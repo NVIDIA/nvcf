@@ -131,6 +131,12 @@ bazel test //src/control-plane-services/cloud-functions/nvcf-core:tests \
   --test_arg=--exclude-classname='^(?!com\.nvidia\.nvcf\.rest\.function\.management\.dto\.LlmRoutingMethodValidatorTest$).*$'
 ```
 
+## LLM routing BDD
+
+The `@llm-function-type` scenarios in the single- and multi-cluster Helmfile
+features cover LLM routing and request handling. See `tests/bdd/README.md`
+to run them.
+
 ## Code style
 
 Use Rust 2024 and the workspace formatter and Clippy rules. Match existing

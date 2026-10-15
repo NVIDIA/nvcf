@@ -50,3 +50,21 @@ func CLIStateToken(path string) (string, error) {
 	}
 	return state.Token, nil
 }
+
+// CLIStateAPIKey reads the function key saved by nvcf-cli api-key generate.
+func CLIStateAPIKey(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read nvcf-cli state: %w", err)
+	}
+	var state struct {
+		APIKey string `json:"apiKey"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return "", fmt.Errorf("parse nvcf-cli state: invalid JSON")
+	}
+	if state.APIKey == "" {
+		return "", fmt.Errorf("nvcf-cli state has no function API key; run nvcf-cli api-key generate first")
+	}
+	return state.APIKey, nil
+}

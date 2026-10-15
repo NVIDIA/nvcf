@@ -178,12 +178,16 @@ original order. Repeated options and empty values are preserved.
 
 ### HTTP requests (Given / When / Then)
 
-These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Pending headers apply to the next send or poll step only.
+These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Requests default to a 30-second deadline unless an explicit timeout is supplied. Pending headers apply to the next send or poll step only.
 
 | Step | Notes |
 |------|-------|
 | `Given the HTTP request header {string} is {string}` | Queues one request header for the next request. `${VAR}` expansion applies to the value. |
 | `Given the HTTP request header {string} is the NVCF CLI admin token with prefix {string}` | Queues a header whose value is the prefix plus the admin token stored by `nvcf-cli init` in the state file of the selected NVCF CLI config. The token never enters argv, env, or logs. |
+| `Given the HTTP request header {string} is the NVCF CLI function API key with prefix {string}` | Reads the saved function API key for the selected config. The key never enters argv, env, or logs. |
+| `When I send a {string} request to {string} with timeout {int} seconds and body:` (docstring) | Sends one request with an explicit positive deadline, including the full response body. Preserves status and body for existing assertions; no retries. |
+| `Then the HTTP response should take at least {string}` | Compares the full exchange duration with an explicit non-negative Go duration such as `60s`. Fails when a delay control was ignored. |
+| `Then the HTTP response body should end with {string}` | Matches a non-empty suffix after trimming trailing whitespace, for terminal stream markers such as `data: [DONE]`. |
 | `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
 | `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
 | `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
@@ -191,7 +195,8 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
 | `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
-| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. |
+| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
+| `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
 | `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
 | `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
 
