@@ -21,6 +21,7 @@ The [Vault Transit Secret Backend](https://www.vaultproject.io/docs/secrets/tran
 This method can help you act quickly in the event of a compromise by rotating the encryption key in Vault and triggering all clients to grab latest by updating the version in Consul KV.
 
 ## Template Example
+
 ```
 {{ with printf "transit/export/encryption-key/%s/%s" ( key "named-key" ) ( key "vault-index" ) | secret }}{{ if .Data.keys }}Encryption Key Version {{ ( key "vault-index" ) }}: {{ index .Data.keys ( key "vault-index" ) }}{{ end }}{{ end }}
 ```

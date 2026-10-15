@@ -104,7 +104,7 @@ Adjust the values to match the GPU product you configured (e.g., `ampere` for A1
 
 The fake GPU operator chart creates `RuntimeClass/nvidia` and several namespaced resources in `gpu-operator`. Helm fails with `invalid ownership metadata` if one of those objects already exists and is not owned by release `gpu-operator` in namespace `gpu-operator`.
 
-For local k3d development, use the recovery workflow in `examples/self-hosted-local-development/README.md`. For manual chart debugging, inspect ownership before deleting anything. If another Helm release owns the resource, remove that release instead of deleting the resource directly.
+For local k3d development, the recovery workflow is to rerun `make build-and-deploy-cluster` in `tools/ncp-local-cluster/`, which removes known stale fake GPU operator resources without deleting the cluster. For manual chart debugging, inspect ownership before deleting anything. If another Helm release owns the resource, remove that release instead of deleting the resource directly.
 
 ## Verification
 

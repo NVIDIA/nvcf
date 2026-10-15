@@ -1,0 +1,16 @@
+# Third-party markdown this repository does not own and cannot fix.
+#
+# Listing git-tracked files is not enough on its own here: vendor/ is tracked,
+# and 609 of the 1394 tracked .md files are vendored Go dependencies. Two of
+# them ship their own .markdownlint.yaml, tuned for a different project.
+vendor/
+third_party/
+
+# Frozen versioned documentation. docs/AGENTS.md states that docs/v*/ must not
+# be edited without an explicit request for a historical docs fix, so linting
+# these trees can only produce findings that must never be acted on. They hold
+# 218 .md files and 744 violations, which is what would otherwise stop the
+# reported count from reaching zero and keep this job from becoming blocking.
+#
+# The [0-9] keeps docs/version-catalog/, which is not frozen, in scope.
+docs/v[0-9]*/

@@ -567,21 +567,20 @@ type maxConnOption struct {
 // below the limit if necessary.
 func (m *maxConnOption) Apply(server *Server) {
 	server.mu.Lock()
-	var (
-		clients = make([]*client, len(server.clients))
-		i       = 0
-	)
+	clients := make([]*client, 0, len(server.clients))
 	// Map iteration is random, which allows us to close random connections.
 	for _, client := range server.clients {
-		clients[i] = client
-		i++
+		if isInternalClient(client.kind) {
+			continue
+		}
+		clients = append(clients, client)
 	}
 	server.mu.Unlock()
 
-	if m.newValue > 0 && len(clients) > m.newValue {
+	if newc := max(0, m.newValue); len(clients) > newc {
 		// Close connections til we are within the limit.
 		var (
-			numClose = len(clients) - m.newValue
+			numClose = len(clients) - newc
 			closed   = 0
 		)
 		for _, client := range clients {
@@ -741,6 +740,35 @@ func (jso jetStreamOption) IsJetStreamChange() bool {
 }
 
 func (jso jetStreamOption) IsStatszChange() bool {
+	return true
+}
+
+type jetStreamLimitsOption struct {
+	noopOption
+	newMaxMemory int64
+	newMaxStore  int64
+}
+
+func (jso *jetStreamLimitsOption) Apply(s *Server) {
+	js := s.getJetStream()
+	if js == nil {
+		return
+	}
+	js.mu.Lock()
+	if jso.newMaxMemory > 0 {
+		js.config.MaxMemory = jso.newMaxMemory
+		atomic.StoreInt64(&js.memMax, js.config.MaxMemory)
+		s.Noticef("Reloaded: JetStream max_mem_store = %s", friendlyBytes(jso.newMaxMemory))
+	}
+	if jso.newMaxStore > 0 {
+		js.config.MaxStore = jso.newMaxStore
+		atomic.StoreInt64(&js.storeMax, js.config.MaxStore)
+		s.Noticef("Reloaded: JetStream max_file_store = %s", friendlyBytes(jso.newMaxStore))
+	}
+	js.mu.Unlock()
+}
+
+func (jso *jetStreamLimitsOption) IsStatszChange() bool {
 	return true
 }
 
@@ -1035,7 +1063,7 @@ func (s *Server) recheckPinnedCerts(curOpts *Options, newOpts *Options) {
 			}
 		})
 	}
-	if s.gateway.enabled && reflect.DeepEqual(newOpts.Gateway.TLSPinnedCerts, curOpts.Gateway.TLSPinnedCerts) {
+	if s.gateway.enabled && !reflect.DeepEqual(newOpts.Gateway.TLSPinnedCerts, curOpts.Gateway.TLSPinnedCerts) {
 		gw := s.gateway
 		gw.RLock()
 		for _, c := range gw.out {
@@ -1179,10 +1207,12 @@ func (s *Server) ReloadOptions(newOpts *Options) error {
 
 	s.recheckPinnedCerts(curOpts, newOpts)
 
+	s.varzMu.Lock()
 	s.mu.Lock()
 	s.configTime = time.Now().UTC()
 	s.updateVarzConfigReloadableFields(s.varz)
 	s.mu.Unlock()
+	s.varzMu.Unlock()
 	return nil
 }
 func applyBoolFlags(newOpts, flagOpts *Options) {
@@ -1290,6 +1320,7 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 		jsMemLimitsChanged  bool
 		jsFileLimitsChanged bool
 		jsStoreDirChanged   bool
+		jsLimitsUpdate      *jetStreamLimitsOption
 	)
 	for i := 0; i < oldConfig.NumField(); i++ {
 		field := oldConfig.Type().Field(i)
@@ -1448,6 +1479,11 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 			tmpNew.TLSConfig = nil
 			tmpOld.tlsConfigOpts = nil
 			tmpNew.tlsConfigOpts = nil
+
+			// Allow TLSPinnedCerts through reload, existing connections
+			// are checked in recheckPinnedCerts
+			tmpOld.TLSPinnedCerts = nil
+			tmpNew.TLSPinnedCerts = nil
 
 			// Need to do the same for remote gateways' TLS configs.
 			// But we can't just set remotes' TLSConfig to nil otherwise this
@@ -1640,29 +1676,38 @@ func (s *Server) diffOptions(newOpts *Options) ([]option, error) {
 				fromSet   = !fromUnset
 				toUnset   = new == -1
 				toSet     = !toUnset
+				increased = fromSet && toSet && new > old
 			)
 			if jsEnabled && modified {
 				// Cannot change limits from dynamic storage at runtime.
 				switch {
+				case increased:
+					// Allowed to increase, but not decrease.
+					if jsLimitsUpdate == nil {
+						jsLimitsUpdate = &jetStreamLimitsOption{}
+						diffOpts = append(diffOpts, jsLimitsUpdate)
+					}
+					if optName == "jetstreammaxmemory" {
+						jsLimitsUpdate.newMaxMemory = new
+					} else {
+						jsLimitsUpdate.newMaxStore = new
+					}
 				case fromSet && toUnset:
 					// Limits changed but it may mean that JS is being disabled,
 					// keep track of the change and error in case it is not.
-					switch optName {
-					case "jetstreammaxmemory":
+					if optName == "jetstreammaxmemory" {
 						jsMemLimitsChanged = true
-					case "jetstreammaxstore":
+					} else {
 						jsFileLimitsChanged = true
-					default:
-						return nil, fmt.Errorf("config reload not supported for jetstream max memory and store")
 					}
 				case fromUnset && toSet:
 					// Prevent changing from dynamic max memory / file at runtime.
 					return nil, fmt.Errorf("config reload not supported for jetstream dynamic max memory and store")
 				default:
-					return nil, fmt.Errorf("config reload not supported for jetstream max memory and store")
+					return nil, fmt.Errorf("config reload not supported for decreasing jetstream max memory and store")
 				}
 			}
-		case "jetstreammetacompact", "jetstreammetacompactsize":
+		case "jetstreammetacompact", "jetstreammetacompactsize", "jetstreammetacompactsync":
 			// Allowed at runtime but monitorCluster looks at s.opts directly, so no further work needed here.
 		case "websocket":
 			// Similar to gateways
@@ -1932,7 +1977,10 @@ func (s *Server) resetInternalLoopInfo() {
 	s.mu.Unlock()
 
 	if resetCh != nil {
-		resetCh <- struct{}{}
+		select {
+		case resetCh <- struct{}{}:
+		case <-s.quitCh:
+		}
 	}
 }
 
@@ -2126,11 +2174,11 @@ func (s *Server) reloadAuthorization() {
 	}
 
 	if resetCh != nil {
-		resetCh <- struct{}{}
+		select {
+		case resetCh <- struct{}{}:
+		case <-s.quitCh:
+		}
 	}
-
-	// Check that publish retained messages sources are still allowed to publish.
-	s.mqttCheckPubRetainedPerms()
 
 	// Close clients that have moved accounts
 	for _, client := range cclients {
@@ -2171,6 +2219,10 @@ func (s *Server) reloadAuthorization() {
 			s.Errorf(err.Error())
 		}
 	}
+
+	// Check that publish retained messages sources are still allowed to publish.
+	// Do this after dealing with JetStream.
+	s.mqttCheckPubRetainedPerms()
 }
 
 // Returns true if given client current account has changed (or user
@@ -2366,11 +2418,13 @@ func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) 
 	// Prevent adding new routes until we are ready to do so.
 	s.routesReject = true
 	var ch chan struct{}
+	// Number of per-account route INFO protocols sent that we expect a
+	// confirmation for. Declared here so the wait below can block on it.
+	protosSent := 0
 	// For accounts that have been added to the list of dedicated routes,
 	// send a protocol to their current assigned routes to allow the
 	// other side to prepare for the changes.
 	if len(co.accsAdded) > 0 {
-		protosSent := 0
 		s.accAddedReqID = nuid.Next()
 		for _, an := range co.accsAdded {
 			if s.accRoutes == nil {
@@ -2492,15 +2546,17 @@ func (s *Server) reloadClusterPoolAndAccounts(co *clusterOption, opts *Options) 
 	// If there are routes to close, we need to release the server lock.
 	// Same if we need to wait on responses from the remotes when
 	// processing new per-account routes.
-	if len(routes) > 0 || len(ch) > 0 {
+	if len(routes) > 0 || protosSent > 0 {
 		s.mu.Unlock()
 
-		for done := false; !done && len(ch) > 0; {
+		// Wait for the expected number of confirmations from the remotes.
+		for received := 0; received < protosSent; {
 			select {
 			case <-ch:
+				received++
 			case <-time.After(2 * time.Second):
 				s.Warnf("Timed out waiting for confirmation from all routes regarding per-account routes changes")
-				done = true
+				received = protosSent
 			}
 		}
 

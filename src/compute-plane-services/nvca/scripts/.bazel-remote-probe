@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Probe the configured remote cache and export BAZEL_REMOTE_FLAGS with the
+# right --remote_cache + --tls_certificate flags, or empty if the cache is
+# unreachable / disabled. Source this file (do NOT execute it) so the
+# exported var is visible in the parent shell.
+#
+# Driven by four CI/CD variables; all default to safe values that fall back
+# to local-only cleanly:
+#   NVCF_BAZEL_REMOTE       "1" to enable, "0" to disable (default 1).
+#   NVCF_BAZEL_REMOTE_HOST  cache host. Unset disables the cache (no default:
+#                           the previous default host was decommissioned).
+#   NVCF_BAZEL_REMOTE_PORT  cache port (443 for the TLS sidecar).
+#   NVCF_BAZEL_REMOTE_TLS   "1" to use grpcs:// + --tls_certificate (default 1).
+#   BAZEL_REMOTE_CA_PEM     File-type CI variable holding the cache's PEM cert.
+#                           Required when TLS=1.
+
+BAZEL_REMOTE_FLAGS=""
+if [ "${NVCF_BAZEL_REMOTE:-1}" != "1" ] || [ -z "${NVCF_BAZEL_REMOTE_HOST:-}" ]; then
+  echo "[bazel-remote] remote cache disabled (NVCF_BAZEL_REMOTE=${NVCF_BAZEL_REMOTE:-unset}, NVCF_BAZEL_REMOTE_HOST=${NVCF_BAZEL_REMOTE_HOST:-unset}); building local-only"
+else
+  host="${NVCF_BAZEL_REMOTE_HOST}"
+  port="${NVCF_BAZEL_REMOTE_PORT:-443}"
+  tls="${NVCF_BAZEL_REMOTE_TLS:-1}"
+  if [ "${tls}" = "1" ] && [ ! -r "${BAZEL_REMOTE_CA_PEM:-}" ]; then
+    # TLS requires a CA pem. grpcurl can probe with `-insecure`, but
+    # Bazel's own gRPC client cannot: with `grpcs://` and no
+    # `--tls_certificate` it tries the system trust store, which does
+    # not contain the cache's self-signed cert, and fails mid-build
+    # with "General OpenSslEngine problem". Skip the cache cleanly
+    # instead of greenlighting an unusable URL. Hit on
+    # dns-cache/nvcf-unbound!41; set BAZEL_REMOTE_CA_PEM (file-type CI
+    # variable) to enable. The test is -r, not -z: a variable set to a
+    # path that does not exist would otherwise reach the `cp` below and
+    # fail the job instead of cleanly declining the cache.
+    echo "[bazel-remote] grpcs://${host}:${port} requested but BAZEL_REMOTE_CA_PEM is unset or unreadable (${BAZEL_REMOTE_CA_PEM:-unset}); remote cache disabled. Set the file-type CI variable to enable."
+  else
+    probe_args=(-d '{"instance_name":""}')
+    cache_url="grpc://${host}:${port}"
+    tls_flag=""
+    if [ "${tls}" = "1" ]; then
+      cache_url="grpcs://${host}:${port}"
+      mkdir -p "${CI_PROJECT_DIR:-.}/.tls"
+      cp "$BAZEL_REMOTE_CA_PEM" "${CI_PROJECT_DIR:-.}/.tls/ca.pem"
+      chmod 600 "${CI_PROJECT_DIR:-.}/.tls/ca.pem"
+      probe_args+=(-cacert "${CI_PROJECT_DIR:-.}/.tls/ca.pem")
+      tls_flag="--tls_certificate=${CI_PROJECT_DIR:-.}/.tls/ca.pem"
+    else
+      probe_args+=(-plaintext)
+    fi
+    if timeout 15 grpcurl "${probe_args[@]}" "${host}:${port}" \
+         build.bazel.remote.execution.v2.Capabilities/GetCapabilities \
+         | grep -q '"ZSTD"'; then
+      echo "[bazel-remote] ${cache_url} healthy; enabling remote cache"
+      BAZEL_REMOTE_FLAGS="--remote_cache=${cache_url} \
+        ${tls_flag} \
+        --remote_upload_local_results=true \
+        --remote_cache_compression \
+        --experimental_remote_cache_compression_threshold=100 \
+        --remote_local_fallback \
+        --remote_timeout=120 \
+        --remote_retries=5 \
+        --grpc_keepalive_time=30s \
+        --grpc_keepalive_timeout=20s"
+    else
+      echo "[bazel-remote] ${cache_url} unreachable or no ZSTD; running local-only"
+    fi
+  fi
+fi
+export BAZEL_REMOTE_FLAGS

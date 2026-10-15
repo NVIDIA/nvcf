@@ -19,6 +19,7 @@ package k8sutil
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -35,6 +36,16 @@ const (
 	// TaskCleanupExtraGracePeriod is extra time allotted to tasks before forced cleanup by NVCA.
 	TaskCleanupExtraGracePeriod = 5 * time.Minute
 )
+
+// AddTaskCleanupGracePeriod adds the NVCA cleanup grace period to max runtime duration.
+// Empty maxRuntimeDuration values are represented as math.MaxInt64, so saturate to
+// preserve "unbounded" semantics instead of overflowing into a negative duration.
+func AddTaskCleanupGracePeriod(maxRuntimeDuration time.Duration) time.Duration {
+	if maxRuntimeDuration > time.Duration(math.MaxInt64)-TaskCleanupExtraGracePeriod {
+		return time.Duration(math.MaxInt64)
+	}
+	return maxRuntimeDuration + TaskCleanupExtraGracePeriod
+}
 
 // FindNVCFImagePullSecretObjects filters objs for NVCF worker and workload pull secrets.
 // It returns an error if either are not found.

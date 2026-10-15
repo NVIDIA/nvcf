@@ -82,6 +82,7 @@ default it listens on port 8000 and will publish an `index.html` if found.
 ```shell
 $ python -m SimpleHTTPServer
 ```
+
 ### Use a Sidecar to add it to the Connect mesh network
 
 Then start the sidecar for the `webserver` service.
@@ -94,7 +95,9 @@ $ consul connect proxy -sidecar-for webserver
 with consul in the `consul-services.json` config file above.
 
 #### index.html
+
 And some content to serve.
+
 ```html
 cat > index.html << EOF
 Brought to you by HAProxy!
@@ -111,12 +114,15 @@ To connect to the mesh network you will need the required TLS certificates,
 the root certificate (the CA) and the client certificates. HAProxy likes the CA cert in one file and both the client certs in another.
 
 #### ca.crt
+
 ```liquid
 cat > ca.crt.tmpl << EOF
 {{range caRoots}}{{.RootCertPEM}}{{end}}
 EOF
 ```
+
 #### certs.pem
+
 ```liquid
 cat > certs.pem.tmpl << EOF
 {{with caLeaf "ingress"}}{{.PrivateKeyPEM}}{{.CertPEM}}{{end}}
@@ -128,10 +134,11 @@ configuration file template for the HAProxy proxy, it uses the `connect`
 template function to get all the "webserver" connect enabled services.
 
 #### haproxy.conf.tmpl
+
 ```haproxy
 cat > haproxy.conf.tmpl << EOF
 defaults
-	mode	http
+ mode http
     timeout connect 5000
     timeout client  50000
     timeout server  50000
@@ -150,7 +157,6 @@ EOF
 For more on the details of the HAProxy configuration file, please see the
 [HAProxy documentation][haproxy].
 
-
 ## Running the HAProxy Ingress Proxy with Consul-Template
 
 Using the consul-template configuration below, run the HAProxy proxy.
@@ -164,6 +170,7 @@ rendered (files written). Note that if multiple templates are rendered, it will
 still only restart it once.
 
 #### ingress-config.hcl
+
 ```hcl
 cat > ingress-config.hcl << EOF
 exec {
@@ -185,6 +192,7 @@ EOF
 ```
 
 ## Test it
+
 ```shell
 $ curl http://localhost:8080
 Brought to you by HAProxy!

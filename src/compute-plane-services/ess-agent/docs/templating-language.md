@@ -63,8 +63,8 @@ provides the following functions:
   - [containsNone](#containsnone)
   - [containsNotAll](#containsnotall)
   - [env](#env)
-  - [mustEnv](#mustEnv)
-  - [envOrDefault](#envOrDefault)
+  - [mustEnv](#mustenv)
+  - [envOrDefault](#envordefault)
   - [executeTemplate](#executetemplate)
   - [explode](#explode)
   - [explodeMap](#explodemap)
@@ -91,7 +91,7 @@ provides the following functions:
   - [sha256Hex](#sha256hex)
   - [md5sum](#md5sum)
   - [split](#split)
-  - [splitToMap](#splitToMap)
+  - [splitToMap](#splittomap)
   - [timestamp](#timestamp)
   - [toJSON](#tojson)
   - [toJSONPretty](#tojsonpretty)
@@ -103,7 +103,7 @@ provides the following functions:
   - [toUpper](#toupper)
   - [toYAML](#toyaml)
   - [sockaddr](#sockaddr)
-  - [writeToFile](#writeToFile)
+  - [writeToFile](#writetofile)
 - [Sprig Functions](#sprig-functions)
 - [Math Functions](#math-functions)
   - [add](#add)
@@ -140,11 +140,13 @@ Query [Consul][consul] for the leaf certificate representing a single service.
 ```
 
 For example:
+
 ```golang
 {{ with caLeaf "proxy" }}{{ .CertPEM }}{{ end }}
 ```
 
 renders
+
 ```text
 -----BEGIN CERTIFICATE-----
 MIICizCCAjGgAwIBAgIBCDAKBggqhkjOPQQDAjAWMRQwEgYDVQQDEwtDb25zdWwg
@@ -167,11 +169,13 @@ Query [Consul][consul] for all [connect][connect] trusted certificate authority
 ```
 
 For example:
+
 ```golang
 {{ range caRoots }}{{ .RootCertPEM }}{{ end }}
 ```
 
 renders
+
 ```text
 -----BEGIN CERTIFICATE-----
 MIICWDCCAf+gAwIBAgIBBzAKBggqhkjOPQQDAjAWMRQwEgYDVQQDEwtDb25zdWwg
@@ -185,7 +189,6 @@ The most useful field is `.RootCertPEM`. For a complete list of available
 fields, see consul's documentation on
 [CARootList](https://godoc.org/github.com/hashicorp/consul/api#CARootList).
 
-
 ### `connect`
 
 Query [Consul][consul] for [connect][connect]-capable services based on their
@@ -196,7 +199,6 @@ health.
 ```
 
 Syntax is exactly the same as for the [service](#service) function below.
-
 
 ```golang
 {{ range connect "web" }}
@@ -210,7 +212,6 @@ renders the IP addresses of all _healthy_ nodes with a logical
 server web01 10.5.2.45:21000
 server web02 10.2.6.61:21000
 ```
-
 
 ### `datacenters`
 
@@ -267,7 +268,7 @@ file contents
 ```
 
 This does not process nested templates. See
-[`executeTemplate`](#executeTemplate) for a way to render nested templates.
+[`executeTemplate`](#executetemplate) for a way to render nested templates.
 
 ### `key`
 
@@ -485,6 +486,7 @@ Query [Vault][vault] for the secret at the given path.
 ```golang
 {{ secret "<PATH>" "<DATA>" }}
 ```
+
 #### Simple Read
 
 The `<DATA>` attribute is optional; if omitted, the request will be a `vault
@@ -637,7 +639,6 @@ Eg. If you don't include the CA in the file the CA field will be blank when
 loading from cache. And note that you **must** include the Certificate itself
 in this file as it contains the TTL/expiration data.
 
-
 ```golang
 {{ with pkiCert "pki/issue/my-domain-dot-com" "common_name=foo.example.com" }}
 Certificate: {{ .Cert }}
@@ -753,7 +754,6 @@ and perform client-side filtering. As a general rule, do not use the "passing"
 argument alone if you want only healthy services - simply omit the second
 argument instead.
 
-
 ### `services`
 
 Query [Consul][consul] for all services in the catalog.
@@ -795,6 +795,7 @@ For example:
 {{ range tree "service/redis" }}
 {{ .Key }}:{{ .Value }}{{ end }}
 ```
+
 renders
 
 ```text
@@ -1229,7 +1230,6 @@ You can also access deeply nested values:
 
 You will need to have a reasonable format about your data in Consul. Please see
 [Go's text/template package][text-template] for more information.
-
 
 ### `explodeMap`
 
@@ -1926,9 +1926,9 @@ variable list query returns blank/empty data.
 
 ```golang
 type NomadVarMeta struct {
-	Namespace, Path          string
-	CreateIndex, ModifyIndex uint64
-	CreateTime, ModifyTime   nanoTime
+ Namespace, Path          string
+ CreateIndex, ModifyIndex uint64
+ CreateTime, ModifyTime   nanoTime
 }
 ```
 
@@ -1973,15 +1973,15 @@ Calls to the `nomadVar` function return a value of type `NomadVarItems`. This
 value is a map of `string` to `NomadVarItem` elements. It provides some
 convenience methods:
 
-* `Keys`: produces a sorted list of keys to this `NomadVarItems` map.
+- `Keys`: produces a sorted list of keys to this `NomadVarItems` map.
 
-* `Values`: produces a key-sorted list.
+- `Values`: produces a key-sorted list.
 
-* `Tuples`: produces a key-sorted list of K,V tuple structs.
+- `Tuples`: produces a key-sorted list of K,V tuple structs.
 
-* `Metadata`: returns this collection's parent metadata as a `NomadVarMeta`
+- `Metadata`: returns this collection's parent metadata as a `NomadVarMeta`
 
-* `Parent`: returns the consul-template version (NomadVariable) of a full
+- `Parent`: returns the consul-template version (NomadVariable) of a full
     variable, which has the Metadata values and Items collection as peers.
 
 #### The `NomadVarItem` Type
@@ -1992,15 +1992,15 @@ the elements that are obtained while ranging the return of `nomadVar` are of typ
 
 ```golang
 type NomadVarItem struct {
-	Key, Value string
+ Key, Value string
 }
 ```
 
 `NomadVarItem` objects also provide helper methods:
 
-* `Metadata`: returns this item's parent's metadata as a `NomadVarMeta`
+- `Metadata`: returns this item's parent's metadata as a `NomadVarMeta`
 
-* `Parent`: returns the consul-template version (NomadVariable) of the
+- `Parent`: returns the consul-template version (NomadVariable) of the
     Nomad variable that contains this item.
 
 ### `nomadVarExists`
@@ -2082,10 +2082,10 @@ renders
 
 Formats output according to the provided format string and then writes the generated information to stdout. You can use format strings to produce a compacted inline printing style by your choice:
 
-* `%v`: most compact
-* `%+v`: adds pointer addresses
-* `%#v`: adds types
-* `%#+v`: adds types and pointer addresses
+- `%v`: most compact
+- `%+v`: adds pointer addresses
+- `%#v`: adds types
+- `%#+v`: adds types and pointer addresses
 
 ```golang
 spew_printf("myVar1: %v -- myVar2: %+v", myVar1, myVar2)
@@ -2114,7 +2114,6 @@ map[foo:map[bar:true baz:string theAnswer:42]]
 ```
 
 #### using `%+v`
-
 
 ```golang
 {{ spew_printf "%+v\n" $OBJ }}
@@ -2168,11 +2167,10 @@ outputs
 
 If you would prefer to use format strings with a compacted inline printing style, use the convenience wrappers for [`spew.Printf`](https://pkg.go.dev/github.com/davecgh/go-spew/spew#Printf), [`spew.Sprintf`](https://pkg.go.dev/github.com/davecgh/go-spew/spew#Sprintf), etc with:
 
-* `%v`: most compact
-* `%+v`: adds pointer addresses
-* `%#v`: adds types
-* `%#+v`: adds types and pointer addresses
-
+- `%v`: most compact
+- `%+v`: adds pointer addresses
+- `%#v`: adds types
+- `%#+v`: adds types and pointer addresses
 
 [connect]: https://www.consul.io/docs/connect/ "Connect"
 [consul]: https://www.consul.io "Consul by HashiCorp"

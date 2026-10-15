@@ -34,6 +34,8 @@ import (
 
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 )
 
 // testTimeConfig creates a TimeConfig with tighter intervals for faster testing.
@@ -359,7 +361,7 @@ func Test_ObjectStatuses_terminalBehavior(t *testing.T) {
 			name: "multiple failures including non-degraded",
 			statuses: ObjectStatuses{
 				{Status: statusFailed, TerminalBad: true, Reason: "FailedMount"},
-				{Status: podDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
+				{Status: statusDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
 			},
 			expectedTerminal:     true,
 			expectedDegradedOnly: false,
@@ -367,8 +369,8 @@ func Test_ObjectStatuses_terminalBehavior(t *testing.T) {
 		{
 			name: "only degraded workers",
 			statuses: ObjectStatuses{
-				{Status: podDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
-				{Status: podDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
+				{Status: statusDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
+				{Status: statusDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"},
 			},
 			expectedTerminal:     true,
 			expectedDegradedOnly: true,
@@ -572,6 +574,35 @@ func Test_doTerminalTaskStatus(t *testing.T) {
 			expectedTerminalError:   true,
 		},
 		{
+			name:              "omitted max runtime duration enters backoff instead of timing out",
+			existingCondition: nil,
+			utilsPod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "utils",
+					CreationTimestamp: metav1.NewTime(baseTime),
+				},
+				Status: corev1.PodStatus{
+					StartTime: &metav1.Time{Time: baseTime},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "utils",
+							State: corev1.ContainerState{},
+						},
+					},
+				},
+			},
+			statuses:                ObjectStatuses{{Status: statusFailed, TerminalBad: true, Reason: "ImagePullBackOff"}},
+			maxRuntimeDuration:      "",
+			maxQueuedDuration:       "PT1H",
+			currentTime:             baseTime.Add(10 * time.Second),
+			expectedPhase:           "",
+			expectedConditionType:   v1alpha1.MiniServiceConditionObjectsHealthy,
+			expectedConditionReason: v1alpha1.MiniServiceStatusReasonObjectsFailedWithinBackoffTimeout,
+			expectedRequeue:         true,
+			expectedError:           false,
+			expectedTerminalError:   false,
+		},
+		{
 			name:              "max queued exceeded - terminal",
 			existingCondition: nil,
 			utilsPod: &corev1.Pod{
@@ -641,13 +672,13 @@ func Test_doTerminalTaskStatus(t *testing.T) {
 					},
 				},
 			},
-			statuses:                ObjectStatuses{{Status: podDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"}},
+			statuses:                ObjectStatuses{{Status: statusDegradedWorker, TerminalBad: true, Reason: "ContainerCrashing"}},
 			maxRuntimeDuration:      "PT1H",
 			maxQueuedDuration:       "PT1H",
 			currentTime:             baseTime.Add(10 * time.Minute),
 			expectedPhase:           "",
 			expectedConditionType:   v1alpha1.MiniServiceConditionObjectsHealthy,
-			expectedConditionReason: v1alpha1.MiniServiceStatusReasonDegradedWorkerPods,
+			expectedConditionReason: v1alpha1.MiniServiceStatusReasonDegradedWorker,
 			expectedRequeue:         false,
 			expectedError:           true,
 			expectedTerminalError:   true,
@@ -1191,4 +1222,350 @@ func TestStatusContextDirectAccess(t *testing.T) {
 
 		assert.Nil(t, retrieved)
 	})
+}
+
+func Test_collectObjectIDs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	ctx := context.Background()
+
+	alwaysTrue := func(ObjectStatus) bool { return true }
+	alwaysFalse := func(ObjectStatus) bool { return false }
+
+	tests := []struct {
+		name     string
+		statuses ObjectStatuses
+		filter   func(ObjectStatus) bool
+		expected []string
+	}{
+		{
+			name:     "nil statuses returns nil",
+			statuses: nil,
+			filter:   alwaysTrue,
+			expected: nil,
+		},
+		{
+			name:     "empty statuses returns nil",
+			statuses: ObjectStatuses{},
+			filter:   alwaysTrue,
+			expected: nil,
+		},
+		{
+			name: "all filtered out returns nil",
+			statuses: ObjectStatuses{
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1"}},
+					TerminalBad: true,
+				},
+			},
+			filter:   alwaysFalse,
+			expected: nil,
+		},
+		{
+			name: "single matching object",
+			statuses: ObjectStatuses{
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1"}},
+					TerminalBad: true,
+				},
+			},
+			filter:   filterTerminal,
+			expected: []string{"v1.Pod pod-1"},
+		},
+		{
+			name: "multiple objects only matching ones included",
+			statuses: ObjectStatuses{
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "healthy-pod"}},
+					TerminalBad: false,
+				},
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "bad-pod"}},
+					TerminalBad: true,
+				},
+			},
+			filter:   filterTerminal,
+			expected: []string{"v1.Pod bad-pod"},
+		},
+		{
+			name: "filterPending selects pending objects",
+			statuses: ObjectStatuses{
+				{
+					Object:  &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pending-pod"}},
+					Pending: true,
+				},
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "failed-pod"}},
+					TerminalBad: true,
+				},
+			},
+			filter:   filterPending,
+			expected: []string{"v1.Pod pending-pod"},
+		},
+		{
+			name: "object with group included in ID",
+			statuses: ObjectStatuses{
+				{
+					Object:      &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "my-deploy"}},
+					TerminalBad: true,
+				},
+			},
+			filter:   filterTerminal,
+			expected: []string{"apps/v1.Deployment my-deploy"},
+		},
+		{
+			name: "child objects included when both parent and child match filter",
+			statuses: ObjectStatuses{
+				{
+					Object:      &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy-1"}},
+					TerminalBad: true,
+					ChildObjects: ObjectStatuses{
+						{
+							Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "child-pod"}},
+							TerminalBad: true,
+						},
+					},
+				},
+			},
+			filter: filterTerminal,
+			expected: []string{
+				"apps/v1.Deployment deploy-1",
+				"v1.Pod child-pod",
+			},
+		},
+		{
+			name: "child not included when parent matches but child does not",
+			statuses: ObjectStatuses{
+				{
+					Object:      &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy-1"}},
+					TerminalBad: true,
+					ChildObjects: ObjectStatuses{
+						{
+							Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ok-child"}},
+							TerminalBad: false,
+						},
+					},
+				},
+			},
+			filter:   filterTerminal,
+			expected: []string{"apps/v1.Deployment deploy-1"},
+		},
+		{
+			name: "parent not matching skips entire subtree",
+			statuses: ObjectStatuses{
+				{
+					Object:      &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "ok-deploy"}},
+					TerminalBad: false,
+					ChildObjects: ObjectStatuses{
+						{
+							Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "bad-child"}},
+							TerminalBad: true,
+						},
+					},
+				},
+			},
+			filter:   filterTerminal,
+			expected: nil,
+		},
+		{
+			name: "multiple top-level objects with children",
+			statuses: ObjectStatuses{
+				{
+					Object:      &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy-a"}},
+					TerminalBad: true,
+					ChildObjects: ObjectStatuses{
+						{
+							Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a1"}},
+							TerminalBad: true,
+						},
+					},
+				},
+				{
+					Object:      &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "standalone-pod"}},
+					TerminalBad: false,
+				},
+				{
+					Object:  &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pending-pod"}},
+					Pending: true,
+				},
+			},
+			filter: filterTerminal,
+			expected: []string{
+				"apps/v1.Deployment deploy-a",
+				"v1.Pod pod-a1",
+			},
+		},
+		{
+			name: "alwaysTrue filter collects all objects and children",
+			statuses: ObjectStatuses{
+				{
+					Object: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1"}},
+				},
+				{
+					Object: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2"}},
+					ChildObjects: ObjectStatuses{
+						{Object: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "child-1"}}},
+					},
+				},
+			},
+			filter: alwaysTrue,
+			expected: []string{
+				"v1.Pod pod-1",
+				"v1.Pod pod-2",
+				"v1.Pod child-1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := collectObjectIDs(ctx, scheme, tt.statuses, tt.filter)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetFunctionWorkerContainerStatus(t *testing.T) {
+	utilsStatus := corev1.ContainerStatus{
+		Name:         common.UtilsContainerName,
+		Ready:        true,
+		RestartCount: 2,
+		Image:        "utils:latest",
+	}
+	llmStatus := corev1.ContainerStatus{
+		Name:  function.LLMWorkerContainerName,
+		Ready: true,
+	}
+
+	tests := []struct {
+		name           string
+		pod            *corev1.Pod
+		wantStatus     corev1.ContainerStatus
+		wantPresent    bool
+		wantErr        bool
+		wantErrMessage string
+	}{
+		{
+			name: "utils worker container status present",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{utilsStatus},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "llm worker container status present",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{llmStatus},
+				},
+			},
+			wantStatus:  llmStatus,
+			wantPresent: true,
+		},
+		{
+			name: "worker container status present among sidecars",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "sidecar-a", Ready: true},
+						utilsStatus,
+						{Name: "sidecar-b", Ready: false},
+					},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "status takes precedence over spec when both present",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: common.UtilsContainerName}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{utilsStatus},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "utils worker in spec but status not yet available",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "sidecar-a"},
+						{Name: common.UtilsContainerName},
+					},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "llm worker in spec but status not yet available",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: function.LLMWorkerContainerName}},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "non-worker status present but worker still only in spec",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: common.UtilsContainerName}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar-a", Ready: true}},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "worker container not found in spec or status",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "sidecar-a"}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar-a"}},
+				},
+			},
+			wantStatus:     corev1.ContainerStatus{},
+			wantPresent:    false,
+			wantErr:        true,
+			wantErrMessage: "terminal error: worker container not found",
+		},
+		{
+			name:           "empty pod returns terminal error",
+			pod:            &corev1.Pod{},
+			wantStatus:     corev1.ContainerStatus{},
+			wantPresent:    false,
+			wantErr:        true,
+			wantErrMessage: "terminal error: worker container not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, present, err := getFunctionWorkerContainerStatus(tt.pod)
+			if tt.wantErr {
+				// The error must be terminal so the reconciler does not requeue; the
+				// "terminal error: " prefix is added by reconcile.TerminalError.
+				assert.EqualError(t, err, tt.wantErrMessage)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantPresent, present)
+			assert.Equal(t, tt.wantStatus, got)
+		})
+	}
 }

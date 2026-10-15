@@ -18,7 +18,10 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -111,6 +114,90 @@ func TestOIDCConfigParsing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, oidcResponse.Issuer)
 		assert.Empty(t, oidcResponse.JwksURI)
+	})
+}
+
+func TestOIDCIssuerDirectDiscovery(t *testing.T) {
+	tests := []struct {
+		name   string
+		issuer string
+		want   bool
+	}{
+		{"EKS public issuer", "https://oidc.eks.eu-west-1.amazonaws.com/id/cluster-id", true},
+		{"custom HTTPS issuer", "https://issuer.example.com/nvcf", true},
+		{"Kubernetes service issuer", "https://kubernetes.default.svc.cluster.local", false},
+		{"Kubernetes default alias", "https://kubernetes.default", false},
+		{"in-cluster service host", "https://oidc.nvcf.svc.cluster.local", false},
+		{"plain SPIFFE issuer", "spiffe://ncp-local.nvidia.com", false},
+		{"empty issuer", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, supportsDirectOIDCDiscovery(tt.issuer))
+		})
+	}
+}
+
+func TestFetchDirectOIDCJWKS(t *testing.T) {
+	t.Run("fetches JWKS from issuer discovery document", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"` + server.URL + `","jwks_uri":"` + server.URL + `/keys"}`))
+		})
+		mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"keys":[{"kid":"eks-public-key"}]}`))
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL, server.Client())
+		require.NoError(t, err)
+		assert.Equal(t, server.URL, issuer)
+		assert.Contains(t, jwks, "eks-public-key")
+	})
+
+	t.Run("resolves relative jwks_uri against discovery document", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/oidc/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"` + server.URL + `/oidc","jwks_uri":"/jwks"}`))
+		})
+		mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"keys":[{"kid":"relative-key"}]}`))
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL+"/oidc", server.Client())
+		require.NoError(t, err)
+		assert.Equal(t, server.URL+"/oidc", issuer)
+		assert.Contains(t, jwks, "relative-key")
+	})
+
+	t.Run("rejects discovery issuer mismatch", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"https://different.example.com","jwks_uri":"` + server.URL + `/keys"}`))
+		})
+		mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("JWKS endpoint should not be called when issuer mismatches")
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL, server.Client())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match requested issuer")
+		assert.Empty(t, issuer)
+		assert.Empty(t, jwks)
 	})
 }
 
@@ -281,6 +368,18 @@ func TestGetICMSURL(t *testing.T) {
 		assert.Equal(t, "http://default-api:8080", result)
 	})
 
+	t.Run("returns config ICMS URL before deriving from BaseHTTPURL", func(t *testing.T) {
+		cmd := &cobra.Command{}
+		addClusterICMSURLFlags(cmd)
+
+		config := &client.Config{
+			BaseHTTPURL: "http://api.localhost:8080",
+			ICMSURL:     "http://configured-sis.localhost:8080",
+		}
+		result := getICMSURL(cmd, config)
+		assert.Equal(t, "http://configured-sis.localhost:8080", result)
+	})
+
 	t.Run("returns empty when both flag and config are empty", func(t *testing.T) {
 		cmd := &cobra.Command{}
 		addClusterICMSURLFlags(cmd)
@@ -332,7 +431,7 @@ func TestHelmValuesIdentitySource(t *testing.T) {
 // `## @param` schema (top-level clusterID/clusterGroupID/ncaID with the
 // mixed-case "ID" suffix). The chart's self-managed-nvcfbackend-cm.yaml
 // renders these into the cluster-dto.yaml that the operator's mapper
-// deserializes into NVCFBackend.spec.clusterConfig — getting the casing
+// deserializes into NVCFBackend.spec.clusterConfig. Getting the casing
 // or nesting wrong leaves ClusterID empty and trips the preflight reject
 // in pkg/operator/reconcile/nvcaagent_reconcile.go.
 
@@ -364,7 +463,7 @@ func TestHelmValuesYAMLSchema(t *testing.T) {
 	assert.Contains(t, got, "icmsServiceURL: http://sis.localhost:18080")
 	assert.Contains(t, got, "revalServiceURL: http://reval.localhost:18080")
 	assert.Contains(t, got, "natsURL: nats://nats.localhost:4222")
-	// Old (pre-fix) schema must not appear — these keys would silently
+	// Old (pre-fix) schema must not appear, these keys would silently
 	// fall through to chart defaults and leave the operator with empty IDs.
 	assert.NotContains(t, got, "clusterId:")
 	assert.NotContains(t, got, "clusterGroupId:")
@@ -500,6 +599,21 @@ func TestBuildKubectlCommand(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "kubeconfig flag not found in command args: %v", cmd.Args)
+	})
+
+	t.Run("includes kube context when specified", func(t *testing.T) {
+		config := &client.Config{KubeContext: "k3d-compute"}
+		cmd := buildKubectlCommand(config, []string{"get", "--raw", "/openid/v1/jwks"})
+		assert.Contains(t, cmd.Args, "--context")
+		assert.Contains(t, cmd.Args, "k3d-compute")
+	})
+
+	t.Run("puts both global flags before the subcommand args", func(t *testing.T) {
+		config := &client.Config{KubeconfigPath: "/home/user/.kube/config", KubeContext: "k3d-compute"}
+		cmd := buildKubectlCommand(config, []string{"get", "pods"})
+		assert.Equal(t,
+			[]string{"kubectl", "--context", "k3d-compute", "--kubeconfig", "/home/user/.kube/config", "get", "pods"},
+			cmd.Args)
 	})
 
 	t.Run("preserves all arguments", func(t *testing.T) {

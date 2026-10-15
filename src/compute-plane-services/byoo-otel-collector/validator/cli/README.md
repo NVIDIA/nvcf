@@ -1,6 +1,7 @@
 # BYOO Metrics Validator CLI
 
 > Limitations
+>
 > - Only supports the metrics from Grafana Cloud
 > - Only supports the platform metrics (does not include the OTLP metrics collected from users' applications)
 
@@ -139,8 +140,10 @@ INFO       - opentelemetry-collector       : Valid with warnings
 INFO     ###########################################################
 ```
 
-Vaidate the metrics against to the golden metrics
+Validate the metrics against to the golden metrics
+
 - Check the golden metrics in ../golden for reference
+
 ``` bash
 > uv run -m src.validator --cloud-provider=non-gfn --wrapper-type=function --workload-type=container --golden aadb8822-7992-4d63-a771-76bdb7d2f402
 INFO     ###########################################################                                                    

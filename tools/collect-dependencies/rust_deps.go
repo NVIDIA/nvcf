@@ -36,6 +36,7 @@ func parseCargoTOML(path string) map[string]struct{} {
 	if data == nil {
 		return out
 	}
+	workspaceDeps := cargoWorkspaceDependencyVersions(path)
 	for _, sec := range []string{"dependencies", "dev-dependencies", "build-dependencies"} {
 		block, ok := asMap(data[sec])
 		if !ok {
@@ -50,10 +51,55 @@ func parseCargoTOML(path string) map[string]struct{} {
 				out[fmt.Sprintf("%s %s", name, strings.TrimSpace(v))] = struct{}{}
 			case map[string]any:
 				version, _ := v["version"].(string)
+				if strings.TrimSpace(version) == "" && cargoDependencyUsesWorkspace(v) {
+					version = workspaceDeps[name]
+				}
 				line := strings.TrimSpace(fmt.Sprintf("%s %s", name, strings.TrimSpace(version)))
 				out[line] = struct{}{}
 			default:
 				out[name] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func cargoDependencyUsesWorkspace(spec map[string]any) bool {
+	workspace, _ := spec["workspace"].(bool)
+	return workspace
+}
+
+func cargoWorkspaceDependencyVersions(cargoTOMLPath string) map[string]string {
+	for dir := filepath.Dir(cargoTOMLPath); ; dir = filepath.Dir(dir) {
+		data := parseTOMLFile(filepath.Join(dir, "Cargo.toml"))
+		if _, ok := asMap(data["workspace"]); ok {
+			return cargoWorkspaceDependencyVersionsFromTOML(data)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+	}
+}
+
+func cargoWorkspaceDependencyVersionsFromTOML(data map[string]any) map[string]string {
+	workspace, ok := asMap(data["workspace"])
+	if !ok {
+		return nil
+	}
+	block, ok := asMap(workspace["dependencies"])
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for name, spec := range block {
+		switch v := spec.(type) {
+		case string:
+			out[name] = strings.TrimSpace(v)
+		case map[string]any:
+			version, _ := v["version"].(string)
+			if strings.TrimSpace(version) != "" {
+				out[name] = strings.TrimSpace(version)
 			}
 		}
 	}

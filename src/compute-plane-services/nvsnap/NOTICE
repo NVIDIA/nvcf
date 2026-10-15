@@ -1,0 +1,77 @@
+NvSnap
+Copyright 2026 NVIDIA Corporation
+
+This product includes software developed by NVIDIA Corporation.
+
+================================================================================
+Forked / vendored third-party components
+================================================================================
+
+This project depends on the following third-party software components, each
+maintained as a separate fork with nvsnap-specific patches. Their original
+licenses apply.
+
+----
+CRIU (Checkpoint/Restore In Userspace)
+  Upstream: https://github.com/checkpoint-restore/criu
+  NvSnap fork: maintained by the NvSnap project (branch criu-dev)
+  License: GPL-2.0 (for the userspace tool); LGPL-2.1 (for the libcriu/libsoccr
+           libraries); see the upstream LICENSE files for the authoritative
+           per-file licensing.
+
+----
+uvloop
+  Upstream: https://github.com/MagicStack/uvloop
+  NvSnap fork: maintained by the NvSnap project
+  License: Apache-2.0 / MIT (dual license; see upstream LICENSE-APACHE and
+           LICENSE-MIT).
+
+----
+libuv
+  Upstream: https://github.com/libuv/libuv
+  NvSnap fork: maintained by the NvSnap project
+  License: MIT (see upstream LICENSE).
+
+----
+libzmq (ZeroMQ)
+  Upstream: https://github.com/zeromq/libzmq
+  NvSnap fork: maintained by the NvSnap project
+  License: MPL-2.0 (see upstream LICENSE).
+
+----
+pyzmq
+  Upstream: https://github.com/zeromq/pyzmq
+  NvSnap build artifact only (rebuilt from upstream against the nvsnap libzmq fork)
+  License: BSD-3-Clause (see upstream LICENSE.md).
+
+----
+go-criu
+  Upstream: https://github.com/checkpoint-restore/go-criu
+  NvSnap fork: maintained by the NvSnap project
+  License: Apache-2.0 (see upstream LICENSE).
+
+----
+NVIDIA cuda-checkpoint
+  Upstream: distributed with NVIDIA CUDA Toolkit
+  Used as a binary dependency for GPU state checkpoint/restore.
+  License: subject to the NVIDIA CUDA Toolkit license.
+
+================================================================================
+Container images
+================================================================================
+
+This project's container images are built from upstream base images. The
+relevant licenses for those base images apply to the resulting container layers:
+
+- ubuntu:22.04                  - https://ubuntu.com/legal/intellectual-property-policy
+- golang:1.24-bookworm           - https://go.dev/LICENSE
+- gcr.io/distroless/static       - https://github.com/GoogleContainerTools/distroless
+
+================================================================================
+Go module dependencies
+================================================================================
+
+See `go.mod` and `go.sum` for the full transitive dependency list and pinned
+versions. License attribution for each Go module is preserved in its vendor
+directory (if vendored) or available via `go list -m -json all` against the
+module proxy.

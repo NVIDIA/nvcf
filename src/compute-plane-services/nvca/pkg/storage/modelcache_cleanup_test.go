@@ -27,12 +27,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
+
+func TestPrimaryPVSelector(t *testing.T) {
+	// primaryPVSel must carry the primary-PV exists requirement so cleanup
+	// lists only model-cache primary PVs. An empty selector would match every
+	// PV in the cluster.
+	assert.False(t, primaryPVSel.Matches(labels.Set{}),
+		"empty label set must not match; selector should require the primary-PV label")
+	assert.True(t, primaryPVSel.Matches(labels.Set{primaryPVLabelKey: "true"}),
+		"a PV carrying the primary-PV label must match")
+}
 
 func TestCleanupModelCaches(t *testing.T) {
 	// create the object

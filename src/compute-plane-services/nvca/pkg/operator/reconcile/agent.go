@@ -492,6 +492,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithNVCAOTELConfig(a.NVCAOTELConfig).
 		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
 		WithIdentitySource(a.IdentitySource).
+		WithClusterSource(a.ClusterSource).
 		Start(ctx)
 
 	if err != nil {
@@ -633,8 +634,9 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) dispatchReconcileCluster(ctx context.Context) {
 	log := core.GetLogger(ctx)
 
-	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged {
-		log.Debug("cluster source is not helm managed, skipping reconcile")
+	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged &&
+		a.ClusterSource != nvcaoptypes.ClusterSourceSelfHosted {
+		log.Debug("cluster source is not ConfigMap managed, skipping reconcile")
 		return
 	}
 
@@ -695,7 +697,7 @@ func (a *Agent) startEventProcessingWorkers(ctx context.Context) error {
 	}
 
 	// create and initialize queues before start goroutines
-	// to aovid a data race
+	// to avoid a data race
 	a.resourceEventWorkerQueues = make(map[string]workqueue.TypedRateLimitingInterface[any])
 	for _, eventName := range getAgentEvents() {
 		a.resourceEventWorkerQueues[eventName] =

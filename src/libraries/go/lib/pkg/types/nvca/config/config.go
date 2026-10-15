@@ -65,6 +65,9 @@ func DecodeConfig(data []byte, extraConfigDatas ...[]byte) (cfg Config, err erro
 	if err := v.Unmarshal(&cfg, NewViperDecoderConfig()); err != nil {
 		return cfg, fmt.Errorf("decode merged config: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("validate merged config: %w", err)
+	}
 	return cfg, nil
 }
 

@@ -22,6 +22,22 @@ export ESS_SECRETS_PATH="$(pwd)/examples/secrets"
 local_secrets_path="$(pwd)/examples/secrets"
 real_secrets_path="/etc/byoo-otel-collector/secrets"
 
+prepend_spdx_header() {
+    local file="$1"
+    if head -n 1 "$file" | grep -q '^# SPDX-FileCopyrightText:'; then
+        return
+    fi
+
+    local tmp_file="${file}.tmp"
+    {
+        echo "# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved."
+        echo "# SPDX-License-Identifier: Apache-2.0"
+        echo
+        cat "$file"
+    } > "$tmp_file"
+    mv "$tmp_file" "$file"
+}
+
 mkdir -p _output
 for input_file in testdata/*.json; do
     echo "=== Test $input_file ==="
@@ -38,6 +54,7 @@ for input_file in testdata/*.json; do
                 else
                     sed -i "s|${local_secrets_path}|${real_secrets_path}|g" examples/otelconfigs/${backend_type}/config_${compute_type}_${req_type}_${basename}.yaml
                 fi
+                prepend_spdx_header "examples/otelconfigs/${backend_type}/config_${compute_type}_${req_type}_${basename}.yaml"
                 rm $generated_file
             done
         done

@@ -15,35 +15,46 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 #### Modified
+
 **General**
-  - .gitignore
+
+- .gitignore
 
 **Config**
-  - config/config.go
-  - config/template.go
+
+- config/config.go
+- config/template.go
 
 **Dependency**
-  - dependency/client_set.go
-  - dependency/vault_common.go
-  - dependency/vault_read.go
-  - dependency/vault_write.go
+
+- dependency/client_set.go
+- dependency/vault_common.go
+- dependency/vault_read.go
+- dependency/vault_write.go
 
 **Manager**
-  - manager/runner.go
- 
+
+- manager/runner.go
+
 **Renderer**
-  - renderer/renderer.go
+
+- renderer/renderer.go
 
 **Template**
-  - template/funcs.go
-  - template/template.go
+
+- template/funcs.go
+- template/template.go
 
 **Watch**
-  - watch/view.go
+
+- watch/view.go
 
 #### New Files
+
 **Nv Release**
-  - nv_releases/
+
+- nv_releases/
 
 **Dependency**
-  - dependency/nv_errors.go
+
+- dependency/nv_errors.go

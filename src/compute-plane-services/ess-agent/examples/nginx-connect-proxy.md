@@ -82,6 +82,7 @@ default it listens on port 8000 and will publish an `index.html` if found.
 ```shell
 $ python -m SimpleHTTPServer
 ```
+
 ### Use a Sidecar to add it to the Connect mesh network
 
 Then start the sidecar for the `webserver` service.
@@ -94,6 +95,7 @@ $ consul connect proxy -sidecar-for webserver
 with consul in the `consul-services.json` config file above.
 
 #### index.html
+
 ```html
 cat > index.html << EOF
 Brought to you by NGINX!
@@ -111,18 +113,23 @@ the root certificate (the CA) and the client certificates. You can use a
 separate template for each certificate, to put each in their own file.
 
 #### ca.crt
+
 ```liquid
 cat > ca.crt.tmpl << EOF
 {{range caRoots}}{{.RootCertPEM}}{{end}}
 EOF
 ```
+
 #### cert.pem
+
 ```liquid
 cat > cert.pem.tmpl << EOF
 {{with caLeaf "ingress"}}{{.CertPEM}}{{end}}
 EOF
 ```
+
 #### cert.key
+
 ```liquid
 cat > cert.key.tmpl << EOF
 {{with caLeaf "ingress"}}{{.PrivateKeyPEM}}{{end}}
@@ -134,6 +141,7 @@ configuration file template for the NGINX proxy, it uses the `connect` template
 function to get all the "webserver" connect enabled services.
 
 #### nginx-proxy.conf.tmpl
+
 ```nginx
 cat > nginx-proxy.conf.tmpl << EOF
 daemon off;
@@ -162,9 +170,9 @@ http {
 }
 EOF
 ```
+
 For more on the details of the NGINX configuration file, please see the [NGINX
 documentation][nginx].
-
 
 ## Running the NGINX Ingress Proxy with Consul-Template
 
@@ -179,6 +187,7 @@ rendered (files written). Note that if multiple templates are rendered, it will
 still only restart it once.
 
 #### ingress-config.hcl
+
 ```hcl
 cat > ingress-config.hcl << EOF
 exec {
@@ -204,6 +213,7 @@ EOF
 ```
 
 ## Test it
+
 ```shell
 $ curl http://localhost:8080
 Welcome to nginx!
@@ -253,6 +263,5 @@ $ ./run-nginx-connect-proxy
 
 [mesh]: https://learn.hashicorp.com/consul/getting-started/connect
 [nginx]: https://docs.nginx.com/
-[nginx_proxy]: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
 [intentions]: https://www.consul.io/docs/connect/intentions.html
 [screen]: https://www.gnu.org/software/screen/

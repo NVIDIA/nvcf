@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $backendRouter := .Values.llmRequestRouter.backendRouter -}}
+{{- $pdb := $backendRouter.podDisruptionBudget | default dict -}}
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") $pdb.enabled }}
+{{- $pdbMinAvailable := $pdb.minAvailable | toString -}}
+{{- $pdbMaxUnavailable := $pdb.maxUnavailable | toString -}}
+{{- if and (ne $pdbMinAvailable "") (ne $pdbMaxUnavailable "") }}
+{{- fail "backendRouter.podDisruptionBudget: set exactly one of minAvailable or maxUnavailable, not both" }}
+{{- end }}
+{{- if and (eq $pdbMinAvailable "") (eq $pdbMaxUnavailable "") }}
+{{- fail "backendRouter.podDisruptionBudget: set exactly one of minAvailable or maxUnavailable" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+spec:
+  {{- if ne $pdbMinAvailable "" }}
+  minAvailable: {{ $pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 6 }}
+{{- end }}

@@ -5,6 +5,7 @@ A Go-based test harness to validate the EC P-256 signing key generation function
 ## Overview
 
 This harness:
+
 1. Calls the bash `generate_asymmetric_signing_key()` function via subprocess
 2. Parses the resulting JWK
 3. Signs a JWT using Go's `crypto/ecdsa`
@@ -64,6 +65,7 @@ docker run --rm \
 ```
 
 **Expected Result:**
+
 - ~56 failures (5.6%)
 - `d` lengths: mix of 40, 42, and 43 chars
 
@@ -92,6 +94,7 @@ docker run --rm \
 ```
 
 **Expected Result:**
+
 - 0 failures (0%)
 - All `d` lengths: 43 chars
 
@@ -121,6 +124,7 @@ docker run --rm \
 ```
 
 **Expected Result (after fix is merged):**
+
 - 0 failures (0%)
 - All `d` lengths: 43 chars
 
@@ -184,6 +188,7 @@ apk add --no-cache openssl uuidgen bash
 ### Test completes instantly with 100% parse errors
 
 This usually means the bash script failed to execute. Check:
+
 1. Tools are installed in container
 2. Script path is correct
 3. Script has execute permissions
@@ -199,4 +204,3 @@ Always test in a Docker container.
 
 - Bug Report: `docs/bug-report-notary-signing-key-corruption.md`
 - Harness Design: `docs/signing-key-test-harness-design.md`
-

@@ -1,9 +1,8 @@
-> [!NOTE]
-> The NVCF CLI is now maintained natively in this monorepo under [`src/clis/nvcf-cli`](src/clis/nvcf-cli/). The former `ncp/nvcf/cli` repository is retained as historical import context; new CLI changes should land here.
-
 ![NVCF banner](docs/user/images/nvcf-banner.svg)
 
-[Documentation](docs/user/index.md) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+[![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
+
+[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 # NVIDIA Cloud Functions
 
@@ -14,7 +13,7 @@ examples, CLI code, agent skills, and validation tooling.
 
 ## Architecture
 
-![NVCF architecture](docs/user/images/self-hosted-component-overview.png)
+![NVCF architecture](docs/user/images/nvcf-high-level-stack.svg)
 
 NVCF runs as Kubernetes services that manage function lifecycle, invocation
 routing, GPU cluster integration, artifact access, secrets, observability, and
@@ -31,6 +30,11 @@ At a high level:
 - Function artifacts live in registries that the NVCF deployment can access.
 - Observability, dashboards, and runbooks help operators monitor health and
   debug workload behavior.
+
+The following diagram shows how self-managed NVCF can span regions and GPU
+clusters.
+
+<img src="docs/user/images/nvcf-multi-region-multi-cluster.svg" alt="NVCF multi-region and multi-cluster architecture" width="80%">
 
 ### Workload types
 
@@ -60,6 +64,25 @@ Kubernetes resources.
 | Mixed GPU support | Supports mixed GPU types across clusters for workloads with different GPU requirements. |
 | Health checks and telemetry | Tracks worker status and request latency through health checks and telemetry. |
 
+## Usage
+
+After installing a self-managed NVCF deployment and configuring `nvcf-cli`, a
+typical function workflow is:
+
+```bash
+nvcf-cli init
+nvcf-cli api-key generate
+
+# Update the example file with your function image before creating it.
+nvcf-cli function create --input-file src/clis/nvcf-cli/examples/create-function.json
+nvcf-cli function deploy create
+nvcf-cli function invoke --request-body '{"message": "hello world"}'
+```
+
+For the full setup, cleanup, and configuration flow, see
+[`docs/user/cli.md`](docs/user/cli.md) and
+[`docs/user/quickstart.md`](docs/user/quickstart.md).
+
 ## Repository map
 
 | Area | Paths | Purpose |
@@ -74,9 +97,102 @@ Kubernetes resources.
 | Tools | [`tools/`](tools/) | Build, docs, dependency, license, and validation utilities. |
 | AI tooling | [`ai-tooling/`](ai-tooling/) | Public agent skills and workflow helpers for NVCF users and developers. |
 
+## Building with Bazel
+
+Bazel is the build, test, and packaging tool across the monorepo. Native
+subtrees (`src/clis/nvcf-cli`, `src/libraries/go/lib`) build fully under
+Bazel today. Phase B has additionally landed Bazel scaffolds in
+upstream-owned service trees: `nvcf-grpc-proxy`, `nvcf-ratelimiter`,
+`nvcf-nats-auth-callout-service`, `nvcf-cache/nvcf-unbound` (dns-cache),
+`nvcf-image-credential-helper`, and `nvca`. Their `BUILD.bazel`,
+`MODULE.bazel`, and `rules/oci/` files are picked up automatically when
+the subtrees are synced into the umbrella; from the umbrella you can
+build, test, and produce OCI images for any of them without leaving the
+monorepo.
+
+Quick start (Linux):
+
+```bash
+curl -fSL -o ~/.local/bin/bazel \
+  "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-$(dpkg --print-architecture)"
+chmod +x ~/.local/bin/bazel
+
+# Native subtrees
+bazel build //src/clis/nvcf-cli:nvcf-cli            # host binary
+bazel test  //src/clis/nvcf-cli/...                 # unit tests
+bazel build //src/clis/nvcf-cli:dist                # all 5 platforms
+
+# Phase B upstream example: build the grpc-proxy multi-arch OCI image
+bazel build //src/invocation-plane-services/grpc-proxy:image_index
+bazel test  //src/invocation-plane-services/grpc-proxy/...
+
+# Run the full tree
+bazel test //...
+```
+
+Quick start (macOS):
+
+```bash
+brew install bazelisk
+
+bazel build //src/clis/nvcf-cli:nvcf-cli
+bazel test  //src/clis/nvcf-cli/...
+bazel build //src/clis/nvcf-cli:dist
+```
+
+Builds read from the configured remote cache by default and do not upload local
+results. If you are off the network path that can reach that cache and Bazel
+fails before local execution starts, disable the remote cache for that build:
+
+```bash
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
+To make the local-only path persistent, add the override to your user Bazel
+config:
+
+```bash
+echo 'build --remote_cache=' >> ~/.bazelrc.user
+```
+
+To seed the cache from a dev box (corp network or VPN required), add
+`--config=remote-write`:
+
+```bash
+bazel build --config=remote-write //src/clis/nvcf-cli/...
+```
+
+Full setup, day-to-day commands, OCI image build/push, stamping, caches,
+remote-cache probe, and CI map live in [`BAZEL.md`](BAZEL.md).
+For CLI-specific developer flow see [`src/clis/nvcf-cli/README.md`](src/clis/nvcf-cli/README.md).
+
+## Local dev env setup
+
+Before opening your first pull request, set up a local build and test
+environment:
+
+1. Install Bazel through bazelisk. See [Building with Bazel](#building-with-bazel).
+2. Confirm your toolchain with `bazel build //src/clis/nvcf-cli:nvcf-cli`.
+3. Run the relevant tests locally before pushing:
+   `bazel test //src/clis/nvcf-cli/...`, or `bazel test //...` for the full tree.
+
+See [`BAZEL.md`](BAZEL.md) for the complete setup, cache, and CI map.
+
+## Roadmap
+
+[GitHub issue #27](https://github.com/NVIDIA/nvcf/issues/27) is the current
+public roadmap for the quarter. Use that issue as the source of truth for
+active priorities, status updates, and follow-up proposals.
+
+The broader [issues board](https://github.com/NVIDIA/nvcf/issues) tracks the
+remaining backlog. Have an idea or a request that is not covered by the
+quarterly roadmap? Start a [Discussion](https://github.com/NVIDIA/nvcf/discussions)
+or file a [feature issue](https://github.com/NVIDIA/nvcf/issues/new/choose).
+
 ## Support
 
-- If you have found a bug or want to request a feature, please open a [GitHub issue](https://github.com/nvidia/nvcf/issues/new/choose) in this repository. Use the appropriate template and include the component name in the title (e.g., [nvcf-nvca] Pod fails to start on arm64).
+- File bugs, feature ideas, and documentation requests as [GitHub issues](https://github.com/NVIDIA/nvcf/issues/new/choose). Use the appropriate template and include the component name in the title (for example, [nvcf-nvca] Pod fails to start on arm64).
+- Use [GitHub Discussions](https://github.com/NVIDIA/nvcf/discussions) for support and usage help.
 - To report a security vulnerability see [`SECURITY.md`](SECURITY.md). Do not open a public issue.
 
 ## Contributing
@@ -87,7 +203,7 @@ We welcome contributions of all sizes, from typo fixes to new features. See
 NVCF is a new open source project, and we are actively smoothing the
 contribution workflow. We accept external contributions through GitHub pull
 requests today, with a few temporary wrinkles while the repository becomes more
-GitHub-native.
+[GitHub-native](https://github.com/NVIDIA/nvcf/issues/27).
 
 Before changing a service, read [`AGENTS.md`](AGENTS.md) and the nearest nested
 `AGENTS.md`. The nested file is the best source for service-specific build,
@@ -109,3 +225,7 @@ guidelines.
 Dependency collection guide and tool:
 [`tools/collect-dependencies/README.md`](tools/collect-dependencies/README.md)
 and [`tools/collect-dependencies`](tools/collect-dependencies).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

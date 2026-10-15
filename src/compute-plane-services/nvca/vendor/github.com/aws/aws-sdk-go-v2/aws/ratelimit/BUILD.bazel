@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ratelimit",
+    srcs = [
+        "none.go",
+        "token_bucket.go",
+        "token_rate_limit.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/ratelimit",
+    importpath = "github.com/aws/aws-sdk-go-v2/aws/ratelimit",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ratelimit",
+    visibility = ["//visibility:public"],
+)

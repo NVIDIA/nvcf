@@ -1,0 +1,189 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    keyspace-name: test
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.scheduling: DEBUG
+    com.datastax.oss.driver.internal.core.tracker.RequestLogger: INFO
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+  prometheus:
+    metrics:
+      export:
+        enabled: false
+  metrics:
+    enable:
+      all: false
+    tags:
+      env: local
+      host_id: local-host-id
+      host_dc: localhost
+
+springdoc:
+  paths-to-exclude:
+
+icms:
+  api-keys:
+    url: http://localhost:9097
+
+  ngc:
+    nvidia-internal-idp-id: dummy-ngc-idp-id
+    enabled: false
+    service-url: https://uis.stg.ngc.nvidia.com
+
+  nats:
+    nats-enabled: false
+    nats-url: nats://localhost:4222
+    create-nats-consumers: true
+    global-stream-validation-task-enabled: true
+
+  aws:
+    region: us-east-1
+    role-arn: dummy-role
+    token-file: local_env/aws/web_token_file
+    endpoint: http://localhost:4566
+    access-key: dummy_access_key
+    secret-key: dummy_secret_key
+    sns:
+      region: us-east-1
+      topics:
+        terminate:
+          name: "gdn-instance-termination-%s.fifo"
+          id: "000000000000"
+    sqs:
+      region: us-east-1
+      endpoint: "http://localhost:4566/000000000000/gdn-spot-instance-requests-global.fifo"
+      queue-tags:
+        Environment: "local"
+
+  reservation-backup-enabled: true
+  gpu-usage-per-instance-task-enabled: true
+  gpu-usage-task-lock-ttl-in-seconds: 40
+  queue-per-instance-enabled: true
+  queue-creation-per-instance-type-enabled: true
+  instance-batch-count: 2
+  request-cancel-duration-in-min: 30
+  fail-instance-creation-for-closed-requests: false
+  cloud-failure-detection-enabled: false
+  instance-lifetime-validity-in-days: 0
+  terminate-expired-request-up-to-past-month: 0
+  terminate-expired-request-from-past-months: 2
+  terminate-expired-instances-enabled: false
+  stale-request-deletion-start-utc-hour-24h: 22
+  stale-request-deletion-end-utc-hour-24h: 1
+  populate-acknowledged-instances: true
+  instance-listing-api-enabled: true
+
+  # Feature flag to enable spot usage after reservation is exhausted for functions
+  spot-post-reserved-exhaustion-for-function-enabled: true
+
+  # lock by ttl configuration
+  cloud-failure-detection-task-lock-ttl-in-seconds: 60
+  cancel-lingering-requests-task-lock-ttl-in-seconds: 60
+  cluster-health-monitor-task-lock-ttl-in-seconds: 60
+  stale-request-deletion-task-lock-ttl-in-seconds: 60
+  terminate-expired-instances-task-lock-ttl-in-seconds: 60
+  wait-for-db-lock-by-ttl-validation-in-seconds: 5
+
+  async-long-task-schedule-initial-delay: PT30S
+  async-long-task-schedule-duration: PT2M
+  async-short-task-schedule-initial-delay: PT30S
+  async-short-task-schedule-duration: PT30S
+
+  stale-request-deletion-task-schedule-duration: PT1H
+
+  database-cleanup-task-enabled: true
+  database-records-ttl-in-days: 1
+  database-cleanup-lookup-period-in-days: 180
+  database-cleanup-lock-ttl-in-seconds: 120
+  database-cleanup-requests-enabled: true
+
+  shutting-down-instance-termination-task-enabled: true
+  shutting-down-instance-termination-task-lock-ttl-in-seconds: 120
+  shutting-down-instance-termination-threshold-in-hours: 1
+
+  telemetry:
+    enabled: false
+
+  datadog:
+    events:
+      enabled: false
+
+  byoc:
+    env: local
+    instance-batch-count: 2
+    cloud-health-ttl-for-byoc-in-sec: 120
+    k8s-version-validation-enabled: true
+    min-k8s-supported-version: "v1.25.0"
+    max-k8s-supported-version: "v1.29.2"
+    cluster-health-monitor-task-enabled: false
+    cluster-expiry-time-in-days: 30
+    # This is mapping of nca-id:cluster-name
+    skip-health-check-clusters:
+      - dummy-static-zone-nca-id: STATIC-ZONE
+    model-caching-enabled: true
+    terminate-cloud-failed-instances-from-clusters: [ ]
+    authorized-nca-id-update-enabled: true
+
+  db:
+    cloud-health-ttl-in-sec: 120
+
+  nvca:
+    tasks-creation-queues-enabled: true
+    sis-config:
+      public-key-set-endpoint: http://localhost:9092/.well-known/jwks.json
+      token-url: http://localhost:9092/token
+      spot-service-url: http://localhost:8080
+    vault-config:
+      address: ${VAULT_ADDR:http://localhost:8200}
+    cluster-version: |
+      {
+        "computePlatforms": [
+            "AWS",
+            "AZURE",
+            "OCI",
+            "ON-PREM",
+            "GCP",
+            "DGX-CLOUD"
+        ],
+        "attributes": [
+            "KataRuntimeIsolation",
+            "AccountIsolation"
+        ],
+        "nvcaVersions": [
+            {
+                "version": "2.27.0",
+                "capabilities": [
+                    "DynamicGPUDiscovery",
+                    "CachingSupport",
+                    "LogPosting"
+                ],
+                "operatorVersion": "1.1.0"
+            }
+        ]
+      }

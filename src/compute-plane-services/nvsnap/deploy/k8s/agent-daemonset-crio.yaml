@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Agent DaemonSet for CRI-O clusters
+#
+# This is the CRI-O variant of agent-daemonset.yaml. Differences:
+#   - containerd socket replaced with CRI-O socket (/run/crio/crio.sock)
+#   - Neutral checkpoint hostPath (/var/lib/nvsnap/checkpoints)
+#   - NVSNAP_CHECKPOINT_HOST_PATH env tells the agent where to drop
+#     cuda-checkpoint for nsenter-from-host execution
+#
+# Use this manifest on CRI-O clusters (OpenShift, some EKS variants, etc.).
+# The agent autodetects the runtime by probing socket paths; the only reason
+# this file exists is that K8s hostPath mounts with type: Socket require
+# the socket to exist — a single DaemonSet can't mount both.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvsnap-agent
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-agent
+    app.kubernetes.io/name: nvsnap-agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/variant: crio
+spec:
+  selector:
+    matchLabels:
+      app: nvsnap-agent
+  template:
+    metadata:
+      labels:
+        app: nvsnap-agent
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      hostPID: true
+      hostNetwork: true
+      # Required so cluster Service DNS still resolves under hostNetwork
+      # (Phase 5d: agent calls nvsnap-server.* and nvsnap-blobstore.* DNS).
+      dnsPolicy: ClusterFirstWithHostNet
+      imagePullSecrets:
+        - name: nvsnap-pull-secret
+      containers:
+        - name: agent
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.42
+          imagePullPolicy: Always
+          args:
+            - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
+            - --criu-path=/criu-bundle/criu
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Phase 5d.1: peer-fanout cascade — HOST_IP from downward API.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NVSNAP_CATALOG_URL
+              value: "http://nvsnap-server.nvsnap-system.svc.cluster.local:8080"
+            # Phase 5d.2: durable backstop. Empty disables it.
+            - name: NVSNAP_BLOB_STORE_URL
+              value: "http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000"
+            - name: PATH
+              value: "/criu-bundle:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            # Tell the agent which host directory the checkpoints hostPath is
+            # mounted from. nsenter'd cuda-checkpoint invocations use this.
+            - name: NVSNAP_CHECKPOINT_HOST_PATH
+              value: "/var/lib/nvsnap/checkpoints"
+          ports:
+            - containerPort: 8081
+              hostPort: 8081
+              name: http-api
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /var/lib/nvsnap/checkpoints
+            # CRI-O socket — path differs from containerd
+            - name: crio-sock
+              mountPath: /run/crio/crio.sock
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: host-nvidia-run
+              mountPath: /host/run/nvidia
+              readOnly: true
+            - name: host-usr
+              mountPath: /host/usr
+              readOnly: true
+            # CRI-O's containers/storage overlay root. Agent needs direct
+            # access so CRIU's mount(2) during restore can bind the container's
+            # overlay "merged" directory. Mounted at the same absolute path so
+            # paths recorded in /proc/<pid>/mountinfo resolve identically
+            # inside the agent container. HostToContainer propagation is
+            # required for new per-pod overlay mounts created after agent start.
+            - name: crio-storage
+              mountPath: /var/lib/containers/storage
+              mountPropagation: HostToContainer
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+      volumes:
+        - name: checkpoints
+          hostPath:
+            # Neutral path on host — not tied to any runtime
+            path: /var/lib/nvsnap/checkpoints
+            type: DirectoryOrCreate
+        - name: crio-sock
+          hostPath:
+            path: /run/crio/crio.sock
+            type: Socket
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: host-nvidia-run
+          hostPath:
+            path: /run/nvidia
+            type: DirectoryOrCreate
+        - name: host-usr
+          hostPath:
+            path: /usr
+            type: Directory
+        - name: crio-storage
+          hostPath:
+            path: /var/lib/containers/storage
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-agent
+  namespace: nvsnap-system
+spec:
+  selector:
+    app: nvsnap-agent
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http-api
+  clusterIP: None

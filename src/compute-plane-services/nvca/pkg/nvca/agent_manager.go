@@ -43,6 +43,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
@@ -63,6 +64,23 @@ func init() {
 
 // startControllerManagerForAgent creates and starts a controller-runtime manager
 // for auxiliary CRD controllers.
+// storageControllerTypes returns the StorageRequest controller types to
+// register with the agent's controller manager. The model-cache controller is
+// included only when caching is enabled, since it backs all storage-class-
+// selected cache backends (NVMesh / shared-FS / Samba). Callers pass the stable
+// agent-level caching flag (a.CachingSupportEnabled), not a live feature-flag
+// lookup, so the set is deterministic for the lifetime of the agent.
+func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType {
+	sts := []nvcav1new.StorageRequestType{
+		nvcav1new.SharedStorageRequest,
+		nvcav1new.InternalPersistentStorageRequest,
+	}
+	if cachingEnabled {
+		sts = append(sts, nvcav1new.ModelCacheRequest)
+	}
+	return sts
+}
+
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -97,14 +115,15 @@ func startControllerManagerForAgent(
 		return fmt.Errorf("create controller manager: %v", err)
 	}
 
-	// Create storage controllers for each type
-	sts := []nvcav1new.StorageRequestType{
-		nvcav1new.SharedStorageRequest,
-		nvcav1new.InternalPersistentStorageRequest,
-	}
-	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) {
-		sts = append(sts, nvcav1new.ModelCacheRequest)
-	}
+	// Create storage controllers for each type. The model-cache controller
+	// backs every storage-class-selected cache backend (NVMesh / shared-FS /
+	// Samba), so it is registered whenever caching is enabled.
+	cachingEnabled := a.CachingSupportEnabled
+	sts := storageControllerTypes(cachingEnabled)
+	log.WithField("controllers", sts).
+		WithField("caching_support_enabled", cachingEnabled).
+		WithField("caching_support_flag", a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport)).
+		Info("Registering storage controllers")
 	for _, st := range sts {
 		if err := storage.BuildController(a.Config, st, mgr,
 			a.ClusterName,
@@ -119,15 +138,50 @@ func startControllerManagerForAgent(
 			log.WithError(err).Errorf("Failed to create storage controller %s", st)
 			return fmt.Errorf("create storage controller %s: %v", st, err)
 		}
+		log.WithField("type", st).Info("Registered storage controller")
+	}
+
+	// Seed the model cache mount option defaults once, after the manager cache
+	// has started. A failure is logged rather than fatal: without the ConfigMap
+	// the reconciler falls back to the configured mount options.
+	if cachingEnabled {
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			if err := storage.EnsureCacheMountOptionsConfigMap(ctx, mgr.GetClient(), ""); err != nil {
+				log.WithError(err).Error("Failed to seed the cache mount option defaults")
+				return nil
+			}
+			log.Info("Cache mount option defaults are in place")
+			return nil
+		})); err != nil {
+			return fmt.Errorf("register cache mount options seeder: %w", err)
+		}
 	}
 
 	log.Info("Starting MiniService controller")
 
-	hrHTTPClient := cmnhttp.NewRetryableClient(ctx,
+	kartas, err := mscontroller.GetKartaObjects(ctx, a.backendk8scache.clients)
+	if err != nil {
+		log.Error(err, "Failed to detect Karta resource")
+		return fmt.Errorf("detect karta resource: %w", err)
+	}
+
+	revalHTTPOpts := []cmnhttp.Option{
 		cmnhttp.WithAppVersionUserAgent(types.AppName),
 		cmnhttp.WithRequestHeader(types.HeaderNVClusterID, a.ClusterID),
+	}
+	if a.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+		revalHTTPOpts = append(revalHTTPOpts, cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, a.clientMetricsRecorder, clientmetrics.PeerServiceReVal)
+		}))
+	}
+	hrHTTPClient := cmnhttp.NewRetryableClient(ctx, revalHTTPOpts...)
+	rvClient := mscontroller.NewReValClient(
+		a.HelmReValServiceURL,
+		tf,
+		hrHTTPClient,
+		metrics,
+		mscontroller.WithReValHostHeaderOverride(a.HelmReValServiceHostHeaderOverride),
 	)
-	rvClient := mscontroller.NewReValClient(a.HelmReValServiceURL, tf, hrHTTPClient, metrics)
 	if err := mscontroller.BuildController(ctx, a.Config, mgr, rvClient,
 		a.backendk8scache.nfClient,
 		a.backendk8scache.regITCache,
@@ -144,6 +198,8 @@ func startControllerManagerForAgent(
 			ClusterRegion:              a.ClusterRegion,
 			ImageCredentialHelperImage: a.ImageCredentialHelperImage,
 			CustomAnnotations:          a.backendk8scache.customAnnotations,
+			Kartas:                     kartas,
+			NsightProfilingAllowlist:   a.backendk8scache.nsightProfilingAllowlist,
 		},
 	); err != nil {
 		log.WithError(err).Error("Failed to create miniservice controller")

@@ -18,8 +18,11 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"time"
 
@@ -31,6 +34,11 @@ import (
 )
 
 var cfgFile string
+
+var (
+	configStateManager    *state.StateManager
+	configStateManagerKey string
+)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -62,19 +70,22 @@ Template file: .nvcf-cli.yaml.template (copy to .nvcf-cli.yaml and customize)
 Authentication:
 
 Generate tokens or use existing credentials:
-  NVCF_API_KEY (for user operations: list, invoke, queue details)
-  NVCF_TOKEN (for admin operations: create, deploy, delete)
+  NVCF_API_KEY (default for list, invoke, queue details)
+  NVCF_TOKEN (default for create, deploy, delete, and cluster management)
+
+For NVCF API endpoints, either bearer type can be used when it includes the
+required scope. Self-hosted SIS cluster management uses NVCF_TOKEN.
 
 Token Generation:
   Run: nvcf-cli init
   - Calls API Keys service directly (no kubectl needed!)
-  - Stores tokens in ~/.nvcf-cli-state.json
+  - Stores tokens in ~/.nvcf-cli.state
   - Works with both production and staging environments
 
 API Endpoints:
   NVCF_BASE_HTTP_URL (default: https://api.nvcf.nvidia.com)
   NVCF_BASE_GRPC_URL (default: grpc.nvcf.nvidia.com:443)
-  NVCF_INVOKE (dedicated invocation endpoint)
+  NVCF_INVOKE_URL (dedicated invocation endpoint)
   API_KEYS_SERVICE_URL (API key management endpoint)
   API_KEYS_ADMIN_SERVICE_URL (admin token generation endpoint; falls back to API_KEYS_SERVICE_URL)
 
@@ -109,20 +120,57 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+func activeConfigFileForState() string {
+	if cfgFile != "" {
+		return resolveConfigFilePath(cfgFile)
+	}
+	return resolveConfigFilePath(viper.ConfigFileUsed())
+}
+
+func resolveConfigFilePath(configPath string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return ""
+	}
+
+	const tildePrefix = "~" + string(filepath.Separator)
+	configPath = os.ExpandEnv(configPath)
+	if configPath == "~" {
+		configPath = tildePrefix + ".nvcf-cli.yaml"
+	}
+
+	if strings.HasPrefix(configPath, tildePrefix) {
+		if home, err := os.UserHomeDir(); err == nil {
+			trimmed := strings.TrimPrefix(configPath, tildePrefix)
+			return filepath.Clean(filepath.Join(home, trimmed))
+		}
+		return filepath.Clean(configPath)
+	}
+
+	absolutePath, err := filepath.Abs(configPath)
+	if err == nil {
+		return filepath.Clean(absolutePath)
+	}
+	return filepath.Clean(configPath)
+}
+
 // GetCurrentConfigName returns the name of the current config file for state management
 func GetCurrentConfigName() string {
-	if cfgFile != "" {
-		return cfgFile
-	}
-	return "" // Use default state
+	return activeConfigFileForState()
 }
 
 // GetStateManagerForCurrentCommand returns the appropriate state manager for the current config context
 func GetStateManagerForCurrentCommand() *state.StateManager {
-	if cfgFile != "" {
-		return state.GetStateManagerForConfig(cfgFile)
+	configFile := activeConfigFileForState()
+	if configFile == "" {
+		return state.DefaultStateManager
 	}
-	return state.DefaultStateManager
+	if configStateManager != nil && configStateManagerKey == configFile {
+		return configStateManager
+	}
+	configStateManager = state.GetStateManagerForConfig(configFile)
+	configStateManagerKey = configFile
+	return configStateManager
 }
 
 // LoadStateForCurrentCommand loads state using the current config context
@@ -134,11 +182,12 @@ func LoadStateForCurrentCommand() error {
 // SaveStateForCurrentCommand saves state using the current config context
 func SaveStateForCurrentCommand() error {
 	sm := GetStateManagerForCurrentCommand()
+	configFile := activeConfigFileForState()
 
-	// Update config file path in state when using --config
-	if cfgFile != "" {
+	// Update config file path in state when a config file is active.
+	if configFile != "" {
 		currentState := sm.GetState()
-		sm.SetConfig(cfgFile, currentState.KubeconfigPath, currentState.ClusterMode)
+		sm.SetConfig(configFile, currentState.KubeconfigPath, currentState.ClusterMode)
 	}
 
 	return sm.Save()
@@ -226,9 +275,21 @@ func initConfig() {
 	viper.BindEnv("api_keys_host", "API_KEYS_HOST")
 	viper.BindEnv("api_host", "API_HOST")
 	viper.BindEnv("invoke_host", "INVOKE_HOST")
+	viper.BindEnv("nvct_host", "NVCT_HOST")
+	// icms_host uses the NVCF_-prefixed form to match the documented
+	// env var in clusters.go and the os.Getenv("NVCF_ICMS_HOST") read
+	// in self_hosted_control_plane_profile.go's sisHost resolution.
+	viper.BindEnv("icms_host", "NVCF_ICMS_HOST")
+	// Cluster-validator image is sourced from the same config layer as the
+	// other endpoints so operators can flip between staging and prod by
+	// swapping --config files. The env name matches the historical
+	// NVCF_CLI_CLUSTER_VALIDATOR_IMAGE override.
+	viper.BindEnv("cluster_validator_image", "NVCF_CLI_CLUSTER_VALIDATOR_IMAGE")
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil && viper.GetBool("debug") {
 		fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+	} else if err != nil && !errors.As(err, &viper.ConfigFileNotFoundError{}) {
+		fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
 	}
 }

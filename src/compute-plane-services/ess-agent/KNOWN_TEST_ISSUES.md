@@ -9,7 +9,7 @@ required services are available. Each section describes the failure, the skip
 mechanism, and what is needed to re-enable the test.
 
 All skips are gated on the `SKIP_INTEGRATION_TESTS` environment variable
-(set in `.gitlab-ci.yml`) or the `GITLAB_CI` variable (set automatically by
+(set in `tools/ci/subproject-validations.yaml` / child pipeline) or the `GITLAB_CI` variable (set automatically by
 GitLab runners).
 
 ---
@@ -20,6 +20,7 @@ GitLab runners).
 any individual test runs).
 
 **Symptom:**
+
 ```
 panic: Error making API request | URL: POST http://127.0.0.1:<port>/v1/sys/mounts/pki
        | Code: 403 | Detail: permission denied
@@ -31,14 +32,15 @@ GitLab CI Kubernetes executor the dev server either fails to initialise
 properly (missing `IPC_LOCK` / `mlock` capability) or another vault process
 interferes, causing all authenticated API calls to return 403.
 
-**Skip mechanism:** `SKIP_INTEGRATION_TESTS` env var in `.gitlab-ci.yml`.
+**Skip mechanism:** `SKIP_INTEGRATION_TESTS` env var in subproject CI config.
 When set, `dependency.TestMain` exits 0 immediately.
 
 **To re-enable:**
+
 1. Build and push the CI image from `nv_releases/docker/Dockerfile.ci`.
-2. Use that image in `.gitlab-ci.yml` (see the TODO comment there).
+2. Wire that image in `tools/ci/subproject-validations.yaml` (ess-agent checks).
 3. Ensure the CI runner grants `IPC_LOCK` or set `VAULT_DISABLE_MLOCK=true`.
-4. Remove `SKIP_INTEGRATION_TESTS` from `.gitlab-ci.yml`.
+4. Remove `SKIP_INTEGRATION_TESTS` from subproject CI config.
 
 ---
 
@@ -58,17 +60,20 @@ When set, `dependency.TestMain` exits 0 immediately.
 ## 3. Root package and `manager` — consul integration tests (#2)
 
 **Tests affected:**
+
 - `TestCLI_Run/once`, `TestCLI_Run/reload`, `TestCLI_Run/once_from_env`
   (root package, `cli_test.go`)
 - `TestRunner_Start/single_dependency` and other consul-dependent subtests
   (`manager/runner_test.go`)
 
 **Symptom (root):**
+
 ```
 cli_test.go: timeout: "ESS Agent instance id: …\nESS Agent init(mode): false\n"
 ```
 
 **Symptom (manager):**
+
 ```
 panic: test timed out after 30m0s
     running tests: TestRunner_Start/single_dependency (3m0s)
@@ -81,6 +86,7 @@ The `manager` package's `Runner.init()` sleeps waiting for a response
 that never arrives, consuming the entire 30-minute `go test` timeout.
 
 **Skip mechanism:**
+
 - Root package: `SKIP_INTEGRATION_TESTS` env var in `main_test.go`
   exits `TestMain` early; individual `TestCLI_Run` subtests also call
   `t.Skip`.
@@ -99,6 +105,7 @@ require a privileged runner or the custom CI image). Remove the
 **Tests affected:** `TestSyslogFilter` in `logging/syslog_test.go`.
 
 **Symptom:**
+
 ```
 syslog_test.go: err: Unix syslog delivery error
 ```
@@ -120,6 +127,7 @@ that this test only runs locally / on full VMs.
 (upstream HashiCorp consul-template).
 
 **Symptom:**
+
 ```
 ==================
 WARNING: DATA RACE
@@ -136,7 +144,7 @@ Goroutine N (running) created at:
 ...
     testing.go:1617: race detected during execution of test
 --- FAIL: TestReload_noSignal (0.15s)
-FAIL	github.com/hashicorp/consul-template/child	1.168s
+FAIL github.com/hashicorp/consul-template/child 1.168s
 ```
 
 **Root cause:** The test uses `defer c.Stop()` and a 10ms `killTimeout`,
@@ -145,6 +153,7 @@ waits for the killed shell process and the test's own teardown calling
 `Stop` again. The race is in vendored upstream code
 (`child/child.go:275/297/456`) and triggers intermittently under
 `go test -race`. Confirmed flake history:
+
 - `main` pipeline 48613751 (sha `cb95a2c`)
 - MR !3 pipeline 50230314 (sha `b64c1c3`)
 
@@ -152,7 +161,7 @@ The race does not affect non-race builds and does not surface in
 production code paths. Other `child/` tests (including `TestReload_signal`,
 `TestKill_signal`) do not flake.
 
-**Skip mechanism:** `.gitlab-ci.yml` `go-test:` script passes
+**Skip mechanism:** subproject CI `go-test:` script passes
 `-skip '^TestReload_noSignal$'` to `go test`. This excludes only the
 flaky test; every other test in `child/` continues to run with `-race`.
 Local developer runs (without `-skip`) still execute the test, so the
@@ -161,8 +170,7 @@ upstream behaviour stays under coverage outside CI.
 **To re-enable:** Either fix the race upstream (file an issue against
 [hashicorp/consul-template](https://github.com/hashicorp/consul-template))
 and pull the patch back into `mpl-files-modified.md`, or wait for
-upstream to address it. Once fixed, drop the `-skip` flag from
-`.gitlab-ci.yml`.
+upstream to address it. Once fixed, drop the `-skip` flag from subproject CI config.
 
 ---
 

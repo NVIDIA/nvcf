@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""Property test for tools/ci/bazel-lock-touches-java.
+
+The example-based suite next to this file pins the cases we thought of. Two
+rounds of review found real defects it did not cover, both in the same place:
+comparing two parsed locks. dict.get() could not tell an absent key from a null
+one, so a new top-level section added as null compared equal to its own
+absence; and defaulting an absent moduleExtensions to {} made deleting the whole
+section look like an empty extension set, so the tool answered "skip Java".
+
+Enumerating more examples would keep losing that race. This asserts the
+invariant instead, over generated mutations, so the class of bug is closed
+rather than two instances of it.
+
+Invariant: the tool may answer "false" only when the two locks differ
+exclusively in the values of moduleExtensions entries whose keys are all
+recognised as Java-irrelevant. Every other difference, of any shape, must
+answer "true".
+
+The expected answer is derived here from the parsed structures directly,
+independently of how the tool computes it, so agreement is evidence rather
+than a restatement.
+"""
+
+import itertools
+import json
+import pathlib
+import random
+import subprocess
+import sys
+import tempfile
+
+TOOL = pathlib.Path(__file__).resolve().parent / "bazel-lock-touches-java"
+
+IRRELEVANT = {
+    "@@rules_rust+//crate_universe:extension.bzl%crate",
+    "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr",
+}
+OTHER_EXTS = [
+    "@@rules_oci+//oci:extensions.bzl%oci",
+    "@@rules_python+//python/uv:uv.bzl%uv",
+    "@@rules_proto_grpc_java+//:module_extensions.bzl%download_plugins",
+]
+SECTIONS = ["lockFileVersion", "registryFileHashes", "selectedYankedVersions", "facts"]
+
+MISSING = object()
+
+
+def base_lock(only_irrelevant=False):
+    """A base lock. only_irrelevant makes moduleExtensions contain nothing but
+    recognised keys, which is the shape that exposes mishandling of the section
+    itself: with an unrecognised key present, deleting or mistyping the section
+    is caught incidentally by that key showing up in the diff. Mutation testing
+    found this gap; without this variant the deletion bug survived 400 cases."""
+    if only_irrelevant:
+        return {
+            "lockFileVersion": 26,
+            "registryFileHashes": {"h": "aaa"},
+            "selectedYankedVersions": {},
+            "moduleExtensions": {
+                "@@rules_rust+//crate_universe:extension.bzl%crate": {"v": 1},
+                "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr": {"v": 1},
+            },
+            "facts": {"f": 1},
+        }
+    return {
+        "lockFileVersion": 26,
+        "registryFileHashes": {"h": "aaa"},
+        "selectedYankedVersions": {},
+        "moduleExtensions": {
+            "@@rules_rust+//crate_universe:extension.bzl%crate": {"v": 1},
+            "@@rules_oci+//oci:extensions.bzl%oci": {"v": 1},
+        },
+        "facts": {"f": 1},
+    }
+
+
+def expected(a, b):
+    """Independently derive whether Java must run. True means run Java."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return True
+    if a == b:
+        return False
+    keys = set(a) | set(b)
+    for k in keys:
+        if a.get(k, MISSING) == b.get(k, MISSING):
+            continue
+        if k != "moduleExtensions":
+            return True
+    if "moduleExtensions" not in a or "moduleExtensions" not in b:
+        return True
+    ma, mb = a["moduleExtensions"], b["moduleExtensions"]
+    if not isinstance(ma, dict) or not isinstance(mb, dict):
+        return True
+    for k in set(ma) | set(mb):
+        if ma.get(k, MISSING) == mb.get(k, MISSING):
+            continue
+        if k not in IRRELEVANT:
+            return True
+    return False
+
+
+def mutate(rng, lock):
+    """Apply one random structural mutation."""
+    d = json.loads(json.dumps(lock))
+    op = rng.choice(
+        [
+            "ext_value", "ext_add", "ext_del", "ext_null",
+            "sec_value", "sec_add", "sec_del", "sec_null",
+            "me_del", "me_type", "root_type", "noop",
+        ]
+    )
+    me = d.get("moduleExtensions")
+    if op == "ext_value" and isinstance(me, dict) and me:
+        me[rng.choice(sorted(me))] = {"v": rng.randint(2, 99)}
+    elif op == "ext_add" and isinstance(me, dict):
+        me[rng.choice(sorted(IRRELEVANT) + OTHER_EXTS)] = {"v": rng.randint(2, 99)}
+    elif op == "ext_del" and isinstance(me, dict) and me:
+        del me[rng.choice(sorted(me))]
+    elif op == "ext_null" and isinstance(me, dict) and me:
+        me[rng.choice(sorted(me))] = None
+    elif op == "sec_value":
+        d[rng.choice(SECTIONS)] = {"changed": rng.randint(2, 99)}
+    elif op == "sec_add":
+        d[f"newSection{rng.randint(1, 3)}"] = rng.choice([None, {}, 1, "x"])
+    elif op == "sec_del":
+        k = rng.choice(SECTIONS)
+        d.pop(k, None)
+    elif op == "sec_null":
+        d[rng.choice(SECTIONS)] = None
+    elif op == "me_del":
+        d.pop("moduleExtensions", None)
+    elif op == "me_type":
+        d["moduleExtensions"] = rng.choice([[], None, "x", 3])
+    elif op == "root_type":
+        return rng.choice([[], None, "x", 3])
+    return d
+
+
+def run_tool(repo, base_sha, head_sha):
+    out = subprocess.run(
+        [sys.executable, str(TOOL), base_sha, head_sha],
+        cwd=repo, capture_output=True, text=True,
+    )
+    return out.stdout.strip()
+
+
+def git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def main():
+    rng = random.Random(20260818)
+    failures = []
+    with tempfile.TemporaryDirectory() as repo:
+        git(repo, "init", "-q", ".")
+        git(repo, "config", "user.email", "t@example.com")
+        git(repo, "config", "user.name", "t")
+        p = pathlib.Path(repo, "MODULE.bazel.lock")
+
+        cases = 0
+        for i in range(400):
+            # Alternate the base so both extension shapes are exercised.
+            base = base_lock(only_irrelevant=(i % 2 == 1))
+            p.write_text(json.dumps(base))
+            git(repo, "add", "MODULE.bazel.lock")
+            subprocess.run(
+                ["git", "commit", "-qm", f"base {i}"], cwd=repo, capture_output=True
+            )
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+            ).stdout.strip()
+            head = base
+            for _ in range(rng.randint(1, 3)):
+                head = mutate(rng, head if isinstance(head, dict) else base_lock())
+            p.write_text(json.dumps(head))
+            git(repo, "add", "MODULE.bazel.lock")
+            subprocess.run(
+                ["git", "commit", "-qm", f"case {i}"], cwd=repo, capture_output=True
+            )
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+            ).stdout.strip()
+
+            want = "true" if expected(base, head) else "false"
+            got = run_tool(repo, base_sha, head_sha)
+            cases += 1
+            if got != want:
+                failures.append((i, want, got, json.dumps(head)[:300]))
+                if len(failures) >= 5:
+                    break
+
+    if failures:
+        print(f"property test FAILED after {cases} cases", file=sys.stderr)
+        for i, want, got, doc in failures:
+            print(f"  case {i}: want {want}, got {got}\n    head={doc}", file=sys.stderr)
+        return 1
+    print(f"bazel-lock-touches-java properties: {cases} generated cases hold")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

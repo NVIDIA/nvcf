@@ -2,6 +2,7 @@
 
 If you are interested in contributing to nvcf-image-credential-helper, your contributions will fall
 into three categories:
+
 1. You want to report a bug, feature request, or documentation issue
     - File an [issue](https://github.com/NVIDIA/nvcf-image-credential-helper/issues/new/choose)
     describing what you encountered or what you want to see changed.
@@ -90,20 +91,23 @@ For all development, your changes should be pushed into a branch in your own for
 
 ### Signing Your Work
 
-* We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
+- We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
 
-  * Any contribution which contains commits that are not Signed-Off will not be accepted.
+  - Any contribution which contains commits that are not Signed-Off will not be accepted.
 
-* To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
+- To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
+
   ```bash
   $ git commit -s -m "Add cool feature."
   ```
+
   This will append the following to your commit message:
+
   ```
   Signed-off-by: Your Name <your@email.com>
   ```
 
-* Full text of the DCO:
+- Full text of the DCO:
 
   ```
     Developer Certificate of Origin
