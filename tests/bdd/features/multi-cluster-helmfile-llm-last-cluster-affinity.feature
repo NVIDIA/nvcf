@@ -278,9 +278,11 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
       # Session A's last cluster goes away: force-terminate version A on
       # compute-1. The router no longer lists that instance, so the next turn
       # is classified stale and fails over to a cluster that can serve it.
+      # The worker pod has a 120 s termination grace period, longer than the
+      # CLI's 60 s default wait for the eviction to finish.
       When I successfully run command:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster agent kill-function ${LAST_CLUSTER_FUNCTION_ID} ${LAST_CLUSTER_VERSION_A_ID} --compute-plane-context k3d-ncp-local-compute-1 --reason bdd-last-cluster-failover --yes
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster agent kill-function ${LAST_CLUSTER_FUNCTION_ID} ${LAST_CLUSTER_VERSION_A_ID} --compute-plane-context k3d-ncp-local-compute-1 --reason bdd-last-cluster-failover --timeout 5m --yes
         """
       Then the command output should contain "[deleted]"
       When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:

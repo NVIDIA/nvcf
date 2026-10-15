@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-const routerSelector = "app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router"
+const routerSelector = "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router"
 
 func TestPrometheusTotalsCommandKeepsTargetsAndExpectationsExplicit(t *testing.T) {
 	t.Setenv("BDD_FUNCTION_ID", "function-1")

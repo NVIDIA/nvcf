@@ -1884,7 +1884,7 @@ func TestPrometheusMetricsShouldTotalRunsVisibleExpectations(t *testing.T) {
 	err := sc.prometheusMetricsShouldTotal(
 		context.Background(),
 		"9090",
-		"app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router",
+		"app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router",
 		"nvcf",
 		"k3d-ncp-local-cp",
 		"2m",
@@ -1894,7 +1894,7 @@ func TestPrometheusMetricsShouldTotalRunsVisibleExpectations(t *testing.T) {
 		t.Fatalf("observe Prometheus totals: %v", err)
 	}
 	want := "bash tests/bdd/scripts/wait-prometheus-totals.sh 9090" +
-		" app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router nvcf k3d-ncp-local-cp 2m" +
+		" app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router nvcf k3d-ncp-local-cp 2m" +
 		" stargate_routing_session_selections_total routing_key=function-1,session_state=returning,selection=primary exactly 4" +
 		" llm_api_gateway_last_cluster_lookups_total result=hit 'at least' 4"
 	if len(fake.runs) != 1 || fake.runs[0].command != want {

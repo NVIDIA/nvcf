@@ -1964,7 +1964,7 @@ func TestMultiClusterHelmfileLLMLastClusterAffinityFeatureFileWiresToSteps(t *te
 			ExitCode: 0,
 			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
 		},
-		cliPrefix + " cluster agent kill-function function-1 version-1 --compute-plane-context k3d-ncp-local-compute-1 --reason bdd-last-cluster-failover --yes": {
+		cliPrefix + " cluster agent kill-function function-1 version-1 --compute-plane-context k3d-ncp-local-compute-1 --reason bdd-last-cluster-failover --timeout 5m --yes": {
 			ExitCode: 0,
 			Stdout:   "terminated 1 request(s) in namespace nvca-system\n  nvca-system/request-1  function=function-1 version=version-1  [deleted]\n",
 		},
