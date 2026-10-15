@@ -114,10 +114,13 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 # cluster; returning sessions, a new session, and failover are checked through
 # router and gateway metrics. The image tag variables are optional. Set them
 # when the stack-pinned LLM API gateway or request router images predate
-# last-cluster affinity.
+# last-cluster affinity. LAST_CLUSTER_INSTANCE_TYPE defaults to
+# NCP.GPU.H100_1x; on a host with about 8 CPUs the fake GPU sizing registers
+# only NCP.GPU.H100_2x, so set it to that there.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   LLM_API_GATEWAY_IMAGE_TAG=<optional-tag> \
   LLM_REQUEST_ROUTER_IMAGE_TAG=<optional-tag> \
+  LAST_CLUSTER_INSTANCE_TYPE=<optional-type> \
   go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 

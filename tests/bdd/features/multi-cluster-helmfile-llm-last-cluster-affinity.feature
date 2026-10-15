@@ -140,11 +140,15 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
 
     Background:
       Given these environment variables are set:
-        | name            |
-        | NVCF_CLI        |
-        | REPO_ROOT       |
-        | SAMPLE_NGC_ORG  |
-        | SAMPLE_NGC_TEAM |
+        | name                       |
+        | NVCF_CLI                   |
+        | REPO_ROOT                  |
+        | SAMPLE_NGC_ORG             |
+        | SAMPLE_NGC_TEAM            |
+        | LAST_CLUSTER_INSTANCE_TYPE |
+      # LAST_CLUSTER_INSTANCE_TYPE defaults to NCP.GPU.H100_1x in the live
+      # entry point. Hosts too small for the fake GPU sizing register only
+      # NCP.GPU.H100_2x and set it to that.
       # This rule depends on the install scenario above and is not a
       # standalone tag target.
 
@@ -174,7 +178,7 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_1x     |
+        | --instance-type | ${LAST_CLUSTER_INSTANCE_TYPE} |
         | --backend       | ncp-local-compute-1 |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |
@@ -226,7 +230,7 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
       And the HTTP request header "Content-Type" is "application/json"
       When I send a "POST" request to "http://api.localhost:8080/v2/nvcf/deployments/functions/${LAST_CLUSTER_FUNCTION_ID}/versions/${LAST_CLUSTER_VERSION_B_ID}" with body:
         """
-        {"deploymentSpecifications":[{"gpu":"H100","instanceType":"NCP.GPU.H100_1x","backend":"ncp-local-compute-2","regions":["us-west-1"],"minInstances":1,"maxInstances":1}]}
+        {"deploymentSpecifications":[{"gpu":"H100","instanceType":"${LAST_CLUSTER_INSTANCE_TYPE}","backend":"ncp-local-compute-2","regions":["us-west-1"],"minInstances":1,"maxInstances":1}]}
         """
       Then the HTTP status should be 200 or 202
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "

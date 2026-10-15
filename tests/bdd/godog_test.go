@@ -1947,6 +1947,7 @@ func TestMultiClusterHelmfileLLMLastClusterAffinityFeatureFileWiresToSteps(t *te
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	t.Setenv("LLM_API_GATEWAY_IMAGE_TAG", "")
 	t.Setenv("LLM_REQUEST_ROUTER_IMAGE_TAG", "")
+	t.Setenv(lastClusterInstanceTypeEnv, lastClusterDefaultInstanceType)
 
 	canned := map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
@@ -2883,8 +2884,19 @@ func TestMultiClusterHelmfileLLMLastClusterAffinity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
+	if os.Getenv(lastClusterInstanceTypeEnv) == "" {
+		t.Setenv(lastClusterInstanceTypeEnv, lastClusterDefaultInstanceType)
+	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-last-cluster-affinity.feature")
 }
+
+// lastClusterInstanceTypeEnv selects the instance type the last-cluster
+// affinity feature deploys to. Hosts with too few CPUs for the fake GPU
+// sizing register only NCP.GPU.H100_2x, so such hosts set it to that type.
+const (
+	lastClusterInstanceTypeEnv     = "LAST_CLUSTER_INSTANCE_TYPE"
+	lastClusterDefaultInstanceType = "NCP.GPU.H100_1x"
+)
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
 // single-cluster EKS Helmfile feature. Skipped under -short.
