@@ -115,8 +115,16 @@ spec:
           {{ $k }}: {{ $val | quote }}
           {{- end }}
       extraPodSpec:
+        {{- if $v.computeDomain }}
+        resourceClaims:
+          - {name: imex-channel, resourceClaimTemplateName: {{ $name }}-imex-channel}
+        {{- end }}
         mainContainer:
           image: {{ $v.dynamo.image }}
+          {{- if $v.computeDomain }}
+          resources:
+            claims: [{name: imex-channel}]
+          {{- end }}
           command: ["python3", "-m", "dynamo.vllm"]
           args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"]
           env:

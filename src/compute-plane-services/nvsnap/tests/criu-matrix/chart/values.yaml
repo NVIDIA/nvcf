@@ -75,6 +75,11 @@ shmSize: 8Gi
 # Anything else the case needs in the engine's env.
 extraEnv: []
 
+# An IMEX channel for every GPU pod, from a ComputeDomain of the instance's
+# own: multi-node NVLink (GB200/GB300) needs one, or NCCL fails ("MNNVL ...
+# is available but not working ... Check the IMEX channel configuration").
+computeDomain: false
+
 resources:
   requests: {cpu: "4", memory: 32Gi}
   limits: {cpu: "16", memory: 128Gi}
