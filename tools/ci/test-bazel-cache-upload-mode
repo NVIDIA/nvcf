@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/bazel-cache-upload-mode.
+#
+# Which events may write to the shared remote cache is a correctness boundary,
+# not a preference: a pull_request that gains write access can poison a cache
+# every other build trusts, and a merge_group that loses it puts warming back
+# on main pushes, where cancel-in-progress can kill the run before it uploads.
+# Assert the decision directly for every event the workflow can receive.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bazel-cache-upload-mode"
+
+fail=0
+
+check() {
+    local desc="$1" want="$2" event="$3" ref="${4:-}"
+    local got
+    got="$(GITHUB_EVENT_NAME="${event}" GITHUB_REF="${ref}" bash "${script}")"
+    if [ "${got}" = "${want}" ]; then
+        printf 'ok   %s\n' "${desc}"
+    else
+        printf 'FAIL %s: want %s, got %s\n' "${desc}" "${want}" "${got}"
+        fail=1
+    fi
+}
+
+# Writers.
+check "merge_group warms the cache"                true  merge_group "refs/heads/gh-readonly-queue/main/pr-1-abc"
+check "push to main warms the cache"               true  push        "refs/heads/main"
+
+# Read-only. A PR must never gain write access, whatever its ref looks like.
+check "pull_request is read-only"                  false pull_request "refs/pull/1/merge"
+check "pull_request on a main-named ref is read-only" false pull_request "refs/heads/main"
+check "push to a non-main branch is read-only"     false push        "refs/heads/topic"
+check "push to a tag is read-only"                 false push        "refs/tags/v1.0.0"
+check "workflow_dispatch is read-only"             false workflow_dispatch "refs/heads/main"
+check "schedule is read-only"                      false schedule    "refs/heads/main"
+
+# Degenerate inputs must fail closed rather than defaulting to write.
+check "unset event is read-only"                   false ""          ""
+check "unknown event is read-only"                 false some_future_event "refs/heads/main"
+check "push with unset ref is read-only"           false push        ""
+
+if [ "${fail}" -ne 0 ]; then
+    echo "bazel-cache-upload-mode: FAILED" >&2
+    exit 1
+fi
+echo "bazel-cache-upload-mode: all checks passed"

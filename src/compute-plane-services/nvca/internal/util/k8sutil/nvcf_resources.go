@@ -395,20 +395,24 @@ func initUtilsContainerResourcesFromEnvs(getenv getenvFunc) (corev1.ResourceList
 type getenvFunc func(key string) string
 
 // SetNVCFInfraContainerResources sets utils/init container resources.
-func SetNVCFInfraContainerResources(utilsResources corev1.ResourceList, pod *corev1.Pod) {
+func SetNVCFInfraContainerResources(utilsResources corev1.ResourceList, pod *corev1.Pod, setLimits bool) {
 	for i, c := range pod.Spec.InitContainers {
 		if c.Name == common.InitContainerName {
 			// TODO: for failed caching, this needs to be dynamic so model download
 			// is not throttled unnecessarily.
 			pod.Spec.InitContainers[i].Resources.Requests = utilsResources.DeepCopy()
-			pod.Spec.InitContainers[i].Resources.Limits = utilsResources.DeepCopy()
+			if setLimits {
+				pod.Spec.InitContainers[i].Resources.Limits = utilsResources.DeepCopy()
+			}
 			break
 		}
 	}
 	for i, c := range pod.Spec.Containers {
 		if c.Name == common.UtilsContainerName {
 			pod.Spec.Containers[i].Resources.Requests = utilsResources.DeepCopy()
-			pod.Spec.Containers[i].Resources.Limits = utilsResources.DeepCopy()
+			if setLimits {
+				pod.Spec.Containers[i].Resources.Limits = utilsResources.DeepCopy()
+			}
 			break
 		}
 	}

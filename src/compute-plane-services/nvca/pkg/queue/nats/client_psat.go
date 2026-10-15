@@ -86,6 +86,15 @@ func NewClientWithTokenFetcher(ctx context.Context, clusterID string, fetcher To
 
 // NewClientWithTokenFetcherURL creates a JetStream-backed queue client for a configured NATS URL.
 func NewClientWithTokenFetcherURL(ctx context.Context, natsURL, clusterID string, fetcher TokenFetcher) (queue.Client, error) {
+	return NewClientWithTokenFetcherURLAndHostOverride(ctx, natsURL, "", clusterID, fetcher)
+}
+
+// NewClientWithTokenFetcherURLAndHostOverride creates a JetStream-backed queue client for a configured NATS URL and optional TLS SNI host.
+func NewClientWithTokenFetcherURLAndHostOverride(
+	ctx context.Context,
+	natsURL, natsHostOverride, clusterID string,
+	fetcher TokenFetcher,
+) (queue.Client, error) {
 	if fetcher == nil {
 		return nil, fmt.Errorf("token fetcher is required")
 	}
@@ -114,9 +123,13 @@ func NewClientWithTokenFetcherURL(ctx context.Context, natsURL, clusterID string
 		return buildAuthCalloutToken("APP", "oidc", jwt)
 	})
 
-	nc, err := nats.Connect(natsURLOrDefault(natsURL),
+	opts := []nats.Option{
 		tokenHandler,
-		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)))
+		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
+	}
+	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
+
+	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to NATS: %w", err)
 	}

@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS sis_api.reservations (
     end_time           timestamp,
     name               text,
     last_updated_time  timestamp,
+    reservation_backup_disabled boolean,
     PRIMARY KEY (reservation_id)
 );
 
@@ -353,6 +354,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
     PRIMARY KEY (cluster_group_id, cluster_id)
 ) WITH CLUSTERING ORDER BY (cluster_id ASC);
 
@@ -393,9 +395,21 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_cluster_id (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
+    jwks                               text,
+    oidc_issuer                        text,
+    jwks_fingerprint                   text,
     healthy_heartbeat_report_time      timestamp,
     PRIMARY KEY (cluster_id)
 );
+
+-- Indexes used to serve cluster reads from cluster_by_cluster_id.
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_authorized_nca_ids
+    ON sis_api.cluster_by_cluster_id (authorized_nca_ids) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_nca_id
+    ON sis_api.cluster_by_cluster_id (nca_id) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_cluster_group_id
+    ON sis_api.cluster_by_cluster_id (cluster_group_id) USING 'StorageAttachedIndex';
 
 -- Per-cluster advanced configuration blobs (BYOC).
 CREATE TABLE IF NOT EXISTS sis_api.cluster_configuration_by_cluster_id (
@@ -461,6 +475,7 @@ CREATE TABLE IF NOT EXISTS sis_api.clusters_by_account (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
     PRIMARY KEY ((nca_id), cluster_name)
 ) WITH CLUSTERING ORDER BY (cluster_name ASC);
 
