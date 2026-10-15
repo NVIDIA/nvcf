@@ -18,6 +18,7 @@ limitations under the License.
 package dsl
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -198,5 +199,46 @@ func TestWaitPrometheusTotalsScriptWaitsForARunningPod(t *testing.T) {
 	}
 	if !strings.Contains(output, "no running pod matches "+routerSelector+" in namespace nvcf") {
 		t.Fatalf("output = %q, want missing pod summary", output)
+	}
+}
+
+func TestWaitPrometheusTotalsScriptBoundsEachKubectlCallByTheDeadline(t *testing.T) {
+	fakeBin := t.TempDir()
+	callLog := filepath.Join(t.TempDir(), "kubectl-calls")
+	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), `#!/bin/sh
+printf '%s\n' "$*" >> '`+callLog+`'
+case "$*" in
+  *"get pods --selector"*)
+    printf '%s\n' '{"items":[{"metadata":{"name":"router-0"},"status":{"phase":"Running"}}]}'
+    ;;
+  *router-0:9090*)
+    printf 'stargate_routing_session_selections_total{session_state="new"} 1\n'
+    ;;
+  *) printf 'unexpected kubectl call: %s\n' "$*" >&2; exit 1 ;;
+esac
+`)
+
+	output, err := runRegistrationScript(
+		t,
+		fakeBin,
+		"wait-prometheus-totals.sh",
+		"9090", routerSelector, "nvcf", "k3d-ncp-local-cp", "1s",
+		"stargate_routing_session_selections_total", "session_state=new", "exactly", "1",
+	)
+	if err != nil {
+		t.Fatalf("wait for Prometheus totals: %v\n%s", err, output)
+	}
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read kubectl calls: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("kubectl calls = %q, want pod discovery and one scrape", lines)
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "--request-timeout=1s") {
+			t.Fatalf("kubectl call %q, want --request-timeout=1s", line)
+		}
 	}
 }

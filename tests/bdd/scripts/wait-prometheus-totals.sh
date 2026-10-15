@@ -125,10 +125,21 @@ total_matches() {
 }
 
 deadline=$(( $(date +%s) + timeout_seconds ))
+
+# Bound each kubectl call by the time left, so a hung API server or pod proxy
+# cannot hold the step past its timeout. Waits at least 1 s.
+request_timeout() {
+  local seconds=$(( deadline - $(date +%s) ))
+  if [[ "$seconds" -lt 1 ]]; then
+    seconds=1
+  fi
+  printf '%ss' "$seconds"
+}
+
 last_summary="no running pod matches $selector in namespace $namespace"
 
 while true; do
-  if ! pods_json="$(kubectl --context "$kube_context" --namespace "$namespace" get pods --selector "$selector" --output json 2>&1)"; then
+  if ! pods_json="$(kubectl --context "$kube_context" --request-timeout="$(request_timeout)" --namespace "$namespace" get pods --selector "$selector" --output json 2>&1)"; then
     last_summary="pod discovery failed: $pods_json"
   elif ! pod_names="$(printf '%s\n' "$pods_json" | jq -r '
     .items[]?
@@ -147,7 +158,7 @@ while true; do
 
     while IFS= read -r pod_name; do
       pod_count=$(( pod_count + 1 ))
-      if ! metrics="$(kubectl --context "$kube_context" get --raw "/api/v1/namespaces/$namespace/pods/$pod_name:$port/proxy/metrics" 2>&1)"; then
+      if ! metrics="$(kubectl --context "$kube_context" --request-timeout="$(request_timeout)" get --raw "/api/v1/namespaces/$namespace/pods/$pod_name:$port/proxy/metrics" 2>&1)"; then
         summaries+=("$namespace/$pod_name metrics scrape failed: $metrics")
         all_match=false
         continue
