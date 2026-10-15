@@ -26,6 +26,7 @@ godog_test.go
             Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
             TestMultiClusterUp, TestSingleClusterHelmfile, TestSingleClusterHA,
             TestMultiClusterHelmfile,
+            TestMultiClusterHelmfileLLMLastClusterAffinity,
             TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
@@ -106,6 +107,18 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
+
+# Multi-cluster last-cluster affinity feature: control plane on
+# k3d-ncp-local-cp plus two compute clusters, k3d-ncp-local-compute-1 and
+# k3d-ncp-local-compute-2. One LLM function runs a version on each compute
+# cluster; returning sessions, a new session, and failover are checked through
+# router and gateway metrics. The image tag variables are optional. Set them
+# when the stack-pinned LLM API gateway or request router images predate
+# last-cluster affinity.
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  LLM_API_GATEWAY_IMAGE_TAG=<optional-tag> \
+  LLM_REQUEST_ROUTER_IMAGE_TAG=<optional-tag> \
+  go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 
 ### EKS Helmfile features (non-local)
