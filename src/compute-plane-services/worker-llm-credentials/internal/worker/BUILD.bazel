@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "worker",
+    srcs = ["worker.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/internal/worker",
+    visibility = ["//src/compute-plane-services/worker-llm-credentials:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/worker-llm-credentials/configs",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//nvcf",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//token",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "worker_test",
+    srcs = [
+        "worker_coverage_test.go",
+        "worker_test.go",
+    ],
+    embed = [":worker"],
+    deps = [
+        "//src/compute-plane-services/worker-llm-credentials/configs",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@com_github_samber_lo//:lo",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
+        "@org_uber_go_zap//zaptest/observer",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":worker",
+    visibility = ["//src/compute-plane-services/worker-llm-credentials:__subpackages__"],
+)

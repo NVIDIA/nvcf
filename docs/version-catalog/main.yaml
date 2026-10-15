@@ -1,297 +1,1185 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 version: 1
 target: main
 registries:
-  nvidia-omniverse:
+  public-helm:
+    host: https://helm.ngc.nvidia.com
+    namespace: nvidia/nvcf
+    repository_alias: nvcf
+  public-images:
     host: nvcr.io
-    namespace: nvidia/omniverse
-  staging:
+    namespace: nvidia/nvcf
+  public-resources:
     host: nvcr.io
-    namespace: 0833294136851237/nvcf-ncp-staging
-stack:
-  name: nvcf-self-managed-stack
-  version: 0.6.0-rc.17
-  registry: staging
-  gitlab_project_id: 182049
-  package_name: ncp-deploy
-  artifacts_file: artifacts-0.6.0-rc.17.txt
-artifacts:
-  - name: admin-token-issuer-proxy
+    namespace: nvidia/nvcf
+publications:
+  - name: cert-manager-cainjector
     type: image
-    registry: staging
-    version: 1.0.1
-  - name: alpine-k8s
+    version: v1.20.2
+    registry: public-images
+  - name: cert-manager-controller
     type: image
-    registry: staging
-    version: 1.30.12
-  - name: bitnami-cassandra
+    version: v1.20.2
+    registry: public-images
+  - name: cert-manager-startupapicheck
     type: image
-    registry: staging
-    version: 5.0.6-nv-1
-  - name: ess-api
+    version: v1.20.2
+    registry: public-images
+  - name: cert-manager-webhook
     type: image
-    registry: staging
-    version: v0.57.3
-  - name: helm-admin-token-issuer-proxy
-    type: chart
-    registry: staging
-    version: 1.3.1
-  - name: helm-nvcf-api-keys
-    type: chart
-    registry: staging
-    version: 1.4.0
-  - name: helm-nvcf-api
-    type: chart
-    registry: staging
-    version: 1.18.1
-  - name: helm-nvcf-cassandra
-    type: chart
-    registry: staging
-    version: 0.14.1
-  - name: helm-nvcf-ess-api
-    type: chart
-    registry: staging
-    version: 1.5.2
-  - name: helm-nvcf-grpc-proxy
-    type: chart
-    registry: staging
-    version: 1.6.2
-  - name: helm-nvcf-invocation-service
-    type: chart
-    registry: staging
-    version: 1.5.2
-  - name: helm-nvcf-llm-api-gateway
-    type: chart
-    registry: staging
-    version: 1.1.0
-  - name: helm-nvcf-llm-request-router
-    type: chart
-    registry: staging
-    version: 1.2.1
-  - name: helm-nvcf-nats-auth-callout-service
-    type: chart
-    registry: staging
-    version: 1.0.1
-  - name: helm-nvcf-nats
-    type: chart
-    registry: staging
-    version: 0.6.0
-  - name: helm-nvcf-notary-service
-    type: chart
-    registry: staging
-    version: 1.3.1
-  - name: helm-nvcf-openbao-server
-    type: chart
-    registry: staging
-    version: 0.30.4
-  - name: helm-nvcf-sis
-    type: chart
-    registry: staging
-    version: 1.13.6
-  - name: helm-nvcf-state-metrics
-    type: chart
-    registry: staging
-    version: 1.0.1
-  - name: helm-nvct-api
-    type: chart
-    registry: staging
-    version: 1.0.1
-  - name: helm-reval
-    type: chart
-    registry: staging
-    version: 1.3.0
-  - name: nats-box
-    type: image
-    registry: staging
-    version: 0.19.2-nonroot
-  - name: nats-server-config-reloader
-    type: image
-    registry: staging
-    version: 0.20.0
-  - name: nats-server
-    type: image
-    registry: staging
-    version: 2.11.10-alpine3.22
-  - name: notary-service
-    type: image
-    registry: staging
-    version: 1.9.4
-  - name: nv-api-keys
-    type: image
-    registry: staging
-    version: 0.0.7
-  - name: nvcf-cassandra-migrations
-    type: image
-    registry: staging
-    version: 0.6.1
-  - name: nvcf-gateway-routes
-    type: chart
-    registry: staging
-    version: 1.10.0
-  - name: nvcf-grpc-proxy
-    type: image
-    registry: staging
-    version: 1.27.0
-  - name: nvcf-invocation-service
-    type: image
-    registry: staging
-    version: 0.5.2
-  - name: nvcf-nats-auth-callout-service
-    type: image
-    registry: staging
-    version: 0.3.3
-  - name: nvcf-openbao-migrations
-    type: image
-    registry: staging
-    version: 0.11.0
-  - id: nvcf-openbao-1
-    name: nvcf-openbao
-    type: image
-    registry: staging
-    version: 2.2.2-nv-1
-  - id: nvcf-openbao-2
-    name: nvcf-openbao
-    type: image
-    registry: staging
-    version: 2.5.1-nv-1.2.1
-  - name: nvcf-service-oss
-    type: image
-    registry: staging
-    version: 1.1.7
-  - name: nvct-service-oss
-    type: image
-    registry: staging
-    version: 1.2.11
+    version: v1.20.2
+    registry: public-images
   - name: oss-vault-k8s
     type: image
-    registry: staging
+    version: 1.7.4
+    registry: public-images
+  - name: nvcf-image-credential-helper
+    type: image
+    version: 0.10.2
+    registry: public-images
+  - name: nats-box
+    type: image
+    version: 0.19.7-nonroot
+    registry: public-images
+  - name: nvcf-state-metrics-service
+    type: image
+    version: 1.23.7
+    registry: public-images
+  - name: cassandra
+    type: image
+    version: 5.0.8-nv-2.0.1
+    registry: public-images
+  - name: helm-nvcf-cert-manager
+    type: chart
+    version: 0.1.0
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-pki
+    type: chart
+    version: 0.1.0
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-state-metrics
+    type: chart
+    version: 1.0.2
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-ui
+    type: chart
+    version: 1.1.2
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-container-cache
+    type: image
+    version: v1.1.36
+    registry: public-images
+  - name: nvcf-proxy-tls-certs
+    type: image
+    version: v1.2.10
+    registry: public-images
+  - name: nvcf-container-cache
+    type: chart
+    version: 0.25.22
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-example-dashboards
+    type: chart
     version: 1.6.0
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-observability-reference-stack
+    type: chart
+    version: 1.10.0
+    registry: public-helm
+    chart_format: http
+version_overrides:
+  - name: nvcf-cli
+    type: resource
+    version: 1.16.2
+    source: independent source release; not pinned by stack
+publication_pending:
+  - admin-token-issuer-proxy
+  - crd-upgrader
+  - dynamo-platform
+  - ess-agent
+  - grove-charts
+  - grove-install-crds
+  - grove-operator
+  - helm-admin-token-issuer-proxy
+  - helm-nvca-operator
+  - helm-nvcf-api
+  - helm-nvcf-api-keys
+  - helm-nvcf-cassandra
+  - helm-nvcf-ess-api
+  - helm-nvcf-function-autoscaler
+  - helm-nvcf-grpc-proxy
+  - helm-nvcf-invocation-service
+  - helm-nvcf-llm-api-gateway
+  - helm-nvcf-llm-request-router
+  - helm-nvcf-nats
+  - helm-nvcf-nats-auth-callout-service
+  - helm-nvcf-notary-service
+  - helm-nvcf-nvct-api
+  - helm-nvcf-openbao-server
+  - helm-nvcf-rate-limiter
+  - helm-nvcf-sis
+  - helm-nvcf-vanity-gateway
+  - helm-reval
+  - icms-service-oss
+  - k8s
+  - kai-scheduler
+  - kubernetes-operator
+  - llm-api-gateway
+  - nats
+  - nats-server
+  - nats-server-config-reloader-image
+  - nats-server-config-reloader-image-2
+  - nvca
+  - nvca-operator
+  - nvcf-ai-api-gateway-service
+  - nvcf-api-keys-service
+  - nvcf-cassandra-migrations
+  - nvcf-cli
+  - nvcf-cluster-topology
+  - nvcf-compute-plane-stack
+  - nvcf-default-monitors
+  - nvcf-ess
+  - nvcf-function-autoscaler
+  - nvcf-gateway-routes
+  - nvcf-grpc-proxy
+  - nvcf-invocation-service
+  - nvcf-nats-auth-callout-service
+  - nvcf-notary
+  - nvcf-observability-stack
+  - nvcf-openbao
+  - nvcf-openbao-migrations
+  - nvcf-otel-collector
+  - nvcf-ratelimiter
+  - nvcf-self-managed-stack
+  - nvcf-service-oss
+  - nvcf-ui
+  - nvcf-worker-init-oss
+  - nvcf-worker-llm-credentials-oss
+  - nvcf-worker-utils-oss
+  - nvct-service-oss
+  - opentelemetry-collector-contrib
+  - opentelemetry-operator-chart
+  - opentelemetry-operator-image
+  - operator
+  - prometheus-operator-crds
+  - pylon
+  - reval-server
+  - stargate
+  - victoria-metrics
+  - victoria-metrics-single
+manifest:
+  entries:
+    - artifact_id: helm-nvcf-api-keys
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the API key management service.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/api-keys-colocated
+    - artifact_id: helm-nvcf-api
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the NVCF API service.
+    - artifact_id: helm-nvcf-cassandra
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys Cassandra and its initialization jobs.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cassandra
+      upstream_url: https://github.com/bitnami/charts/tree/main/bitnami/cassandra
+    - artifact_id: helm-nvcf-cert-manager
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the NVCF cert-manager configuration.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cert-manager
+      upstream_url: https://github.com/cert-manager/cert-manager
+    - artifact_id: helm-nvcf-ess-api
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the Encrypted Secrets Service API.
+    - artifact_id: helm-nvcf-function-autoscaler
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the function autoscaler for observability-driven scaling.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/function-autoscaler
+    - artifact_id: helm-nvcf-grpc-proxy
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the gRPC proxy service.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/grpc-proxy
+    - artifact_id: helm-nvcf-invocation-service
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the HTTP invocation service.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/http-invocation
+    - artifact_id: helm-nvcf-nats-auth-callout-service
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the NATS authorization callout service.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats-auth-callout
+    - artifact_id: helm-nvcf-nats
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys NATS messaging for the control plane.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats
+      upstream_url: https://github.com/nats-io/k8s
+    - artifact_id: helm-nvcf-notary-service
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the notary service for signing and validation.
+    - artifact_id: helm-nvcf-nvct-api
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the NVCF tenant API service.
+    - artifact_id: helm-nvcf-openbao-server
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys OpenBao secret management.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/openbao
+      upstream_url: https://github.com/openbao/openbao-helm
+    - artifact_id: helm-nvcf-sis
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the Spot Instance Service.
+    - artifact_id: helm-reval
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the function revalidation service.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval
+    - artifact_id: helm-admin-token-issuer-proxy
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the admin token issuer proxy.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/admin-token-issuer-proxy
+    - artifact_id: helm-nvcf-llm-api-gateway
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the OpenAI-compatible LLM API gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-api-gateway
+    - artifact_id: helm-nvcf-llm-request-router
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the LLM request router.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router
+    - artifact_id: helm-nvcf-pki
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Provisions the OpenBao-backed ClusterIssuer for NVCF service TLS.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvcf-pki
+    - artifact_id: helm-nvcf-rate-limiter
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys request rate limiting for supported invocation paths.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/ratelimiter
+    - artifact_id: helm-nvcf-state-metrics
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys NVCF state metrics for observability.
+    - artifact_id: helm-nvcf-ui
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the optional NVCF UI admin panel.
+    - artifact_id: helm-nvcf-vanity-gateway
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway
+    - artifact_id: nvcf-example-dashboards
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys example Grafana dashboards for NVCF telemetry.
+    - artifact_id: nvcf-gateway-routes
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys Gateway API routes for NVCF services.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes
+    - artifact_id: nvcf-default-monitors
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the default service and pod monitors for NVCF.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-default-monitors
+    - artifact_id: nvcf-otel-collector
+      plane: control
+      kind: chart
+      requirement: required
+      description: Configures the OpenTelemetry Collector used by NVCF.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-otel-collector
+    - artifact_id: opentelemetry-operator-chart
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the OpenTelemetry Operator.
+      upstream_url: https://github.com/open-telemetry/opentelemetry-operator
+    - artifact_id: prometheus-operator-crds
+      plane: control
+      kind: chart
+      requirement: required
+      description: Installs the Prometheus Operator custom resource definitions.
+      upstream_url: https://github.com/prometheus-community/helm-charts
+    - artifact_id: victoria-metrics-single
+      plane: control
+      kind: chart
+      requirement: required
+      description: Deploys the default metrics storage backend.
+      upstream_url: https://github.com/VictoriaMetrics/helm-charts
+    - artifact_id: nvcf-observability-reference-stack
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys a reference observability backend for evaluation.
+    - artifact_id: k8s
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides Kubernetes command-line utilities for deployment jobs.
+      github_url: https://github.com/alpine-docker/k8s
+    - artifact_id: cert-manager-cainjector
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Injects certificate authority data into Kubernetes resources.
+      upstream_url: https://github.com/cert-manager/cert-manager
+    - artifact_id: cert-manager-controller
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Reconciles certificates and issuers for the control plane.
+      upstream_url: https://github.com/cert-manager/cert-manager
+    - artifact_id: cert-manager-startupapicheck
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Verifies that the cert-manager API is ready.
+      upstream_url: https://github.com/cert-manager/cert-manager
+    - artifact_id: cert-manager-webhook
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Validates and converts cert-manager API resources.
+      upstream_url: https://github.com/cert-manager/cert-manager
+    - artifact_id: nvcf-ess
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides encrypted application secrets to NVCF workloads.
+    - artifact_id: nats-box
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides NATS administration and diagnostic utilities.
+      upstream_url: https://github.com/nats-io/nats-box
+    - artifact_id: nats-server
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides messaging for function deployment and invocation.
+      upstream_url: https://github.com/nats-io/nats-server
+    - artifact_id: nats-server-config-reloader-image
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Reloads NATS server configuration when mounted settings change.
+      upstream_url: https://github.com/nats-io/k8s
+    - artifact_id: nvcf-notary
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Signs and validates functions and cluster nodes.
+    - artifact_id: nvcf-ai-api-gateway-service
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway
+    - artifact_id: nvcf-api-keys-service
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Creates and manages NVCF API keys.
+    - artifact_id: icms-service-oss
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Manages instance and cluster lifecycle operations.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management
+    - artifact_id: nvcf-grpc-proxy
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Proxies bidirectional gRPC traffic between the control and compute planes.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy
+    - artifact_id: nvcf-invocation-service
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Routes stateless HTTP function invocation requests.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation
+    - artifact_id: nvcf-nats-auth-callout-service
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Authorizes NATS clients for NVCF services and workloads.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout
+    - artifact_id: nvcf-openbao
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Stores and manages control-plane secrets.
+      upstream_url: https://github.com/openbao/openbao
+    - artifact_id: nvcf-openbao-migrations
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Applies the OpenBao configuration required by NVCF.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao
+    - artifact_id: nvcf-ratelimiter
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Enforces request rate limits for supported invocation paths.
+    - artifact_id: nvcf-service-oss
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides the primary NVCF control-plane API.
+    - artifact_id: nvct-service-oss
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Provides tenant-scoped NVCF control-plane operations.
+    - artifact_id: oss-vault-k8s
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Integrates Kubernetes workloads with OpenBao secrets.
+    - artifact_id: reval-server
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Revalidates function state in the background.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/helm-reval
+    - artifact_id: admin-token-issuer-proxy
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Proxies admin token requests for stack services.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy
+    - artifact_id: llm-api-gateway
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Exposes OpenAI-compatible APIs for LLM functions.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway
+    - artifact_id: stargate
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Routes LLM requests to eligible worker instances.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate
+    - artifact_id: nvcf-state-metrics-service
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Exports NVCF resource state as Prometheus metrics.
+    - artifact_id: nvcf-function-autoscaler
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Scales functions from NVCF workload metrics.
+    - artifact_id: nvcf-ui
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves the optional NVCF administrative interface.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/uis/nvcf-ui
+    - artifact_id: opentelemetry-collector-contrib
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Collects and exports NVCF telemetry.
+      upstream_url: https://github.com/open-telemetry/opentelemetry-collector-contrib
+    - artifact_id: opentelemetry-operator-image
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Reconciles OpenTelemetry Collector resources.
+      upstream_url: https://github.com/open-telemetry/opentelemetry-operator
+    - artifact_id: victoria-metrics
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Stores metrics for the default observability profile.
+      upstream_url: https://github.com/VictoriaMetrics/VictoriaMetrics
+    - artifact_id: cassandra
+      plane: control
+      kind: service-image
+      requirement: required
+      description: Stores NVCF account, function, cluster, and service state.
+      upstream_url: https://github.com/apache/cassandra
+    - artifact_id: nvcf-cassandra-migrations
+      plane: control
+      kind: ea-cve
+      requirement: required
+      description: Applies the Cassandra schemas required by Early Access NVCF services.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra
+    - artifact_id: helm-nvca-operator
+      plane: compute
+      kind: chart
+      requirement: required
+      description: Deploys the NVCA operator and compute-plane integration.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvca-operator
+    - artifact_id: nvcf-cluster-topology
+      plane: compute
+      kind: chart
+      requirement: required
+      description: Configures cluster topology resources for compute scheduling.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology
+    - artifact_id: dynamo-platform
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Deploys the optional NVIDIA Dynamo operator.
+      upstream_url: https://github.com/ai-dynamo/dynamo
+    - artifact_id: grove-charts
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Deploys the optional Grove operator for topology-aware scheduling.
+      upstream_url: https://github.com/ai-dynamo/grove
+    - artifact_id: kai-scheduler
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Deploys the optional KAI Scheduler.
+      upstream_url: https://github.com/NVIDIA/KAI-Scheduler
+    - artifact_id: nvcf-container-cache-chart
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Deploys container image caching on GPU cluster nodes.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache
+    - name: gpu-operator
+      version: supported
+      distribution: https://helm.ngc.nvidia.com/nvidia
+      plane: compute
+      kind: chart
+      requirement: required
+      description: Manages NVIDIA GPU software on Kubernetes nodes.
+      upstream_url: https://github.com/NVIDIA/gpu-operator
+    - name: ebs-csi-driver
+      version: supported
+      distribution: https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Provides Amazon EBS persistent volumes for EKS clusters.
+      upstream_url: https://github.com/kubernetes-sigs/aws-ebs-csi-driver
+    - name: csi-driver-smb
+      version: supported
+      distribution: https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Provides SMB persistent volumes for supported deployments.
+      upstream_url: https://github.com/kubernetes-csi/csi-driver-smb
+    - name: modelexpress
+      version: supported
+      distribution: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
+    - artifact_id: nvca
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Registers GPU clusters and orchestrates deployments in-cluster.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca
+    - artifact_id: nvca-operator
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Reconciles NVCA resources and compute-plane configuration.
+    - artifact_id: nvcf-worker-utils-oss
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Proxies NATS traffic between function containers and the control plane.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils
+    - artifact_id: nvcf-worker-init-oss
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Prepares function resources before the user container starts.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init
+    - artifact_id: nvcf-worker-llm-credentials-oss
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Maintains a current NVCF worker token for LLM function workloads.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials
+    - artifact_id: crd-upgrader
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Upgrades KAI Scheduler custom resources.
+      upstream_url: https://github.com/NVIDIA/KAI-Scheduler
+    - artifact_id: operator
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Reconciles KAI Scheduler resources.
+      upstream_url: https://github.com/NVIDIA/KAI-Scheduler
+    - artifact_id: grove-install-crds
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Installs Grove custom resource definitions.
+      upstream_url: https://github.com/ai-dynamo/grove
+    - artifact_id: grove-operator
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Reconciles Grove topology-aware scheduling resources.
+      upstream_url: https://github.com/ai-dynamo/grove
+    - artifact_id: kubernetes-operator
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Reconciles NVIDIA Dynamo workloads on Kubernetes.
+      upstream_url: https://github.com/ai-dynamo/dynamo
+    - artifact_id: nats
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Provides messaging for the optional NVIDIA Dynamo operator.
+      upstream_url: https://github.com/nats-io/nats-server
+    - artifact_id: nats-server-config-reloader-image-2
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Reloads NATS configuration for the optional NVIDIA Dynamo operator.
+      upstream_url: https://github.com/nats-io/k8s
+    - artifact_id: ess-agent
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Injects encrypted application secrets into function workloads.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent
+    - artifact_id: nvcf-image-credential-helper
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Resolves container image credentials for function workloads.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper
+    - name: gpu-operator-validator
+      version: supported
+      distribution: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Validates GPU Operator components on GPU nodes.
+      upstream_url: https://github.com/NVIDIA/gpu-operator
+    - name: k8s-device-plugin
+      version: supported
+      distribution: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/device-plugin
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Advertises NVIDIA GPU resources to Kubernetes.
+      upstream_url: https://github.com/NVIDIA/k8s-device-plugin
+    - name: modelexpress-server
+      version: supported
+      distribution: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Serves model weights to Dynamo workers over NIXL RDMA transports.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
+    - artifact_id: pylon
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Connects LLM worker pods to the LLM request router.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate
+    - artifact_id: nvcf-container-cache-image
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Caches container image layers on GPU cluster nodes.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache
+    - artifact_id: nvcf-proxy-tls-certs
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Configures TLS trust for the optional container cache proxy.
+    - artifact_id: nvcf-self-managed-stack
+      plane: shared
+      kind: resource
+      description: Provides the Helmfile bundle for control-plane deployment.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed
+    - artifact_id: nvcf-compute-plane-stack
+      plane: shared
+      kind: resource
+      description: Provides the Helmfile bundle for compute-plane deployment.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane
+    - artifact_id: nvcf-observability-stack
+      plane: shared
+      kind: resource
+      description: Provides the Helmfile bundle for standalone observability deployment.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability
+    - artifact_id: nvcf-cli
+      plane: shared
+      kind: resource
+      description: Manages functions, deployments, and clusters from the command line.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
+stack:
+  name: nvcf-self-managed-stack
+  version: 0.16.1
+  registry: public-resources
+  source_tag: deploy/stacks/self-managed/v0.16.1
+  source_commit: 6aa572575c3f3ee7716a9fddc4cbfceae17e73ec
+  pin_sources:
+    - deploy/stacks/nvcf-compute-plane/environments/base.yaml
+    - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
+    - deploy/stacks/self-managed/global.yaml.gotmpl
+    - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
+  pin_source_digest: sha256:9080c81090e00803c9920b4bbc3fe4015ea4efc7804f9a597d661f55f03ec118
+denylist:
+  - name: strap
+    reason: Legacy name replaced by nvcf-service-oss
+  - name: nv-api-keys
+    reason: Legacy name replaced by nvcf-api-keys-service
+  - name: nvcf_worker_niclls
+    reason: Proprietary image excluded from the published manifest
+  - name: stargate-client
+    reason: Renamed worker client deferred to a later release
+  - name: ddcs-dist-kv
+    reason: Excluded from the published manifest
+  - name: ddcs
+    reason: Excluded from the published manifest
+  - name: usd-content-cache
+    reason: Excluded from the published manifest
+  - name: load_tester_supreme
+    reason: Excluded from the published manifest
+  - name: gxcache-webhook
+    reason: Excluded from the published manifest
+  - name: gxcache-init
+    reason: Excluded from the published manifest
+  - name: gxcache-service
+    reason: Excluded from the published manifest
+  - name: helm-gxcache
+    reason: Excluded from the published manifest
+  - name: storage-service
+    reason: Excluded from the published manifest
+  - name: simple-nginx
+    reason: Excluded from the published manifest
+  - name: discovery-service
+    reason: Excluded from the published manifest
+  - name: streaming-proxy
+    reason: Excluded from the published manifest
+  - name: gdn-streaming
+    reason: Excluded from the published manifest
+artifacts:
+  - name: k8s
+    type: image
+    registry: public-images
+    version: 1.37.0
+  - id: nats-server-config-reloader-image
+    name: nats-server-config-reloader
+    type: image
+    registry: public-images
+    version: 0.24.0
+  - name: grove-install-crds
+    type: image
+    registry: public-images
+    version: v0.1.0-alpha.12
+  - name: grove-operator
+    type: image
+    registry: public-images
+    version: v0.1.0-alpha.12
+  - name: crd-upgrader
+    type: image
+    registry: public-images
+    version: v0.17.1
+  - name: operator
+    type: image
+    registry: public-images
+    version: v0.17.1
+  - name: opentelemetry-collector-contrib
+    type: image
+    registry: public-images
+    version: 0.160.0
+  - id: opentelemetry-operator-image
+    name: opentelemetry-operator
+    type: image
+    registry: public-images
+    version: 0.158.0
+  - name: nats
+    type: image
+    registry: public-images
+    version: 2.10.21-alpine
+  - id: nats-server-config-reloader-image-2
+    name: nats-server-config-reloader
+    type: image
+    registry: public-images
+    version: 0.16.0
+  - name: kubernetes-operator
+    type: image
+    registry: public-images
+    version: 1.4.2
+  - name: admin-token-issuer-proxy
+    type: image
+    registry: public-images
+    version: 1.1.1
+  - name: cassandra
+    type: image
+    registry: public-images
+    version: 5.0.8-nv-2.0.1
+  - name: cert-manager-cainjector
+    type: image
+    registry: public-images
+    version: v1.20.2
+  - name: cert-manager-controller
+    type: image
+    registry: public-images
+    version: v1.20.2
+  - name: cert-manager-startupapicheck
+    type: image
+    registry: public-images
+    version: v1.20.2
+  - name: cert-manager-webhook
+    type: image
+    registry: public-images
+    version: v1.20.2
+  - name: ess-agent
+    type: image
+    registry: public-images
+    version: 1.4.1
+  - name: icms-service-oss
+    type: image
+    registry: public-images
+    version: 0.7.1
+  - name: llm-api-gateway
+    type: image
+    registry: public-images
+    version: 0.14.2
+  - name: nats-box
+    type: image
+    registry: public-images
+    version: 0.19.7-nonroot
+  - name: nats-server
+    type: image
+    registry: public-images
+    version: 2.14.6-alpine3.22
+  - name: nvca-operator
+    type: image
+    registry: public-images
+    version: 3.6.0
+  - name: nvca
+    type: image
+    registry: public-images
+    version: 3.5.2
+  - name: nvcf-ai-api-gateway-service
+    type: image
+    registry: public-images
+    version: 1.35.1
+  - name: nvcf-api-keys-service
+    type: image
+    registry: public-images
+    version: 1.9.1
+  - name: nvcf-cassandra-migrations
+    type: image
+    registry: public-images
+    version: 0.17.5
+  - name: nvcf-ess
+    type: image
+    registry: public-images
+    version: 0.5.0
+  - name: nvcf-function-autoscaler
+    type: image
+    registry: public-images
+    version: 1.21.5
+  - name: nvcf-grpc-proxy
+    type: image
+    registry: public-images
+    version: 1.33.4
+  - name: nvcf-image-credential-helper
+    type: image
+    registry: public-images
+    version: 0.10.2
+  - name: nvcf-invocation-service
+    type: image
+    registry: public-images
+    version: 0.12.1
+  - name: nvcf-nats-auth-callout-service
+    type: image
+    registry: public-images
+    version: 0.8.3
+  - name: nvcf-notary
+    type: image
+    registry: public-images
+    version: 1.14.1
+  - name: nvcf-openbao-migrations
+    type: image
+    registry: public-images
+    version: 0.19.1
+  - name: nvcf-openbao
+    type: image
+    registry: public-images
+    version: 2.5.5-nv-1.3.1
+  - name: nvcf-ratelimiter
+    type: image
+    registry: public-images
+    version: 1.17.3
+  - name: nvcf-service-oss
+    type: image
+    registry: public-images
+    version: 1.18.0
+  - name: nvcf-state-metrics-service
+    type: image
+    registry: public-images
+    version: 1.23.7
+  - name: nvcf-ui
+    type: image
+    registry: public-images
+    version: 1.1.2
+  - name: nvcf-worker-init-oss
+    type: image
+    registry: public-images
+    version: 1.2.1
+  - name: nvcf-worker-llm-credentials-oss
+    type: image
+    registry: public-images
+    version: 1.1.2
+  - name: nvcf-worker-utils-oss
+    type: image
+    registry: public-images
+    version: 1.2.3
+  - name: nvct-service-oss
+    type: image
+    registry: public-images
+    version: 1.66.0
+  - name: oss-vault-k8s
+    type: image
+    registry: public-images
+    version: 1.7.4
   - name: reval-server
     type: image
-    registry: staging
-    version: 0.15.0
-  - name: spot
+    registry: public-images
+    version: 0.20.2
+  - name: stargate
     type: image
-    registry: staging
-    version: 1.556.0-v3474d670
+    registry: public-images
+    version: 0.16.2
+  - name: victoria-metrics
+    type: image
+    registry: public-images
+    version: v1.150.0
+  - name: nvcf-cluster-topology
+    type: chart
+    registry: public-helm
+    version: 0.1.0
+  - name: nvcf-default-monitors
+    type: chart
+    registry: public-helm
+    version: 0.2.0
+  - name: nvcf-otel-collector
+    type: chart
+    registry: public-helm
+    version: 0.2.0
+  - name: dynamo-platform
+    type: chart
+    registry: public-helm
+    version: 1.4.2
+  - name: helm-admin-token-issuer-proxy
+    type: chart
+    registry: public-helm
+    version: 1.5.2
+  - name: helm-nvca-operator
+    type: chart
+    registry: public-helm
+    version: 1.24.0
+  - name: helm-nvcf-api-keys
+    type: chart
+    registry: public-helm
+    version: 1.8.0
+  - name: helm-nvcf-api
+    type: chart
+    registry: public-helm
+    version: 1.27.0
+  - name: helm-nvcf-cassandra
+    type: chart
+    registry: public-helm
+    version: 0.21.0
+  - name: helm-nvcf-cert-manager
+    type: chart
+    registry: public-helm
+    version: 0.1.0
+  - name: helm-nvcf-ess-api
+    type: chart
+    registry: public-helm
+    version: 1.8.2
+  - name: helm-nvcf-function-autoscaler
+    type: chart
+    registry: public-helm
+    version: 0.4.0
+  - name: helm-nvcf-grpc-proxy
+    type: chart
+    registry: public-helm
+    version: 1.7.3
+  - name: helm-nvcf-invocation-service
+    type: chart
+    registry: public-helm
+    version: 1.6.1
+  - name: helm-nvcf-llm-api-gateway
+    type: chart
+    registry: public-helm
+    version: 1.4.3
+  - name: helm-nvcf-llm-request-router
+    type: chart
+    registry: public-helm
+    version: 1.13.3
+  - name: helm-nvcf-nats-auth-callout-service
+    type: chart
+    registry: public-helm
+    version: 1.2.0
+  - name: helm-nvcf-nats
+    type: chart
+    registry: public-helm
+    version: 0.8.1
+  - name: helm-nvcf-notary-service
+    type: chart
+    registry: public-helm
+    version: 1.6.0
+  - name: helm-nvcf-nvct-api
+    type: chart
+    registry: public-helm
+    version: 1.6.0
+  - name: helm-nvcf-openbao-server
+    type: chart
+    registry: public-helm
+    version: 0.32.4
+  - name: helm-nvcf-pki
+    type: chart
+    registry: public-helm
+    version: 0.1.0
+  - name: helm-nvcf-rate-limiter
+    type: chart
+    registry: public-helm
+    version: 1.2.1
+  - name: helm-nvcf-sis
+    type: chart
+    registry: public-helm
+    version: 2.3.0
+  - name: helm-nvcf-state-metrics
+    type: chart
+    registry: public-helm
+    version: 1.0.2
+  - name: helm-nvcf-ui
+    type: chart
+    registry: public-helm
+    version: 1.1.2
+  - name: helm-nvcf-vanity-gateway
+    type: chart
+    registry: public-helm
+    version: 0.4.4
+  - name: helm-reval
+    type: chart
+    registry: public-helm
+    version: 1.4.0
+  - name: nvcf-gateway-routes
+    type: chart
+    registry: public-helm
+    version: 1.18.1
+  - id: opentelemetry-operator-chart
+    name: opentelemetry-operator
+    type: chart
+    registry: public-helm
+    version: 0.122.0
+  - name: prometheus-operator-crds
+    type: chart
+    registry: public-helm
+    version: 31.0.1
+  - name: victoria-metrics-single
+    type: chart
+    registry: public-helm
+    version: 0.45.0
+  - name: grove-charts
+    type: chart
+    registry: public-helm
+    version: v0.1.0-alpha.12
+  - name: kai-scheduler
+    type: chart
+    registry: public-helm
+    version: v0.17.1
+  - name: pylon
+    type: image
+    registry: public-images
+    version: 0.16.2
 supplemental_artifacts:
   - name: nvcf-cli
     type: resource
-    registry: staging
-    version: 0.0.30
-  - name: strap
-    type: image
-    registry: staging
-    version: 2.242.2
-  - name: llm-api-gateway
-    type: image
-    registry: staging
-    version: 0.3.0
-  - name: llm-request-router
-    type: image
-    registry: staging
-    repository_name: stargate
-    version: 0.2.0
-  - name: nvca
-    type: image
-    registry: staging
-    version: 3.0.0-rc.11
-  - name: nvca-operator
-    type: image
-    registry: staging
-    version: 3.0.0-rc.11
-  - name: helm-nvca-operator
-    type: chart
-    registry: staging
-    version: 1.9.0
-  - name: nvcf_worker_utils
-    type: image
-    registry: staging
-    version: 2.101.0
-  - name: nvcf_worker_init
-    type: image
-    registry: staging
-    version: 2.102.0
-  - name: nvcf_worker_niclls
-    type: image
-    registry: staging
-    version: 2.105.7
-  - name: ess-agent
-    type: image
-    registry: staging
-    version: 1.0.5
-  - name: nvcf-image-credential-helper
-    type: image
-    registry: staging
-    version: 0.5.1
-  - name: load_tester_supreme
-    type: image
-    registry: staging
-    version: 0.0.8
+    registry: public-resources
+    version: 1.16.2
+  - name: nvcf-compute-plane-stack
+    type: resource
+    registry: public-resources
+    version: 0.16.1
+  - name: nvcf-observability-stack
+    type: resource
+    registry: public-resources
+    version: 0.16.1
   - name: nvcf-observability-reference-stack
     type: chart
-    registry: staging
-    version: 1.7.0
+    registry: public-helm
+    version: 1.10.0
   - name: nvcf-example-dashboards
     type: chart
-    registry: staging
+    registry: public-helm
     version: 1.6.0
-  - name: nvcf-container-cache
+  - id: nvcf-container-cache-image
+    name: nvcf-container-cache
     type: image
-    registry: staging
-    version: v1.1.31
-  - name: helm-nvcf-container-cache
+    registry: public-images
+    version: v1.1.36
+  - id: nvcf-container-cache-chart
+    name: nvcf-container-cache
     type: chart
-    registry: staging
-    repository_name: nvcf-container-cache
-    version: 0.25.6
+    registry: public-helm
+    version: 0.25.22
   - name: nvcf-proxy-tls-certs
     type: image
-    registry: staging
-    version: 1.2.0
-  - name: gxcache-webhook
-    type: image
-    registry: staging
-    version: 59bd8ec5
-  - name: gxcache-init
-    type: image
-    registry: staging
-    version: 1e47f722
-  - name: gxcache-service
-    type: image
-    registry: staging
-    version: b206ce39
-  - name: helm-gxcache
-    type: chart
-    registry: staging
-    repository_name: gxcache
-    version: 0.8.2
-  - name: ddcs-dist-kv
-    type: image
-    registry: nvidia-omniverse
-    version: 5.0.0
-  - name: usd-content-cache
-    type: image
-    registry: nvidia-omniverse
-    version: 3.0.1
-  - name: storage-service
-    type: image
-    registry: nvidia-omniverse
-    version: 1.0.2
-  - name: simple-nginx
-    type: image
-    registry: nvidia-omniverse
-    version: 1.0.2
-  - name: streaming-proxy
-    type: image
-    registry: staging
-    version: 2.0.1
-  - name: gdn-streaming
-    type: chart
-    registry: staging
-    version: 2.0.1
+    registry: public-images
+    version: v1.2.10
 outputs:
   - path: docs/user/manifest.md
     blocks:
@@ -303,10 +1191,11 @@ outputs:
         renderer: image-mirroring-resource-examples
       - marker: image-mirroring-stack-snippet
         renderer: image-mirroring-stack-snippet
+      - marker: image-mirroring-compute-stack-snippet
+        renderer: image-mirroring-compute-stack-snippet
+      - marker: image-mirroring-observability-stack-snippet
+        renderer: image-mirroring-observability-stack-snippet
       - marker: image-mirroring-cli-snippet
         renderer: image-mirroring-cli-snippet
-  - path: docs/user/standalone-infrastructure.md
-  - path: docs/user/standalone-core-services.md
-  - path: docs/user/standalone-gateway.md
   - path: docs/user/cluster-management/self-managed.md
   - path: docs/user/cluster-management/reference.md

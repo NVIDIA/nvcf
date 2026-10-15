@@ -24,13 +24,35 @@ import (
 )
 
 const (
+	// HelmChartInstanceServiceAccountName is the legacy name for the restricted instance
+	// ServiceAccount. It is still provisioned by the agent's Helm-chart RBAC path.
 	HelmChartInstanceServiceAccountName = "helm-instance-permissions"
+
+	// InstanceServiceAccountName is the ServiceAccount that mini-service workloads
+	// run as, and under which the MiniService reconciler applies workload objects (via an
+	// impersonating client). It is the identity the admission webhook must match to validate
+	// mini-service workloads. This constant is the single source of truth for that name; the
+	// MiniService controller (internal/miniservice) references it so the two cannot drift.
+	InstanceServiceAccountName = "miniservice-instance-permissions"
 )
+
+// InstanceServiceAccountUsername returns the Kubernetes username used when the MiniService
+// reconciler impersonates the ServiceAccount that applies mini-service workload objects.
+func InstanceServiceAccountUsername(namespace string) string {
+	return fmt.Sprintf("system:serviceaccount:%s:%s", namespace, InstanceServiceAccountName)
+}
 
 var (
 	HelmChartInstanceServiceAccountNameRegexp = regexp.MustCompile(fmt.Sprintf(
 		"^system:serviceaccount:.+:%s$",
 		HelmChartInstanceServiceAccountName))
+
+	// InstanceServiceAccountNameRegexp matches the username of the ServiceAccount
+	// under which mini-service workload objects are applied.
+	InstanceServiceAccountNameRegexp = regexp.MustCompile(fmt.Sprintf(
+		"^system:serviceaccount:.+:%s$",
+		InstanceServiceAccountName))
+
 	// DefaultMaxHelmObjectPendingTimeout is the maximum time a Helm release or repository
 	// can have a "pending" state
 	DefaultMaxHelmObjectPendingTimeout = 20 * time.Minute

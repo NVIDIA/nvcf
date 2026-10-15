@@ -8,6 +8,14 @@
 consul-template
 ess-agent
 
+### Bazel ###
+# Output symlinks Bazel creates at the workspace root. Scoped with a
+# leading slash so the pattern doesn't match nvidia-internal/bazel-build.md
+# or other paths containing `bazel-` further down the tree.
+/bazel-*
+.bazel-cache/
+user.bazelrc
+
 ### Golang ###
 # Compiled Object files, Static and Dynamic libs (Shared Objects)
 *.o

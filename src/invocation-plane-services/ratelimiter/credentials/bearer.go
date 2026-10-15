@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
@@ -36,6 +37,7 @@ type BearerTokenCredentials struct {
 	secretsPath  string
 	tokenKey     string
 	watcherDone  chan struct{}
+	closeOnce    sync.Once
 }
 
 // NewBearerTokenCredentials creates a new BearerTokenCredentials that reads the token
@@ -85,7 +87,9 @@ func (c *BearerTokenCredentials) updateToken(token string) {
 
 // Close stops the file watcher
 func (c *BearerTokenCredentials) Close() error {
-	close(c.watcherDone)
+	c.closeOnce.Do(func() {
+		close(c.watcherDone)
+	})
 	return nil
 }
 

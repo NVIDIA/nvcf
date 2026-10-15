@@ -2,11 +2,16 @@
 
 set -euo pipefail
 
+# No --feature-gates here on purpose. This renderer is shared with sidecar
+# images chosen independently of it, including versions that predate OTTL
+# lambda support, so its output must parse on a collector with no gates
+# enabled. Validating without them is what keeps that true.
+
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 tool_root="${repo_root}/tools/byoo"
 examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
 templates_dir="${repo_root}/src/libraries/go/lib/pkg/otelconfig/backendconfig/templates"
-create_cmd="./testdata/otelconfig/create/main.go"
+create_cmd="./otelconfig-create"
 
 export ESS_SECRETS_PATH="${examples_root}/secrets"
 cd "${tool_root}"
@@ -37,6 +42,13 @@ validate_otel_config() {
     fi
 }
 
+restore_template() {
+    local template_file="$1"
+    if [ -f "${templates_dir}/${template_file}.bk" ]; then
+        mv "${templates_dir}/${template_file}.bk" "${templates_dir}/${template_file}"
+    fi
+}
+
 run_matrix() {
     local template_file="$1"
     local backend="$2"
@@ -44,7 +56,12 @@ run_matrix() {
 
     mkdir -p _output/test/
     cp "${templates_dir}/${template_file}" "${templates_dir}/${template_file}.bk"
-    sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' "${templates_dir}/${template_file}"
+    # Restore on any exit path. This edits a checked-in template, so without the
+    # trap a failure under `set -e` would leave the worktree dirty.
+    trap 'restore_template "'"${template_file}"'"' EXIT
+    # Not "sed -i": that form is GNU-only and fails on BSD sed.
+    sed 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' \
+        "${templates_dir}/${template_file}.bk" > "${templates_dir}/${template_file}"
     touch _output/test/token
 
     for input_file in testdata/otelconfig/*.json; do
@@ -62,7 +79,8 @@ run_matrix() {
         fi
     done
 
-    mv "${templates_dir}/${template_file}.bk" "${templates_dir}/${template_file}"
+    restore_template "${template_file}"
+    trap - EXIT
     rm -rf _output/test _output/byoo-otel-collector
 }
 

@@ -53,3 +53,23 @@ func TestStorageRequestRoundTripPreservesSMBServerPodTolerations(t *testing.T) {
 		roundTripped.Spec.SharedStorage.Server.SMBServerPodTolerations,
 	)
 }
+
+func TestStorageRequestRoundTripPreservesModelCacheBackend(t *testing.T) {
+	original := &StorageRequest{
+		Spec: StorageRequestSpec{
+			ModelCache: &ModelCacheSpec{
+				CacheHandle: "handle-1",
+				Backend:     "sharedfs",
+			},
+		},
+	}
+
+	toV1 := StorageRequestToV1(original)
+	require.NotNil(t, toV1.Spec.ModelCache)
+	assert.Equal(t, "sharedfs", toV1.Spec.ModelCache.Backend)
+
+	roundTripped := StorageRequestFromV1(toV1)
+	require.NotNil(t, roundTripped.Spec.ModelCache)
+	assert.Equal(t, "handle-1", roundTripped.Spec.ModelCache.CacheHandle)
+	assert.Equal(t, "sharedfs", roundTripped.Spec.ModelCache.Backend)
+}

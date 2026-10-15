@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"context"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/hellofresh/health-go/v5"
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
@@ -29,11 +30,20 @@ import (
 	"nvcf-grpc-proxy/proxy/worker"
 )
 
-func createHttp2Server(director *StreamDirector, addr string, healthManager *health.Health) *InterceptedHttpServer {
+// newProxyMux builds the HTTP mux served by the http/2 listener: proxied
+// traffic on "/", the health check on "/health", and the GET /info
+// build-version endpoint.
+func newProxyMux(director *StreamDirector, healthManager *health.Health) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/", director)
 	// TODO only route to this health if there are no function id headers
 	mux.HandleFunc("/health", healthManager.HandlerFunc)
+	mux.HandleFunc("/info", golibversion.Handler().ServeHTTP)
+	return mux
+}
+
+func createHttp2Server(director *StreamDirector, addr string, healthManager *health.Health) *InterceptedHttpServer {
+	mux := newProxyMux(director, healthManager)
 	corsMux := middleware.Cors(mux)
 	tracedMux := middleware.ApplyMiddleware(corsMux, "http/2 listener")
 	return &InterceptedHttpServer{http.Server{
@@ -56,11 +66,20 @@ func (s *InterceptedHttpServer) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	listener = ListenerInterceptor{Listener: listener, InterceptFunc: func(conn net.Conn) net.Conn {
+	return s.Serve(listener)
+}
+
+// Serve wraps an already-bound listener with the connection-tracking
+// interceptor and hands it to the embedded http.Server. Callers that
+// need to discover the bound address before serving (eg tests using
+// ephemeral ports) bind a listener themselves and pass it here; this
+// keeps the interceptor wrap in one place instead of duplicating it.
+func (s *InterceptedHttpServer) Serve(l net.Listener) error {
+	l = ListenerInterceptor{Listener: l, InterceptFunc: func(conn net.Conn) net.Conn {
 		zap.L().Debug("new http/2 listener connection")
 		return worker.NewConnectionTrackingConn(conn)
 	}}
-	return s.Serve(listener)
+	return s.Server.Serve(l)
 }
 
 type ListenerInterceptor struct {

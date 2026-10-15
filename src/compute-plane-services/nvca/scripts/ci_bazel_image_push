@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Push Bazel-built multi-arch images to the byocdev, devops, and ncp-dev registries.
+
+set -euo pipefail
+
+bazel_flags=()
+if [[ -n "${BAZEL_REMOTE_FLAGS:-}" ]]; then
+  # BAZEL_REMOTE_FLAGS is produced by scripts/.bazel-remote-probe as shell words.
+  # shellcheck disable=SC2206
+  bazel_flags+=(${BAZEL_REMOTE_FLAGS})
+fi
+if [[ -n "${BAZEL_DISK_CACHE:-}" ]]; then
+  bazel_flags+=("--disk_cache=${BAZEL_DISK_CACHE}")
+fi
+if [[ -n "${BAZEL_REPO_CACHE:-}" ]]; then
+  bazel_flags+=("--repository_cache=${BAZEL_REPO_CACHE}")
+fi
+
+bazel_run() {
+  bazel run --stamp "${bazel_flags[@]}" "$1"
+}
+
+byocdev_targets=(
+  "//cmd/nvca:image_push"
+  "//cmd/nvca-operator:image_push"
+  "//cmd/cluster-validator:image_push"
+  "//cmd/tools:image_push"
+)
+
+devops_targets=(
+  "//cmd/nvca:image_push_devops"
+  "//cmd/nvca:image_push_ncp_dev"
+  "//cmd/nvca-operator:image_push_devops"
+  "//cmd/nvca-operator:image_push_ncp_dev"
+  "//cmd/cluster-validator:image_push_devops"
+  "//cmd/cluster-validator:image_push_ncp_dev"
+  "//cmd/tools:image_push_devops"
+  "//cmd/tools:image_push_ncp_dev"
+)
+
+export DOCKER_CONFIG="${HOME}/.docker-byocdev"
+for target in "${byocdev_targets[@]}"; do
+  bazel_run "${target}"
+done
+
+export DOCKER_CONFIG="${HOME}/.docker-devops"
+for target in "${devops_targets[@]}"; do
+  bazel_run "${target}"
+done

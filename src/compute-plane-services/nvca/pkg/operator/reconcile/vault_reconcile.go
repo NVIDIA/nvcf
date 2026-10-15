@@ -98,7 +98,10 @@ func getVaultConfigData(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	// Get OAuth mount path from CRD spec (set by helm chart or ngcclient)
 	vaultSecretPath := getOAuthClientMountPath(nb)
 
-	// Generate template with OAuth names (NVCA handles backwards compatibility)
+	// Render the bare secret, no KEY= prefix: the otel collector's
+	// oauth2client extension reads client_secret_file whole (no dotenv
+	// parsing), so any prefix breaks its token fetch with 401. The agent's
+	// fetcher parses both forms, and its client ID comes from config/env.
 	temCfg := fmt.Sprintf("{{ with secret %q }}\n{{ %s }}\n{{ end }}",
 		vaultSecretPath,
 		secretDataPath)

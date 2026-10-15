@@ -20,6 +20,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"path"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	appsv1 "k8s.io/api/apps/v1"
@@ -137,6 +138,11 @@ func applySelfManagedNVCADeployment(ctx context.Context, nb *nvidiaiov1.NVCFBack
 	return nil
 }
 
+const (
+	clusterIssuedTokenDir      = "/var/run/secrets/tokens"
+	clusterIssuedTokenFilePath = clusterIssuedTokenDir + "/token"
+)
+
 // applyPSATIdentity adds the projected ServiceAccount token volume for PSAT identity.
 // The agent container reads the token from /var/run/secrets/tokens/token; audience
 // is "nvcf-icms:{clusterID}" so ICMS can resolve the cluster by audience at verify time.
@@ -153,7 +159,7 @@ func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, c
 							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
 								Audience:          fmt.Sprintf("nvcf-icms:%s", clusterID),
 								ExpirationSeconds: ptr.To(int64(3600)),
-								Path:              "token",
+								Path:              path.Base(clusterIssuedTokenFilePath),
 							},
 						},
 					},
@@ -168,22 +174,8 @@ func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, c
 			containers[i].VolumeMounts = append(containers[i].VolumeMounts,
 				corev1.VolumeMount{
 					Name:      "nvca-token",
-					MountPath: "/var/run/secrets/tokens",
+					MountPath: clusterIssuedTokenDir,
 					ReadOnly:  true,
-				},
-			)
-			containers[i].Env = append(containers[i].Env,
-				corev1.EnvVar{
-					Name:  "NVCF_TOKEN_FILE_PATH",
-					Value: "/var/run/secrets/tokens/token",
-				},
-				// Identity source disambiguates code paths in the agent that
-				// otherwise key off NVCF_TOKEN_FILE_PATH alone (e.g. the JWKS
-				// updater is PSAT-only — for SPIRE the JWKS lives in ICMS's
-				// configured trust bundle, not /openid/v1/jwks).
-				corev1.EnvVar{
-					Name:  "NVCF_IDENTITY_SOURCE",
-					Value: IdentitySourcePSAT,
 				},
 			)
 		}
@@ -220,18 +212,8 @@ func applySPIREIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, 
 			containers[i].VolumeMounts = append(containers[i].VolumeMounts,
 				corev1.VolumeMount{
 					Name:      "nvca-token",
-					MountPath: "/var/run/secrets/tokens",
+					MountPath: clusterIssuedTokenDir,
 					ReadOnly:  true,
-				},
-			)
-			containers[i].Env = append(containers[i].Env,
-				corev1.EnvVar{
-					Name:  "NVCF_TOKEN_FILE_PATH",
-					Value: "/var/run/secrets/tokens/token",
-				},
-				corev1.EnvVar{
-					Name:  "NVCF_IDENTITY_SOURCE",
-					Value: IdentitySourceSPIRE,
 				},
 			)
 		}
@@ -250,12 +232,12 @@ func applySPIREIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, 
 			Args: []string{
 				"--socket=unix:///run/spire/spire-agent.sock",
 				fmt.Sprintf("--audience=nvcf-icms:%s", clusterID),
-				"--output=/var/run/secrets/tokens/token",
+				"--output=" + clusterIssuedTokenFilePath,
 				"--health-port=8081",
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "spire-agent-socket", MountPath: "/run/spire", ReadOnly: true},
-				{Name: "nvca-token", MountPath: "/var/run/secrets/tokens"},
+				{Name: "nvca-token", MountPath: clusterIssuedTokenDir},
 			},
 			SecurityContext: sc,
 		},

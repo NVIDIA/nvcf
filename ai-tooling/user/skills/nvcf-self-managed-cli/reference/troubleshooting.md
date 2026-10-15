@@ -40,3 +40,9 @@ Known errors → diagnostic command → remediation. Keep in sync with the struc
 | `No cluster found with valid JWKS for cluster ID: <id>` (ICMS log) | JWKS in ICMS doesn't match what compute-plane K8s is currently signing | `nvcf-cli cluster rotate --cluster-id=<id>` |
 | Function pod `ImagePullBackOff` in `nvcf-backend` | Image-credential-helper config missing or wrong | `kubectl describe pod -n nvcf-backend <pod>`; check the pull secret config |
 | Function deploy stuck `DEPLOYING` for >5 min | NATS stream init lag (cold-cluster) — wait, or check NATS auth-callout health | `kubectl logs -n nats-system -l app.kubernetes.io/name=nats-auth-callout-service` |
+
+## Tasks
+
+| Symptom | Cause | Remediation |
+|---|---|---|
+| `task create` returns `Missing <TYPE> registry credential for hostname`, or keeps using a previous credential value, shortly after `registry-credential add/update/delete` while `registry-credential list`/`get` already show the new value | Expected propagation delay: NVCT caches the account's registry credentials with `nvct.nvcf.cache-ttl` (default `PT5M`, about 5 min) and applies the change when that cached copy refreshes | Wait up to about 5 min and retry, or `kubectl -n nvcf rollout restart deployment/nvct-api` to apply immediately |

@@ -1,0 +1,163 @@
+@startuml
+title Development-Only Kubernetes Multi-Stargate Peer Relay Flow
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam participantPadding 15
+skinparam BoxPadding 10
+skinparam sequenceMessageAlign center
+
+participant "LLM Gateway" as InfClient
+
+box "pylon" #e8f4fd
+  participant "Backend Client" as BackendCli
+end box
+
+box "Kubernetes" #f5f5f5
+  participant "ClusterIP\nsvc/stargate" as ClusterIP
+  participant "Headless Service\nstargate-headless" as HeadlessSvc
+  participant "ClusterIP Service\nstargate-model-discovery" as ModelSvc
+  participant "ClusterIP Service\nstargate-proxy" as ProxySvc
+end box
+
+box "Stargate Pod A" #f0f7e8
+  participant "gRPC + Dev Peer Relay\n(Pod A)" as GrpcA
+  participant "Reverse Listener\n(Pod A)" as ReverseA
+  participant "HTTP Proxy\n(Pod A)" as ProxyA
+end box
+
+box "Stargate Pod B" #f0f7e8
+  participant "gRPC + Dev Peer Relay\n(Pod B)" as GrpcB
+  participant "Reverse Listener\n(Pod B)" as ReverseB
+end box
+
+note over ClusterIP
+  DEVELOPMENT ONLY: this diagram shows the
+  built-in peer-relay topology when
+  --enable-dev-peer-forwarding is explicitly set
+  and the backend-facing stargate-k8s-router
+  is not deployed.
+  The flag defaults to false and must not be
+  used in production.
+  Backend clients use ClusterIP for gRPC
+  registration and QUIC reverse tunnel.
+  A DNS rewrite rule maps the configured
+  wildcard domain (e.g. *.stargate.external)
+  to the ClusterIP service DNS name.
+end note
+
+note over ModelSvc
+  LLM gateway calls model discovery
+  through service load balancing
+  (ListModels on port 50073).
+  The selected pod serves its local
+  snapshot and never forwards.
+end note
+
+note over ProxySvc
+  LLM gateway sends OpenAI HTTP proxy
+  requests through service load balancing
+  to real Stargate pods.
+end note
+
+== Discovery ==
+GrpcA -> HeadlessSvc: DNS lookup ready endpoints
+HeadlessSvc --> GrpcA: SRV targets\n[stargate-0..., stargate-1...]
+note right of GrpcA
+  Headless DNS and pod identity provide discovery
+  in every Kubernetes deployment. They do not
+  enable this relay without the explicit flag.
+
+  WatchStargates returns hostnames
+  from --advertised-hostname-template, e.g.:
+  - stargate-0.stargate.external:50071
+  - stargate-1.stargate.external:50071
+end note
+
+BackendCli -> ClusterIP: WatchStargates
+ClusterIP -> GrpcA: (routed to any pod)
+GrpcA --> BackendCli: StargateInfo snapshots\n(Pod A + Pod B hostnames)
+
+== Development-Only gRPC Registration Relay ==
+note over BackendCli
+  Client opens RegisterInferenceServer
+  to Pod A's hostname through ClusterIP.
+  ClusterIP may route to either pod.
+end note
+
+BackendCli -> ClusterIP: RegisterInferenceServer\n(:authority = stargate-0.stargate.external)
+ClusterIP -> GrpcB: (routes to Pod B randomly)
+
+GrpcB -> GrpcB: extract :authority host\n= stargate-0.stargate.external
+GrpcB -> GrpcB: ForwardingResolver::peer_addr()\nhost != self, is peer
+
+GrpcB -> GrpcB: build headless DNS target\nstargate-0.stargate-headless...:50071
+
+GrpcB -> HeadlessSvc: DNS resolves only ready endpoints
+GrpcB -> GrpcA: open gRPC channel to peer\nrelay protobuf streams
+GrpcA --> GrpcB: InferenceServerAck stream
+GrpcB --> BackendCli: relayed InferenceServerAck
+
+note over GrpcA
+  Pod A now has the registration
+  and manages QUIC connectivity
+  for this backend.
+end note
+
+== Development-Only QUIC Reverse Tunnel Relay ==
+note over BackendCli
+  Client connects reverse tunnel to
+  the ACK pylon dial address, defaulting
+  to Pod A's reverse_tunnel_target.
+  ClusterIP may route to either pod.
+end note
+
+BackendCli -> ClusterIP: QUIC connect\n(SNI = stargate-0.stargate.external)
+ClusterIP -> ReverseB: (routes to Pod B randomly)
+
+ReverseB -> ReverseB: extract SNI from handshake_data()\n= stargate-0.stargate.external
+ReverseB -> ReverseB: ForwardingResolver::peer_addr()\nSNI != self, is peer
+
+ReverseB -> ReverseB: build headless DNS target\nstargate-0.stargate-headless...:50072
+
+ReverseB -> HeadlessSvc: DNS resolves only ready endpoints
+ReverseB -> ReverseA: QUIC connect to peer\n(relay endpoint)
+
+note over ReverseB,ReverseA
+  Bidirectional stream relay:
+  all bi-streams between client
+  and peer are transparently proxied.
+  Handshake flows as the first stream.
+end note
+
+ReverseA --> ReverseB: handshake ACK (relayed)
+ReverseB --> BackendCli: handshake ACK
+
+note over ReverseA
+  Pod A stores the relayed connection
+  in its QUIC pool. Subsequent proxy
+  requests use this connection.
+end note
+
+== HTTP Proxy (Load-Balanced Proxy Service) ==
+note over InfClient
+  LLM gateway calls the proxy service.
+  Kubernetes selects a stargate pod.
+end note
+
+InfClient -> ProxySvc: POST /v1/chat/completions\n(x-routing-key, x-model, x-request-id,\nx-input-tokens)\n(resolved to Pod A)
+ProxySvc -> ProxyA: (direct to Pod A)
+
+ProxyA -> ProxyA: LB selects backend\nfrom local routing state
+ProxyA -> ProxyA: open bi-stream on\nlocal QUIC connection
+
+note over ProxyA
+  HTTP proxy does NOT forward.
+  It only routes to backends with
+  local registrations and local
+  QUIC connections.
+end note
+
+ProxyA --> InfClient: streamed response\n(x-inference-server-id,\nx-inference-server-url)
+
+@enduml

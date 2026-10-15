@@ -5,13 +5,14 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -62,7 +63,7 @@ rules:
   resources: ["icmsrequests/status"]
   verbs: ["get", "update", "patch"]
 - apiGroups: ["nvca.nvcf.nvidia.io"]
-  resources: ["storagerequests", "storagerequests/status"]
+  resources: ["modelcachebindings", "modelcachebindings/status", "storagerequests", "storagerequests/status"]
   verbs: ["get", "list", "watch", "patch", "create", "update", "delete"]
 - apiGroups: ["batch"]
   resources: ["jobs", "cronjobs"]
@@ -92,6 +93,19 @@ rules:
 - apiGroups: ["nvca.nvcf.nvidia.io"]
   resources: ["miniservices", "miniservices/status"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+# NvSnapFunctionState is granted unconditionally, NOT behind the NvSnap
+# feature flag. The operator generates the agent ClusterRole with this rule on
+# every reconcile, and Kubernetes escalation prevention rejects a role that
+# grants permissions the granting account does not itself hold:
+#   clusterroles "nvca" is forbidden: user "system:serviceaccount:
+#   nvca-operator:nvca-operator" is attempting to grant RBAC permissions not
+#   currently held: {APIGroups:["nvsnap.nvcf.nvidia.io"], ...}
+# That check runs at install time on the delegation itself, long before any
+# feature flag is consulted, so a default-off flag does not avoid it and a
+# clean install cannot reconcile its NVCFBackend without this.
+- apiGroups: ["nvsnap.nvcf.nvidia.io"]
+  resources: ["nvsnapfunctionstates", "nvsnapfunctionstates/status"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
 - apiGroups: ["resource.nvidia.com"]
   resources: ["computedomains"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"]
@@ -103,4 +117,7 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: ["scheduling.run.ai"]
   resources: ["queues"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["run.ai"]
+  resources: ["kartas"]
   verbs: ["get", "list", "watch"]

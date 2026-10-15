@@ -1,0 +1,3 @@
+# Environment Post Processors
+org.springframework.boot.EnvironmentPostProcessor=\
+com.nvidia.boot.observability.logging.LogbackEnvironmentPostProcessor

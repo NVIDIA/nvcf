@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-jmespath",
+    srcs = [
+        "api.go",
+        "astnodetype_string.go",
+        "functions.go",
+        "interpreter.go",
+        "lexer.go",
+        "parser.go",
+        "toktype_string.go",
+        "util.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/jmespath/go-jmespath",
+    importpath = "github.com/jmespath/go-jmespath",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-jmespath",
+    visibility = ["//visibility:public"],
+)

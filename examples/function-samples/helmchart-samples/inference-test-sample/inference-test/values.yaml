@@ -21,3 +21,7 @@ image:
   pullPolicy: "IfNotPresent"
 
 inferencePort: 8000
+
+# When true, render nvcf-workload-config so NVCA uses worker container readiness
+# for instance health instead of all chart objects. See docs/user/helm-functions.md.
+statusByWorkerReadiness: false

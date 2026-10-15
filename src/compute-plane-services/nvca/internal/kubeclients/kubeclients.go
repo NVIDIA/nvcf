@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	k8sclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +34,7 @@ import (
 
 type KubeClients struct {
 	Config          *rest.Config
+	DynamicClient   dynamic.Interface
 	DiscoveryClient discovery.DiscoveryInterface
 	K8s             k8sclient.Interface
 	BART            bartclient.Interface
@@ -50,6 +52,11 @@ func NewFromCore(coreK8sClient *core.KubeClients) (*KubeClients, error) {
 		return nil, err
 	}
 
+	dyClient, err := dynamic.NewForConfig(coreK8sClient.Config)
+	if err != nil {
+		return nil, err
+	}
+
 	schemeHelmV2 := runtime.NewScheme()
 	utilruntime.Must(v1alpha1.AddToScheme(schemeHelmV2))
 	utilruntime.Must(kaischedulingv2.AddToScheme(schemeHelmV2))
@@ -63,6 +70,7 @@ func NewFromCore(coreK8sClient *core.KubeClients) (*KubeClients, error) {
 	return &KubeClients{
 		Config:          coreK8sClient.Config,
 		K8s:             coreK8sClient.K8s,
+		DynamicClient:   dyClient,
 		BART:            bc,
 		HelmV2:          helmV2Client,
 		DiscoveryClient: dc,
