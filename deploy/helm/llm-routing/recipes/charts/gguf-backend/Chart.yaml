@@ -4,4 +4,4 @@ apiVersion: v2
 name: pylon-gguf-backend
 description: Pinned GGUF recipes with Kubernetes preparation and distributed serving
 type: application
-version: 0.3.0-iiab
+version: 0.3.1-iiab

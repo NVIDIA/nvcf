@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qualify, cache, and supervise one rank of a pinned SGLang recipe."""
 import datetime
+import ctypes
 import fcntl
 import hashlib
 import http.client
@@ -12,10 +13,10 @@ import math
 import os
 import pathlib
 import platform
+import re
 import shutil
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import threading
@@ -43,10 +44,19 @@ def command(config, model_path, rank):
     token_capacity = profile.get('maxTotalTokens', workload_tokens)
     if type(token_capacity) is not int or token_capacity < workload_tokens:
         raise RuntimeError('maxTotalTokens must cover the configured context and concurrency')
+    host = '0.0.0.0'
+    if profile['nodes'] > 1:
+        host = os.environ.get('POD_IP', '')
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            raise RuntimeError('TP2 requires POD_IP from the Kubernetes downward API') from None
+        if address.is_unspecified or address.is_loopback or address.is_multicast:
+            raise RuntimeError('TP2 requires a usable pod IP for the backend Service')
     flags = ['--model-path', str(model_path), '--served-model-name', config['model']['id'],
              '--tp', str(profile['nodes']), '--context-length', str(config['contextLength']),
              '--max-running-requests', str(config['concurrency']), '--max-total-tokens', str(token_capacity),
-             '--host', '0.0.0.0', '--port', str(config['ports']['http'])] + profile['flags']
+             '--host', host, '--port', str(config['ports']['http'])] + profile['flags']
     if profile['nodes'] > 1:
         flags += ['--nnodes', str(profile['nodes']), '--node-rank', str(rank),
                   '--dist-init-addr', config['targets'][0]['address'] + ':' + str(config['ports']['rendezvous'])]
@@ -137,21 +147,48 @@ def prepare_offload(config, directory=pathlib.Path('/ple')):
         raise RuntimeError('Insufficient free NVMe space for the profile offload reservation')
 
 
+def interface_addresses(interface):
+    """Read all IPv4 addresses assigned to a Linux interface, including secondary addresses."""
+    class IfAddrs(ctypes.Structure):
+        pass
+    IfAddrs._fields_ = [('next', ctypes.POINTER(IfAddrs)), ('name', ctypes.c_char_p),
+                       ('flags', ctypes.c_uint), ('address', ctypes.c_void_p)]
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(IfAddrs))]
+    libc.getifaddrs.restype = ctypes.c_int
+    libc.freeifaddrs.argtypes = [ctypes.POINTER(IfAddrs)]
+    libc.freeifaddrs.restype = None
+    head = ctypes.POINTER(IfAddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        raise RuntimeError('Cannot inspect fabric interface addresses: ' + os.strerror(ctypes.get_errno()))
+    addresses = set()
+    try:
+        current = head
+        while current:
+            entry = current.contents
+            if entry.name == interface.encode() and entry.address and ctypes.c_ushort.from_address(entry.address).value == socket.AF_INET:
+                addresses.add(socket.inet_ntoa(ctypes.string_at(entry.address + 4, 4)))
+            current = entry.next
+    finally:
+        libc.freeifaddrs(head)
+    return addresses
+
+
 def check_fabric(config, rank, net=pathlib.Path('/sys/class/net')):
     targets, profile = config['targets'], config['profile']
     if len(targets) != 2 or targets[0].get('fabric') != targets[1].get('fabric') or not targets[0].get('fabric'):
         raise RuntimeError('TP2 requires two targets on the same verified fabric')
-    addresses = [ipaddress.ip_address(target['address']) for target in targets]
-    if len(set(addresses)) != 2 or any(address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local for address in addresses):
+    try:
+        addresses = [ipaddress.ip_address(target['address']) for target in targets]
+    except ValueError:
+        raise RuntimeError('TP2 requires distinct usable IPv4 fabric addresses') from None
+    if len(set(addresses)) != 2 or any(address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_reserved for address in addresses):
         raise RuntimeError('TP2 requires distinct usable IPv4 fabric addresses')
     target = targets[rank]
     interface = target['interface']
-    if len(interface.encode()) > 15 or '/' in interface or interface in ('', '.', '..'):
+    if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', interface) or interface in ('.', '..'):
         raise RuntimeError('Invalid fabric interface name')
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        # SIOCGIFADDR returns the IPv4 address assigned to this local interface.
-        result = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', interface.encode()))
-    if socket.inet_ntoa(result[20:24]) != target['address']:
+    if target['address'] not in interface_addresses(interface):
         raise RuntimeError('Configured fabric address does not belong to the selected interface')
     if (net / interface / 'operstate').read_text().strip() != 'up':
         raise RuntimeError('The selected fabric interface is not up')
@@ -255,10 +292,21 @@ def stop(child):
         child.wait()
 
 
-def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup'), peer_guard=None):
+def check_memory_latch(state_dir=pathlib.Path('/tmp')):
     latch = state_dir / 'recipe-memory-stop.json'
     if latch.exists():
-        raise RuntimeError('Memory guard previously stopped this pod. Inspect the cause before replacing the pod.')
+        cause = latch.read_text()
+        try:
+            cause = json.loads(cause)
+        except ValueError:
+            pass
+        log('memory_guard_latched', cause=cause)
+        raise RuntimeError('Memory guard previously stopped this pod. Inspect the recorded cause before replacing the pod: ' + str(cause))
+
+
+def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup'), peer_guard=None):
+    check_memory_latch(state_dir)
+    latch = state_dir / 'recipe-memory-stop.json'
     swap = cgroup / 'memory.swap.current'
     if not swap.exists():
         raise RuntimeError('Runtime memory guard requires cgroup v2')
@@ -308,8 +356,8 @@ def cached_blob(path, repository, cache):
     if path.is_file() and resolved.is_relative_to(repository.resolve()):
         return resolved, resolved.name
     if path.is_file() and path.is_symlink():
-        # Hub 1.33 links snapshot -> repository/blobs/<ETag> ->
-        # hub/blobs/<prefix>/<Xet hash>. The Xet hash is NOT a SHA256 digest.
+        # Hub 1.33 snapshot links pass through repository/blobs/<ETag> to
+        # hub/blobs/<prefix>/<Xet hash>. The ETag supplies the SHA256 identity.
         alias = pathlib.Path(os.path.abspath(path.parent.resolve() / os.readlink(path)))
         store = repository.resolve().parent / 'blobs'
         if (alias.parent == repository.resolve() / 'blobs' and alias.parent.resolve() == alias.parent
@@ -472,7 +520,8 @@ def patch_mmap_weight_loader(config, path=pathlib.Path('/sgl-workspace/sglang/py
     log('runtime_patch_applied', patch='deepseek-mmap-materialize', sha256=MMAP_LOADER_PATCHED_SHA256)
 
 
-def automatic(config, rank, cache=pathlib.Path('/cache')):
+def automatic(config, rank, cache=pathlib.Path('/cache'), state_dir=pathlib.Path('/tmp')):
+    check_memory_latch(state_dir)
     world = config['profile']['nodes']
     if world not in (1, 2) or rank not in range(world):
         raise RuntimeError('Automatic startup requires one or two valid profile ranks')
@@ -510,8 +559,8 @@ def automatic(config, rank, cache=pathlib.Path('/cache')):
             log('serve_start', model=config['model']['id'], revision=config['model']['revision'], rank=rank)
             if barrier:
                 barrier.state['phase'] = 'serving'
-                return supervise(command(config, model_path, rank), config, peer_guard=barrier.guard)
-            return supervise(command(config, model_path, rank), config)
+                return supervise(command(config, model_path, rank), config, state_dir=state_dir, peer_guard=barrier.guard)
+            return supervise(command(config, model_path, rank), config, state_dir=state_dir)
         finally:
             if barrier:
                 barrier.close()

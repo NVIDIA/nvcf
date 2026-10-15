@@ -387,7 +387,7 @@ class AutomaticRuntimeTests(unittest.TestCase):
 
     def test_automatic_qualifies_then_prepares_then_serves_with_offline_environment(self):
         events = []
-        def serve(argv, config):
+        def serve(argv, config, **kwargs):
             self.assertEqual(os.environ['HF_HUB_OFFLINE'], '1')
             self.assertEqual(os.environ['TRANSFORMERS_OFFLINE'], '1')
             events.append('serve')

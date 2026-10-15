@@ -76,6 +76,48 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertEqual(catalog.recipe_notice(root, {"id": "example", "runtime": {"backend": "sglang"}}),
                              root / "NOTICE")
 
+    def test_runtime_display_versions_are_consistent(self):
+        for recipe in self.recipes.values():
+            if recipe['profiles']:
+                self.assertTrue(recipe['runtime']['version'])
+        source = catalog.read(ROOT/'glm-5.3/recipe.json')
+        glm = self.recipes['glm-5.3']
+        self.assertEqual(glm['name'], 'GLM-5.3')
+        self.assertEqual(glm['runtime']['revision'], source['llamaCppRevision'])
+        self.assertEqual(glm['runtime']['version'], 'llama.cpp ' + source['llamaCppRevision'][:7])
+        self.assertEqual(glm['availability']['status'], 'available')
+        self.assertEqual(glm['profiles'][0]['validation']['runtimeStatus'], 'failed')
+        self.assertIn('Historical', glm['profiles'][0]['validation']['scope'])
+        profiles = {profile['id']: profile for profile in glm['profiles']}
+        for identifier in ('gb10-x3', 'gb300-x2'):
+            self.assertEqual(profiles[identifier]['validation']['runtimeStatus'], 'smoke-tested')
+
+    def test_gguf_availability_and_workload_follow_current_automatic_evidence(self):
+        original_read = catalog.read
+        for status in ('failed', 'pending', 'smoke-tested'):
+            def changed_read(path):
+                result = original_read(path)
+                if path == ROOT / 'glm-5.3/profiles.json':
+                    for profile in result['profiles']:
+                        validation = profile['validation']
+                        if status == 'pending':
+                            validation.pop('automaticHelmValidation')
+                        else:
+                            validation['automaticHelmValidation']['status'] = status
+                return result
+            with self.subTest(status=status), patch.object(catalog, 'read', side_effect=changed_read):
+                recipe = catalog.gguf_recipes(ROOT)[0]
+            validation = recipe['profiles'][0]['validation']
+            qualified = status == 'smoke-tested'
+            self.assertEqual(validation['runtimeStatus'], status)
+            self.assertEqual(validation['automaticHelmStatus'], status)
+            self.assertEqual(recipe['availability']['status'], 'available' if qualified else 'experimental')
+            self.assertEqual(validation['workload'] is not None, qualified)
+            if qualified:
+                self.assertNotIn('reason', recipe['availability'])
+            else:
+                self.assertEqual(recipe['availability']['reason'], 'Not validated.')
+
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
             with self.subTest(recipe=identifier):
@@ -372,8 +414,7 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertGreater(evidence["weightBytes"], 0)
 
     def test_chart_references_resolve_to_source_and_published_charts(self):
-        # Every executable recipe names its published chart; without one, the
-        # planner would install the source chart instead.
+        # Every executable recipe names its published chart for registry installs.
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 chart = profile["deployment"]["chart"]
@@ -467,7 +508,7 @@ class CommonCatalogTests(unittest.TestCase):
                     self.assertFalse(validation["workload"]["performanceBenchmarked"])
                     self.assertFalse(validation["workload"]["qualityEvaluated"])
                 else:
-                    self.assertEqual(validation["runtimeStatus"], "pending")
+                    self.assertIn(validation["runtimeStatus"], ("pending", "failed"))
 
 
 if __name__ == "__main__":
