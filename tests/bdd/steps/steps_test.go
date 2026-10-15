@@ -1871,6 +1871,64 @@ func TestPylonMetricTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestPrometheusMetricsShouldTotalRunsVisibleExpectations(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	t.Setenv("BDD_FUNCTION_ID", "function-1")
+	table := docTable(t, [][]string{
+		{"metric", "labels", "comparison", "total"},
+		{"stargate_routing_session_selections_total", "routing_key=${BDD_FUNCTION_ID},session_state=returning,selection=primary", "exactly", "4"},
+		{"llm_api_gateway_last_cluster_lookups_total", "result=hit", "at least", "4"},
+	})
+
+	err := sc.prometheusMetricsShouldTotal(
+		context.Background(),
+		"9090",
+		"app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router",
+		"nvcf",
+		"k3d-ncp-local-cp",
+		"2m",
+		table,
+	)
+	if err != nil {
+		t.Fatalf("observe Prometheus totals: %v", err)
+	}
+	want := "bash tests/bdd/scripts/wait-prometheus-totals.sh 9090" +
+		" app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router nvcf k3d-ncp-local-cp 2m" +
+		" stargate_routing_session_selections_total routing_key=function-1,session_state=returning,selection=primary exactly 4" +
+		" llm_api_gateway_last_cluster_lookups_total result=hit 'at least' 4"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestPrometheusTotalTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
+	for name, rows := range map[string][][]string{
+		"missing labels header": {
+			{"metric", "comparison", "total"},
+			{"stargate_routing_session_selections_total", "exactly", "1"},
+		},
+		"invalid total": {
+			{"metric", "labels", "comparison", "total"},
+			{"stargate_routing_session_selections_total", "session_state=new", "exactly", "not-a-total"},
+		},
+		"no data rows": {
+			{"metric", "labels", "comparison", "total"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			err := sc.prometheusMetricsShouldTotal(context.Background(), "9090", "app=router", "nvcf", "context", "2m", docTable(t, rows))
+			if err == nil {
+				t.Fatal("expected table validation error")
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want 0 before table validation", len(fake.runs))
+			}
+		})
+	}
+}
+
 func TestJSONOutputContainsRowsAssertion(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	sc.LastResult = harness.Result{Stdout: `[{"name":"api","namespace":"nvcf"}]`}

@@ -1,0 +1,28 @@
+NVCF non-root dependency image derivatives
+Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+The derivative build definitions are licensed under Apache-2.0. The upstream
+images retain their existing software, licenses, and attribution files. No
+upstream binary or package is replaced by these build definitions.
+
+NATS Server 2.14.6, Alpine 3.22 variant
+Source: https://github.com/nats-io/nats-docker
+NATS Server source license: Apache-2.0
+Base: docker.io/nats:2.14.6-alpine3.22
+Index digest: sha256:ad7a43eb7e3337c3c38ce5d784d1461791f95f730f252d2b25eee699752a0ca3
+
+NATS Server Config Reloader 0.24.0
+Source: https://github.com/nats-io/nack
+Application source license: Apache-2.0
+Base: docker.io/natsio/nats-server-config-reloader:0.24.0
+Index digest: sha256:d758a82a9c20337e46c2f7356a413faa52cf4d6b02497c3ad81f72f1ba106464
+
+Alpine Kubernetes helper 1.37.0
+Source: https://github.com/alpine-docker/k8s
+Build definition source license: MIT
+Base: docker.io/alpine/k8s:1.37.0
+Index digest: sha256:b421c2e9419edb98db39b6ab641669f4db7bb2acf354f22450c6b7e7176d1ff4
+
+Each base also contains operating-system packages and tools under their own
+licenses. Preserve the full image SBOM and package attribution during release;
+this notice does not replace those component-specific license records.

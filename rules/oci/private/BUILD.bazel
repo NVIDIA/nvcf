@@ -18,6 +18,9 @@
 # The shared Java image contract test script, referenced by the
 # java_image_contract_test macro in every Java service's BUILD file.
 exports_files(
-    ["java_image_contract_test.sh"],
+    [
+        "java_image_contract_test.sh",
+        "numeric_user_test.go",
+    ],
     visibility = ["//visibility:public"],
 )
