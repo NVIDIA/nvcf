@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "spew",
+    srcs = [
+        "bypass.go",
+        "bypasssafe.go",
+        "common.go",
+        "config.go",
+        "doc.go",
+        "dump.go",
+        "format.go",
+        "spew.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/davecgh/go-spew/spew",
+    importpath = "github.com/davecgh/go-spew/spew",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":spew",
+    visibility = ["//visibility:public"],
+)

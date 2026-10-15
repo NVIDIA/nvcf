@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "remote",
+    srcs = [
+        "manifest.go",
+        "referrers.go",
+        "registry.go",
+        "repository.go",
+        "url.go",
+        "utils.go",
+        "warning.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote",
+    importpath = "oras.land/oras-go/v2/registry/remote",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest",
+        "//src/compute-plane-services/nvca/vendor/github.com/opencontainers/image-spec/specs-go",
+        "//src/compute-plane-services/nvca/vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/content",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/errdef",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/cas",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/descriptor",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/docker",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/httputil",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/ioutil",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/spec",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/syncutil",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/auth",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/errcode",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":remote",
+    visibility = ["//visibility:public"],
+)

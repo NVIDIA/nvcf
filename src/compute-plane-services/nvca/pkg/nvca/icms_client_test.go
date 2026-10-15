@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -157,6 +158,50 @@ func setupTestICMSClient() (*ICMSClient, *mockTransport) {
 	return s, m
 }
 
+func TestICMSClientHostHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+	}{
+		{
+			name:     "uses URL host by default",
+			wantHost: "bare-elb.example.invalid",
+		},
+		{
+			name:     "uses configured host override",
+			host:     "sis.bare-elb.example.invalid",
+			wantHost: "sis.bare-elb.example.invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewICMSClientWithHostHeaderOverride(
+				t.Context(),
+				uuid.NewString(),
+				"http://bare-elb.example.invalid",
+				tt.host,
+				&mockTokenFetcher{token: "token"},
+				nil,
+			)
+			transport := newMockTransport()
+			transport.setBody(`{"clusterId":"test-cluster"}`)
+			client.client.Transport = transport
+
+			_, err := client.Register(t.Context(), &types.ICMSRegistrationRequest{})
+			require.NoError(t, err)
+			req := transport.getRequest()
+			require.NotNil(t, req)
+			gotHost := req.Host
+			if gotHost == "" {
+				gotHost = req.URL.Host
+			}
+			assert.Equal(t, tt.wantHost, gotHost)
+		})
+	}
+}
+
 func TestICMSRegister(t *testing.T) {
 	ctx := newTestContext()
 	s, m := setupTestICMSClient()
@@ -170,18 +215,18 @@ func TestICMSRegister(t *testing.T) {
 			"` + string(testGPUNameDefault) + `": {
 				"url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_13e2b598-96cf-41b5-b419-8ea7f700d5d2.fifo",
 				"queueType": "FifoQueue",
-				"accessKeyId": "ASIAQAAAAAAAKQ563GZD",
-				"secretAccessKey": "VuwiYiuZ54FpjJNoKi4+xLmItKsuSkL4JM7Gibg/",
-				"sessionToken": "FQoGZXIvYXdzEBYaDWBDIgdpw+WFwbMJjzWlBUY8Tz8VkPa4m7GD6pF006Pu5J2q82CeF08FYzgBFK1KsfZbenSykRH01TifaKDnghJMtHIQMXo1cerGTbXeqyCpvsl42gRiFqmiR1Hwy5sVUhlqQ05ZnVYUGPoWGu6OpA/9jWQbKK3ITVTXMhrbTXl0AN/e05Gxk16zCnPwsO1FFFDbOkd6Y5g1raAgtGZmst/6NkBpxAjehzUFfZvhQOg1FGJUsYkg3Y11QQ39DB4Ytl1AZTqmB//jCJiTPfJXGF+7MuX3Ufb/yC66Q89ENx9jpL8/lC66hliPrQKC1BOOYLBYgopaFMHTuVcL/wA=",
+				"accessKeyId": "dummy-access-key-id",
+				"secretAccessKey": "dummy-secret-access-key",
+				"sessionToken": "dummy-session-token",
 				"expiresAt": "2023-05-31T05:26:04.433Z"
 			}
 		},
         "terminationQueue": {
             "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_oauth-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
             "queueType": "FifoQueue",
-            "accessKeyId": "ASIAQAAAAAAAD6FWY6K6",
-            "secretAccessKey": "tlxkupYvYw5W5PkxOnZCP2GX8GqDk7i0w2tKN4oY",
-            "sessionToken": "FQoGZXIvYXdzEBYaDkZEjNzHSLiYWlztWai9L21wXsZxYP31GgDnQWVcVp1qC9rBSXiRJBUeO9s/91y0qOU3PWIzUTnhhpNDJK4xg+nlCjsjRqESYYIW3aM+OxmFAQrSFoSWLLI+bo2Q6gKXL1KuoLxa7RplsOu892ZbBLhaqX3XAkHUIoCH3+28gsqjXCjGwuReKR3XWREuDAj3Aa2jhUAZFdZMlhSC6WUApU2V/qSbWlQDmvgL0XQWhLWU1r6qaPrBZtFYc7Rkj8LeZmvmb9kJi3XEAfjiX7jb9ZdjI22ZtQXss018M062wVfRQD9ioyW3QI5hGh3SBQwfNaWlT8G5MzYV8Xb0SGs=",
+            "accessKeyId": "dummy-access-key-id",
+            "secretAccessKey": "dummy-secret-access-key",
+            "sessionToken": "dummy-session-token",
             "expiresAt": "2023-05-31T05:26:04.461Z"
         }
     }
@@ -211,17 +256,17 @@ func TestICMSGetCreds(t *testing.T) {
 	assert.NotNil(t, res)
 	assert.Len(t, res.CreationQueues, 1)
 	if assert.Contains(t, res.CreationQueues, testGPUNameDefault) {
-		assert.Equal(t, res.CreationQueues[testGPUNameDefault].AccessKey, "ASIAQAAAAAAAKQ563GZD")
+		assert.Equal(t, res.CreationQueues[testGPUNameDefault].AccessKey, "dummy-access-key-id")
 	}
-	assert.Equal(t, res.TerminationQueue.AccessKey, "ASIAQAAAAAAAD6FWY6K6")
+	assert.Equal(t, res.TerminationQueue.AccessKey, "dummy-access-key-id")
 
 	m.body = `{
     "credentials": {
  000/q_gdn_icms_byoc_oauth-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
             "queueType": "FifoQueue",
-            "accessKeyId": "ASIAQAAAAAAAD6FWY6K6",
-            "secretAccessKey": "tlxkupYvYw5W5PkxOnZCP2GX8GqDk7i0w2tKN4oY",
-            "sessionToken": "FQoGZXIvYXdzEBYaDkZEjNzHSLiYWlztWai9L21wXsZxYP31GgDnQWVcVp1qC9rBSXiRJBUeO9s/91y0qOU3PWIzUTnhhpNDJK4xg+nlCjsjRqESYYIW3aM+OxmFAQrSFoSWLLI+bo2Q6gKXL1KuoLxa7RplsOu892ZbBLhaqX3XAkHUIoCH3+28gsqjXCjGwuReKR3XWREuDAj3Aa2jhUAZFdZMlhSC6WUApU2V/qSbWlQDmvgL0XQWhLWU1r6qaPrBZtFYc7Rkj8LeZmvmb9kJi3XEAfjiX7jb9ZdjI22ZtQXss018M062wVfRQD9ioyW3QI5hGh3SBQwfNaWlT8G5MzYV8Xb0SGs=",
+            "accessKeyId": "dummy-access-key-id",
+            "secretAccessKey": "dummy-secret-access-key",
+            "sessionToken": "dummy-session-token",
             "expiresAt": "2023-05-31T05:26:04.461Z"
         }
     }
@@ -1139,4 +1184,71 @@ func TestICMSPathConfig_CustomPathsFromEnv(t *testing.T) {
 		require.NotNil(t, req)
 		assert.Contains(t, req.URL.Path, "custom/sirs/req-99")
 	})
+}
+
+// ctxCapturingTokenFetcher records the context it was called with, so a test can
+// assert what the ICMS client hands to the auth path.
+type ctxCapturingTokenFetcher struct {
+	seenURLTemplate string
+	called          bool
+}
+
+func (f *ctxCapturingTokenFetcher) FetchToken(ctx context.Context) (string, error) {
+	f.called = true
+	f.seenURLTemplate = clientmetrics.URLTemplateFromContext(ctx)
+	return "test-token", nil
+}
+
+// TestICMSClient_DoesNotLeakURLTemplateToTokenFetcher pins a real defect: the
+// url.template must be bound to the ICMS request only, never to the caller's
+// context. The token fetcher is reached with that same context and is itself
+// instrumented (peer.service="auth"), so a template on the caller context would
+// stamp the auth server's series with an ICMS route it never called, splitting
+// one auth series across every ICMS route.
+func TestICMSClient_DoesNotLeakURLTemplateToTokenFetcher(t *testing.T) {
+	var requestTemplate string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestTemplate = clientmetrics.URLTemplateFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	tf := &ctxCapturingTokenFetcher{}
+	c := newICMSClient(ctx, "cluster-123", srv.URL, "", tf, nil)
+
+	// The handler runs server-side so it cannot observe the client context; assert
+	// on the client side instead by recording what the transport sees.
+	var transportTemplate string
+	c.client.Transport = roundTripCapture{
+		inner: c.client.Transport,
+		capture: func(req *http.Request) {
+			transportTemplate = clientmetrics.URLTemplateFromContext(req.Context())
+		},
+	}
+
+	_, _ = c.PutHealthStatus(ctx, &types.HealthStatusRequest{})
+
+	if !tf.called {
+		t.Fatal("expected the token fetcher to be called")
+	}
+	if tf.seenURLTemplate != "" {
+		t.Errorf("token fetcher context carries url.template %q; it must be bound to the ICMS request only, "+
+			"otherwise the auth client reports an ICMS route it never called", tf.seenURLTemplate)
+	}
+	if want := "v1/nvca/clusters/{clusterId}/heartbeat"; transportTemplate != want {
+		t.Errorf("ICMS request url.template = %q, want %q", transportTemplate, want)
+	}
+	_ = requestTemplate
+}
+
+type roundTripCapture struct {
+	inner   http.RoundTripper
+	capture func(*http.Request)
+}
+
+func (r roundTripCapture) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.capture(req)
+	return r.inner.RoundTrip(req)
 }

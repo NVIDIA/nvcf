@@ -259,7 +259,7 @@ The Gateway you created here will be used by the `nvcf-gateway-routes` chart to 
 
 Environment configuration files define how NVCF is deployed in your specific environment. They are YAML files that provide values to the Helm charts.
 
-Create your environment file from the template below ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+Create your environment file from the template below ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -606,7 +606,7 @@ Secrets configuration contains any sensitive data required for NVCF operation. T
 
 These credentials will then be used for function deployments. Note that if the registry credentials are not correct you can always update them using the steps in [third-party-registries-self-hosted](./third-party-registries.md).
 
-Create your secrets file from the template below ([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your actual base64-encoded registry credentials.
+Create your secrets file from the template below ([example-secrets.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/cp-example-secrets.yaml)). You must replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your actual base64-encoded registry credentials.
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -727,7 +727,7 @@ The secrets file you configured in Step 3 handles **API bootstrap registry crede
 
 If your `image` registry is private and your cluster nodes do not have built-in credential helpers, you must create Kubernetes `docker-registry` secrets in each NVCF namespace and configure the helmfile to reference them.
 
-**1. Create the pull secret** in each NVCF namespace ([create-nvcr-pull-secrets.sh](samples/scripts/create-nvcr-pull-secrets.sh)):
+**1. Create the pull secret** in each NVCF namespace ([create-nvcr-pull-secrets.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/scripts/create-nvcr-pull-secrets.sh)):
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"

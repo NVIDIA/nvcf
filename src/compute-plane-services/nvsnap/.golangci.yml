@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP golangci-lint configuration
+version: "2"
+run:
+  modules-download-mode: readonly
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nakedret
+    - noctx
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+  settings:
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    gocritic:
+      disabled-checks:
+        - hugeParam # We pass large structs by value intentionally in some cases
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    gosec:
+      excludes:
+        - G104 # Audit errors not checked - we handle this case by case
+        - G304 # Potential file inclusion - necessary for our use case
+        # Permissive dir/file perms are intentional: restored pods run as a
+        # different uid (distroless 65532) than the capturing agent, so the
+        # cache/checkpoint/blob trees these rules flag MUST stay world-readable
+        # for cross-uid restore to work. Tightening them breaks restore.
+        - G301 # dir perms (MkdirAll 0755) — see above
+        - G302 # file perms on chmod — see above
+        - G306 # WriteFile perms (0644) — see above
+    govet:
+      enable:
+        - shadow
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+  exclusions:
+    generated: lax
+    rules:
+      # Test files can have longer functions
+      - linters:
+          - funlen
+        path: _test\.go
+      # Allow dot imports in tests
+      - linters:
+          - revive
+        path: _test\.go
+        text: dot-imports
+      # Generated files
+      - linters:
+          - all
+        path: zz_generated
+      # API types have many fields
+      - linters:
+          - revive
+        path: pkg/apis/
+        text: 'exported:'
+    paths:
+      # Third-party vendored code (npm package that happens to ship a .go file).
+      - ui/node_modules
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+  exclusions:
+    generated: lax
+    paths:
+      - ui/node_modules
+      - third_party$
+      - builtin$
+      - examples$

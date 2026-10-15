@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.22 AS http-server-build
+FROM golang:1.23 AS http-server-build
 
 WORKDIR /go/src/http-app
 COPY http-server .

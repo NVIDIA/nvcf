@@ -33,6 +33,7 @@ impl IntoResponse for AppError {
         );
         metrics::record_nvcf_application_error(
             self.0.status.unwrap_or_default().as_str().to_string(),
+            None,
         );
         let span = Span::current();
         span.record("app_error", "true");

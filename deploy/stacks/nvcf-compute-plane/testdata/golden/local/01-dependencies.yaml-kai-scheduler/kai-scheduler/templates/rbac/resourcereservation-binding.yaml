@@ -1,0 +1,19 @@
+---
+# Source: kai-scheduler/templates/rbac/resourcereservation-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kai-resource-reservation
+  namespace: kai-resource-reservation
+subjects:
+  - kind: ServiceAccount
+    name: kai-resource-reservation
+    namespace: kai-resource-reservation
+roleRef:
+  kind: ClusterRole
+  name: kai-resource-reservation
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: kai-scheduler/templates/rbac/resourcereservation-binding.yaml
+# Copyright 2025 NVIDIA CORPORATION
+  # SPDX-License-Identifier: Apache-2.0

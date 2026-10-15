@@ -68,6 +68,8 @@ var (
 	ErrCorruptStreamState = errors.New("stream state snapshot is corrupt")
 	// ErrTooManyResults
 	ErrTooManyResults = errors.New("too many matching results for request")
+	// ErrStoreOldUpdate is returned when a consumer update is older than the current state.
+	ErrStoreOldUpdate = errors.New("old update ignored")
 )
 
 // StoreMsg is the stored message format for messages that are retained by the Store layer.
@@ -95,13 +97,15 @@ type StreamStore interface {
 	StoreMsg(subject string, hdr, msg []byte, ttl int64) (uint64, int64, error)
 	StoreRawMsg(subject string, hdr, msg []byte, seq uint64, ts int64, ttl int64) error
 	SkipMsg(seq uint64) (uint64, error)
+	SkipMsgNoInterest(seq uint64) (uint64, error)
 	SkipMsgs(seq uint64, num uint64) error
 	FlushAllPending()
 	LoadMsg(seq uint64, sm *StoreMsg) (*StoreMsg, error)
 	LoadNextMsg(filter string, wc bool, start uint64, smp *StoreMsg) (sm *StoreMsg, skip uint64, err error)
 	LoadNextMsgMulti(sl *gsl.SimpleSublist, start uint64, smp *StoreMsg) (sm *StoreMsg, skip uint64, err error)
 	LoadLastMsg(subject string, sm *StoreMsg) (*StoreMsg, error)
-	LoadPrevMsg(start uint64, smp *StoreMsg) (sm *StoreMsg, err error)
+	LoadPrevMsg(filter string, wc bool, start uint64, smp *StoreMsg) (sm *StoreMsg, skip uint64, err error)
+	LoadPrevMsgMulti(sl *gsl.SimpleSublist, start uint64, smp *StoreMsg) (sm *StoreMsg, skip uint64, err error)
 	RemoveMsg(seq uint64) (bool, error)
 	EraseMsg(seq uint64) (bool, error)
 	Purge() (uint64, error)
@@ -115,8 +119,8 @@ type StreamStore interface {
 	AllLastSeqs() ([]uint64, error)
 	MultiLastSeqs(filters []string, maxSeq uint64, maxAllowed int) ([]uint64, error)
 	SubjectForSeq(seq uint64) (string, error)
-	NumPending(sseq uint64, filter string, lastPerSubject bool) (total, validThrough uint64)
-	NumPendingMulti(sseq uint64, sl *gsl.SimpleSublist, lastPerSubject bool) (total, validThrough uint64)
+	NumPending(sseq uint64, filter string, lastPerSubject bool) (total, validThrough uint64, err error)
+	NumPendingMulti(sseq uint64, sl *gsl.SimpleSublist, lastPerSubject bool) (total, validThrough uint64, err error)
 	State() StreamState
 	FastState(*StreamState)
 	EncodedStreamState(failed uint64) (enc []byte, err error)
@@ -128,7 +132,7 @@ type StreamStore interface {
 	UpdateConfig(cfg *StreamConfig) error
 	Delete(inline bool) error
 	Stop() error
-	ConsumerStore(name string, cfg *ConsumerConfig) (ConsumerStore, error)
+	ConsumerStore(name string, created time.Time, cfg *ConsumerConfig) (ConsumerStore, error)
 	AddConsumer(o ConsumerStore) error
 	RemoveConsumer(o ConsumerStore) error
 	Snapshot(deadline time.Duration, includeConsumers, checkMsgs bool) (*SnapshotResult, error)
@@ -363,6 +367,7 @@ type ConsumerStore interface {
 	HasState() bool
 	UpdateDelivered(dseq, sseq, dc uint64, ts int64) error
 	UpdateAcks(dseq, sseq uint64) error
+	RemoveRedeliveredBelow(seq uint64)
 	UpdateConfig(cfg *ConsumerConfig) error
 	Update(*ConsumerState) error
 	State() (*ConsumerState, error)
@@ -741,7 +746,7 @@ func isOutOfSpaceErr(err error) bool {
 var errFirstSequenceMismatch = errors.New("first sequence mismatch")
 
 func isClusterResetErr(err error) bool {
-	return err == errLastSeqMismatch || err == ErrStoreEOF || err == errFirstSequenceMismatch || errors.Is(err, errCatchupAbortedNoLeader) || err == errCatchupTooManyRetries
+	return err == errLastSeqMismatch || err == ErrStoreEOF || err == errFirstSequenceMismatch || errors.Is(err, errCatchupAbortedNoLeader) || err == errCatchupTooManyRetries || err == errAlreadyLeader
 }
 
 // Copy all fields.

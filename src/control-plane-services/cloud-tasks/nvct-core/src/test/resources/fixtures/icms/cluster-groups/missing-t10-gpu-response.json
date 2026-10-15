@@ -1,0 +1,65 @@
+{
+  "clusterGroups": [
+    {
+      "id": "a8bc8edc-e7ef-455b-90d7-10645841e234",
+      "name": "GFN",
+      "ncaId": "jY_kY8LqzQRKL0J8pqC6avyTLyWGUrlQr4BC-SVYhbo",
+      "authorizedNcaIds": [
+        "*"
+      ],
+      "gpus": [
+        {
+          "name": "A10G",
+          "instanceTypes": [
+            {
+              "name": "ga10g_1.br20_2xlarge",
+              "value": "ga10g_1.br20_2xlarge",
+              "description": "One Nvidia Ampere GPU",
+              "default": true
+            }
+          ]
+        }
+      ],
+      "clusters": [
+        {
+          "k8sVersion": "v1.25.9",
+          "id": "nvssa-stg-XVZkj_L81QojSxA_6M_ajWajcx56xZEtM2MUR_BAH8M",
+          "name": "STATIC-ZONE"
+        }
+      ]
+    },
+    {
+      "id": "d6c45d29-2094-4e45-a0f9-f39587da2ecc",
+      "name": "OCI",
+      "ncaId": "zK0fuqHAgHZtM8zbcSAlWeOgN3KE2PO3wI6jtjidFhw",
+      "authorizedNcaIds": [
+        "*"
+      ],
+      "gpus": [
+        {
+          "name": "A100_80GB",
+          "instanceTypes": [
+            {
+              "name": "BM.GPU.A100-v2.8",
+              "value": "BM.GPU.A100-v2.8",
+              "description": "One Nvidia Tensor Core GPU",
+              "default": true
+            },
+            {
+              "name": "BM.GPU.A100-v2.8_8x",
+              "value": "BM.GPU.A100-v2.8",
+              "description": "Eight Nvidia Tensor Core GPU"
+            }
+          ]
+        }
+      ],
+      "clusters": [
+        {
+          "k8sVersion": "v1.25.9",
+          "id": "nvssa-stg-76wrulCe8IWNEOrc2w8MSsJSJme4xoVRUxO-Xck3pqw",
+          "name": "OCI-STATIC-REGION"
+        }
+      ]
+    }
+  ]
+}

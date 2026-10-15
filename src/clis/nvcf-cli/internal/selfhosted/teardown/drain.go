@@ -46,7 +46,7 @@ const (
 // production SIS client implements it. Tests use a fake.
 //
 // NOTE: ListActiveDeployments, RemoveDeployment, and DeploymentStatus are not
-// yet exposed on client.SISCluster — those are deferred SIS API surfaces
+// yet exposed on client.ICMSCluster — those are deferred SIS API surfaces
 // tracked as part of M+11.G.
 type FunctionDeploymentLister interface {
 	ListActiveDeployments(ctx context.Context, sisURL, ncaID, clusterID string) ([]ActiveDeployment, error)

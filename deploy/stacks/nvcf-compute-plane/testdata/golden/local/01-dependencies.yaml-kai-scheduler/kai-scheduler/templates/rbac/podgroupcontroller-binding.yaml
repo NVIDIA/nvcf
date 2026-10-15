@@ -1,0 +1,18 @@
+---
+# Source: kai-scheduler/templates/rbac/podgroupcontroller-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kai-podgroup-controller
+subjects:
+  - kind: ServiceAccount
+    name: podgroup-controller
+    namespace: kai-scheduler
+roleRef:
+  kind: ClusterRole
+  name: kai-podgroup-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: kai-scheduler/templates/rbac/podgroupcontroller-binding.yaml
+# Copyright 2025 NVIDIA CORPORATION
+  # SPDX-License-Identifier: Apache-2.0

@@ -16,11 +16,15 @@
 package nvcaconfig
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -86,6 +90,305 @@ func TestAgentConfig_Complete(t *testing.T) {
 	})
 }
 
+func TestBYOOLogChunkingConfig_Complete(t *testing.T) {
+	t.Run("disabled does not add defaults", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{}.Complete()
+		assert.False(t, completed.Enabled)
+		assert.Zero(t, completed.MaxPayloadBytes)
+		assert.False(t, completed.DryRun)
+	})
+
+	t.Run("enabled does not add collector defaults", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{Enabled: true}.Complete()
+		assert.True(t, completed.Enabled)
+		assert.Zero(t, completed.MaxPayloadBytes)
+		assert.False(t, completed.DryRun)
+	})
+
+	t.Run("enabled preserves explicit values", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			Enabled:         true,
+			MaxPayloadBytes: 131072,
+			DryRun:          true,
+		}.Complete()
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
+		assert.True(t, completed.DryRun)
+	})
+
+	t.Run("deprecated max body bytes populates max payload bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxBodyBytes: 131072,
+		}.Complete()
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
+	})
+
+	t.Run("max payload bytes takes precedence over deprecated max body bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxPayloadBytes: 262144,
+			MaxBodyBytes:    131072,
+		}.Complete()
+		assert.Equal(t, int64(262144), completed.MaxPayloadBytes)
+	})
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsUsesMaxPayloadBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: BYOOLogChunkMaxPayloadBytesEnv, Value: "262144"},
+		{Name: BYOOLogChunkDryRunEnv, Value: "true"},
+	}, cfg.EnvVars())
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsAcceptsDeprecatedMaxBodyBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		MaxPayloadBytes: 262144,
+		MaxBodyBytes:    131072,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "262144",
+	}}, cfg.EnvVars())
+
+	cfg = BYOOLogChunkingConfig{MaxBodyBytes: 131072}
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "131072",
+	}}, cfg.EnvVars())
+}
+
+func TestBYOODebugModeConfig_IsZero(t *testing.T) {
+	assert.True(t, BYOODebugModeConfig{}.IsZero())
+	assert.False(t, BYOODebugModeConfig{Enabled: true}.IsZero())
+}
+
+func TestBYOOMetricSubsetConfig_EnvVars(t *testing.T) {
+	cfg := BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: BYOOMetricSubsetFilterConfigEnv, Value: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n"},
+	}, cfg.EnvVars())
+}
+
+func TestBYOOWorkloadMetricsConfig_EnvVars(t *testing.T) {
+	cfg := BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOWorkloadMetricsDropLabelsEnv,
+		Value: "metric_subset_enabled,custom_label",
+	}}, cfg.EnvVars())
+	assert.Nil(t, BYOOWorkloadMetricsConfig{}.EnvVars())
+}
+
+func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
+	queueSize := int64(2048)
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
+	cfg := AgentConfig{
+		BYOOLogChunking: BYOOLogChunkingConfig{
+			Enabled: true,
+		},
+		BYOODebugMode: BYOODebugModeConfig{
+			Enabled: true,
+		},
+		BYOOMetricSubset: BYOOMetricSubsetConfig{
+			Enabled: true,
+		},
+		BYOOWorkloadMetrics: BYOOWorkloadMetricsConfig{
+			DropLabels: []string{"metric_subset_enabled"},
+		},
+		BYOOOTelCollector: BYOOOTelCollectorConfig{
+			ExporterHelper: BYOOOTelExporterHelperConfig{
+				Timeout: "30s",
+				SendingQueue: BYOOOTelSendingQueueConfig{
+					QueueSize: &queueSize,
+				},
+			},
+			LogSampling: BYOOOTelLogSamplingConfig{
+				SamplingPercentage: &logSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+				AttributeSource:    "record",
+				FromAttribute:      "log.id",
+				SamplingPriority:   "sampling.priority",
+			},
+			TraceSampling: BYOOOTelSamplingConfig{
+				SamplingPercentage: &traceSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+			},
+		},
+	}
+
+	envsByName := map[string]string{}
+	for _, env := range cfg.BYOOOTelCollectorEnvVars() {
+		envsByName[env.Name] = env.Value
+	}
+
+	assert.Equal(t, "true", envsByName[BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "true", envsByName[BYOODebugModeEnv])
+	assert.Equal(t, "true", envsByName[BYOOMetricSubsetEnabledEnv])
+	assert.Equal(t, "metric_subset_enabled", envsByName[BYOOWorkloadMetricsDropLabelsEnv])
+	assert.NotContains(t, envsByName, "BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES")
+
+	decodedConfig, ok := envsByName[BYOOOTelCollectorConfigEnv]
+	require.True(t, ok)
+	decodedBytes, err := base64.StdEncoding.DecodeString(decodedConfig)
+	require.NoError(t, err)
+	var got BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedBytes, &got))
+	assert.Equal(t, cfg.BYOOOTelCollector, got)
+}
+
+func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
+	tests := []struct {
+		name            string
+		samplingPercent float64
+		mode            string
+		attributeSource string
+		fromAttribute   string
+		wantErr         string
+	}{
+		{name: "accepts zero", samplingPercent: 0, mode: "hash_seed"},
+		{name: "rejects default hash seed below lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage / 2, wantErr: "at least"},
+		{name: "accepts hash seed lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage, mode: "hash_seed"},
+		{name: "rejects hash seed below lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage / 2, mode: "hash_seed", wantErr: "at least"},
+		{name: "accepts proportional lower bound", samplingPercent: byooOTelConsistentMinSamplingPercentage, mode: "proportional"},
+		{name: "rejects NaN", samplingPercent: math.NaN(), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects positive infinity", samplingPercent: math.Inf(1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative infinity", samplingPercent: math.Inf(-1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative", samplingPercent: -1, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects exceeding float32", samplingPercent: float64(math.MaxFloat32) * 2, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects record attributes outside hash seed", samplingPercent: 1, mode: "proportional", attributeSource: "record", fromAttribute: "log.id", wantErr: "require hash_seed"},
+		{name: "rejects unsupported mode", samplingPercent: 1, mode: "invalid", wantErr: "unsupported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			samplingPercentage := tt.samplingPercent
+			config := BYOOOTelCollectorConfig{
+				LogSampling: BYOOOTelLogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               tt.mode,
+					AttributeSource:    tt.attributeSource,
+					FromAttribute:      tt.fromAttribute,
+				},
+				TraceSampling: BYOOOTelSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               tt.mode,
+				},
+			}
+
+			err := config.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestAgentTimeConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     AgentTimeConfig
+		wantErr string
+	}{
+		{name: "accepts zero values", cfg: AgentTimeConfig{}},
+		{name: "accepts positive values", cfg: AgentTimeConfig{HeartbeatInterval: 30 * time.Second}},
+		{
+			name:    "rejects negative HeartbeatInterval",
+			cfg:     AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+			wantErr: "agent.heartbeatInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative CredRenewInterval",
+			cfg:     AgentTimeConfig{CredRenewInterval: -1 * time.Second},
+			wantErr: "agent.credRenewInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncQueueInterval",
+			cfg:     AgentTimeConfig{SyncQueueInterval: -1 * time.Second},
+			wantErr: "agent.syncQueueInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncRequestStatusInterval",
+			cfg:     AgentTimeConfig{SyncRequestStatusInterval: -1 * time.Second},
+			wantErr: "agent.syncRequestStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative SyncAcknowledgeRequestInterval",
+			cfg:     AgentTimeConfig{SyncAcknowledgeRequestInterval: -1 * time.Second},
+			wantErr: "agent.syncAcknowledgeRequestInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative PeriodicInstanceStatusInterval",
+			cfg:     AgentTimeConfig{PeriodicInstanceStatusInterval: -1 * time.Second},
+			wantErr: "agent.periodicInstanceStatusInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckInterval",
+			cfg:     AgentTimeConfig{ICMSRequestAckInterval: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckInterval: must not be negative",
+		},
+		{
+			name:    "rejects negative ICMSRequestAckRetryTimeout",
+			cfg:     AgentTimeConfig{ICMSRequestAckRetryTimeout: -1 * time.Second},
+			wantErr: "agent.icmsRequestAckRetryTimeout: must not be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestConfig_Validate_RejectsNegativeHeartbeatInterval is a regression test for
+// NVBug 6843414: worker.timeouts.heartbeatInterval=-1s was accepted by the Helm
+// update and the merged agent config, then reached time.NewTicker unvalidated,
+// panicking the replacement agent at startup with "non-positive interval for
+// NewTicker" and blocking rollout. Config.Validate() must now reject it before
+// Complete() or any ticker construction.
+func TestConfig_Validate_RejectsNegativeHeartbeatInterval(t *testing.T) {
+	cfg := Config{
+		Agent: AgentConfig{
+			AgentTimeConfig: AgentTimeConfig{HeartbeatInterval: -1 * time.Second},
+		},
+	}
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "agent.heartbeatInterval: must not be negative")
+
+	// A zero HeartbeatInterval must continue to pass validation and be
+	// defaulted by Complete(), unaffected by the new negative-value check.
+	zeroCfg := Config{}
+	require.NoError(t, zeroCfg.Validate())
+	completed := zeroCfg.Agent.AgentTimeConfig.Complete()
+	assert.Equal(t, defaultHeartbeatInterval, completed.HeartbeatInterval)
+}
+
 func TestAgentTimeConfig_Complete(t *testing.T) {
 	t.Run("sets_all_defaults", func(t *testing.T) {
 		cfg := AgentTimeConfig{}
@@ -96,7 +399,6 @@ func TestAgentTimeConfig_Complete(t *testing.T) {
 		assert.Equal(t, defaultSyncRequestStatusInterval, completed.SyncRequestStatusInterval)
 		assert.Equal(t, defaultSyncAcknowledgeRequestInterval, completed.SyncAcknowledgeRequestInterval)
 		assert.Equal(t, defaultPeriodicInstanceStatusInterval, completed.PeriodicInstanceStatusInterval)
-		assert.Equal(t, defaultRolloverServiceUpdateInterval, completed.RolloverServiceUpdateInterval)
 		assert.Equal(t, defaultICMSRequestAckInterval, completed.ICMSRequestAckInterval)
 		assert.Equal(t, defaultICMSRequestAckRetryTimeout, completed.ICMSRequestAckRetryTimeout)
 	})

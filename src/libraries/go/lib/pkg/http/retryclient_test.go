@@ -55,7 +55,7 @@ func TestRoundTrip(t *testing.T) {
 	// Test with non-default client timeout
 	timeout := 10 * time.Millisecond
 	s = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(timeout + time.Millisecond)
+		<-r.Context().Done()
 	}))
 	t.Cleanup(s.Close)
 	httpClient = NewRetryableClient(context.Background(), WithAppVersionUserAgent("testApp"), WithClientTimeout(timeout))
@@ -72,6 +72,10 @@ func TestRoundTrip(t *testing.T) {
 	assert.Nil(t, resp)
 
 	// Ensure a bad parse falls back to default
+	s = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "testApp/1.0.0", r.Header.Get("User-Agent"))
+	}))
+	t.Cleanup(s.Close)
 	os.Setenv(ClientTimeoutEnvKey, "some-bad-value")
 	t.Cleanup(func() { os.Unsetenv(ClientTimeoutEnvKey) })
 	httpClient = NewRetryableClient(context.Background(), WithAppVersionUserAgent("testApp"))

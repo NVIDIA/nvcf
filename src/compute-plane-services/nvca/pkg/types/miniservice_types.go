@@ -57,6 +57,7 @@ type MiniserviceMetadata struct {
 	PodAnnotations                map[string]string   `json:"podAnnotations,omitempty"`
 	PodLabels                     map[string]string   `json:"podLabels,omitempty"`
 	EnvVars                       []corev1.EnvVar     `json:"envVars,omitempty"`
+	OTelCollectorEnvVars          []corev1.EnvVar     `json:"otelCollectorEnvVars,omitempty"`
 	NodeAffinityKey               string              `json:"nodeAffinityKey,omitempty"`
 	NodeAffinityValue             string              `json:"nodeAffinityValue,omitempty"`
 	ServiceAccountName            string              `json:"serviceAccountName,omitempty"`
@@ -64,6 +65,23 @@ type MiniserviceMetadata struct {
 	ImagePullSecretNames          []string            `json:"imagePullSecretNames,omitempty"`
 	TerminationGracePeriodSeconds *int64              `json:"terminationGracePeriodSeconds,omitempty"`
 	SchedulerName                 string              `json:"schedulerName,omitempty"`
+
+	// ModelCacheInitEnv is the flattened launch environment (plus INSTANCE_ID)
+	// injected into the ephemeral model-cache-init container by the webhook.
+	// Set only when the ephemeral model-cache backend is selected.
+	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
+
+	// WorkloadFeatureFlags is the featureFlags map decoded from the nvcf-workload-config
+	// ConfigMap for this MiniService, carried through so the admission webhook can read
+	// workload-level feature flags (e.g. featureflag.DisableNVLinkComputeDomain) without new
+	// plumbing for each new flag. Only the feature flags are carried, not the rest of
+	// WorkloadConfig (e.g. BYOOResources), which the webhook has no use for.
+	WorkloadFeatureFlags map[string]bool `json:"workloadFeatureFlags,omitempty"`
+}
+
+// IsWorkloadFeatureFlagEnabled reports whether the named workload feature flag is enabled.
+func (m MiniserviceMetadata) IsWorkloadFeatureFlagEnabled(key string) bool {
+	return m.WorkloadFeatureFlags[key]
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.
