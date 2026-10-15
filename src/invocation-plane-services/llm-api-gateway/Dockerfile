@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS builder
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=mod \
     go build -o /out/$TARGETARCH/llm-api-gateway-rate-limit-sync-worker ./cmd/llm-api-gateway-rate-limit-sync-worker
 
-FROM nvcr.io/nvidia/distroless/go:v4.1.2
+FROM nvcr.io/nvidia/distroless/go:v4.1.4@sha256:965c2a14a594d7d467bbe9a6517d958cee22ed035333097bdc216da68fd55ba5
 
 ARG TARGETARCH
 
