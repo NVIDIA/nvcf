@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Helm hook Job that provisions the NVCF service-issuing PKI hierarchy in
+# OpenBao that cert-manager will use to mint this chart's Certificate. Runs
+# pre-install/pre-upgrade so the PKI backend exists before the Certificate
+# resource is reconciled. Mirrors the SIS chart's hook-lls-migrations.yaml
+# pattern: same nvcf-openbao-migrations image, env-var-driven dispatch
+# (CORE_MIGRATIONS_ENABLED=false + ADDONS_LLM_ENABLED=true), Job-level
+# fail-hard via restartPolicy: OnFailure + backoffLimit.
+{{- if .Values.llmRequestRouter.pki.enabled }}
+{{- $pki := .Values.llmRequestRouter.pki }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: addons-llm-migrations
+  namespace: {{ $pki.namespace }}
+  labels:
+    app.kubernetes.io/name: addons-llm-migrations
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "2"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ default 3 $pki.backoffLimit }}
+  template:
+    {{- with $pki.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $pki.serviceAccountName }}
+      {{- with $pki.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: addons-llm-migrations
+          image: "{{ include "llm-request-router.pkiMigrationsImage" . }}"
+          imagePullPolicy: {{ $pki.image.pullPolicy }}
+          env:
+            - name: CORE_MIGRATIONS_ENABLED
+              value: "false"
+            - name: ADDONS_LLM_ENABLED
+              value: "true"
+            - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+              value: {{ required "llmRequestRouter.pki.allowedDomains is required when llmRequestRouter.pki.enabled is true" $pki.allowedDomains | quote }}
+            - name: BAO_SERVICE
+              value: {{ ($pki.baoService | default (printf "openbao-server.%s.svc.cluster.local" $pki.namespace)) | quote }}
+            - name: BAO_PORT
+              value: {{ $pki.baoPort | quote }}
+          volumeMounts:
+            - name: root-token
+              mountPath: /secrets/root_token
+              readOnly: true
+          resources:
+            {{- toYaml $pki.resources | nindent 12 }}
+      volumes:
+        - name: root-token
+          secret:
+            secretName: {{ $pki.rootTokenSecretName }}
+            items:
+              - key: root_token
+                path: root_token
+{{- end }}

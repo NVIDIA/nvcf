@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for every subtree .bazel-remote-probe.
+#
+# The probes are sourced, not executed, and they decide whether a build gets
+# --remote_cache flags. The decision is the whole contract, so assert it
+# directly rather than relying on `bash -n`, which only checks syntax.
+#
+# grpcurl is stubbed so the test never touches a network.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+stub_dir="$(mktemp -d)"
+trap 'rm -rf "${stub_dir}"' EXIT
+
+# Stubbed grpcurl: prints a capabilities response advertising ZSTD, which is
+# what the probes grep for when deciding the cache is healthy.
+cat > "${stub_dir}/grpcurl" <<'STUB'
+#!/usr/bin/env bash
+echo '{"cacheCapabilities":{"supportedCompressors":["IDENTITY","ZSTD"]}}'
+STUB
+chmod +x "${stub_dir}/grpcurl"
+
+# A readable (contents irrelevant) CA pem for the TLS success path.
+ca_pem="${stub_dir}/ca.pem"
+printf -- '-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n' > "${ca_pem}"
+
+fail=0
+
+check() { # name, expectation (enabled|disabled), probe, env assignments...
+  local name="$1" want="$2" probe="$3"; shift 3
+  local out status svc
+  svc="$(basename "$(dirname "$(dirname "${probe}")")")"
+
+  # Capture stdout and the exit status separately. Discarding stderr and
+  # forcing success would let a probe that CRASHES look identical to one that
+  # deliberately disables the cache, so every disabled-case assertion would
+  # pass on a broken script.
+  set +e
+  out="$(
+    env -i PATH="${stub_dir}:/usr/bin:/bin" HOME="${stub_dir}" \
+        CI_PROJECT_DIR="${stub_dir}" "$@" \
+        bash -c 'set -e; BAZEL_REMOTE_FLAGS=""; . "$0"; printf "%s" "${BAZEL_REMOTE_FLAGS}"' \
+        "${probe}" 2>"${stub_dir}/stderr.txt"
+  )"
+  status=$?
+  set -e
+
+  if [[ "${status}" -ne 0 ]]; then
+    printf '  FAIL %-26s %-11s probe exited %s (expected a clean %s decision)\n' \
+      "${svc}" "${name}" "${status}" "${want}" >&2
+    sed 's/^/         /' "${stub_dir}/stderr.txt" >&2 || true
+    fail=1
+    return
+  fi
+
+  local got="disabled"
+  [[ "${out}" == *--remote_cache=* ]] && got="enabled"
+  if [[ "${got}" != "${want}" ]]; then
+    printf '  FAIL %-26s %-11s want=%s got=%s\n' "${svc}" "${name}" "${want}" "${got}" >&2
+    fail=1
+    return
+  fi
+
+  # For the TLS-enabled case, the cache URL must be grpcs:// and the probe must
+  # emit --tls_certificate. Without this the case would pass on a probe that
+  # silently downgraded to plaintext.
+  if [[ "${name}" == "tls-with-ca" ]]; then
+    if [[ "${out}" != *--tls_certificate=* || "${out}" != *grpcs://* ]]; then
+      printf '  FAIL %-26s %-11s expected grpcs:// and --tls_certificate, got: %s\n' \
+        "${svc}" "${name}" "${out}" >&2
+      fail=1
+    fi
+  fi
+}
+
+probes=()
+while IFS= read -r p; do probes+=("$p"); done < <(
+  find "${repo_root}/src" -name .bazel-remote-probe -type f | sort
+)
+if [[ "${#probes[@]}" -eq 0 ]]; then
+  echo "no .bazel-remote-probe scripts found" >&2
+  exit 1
+fi
+
+for probe in "${probes[@]}"; do
+  # Host unset: the cache must be disabled, not probed at a default host.
+  # This is the regression this test exists for; the previous default pointed
+  # at a decommissioned host.
+  #
+  # TLS is turned off deliberately. With TLS on, an unset BAZEL_REMOTE_CA_PEM
+  # also disables the cache, so the case would pass even with a default host
+  # restored, and the test would be vacuous for exactly the regression it
+  # guards. With TLS off, a reintroduced default host would reach the stubbed
+  # grpcurl and report enabled, which is what makes this assertion meaningful.
+  check "host-unset" disabled "${probe}" NVCF_BAZEL_REMOTE_TLS=0
+
+  # Explicitly disabled, even with a host configured.
+  check "remote-off" disabled "${probe}" \
+    NVCF_BAZEL_REMOTE=0 NVCF_BAZEL_REMOTE_HOST=cache.example.com
+
+  # Configured host, TLS off so no CA pem is required: cache enabled.
+  check "host-set" enabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=8980 NVCF_BAZEL_REMOTE_TLS=0
+
+  # TLS requested but no CA pem: must decline rather than emit an unusable URL.
+  # Bazel's gRPC client cannot verify a private cache cert from the system
+  # trust store, so a grpcs:// URL without --tls_certificate fails mid-build.
+  check "tls-no-ca" disabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1
+
+  # TLS requested WITH a readable CA pem: the success path that actually emits
+  # the certificate flag. Without this case nothing covers the grpcs:// branch.
+  check "tls-with-ca" enabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1 \
+    BAZEL_REMOTE_CA_PEM="${ca_pem}"
+
+  # TLS requested with an UNREADABLE CA path: must decline, not emit a flag
+  # pointing at a file that does not exist.
+  check "tls-bad-ca" disabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1 \
+    BAZEL_REMOTE_CA_PEM="${stub_dir}/definitely-missing.pem"
+done
+
+if [[ "${fail}" -ne 0 ]]; then
+  echo "bazel-remote-probe behavioral tests failed" >&2
+  exit 1
+fi
+echo "bazel-remote-probe: ${#probes[@]} probes x 6 cases OK"

@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Rootfs-path restore for whisper-large-v3 NIM.
+#
+# Why a separate manifest from whisper-large-v3-restore.yaml: the CRIU restore
+# yaml chains restore-entrypoint + nvsnap-lib LD_PRELOAD, which is meaningless on
+# the rootfs path. The webhook injects per-pod OverlayFS upper layers on top of
+# the captured rootfs based on nvsnap.io/restore-from, then the container just
+# boots whisper-large-v3 cleanly — no in-process restore step.
+#
+# Created 2026-06-08 to validate whether rootfs is a viable path for whisper
+# (the CRIU+cuda-checkpoint path hits the cudaHostUnregister/SIGTERM bug).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-whisper-rootfs-restored
+  namespace: nvsnap-system
+  labels:
+    app: bench-whisper-rootfs-restored
+    nvsnap.io/bench: "pdf-matrix"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: whisper
+      image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+      imagePullPolicy: IfNotPresent
+      env:
+        - { name: NIM_TAGS_SELECTOR, value: "name=whisper-large-v3" }
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        # NIM_CACHE_PATH injected by the webhook (cachedir) → /opt/nvsnap/model.
+        # Riva/Triton lib path still required for the engine to load.
+        - { name: LD_LIBRARY_PATH, value: "/opt/tritonserver/backends/pytorch:/opt/tritonserver/lib:/opt/riva/lib:/usr/local/cuda-13.0/lib64:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+      ports:
+        - { containerPort: 9000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 9000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+        # NB: NO cache mount here. The mutating webhook (cachedir mode)
+        # RO-mounts the captured rox at /opt/nvsnap, re-injects the cache
+        # env (NIM_CACHE_PATH=/opt/nvsnap/model), and prewarms it. Declaring
+        # our own cache volume would shadow the webhook's mount.
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

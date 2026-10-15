@@ -31,8 +31,8 @@ import (
 
 // StackOptions controls how ResolveStack locates the helmfile bundle.
 type StackOptions struct {
-	// Source is the user-supplied --stack= value, or empty to fall through
-	// to BuiltInOCIRef.
+	// Source is the user-supplied --control-plane-stack= or --compute-plane-stack= value,
+	// or empty to fall through to BuiltInOCIRef.
 	Source string
 	// BuiltInOCIRef is the CLI-version-pinned default (digest-suffixed),
 	// used when Source is empty.
@@ -72,7 +72,7 @@ func ResolveStack(ctx context.Context, opts StackOptions) (*ResolvedStack, error
 	src := opts.Source
 	if src == "" {
 		if opts.BuiltInOCIRef == "" {
-			return nil, fmt.Errorf("no --stack provided and no built-in OCI default configured")
+			return nil, fmt.Errorf("no stack provided and no built-in OCI default configured")
 		}
 		src = opts.BuiltInOCIRef
 	}
@@ -89,13 +89,13 @@ func ResolveStack(ctx context.Context, opts StackOptions) (*ResolvedStack, error
 	}
 }
 
-func resolveLocal(ctx context.Context, path string) (*ResolvedStack, error) {
+func resolveLocal(_ context.Context, path string) (*ResolvedStack, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolving --stack=%s: %w", path, err)
+		return nil, fmt.Errorf("resolving stack %s: %w", path, err)
 	}
 	if _, err := os.Stat(filepath.Join(abs, "helmfile.d")); err != nil {
-		return nil, fmt.Errorf("--stack=%s: missing helmfile.d/ directory", abs)
+		return nil, fmt.Errorf("stack %s: missing helmfile.d/ directory", abs)
 	}
 	return &ResolvedStack{Path: abs, Source: "local"}, nil
 }

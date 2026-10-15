@@ -1,0 +1,55 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "worker",
+    srcs = ["worker.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/worker",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/worker-task/configs",
+        "//src/compute-plane-services/worker-task/internal/health",
+        "//src/compute-plane-services/worker-task/internal/progress",
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/internal/types",
+        "//src/compute-plane-services/worker-task/internal/upload",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/servers",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metering",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metrics",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//nvct",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvct",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//types",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@org_golang_google_grpc//:grpc",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":worker",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+)
+
+go_test(
+    name = "worker_test",
+    srcs = [
+        "worker_integration_test.go",
+        "worker_newnvctworker_test.go",
+    ],
+    embed = [":worker"],
+    deps = [
+        "//src/compute-plane-services/worker-task/configs",
+        "//src/compute-plane-services/worker-task/internal/progress",
+        "//src/compute-plane-services/worker-task/internal/types",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metering",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//nvct",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//test/testutils",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_zap//:zap",
+    ],
+)

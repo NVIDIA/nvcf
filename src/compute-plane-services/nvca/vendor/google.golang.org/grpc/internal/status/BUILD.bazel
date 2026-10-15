@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "status",
+    srcs = ["status.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/status",
+    importpath = "google.golang.org/grpc/internal/status",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/protoadapt",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":status",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+)

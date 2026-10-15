@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
@@ -60,6 +61,8 @@ type TokenFetcher struct {
 	resultListeners         []TokenFetcherResultListener
 	scopeEnforcementEnabled bool
 	envNameFromFile         string
+
+	transportWrapper func(http.RoundTripper) http.RoundTripper
 }
 
 type authTokenResponse struct {
@@ -91,6 +94,17 @@ func WithScopeEnforcementEnabled(scopeEnforcementEnabled bool) TokenFetcherOptio
 func WithEnvKey(env string) TokenFetcherOption {
 	return func(f *TokenFetcher) {
 		f.envNameFromFile = env
+	}
+}
+
+// WithTransportWrapper wraps the fetcher's HTTP transport with the provided
+// function. The wrapper is applied as the outermost transport layer, so it
+// observes each token request and its final outcome. It lets callers add
+// cross-cutting transport behaviour such as metrics without this package taking
+// a dependency on the wrapper's implementation. A nil wrapper is ignored.
+func WithTransportWrapper(wrap func(http.RoundTripper) http.RoundTripper) TokenFetcherOption {
+	return func(f *TokenFetcher) {
+		f.transportWrapper = wrap
 	}
 }
 
@@ -129,10 +143,22 @@ func newTokenFetcher(tokenURL, tokenScope, clientID string,
 		getAuthClientSecret: getAuthClientSecretFunc,
 		client:              &http.Client{Timeout: clientTimeout},
 	}
-	// Add OTEL instrumentation for requests to Auth server
-	f.client.Transport = otelhttp.NewTransport(f.client.Transport)
 	for _, opt := range opts {
 		opt(f)
+	}
+	// Add OTEL instrumentation for requests to Auth server. otelhttp provides
+	// tracing (unchanged for all callers). Its own HTTP client metrics are
+	// suppressed only when a transport wrapper is present, so that wrapper is the
+	// single source for the semconv HTTP client series and does not double-count.
+	// Callers without a transport wrapper keep otelhttp's default behaviour.
+	var otelOpts []otelhttp.Option
+	if f.transportWrapper != nil {
+		otelOpts = append(otelOpts, otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()))
+	}
+	f.client.Transport = otelhttp.NewTransport(f.client.Transport, otelOpts...)
+
+	if f.transportWrapper != nil {
+		f.client.Transport = f.transportWrapper(f.client.Transport)
 	}
 	return f
 }

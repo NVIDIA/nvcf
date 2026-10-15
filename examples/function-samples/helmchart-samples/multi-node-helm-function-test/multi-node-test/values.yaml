@@ -21,14 +21,98 @@
 helmChartServiceName: "multi-node-test"
 ngcImagePullSecretName: ""
 
-# Maps to NODES_PER_INSTANCE environment variable in the container
-nodesPerInstance: 2
+# Selects the built-in cluster profile used by the chart. Set to "auto" to use
+# live Kubernetes lookups during Helm rendering.
+clusterProfile: ncp-gb200
 
-image:
-  repository: nvcr.io/qdrlnbkss8u1/nccl-multi-node-test
-  pullPolicy: Always
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.0.4"
+clusterProfileDetection:
+  enabled: true
+  efaResourceName: vpc.amazonaws.com/efa
+  mlnxResourceName: nvidia.com/mlnxnics
+  roceDeviceClassName: roce.networking.k8s.aws
+
+clusterProfiles:
+  aws-gb200:
+    nodesPerInstance: 4
+    image:
+      repository: nvcr.io/qdrlnbkss8u1/nccl-multi-node-test
+      pullPolicy: Always
+      tag: "aws-0.1.0"
+    resources:
+      limits:
+        nvidia.com/gpu: 4
+        vpc.amazonaws.com/efa: 4
+      requests:
+        nvidia.com/gpu: 4
+        vpc.amazonaws.com/efa: 4
+    podAnnotations:
+      disable-auto-efa: "true"
+    securityContext:
+      capabilities:
+        add:
+          - IPC_LOCK
+    resourceClaimTemplate:
+      enabled: false
+      name: nvcf-roce-channel-0
+      claimName: roce
+      allocationMode: ExactCount
+      count: 8
+      deviceClassName: roce.networking.k8s.aws
+  aws-gb300:
+    nodesPerInstance: 2
+    image:
+      repository: nvcr.io/qdrlnbkss8u1/nccl-multi-node-test
+      pullPolicy: Always
+      tag: "0.2.0"
+    resources:
+      limits:
+        nvidia.com/gpu: 4
+      requests:
+        nvidia.com/gpu: 4
+    podAnnotations:
+      disable-auto-efa: "true"
+    securityContext:
+      capabilities:
+        add:
+          - IPC_LOCK
+    resourceClaimTemplate:
+      enabled: true
+      name: nvcf-roce-channel-0
+      claimName: roce
+      allocationMode: ExactCount
+      count: 8
+      deviceClassName: roce.networking.k8s.aws
+  ncp-gb200:
+    nodesPerInstance: 4
+    image:
+      repository: nvcr.io/qdrlnbkss8u1/nccl-multi-node-test
+      pullPolicy: Always
+      tag: "ncp-0.1.0"
+    resources:
+      limits:
+        nvidia.com/gpu: 4
+        nvidia.com/mlnxnics: "4"
+      requests:
+        nvidia.com/gpu: 4
+        nvidia.com/mlnxnics: "4"
+    podAnnotations: {}
+    securityContext:
+      capabilities:
+        add:
+          - IPC_LOCK
+    resourceClaimTemplate:
+      enabled: false
+      name: nvcf-roce-channel-0
+      claimName: roce
+      allocationMode: ExactCount
+      count: 8
+      deviceClassName: roce.networking.k8s.aws
+
+# Optional top-level overrides applied after the selected cluster profile.
+# These keys remain supported for compatibility with older override files.
+nodesPerInstance:
+
+image: {}
 
 nameOverride: ""
 fullnameOverride: ""
@@ -55,15 +139,9 @@ securityContext: {}
   # runAsNonRoot: true
   # runAsUser: 1000
 
-resources:
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
- limits:
-    nvidia.com/gpu: 8
- requests:
-    nvidia.com/gpu: 8
+resources: {}
+
+resourceClaimTemplate: {}
 
 autoscaling:
   enabled: false

@@ -72,7 +72,7 @@ func (v *helmMiniServiceValWebhookHandler) Handle(ctx context.Context, req admis
 		"gvk": gvk,
 	}).Debug("Validating request")
 
-	if !miniservice.HelmChartInstanceServiceAccountNameRegexp.MatchString(req.UserInfo.Username) {
+	if !miniservice.InstanceServiceAccountNameRegexp.MatchString(req.UserInfo.Username) {
 		log.WithField("user", req.UserInfo.Username).
 			Debug("Skipping validation of non-ICMS instance user request")
 		return admission.Allowed("non-ICMS instance user request skipped")

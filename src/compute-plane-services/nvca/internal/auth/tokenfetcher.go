@@ -20,6 +20,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
@@ -63,6 +64,12 @@ type TokenFetcherOptions struct {
 	// the fetcher simply reads the projected SA token from this path. Used by
 	// self-hosted clusters running the PSAT identity-source flow.
 	PSATTokenFilePath string
+	// TransportWrapper, when set, wraps the OAuth token fetcher's HTTP transport
+	// as its outermost layer. It is how the auth client is instrumented without
+	// this package depending on the metrics implementation. It applies only to
+	// the OAuth path; the PSAT, self-hosted vault, and NGC key paths read from a
+	// file rather than issuing HTTP requests.
+	TransportWrapper func(http.RoundTripper) http.RoundTripper
 }
 
 // NewTokenFetcher returns the tokenfetcher and a health check to
@@ -88,6 +95,13 @@ func NewTokenFetcher(ctx context.Context, name string, opts TokenFetcherOptions)
 		}
 		name += "-oauth-tokenfetcher"
 		tokenFetcherHealthCheck := health.NewTokenFetcherHealthCheck(name, health.WithUnauthorizedFailureThreshold(opts.OAuthTokenFetchFailureThreshold))
+		authOpts := []auth.TokenFetcherOption{
+			auth.WithResultListener(tokenFetcherHealthCheck),
+			auth.WithScopeEnforcementEnabled(true),
+		}
+		if opts.TransportWrapper != nil {
+			authOpts = append(authOpts, auth.WithTransportWrapper(opts.TransportWrapper))
+		}
 		var oauthTokenFetcher *auth.TokenFetcher
 		if opts.OAuthClientSecretsEnvFile != "" {
 			tokFetcher, err := auth.NewTokenFetcherFromFile(ctx,
@@ -95,9 +109,7 @@ func NewTokenFetcher(ctx context.Context, name string, opts TokenFetcherOptions)
 				opts.OAuthTokenScope,
 				opts.OAuthClientID,
 				opts.OAuthClientSecretsEnvFile,
-				auth.WithResultListener(tokenFetcherHealthCheck),
-				auth.WithScopeEnforcementEnabled(true),
-				auth.WithEnvKey("OAUTH_CLIENT_SECRET_KEY"))
+				append(authOpts, auth.WithEnvKey("OAUTH_CLIENT_SECRET_KEY"))...)
 			if err != nil {
 				core.GetLogger(ctx).WithError(err).Errorf("failed to retrieve OAuth token from file")
 				return nil, nil, err
@@ -108,8 +120,7 @@ func NewTokenFetcher(ctx context.Context, name string, opts TokenFetcherOptions)
 				opts.OAuthClientID,
 				opts.OAuthClientSecretKey,
 				opts.OAuthTokenScope,
-				auth.WithResultListener(tokenFetcherHealthCheck),
-				auth.WithScopeEnforcementEnabled(true))
+				authOpts...)
 		}
 		jwksVerifier := cmnoauth.NewJWKSVerifier(opts.OAuthPublicKeysetEndpoint, cmnoauth.WithJWKSVerifierCacheTTL(DefaultJWKSKeySetTTL))
 		return cmnoauth.NewJWTCache().

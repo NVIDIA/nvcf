@@ -2,6 +2,20 @@
 
 This page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.
 
+## Find the answer to your question
+
+Common operator questions and where to look on this page or in linked references.
+
+| Question | Where to look |
+|----------|---------------|
+| How do I see application-level NVCF stats (number of functions, queue depth, request latency)? | [State Metrics Service metrics](./metrics/state-metrics/metrics.md). The page documents per-function instance count, queue depth, and request latency, plus other function-level signals. |
+| How do I debug a single request end-to-end? | Combine the per-hop signals: enable tracing per [Tracing Configuration](#tracing-configuration), correlate with the [Metrics Overview](./metrics/metrics-index.md) for each service in the request path, and tail the matching service logs. A consolidated hop-by-hop walkthrough is in development. |
+| Where are per-service metrics? | [Metrics Overview](./metrics/metrics-index.md). |
+| Where are gRPC proxy metrics? | [gRPC Proxy metrics](./metrics/grpc-proxy/metrics.md). The page documents client connection counts, NATS pipe health, gRPC worker session-attach latency, and HTTP RED metrics. |
+| How do I add custom spans or metrics in a Kit application? | Use the OpenTelemetry API directly, the OmniTrace helper, the Carbonite static metrics API, or the `omni::observability::IMeter` interface. Refer to the Omniverse Kit and Carbonite documentation for details. |
+| Where are reference dashboards? | [Example dashboards](./example-dashboards.md) and the [Dashboards](#dashboards) section below. |
+| How do I configure the shared metrics stack? | See [Self-managed metrics stack](#self-managed-metrics-stack). |
+
 ## Overview
 
 Self-hosted NVCF control-plane observability enables users to monitor the health and performance of their NVCF deployment. The observability solution is designed to be:
@@ -23,8 +37,8 @@ The observability solution currently provides:
 to explore metrics, logs, and dashboards, see [self-hosted-example-dashboards](./example-dashboards.md).
 
 The example deployments are designed for development and testing only, and are not suitable
-for production use. For production deployments, follow the guidance on this page to integrate
-with your own observability infrastructure.
+for production use. For production deployments, use the self-managed metrics stack or
+integrate with your own observability infrastructure.
 
 </Note>
 
@@ -37,14 +51,15 @@ NVCF self-hosted observability is currently in Early Access (EA). During EA, NVC
 - Documented metrics for critical control-plane services
 - Example scrape targets for prometheus-operator ServiceMonitor configuration
 - Metrics exposed via Prometheus-compatible endpoints
+- Shared metrics collection with bundled VictoriaMetrics or an existing backend
 - Logs emitted to stdout/stderr for easy collection
 - Configuration and deployment documentation
 - Example dashboards for key metrics
 
 **Your Responsibility:**
 
-- Deploy and manage your own observability backend (Prometheus, Grafana, Loki, Elasticsearch, etc.)
-- Configure metrics scraping from control-plane services
+- Configure storage for bundled VictoriaMetrics or connect an existing backend
+- Configure compute-plane collection for split deployments
 - Deploy log collectors (e.g., Fluentd, Promtail, OTel Collector) to aggregate logs
 - Set up your preferred visualization and alerting tools
 
@@ -57,7 +72,8 @@ The following control-plane services expose metrics and logs for monitoring:
 - **NVCF API**: Main API for function management and invocation
 - **Invocation Service**: Handles function invocation requests
 - **SPOT Instance Service (SIS)**: Manages worker pod and cluster state
-- **State Metrics Service**: *(Available in GA)* Aggregates and exports NVCF-specific metrics
+- **State Metrics Service**: Aggregates and exports NVCF-specific metrics
+- **Function Autoscaler**: Calculates desired function instance counts
 
 **Supporting Services:**
 
@@ -88,6 +104,61 @@ All control-plane services expose Prometheus-compatible metrics endpoints. You c
 Detailed metrics documentation is available for each service, including metric names,
 types, labels, and descriptions. See the per-service metrics reference under the
 `Metrics` section.
+
+### Self-managed metrics stack
+
+The Helmfile stack uses an observability profile to select the default metrics
+components and monitor targets:
+
+| Profile | Shared monitor defaults | Function Autoscaler | NVCA observability defaults |
+| --- | --- | --- | --- |
+| `disabled` | None | Not installed | Disabled |
+| `control` | Control-plane services | Installed | Disabled |
+| `compute` | NVCA, DCGM, and worker pods | Not installed | Enabled |
+| `all` | Control-plane and compute-plane targets | Installed | Enabled |
+
+The control-plane stack defaults to `control`. The compute-plane stack defaults
+to `compute`. Use `all` when both sets of targets run in the same cluster.
+
+The default `control` profile installs the Prometheus Operator custom resource
+definitions, OpenTelemetry Operator, collector with Target Allocator and
+discovery RBAC, default control-plane monitors, and VictoriaMetrics. It also
+installs State Metrics, then the Function Autoscaler.
+
+Profiles set defaults. Individual components can use `install`, `existing`, or
+`disabled` where supported. The available layouts are:
+
+| Layout | Configuration |
+| --- | --- |
+| Bundled backend | Use the default `install` modes and review the VictoriaMetrics persistent volume settings. |
+| External backend | Set `metricsBackend.mode: existing` and provide remote-write and PromQL endpoints. |
+| Existing components | Set the applicable `observability.components.*.mode` values to `existing`. |
+| No shared stack | Use the `disabled` profile. The Function Autoscaler is not installed. |
+
+The bundled VictoriaMetrics instance runs in `monitoring` by default. Configure
+its persistent volume in the Helmfile environment if the defaults are not
+suitable. See [Helmfile Installation](./helmfile-installation.md#observability-configuration).
+
+Use `metricsBackend.mode: existing` to connect a customer-managed backend:
+
+```yaml
+metricsBackend:
+  mode: existing
+  type: external
+  remoteWriteEndpoint: https://metrics.example.com/write
+  promqlEndpoint: https://metrics.example.com
+  authentication:
+    mode: none
+```
+
+The collector requires the remote-write endpoint. The `control` and `all`
+profiles also require the PromQL endpoint because the Function Autoscaler
+queries it. The autoscaler supports `none`, `token`, and `mtls` authentication
+for PromQL queries. Configure collector remote-write authentication separately.
+
+The shared collector discovers targets only in its Kubernetes cluster. In a
+split deployment, configure compute-plane collection separately. See [Cluster
+Monitoring](./cluster-management/monitoring.md).
 
 ### Logging
 
@@ -121,9 +192,14 @@ Distributed tracing support via OpenTelemetry Protocol (OTLP) is planned for a f
 
 ## Configuration
 
-You configure observability by integrating with your own backend:
+You can use the shared metrics stack or integrate with your own backend.
 
 ### Metrics Scraping
+
+The observability profile configures the shared collector and default monitors.
+Some service charts also use `global.observability.metrics.enabled` to enable
+their own metrics exports or PodMonitors. Set it separately when those service
+metrics are needed.
 
 Use Prometheus Operator with the provided ServiceMonitor examples:
 
@@ -148,6 +224,44 @@ spec:
 
 Or configure Prometheus scrape targets manually in your prometheus.yml.
 
+#### Application-level NVCF stats
+
+The State Metrics Service exposes per-function signals you can query in
+Prometheus. The following PromQL examples cover the three most common
+operator questions. Metric names and labels are sourced from
+[State Metrics Service metrics](./metrics/state-metrics/metrics.md).
+
+Number of registered functions:
+
+```promql
+# nvcf_function_info is emitted per function with descriptive labels.
+# Dedupe by function_id so multiple label series do not inflate the count.
+count(count by (function_id) (nvcf_function_info))
+```
+
+Queue depth per function:
+
+```promql
+# nvcf_function_queue_depth is a gauge keyed by function_id.
+sum by (function_id, name) (nvcf_function_queue_depth)
+```
+
+Function request latency (p50 and p95) over a 5-minute window:
+
+```promql
+# p50
+histogram_quantile(
+  0.50,
+  sum by (le, function_id) (rate(function_request_latency_bucket[5m]))
+)
+
+# p95
+histogram_quantile(
+  0.95,
+  sum by (le, function_id) (rate(function_request_latency_bucket[5m]))
+)
+```
+
 ### Log Collection
 
 Deploy a log collector as a DaemonSet to ship logs to your backend:
@@ -171,10 +285,11 @@ Configure your log collector to:
 Enable distributed tracing by setting Helm values under
 `global.observability.tracing`. The control-plane exports traces via OTLP
 to your own OTLP-compatible collector. Set `collectorEndpoint`,
-`collectorPort`, and `collectorProtocol` to match your collector's
-address and protocol.
+`collectorPort`, and `collectorProtocol` to match your collector's address.
+`collectorProtocol` is the endpoint URI scheme expected by the stack, not the
+OTLP transport.
 
-**Helm overrides example:**
+Helm overrides example:
 
 ```yaml
 global:
@@ -186,18 +301,18 @@ global:
       collectorProtocol: http
 ```
 
-**Configuration fields:**
+Configuration fields:
 
-- **enabled**: Set to `true` to enable OTLP trace export from control-plane
+- `enabled`: Set to `true` to enable OTLP trace export from control-plane
   services.
-- **collectorEndpoint**: DNS name or address of your OTLP collector (e.g.,
+- `collectorEndpoint`: DNS name or address of your OTLP collector (e.g.,
   OpenTelemetry Collector, Jaeger collector). Use a Kubernetes service DNS name
   such as `<service>.<namespace>.svc.cluster.local` when the collector runs
   in-cluster.
-- **collectorPort**: Port on which the collector accepts OTLP traffic (e.g.,
-  4317 for HTTP, 4318 for gRPC depending on your collector setup).
-- **collectorProtocol**: OTLP protocol: `http` or `grpc`. Must match how
-  your collector is configured.
+- `collectorPort`: Port on which the collector accepts OTLP traffic (e.g.,
+  4317 for gRPC, 4318 for HTTP depending on your collector setup).
+- `collectorProtocol`: URI scheme used to build the collector endpoint
+  (`http` or `https`). This value does not select the OTLP transport.
 
 Ensure your collector is deployed and reachable from the NVCF control-plane
 namespace, and that it forwards traces to your backend (Jaeger, Tempo, Zipkin,
@@ -224,7 +339,7 @@ Reference Grafana dashboards are provided for control-plane services showing cri
   - Note: Worker Pods are deployed in the backend cluster, not the control-plane
     cluster, but their configuration is globally controlled as part of the control-plane
 
-- State Metrics Service (Available in GA)
+- State Metrics Service
 
 **Dashboard Location:**
 
@@ -233,7 +348,7 @@ Dashboards are provided in native Grafana JSON format for [file-provisioning](ht
 Load dashboards into Grafana by placing them in `/etc/grafana/provisioning/dashboards/` on startup.
 
 Published dashboards will be available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) public GitHub repository.
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) public GitHub repository.
 
 ## Troubleshooting
 
@@ -279,6 +394,9 @@ For troubleshooting common observability issues:
    # Check for metrics-related errors
    kubectl logs -n nvcf deployment/nvcf-api | grep -i metric
    ```
+
+For shared stack or Function Autoscaler issues, see
+[Function Autoscaler Operations](./autoscaling/operations.md).
 
 **Logs not being collected:**
 
@@ -337,6 +455,9 @@ For troubleshooting common observability issues:
 
 ## Related Documentation
 
+- [Function Autoscaling](./autoscaling/index.md)
+- [Function Autoscaler Observability](./autoscaling/observability.md)
+- [Cluster Monitoring](./cluster-management/monitoring.md)
 - [OpenTelemetry documentation](https://opentelemetry.io/docs/)
 - [Prometheus documentation](https://prometheus.io/docs/)
 
@@ -344,7 +465,7 @@ For troubleshooting common observability issues:
 
 NVCF self-hosted control-plane observability is compatible with:
 
-- Any official supported Kubernetes version
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
 - Any Prometheus-compatible metrics collection system
 - Any log aggregation system that can collect from Kubernetes stdout/stderr or read
   from the filesystem (depending on K8s cluster configuration)

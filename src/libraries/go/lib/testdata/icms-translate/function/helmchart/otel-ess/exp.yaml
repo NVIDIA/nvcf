@@ -296,6 +296,10 @@ spec:
       successThreshold: 1
       timeoutSeconds: 1
     name: utils
+    ports:
+    - containerPort: 8010
+      name: worker-metrics
+      protocol: TCP
     readinessProbe:
       failureThreshold: 2
       httpGet:
@@ -400,8 +404,8 @@ spec:
         path: /health
         port: 13133
         scheme: HTTP
-      initialDelaySeconds: 30
-      periodSeconds: 30
+      initialDelaySeconds: 5
+      periodSeconds: 5
       successThreshold: 1
       timeoutSeconds: 1
     resources:

@@ -15,7 +15,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package otelconfig
 
 import (
@@ -30,6 +29,15 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
+
+// This renderer deliberately does not add the empty-value filter that the
+// byoo-otel-collector renderer applies. That filter uses an OTTL lambda, which
+// needs the ottl.functions.enableLambda feature gate and collector v0.155.0 or
+// newer. This is a shared library: the config it renders is consumed by sidecar
+// images chosen independently of it, including versions well below v0.155.0,
+// and nothing on that path passes the gate. Emitting the lambda here would fail
+// config parsing and leave those sidecars unable to start, which is worse than
+// the ingest conflicts the filter avoids.
 
 type Telemetry struct {
 	Protocol Protocol `json:"protocol"`
@@ -431,7 +439,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 			},
 		},
 		"metrics": {
-			"level": "normal",
+			"level": "detailed",
 			"readers": []map[string]interface{}{
 				{
 					"pull": map[string]interface{}{

@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sqs",
+    srcs = ["sqs.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/endpoints",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/session",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sqs",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sqs_test",
+    srcs = ["sqs_test.go"],
+    embed = [":sqs"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+    ],
+)

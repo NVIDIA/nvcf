@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# nvsnap-blobstore — Phase 5d.2 durable backstop for cross-node restore.
+#
+# Custom HTTP content-addressed blob store. NOT MinIO/S3-compat;
+# protocol is documented in docs/archive/PHASE5D-PEER-FANOUT-BLOB-STORE.md
+# and implemented in internal/blobstore/. Single replica is fine for
+# v1 — when the blob store is unreachable, peers still serve hot
+# captures, only cold-tier fanout breaks.
+#
+# Deploy: kubectl apply -f deploy/k8s/nvsnap-blobstore.yaml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvsnap-blobstore
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-blobstore
+spec:
+  replicas: 1
+  # Recreate, not rolling — the data PVC is RWO and a rolling update
+  # would race on volume attach (nvsnap-server precedent).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nvsnap-blobstore
+  template:
+    metadata:
+      labels:
+        app: nvsnap-blobstore
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # Distroless nonroot uid; matches the Dockerfile USER.
+        fsGroup: 65532
+      containers:
+        - name: blobstore
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-blobstore:v0.0.1
+          imagePullPolicy: Always
+          args:
+            - --listen=:9000
+            - --data-dir=/data
+            - --log-level=info
+          ports:
+            - containerPort: 9000
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: 9000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            # Modest steady-state. Big captures stream — server holds
+            # one buffered hash + small metadata, NOT the whole blob.
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nvsnap-blobstore-data
+      imagePullSecrets:
+        - name: nvsnap-pull-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-blobstore
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-blobstore
+spec:
+  selector:
+    app: nvsnap-blobstore
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: http
+  # ClusterIP — only agents and nvsnap-server inside the cluster need
+  # to reach this. External access (e.g., admin GC sweep) is via
+  # `kubectl port-forward`.
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvsnap-blobstore-data
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-blobstore
+spec:
+  # 1 TiB is enough for ~30 captures of vllm-small (28 GB each) before
+  # eviction kicks in; bump or shrink based on retention policy. Use
+  # the same SC as nvsnap-server's DB so both ride on the same storage
+  # backend.
+  storageClassName: nvcf-sc
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti

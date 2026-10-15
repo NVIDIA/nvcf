@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""Decide whether a MODULE.bazel.lock change can affect the Java build.
+
+Prints "true" or "false". Reads the two lock revisions from git.
+
+    bazel-lock-touches-java <base-ref> <head-ref>
+
+MODULE.bazel.lock is in JAVA_SHARED_GLOBS, so any edit to it schedules all
+seven Java rows. Those rows run on GitHub-hosted runners at max-parallel 4 and
+are the long pole of a merge queue entry: on NVIDIA/nvcf#777, cloud-functions
+alone took 19 minutes. That pull request's entire lock delta was one Rust
+crate_universe extension, and the Java rows it scheduled rebuilt from near
+scratch (168 remote cache hits out of 3073 actions) because a repin invalidates
+external repository state.
+
+The lock is JSON, so this compares structure rather than matching text. A
+grep for "maven" or "jvm" would be worse than useless here: Java artifacts are
+pinned in maven_install.json, which is a separate entry in JAVA_SHARED_GLOBS,
+and the lock's moduleExtensions carries no rules_jvm_external entry at all. So
+such a grep would answer "not Java" for almost every input, including inputs
+that genuinely do affect Java.
+
+Fail closed. Java is skipped only when every difference is positively
+recognised as Java-irrelevant. Anything else, including a parse failure, a
+missing file, an unreadable revision, a new top-level section, or an unfamiliar
+module extension, answers "true". Wrongly skipping Java breaks main and is
+found later by someone else; wrongly running it costs runner minutes.
+"""
+
+import json
+import subprocess
+import sys
+
+LOCK = "MODULE.bazel.lock"
+
+# Module extensions whose state cannot reach a Java action. Keep this list
+# small and evidence-based: an extension earns a place here only when it is
+# clear it produces no input to a Java target. Anything absent is treated as
+# Java-relevant, so forgetting to add one costs time, never correctness.
+JAVA_IRRELEVANT_EXTENSIONS = {
+    "@@rules_rust+//crate_universe:extension.bzl%crate",
+    "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr",
+}
+
+# Top-level sections that may differ without implying a Java change, provided
+# the differences inside them are themselves recognised. Every other top-level
+# key differing means "true", so a future Bazel lock format that adds a section
+# fails closed rather than being silently ignored.
+INSPECTABLE_SECTIONS = {"moduleExtensions"}
+
+# dict.get() cannot tell an absent key from one whose value is null, and
+# cannot tell an absent section from an empty one. Both conflations were live
+# bugs: a new top-level section added as null compared equal to its own
+# absence and was never noticed, and deleting moduleExtensions outright made
+# the head look like an empty extension set, so the only "changed" extensions
+# were the base's, all recognised, and the tool answered false. Losing a whole
+# section must never be a skip. Compare against a sentinel instead.
+MISSING = object()
+
+
+def die_true(reason):
+    print("true")
+    print(f"[lock-scope] {reason}; running Java", file=sys.stderr)
+    raise SystemExit(0)
+
+
+def read_lock(ref):
+    try:
+        raw = subprocess.run(
+            ["git", "show", f"{ref}:{LOCK}"],
+            capture_output=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError) as exc:
+        die_true(f"cannot read {LOCK} at {ref}: {exc}")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        die_true(f"cannot parse {LOCK} at {ref}: {exc}")
+    # "[]" and "null" are valid JSON but not a lock. Without this the section
+    # comparison below raises on a non-mapping and the tool dies with a
+    # traceback, which is an exit code nobody reads as "run Java".
+    if not isinstance(parsed, dict):
+        die_true(f"{LOCK} at {ref} is {type(parsed).__name__}, not an object")
+    return parsed
+
+
+def main():
+    if len(sys.argv) != 3:
+        die_true("usage: bazel-lock-touches-java <base-ref> <head-ref>")
+    base, head = sys.argv[1], sys.argv[2]
+
+    a, b = read_lock(base), read_lock(head)
+
+    if a == b:
+        print("false")
+        print("[lock-scope] lock is unchanged; skipping Java", file=sys.stderr)
+        return
+
+    changed_sections = {
+        k for k in set(a) | set(b) if a.get(k, MISSING) != b.get(k, MISSING)
+    }
+
+    unexpected = changed_sections - INSPECTABLE_SECTIONS
+    if unexpected:
+        die_true(f"lock sections changed that are not inspectable: {sorted(unexpected)}")
+
+    # Require the section in both. Defaulting it to {} is what let a deletion
+    # read as "no extensions changed".
+    if "moduleExtensions" not in a or "moduleExtensions" not in b:
+        die_true("moduleExtensions is absent from one of the revisions")
+    ma, mb = a["moduleExtensions"], b["moduleExtensions"]
+    if not isinstance(ma, dict) or not isinstance(mb, dict):
+        die_true("moduleExtensions is not an object in one of the revisions")
+    changed_exts = {
+        k for k in set(ma) | set(mb) if ma.get(k, MISSING) != mb.get(k, MISSING)
+    }
+
+    unrecognised = changed_exts - JAVA_IRRELEVANT_EXTENSIONS
+    if unrecognised:
+        die_true(f"module extensions changed that may affect Java: {sorted(unrecognised)}")
+
+    print("false")
+    print(
+        f"[lock-scope] only Java-irrelevant extensions changed ({sorted(changed_exts)}); "
+        "skipping Java",
+        file=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    main()

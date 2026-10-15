@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Decide whether a bazel CI job may write to the shared remote cache.
+# Prints "true" or "false" on stdout.
+#
+# Writers:
+#   merge_group  the primary writer. The tree under test is exactly what is
+#                about to become main, and each queue entry gets its own ref,
+#                so these runs are never cancelled by the next merge.
+#   push to main a backstop for anything that reaches main without going
+#                through the merge queue. These runs all share the
+#                bazel-refs/heads/main concurrency group with
+#                cancel-in-progress, so a second merge landing minutes later
+#                kills the first one's warm-write; that is why merge_group and
+#                not this is the primary writer.
+#
+# Everything else (pull_request above all) is read-only, so a build from an
+# unreviewed branch can never poison the cache other builds trust.
+#
+# This lives in a script rather than inline in .github/workflows/bazel.yml so
+# the decision is testable; see tools/ci/test-bazel-cache-upload-mode.
+set -euo pipefail
+
+event="${GITHUB_EVENT_NAME:-}"
+ref="${GITHUB_REF:-}"
+
+case "${event}" in
+    merge_group)
+        echo "true"
+        ;;
+    push)
+        if [ "${ref}" = "refs/heads/main" ]; then
+            echo "true"
+        else
+            echo "false"
+        fi
+        ;;
+    *)
+        echo "false"
+        ;;
+esac

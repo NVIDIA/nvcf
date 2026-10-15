@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "admission",
+    srcs = [
+        "decode.go",
+        "defaulter_custom.go",
+        "doc.go",
+        "http.go",
+        "multi.go",
+        "response.go",
+        "validator_custom.go",
+        "webhook.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/gomodules.xyz/jsonpatch/v2:jsonpatch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/admission/v1:admission",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/admission/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/json",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission/metrics",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":admission",
+    visibility = ["//visibility:public"],
+)

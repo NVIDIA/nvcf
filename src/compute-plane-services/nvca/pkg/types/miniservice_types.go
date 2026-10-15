@@ -57,6 +57,7 @@ type MiniserviceMetadata struct {
 	PodAnnotations                map[string]string   `json:"podAnnotations,omitempty"`
 	PodLabels                     map[string]string   `json:"podLabels,omitempty"`
 	EnvVars                       []corev1.EnvVar     `json:"envVars,omitempty"`
+	OTelCollectorEnvVars          []corev1.EnvVar     `json:"otelCollectorEnvVars,omitempty"`
 	NodeAffinityKey               string              `json:"nodeAffinityKey,omitempty"`
 	NodeAffinityValue             string              `json:"nodeAffinityValue,omitempty"`
 	ServiceAccountName            string              `json:"serviceAccountName,omitempty"`
@@ -64,6 +65,11 @@ type MiniserviceMetadata struct {
 	ImagePullSecretNames          []string            `json:"imagePullSecretNames,omitempty"`
 	TerminationGracePeriodSeconds *int64              `json:"terminationGracePeriodSeconds,omitempty"`
 	SchedulerName                 string              `json:"schedulerName,omitempty"`
+
+	// ModelCacheInitEnv is the flattened launch environment (plus INSTANCE_ID)
+	// injected into the ephemeral model-cache-init container by the webhook.
+	// Set only when the ephemeral model-cache backend is selected.
+	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.

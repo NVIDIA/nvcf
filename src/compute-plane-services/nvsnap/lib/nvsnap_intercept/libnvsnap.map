@@ -1,0 +1,5 @@
+GLIBC_2.2.5 {
+    global:
+        sigaction;
+        signal;
+};
