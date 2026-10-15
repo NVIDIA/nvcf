@@ -28,7 +28,7 @@
 // The repo also has a generated go.work (gitignored) used by the non-Bazel CI
 // for license and dependency checks across every go.mod. That one is wider on
 // purpose: it covers upstream-owned subtrees Bazel does not build.
-go 1.26.5
+go 1.26.8
 
 use (
 	./src/clis/nvcf-cli
