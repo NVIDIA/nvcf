@@ -563,3 +563,53 @@ Run `go test -C tools/docs-version-sync -run TestUmbrellaPublisher -v` for the
 isolated API rehearsal. It assembles a real fixture bundle, interrupts upload,
 retries, reads every asset back, checks immutable reruns and corruption, and
 verifies trigger isolation. This test does not publish to GitHub.
+
+### Same-version umbrella docs revisions
+
+Legacy `docs/releases/X.Y.Z` entries remain immutable. New registry entries
+can use `mode: umbrella` and a maintained `docs/versions/X.Y.Z` source. The
+entry's product commit and manifest digest never change. Its docs `commit`
+selects an approved revision; `umbrella.revisions` retains previous approvals
+for rollback. Advancing the source branch does not approve its new HEAD.
+
+Prepare from a reviewed prose source and the qualified product identity:
+
+```bash
+go run -C tools/docs-version-sync . umbrella docs-prepare \
+  --repo /path/to/nvcf --version X.Y.Z \
+  --product-commit FULL_PRODUCT_TAG_COMMIT \
+  --manifest-sha256 sha256:PRODUCT_MANIFEST_DIGEST \
+  --commit REVIEWED_DOCS_SOURCE_COMMIT --out /tmp/nvcf-product-docs
+```
+
+The prepared catalog comes from the product's locked source catalog. It never
+selects latest stack releases. Review the prepared prose for this product,
+commit it on `docs/versions/X.Y.Z`, and push that branch. Then prepare a
+canonical registry change:
+
+```bash
+go run -C tools/docs-version-sync . umbrella docs-revise \
+  --repo /path/to/nvcf --version X.Y.Z \
+  --product-commit FULL_PRODUCT_TAG_COMMIT \
+  --manifest-sha256 sha256:PRODUCT_MANIFEST_DIGEST \
+  --commit REVIEWED_DOCS_REVISION_COMMIT
+```
+
+Review and merge the registry diff on main. This command does not change the
+selector, default, product tag, release assets, or production site. First-time
+activation and canonical publishing use a separate reviewed change. For a
+correction, edit the existing maintained branch and approve another commit
+with the same command. For rollback, select a previous approved commit.
+
+Registry validation checks that the selected commit remains reachable from the
+maintained source branch. It validates only that approved content, including
+its generated blocks, navigation, product manifest, and immutable catalog
+inputs. Catalog output locations and descriptive manifest text may change;
+artifact versions, distribution locations, compatibility, and product inputs
+may not. Carry applicable fixes into Development and other supported versions
+through separate reviewed changes; do not copy unrelated next-release prose.
+
+Run `go test -C tools/docs-version-sync -run TestUmbrellaDocsRevisionE2E -v`.
+The test uses the real binary and temporary Git remotes for a mixed registry,
+same-version correction, unapproved branch advancement, rollback, product-pin
+rejection, stale generated content, and unchanged legacy immutability checks.
