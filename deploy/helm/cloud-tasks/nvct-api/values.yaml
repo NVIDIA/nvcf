@@ -119,7 +119,7 @@ nvctApi:
       nvct:
         sidecars:
           init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.1"
-          utils-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.3"
+          utils-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.4"
           otel-container: dummy
           ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.1"
           otel-collector-container: dummy
