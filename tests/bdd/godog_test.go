@@ -22,13 +22,16 @@ package bdd_tmp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cucumber/godog"
 
@@ -463,6 +466,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES", "https://charts.example.test/inference-test-missing-resources.tgz")
 	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
+	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-echo:test")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -515,6 +519,12 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response from an NVCF-hosted OpenAI-compatible sample, used for load testing and throughput benchmarks."}}]}` +
 				"\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-llm-field-fidelity-ready\"}]}' --timeout 120": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n" + `{"object":"chat.completion","choices":[{"message":{"content":"xxxx"}}]}` + "\n",
+		},
 		`curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'`: {
 			ExitCode: 0,
 			Stdout:   "401",
@@ -535,14 +545,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
-	if err := os.WriteFile(
-		filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"),
-		[]byte(`{"apiKey":"wiring-function-api-key"}`),
-		0o600,
-	); err != nil {
-		t.Fatalf("write NVCF CLI state: %v", err)
-	}
+	seedFunctionAPIKey(t, home)
 
+	suite.HTTP = &llmRoutingHTTPFake{seen: map[string]bool{}}
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
 	var out strings.Builder
@@ -642,10 +647,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample") {
 		t.Fatal("LLM function invoke CLI command was never invoked")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-llm-field-fidelity",
+		"--image nvcr.io/test-org/test-team/openai-compatible-echo:test",
+		"--function-type LLM") {
+		t.Fatal("LLM field-fidelity function was not created from SAMPLE_LLM_ECHO_IMAGE")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 6)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
@@ -1373,6 +1384,14 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	seedFunctionAPIKey(t, home)
+	suite.HTTP = &llmRoutingHTTPFake{seen: map[string]bool{}}
+	const statusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
+	suite.Runner.(*fakeRunner).results[statusCommand] = harness.Result{
+		Stdout: `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+	}
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile.feature")
 	var out strings.Builder
@@ -3232,5 +3251,289 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if readKeyDeletes != 3 || writeKeyDeletes != 1 {
 		t.Fatalf("keys deleted: read = %d (want 3), write = %d (want 1)", readKeyDeletes, writeKeyDeletes)
+	}
+}
+
+// Exercise the HTTP step contract through Godog and a real HTTP boundary.
+func TestLLMHTTPObservationsWireToSteps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.llm-http.state"), []byte(`{"apiKey":"nvapi-wiring-key","token":"admin-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body, assertion string
+		delay                 time.Duration
+		wantFailure           bool
+	}{
+		{"complete stream", "data: {\"choices\":[]}\n\ndata: [DONE]\n\n", `the HTTP response body should end with "data: [DONE]"`, 0, false},
+		{"truncated stream", "data: {\"choices\":[]}\n\n", `the HTTP response body should end with "data: [DONE]"`, 0, true},
+		{"data after done", "data: [DONE]\n\ndata: unexpected\n\n", `the HTTP response body should end with "data: [DONE]"`, 0, true},
+		{"delayed body", "done", `the HTTP response should take at least "20ms"`, 40 * time.Millisecond, false},
+		{"delay ignored", "done", `the HTTP response should take at least "60s"`, 0, true},
+		{"deadline during body", "done", `the HTTP status should be 200`, 1500 * time.Millisecond, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer nvapi-wiring-key" || r.Method != "POST" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				body, _ := io.ReadAll(r.Body)
+				if string(body) != `{"stream":true}` {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(tc.delay):
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			suite := newWiringSuite(t, newFakeRunner(nil))
+			sc := steps.NewScenarioContext(suite)
+			feature := `Feature: HTTP observations
+  Scenario: Observe a complete response
+    Given I use NVCF CLI config "llm-http.yaml"
+    And the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+    When I send a "POST" request to "` + server.URL + `" with timeout 1 seconds and body:
+      """
+      {"stream":true}
+      """
+    Then the HTTP status should be 200
+    And ` + tc.assertion + "\n"
+			var out strings.Builder
+			status := godog.TestSuite{
+				Name:                "llm-http-observations",
+				ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
+				Options:             &godog.Options{Format: "pretty", Output: &out, Strict: true, FeatureContents: []godog.Feature{{Name: "llm-http.feature", Contents: []byte(feature)}}},
+			}.Run()
+			if strings.Contains(out.String(), "undefined") || (status != 0) != tc.wantFailure {
+				t.Fatalf("status = %d, want failure %v:\n%s", status, tc.wantFailure, out.String())
+			}
+		})
+	}
+}
+
+type llmRoutingHTTPFake struct {
+	broken string
+	seen   map[string]bool
+}
+
+func (f *llmRoutingHTTPFake) Do(ctx context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
+	if method != "POST" || headers["Authorization"] != "Bearer wiring-function-api-key" || headers["Content-Type"] != "application/json" {
+		return harness.HTTPResponse{Status: 401}, nil
+	}
+	var payload struct {
+		Model             string
+		Stream            bool
+		TTFTMillis        int  `json:"ttft_ms"`
+		InterTokenDelayMS int  `json:"inter_token_delay_ms"`
+		RepeatCount       int  `json:"repeat_count"`
+		Echo              bool `json:"x_load_tester_echo"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	key := ""
+	response := harness.HTTPResponse{Status: 200}
+	switch {
+	case u.Host == "invocation.localhost:8080":
+		if headers["Function-ID"] != "function-1" || headers["Function-Version-ID"] != "version-1" {
+			return harness.HTTPResponse{Status: 400}, nil
+		}
+		key = "classic"
+		response.Status = 404
+	case u.Host == "api.localhost:8080" && strings.HasSuffix(u.Path, "/pexec/functions/function-1"):
+		key = "pexec"
+		response.Status = 404
+	case payload.Model == "function-1/not-a-model":
+		key = "unlisted"
+		response.Status = 404
+		response.Body = `{"error":{"code":"no_eligible_candidates"}}`
+	case payload.Model != "function-1/openai-compatible-sample":
+		return harness.HTTPResponse{Status: 404}, nil
+	case u.Path == "/v1/chat/completions" && payload.Echo:
+		return f.echo(ctx, body)
+	case u.Path == "/v1/responses":
+		key = "responses"
+		response.Body = `{"object":"response","status":"completed","output":[{"content":[{"type":"output_text","text":"This is a fixed 128-byte response"}]}]}`
+	case u.Path == "/v1/chat/completions" && !payload.Stream && payload.TTFTMillis == 90000 && payload.RepeatCount == 1:
+		key = "long-nonstream"
+		response.Elapsed = 90 * time.Second
+		response.Body = `{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response"},"finish_reason":"stop"}]}`
+	case u.Path == "/v1/chat/completions" && payload.Stream && payload.TTFTMillis == 0 && payload.InterTokenDelayMS == 4500 && payload.RepeatCount == 1:
+		key = "long-stream"
+		response.Elapsed = 76500 * time.Millisecond
+		response.Body = "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"This\"}}]}\n\ndata: [DONE]\n\n"
+	case u.Path == "/v1/chat/completions" && payload.Stream:
+		key = "chat-stream"
+		response.Body = "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"This\"}}]}\n\ndata: [DONE]\n\n"
+	default:
+		return harness.HTTPResponse{}, fmt.Errorf("unexpected LLM request to %s", rawURL)
+	}
+	return f.recordResponse(ctx, key, response)
+}
+
+// echo replies with the request the model server would receive. Each echo-*
+// broken mode forwards the request the way a faulty gateway would.
+func (f *llmRoutingHTTPFake) echo(ctx context.Context, body string) (harness.HTTPResponse, error) {
+	var forwarded map[string]any
+	if err := json.Unmarshal([]byte(body), &forwarded); err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	switch f.broken {
+	case "echo-added":
+		forwarded["include_reasoning"] = true
+	case "echo-dropped":
+		delete(forwarded, "ignore_eos")
+	case "echo-changed":
+		forwarded["chat_template_kwargs"] = map[string]any{"enable_thinking": true}
+	case "echo-audio-dropped":
+		message := forwarded["messages"].([]any)[0].(map[string]any)
+		message["content"] = message["content"].([]any)[:1]
+	case "echo-rejected":
+		f.seen["echo"], f.seen[f.broken] = true, true
+		return harness.HTTPResponse{Status: 400, Body: `{"error":{"message":"unsupported content part"}}`}, nil
+	}
+	if strings.HasPrefix(f.broken, "echo-") {
+		f.seen[f.broken] = true
+	}
+	request, err := json.Marshal(forwarded)
+	if err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	reply, err := json.Marshal(map[string]any{
+		"object":  "chat.completion",
+		"choices": []any{map[string]any{"message": map[string]any{"content": string(request)}, "finish_reason": "stop"}},
+	})
+	if err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	return f.recordResponse(ctx, "echo", harness.HTTPResponse{Status: 200, Body: string(reply)})
+}
+
+func (f *llmRoutingHTTPFake) recordResponse(ctx context.Context, key string, response harness.HTTPResponse) (harness.HTTPResponse, error) {
+	if key == "classic" || key == "pexec" {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 10*time.Second {
+			return harness.HTTPResponse{}, fmt.Errorf("classic request has no fast deadline")
+		}
+	}
+	if strings.HasPrefix(key, "long-") {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 90*time.Second {
+			return harness.HTTPResponse{}, fmt.Errorf("long request deadline cannot accommodate the sample delay")
+		}
+	}
+	f.seen[key] = true
+	if f.broken == key+"-too-fast" {
+		f.seen[f.broken] = true
+		response.Elapsed = time.Second
+	}
+	if f.broken == key {
+		if response.Status == 404 {
+			response.Status = 200
+		} else if key == "chat-stream" || key == "long-stream" {
+			response.Body = strings.TrimSuffix(response.Body, "data: [DONE]\n\n")
+		} else if key == "long-nonstream" {
+			response.Body = strings.Replace(response.Body, `"stop"`, `"length"`, 1)
+		} else {
+			response.Body = strings.Replace(response.Body, `"completed"`, `"incomplete"`, 1)
+		}
+	}
+	return response, nil
+}
+
+func TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-echo:test")
+	seedFunctionAPIKey(t, home)
+	for _, file := range []string{"single-cluster-helmfile.feature", "multi-cluster-helmfile.feature"} {
+		data, err := os.ReadFile(mustResolveFeaturePath(t, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, scenario, found := strings.Cut(string(data), "    @llm-function-type\n")
+		if !found {
+			t.Fatal("missing LLM scenario")
+		}
+		brokenModes := []string{"", "chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream", "long-nonstream-too-fast", "long-stream-too-fast"}
+		exercised := []string{"chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream"}
+		// Field fidelity runs only in the single-cluster feature.
+		if file == "single-cluster-helmfile.feature" {
+			brokenModes = append(brokenModes, "echo-added", "echo-dropped", "echo-changed", "echo-audio-dropped", "echo-rejected")
+			exercised = append(exercised, "echo")
+		}
+		for _, broken := range brokenModes {
+			t.Run(file+"/"+broken, func(t *testing.T) {
+				runner := newFakeRunner(map[string]harness.Result{})
+				// Bootstrap and the already-covered ready check use CLI fakes.
+				runner.onRun = func(command string) error {
+					if strings.Contains(command, " status --json") {
+						runner.results[command] = harness.Result{Stdout: `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`}
+					}
+					if strings.Contains(command, " function invoke ") {
+						runner.results[command] = harness.Result{Stdout: `{"object":"chat.completion","choices":[{"message":{"content":"fixed 128-byte response"}}]}`}
+					}
+					if strings.Contains(command, "curl ") {
+						runner.results[command] = harness.Result{Stdout: "401"}
+					}
+					return nil
+				}
+				suite := newWiringSuite(t, runner)
+				t.Cleanup(func() {
+					if err := suite.Teardown(); err != nil {
+						t.Error(err)
+					}
+				})
+				fake := &llmRoutingHTTPFake{broken: broken, seen: map[string]bool{}}
+				suite.HTTP = fake
+				sc := steps.NewScenarioContext(suite)
+				var out strings.Builder
+				status := godog.TestSuite{
+					Name:                "llm-routing-feature",
+					ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
+					Options:             &godog.Options{Format: "pretty", Output: &out, Strict: true, FeatureContents: []godog.Feature{{Name: file, Contents: []byte("Feature: LLM routing\n" + scenario)}}},
+				}.Run()
+				if broken != "" {
+					if !fake.seen[broken] || status == 0 {
+						t.Fatalf("feature did not reject broken %s response:\n%s", broken, out.String())
+					}
+				} else {
+					if status != 0 {
+						t.Fatalf("feature failed:\n%s", out.String())
+					}
+					if !commandRanThatContainsAll(runner.runs, "--llm-model", "/v1/responses") {
+						t.Error("function does not declare the Responses route")
+					}
+					for _, key := range exercised {
+						if !fake.seen[key] {
+							t.Errorf("feature never exercised %s", key)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func seedFunctionAPIKey(t *testing.T, home string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"apiKey":"wiring-function-api-key"}`), 0o600); err != nil {
+		t.Fatalf("write NVCF CLI state: %v", err)
 	}
 }

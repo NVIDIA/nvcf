@@ -52,7 +52,11 @@ public task and function chart references. `SAMPLE_HELM_TASK_CHART` and
 `SAMPLE_HELM_FUNCTION_CHART` must declare CPU and memory resources. Their
 `_WITHOUT_RESOURCES` counterparts must omit them. The function charts must
 expose an `entrypoint` Service on port 8000, answer `/health`, and echo the
-request message from `/echo`.
+request message from `/echo`. `SAMPLE_LLM_ECHO_IMAGE` is an
+OpenAI-compatible sample image that supports the `x_load_tester_echo` body
+control (the monorepo `examples/function-samples/openai-compatible-sample`);
+the single-cluster LLM field-fidelity scenario reads the forwarded request from
+its reply.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -79,6 +83,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_LLM_ECHO_IMAGE=<image-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Single-cluster HA Helmfile feature: installs the control plane with

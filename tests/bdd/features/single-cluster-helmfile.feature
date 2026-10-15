@@ -375,7 +375,9 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | --health-uri     | /health                                                                                             |
         | --health-port    | 8000                                                                                                |
         | --health-timeout | PT30S                                                                                               |
-        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/embeddings,routingMethod=round_robin |
+        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/responses\|/v1/embeddings,routingMethod=round_robin |
+
+      And the function selected by NVCF CLI is undeployed at scenario teardown
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
@@ -401,6 +403,86 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command output should contain "chat.completion"
       And the command output should contain "fixed 128-byte response"
 
+      And I export the function selected by NVCF CLI to environment variables "BDD_LLM_FUNCTION_ID" and "BDD_LLM_VERSION_ID"
+
+      # Use the same authenticated function through each public entry point.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-stream"}],"stream":true}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "chat.completion.chunk"
+      And the HTTP response body should end with "data: [DONE]"
+      And the HTTP response body should not contain "error"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/responses" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","input":"bdd-responses","stream":false}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "object" should equal "response"
+      And the HTTP response JSON field "status" should equal "completed"
+      And the HTTP response JSON field "output.0.content.0.type" should equal "output_text"
+      And the HTTP response body should contain "fixed 128-byte response"
+
+      # The sample body controls hold non-streaming output for 90s and
+      # stream its 18 words over 76.5s, crossing the 60s regression boundary.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-long-nonstream"}],"stream":false,"ttft_ms":90000,"repeat_count":1}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response should take at least "60s"
+      And the HTTP response JSON field "object" should equal "chat.completion"
+      And the HTTP response JSON field "choices.0.finish_reason" should equal "stop"
+      And the HTTP response body should contain "fixed 128-byte response"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-long-stream"}],"stream":true,"ttft_ms":0,"inter_token_delay_ms":4500,"repeat_count":1}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response should take at least "60s"
+      And the HTTP response body should contain "chat.completion.chunk"
+      And the HTTP response body should end with "data: [DONE]"
+      And the HTTP response body should not contain "error"
+
+      # A client deadline well below 60s also rejects the old hanging behavior.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "Function-ID" is "${BDD_LLM_FUNCTION_ID}"
+      And the HTTP request header "Function-Version-ID" is "${BDD_LLM_VERSION_ID}"
+      When I send a "POST" request to "http://invocation.localhost:8080/v1/chat/completions" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-classic"}],"stream":false}
+        """
+      Then the HTTP status should be 404
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://api.localhost:8080/v2/nvcf/pexec/functions/${BDD_LLM_FUNCTION_ID}" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/openai-compatible-sample","messages":[{"role":"user","content":"bdd-pexec"}],"stream":false}
+        """
+      Then the HTTP status should be 404
+
+      # The declared model succeeded above, so this cannot pass on a cold route.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 10 seconds and body:
+        """
+        {"model":"${BDD_LLM_FUNCTION_ID}/not-a-model","messages":[{"role":"user","content":"bdd-unlisted"}],"stream":false}
+        """
+      Then the HTTP status should be 404
+
       # curl reports only the status code so the assertion cannot
       # match response-body noise.
       When I successfully run command:
@@ -410,4 +492,74 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command output should contain "401"
 
       # Leave the GPU capacity free, same as the echo scenarios.
+      And I successfully undeploy the function selected by NVCF CLI
+
+    # The gateway must forward chat fields it does not model unchanged, must
+    # not add reasoning options the client omitted, and must forward an audio
+    # part instead of rejecting it. SAMPLE_LLM_ECHO_IMAGE is an
+    # OpenAI-compatible sample image that supports the x_load_tester_echo
+    # body control and replies with the request body it received, so each
+    # check reads what reached the model server. The :local sample above
+    # cannot echo. Depends on the earlier install and registration scenarios.
+    @llm-function-type @llm-field-fidelity
+    Scenario: LLM gateway forwards chat request fields to the model server unchanged
+      Given environment variable "SAMPLE_LLM_ECHO_IMAGE" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully create function "bdd-llm-field-fidelity" from image "${SAMPLE_LLM_ECHO_IMAGE}" with CLI options:
+        | option           | value                                                                              |
+        | --function-type  | LLM                                                                                |
+        | --inference-url  | /v1/chat/completions                                                               |
+        | --inference-port | 8000                                                                               |
+        | --health-uri     | /health                                                                            |
+        | --health-port    | 8000                                                                               |
+        | --health-timeout | PT30S                                                                              |
+        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions,routingMethod=round_robin |
+
+      And the function selected by NVCF CLI is undeployed at scenario teardown
+
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local           |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                                       |
+        | --description | bdd-llm-field-fidelity                                                      |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
+
+      # Same warm-up as the scenario above: the first gateway call proves
+      # the route is ready before the raw HTTP checks.
+      When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:
+        """
+        {"messages":[{"role":"user","content":"bdd-llm-field-fidelity-ready"}]}
+        """
+      Then the command output should contain "chat.completion"
+
+      And I export the function selected by NVCF CLI to environment variables "BDD_LLM_ECHO_FUNCTION_ID" and "BDD_LLM_ECHO_VERSION_ID"
+
+      # Chat Completions takes audio as audio_url; input_audio is a
+      # Responses API part.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/chat/completions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_LLM_ECHO_FUNCTION_ID}/openai-compatible-sample","stream":false,"chat_template_kwargs":{"enable_thinking":false},"ignore_eos":true,"x_load_tester_echo":true,"messages":[{"role":"user","content":[{"type":"text","text":"bdd-field-fidelity"},{"type":"audio_url","audio_url":{"url":"data:audio/wav;base64,AAAA"}}]}]}
+        """
+      Then the HTTP status should be 200
+      # The sample's reply text is the request it received, so these paths
+      # read the forwarded request.
+      And the HTTP response JSON field "choices.0.message.content.chat_template_kwargs.enable_thinking" should equal "false"
+      And the HTTP response JSON field "choices.0.message.content.ignore_eos" should equal "true"
+      And the HTTP response JSON field "choices.0.message.content.messages.0.content.0.text" should equal "bdd-field-fidelity"
+      And the HTTP response JSON field "choices.0.message.content.messages.0.content.1.type" should equal "audio_url"
+      And the HTTP response JSON field "choices.0.message.content.messages.0.content.1.audio_url.url" should equal "data:audio/wav;base64,AAAA"
+      And the HTTP response JSON field "choices.0.message.content.include_reasoning" should be absent
+      And the HTTP response JSON field "choices.0.message.content.reasoning_format" should be absent
+
       And I successfully undeploy the function selected by NVCF CLI
