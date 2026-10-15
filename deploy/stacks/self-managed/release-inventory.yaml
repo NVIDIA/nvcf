@@ -19,6 +19,8 @@ states:
     path: deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl
     fullOverrides:
       - observability.profile=control
+  - plane: control-plane
+    path: deploy/stacks/self-managed/helmfile.d/04-upgrade-receipt.yaml.gotmpl
 # These charts are released independently and might not yet be mirrored into
 # the composite stack's release chart repository. Render each pinned chart from
 # its immutable public GitHub release tag, then report the public self-managed
