@@ -536,6 +536,13 @@ webhook:
   # is stale.
   inject: true
 
+  # Which namespaces the registration covers while inject is true.
+  # "all": every namespace not labelled nvsnap.io/inject=false.
+  # "optIn": only namespaces labelled nvsnap.io/inject=true, for a
+  # cluster that shares its GPUs with workloads nvsnap must not touch,
+  # or for a gradual rollout. The pod-level opt-out applies in both.
+  injectScope: all
+
   # Fixed Dynamo namespace (DYN_NAMESPACE and DYN_NAMESPACE_PREFIX) for
   # Dynamo components whose etcd and NATS are services of their own
   # Kubernetes namespace. The operator derives the Dynamo namespace from the
