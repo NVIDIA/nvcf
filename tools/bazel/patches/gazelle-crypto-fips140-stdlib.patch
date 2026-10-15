@@ -1,0 +1,10 @@
+--- a/language/go/std_package_list.go
++++ b/language/go/std_package_list.go
+@@ -633,6 +633,7 @@
+ 	"crypto/ed25519": true,
+ 	"crypto/ed25519/testdata": true,
+ 	"crypto/elliptic": true,
++	"crypto/fips140": true,
+ 	"crypto/hmac": true,
+ 	"crypto/internal/alias": true,
+ 	"crypto/internal/bigmod": true,

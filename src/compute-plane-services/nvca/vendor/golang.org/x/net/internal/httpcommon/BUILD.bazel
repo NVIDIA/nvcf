@@ -4,6 +4,7 @@ go_library(
     name = "httpcommon",
     srcs = [
         "ascii.go",
+        "gzip.go",
         "headermap.go",
         "request.go",
     ],

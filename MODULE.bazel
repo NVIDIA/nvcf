@@ -110,11 +110,15 @@ bazel_dep(
 # (_is_dev_dependency=False). That conflicts with the root-only
 # use_extension(..., dev_dependency=True) above: Bazel then fails with
 # "root_module_direct_deps must be empty". Patch inherits the parent
-# from_file(go_work) tag's own dev status.
+# from_file(go_work) tag's own dev status. Also recognize Go 1.26's
+# crypto/fips140 standard package when generating vendored dependencies.
 single_version_override(
     module_name = "gazelle",
     patch_strip = 1,
-    patches = ["//tools/bazel:patches/gazelle_go_work_dev_dependency.patch"],
+    patches = [
+        "//tools/bazel:patches/gazelle_go_work_dev_dependency.patch",
+        "//tools/bazel:patches/gazelle-crypto-fips140-stdlib.patch",
+    ],
     version = "0.48.0",
 )
 
