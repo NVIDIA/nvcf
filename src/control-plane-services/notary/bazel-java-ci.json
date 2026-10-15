@@ -1,0 +1,6 @@
+{
+  "ci_lane": "build-container",
+  "component_kind": "java-service",
+  "id": "notary",
+  "tests_skip": false
+}

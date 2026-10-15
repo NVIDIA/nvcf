@@ -57,7 +57,7 @@ func TestImageCredentialUpdater(t *testing.T) {
 			Metrics:            metrics.NewDefaultMetrics("test-nca-id", "test-cluster", "test-group", "test-version", metrics.WithRegisterer(prometheus.NewRegistry())),
 		},
 		Client:                crclient,
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         record.NewFakeRecorder(256),
 		newPermissionsChecker: newFakePermissionsChecker,
 	}
 	configuredToleration := corev1.Toleration{

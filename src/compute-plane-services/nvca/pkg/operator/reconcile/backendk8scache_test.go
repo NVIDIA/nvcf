@@ -63,9 +63,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
-var icmsGVK schema.GroupVersionKind
+var (
+	icmsGVK                  schema.GroupVersionKind
+	testModelCacheBindingGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "modelcachebindings",
+	}
+)
 
 func init() {
 	icmsCRD := makeICMSRequestCRD()
@@ -85,7 +91,12 @@ func init() {
 		&nvidiaiov1.NVCFBackendList{},
 	)
 	newDynamicClient = func(_ *runtime.Scheme, _ *rest.Config) (dynamic.Interface, error) {
-		return fakedynamic.NewSimpleDynamicClient(testScheme), nil
+		return fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+			testScheme,
+			map[schema.GroupVersionResource]string{
+				testModelCacheBindingGVR: "ModelCacheBindingList",
+			},
+		), nil
 	}
 
 	newDiscoverClient = func(_ kubernetes.Interface, _ *rest.Config) (discovery.DiscoveryInterface, error) {
@@ -473,6 +484,10 @@ func newTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	s.AddKnownTypeWithName(icmsGVK, &nvcav2beta1.ICMSRequest{})
 	s.AddKnownTypeWithName(icmsGVK.GroupVersion().WithKind(icmsGVK.Kind+"List"), &nvcav2beta1.ICMSRequestList{})
+	s.AddKnownTypeWithName(
+		nvcav2beta1.SchemeGroupVersion.WithKind("ModelCacheBinding"), &nvcav2beta1.ModelCacheBinding{})
+	s.AddKnownTypeWithName(
+		nvcav2beta1.SchemeGroupVersion.WithKind("ModelCacheBindingList"), &nvcav2beta1.ModelCacheBindingList{})
 	return s
 }
 
@@ -503,15 +518,37 @@ func mockKubeClientsForIntegrationTests() *kubeclients.KubeClients {
 		panic(err)
 	}
 	return &kubeclients.KubeClients{
-		Config:              newRESTConfig(),
-		NVCAOP:              fakenvcaopclient.NewSimpleClientset(),
-		K8s:                 k8sClient,
-		APIExtV1:            fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
-		DynamicClient:       fakedynamic.NewSimpleDynamicClient(scheme),
+		Config:   newRESTConfig(),
+		NVCAOP:   fakenvcaopclient.NewSimpleClientset(),
+		K8s:      k8sClient,
+		APIExtV1: fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
+		DynamicClient: fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+			scheme,
+			map[schema.GroupVersionResource]string{
+				testModelCacheBindingGVR: "ModelCacheBindingList",
+			},
+		),
 		DiscoveryClient:     discClient,
 		DiscoveryRESTMapper: restmapper.NewDiscoveryRESTMapper(grs),
 	}
 }
+
+// testStorageCapabilityCatalog is the shipped catalog shape, enough for the
+// sync tests to prove the mirror carries the data through unchanged.
+const testStorageCapabilityCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  - name: nvmesh-csi.excelero.com
+    provider: nvmesh
+    encryptionSupported: true
+    accessModes:
+      - ReadWriteOnce
+      - ReadOnlyMany
+    readerMountOptions:
+      - ro
+      - norecovery
+      - nouuid
+`
 
 func mockKubeClients() *kubeclients.KubeClients {
 	scheme := newTestScheme()
@@ -523,6 +560,15 @@ func mockKubeClients() *kubeclients.KubeClients {
 				Namespace: NVCAOperatorNamespace,
 			},
 			Data: map[string]string{},
+		},
+		// Rendered by the chart into the operator namespace; the sync must
+		// mirror it into the agent namespace, where NVCA reads it.
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcastorage.StorageCapabilityConfigMapName,
+				Namespace: NVCAOperatorNamespace,
+			},
+			Data: map[string]string{nvcastorage.StorageCapabilityConfigMapKey: testStorageCapabilityCatalog},
 		},
 	)
 	discClient := k8sClient.Discovery().(*fakediscovery.FakeDiscovery)
@@ -630,12 +676,15 @@ func TestBackendK8sSyncMinimal(t *testing.T) {
 		WithGXCache(clustermgmt.DefaultGXCacheNamespace, false).
 		WithK8sClusterNetworkCIDRs([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"}).
 		WithNGCServiceKeyFetcher(ag.TokenFetcher).
-		WithClients(clients)
+		WithClients(clients).
+		WithClusterSource(ag.ClusterSource)
 
 	bc, _, err := b.Start(ctx)
 	require.NoError(t, err)
 
 	ag.backendk8scache = bc
+
+	assert.Equal(t, nvcaoptypes.ClusterSourceNGCManaged, bc.clusterSource)
 
 	nb := getTestNVCFBackendMinimal()
 
@@ -697,6 +746,10 @@ func TestBackendK8sSyncMinimal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		_, err = bc.clients.K8s.CoreV1().Secrets(getSystemNamespace(nb)).Get(ctx, NGCServiceAPIKeySecretName, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -902,6 +955,10 @@ func TestBackendK8sSyncMinimalExternal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		nbObj, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(agentOpts.SystemNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -1118,6 +1175,14 @@ func TestBackendK8sSyncAllFeatures(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		if !assert.NoError(ct, err) {
+			return
+		}
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		if !assert.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace") {
+			return
+		}
+		if !assert.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey]) {
 			return
 		}
 
@@ -1812,6 +1877,39 @@ func Test_shouldUpdateNVCFStatus(t *testing.T) {
 	}
 }
 
+func TestMarkNVCFBackendUnhealthy(t *testing.T) {
+	ctx := newTestContext()
+	nb := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backend",
+			Namespace: NVCAOperatorNamespace,
+		},
+		Status: nvidiaiov1.NVCFBackendStatus{
+			AgentStatus: nvidiaiov1.AgentStatusHealthy,
+		},
+	}
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+		},
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     record.NewFakeRecorder(1),
+	}
+
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, nb))
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+	require.NotNil(t, got.Status.LastUpdatedAgentStatus)
+	lastUpdated := got.Status.LastUpdatedAgentStatus.DeepCopy()
+
+	// Repeated failures should not churn status updates or health events.
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, got))
+	got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.True(t, got.Status.LastUpdatedAgentStatus.Equal(lastUpdated))
+}
+
 func TestSyncNVCFBackendHealth(t *testing.T) {
 	ctx := newTestContext()
 
@@ -1956,6 +2054,59 @@ func TestSyncNVCFBackendHealth(t *testing.T) {
 	require.Equal(t, nvcaResponse.K8sVersion, gotNB.Status.KubernetesVersion)
 	require.Equal(t, nvcaResponse.GPUUsage, gotNB.Status.GPUUsage)
 	lastStatus = gotNB.Status.LastUpdatedAgentStatus
+}
+
+func TestSyncNVCFBackendHealthRejectsStaticCapacityOnDynamicBackend(t *testing.T) {
+	ctx := newTestContext()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+			Status: nvidiaiov1.AgentStatusHealthy,
+		}))
+	}))
+	t.Cleanup(server.Close)
+	previousHealthzURL := makeNVCAHealthzURL
+	makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) {
+		return server.URL, nil
+	}
+	t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	nb.Name = "dynamic-backend"
+	nb.Namespace = NVCAOperatorNamespace
+	nb.Spec.ClusterConfig.GPUDiscovery.Dynamic = &nvidiaiov1.DynamicGPUDiscoveryConfig{}
+	nb.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: nvcaoptypes.NVCAModuleName, Namespace: getSystemNamespace(nb),
+	}}
+	dep.Status.ReadyReplicas = 1
+	mergeCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+		Data:       map[string]string{agentConfigFile: "agent:\n  staticGPUCapacity: 5\n"},
+	}
+	recorder := record.NewFakeRecorder(0)
+	recorder.Events = nil
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+			K8s:    fakek8sclient.NewSimpleClientset(dep, mergeCM),
+		},
+		httpClient:        server.Client(),
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     recorder,
+	}
+
+	require.NoError(t, bc.SyncNVCFBackendHealth(ctx, nb))
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+
+	mergeCM.Data[agentConfigFile] = "agent:\n  logLevel: info\n"
+	_, err = bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, mergeCM, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	require.NoError(t, bc.SyncNVCFBackendHealth(ctx, got))
+	got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
 }
 
 type PatchedOSExit struct {
@@ -2378,6 +2529,78 @@ func TestOperator_mergeOverrides(t *testing.T) {
 			sort.Strings(tt.want.FeatureGate.Values)
 
 			assert.Equal(t, tt.want, nb.Spec.NVCFBackendSpecT)
+		})
+	}
+}
+
+func TestFormatFeatureGateChangeSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous nvidiaiov1.FeatureGate
+		desired  nvidiaiov1.FeatureGate
+		want     string
+	}{
+		{
+			name: "reports added gates from status to spec",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability", "LogPosting"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability", "KAIScheduler", "LogPosting"},
+			},
+			want: "feature gates: added=[KAIScheduler] removed=[]",
+		},
+		{
+			name: "sorts added and removed gates for stable logs",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"Zeta", "Alpha", "Stale"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"Beta", "Alpha", "Gamma"},
+			},
+			want: "feature gates: added=[Beta Gamma] removed=[Stale Zeta]",
+		},
+		{
+			name: "reports shared storage changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values:        []string{"BYOObservability"},
+				SharedStorage: &nvidiaiov1.SharedStorageSpec{},
+			},
+			want: "feature gates: added=[] removed=[] sharedStorageChanged=true",
+		},
+		{
+			name: "reports internal persistent storage changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+				InternalPersistentStorage: &nvidiaiov1.InternalPersistentStorageSpec{
+					Enabled: true,
+				},
+			},
+			want: "feature gates: added=[] removed=[] internalPersistentStorageChanged=true",
+		},
+		{
+			name: "reports otel config changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values:     []string{"BYOObservability"},
+				OTELConfig: &nvidiaiov1.OTELConfig{ServiceName: "nvcf-nvca"},
+			},
+			want: "feature gates: added=[] removed=[] otelConfigChanged=true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatFeatureGateChangeSummary(tt.previous, tt.desired)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -3155,6 +3378,7 @@ func TestValidateNVCFBackend(t *testing.T) {
 	tests := []struct {
 		name           string
 		setupConfigMap func(clients *kubeclients.KubeClients) error
+		bc             *BackendK8sCache
 		expectedError  bool
 		errorContains  string
 	}{
@@ -3239,16 +3463,27 @@ spec:
 				require.NoError(t, err, "Failed to setup test configmap")
 			}
 
-			bc := &BackendK8sCache{
-				clients:           clients,
-				operatorNamespace: NVCAOperatorNamespace,
+			var bc *BackendK8sCache
+			if tt.bc != nil {
+				bc = tt.bc
+			} else {
+				bc = &BackendK8sCache{}
+				bc.clusterSource = nvcaoptypes.ClusterSourceNGCManaged
 			}
+
+			bc.clients = clients
+			bc.operatorNamespace = NVCAOperatorNamespace
 
 			// Create a test NVCFBackend
 			nb := &nvidiaiov1.NVCFBackend{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-backend",
 					Namespace: NVCAOperatorNamespace,
+				},
+				Spec: nvidiaiov1.NVCFBackendSpec{
+					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+						ClusterSource: nvcaoptypes.ClusterSourceNGCManaged,
+					},
 				},
 			}
 

@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+spring:
+  jmx:
+    enabled: false
+  autoconfigure:
+    exclude: org.springframework.boot.webmvc.autoconfigure.error.ErrorMvcAutoConfiguration
+  cloud:
+    discovery:
+      enabled: false
+  main:
+    allow-bean-definition-overriding: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8081
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+  web:
+    error:
+      whitelabel:
+        enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.nvidia: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security.oauth2.jwt: TRACE
+    org.springframework.web.servlet.mvc.method.annotation: TRACE
+
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,metrics
+    jmx:
+      exposure:
+        exclude: '*'
+      domain: localhost
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include:
+            - readinessState
+        liveness:
+          include:
+            - livenessState
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+  observations:
+    annotations:
+      enabled: true
+  forward-headers-strategy: framework
+
+notary:
+  issuer-url: http://assertion.issuer.test
+  signing-scope: notary-test-sign
+  private-jwks: ${kv.private-key-jwks.keys}
+  signing-kid: ${kv.signing-key.kid}
+  signing-algorithm: ${kv.signing-key.alg}
+  max-assertions-request-size: 2048
+  required-audiences:
+    - "s:xqlnhnfz6tjcz-ashudoahdkz6zrpjttwhaxjhaketm"
+
+springdoc:
+  api-docs:
+    enabled: false

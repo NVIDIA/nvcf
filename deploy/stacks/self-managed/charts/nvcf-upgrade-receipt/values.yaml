@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The stack version this bundle installs. The Helmfile supplies it from the
+# bundle's own VERSION file; there is no sensible default, so rendering fails
+# rather than recording a version the cluster is not running.
+stackVersion: ""
+
+image:
+  registry: ""
+  repository: alpine-k8s
+  tag: "1.33.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Name of the ConfigMap holding the receipt. An upgrade reads this to decide
+# whether the jump it has been asked to make is one it can make safely.
+configMapName: nvcf-upgrade-receipt

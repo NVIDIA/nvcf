@@ -206,15 +206,15 @@ type checkCategoryState struct {
 
 // checkRow tracks a single check within a category.
 type checkRow struct {
-	id          string
-	started     bool
-	finished    bool
-	passed      bool
-	severity    string
-	message     string
-	startMsg    string // human label from CheckStarted.Message, shown while in-flight
-	detail      string
-	hintURL     string
+	id       string
+	started  bool
+	finished bool
+	passed   bool
+	severity string
+	message  string
+	startMsg string // human label from CheckStarted.Message, shown while in-flight
+	detail   string
+	hintURL  string
 }
 
 // Model is the bubbletea Elm-architecture model that backs the TTY renderer.
@@ -223,12 +223,12 @@ type checkRow struct {
 // owned by TTYRenderer.
 type Model struct {
 	// identity (set at construction)
-	cluster     string
-	target      string
-	stack       string
-	controlCtx  string // M+9: control-plane kubeconfig context (empty → single-cluster)
-	computeCtx  string // M+9: compute-plane kubeconfig context (empty → single-cluster)
-	nowFunc func() time.Time
+	cluster    string
+	target     string
+	stack      string
+	controlCtx string // M+9: control-plane kubeconfig context (empty → single-cluster)
+	computeCtx string // M+9: compute-plane kubeconfig context (empty → single-cluster)
+	nowFunc    func() time.Time
 
 	// dynamic state (mutated by Update)
 	started  time.Time
@@ -246,7 +246,7 @@ type Model struct {
 	clusterGroupID    string
 	nvcfBackendHealth string
 	finalDuration     time.Duration
-	planOnly          bool    // true when reached via --plan-only short-circuit
+	planOnly          bool     // true when reached via --plan-only short-circuit
 	planned           *Planned // non-nil when --plan-only emitted a Planned event
 
 	// failure summary
@@ -282,6 +282,9 @@ type Model struct {
 	checkCategories  []checkCategoryState
 	checkCategoryIdx map[string]int
 	totalChecks      int // hint from ModelOpts; 0 means derive from accumulated rows
+	checkFinalTotal  int
+	checkFinalPassed int
+	checkFinalFailed int
 
 	// log tail (LogLine ring buffer; rendered as a "Recent" panel during
 	// long phases like apply-cp). Capacity is fixed; new lines push older
@@ -738,6 +741,9 @@ func (m Model) applyCheckEvent(e Event) (tea.Model, tea.Cmd) {
 
 	case Final:
 		m.finished = true
+		m.checkFinalTotal = ev.TotalChecks
+		m.checkFinalPassed = ev.PassedCount
+		m.checkFinalFailed = ev.FailedCount
 		return m, tea.Quit
 	}
 	return m, nil
@@ -1147,7 +1153,7 @@ func (m Model) renderSplitHeader(now time.Time) string {
 
 // renderChecklist produces the 8-line phase list. Each line is of the form
 //
-//	    <marker>  <num>. <name padded>          <duration>
+//	<marker>  <num>. <name padded>          <duration>
 //
 // The marker carries the phase state in glyph form so an ASCII-only render
 // retains all distinctions.
@@ -1742,12 +1748,12 @@ func (m Model) viewStatus(now time.Time) string {
 // humanCategoryName maps raw category identifiers to human-readable labels.
 func humanCategoryName(raw string) string {
 	names := map[string]string{
-		"local-host-tools":    "Local host",
-		"kubernetes-api":      "Kubernetes API",
+		"local-host-tools":     "Local host",
+		"kubernetes-api":       "Kubernetes API",
 		"pre-kubernetes-setup": "Cluster setup",
-		"cluster":             "Cluster",
-		"control-plane":       "Control plane",
-		"compute-plane":       "Compute plane",
+		"cluster":              "Cluster",
+		"control-plane":        "Control plane",
+		"compute-plane":        "Compute plane",
 	}
 	if n, ok := names[raw]; ok {
 		return n
@@ -1814,6 +1820,11 @@ func (m Model) viewCheck(now time.Time) string {
 
 	// ── status line ───────────────────────────────────────────────────────────
 	passed, failed, total := m.checkTally()
+	if m.finished && m.checkFinalTotal > 0 {
+		passed = m.checkFinalPassed
+		failed = m.checkFinalFailed
+		total = m.checkFinalTotal
+	}
 	if total < m.totalChecks {
 		total = m.totalChecks
 	}

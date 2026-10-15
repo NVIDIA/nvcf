@@ -433,22 +433,9 @@ metrics:
         # generate a metric_relabel_configs item source_labels: [__name__] and action: keep
         metric_allow_list:
           - catagory: generic
-            docstring: Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
+            docstring: Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
             list:
-              - name: otelcol_exporter_sent_metric_points_total
-              - name: otelcol_exporter_sent_spans_total
-              - name: otelcol_exporter_sent_log_records_total
-              - name: otelcol_exporter_send_failed_log_records_total
-              - name: otelcol_exporter_send_failed_spans_total
-              - name: otelcol_exporter_send_failed_metric_points_total
-              - name: otelcol_processor_incoming_items_total
-              - name: otelcol_processor_outgoing_items_total
-              - name: otelcol_receiver_accepted_log_records_total
-              - name: otelcol_receiver_accepted_metric_points_total
-              - name: otelcol_receiver_accepted_spans_total
-              - name: otelcol_receiver_refused_log_records_total
-              - name: otelcol_receiver_refused_spans_total
-              - name: otelcol_receiver_refused_metric_points_total
+              - name: otelcol_.*
 
   - function_type: container
     jobs:
@@ -642,19 +629,6 @@ metrics:
       - name: opentelemetry-collector
         metric_allow_list:
           - catagory: generic
-            docstring: Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
+            docstring: Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
             list:
-              - name: otelcol_receiver_refused_metric_points_total
-              - name: otelcol_receiver_refused_spans_total
-              - name: otelcol_receiver_refused_log_records_total
-              - name: otelcol_receiver_accepted_metric_points_total
-              - name: otelcol_receiver_accepted_spans_total
-              - name: otelcol_receiver_accepted_log_records_total
-              - name: otelcol_exporter_sent_metric_points_total
-              - name: otelcol_exporter_sent_spans_total
-              - name: otelcol_exporter_sent_log_records_total
-              - name: otelcol_exporter_send_failed_metric_points_total
-              - name: otelcol_exporter_send_failed_spans_total
-              - name: otelcol_exporter_send_failed_log_records_total
-              - name: otelcol_processor_incoming_items_total
-              - name: otelcol_processor_outgoing_items_total
+              - name: otelcol_.*

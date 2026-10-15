@@ -29,8 +29,14 @@ import (
 
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
-	Log                      *logrus.Entry
-	ControlPlaneHealthy      bool
+	Log                 *logrus.Entry
+	ControlPlaneHealthy bool
+	// NodesAllReady tracks whether all worker nodes are Ready. False means at
+	// least one NotReady node. Warning only — does not flip cluster readiness.
+	NodesAllReady bool
+	// NotReadyNodes is the count of NotReady nodes; populated when
+	// NodesAllReady is false. Used by printSummary to surface the count.
+	NotReadyNodes            int
 	WebhooksSupported        bool
 	NetworkPoliciesSupported bool
 	SMBCSIDriverOK           bool
@@ -38,6 +44,7 @@ type ValidationState struct {
 	GPUOperatorInstalled     bool
 	K8sVersion               string
 	TotalNodes               string
+	ContainerRuntime         string
 	Recommendations          []string
 	Warnings                 []string
 
@@ -59,6 +66,34 @@ type ValidationState struct {
 	// EnforcementCritical is true when the enforcement config has
 	// critical: true, meaning enforcement failure blocks readiness.
 	EnforcementCritical bool
+
+	// EndpointResults captures per-endpoint reachability outcomes for the
+	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
+	// endpoint name (the same string Prometheus will use as the label
+	// value). Populated by checkConfigurableReachability when a network
+	// check config is loaded; empty otherwise.
+	EndpointResults map[string]EndpointResult
+	// NetpolPairResults captures per-pair NetworkPolicy-coverage outcomes
+	// for the summary ConfigMap / metrics pipeline. Keyed by the
+	// user-supplied pair name. Populated by checkConfigurableNetworkPolicies.
+	NetpolPairResults map[string]NetpolPairResult
+}
+
+// EndpointResult is one row of ValidationState.EndpointResults — the
+// per-endpoint outcome the agent will surface as a Prometheus gauge.
+type EndpointResult struct {
+	Reachable bool
+	Critical  bool
+}
+
+// NetpolPairResult is one row of ValidationState.NetpolPairResults. The
+// fields mirror clustervalidator.PairStatus so buildSummary can convert
+// directly. Directions holds the per-direction, per-policy-side breakdown
+// keyed by NetpolDirectionAToB / NetpolDirectionBToA.
+type NetpolPairResult struct {
+	Passed     bool
+	Critical   bool
+	Directions map[string]DirectionStatus
 }
 
 // Run executes all cluster validation checks and prints a summary.
@@ -68,7 +103,20 @@ type ValidationState struct {
 // configNamespace and configName identify an optional ConfigMap that holds
 // user-defined reachability and network-policy checks. When the ConfigMap
 // does not exist the configurable checks are silently skipped.
-func Run(ctx context.Context, client kubernetes.Interface, configNamespace, configName string) error {
+//
+// summaryNamespace is where the summary ConfigMap is written for the agent to
+// read — kept separate from configNamespace so a config-namespace override
+// can't redirect the summary away from the namespace the agent watches.
+//
+// emitMetrics gates that write. In-cluster runs emit by default; callers pass
+// false for preflight (no agent to read it, no RBAC to write it).
+func Run(
+	ctx context.Context,
+	client kubernetes.Interface,
+	configNamespace, configName, summaryNamespace string,
+	emitMetrics bool,
+) error {
+	startedAt := time.Now()
 	log := core.GetLogger(ctx)
 	log.Info("Starting NVCF cluster validation")
 	log.Info("")
@@ -80,11 +128,19 @@ func Run(ctx context.Context, client kubernetes.Interface, configNamespace, conf
 	state := &ValidationState{
 		Log:                 log,
 		ControlPlaneHealthy: true,
+		NodesAllReady:       true,
 	}
 
 	if err := checkPrerequisites(ctx, client, state); err != nil {
 		return err
 	}
+
+	// Reclaim orphan netpol-validation-* namespaces left behind by previous
+	// runs whose pod was SIGKILLed / OOMed / force-deleted (the deferred
+	// cleanup in checkNetworkPolicyEnforcement only fires on normal control
+	// flow). Runs unconditionally so orphans get reclaimed even if enforcement
+	// is currently disabled.
+	sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
 
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
@@ -117,7 +173,21 @@ func Run(ctx context.Context, client kubernetes.Interface, configNamespace, conf
 		}
 	}
 
-	return printSummary(state)
+	summaryErr := printSummary(state)
+
+	// Persist the summary (to summaryNamespace, the agent's watch namespace)
+	// for the agent to publish as metrics. Gated on emitMetrics so preflight
+	// skips it. Best-effort: failures are logged, never block the verdict.
+	verdict := "NVCF-Ready"
+	if summaryErr != nil {
+		verdict = "NVCF-Not-Ready"
+	}
+	if emitMetrics && summaryNamespace != "" {
+		writeSummaryConfigMap(ctx, log, client, summaryNamespace,
+			buildSummary(state, startedAt, summaryErr == nil, verdict))
+	}
+
+	return summaryErr
 }
 
 // printSummary outputs the final validation results and returns an error if
@@ -137,11 +207,32 @@ func printSummary(state *ValidationState) error {
 		Critical bool
 	}
 
+	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
+	// from "we couldn't list nodes at all" (NotReadyNodes==0 + !NodesAllReady).
+	// Successful listing always yields either NodesAllReady=true (pass) or
+	// NotReadyNodes>0 (genuine NotReady count); the zero case can only
+	// happen when checkControlPlaneHealth's Nodes().List() returned an
+	// error, so avoid the misleading "0 NotReady" summary row.
+	nodesFailMsg := fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes)
+	if !state.NodesAllReady && state.NotReadyNodes == 0 {
+		nodesFailMsg = "Worker Nodes: status unknown (node listing failed)"
+	}
+
 	checks := []check{
 		{state.ControlPlaneHealthy, "Control Plane: Healthy", "Control Plane: Unhealthy", true},
+		{state.NodesAllReady,
+			"Worker Nodes: All Ready",
+			nodesFailMsg,
+			false},
 		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
 		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
-		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", true},
+		// SMB CSI Driver missing is non-blocking: it is required only when
+		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
+		// pkg/storage/smbcsidriver.go's runtime health check itself flags
+		// this at StatusLevelWarn, not StatusLevelError — block install
+		// only when the customer has explicitly opted in to a feature that
+		// needs SMB CSI, not for every operator install.
+		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
 	}
 
 	if state.ReachabilityOK != nil {
@@ -150,14 +241,19 @@ func printSummary(state *ValidationState) error {
 		checks = append(checks, check{
 			*state.ReachabilityOK,
 			"Endpoint Reachability: All Endpoints Reachable",
-			"Endpoint Reachability: Some Endpoints Not Reachable",
+			"Endpoint Reachability: One or more endpoints not reachable",
 			isCritical,
 		})
 	}
 
 	checks = append(checks,
 		check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
-		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", true},
+		// GPU Operator missing is non-blocking: clusters registered with
+		// Manual Instance Configuration expose GPUs via an alternative
+		// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
+		// GPU Operator. GPU Resources above is the load-bearing signal —
+		// if GPUs aren't usable that fails Critical separately.
+		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
 	)
 
 	if state.ConfigurableNetPolOK != nil {
@@ -166,7 +262,7 @@ func printSummary(state *ValidationState) error {
 		checks = append(checks, check{
 			*state.ConfigurableNetPolOK,
 			"Configurable Network Policies: All Checks Passed",
-			"Configurable Network Policies: Some Checks Failed",
+			"Configurable Network Policies: One or more checks failed",
 			isCritical,
 		})
 	}
@@ -194,15 +290,27 @@ func printSummary(state *ValidationState) error {
 	log.Infof("%s%s%s", colorBlue, separator, colorReset)
 	log.Info("")
 	if isReady {
-		log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
-		log.Infof("%s║                %s  Cluster is NVCF-Ready  %s                ║%s", colorGreen, iconCheck, iconCheck, colorReset)
-		log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorGreen, colorReset)
-		log.Info("")
-		printSuccess(log, "Your cluster meets all requirements for NVCF workloads")
+		hasWarnings := len(state.Warnings) > 0
+		if hasWarnings {
+			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorYellow, colorReset)
+			log.Infof("%s║        %s  Cluster is NVCF-Ready (with warnings)  %s        ║%s", colorYellow, iconWarn, iconWarn, colorReset)
+			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorYellow, colorReset)
+			log.Info("")
+			printWarning(log, "Your cluster meets all critical requirements; see warnings below for non-blocking issues.")
+		} else {
+			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
+			log.Infof("%s║                %s  Cluster is NVCF-Ready  %s                ║%s", colorGreen, iconCheck, iconCheck, colorReset)
+			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorGreen, colorReset)
+			log.Info("")
+			printSuccess(log, "Your cluster meets all requirements for NVCF workloads")
+		}
 		log.Info("")
 		log.Info("Validated Cluster:")
 		printInfo(log, fmt.Sprintf("  Kubernetes Version: %s", state.K8sVersion))
 		printInfo(log, fmt.Sprintf("  Total Nodes: %s", state.TotalNodes))
+		if state.ContainerRuntime != "" {
+			printInfo(log, fmt.Sprintf("  Container Runtime: %s", state.ContainerRuntime))
+		}
 	} else {
 		log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorRed, colorReset)
 		log.Infof("%s║              %s  Cluster is NVCF-Not-Ready  %s              ║%s", colorRed, iconCross, iconCross, colorReset)

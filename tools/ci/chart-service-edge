@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Stable CI entrypoint for the Go tool in tools/chart-service-edge.
+#
+# The wrapper exists for two reasons.
+#
+# The repository root. `go run -C <dir>` leaves the process running with that
+# directory as its working directory, so the tool cannot find the release
+# metadata on its own. Resolving the root from this script's own location means
+# callers do not have to pass it.
+#
+# The exit code. `go run` does NOT propagate the program's status: it prints
+# "exit status N" and exits 1, collapsing every non-zero code into one. This
+# tool only uses 0 and 1 today, so nothing is lost yet, but building the binary
+# keeps that from becoming a trap the first time a distinct code is added.
+#
+# Run the tests with: go test -C tools/chart-service-edge ./...
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bin_dir="$(mktemp -d)"
+trap 'rm -rf "${bin_dir}"' EXIT
+
+go build -C "${repo_root}/tools/chart-service-edge" -o "${bin_dir}/chart-service-edge" .
+
+# Not exec, so the trap above still runs, and not under errexit, so the exit
+# code reaches the caller rather than aborting the shell first.
+set +e
+"${bin_dir}/chart-service-edge" --root "${repo_root}" "$@"
+status=$?
+set -e
+exit "${status}"

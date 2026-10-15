@@ -33,6 +33,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
+// translateContainer converts a container function request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	if err := tcfg.ValidateContainer(); err != nil {
@@ -75,6 +77,9 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 	allEnvSet[common.CloudProviderEnv] = launchSpec.CloudProvider
 	allEnvSet[common.GPUNameEnv] = t.GPUType
 	allEnvSet[common.GPUCountEnv] = strconv.Itoa(int(t.RequestedGPUCount)) //nolint:gosec // G115: intentional uint64->int conversion, values are bounded
+	if isLLM {
+		normalizeLLMRequestRouterAddressEnvAliases(allEnvSet)
+	}
 
 	inferenceContainerImage := allEnvSet[common.ContainerFunctionImageEnv]
 	if inferenceContainerImage == "" {
@@ -428,7 +433,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				VolumeMounts:    utilsContainerVolumeMounts,
 			}
 			// mutate startup / liveness / readiness probes
-			common.MutateUtilsProbes(&utilsContainer)
+			common.MutateUtilsContainer(&utilsContainer)
 			pod.Spec.Containers = append(pod.Spec.Containers, utilsContainer)
 		} else {
 			// llm functions don't have a utils container. they have a router client container instead.

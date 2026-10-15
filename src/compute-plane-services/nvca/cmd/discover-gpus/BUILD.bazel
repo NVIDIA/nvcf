@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "discover-gpus_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/discover-gpus",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvca/cmd/internal",
+        "//src/compute-plane-services/nvca/pkg/featureflag",
+        "//src/compute-plane-services/nvca/pkg/nodefeatures",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+go_binary(
+    name = "discover-gpus",
+    embed = [":discover-gpus_lib"],
+    visibility = ["//visibility:public"],
+)

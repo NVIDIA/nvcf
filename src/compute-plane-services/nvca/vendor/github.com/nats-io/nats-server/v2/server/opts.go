@@ -392,6 +392,7 @@ type Options struct {
 	JetStreamRequestQueueLimit int64
 	JetStreamMetaCompact       uint64
 	JetStreamMetaCompactSize   uint64
+	JetStreamMetaCompactSync   bool
 	StreamMaxBufferedMsgs      int               `json:"-"`
 	StreamMaxBufferedSize      int64             `json:"-"`
 	StoreDir                   string            `json:"-"`
@@ -597,6 +598,11 @@ type WebsocketOpts struct {
 	// and write the response back to the client. This include the
 	// time needed for the TLS Handshake.
 	HandshakeTimeout time.Duration
+
+	// How often to send pings to WebSocket clients. When set to a non-zero
+	// duration, this overrides the default PingInterval for WebSocket connections.
+	// If not set or zero, the server's default PingInterval will be used.
+	PingInterval time.Duration
 
 	// Headers to be added to the upgrade response.
 	// Useful for adding custom headers like Strict-Transport-Security.
@@ -1266,7 +1272,9 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 	case "proxy_protocol":
 		o.ProxyProtocol = v.(bool)
 	case "max_connections", "max_conn":
-		o.MaxConn = int(v.(int64))
+		if o.MaxConn = int(v.(int64)); o.MaxConn == 0 {
+			o.MaxConn = -1
+		}
 	case "max_traced_msg_len":
 		o.MaxTracedMsgLen = int(v.(int64))
 	case "max_subscriptions", "max_subs":
@@ -1688,7 +1696,7 @@ func (o *Options) processConfigFileLine(k string, v any, errors *[]error, warnin
 	case "reconnect_error_reports":
 		o.ReconnectErrorReports = int(v.(int64))
 	case "websocket", "ws":
-		if err := parseWebsocket(tk, o, errors); err != nil {
+		if err := parseWebsocket(tk, o, errors, warnings); err != nil {
 			*errors = append(*errors, err)
 			return
 		}
@@ -2324,7 +2332,7 @@ func parseJetStreamForAccount(v any, acc *Account, errors *[]error) error {
 			case "cluster_traffic":
 				vv, ok := mv.(string)
 				if !ok {
-					return &configErr{tk, fmt.Sprintf("Expected either 'system' or 'account' string value for %q, got %v", mk, mv)}
+					return &configErr{tk, fmt.Sprintf("Expected either 'system' or 'owner' string value for %q, got %v", mk, mv)}
 				}
 				switch vv {
 				case "system", _EMPTY_:
@@ -2651,6 +2659,8 @@ func parseJetStream(v any, opts *Options, errors *[]error, warnings *[]error) er
 					return &configErr{tk, fmt.Sprintf("Expected an absolute size for %q, got %v", mk, mv)}
 				}
 				opts.JetStreamMetaCompactSize = uint64(s)
+			case "meta_compact_sync":
+				opts.JetStreamMetaCompactSync = mv.(bool)
 			default:
 				if !tk.IsUsedVariable() {
 					err := &unknownConfigFieldErr{
@@ -5316,7 +5326,7 @@ func parseStringArray(fieldName string, tk token, lt *token, mv any, errors *[]e
 	}
 }
 
-func parseWebsocket(v any, o *Options, errors *[]error) error {
+func parseWebsocket(v any, o *Options, errors *[]error, warnings *[]error) error {
 	var lt token
 	defer convertPanicToErrorList(&lt, errors)
 
@@ -5417,6 +5427,8 @@ func parseWebsocket(v any, o *Options, errors *[]error) error {
 					o.Websocket.Headers[key] = headerValue
 				}
 			}
+		case "ping_interval":
+			o.Websocket.PingInterval = parseDuration("ping_interval", tk, mv, errors, warnings)
 		default:
 			if !tk.IsUsedVariable() {
 				err := &unknownConfigFieldErr{
@@ -6425,4 +6437,61 @@ func expandPath(p string) (string, error) {
 	}
 
 	return filepath.Join(home, p[1:]), nil
+}
+
+// RedactArgs redacts sensitive arguments from the command line.
+// For example, turns '--pass=secret' into '--pass=[REDACTED]'.
+func RedactArgs(args []string) {
+	secretArg := regexp.MustCompile("^-{1,2}(user|pass|auth)(=.*)?$")
+	routeURLArg := regexp.MustCompile("^-{1,2}(routes)(=.*)?$")
+	singleURLArg := regexp.MustCompile("^-{1,2}(cluster|cluster_listen)(=.*)?$")
+	for i, arg := range args {
+		switch {
+		case secretArg.MatchString(arg):
+			redactArgValue(args, i, func(_ string) string { return "[REDACTED]" })
+		case routeURLArg.MatchString(arg):
+			redactArgValue(args, i, redactURLListUser)
+		case singleURLArg.MatchString(arg):
+			redactArgValue(args, i, redactURLUser)
+		}
+	}
+}
+
+func redactArgValue(args []string, i int, redact func(string) string) {
+	if flag, value, ok := strings.Cut(args[i], "="); ok {
+		args[i] = flag + "=" + redact(value)
+	} else if i+1 < len(args) {
+		args[i+1] = redact(args[i+1])
+	}
+}
+
+func redactURLUser(raw string) string {
+	if !strings.Contains(raw, "@") {
+		return raw
+	}
+	parseValue := strings.TrimSpace(raw)
+	restoreRandom := false
+	if prefix, ok := strings.CutSuffix(parseValue, ":-1"); ok {
+		parseValue = prefix + ":0"
+		restoreRandom = true
+	}
+	u, err := url.Parse(parseValue)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	// url.String escapes brackets in userinfo, so use
+	// a placeholder here and rewrite it afterward.
+	u.User = url.User("_REDACTED_")
+	if restoreRandom {
+		u.Host = strings.TrimSuffix(u.Host, ":0") + ":-1"
+	}
+	return strings.Replace(u.String(), "_REDACTED_@", "[REDACTED]@", 1)
+}
+
+func redactURLListUser(raw string) string {
+	parts := strings.Split(raw, ",")
+	for i, part := range parts {
+		parts[i] = redactURLUser(part)
+	}
+	return strings.Join(parts, ",")
 }

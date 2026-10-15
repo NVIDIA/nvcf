@@ -56,6 +56,16 @@ var (
 		nvcav1new.SchemeGroupVersion.Group,
 		nvcav1new.SharedStorageRequest)
 
+	// Ephemeral (per-pod emptyDir) model cache fallback (backend "ephemeral").
+	// When no shared cache backend is available, the reconciler sets this
+	// annotation (the init env travels in the miniservice metadata ConfigMap)
+	// so the helm storage webhook injects a model-cache-init init container
+	// that downloads the model into an emptyDir shared with the workload
+	// containers.
+	//nolint:gosec
+	WebhookEphemeralModelCacheInitImageAnnotationKey = fmt.Sprintf("%s/helm-ephemeral-model-cache-init-image",
+		nvcav1new.SchemeGroupVersion.Group)
+
 	storageRequestGVK        = nvcav1new.SchemeGroupVersion.WithKind("StorageRequest")
 	storageRequestV2Beta1GVK = nvcav2beta1.SchemeGroupVersion.WithKind("StorageRequest")
 )
@@ -84,6 +94,22 @@ const (
 
 	// SharedStorageEnabledLabel namespace label
 	SharedStorageEnabledLabel = "nvca.nvcf.nvidia.io/shared-storage-enabled"
+
+	// NVMeshCacheMountOptions are the mount options a read-only model cache
+	// volume on NVMesh requires, and the value the mount option ConfigMap is
+	// seeded with. NVMesh provisions XFS and the read-only volume attaches the
+	// same filesystem as the volume it was populated from, so the kernel
+	// rejects the mount as a duplicate filesystem UUID without nouuid, and
+	// rejects a dirty log on a read-only mount without norecovery.
+	NVMeshCacheMountOptions = "ro,norecovery,nouuid"
+
+	// Ephemeral model cache fallback (per-pod emptyDir). Reuses the model
+	// cache volume name and mount paths (ModelCachePodVolumeName /
+	// ModelCachePod{Model,Resources}MountPath) so workload containers see the
+	// cache at the same paths regardless of backend.
+	EphemeralModelCacheInitContainerName     = "model-cache-init"
+	EphemeralModelCacheConfigDataVolumeName  = "config-data"
+	EphemeralModelCacheConfigSharedMountPath = "/config/shared"
 )
 
 func HasStorageAnnotation(annotations map[string]string) bool {

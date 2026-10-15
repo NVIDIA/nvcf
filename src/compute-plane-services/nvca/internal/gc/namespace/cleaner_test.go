@@ -36,6 +36,7 @@ import (
 
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	bartfake "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -132,9 +133,13 @@ func TestCleaner_collectOrphanedNamespaces(t *testing.T) {
 	nsOrphan := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-orphan", Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "miniservice"}}}
 	nsValid := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-valid", Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "miniservice"}}}
 
+	// The model-cache init namespace carries the same label and has no
+	// ICMSRequest, but must never be collected.
+	nsInit := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: storage.ModelCacheInitNamespace, Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "miniservice"}}}
+
 	// StorageRequest inside nsValid (to be cleaned later)
 	// Create fake clients
-	k8sClient := fake.NewSimpleClientset(nsOrphan, nsValid)
+	k8sClient := fake.NewSimpleClientset(nsOrphan, nsValid, nsInit)
 	nvcaClient := bartfake.NewSimpleClientset()
 
 	icmsGetter := &mockICMSRequestGetter{requests: map[string]*nvcav2beta1.ICMSRequest{"ns-valid": {ObjectMeta: metav1.ObjectMeta{Name: "ns-valid", Namespace: types.DefaultICMSRequestNamespace}}}}

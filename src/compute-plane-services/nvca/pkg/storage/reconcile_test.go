@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
@@ -169,6 +170,129 @@ func TestCleanupDanglingStorageRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRequeueDeletingStorageRequestWithFinalizer(t *testing.T) {
+	deletionTime := metav1.Now()
+	existingResult := reconcile.Result{RequeueAfter: defaultRequeueDelay}
+
+	tests := []struct {
+		name     string
+		res      reconcile.Result
+		err      error
+		owner    *nvcav1new.StorageRequest
+		expected reconcile.Result
+	}{
+		{
+			name: "deleting storage request with finalizer requeues",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: reconcile.Result{RequeueAfter: deletingStorageRequestRequeueDelay},
+		},
+		{
+			name: "deleting storage request without finalizer does not requeue",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+				},
+			},
+			expected: reconcile.Result{},
+		},
+		{
+			name: "active storage request with finalizer does not requeue",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{StorageRequestFinalizer},
+				},
+			},
+			expected: reconcile.Result{},
+		},
+		{
+			name: "existing result is preserved",
+			res:  existingResult,
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: existingResult,
+		},
+		{
+			name: "error result is preserved",
+			res:  existingResult,
+			err:  errors.New("cleanup failed"),
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: existingResult,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := requeueDeletingStorageRequestWithFinalizer(test.res, test.err, test.owner)
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
+func TestRequiresStrictModelCacheCleanupPreservesLegacyEscape(t *testing.T) {
+	legacy := &nvcav1new.StorageRequest{
+		Spec: nvcav1new.StorageRequestSpec{Type: nvcav1new.ModelCacheRequest},
+	}
+	assert.False(t, requiresStrictModelCacheCleanup(legacy))
+
+	durableSelection := &PersistedModelCacheStorageSelection{
+		Version:              ModelCacheStorageSelectionVersion,
+		Workflow:             ModelCacheWorkflowHelm,
+		Mode:                 ModelCacheSelectionDurable,
+		StorageClassName:     DefaultModelCacheStorageClassName,
+		StorageClassUID:      "uid-1",
+		StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+		ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+		Provider:             ModelCacheProviderNVMesh,
+		Provisioner:          NVMeshStorageClassProvisioner,
+		Transition:           ModelCacheTransitionROXReadOnly,
+		RequiredAccessModes:  []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
+	}
+	durableRaw, err := durableSelection.Marshal()
+	require.NoError(t, err)
+	durable := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{ModelCacheStorageSelectionAnnotationKey: durableRaw},
+		},
+		Spec: nvcav1new.StorageRequestSpec{Type: nvcav1new.ModelCacheRequest},
+	}
+	assert.True(t, requiresStrictModelCacheCleanup(durable))
+
+	nonDurable := durable.DeepCopy()
+	selection, err := ParsePersistedModelCacheStorageSelection(
+		nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey])
+	require.NoError(t, err)
+	selection.Mode = ModelCacheSelectionEphemeral
+	selection.BindingName = ""
+	selection.BindingUID = ""
+	selection.EncryptionRequired = false
+	selection.Transition = ModelCacheTransitionDisabled
+	selection.RequiredAccessModes = nil
+	selection.RequiredMountOptions = nil
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw
+	assert.False(t, requiresStrictModelCacheCleanup(nonDurable))
+
+	invalid := durable.DeepCopy()
+	invalid.Annotations[ModelCacheStorageSelectionAnnotationKey] = "{"
+	assert.True(t, requiresStrictModelCacheCleanup(invalid))
 }
 
 func TestDoCleanupSharedStorage(t *testing.T) {
@@ -702,4 +826,46 @@ func (c *mockCleanK8sClient) Delete(ctx context.Context, obj client.Object, opts
 
 func (c *mockCleanK8sClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 	return c.patchFunc(ctx, obj, patch, opts...)
+}
+
+func TestWithModelCacheStorageClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing string
+		option   string
+		want     string
+	}{
+		{name: "name overrides the default", existing: "", option: "custom-sc", want: "custom-sc"},
+		{name: "empty name leaves the value alone", existing: "custom-sc", option: "", want: "custom-sc"},
+		{name: "empty name leaves an unset value unset", existing: "", option: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{modelCacheStorageClass: tt.existing}
+			WithModelCacheStorageClass(tt.option)(r)
+			assert.Equal(t, tt.want, r.modelCacheStorageClass)
+		})
+	}
+}
+
+func TestWithCacheMountOptionsConfigMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing string
+		option   string
+		want     string
+	}{
+		{name: "name overrides the default", existing: "", option: "custom-cm", want: "custom-cm"},
+		{name: "empty name leaves the value alone", existing: "custom-cm", option: "", want: "custom-cm"},
+		{name: "empty name leaves an unset value unset", existing: "", option: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{cacheMountOptionsConfigMap: tt.existing}
+			WithCacheMountOptionsConfigMap(tt.option)(r)
+			assert.Equal(t, tt.want, r.cacheMountOptionsConfigMap)
+		})
+	}
 }

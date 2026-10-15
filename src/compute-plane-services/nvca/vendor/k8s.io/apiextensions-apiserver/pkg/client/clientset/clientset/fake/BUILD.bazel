@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "clientset_generated.go",
+        "doc.go",
+        "register.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake",
+    importpath = "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:apiextensions",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1:apiextensions",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1beta1/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)
