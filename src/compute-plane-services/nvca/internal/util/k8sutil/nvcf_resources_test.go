@@ -300,6 +300,58 @@ func TestSetConfigDefaultResources(t *testing.T) {
 	})
 }
 
+func TestSetConfigDefaultResourcesFromConfig(t *testing.T) {
+	// The deprecated variables belong to the agent's process, so they must not leak in.
+	t.Setenv(utilsCPULimitEnv, "1")
+	t.Setenv(additionalOverheadResourcesEnv, base64.StdEncoding.EncodeToString([]byte(`{"cpu":"3"}`)))
+
+	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			AdditionalResourceOverhead: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			BYOOResources: nvcaconfig.ResourceRequirements{
+				Requests: nvcaconfig.ResourceList{corev1.ResourceCPU: resource.MustParse("300m")},
+			},
+		},
+	}
+	SetConfigDefaultResourcesFromConfig(&cfg)
+
+	quantities := func(rl nvcaconfig.ResourceList) map[corev1.ResourceName]string {
+		out := map[corev1.ResourceName]string{}
+		for rn, rq := range rl {
+			out[rn] = rq.String()
+		}
+		return out
+	}
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "4", corev1.ResourceMemory: "4Gi"},
+		quantities(cfg.Agent.UtilsResources))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "2"},
+		quantities(cfg.Agent.AdditionalResourceOverhead))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
+		quantities(cfg.Agent.SharedStorage.Server.ContainerResources.Limits))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
+		quantities(cfg.Agent.BYOOResources.Limits))
+	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "200m", corev1.ResourceMemory: "256Mi"},
+		quantities(cfg.Agent.BYOOFluentBitResources.Limits))
+}
+
+func TestDeprecatedResourceEnvs(t *testing.T) {
+	assert.ElementsMatch(t, []string{
+		"NVCF_UTILS_CPU_LIMIT",
+		"NVCF_UTILS_MEM_LIMIT",
+		"NVCF_UTILS_EPHEMERAL_STORAGE_LIMIT",
+		"NVCF_ADDITIONAL_OVERHEAD_RESOURCES_B64",
+		"NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64",
+	}, DeprecatedResourceEnvs())
+}
+
+func TestFormatResourceList(t *testing.T) {
+	assert.Equal(t, "", FormatResourceList(nil))
+	assert.Equal(t, "cpu 1500m, memory 2Gi", FormatResourceList(corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("2Gi"),
+		corev1.ResourceCPU:    resource.MustParse("1500m"),
+	}))
+}
+
 func TestGetAdditionalOverheadResources(t *testing.T) {
 	// Save original env var to restore later
 	originalEnv := os.Getenv(additionalOverheadResourcesEnv)

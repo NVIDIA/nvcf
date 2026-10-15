@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	mockicmsservice "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/icmsservice"
@@ -66,6 +67,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	fakenodefeatures "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/fake"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
@@ -3013,4 +3016,63 @@ func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
 		return a.resourceEventWorkerQueues["Pod"].Len() != 1
 	}, 250*time.Millisecond, 10*time.Millisecond,
 		"a closed channel must not enqueue anything further")
+}
+
+func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
+	backendGPUs := []types.BackendGPU{{
+		Name: "A100",
+		InstanceTypes: []types.InstanceType{{
+			Name:            "NCP.GPU.A100",
+			FullName:        "A100-SXM4-40GB",
+			CPU:             resource.MustParse("7910m"),
+			SystemMemory:    resource.MustParse("30Gi"),
+			GPUCount:        1,
+			GPUMemoryPerGPU: resource.MustParse("40Gi"),
+			Storage:         resource.MustParse("100Gi"),
+			NodeCount:       1,
+		}},
+	}}
+	conflict := nvcaerrors.HTTPStatusError(http.StatusConflict, fmt.Errorf("error response from ICMS: 409 Conflict"))
+
+	tests := []struct {
+		name        string
+		registerErr error
+		overheadCPU string
+		wantHint    bool
+	}{
+		{name: "conflict after the overhead removed an instance type", registerErr: conflict, overheadCPU: "7910m", wantHint: true},
+		{name: "conflict while every instance type fits", registerErr: conflict, overheadCPU: "100m"},
+		{
+			name:        "other registration errors",
+			registerErr: nvcaerrors.HTTPStatusError(http.StatusInternalServerError, fmt.Errorf("error response from ICMS")),
+			overheadCPU: "7910m",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bc := &BackendK8sCache{
+				nfClient: &fakenodefeatures.Client{BackendGPUs: backendGPUs},
+				infraOverheadGetter: enforce.InfraOverheadGetterFunc(func(context.Context) (v1.ResourceList, error) {
+					return v1.ResourceList{v1.ResourceCPU: resource.MustParse(tt.overheadCPU)}, nil
+				}),
+				featureFlagFetcher: featureflag.DefaultFetcher,
+				regITCache:         icms.NewRegistrationInstanceTypeCache(),
+			}
+			a := &Agent{
+				AgentOptions:    &AgentOptions{K8sVersion: "1.30.0"},
+				backendk8scache: bc,
+				icmsClient:      &mockICMSClient{registerErr: tt.registerErr},
+			}
+
+			_, err := a.registerWithICMS(newTestContext(), nil)
+			require.Error(t, err)
+			if !tt.wantHint {
+				assert.NotContains(t, err.Error(), "leaves no room")
+				return
+			}
+			assert.ErrorContains(t, err, "409 Conflict; the infrastructure resource overhead of cpu 7910m "+
+				"leaves no room in instance types NCP.GPU.A100_1x")
+			assert.ErrorContains(t, err, "lower byoo.additionalResourceOverhead")
+		})
+	}
 }

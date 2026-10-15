@@ -21,7 +21,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
@@ -77,11 +81,51 @@ var (
 	defaultSharedStorageTaskDataStorageCapacity = resource.MustParse("100Gi")
 )
 
+// SetConfigDefaultResources fills in the agent's default resources, merging the
+// deprecated resource environment variables of the current process.
 func SetConfigDefaultResources(cfg *nvcaconfig.Config) error {
+	utilsResourcesFromEnvs := getUtilsContainerResourcesFromEnvs(os.Exit)
+	// Only override defaults if the shared storage legacy env is set and populated.
+	sharedStorageFFConfig, err := featureflag.ParseHelmSharedStorageSpecFromEnv()
+	if err != nil {
+		return err
+	}
+	setConfigDefaultResources(cfg, utilsResourcesFromEnvs, sharedStorageFFConfig,
+		getAdditionalOverheadResourcesFromEnvs(os.Exit))
+	return nil
+}
+
+// SetConfigDefaultResourcesFromConfig applies the defaults of SetConfigDefaultResources
+// using cfg alone. It skips the deprecated resource environment variables, which the
+// agent reads from its own process, so a caller outside the agent can derive the
+// resources an agent will use from the configuration rendered for it.
+// DeprecatedResourceEnvs lists the variables it does not account for.
+func SetConfigDefaultResourcesFromConfig(cfg *nvcaconfig.Config) {
+	setConfigDefaultResources(cfg, nil, featureflag.SharedStorageSpec{}, nil)
+}
+
+// DeprecatedResourceEnvs returns the deprecated environment variables that
+// SetConfigDefaultResources merges into the agent's resources.
+func DeprecatedResourceEnvs() []string {
+	return []string{
+		utilsCPULimitEnv,
+		utilsMemoryLimitEnv,
+		utilsEphemeralStorageLimitEnv,
+		additionalOverheadResourcesEnv,
+		featureflag.SharedStorageSpecEnv,
+	}
+}
+
+func setConfigDefaultResources(
+	cfg *nvcaconfig.Config,
+	utilsResourcesFromEnvs corev1.ResourceList,
+	sharedStorageFFConfig featureflag.SharedStorageSpec,
+	additionalOverheadFromEnvs corev1.ResourceList,
+) {
 	// Utils resources, merged with legacy env.
 	cfg.Agent.UtilsResources = nvcaconfig.ResourceList(overrideResources(
 		corev1.ResourceList(cfg.Agent.UtilsResources),
-		getUtilsContainerResourcesFromEnvs(os.Exit),
+		utilsResourcesFromEnvs,
 	))
 	if len(cfg.Agent.UtilsResources) == 0 {
 		cfg.Agent.UtilsResources = nvcaconfig.ResourceList(defaultUtilsContainerResources.Limits.DeepCopy())
@@ -93,11 +137,6 @@ func SetConfigDefaultResources(cfg *nvcaconfig.Config) error {
 		}
 	}
 
-	// Only override defaults if the shared storage legacy env is set and populated.
-	sharedStorageFFConfig, err := featureflag.ParseHelmSharedStorageSpecFromEnv()
-	if err != nil {
-		return err
-	}
 	if sc := sharedStorageFFConfig.Server; sc != nil && sc.SMBServerContainerResources != nil {
 		cfg.Agent.SharedStorage.Server.ContainerResources.Requests = nvcaconfig.ResourceList(overrideResources(
 			corev1.ResourceList(cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
@@ -158,10 +197,8 @@ func SetConfigDefaultResources(cfg *nvcaconfig.Config) error {
 	// Additional resource overhead, merged with legacy env.
 	cfg.Agent.AdditionalResourceOverhead = nvcaconfig.ResourceList(overrideResources(
 		corev1.ResourceList(cfg.Agent.AdditionalResourceOverhead),
-		getAdditionalOverheadResourcesFromEnvs(os.Exit),
+		additionalOverheadFromEnvs,
 	))
-
-	return nil
 }
 
 // setDefaultResourceRequirements sets default resource requirements if not configured.
@@ -318,6 +355,16 @@ func GetInfraContainerResourceOverhead(
 
 	rls = append(rls, addlResourceLimits...)
 	return combineResourceLists(rls...)
+}
+
+// FormatResourceList formats rl as "cpu 1500m, memory 2Gi", sorted by resource name.
+func FormatResourceList(rl corev1.ResourceList) string {
+	parts := make([]string, 0, len(rl))
+	for _, rn := range slices.Sorted(maps.Keys(rl)) {
+		q := rl[rn]
+		parts = append(parts, fmt.Sprintf("%s %s", rn, q.String()))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // featureFlagChecker is an interface for checking feature flags.
