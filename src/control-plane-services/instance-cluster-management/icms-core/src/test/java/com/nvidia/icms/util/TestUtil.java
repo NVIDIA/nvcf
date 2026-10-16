@@ -24,7 +24,6 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.cfg.DateTimeFeature;
 import tools.jackson.databind.json.JsonMapper;
 import com.nvidia.icms.factory.InstanceEntityFactory;
-import com.nvidia.icms.inbound.rest.converters.NvcaRequestSchemaToUdtConverter;
 import com.nvidia.icms.inbound.rest.model.ClientRequestDataModel;
 import com.nvidia.icms.inbound.rest.model.CloudHealthStatus;
 import com.nvidia.icms.inbound.rest.model.CloudProvider;
@@ -39,9 +38,7 @@ import com.nvidia.icms.inbound.rest.model.SpotRequestStatusCode;
 import com.nvidia.icms.inbound.rest.model.byoc.AwsQueueAccessInfo;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterProviderEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
-import com.nvidia.icms.inbound.rest.model.byoc.Gpu;
 import com.nvidia.icms.inbound.rest.model.byoc.GpuRequestSchema;
-import com.nvidia.icms.inbound.rest.model.byoc.InstanceType;
 import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeRequestSchema;
 import com.nvidia.icms.inbound.rest.model.byoc.NodeTypeEnum;
 import com.nvidia.icms.inbound.rest.model.cluster.ClusterHeartbeatRequest;
@@ -614,22 +611,17 @@ public class TestUtil {
                 .build();
     }
 
-    public static Set<Gpu> buildGpus() {
-        Gpu gpu = Gpu.builder().name("gpu").instanceTypes(
-                Set.of(InstanceType.builder().name("gpu1").gpuMemory("16G").gpuCount(8)
+    public static Set<GpuUdt> buildGpuUdts() {
+        return Set.of(GpuUdt.builder().name("gpu").instanceTypes(
+                Set.of(InstanceTypeUdt.builder().name("gpu1").gpuMemory("16G").gpuCount(8)
                                .value("xlarge")
                                .systemMemory("16G").cpuCores(8).description("desc").isDefault(true)
                                .build(),
-                       InstanceType.builder().name("gpu2").gpuMemory("16G").gpuCount(8)
+                       InstanceTypeUdt.builder().name("gpu2").gpuMemory("16G").gpuCount(8)
                                .value("ylarge")
                                .systemMemory("16G").cpuCores(8).description("desc")
                                .isDefault(false)
-                               .build())).build();
-        return Set.of(gpu);
-    }
-
-    public static Set<GpuUdt> buildGpuUdts() {
-        return NvcaRequestSchemaToUdtConverter.toGpuUdts(buildGpus());
+                               .build())).build());
     }
 
 
