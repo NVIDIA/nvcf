@@ -461,6 +461,9 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
 	}
+	// The tree's stdio, read before the dump takes the tree away
+	// (restore_stdio.go).
+	stdio := readStdio(procBase, targetHostPID)
 	var out []byte
 	runErr := freeze()
 	if runErr == nil && o.ThawTarget != nil {
@@ -540,6 +543,10 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	if moveErr != nil {
 		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
+	}
+	if err := writeStdioMarker(checkpointDir, stdio); err != nil {
+		// The restore then logs to a pipe nobody reads; the workload is fine.
+		log.WithError(err).Warn("criu-v2: could not record the workload's stdio; its restore will not log to the new pod")
 	}
 	if gsOn {
 		if leaveRunning {

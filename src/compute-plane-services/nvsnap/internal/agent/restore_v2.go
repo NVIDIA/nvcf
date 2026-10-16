@@ -29,10 +29,8 @@ limitations under the License.
 // during the restore itself (proven by the in-container PoC: inference works
 // immediately after criu restore returns).
 //
-// Restored stdio: the PoC-convention source manifest launches the
-// workload via setsid with stdio redirected to a file in the container
-// rootfs, so CRIU restores those fds as plain files — the placeholder's
-// pid1 tails that file to surface logs via kubelet.
+// Restored stdio: the workload's stdout and stderr pipes are replaced with
+// the placeholder's own, so it logs to the new pod (restore_stdio.go).
 
 package agent
 
@@ -203,11 +201,32 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				stdioInheritFDs(pidnsCapture)...)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
+	// An in-namespace restore: the restored tree logs to the placeholder's
+	// stdout and stderr (restore_stdio.go). nsenter passes the extra files
+	// on to criu.
+	var stdioFiles []*os.File
+	if !pidns {
+		pipes, serr := readStdioMarker(checkpointDir)
+		if serr == nil {
+			var extra []string
+			stdioFiles, extra, serr = placeholderStdio(procBase, hostPID, pipes)
+			args = append(args, extra...)
+		}
+		if serr != nil {
+			log.WithError(serr).Warn("criu-v2: the restored workload will not log to the new pod")
+		}
+		defer func() {
+			for _, f := range stdioFiles {
+				_ = f.Close()
+			}
+		}()
+	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
 	cmd := exec.CommandContext(rctx, "nsenter", args...)
+	cmd.ExtraFiles = stdioFiles
 	// criu forks the restorer and the restored tree below it. A failed
 	// restore has been seen leave criu waiting on its restorer tasks for
 	// good ("Restoring FAILED" logged, process alive 20 min later,
