@@ -40,6 +40,7 @@ use stargate::routing::{
     RoutedClusterSnapshot, RoutingTargetKey, apply_reservation, queue_time_estimate_ms_for_priority,
 };
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
+use stargate_protocol::common::has_available_engine_slot;
 
 use crate::backend::Backend;
 use crate::config::{PolicyConfig, SimConfig};
@@ -423,7 +424,16 @@ impl Simulation<'_> {
         let decision = self.stargates[stargate]
             .load_balancer
             .decide(&lb_request, &candidates);
-        self.requests[request].record.route_attempts += 1;
+        let view_had_free_slot = candidates.iter().any(|candidate| {
+            !excluded.contains(&candidate.cluster_id)
+                && has_available_engine_slot(
+                    candidate.stats.num_running_queries,
+                    candidate.stats.max_engine_concurrency,
+                )
+        });
+        let record = &mut self.requests[request].record;
+        record.route_attempts += 1;
+        record.last_view_had_free_slot = view_had_free_slot;
 
         match decision {
             LoadBalancerDecision::Selected(choice) => {

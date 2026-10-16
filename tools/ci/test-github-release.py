@@ -188,6 +188,12 @@ class GithubReleaseTest(unittest.TestCase):
             )
         return created, output.getvalue()
 
+    def test_upstream_dependencies_have_no_derivative_release_registration(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        for service in metadata["services"]:
+            self.assertNotEqual(service["id"], "nonroot-images")
+            self.assertNotEqual(service["path"], "infra/nonroot-images")
+
     def test_java_ci_components_match_registered_subprojects(self):
         root = SCRIPT_PATH.parents[2]
         components = self.github_release.java_ci_components(root)

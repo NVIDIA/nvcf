@@ -14,12 +14,12 @@ name: openbao-migrations
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release-migrations/openbao/v*"]
     paths:
       - 'migrations/openbao/**'
       - '.github/workflows/openbao-migrations.yml'
   pull_request:
-    branches: [main]
+    branches: [main, "release-migrations/openbao/v*"]
     paths:
       - 'migrations/openbao/**'
       - '.github/workflows/openbao-migrations.yml'
@@ -59,6 +59,7 @@ jobs:
           context: migrations/openbao
           file: migrations/openbao/Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: GIT_SHA=${{ github.sha }}
           push: false
           # Multi-platform builds cannot load into the local docker daemon.
           # cacheonly keeps this job build-only without exporting or pushing.
@@ -71,11 +72,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test Go binary security baseline
+        run: migrations/openbao/tests/verify-go-security-test.sh
+
       - name: Test dependency version comparisons
         run: migrations/openbao/tests/verify-openbao-version-test.sh
 
       - name: Test kubectl source-build contract
         run: migrations/openbao/tests/verify-kubectl-build-test.sh
+
+      - name: Test admin-issuer grant is gated
+        run: migrations/openbao/tests/admin-issuer-gate-test.sh
 
       - name: Run kv write retry test
         run: migrations/openbao/tests/kv-write-retry-test.sh

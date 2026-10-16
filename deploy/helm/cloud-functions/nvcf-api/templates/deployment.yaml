@@ -39,7 +39,7 @@ spec:
         {{- if .Values.api.env }}
         checksum/config-env: {{ toYaml .Values.api.env | sha256sum }}
         {{- end }}
-        checksum/vault-agent-template: {{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | sha256sum }}
+        checksum/vault-agent-template: {{ include "nvcf-api.vaultAgentTemplate" . | sha256sum }}
       labels:
         {{- include "nvcf-api.selectorLabels" . | nindent 8 }}
     spec:

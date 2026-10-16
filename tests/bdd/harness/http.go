@@ -28,10 +28,11 @@ import (
 
 const httpTimeout = 30 * time.Second
 
-// HTTPResponse is the status code and body of one HTTP exchange.
+// HTTPResponse records status, body, and duration through the last body byte.
 type HTTPResponse struct {
-	Status int
-	Body   string
+	Status  int
+	Body    string
+	Elapsed time.Duration
 }
 
 // HTTPClient sends one HTTP request. Header values may carry credentials,
@@ -48,16 +49,21 @@ type netHTTPClient struct {
 // followed so a test can assert on a 301 directly.
 func NewHTTPClient() HTTPClient {
 	return &netHTTPClient{client: &http.Client{
-		Timeout: httpTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}}
 }
 
-// Do sends the request and returns the status and full body. The error text
-// never includes header values.
+// Do sends the request and reads the full body within the context deadline,
+// or 30 seconds if no deadline is set. Errors never include header values.
 func (c *netHTTPClient) Do(ctx context.Context, method, url string, headers map[string]string, body string) (HTTPResponse, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, httpTimeout)
+		defer cancel()
+	}
+	started := time.Now()
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
@@ -78,5 +84,5 @@ func (c *netHTTPClient) Do(ctx context.Context, method, url string, headers map[
 	if err != nil {
 		return HTTPResponse{}, fmt.Errorf("read %s %s response: %w", method, url, err)
 	}
-	return HTTPResponse{Status: resp.StatusCode, Body: string(data)}, nil
+	return HTTPResponse{Status: resp.StatusCode, Body: string(data), Elapsed: time.Since(started)}, nil
 }

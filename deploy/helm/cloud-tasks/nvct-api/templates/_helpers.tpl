@@ -77,6 +77,27 @@ to avoid collisions across installs in the same namespace). Override via
 {{- end -}}
 
 {{/*
+Stack release tooling skips "${...}" values, so resolve each sidecar image as nvcf-api.sidecarReleaseArtifacts does.
+Emits nothing unless both NVCT_SIDECARS_HOSTNAME and NVCT_SIDECARS_REPOSITORY are set.
+*/}}
+{{- define "nvct-api.sidecarReleaseArtifacts" -}}
+{{- $env := .Values.nvctApi.env | default dict -}}
+{{- $hostname := $env.NVCT_SIDECARS_HOSTNAME | default "" -}}
+{{- $repository := $env.NVCT_SIDECARS_REPOSITORY | default "" -}}
+{{- $remoteConfig := .Values.nvctApi.remoteConfig | default dict -}}
+{{- $configData := $remoteConfig.configData | default dict -}}
+{{- $nvct := $configData.nvct | default dict -}}
+{{- $sidecars := $nvct.sidecars | default dict -}}
+{{- if and $hostname $repository -}}
+{{- range $key, $value := $sidecars }}
+{{- if and (kindIs "string" $value) (contains "${nvct.sidecars." $value) }}
+release-artifact-{{ $key }}{{ if not (hasSuffix "-image" $key) }}-image{{ end }}: {{ $value | replace "${nvct.sidecars.hostname}" $hostname | replace "${nvct.sidecars.repository}" $repository | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Remote config Role/RoleBinding name. Release-scoped via the fullname helper.
 */}}
 {{- define "nvct-api.remoteConfigReaderName" -}}

@@ -186,7 +186,6 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 
 func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testing.T) {
 	want := []string{
-		"-InfraResourceOverhead",
 		"-EnforceContainerFunctionResourceLimits",
 		"-EnforceContainerTaskResourceLimits",
 	}
@@ -222,6 +221,28 @@ func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testin
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Helm resource enforcement keeps NVCA's per-instance infra overhead on, so
+// the local fixtures shrink the utils reservation to keep NCP.GPU.H100_1x
+// registrable on hosts with about 8 CPUs.
+func TestComputePlaneLocalBDDFixturesReserveSmallUtilsContainer(t *testing.T) {
+	want := map[string]string{"cpu": "1", "memory": "2Gi"}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixture := loadYAMLMap(t, fixturePath)
+			for name, quantity := range want {
+				got, exists := nestedYAMLValue(fixture, "global", "nvcaOperator", "utils", "resources", name)
+				if !exists || got != quantity {
+					t.Errorf("global.nvcaOperator.utils.resources.%s = %#v (exists %t), want string %q", name, got, exists, quantity)
+				}
 			}
 		})
 	}

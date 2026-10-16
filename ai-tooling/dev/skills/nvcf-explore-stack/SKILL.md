@@ -101,6 +101,7 @@ After exploring, suggest the next skill when applicable:
 - `nvcf-self-managed-cli` for `nvcf-cli` usage against an installed stack
 - `docs/AGENTS.md`, `fern/navigation.yml` (current tabs), and `fern/docs.yml`
   (release selector and archives) for routing the user to a published docs page
-- `docs/dev/docs-editions.md` for preparing and registering a qualified docs
-  release on a protected `docs/releases/X.Y.Z` branch
+- `docs/dev/docs-editions.md` for legacy immutable docs editions
+- `docs/dev/umbrella-releases.md` for qualified product bundles and maintained
+  `docs/versions/X.Y.Z` sources selected by approved commit
 - `tools/ci/check-doc-version-sync` for keeping the documentation manifest in sync with the docs version catalog
