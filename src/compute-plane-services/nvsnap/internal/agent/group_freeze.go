@@ -118,10 +118,17 @@ func writePostDumpScript(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("post-dump barrier: %w", err)
 	}
-	steps := int(postDumpWait / (50 * time.Millisecond))
-	script := fmt.Sprintf(`#!/bin/sh
-[ "$CRTOOLS_SCRIPT_ACTION" = post-dump ] || exit 0
-D=%q
+	path := filepath.Join(dir, "post-dump.sh")
+	if err := writeDumpActionScript(path, "", dir); err != nil {
+		return "", fmt.Errorf("post-dump barrier: %w", err)
+	}
+	return path, nil
+}
+
+// postDumpBarrier is the action script's wait at a group's post-dump
+// barrier in dir.
+func postDumpBarrier(dir string) string {
+	return fmt.Sprintf(`D=%q
 : > "$D/reached"
 i=0
 while [ ! -e "$D/go" ]; do
@@ -129,12 +136,7 @@ while [ ! -e "$D/go" ]; do
 	i=$((i+1)); [ "$i" -gt %d ] && exit 1
 	sleep 0.05
 done
-`, dir, steps)
-	path := filepath.Join(dir, "post-dump.sh")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		return "", fmt.Errorf("post-dump barrier: %w", err)
-	}
-	return path, nil
+`, dir, int(postDumpWait/(50*time.Millisecond)))
 }
 
 // markPostDumpReached reports a member that has no post-dump hook as past

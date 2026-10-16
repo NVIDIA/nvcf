@@ -282,6 +282,11 @@ type dumpV2Opts struct {
 	// barrier: criu's post-dump hook waits there, the tree still stopped,
 	// until every member is dumped (group_freeze.go).
 	PostDumpDir string
+	// Snapshot copies what a restore puts back beside the dump (the replay
+	// mounts). dumpV2 runs it from criu's post-dump hook, the tree stopped,
+	// so the copy matches the dumped memory (dump_snapshot.go); a dump whose
+	// snapshot was not taken fails.
+	Snapshot func() error
 }
 
 func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
@@ -403,18 +408,45 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	if nsPID == 1 {
 		hooks := pidnsDumpHooks{Before: freeze, FreezeCgroup: o.HeldCgroup}
+		// criu runs from the agent here: its action script sees the
+		// agent's paths.
+		var snapDir string
+		if o.Snapshot != nil {
+			snapDir = filepath.Join(checkpointDir, dumpHookDir)
+			if err := os.MkdirAll(snapDir, 0o755); err != nil {
+				return nil, fmt.Errorf("dump snapshot hook: %w", err)
+			}
+			defer func() { _ = os.RemoveAll(snapDir) }()
+		}
 		if o.PostDumpDir != "" {
-			script, err := writePostDumpScript(o.PostDumpDir)
-			if err != nil {
-				return nil, err
+			if err := os.MkdirAll(o.PostDumpDir, 0o755); err != nil {
+				return nil, fmt.Errorf("post-dump barrier: %w", err)
 			}
 			defer func() { _ = os.RemoveAll(o.PostDumpDir) }()
+		}
+		if snapDir != "" || o.PostDumpDir != "" {
+			dir := snapDir
+			if dir == "" {
+				dir = o.PostDumpDir
+			}
+			script := filepath.Join(dir, "action.sh")
+			if err := writeDumpActionScript(script, snapDir, o.PostDumpDir); err != nil {
+				return nil, fmt.Errorf("dump action script: %w", err)
+			}
 			hooks.ActionScript = script
+		}
+		stopSnapshot := func() (bool, error) { return true, nil }
+		if snapDir != "" {
+			stopSnapshot = serveSnapshot(ctx, snapDir, o.Snapshot)
 		}
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
 		_ = os.RemoveAll(imgsDir)
-		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, hooks, log); err != nil {
+		err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, hooks, log)
+		if taken, serr := stopSnapshot(); err == nil && !taken {
+			err = snapshotNotTaken(serr)
+		}
+		if err != nil {
 			if gsOn {
 				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
@@ -448,6 +480,22 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
 	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"), a.ghostLimit())
+	// criu runs in the container's mount namespace here: its action script
+	// and the snapshot request live in the images dir, which the agent sees
+	// through the container's root while the tree runs.
+	stopSnapshot := func() (bool, error) { return true, nil }
+	if o.Snapshot != nil {
+		hookHost := filepath.Join(imgsDir, dumpHookDir)
+		hookIn := v2ImagesDirInContainer + "/" + dumpHookDir
+		if err := os.MkdirAll(hookHost, 0o755); err != nil {
+			return nil, fmt.Errorf("dump snapshot hook: %w", err)
+		}
+		if err := writeDumpActionScript(filepath.Join(hookHost, "action.sh"), hookIn, ""); err != nil {
+			return nil, fmt.Errorf("dump action script: %w", err)
+		}
+		args = append(args, "--action-script", hookIn+"/action.sh")
+		stopSnapshot = serveSnapshot(ctx, hookHost, o.Snapshot)
+	}
 	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -479,6 +527,9 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			markPostDumpReached(o.PostDumpDir, log)
 		}
 	}
+	if taken, serr := stopSnapshot(); runErr == nil && !taken {
+		runErr = snapshotNotTaken(serr)
+	}
 
 	// 6. Move images host-side into the standard checkpoint dir. After a
 	// non-leave-running dump the target tree is gone and /proc/<pid>/root
@@ -507,6 +558,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	if _, statErr := os.Stat(imgsDir); statErr != nil {
 		imgsHost = filepath.Join(sourceUpperdir, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	}
+	_ = os.RemoveAll(filepath.Join(imgsHost, dumpHookDir))
 	moveErr := moveDirContents(imgsHost, checkpointDir)
 	// Only clear the mirror once its contents are safely moved. Removing it
 	// unconditionally destroys dump.log on any move failure, which is exactly

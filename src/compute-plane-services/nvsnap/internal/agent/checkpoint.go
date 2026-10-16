@@ -692,10 +692,6 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		log.Warn("Could not determine pod IP - loopback alias won't be set on restore")
 	}
 
-	// Step 4.8: Capture pipe IDs for stdout/stderr (MUST be before CRIU dump)
-	// These are needed for InheritFd during restore to replace broken pipes
-	// Step 4.9: Capture temp directories and files as late as possible
-	// (some frameworks write temp files after startup)
 	// Step 4.95: Capture replay-mount snapshots for cross-pod restore.
 	// For each mountpoint on the configured allowlist (default: /dev/shm),
 	// tar its contents into <checkpointDir>/mounts/<sanitized>.tar so
@@ -704,10 +700,14 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// inter-rank SHM segments only exist in the source pod's tmpfs.
 	// See docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 	//
-	// Timing: AFTER cuda Lock + cleanupSharedMemory + quiesce — no GPU
-	// process is writing into the snapshot path at this point. Per-mount
+	// Timing: the dump takes them from criu's post-dump hook, the tree
+	// stopped, so they match the dumped memory (dump_snapshot.go). Per-mount
 	// failures are logged and skipped (warn-and-continue, Q6 in design).
-	replayMounts := a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
+	var replayMounts []ReplayMount
+	snapshot := func() error {
+		replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
+		return nil
+	}
 
 	// Step 4.9: drop external TCP_ESTABLISHED sockets before CRIU dump.
 	//
@@ -742,7 +742,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// legacy path — the artifact contract is identical.
 	_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-	dopts := dumpV2Opts{LeaveRunning: req.LeaveRunning, FabricSession: req.GPUShareFabricSession}
+	dopts := dumpV2Opts{LeaveRunning: req.LeaveRunning, FabricSession: req.GPUShareFabricSession, Snapshot: snapshot}
 	if req.GroupFreeze {
 		session := req.GPUShareFabricSession
 		if session == "" {
