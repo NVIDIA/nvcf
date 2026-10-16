@@ -460,11 +460,22 @@ This value changes three releases:
 
 | Release | Effect in `token` mode |
 | --- | --- |
-| `nats` | The auth callout configuration gives the `APP` account a `webhook` plugin that calls the NVCF API at `http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth`. NKey logins and NVCA's login are unchanged |
+| `nats` | The auth callout configuration gives the `APP` account a `webhook` plugin that sends worker tokens to the NVCF API's webhook URL. NKey logins and NVCA's login are unchanged |
 | `api` | The API's secrets leave out `worker-nkey-seed`, so the API stops sending `NKEY_SEED` to workers. The API keeps its own NKey for its own connection |
-| `nats-auth-callout-service` | Restarts, because it reads its plugin configuration only at start-up |
+| `nats-auth-callout-service` | Restarts whenever the mode or the webhook URL changes, because it reads its plugin configuration only at start-up |
 
-Any value other than `nkey` or `token` fails the deployment with `nats.workerAuth must be nkey or token`.
+The auth callout sends worker tokens to the NVCF API's in-cluster Service, `http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth`. If the API runs elsewhere, set the URL:
+
+```yaml
+# environments/<environment-name>.yaml
+nats:
+  workerAuth: token
+  authCallout:
+    workerTokenAuth:
+      webhookUrl: http://<api-service>.<api-namespace>.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
+```
+
+Any value other than `nkey` or `token` fails the deployment with `nats.workerAuth must be nkey or token`. In `token` mode, an empty webhook URL fails it too.
 
 ### Switching an existing install
 
@@ -483,7 +494,20 @@ kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-serv
   --tail=-1 --prefix | grep 'Authentication successful' | grep 'worker-'
 ```
 
-No lines after new workers have started means they aren't using their tokens. Check the worker-utils version first.
+If new workers don't appear there, look for refused logins:
+
+```bash
+kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-service \
+  --tail=-1 --prefix | grep -E 'Authentication (failed|denied)'
+```
+
+| Log shows | Cause |
+| --- | --- |
+| `plugin webhook not found for account Worker` | The worker asked for the account `Worker`, not `APP`. Its worker-utils doesn't read `NVCF_NATS_ACCOUNT`, or the NVCF API doesn't send `APP` |
+| `Authentication denied`, with `status_code` 401 or 403 | The NVCF API refused the worker's token or account. Check the API's logs |
+| `webhook request failed` | The auth callout can't reach the NVCF API at the webhook URL |
+
+If the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability
 

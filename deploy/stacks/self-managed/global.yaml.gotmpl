@@ -227,6 +227,10 @@ topologySpreadConstraints:
 {{- if not (has $natsWorkerAuth (list "nkey" "token")) }}
 {{- fail (printf "nats.workerAuth must be nkey or token, got %q" $natsWorkerAuth) }}
 {{- end }}
+{{- $natsWorkerWebhookUrl := dig "nats" "authCallout" "workerTokenAuth" "webhookUrl" "" .Values | default "" | toString }}
+{{- if and (eq $natsWorkerAuth "token") (not $natsWorkerWebhookUrl) }}
+{{- fail "nats.authCallout.workerTokenAuth.webhookUrl is required when nats.workerAuth is token" }}
+{{- end }}
 {{- range $key := list "affinity" "topologySpreadConstraints" }}
 {{- $byClass := dig "global" $key dict $.Values }}
 {{- if not (kindIs "map" $byClass) }}
@@ -514,6 +518,7 @@ nats:
   authCallout:
     workerTokenAuth:
       enabled: true
+      webhookUrl: {{ $natsWorkerWebhookUrl | quote }}
   {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}

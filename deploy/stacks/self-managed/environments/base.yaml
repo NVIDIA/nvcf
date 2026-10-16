@@ -232,6 +232,11 @@ nats:
   # Switching an existing install: see "Worker NATS Authentication" in
   # docs/self-managed/control-plane-operations.md.
   workerAuth: nkey
+  authCallout:
+    workerTokenAuth:
+      # token mode: the NVCF API endpoint the NATS auth callout sends worker
+      # tokens to. Changing it restarts the auth callout.
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:

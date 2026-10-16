@@ -5,9 +5,10 @@
 # Test that nats.workerAuth in environments/<env>.yaml reaches the three releases
 # that act on it: nats, which routes worker tokens to the NVCF API webhook; api,
 # which stops rendering worker-nkey-seed so workers get no NKEY_SEED; and
-# nats-auth-callout-service, which must restart to load the new plugin config.
-# The api values are rendered through the local nvcf-api chart, so the vault
-# agent template the chart builds from them is covered too.
+# nats-auth-callout-service, which must restart to load the new plugin config
+# whenever the mode or the webhook URL changes. The api values are rendered
+# through the local nvcf-api chart, so the vault agent template the chart builds
+# from them is covered too.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -85,6 +86,22 @@ assert_valid_json() {
     fail "$2: the vault agent template is not valid JSON"
 }
 
+expect_render_failure() {
+  local name="$1"
+  local message="$2"
+  if HELMFILE_ENV="$environment_name" HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile "${helmfile_common[@]}" --selector name=api write-values \
+    --output-file-template "$work_dir/$name-api.yaml" >/dev/null 2>"$work_dir/$name.log"; then
+    fail "$name: rendered without an error"
+  fi
+  grep -qF "$message" "$work_dir/$name.log" ||
+    fail "$name: the render failed for another reason: $(tail -3 "$work_dir/$name.log")"
+}
+
+# The default is the NVCF API's in-cluster Service, from environments/base.yaml.
+default_webhook_url=http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
+custom_webhook_url=http://nvcf-api.example.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
+
 base_env='global:
   image:
     registry: nvcr.io
@@ -103,8 +120,10 @@ grep -q '"worker-nkey-seed"' "$work_dir/nkey-secrets.json.tmpl" ||
   fail "nkey: the vault agent template has no worker-nkey-seed"
 assert_valid_json "$work_dir/nkey-secrets.json.tmpl" nkey
 write_values nats-auth-callout-service "$work_dir/nkey-callout.yaml"
-test "$(yq -r '.podAnnotations."nvcf.nvidia.com/nats-worker-auth" // "unset"' "$work_dir/nkey-callout.yaml")" = unset ||
-  fail "nkey: the auth callout carries the worker auth annotation"
+for annotation in nats-worker-auth nats-worker-auth-webhook-url; do
+  test "$(yq -r ".podAnnotations.\"nvcf.nvidia.com/$annotation\" // \"unset\"" "$work_dir/nkey-callout.yaml")" = unset ||
+    fail "nkey: the auth callout carries the $annotation annotation"
+done
 
 # 2. token: the auth callout routes worker tokens to the API, and the API sends no NKEY_SEED.
 write_env <<EOF
@@ -116,6 +135,8 @@ write_values nats "$work_dir/token-nats.yaml"
 write_values api "$work_dir/token-api.yaml"
 test "$(yq -r '.nats.authCallout.workerTokenAuth.enabled' "$work_dir/token-nats.yaml")" = true ||
   fail "token: nats.authCallout.workerTokenAuth.enabled is not true"
+test "$(yq -r '.nats.authCallout.workerTokenAuth.webhookUrl' "$work_dir/token-nats.yaml")" = "$default_webhook_url" ||
+  fail "token: the nats release does not get the default webhook URL"
 test "$(yq -r '.api.workerNkeySeed.enabled' "$work_dir/token-api.yaml")" = false ||
   fail "token: api.workerNkeySeed.enabled is not false"
 vault_agent_template "$work_dir/token-api.yaml" "$work_dir/token-secrets.json.tmpl"
@@ -126,19 +147,43 @@ assert_valid_json "$work_dir/token-secrets.json.tmpl" token
 write_values nats-auth-callout-service "$work_dir/token-callout.yaml"
 test "$(yq -r '.podAnnotations."nvcf.nvidia.com/nats-worker-auth" // "unset"' "$work_dir/token-callout.yaml")" = token ||
   fail "token: the auth callout has no worker auth annotation, so it would keep its old plugin config"
+test "$(yq -r '.podAnnotations."nvcf.nvidia.com/nats-worker-auth-webhook-url" // "unset"' "$work_dir/token-callout.yaml")" = "$default_webhook_url" ||
+  fail "token: the auth callout's annotation does not carry the webhook URL"
 
-# 3. Anything else fails the render instead of silently falling back to nkey.
+# 3. A new webhook URL reaches the nats release and changes the auth callout's pod
+# template, so the auth callout restarts and loads it.
+write_env <<EOF
+$base_env
+nats:
+  workerAuth: token
+  authCallout:
+    workerTokenAuth:
+      webhookUrl: $custom_webhook_url
+EOF
+write_values nats "$work_dir/custom-url-nats.yaml"
+write_values nats-auth-callout-service "$work_dir/custom-url-callout.yaml"
+test "$(yq -r '.nats.authCallout.workerTokenAuth.webhookUrl' "$work_dir/custom-url-nats.yaml")" = "$custom_webhook_url" ||
+  fail "custom URL: the nats release does not get the configured webhook URL"
+test "$(yq -r '.podAnnotations."nvcf.nvidia.com/nats-worker-auth-webhook-url" // "unset"' "$work_dir/custom-url-callout.yaml")" = "$custom_webhook_url" ||
+  fail "custom URL: the auth callout's pod template does not change with the webhook URL"
+
+# 4. token with no webhook URL fails the render.
+write_env <<EOF
+$base_env
+nats:
+  workerAuth: token
+  authCallout:
+    workerTokenAuth:
+      webhookUrl: ""
+EOF
+expect_render_failure empty-url 'nats.authCallout.workerTokenAuth.webhookUrl is required when nats.workerAuth is token'
+
+# 5. Any other mode fails the render instead of silently falling back to nkey.
 write_env <<EOF
 $base_env
 nats:
   workerAuth: oauth
 EOF
-if HELMFILE_ENV="$environment_name" HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
-  helmfile "${helmfile_common[@]}" --selector name=api write-values \
-  --output-file-template "$work_dir/invalid-api.yaml" >/dev/null 2>"$work_dir/invalid.log"; then
-  fail "invalid: nats.workerAuth: oauth rendered without an error"
-fi
-grep -q 'nats.workerAuth must be nkey or token' "$work_dir/invalid.log" ||
-  fail "invalid: the render failed for another reason: $(tail -3 "$work_dir/invalid.log")"
+expect_render_failure invalid 'nats.workerAuth must be nkey or token'
 
 echo "nats-worker-auth-wiring: ok"
