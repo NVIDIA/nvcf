@@ -320,6 +320,28 @@ func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			name:       "responses rejects x-api-key without bearer",
+			path:       "/v1/responses",
+			body:       `{"model":"fn-alpha/company-name/model-name","input":"hello"}`,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "embeddings rejects x-api-key without bearer",
+			path:       "/v1/embeddings",
+			body:       `{"model":"fn-alpha/company-name/model-name","input":"hello"}`,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "chat completions with bearer carries no request-id",
+			path:          "/v1/chat/completions",
+			body:          `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`,
+			authorization: "Bearer sk-bearer",
+			wantStatus:    http.StatusNoContent,
+			wantToken:     "sk-bearer",
+		},
+		{
 			name:          "messages prefers bearer over x-api-key",
 			path:          messagesEndpointPath,
 			body:          `{"model":"fn-alpha/company-name/model-name","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
@@ -378,6 +400,9 @@ func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
 			}
 			if authClient.authorizeToken != tc.wantToken {
 				t.Fatalf("authorized token = %q, want %q", authClient.authorizeToken, tc.wantToken)
+			}
+			if got := rec.Header().Get(headerMessagesRequestID); tc.path != messagesEndpointPath && got != "" {
+				t.Fatalf("request-id = %q on %s, want none outside Messages", got, tc.path)
 			}
 		})
 	}

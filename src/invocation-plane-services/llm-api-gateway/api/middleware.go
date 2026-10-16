@@ -67,6 +67,8 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 
 			requestID := requestIDHeader(gc.Request().Header)
 			gc.store.Set(contextKeyRequestID, requestID)
+			// The error handler receives the original echo context.
+			ec.Set(contextKeyRequestID, requestID)
 
 			parentCtx := otel.GetTextMapPropagator().Extract(
 				gc.UserContext(),
@@ -87,7 +89,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				routingKey = requestRoutingKey(gc.Request())
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := callerCredential(gc.Request().Header, routePath)
+			bearerToken := callerCredential(gc.Request())
 			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
 
 			span.SetAttributes(
@@ -107,10 +109,11 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			gc.SetRequest(gc.Request().WithContext(ctx))
 			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
-			if gc.Request().URL.Path == messagesEndpointPath {
+			if isMessagesRequest(gc.Request()) {
 				// Runs as headers are written, after backend headers are
-				// copied, so the NVCF ID replaces any backend request-id.
+				// copied, so the NVCF ID replaces any backend request ID.
 				gc.Response().Before(func() {
+					gc.Response().Header().Set(HeaderRequestID, requestID)
 					gc.Response().Header().Set(headerMessagesRequestID, requestID)
 				})
 			}
@@ -281,14 +284,21 @@ const headerAPIKey = "X-Api-Key"
 // Authorization, when present, is authoritative on every route. Messages also
 // accepts X-Api-Key so Anthropic SDK clients work with their default settings.
 // The Stargate provider strips both headers from outbound Messages requests.
-func callerCredential(header http.Header, routePath string) string {
-	if len(header.Values(echo.HeaderAuthorization)) > 0 {
-		return bearerTokenFromHeader(header.Get(echo.HeaderAuthorization))
+func callerCredential(r *http.Request) string {
+	if len(r.Header.Values(echo.HeaderAuthorization)) > 0 {
+		return bearerTokenFromHeader(r.Header.Get(echo.HeaderAuthorization))
 	}
-	if routePath == messagesEndpointPath {
-		return header.Get(headerAPIKey)
+	if isMessagesRequest(r) {
+		return r.Header.Get(headerAPIKey)
 	}
 	return ""
+}
+
+// isMessagesRequest reports whether r targets the Anthropic Messages route.
+// Credential selection, request-id, the 401 message, and the error envelope
+// all use it so they stay in step.
+func isMessagesRequest(r *http.Request) bool {
+	return r.URL.Path == messagesEndpointPath
 }
 
 func bearerTokenFromHeader(value string) string {

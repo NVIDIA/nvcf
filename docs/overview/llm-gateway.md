@@ -259,10 +259,12 @@ The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `X-Request-Id` from its request context and sends it to the backend. Every
 Messages response, including gateway errors, carries the same ID in the
 Anthropic `request-id` header, which Anthropic SDKs report as the request ID.
-NVCF replaces any `request-id` the backend returns. Gateway error bodies also
-include it as `request_id`. Use this ID to find the request in gateway logs.
-The gateway requests identity response encoding so usage can be observed
-without decoding or changing the response. Send the NVCF API key in
+NVCF replaces any `request-id` or `X-Request-Id` the backend returns. Error
+bodies the gateway writes also include it as `request_id`; native Anthropic
+error bodies relayed from the backend keep the backend's own `request_id`. Use
+this ID to find the request in gateway logs. The gateway requests identity
+response encoding so usage can be observed without decoding or changing the
+response. Send the NVCF API key in
 `Authorization: Bearer` or in `x-api-key`, the Anthropic SDK default. When a
 request carries an `Authorization` header, the gateway uses it and ignores
 `x-api-key`. Other endpoints accept only `Authorization: Bearer`. Credentials,

@@ -62,7 +62,7 @@ func NewNVCFAuthMiddleware(client InvocationAuthClient) echo.MiddlewareFunc {
 
 			bearerToken := reqCtx.BearerToken
 			if bearerToken == "" {
-				if gc.Request().URL.Path == messagesEndpointPath {
+				if isMessagesRequest(gc.Request()) {
 					return echo.NewHTTPError(http.StatusUnauthorized, "authorization required: send the API key in Authorization: Bearer or x-api-key")
 				}
 				return echo.NewHTTPError(http.StatusUnauthorized, "bearer authorization is required")

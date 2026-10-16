@@ -82,7 +82,7 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 		// The handler always writes an uncompressed body; drop any encoding
 		// copied from the upstream response.
 		c.Response().Header().Del(echo.HeaderContentEncoding)
-		anthropic := c.Request().URL.Path == messagesEndpointPath
+		anthropic := isMessagesRequest(c.Request())
 		var upstream *provider.UpstreamError
 		if errors.As(err, &upstream) && upstream.RouterCode == "" {
 			native := isOpenAIErrorBody
@@ -101,7 +101,7 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 			_ = c.JSON(status, anthropicErrorResponse{
 				Type:      "error",
 				Error:     anthropicError{Type: anthropicErrorType(status), Message: message},
-				RequestID: c.Response().Header().Get(HeaderRequestID),
+				RequestID: errorRequestID(c),
 			})
 			return
 		}
@@ -198,4 +198,13 @@ func proxyUpstreamError(resp *provider.ProxyResponse) error {
 		_ = resp.Body.Close()
 	}
 	return provider.NewUpstreamHTTPError(resp.StatusCode, resp.Header, body)
+}
+
+// errorRequestID returns the NVCF request ID. A relayed backend response can
+// overwrite the X-Request-Id response header, so the context value wins.
+func errorRequestID(c echo.Context) string {
+	if id, ok := c.Get(contextKeyRequestID).(string); ok && id != "" {
+		return id
+	}
+	return c.Response().Header().Get(HeaderRequestID)
 }

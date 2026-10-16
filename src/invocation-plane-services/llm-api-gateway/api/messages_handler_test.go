@@ -93,6 +93,7 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 				captured <- messagesCapturedRequest{body, r.Header.Clone(), r.URL.RequestURI()}
 				w.Header().Set("Content-Type", tc.contentType)
 				w.Header().Set("Request-Id", "msg-request")
+				w.Header().Set(HeaderRequestID, "backend-request")
 				w.Header().Set("X-Stargate-Private", "remove")
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.response)
@@ -110,9 +111,10 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 			e.ServeHTTP(rec, messagesHTTPRequest(body))
 			require.Equal(t, tc.status, rec.Code, rec.Body.String())
 			require.Equal(t, tc.response, rec.Body.String())
-			requestID := rec.Header().Get(HeaderRequestID)
+			requestID := rec.Header().Get(headerMessagesRequestID)
 			require.NotEmpty(t, requestID)
-			require.Equal(t, []string{requestID}, rec.Header().Values(headerMessagesRequestID), "NVCF id replaces the backend request-id")
+			require.NotEqual(t, "msg-request", requestID, "NVCF id replaces the backend request-id")
+			require.Equal(t, []string{requestID}, rec.Header().Values(HeaderRequestID), "NVCF id replaces the backend X-Request-Id")
 			require.Equal(t, "session-test", rec.Header().Get(HeaderMultiTurnSessionID))
 			require.Empty(t, rec.Header().Get("X-Stargate-Private"))
 			require.Equal(t, "caller-token", auth.authorizeToken)
@@ -580,4 +582,30 @@ func TestMessagesUnknownDispatchOutcomeRetainsReservation(t *testing.T) {
 	}
 	input := estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["messages"])) + estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["system"])) + estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["tools"]))
 	require.EqualValues(t, input+64, charged)
+}
+
+func TestMessagesGatewayRenderedUpstreamErrorUsesNVCFRequestID(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set(HeaderRequestID, "backend-request")
+		w.Header().Set("Request-Id", "backend-request")
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "Internal Server Error")
+	}))
+	defer backend.Close()
+	cfg := config.Default()
+	cfg.ModelURIAllowlistEnabled = true
+	e, _ := messagesTestAPI(t, backend.URL, cfg, &recordingRateLimiter{}, []string{messagesEndpointPath})
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, messagesHTTPRequest(messagesTestBody))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	requestID := rec.Header().Get(headerMessagesRequestID)
+	require.NotEmpty(t, requestID)
+	require.NotEqual(t, "backend-request", requestID)
+	require.Equal(t, []string{requestID}, rec.Header().Values(HeaderRequestID))
+	var body anthropicErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, requestID, body.RequestID)
 }
