@@ -21,6 +21,7 @@ use headers::{Authorization, HeaderMapExt};
 use http::header::AUTHORIZATION;
 use http::{Response, StatusCode};
 
+/// Parse one bearer header for control-plane or request-scoped handler validation.
 pub async fn auth_middleware(mut req: Request, next: Next) -> impl IntoResponse {
     if req.headers().get_all(AUTHORIZATION).iter().count() != 1 {
         tracing::warn!("expected one authorization header");
@@ -45,6 +46,7 @@ pub async fn auth_middleware(mut req: Request, next: Next) -> impl IntoResponse 
     next.run(req).await
 }
 
+/// Use the same response for every authorization-header parsing failure.
 fn auth_err_response() -> Response<Body> {
     let mut err_response: Response<Body> = Response::new("Unauthorized access".into());
     *err_response.status_mut() = StatusCode::UNAUTHORIZED;

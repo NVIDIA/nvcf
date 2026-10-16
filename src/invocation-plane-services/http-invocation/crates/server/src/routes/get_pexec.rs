@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics;
-use crate::nats::{NatsService, PollingRequestOwner, WorkerPollingResponse};
+use crate::metrics::{self, PollingOwnerCheck};
+use crate::nats::{NatsService, PollingRequestOwnership, WorkerPollingResponse};
 use crate::nvcf_api::{
     nvcf::{
         worker_invoke_function_request::{
@@ -55,6 +55,7 @@ pub struct StatusPath {
     pub request_id: Uuid,
 }
 
+/// Extract a passthrough status request and apply the common polling policy.
 pub async fn pexec_status_route(
     Path(StatusPath { request_id }): Path<StatusPath>,
     State(nvcf_service): State<Arc<NVCFService>>,
@@ -76,6 +77,7 @@ pub async fn pexec_status_route(
     .await
 }
 
+/// Authorize function access and caller ownership before contacting the worker.
 #[tracing::instrument(level = Level::DEBUG, skip(nvcf_service, nats_service, worker_stream_service, app_config, bearer))]
 pub async fn pexec_status(
     request_id: Uuid,
@@ -148,9 +150,20 @@ pub async fn pexec_status(
     };
     span.record("nca_id", allowed_functions.authed_client_nca_id.clone());
 
-    // Function access does not grant access to another caller's invocation.
-    // Older records have no owner and must fail closed.
-    if !request_owned_by(polling_owner.as_ref(), &allowed_functions) {
+    let owner_check = check_polling_owner(
+        &polling_owner,
+        &allowed_functions,
+        app_config.enforce_polling_owner,
+    );
+    metrics::record_polling_owner_check(owner_check);
+    tracing::debug!(
+        polling_owner_outcome = owner_check.label(),
+        "polling ownership checked"
+    );
+    if !matches!(
+        owner_check,
+        PollingOwnerCheck::Matched | PollingOwnerCheck::LegacyAccepted
+    ) {
         span.record("error", true);
         return Err(AppError(ProblemDetails::from_status_code(
             StatusCode::NOT_FOUND,
@@ -218,8 +231,7 @@ pub async fn pexec_status(
         nats_service.clone(),
         function_id,
         function_version_id,
-        allowed_functions.authed_client_nca_id,
-        allowed_functions.authed_client_subject,
+        polling_owner.owner().cloned(),
         request_id,
         poll_duration,
         original_start_time,
@@ -240,13 +252,74 @@ pub async fn pexec_status(
     Ok(response)
 }
 
-fn request_owned_by(
-    owner: Option<&PollingRequestOwner>,
+/// Only absent legacy metadata is eligible for the temporary preparation stage.
+fn check_polling_owner(
+    ownership: &PollingRequestOwnership,
     caller: &AllowedFunctionInvocations,
-) -> bool {
-    owner.is_some_and(|owner| {
-        owner.nca_id == caller.authed_client_nca_id && owner.subject == caller.authed_client_subject
-    })
+    enforce: bool,
+) -> PollingOwnerCheck {
+    match ownership {
+        PollingRequestOwnership::Recorded(owner)
+            if owner.nca_id == caller.authed_client_nca_id
+                && owner.subject == caller.authed_client_subject =>
+        {
+            PollingOwnerCheck::Matched
+        }
+        PollingRequestOwnership::Recorded(_) => PollingOwnerCheck::MismatchRejected,
+        PollingRequestOwnership::Missing if enforce => PollingOwnerCheck::MissingRejected,
+        PollingRequestOwnership::Missing => PollingOwnerCheck::LegacyAccepted,
+        PollingRequestOwnership::Invalid => PollingOwnerCheck::InvalidRejected,
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::nats::PollingRequestOwner;
+
+    #[test]
+    fn only_headerless_records_are_allowed_during_preparation() {
+        let caller = AllowedFunctionInvocations {
+            function_id: Uuid::new_v4(),
+            function_version_ids: vec![],
+            authed_client_subject: "caller".into(),
+            authed_client_nca_id: "tenant".into(),
+            authed_client_owner_nca_id: "owner".into(),
+        };
+        for enforce in [false, true] {
+            for (nca_id, subject, expected) in [
+                ("tenant", "caller", PollingOwnerCheck::Matched),
+                (
+                    "other-tenant",
+                    "caller",
+                    PollingOwnerCheck::MismatchRejected,
+                ),
+                (
+                    "tenant",
+                    "other-caller",
+                    PollingOwnerCheck::MismatchRejected,
+                ),
+            ] {
+                let owner = PollingRequestOwnership::Recorded(PollingRequestOwner {
+                    nca_id: nca_id.into(),
+                    subject: subject.into(),
+                });
+                assert_eq!(check_polling_owner(&owner, &caller, enforce), expected);
+            }
+            assert_eq!(
+                check_polling_owner(&PollingRequestOwnership::Invalid, &caller, enforce),
+                PollingOwnerCheck::InvalidRejected
+            );
+            assert_eq!(
+                check_polling_owner(&PollingRequestOwnership::Missing, &caller, enforce),
+                if enforce {
+                    PollingOwnerCheck::MissingRejected
+                } else {
+                    PollingOwnerCheck::LegacyAccepted
+                }
+            );
+        }
+    }
 }
 
 fn request_time_to_system_time(request_start_time: Option<prost_types::Timestamp>) -> SystemTime {

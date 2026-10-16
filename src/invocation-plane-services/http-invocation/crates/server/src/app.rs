@@ -56,6 +56,7 @@ pub struct AppState {
     app_config: Arc<AppConfig>,
 }
 
+/// Build legacy and transparent routers with their respective browser policies.
 pub async fn app(
     config: AppConfig,
     secrets: Option<Arc<SecretFileWatcher>>,
@@ -221,6 +222,7 @@ async fn handler_404() -> impl IntoResponse {
     ProblemDetails::from_status_code(StatusCode::NOT_FOUND)
 }
 
+/// Grant legacy browser access only to exact origins, without cookie credentials.
 fn legacy_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> {
     let origins = origins
         .iter()

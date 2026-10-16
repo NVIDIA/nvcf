@@ -51,19 +51,34 @@ Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
 ## Legacy route access
 
 The legacy exec/pexec handlers delegate bearer-token validation and function
-authorization to the control plane. Status polling also requires the authenticated
+authorization to the control plane. New polling records bind the authenticated
 tenant and subject that started the invocation. A replacement token for the same
-identity can continue polling.
+identity can continue polling. Mismatched or malformed ownership metadata is
+rejected in both rollout stages.
 
 The invocation service stores caller identity in the NATS message header
 `Nvcf-Http-Invocation-Owner`. The shared `WorkerResultTracking` protobuf payload
 is preserved so other services can continue decoding the same message.
 
-Polling records without this header, including records written by legacy
-producers, return 404 through these status routes. Drain pending legacy
-invocations before upgrading, and upgrade every serving invocation replica
-before relying on the ownership checks. Other producers must also supply trusted
-caller metadata to resume their requests through these routes.
+Use two releases for rolling and cross-region upgrades:
+
+1. Deploy with `enforce_polling_owner: false` (the default) to every region and
+   update every producer of polling records to write ownership metadata. This
+   preparation release accepts headerless records after the existing token and
+   function authorization checks. Intermediate polls preserve their original
+   expiry and never assign them to the polling caller.
+2. Wait more than 60 minutes after the last headerless writer is upgraded, or
+   longer if the tracking stream's retention has been increased. Enable
+   `enforce_polling_owner: true` in a subsequent release across every region.
+   Headerless records then return 404. Do not enable enforcement while any
+   producer, including a legacy NVCF producer, still writes headerless records.
+
+The counter `nvcf_http_invocation_polling_owner_checks_total` has bounded
+`outcome` labels: `matched`, `legacy_accepted`, `missing_rejected`,
+`invalid_rejected`, and `mismatch_rejected`. Watch increments of
+`legacy_accepted` to find remaining legacy polls. Full caller ownership
+enforcement requires the second release; preparation retains the old
+authorization behavior for headerless records.
 
 Browser access to legacy routes requires an explicit list of exact HTTP or HTTPS
 origins in the service configuration. The default list is empty. Cookie
@@ -72,7 +87,13 @@ credentials are not enabled; callers send their bearer token explicitly.
 ```yaml
 cors_allowed_origins:
   - https://console.example.com
+enforce_polling_owner: false
 ```
+
+Environment configuration uses comma-separated `CORS_ALLOWED_ORIGINS` and the
+boolean `ENFORCE_POLLING_OWNER`. For Helm, use
+`invocation.cors.allowedOrigins` and `invocation.polling.enforceOwnership`.
+Configure approved browser origins before deploying the preparation release.
 
 The transparent load-balancer routes continue to forward CORS requests to the
 workload, which owns their browser policy.
@@ -206,7 +227,8 @@ inference --> worker: http response header
 group if http response is 202
     note over client,is
         The invocation service records the authenticated tenant and subject.
-        Status polls must authenticate as the same caller before reaching the worker.
+        Records with ownership require the same caller before reaching the worker.
+        Preparation accepts headerless records until the enforcement release.
     end note
     loop
         worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id} 

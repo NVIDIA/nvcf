@@ -192,12 +192,41 @@ impl Default for NatsProperties {
 #[derive(Debug)]
 pub struct ExistingInvocationDetails {
     pub worker_result_tracking: WorkerResultTracking,
-    pub polling_owner: Option<PollingRequestOwner>,
+    pub polling_owner: PollingRequestOwnership,
     pub region: String,
 }
 
 const POLLING_OWNER_HEADER: &str = "Nvcf-Http-Invocation-Owner";
 
+/// Distinguish legacy records from malformed metadata during the staged rollout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PollingRequestOwnership {
+    Missing,
+    Recorded(PollingRequestOwner),
+    Invalid,
+}
+
+impl PollingRequestOwnership {
+    /// Decode ownership without treating invalid metadata as a legacy record.
+    fn from_headers(headers: &HeaderMap) -> Self {
+        if headers.get(POLLING_OWNER_HEADER).is_none() {
+            return Self::Missing;
+        }
+        PollingRequestOwner::from_headers(headers)
+            .map(Self::Recorded)
+            .unwrap_or(Self::Invalid)
+    }
+
+    /// Return a recorded owner; legacy records must never adopt the polling caller.
+    pub fn owner(&self) -> Option<&PollingRequestOwner> {
+        match self {
+            Self::Recorded(owner) => Some(owner),
+            Self::Missing | Self::Invalid => None,
+        }
+    }
+}
+
+/// Caller identity stored outside the shared request-tracking protobuf payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PollingRequestOwner {
     pub nca_id: String,
@@ -205,6 +234,7 @@ pub struct PollingRequestOwner {
 }
 
 impl PollingRequestOwner {
+    /// Encode identity as one header, escaping characters that could split headers.
     fn to_headers(&self) -> anyhow::Result<HeaderMap> {
         anyhow::ensure!(
             !self.nca_id.is_empty() && !self.subject.is_empty(),
@@ -218,6 +248,7 @@ impl PollingRequestOwner {
         Ok(headers)
     }
 
+    /// Reject incomplete, duplicate, or malformed ownership metadata.
     fn from_headers(headers: &HeaderMap) -> Option<Self> {
         let mut values = headers.get_all(POLLING_OWNER_HEADER);
         let value = values.next()?;
@@ -824,6 +855,7 @@ impl NatsService {
         )
     }
 
+    /// Persist tracking and its authenticated owner in one NATS message.
     #[tracing::instrument(level = Level::TRACE, skip(self, tracking, owner), err)]
     pub async fn record_polling_request(
         &self,
@@ -860,6 +892,7 @@ impl NatsService {
         }
     }
 
+    /// Publish the shared payload with invocation-service ownership headers.
     #[tracing::instrument(level = Level::TRACE, skip(self, tracking, headers), err)]
     async fn publish_to_request_mapping(
         &self,
@@ -875,6 +908,7 @@ impl NatsService {
             .await
     }
 
+    /// Find the tracking record and its ownership metadata in any configured region.
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
     pub async fn get_request_mapping(
         &self,
@@ -899,6 +933,7 @@ impl NatsService {
         Ok(other_region_mapping)
     }
 
+    /// Read payload and ownership from the same persisted regional message.
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
     async fn get_request_mapping_by_region(
         &self,
@@ -928,7 +963,7 @@ impl NatsService {
         };
         Ok(Some(ExistingInvocationDetails {
             worker_result_tracking: WorkerResultTracking::decode(message.payload)?,
-            polling_owner: PollingRequestOwner::from_headers(&message.headers),
+            polling_owner: PollingRequestOwnership::from_headers(&message.headers),
             region: region.into(),
         }))
     }
@@ -1022,12 +1057,18 @@ mod tests {
         let headers = owner.to_headers().unwrap();
         let value = headers.get(POLLING_OWNER_HEADER).unwrap().as_str();
         assert!(!value.contains(['\r', '\n']));
-        assert_eq!(PollingRequestOwner::from_headers(&headers), Some(owner));
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&headers),
+            PollingRequestOwnership::Recorded(owner)
+        );
     }
 
     #[test]
     fn polling_owner_rejects_missing_malformed_or_ambiguous_metadata() {
-        assert!(PollingRequestOwner::from_headers(&HeaderMap::new()).is_none());
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&HeaderMap::new()),
+            PollingRequestOwnership::Missing
+        );
         for value in [
             "invalid-json",
             r#"{"nca_id":"tenant"}"#,
@@ -1036,7 +1077,10 @@ mod tests {
         ] {
             let mut headers = HeaderMap::new();
             headers.insert(POLLING_OWNER_HEADER, value);
-            assert!(PollingRequestOwner::from_headers(&headers).is_none());
+            assert_eq!(
+                PollingRequestOwnership::from_headers(&headers),
+                PollingRequestOwnership::Invalid
+            );
         }
         let owner = PollingRequestOwner {
             nca_id: "tenant".into(),
@@ -1045,7 +1089,10 @@ mod tests {
         let mut headers = owner.to_headers().unwrap();
         let value = headers.get(POLLING_OWNER_HEADER).unwrap().clone();
         headers.append(POLLING_OWNER_HEADER, value);
-        assert!(PollingRequestOwner::from_headers(&headers).is_none());
+        assert_eq!(
+            PollingRequestOwnership::from_headers(&headers),
+            PollingRequestOwnership::Invalid
+        );
         assert!(PollingRequestOwner {
             nca_id: "tenant".into(),
             subject: String::new()

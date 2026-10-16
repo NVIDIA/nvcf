@@ -28,7 +28,10 @@ use mocks::{
     API_KEY, FUNCTION_ID, INSTANCE_ID, NCA_ID, OWNER_NCA_ID, VERSION_ID_1,
 };
 use nvcf_invocation_service::app::app;
-use nvcf_invocation_service::{nats::NatsService, request_id::RequestId};
+use nvcf_invocation_service::{
+    nats::{NatsService, PollingRequestOwnership},
+    request_id::RequestId,
+};
 use prost::Message;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -55,6 +58,7 @@ async fn test_poll() -> anyhow::Result<()> {
             .await;
     }
     config.nats_properties.region = "server-region".into();
+    config.enforce_polling_owner = true;
     let mut app = app(config.clone(), None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
     let _worker = Worker::new(
@@ -134,7 +138,7 @@ async fn test_poll() -> anyhow::Result<()> {
         .get_request_mapping(request_id.parse::<uuid::Uuid>()?.into())
         .await?
         .unwrap();
-    let owner = mapping.polling_owner.as_ref().unwrap();
+    let owner = mapping.polling_owner.owner().unwrap();
     assert_eq!(owner.nca_id, NCA_ID);
     assert_eq!(owner.subject, "test-subject");
 
@@ -173,7 +177,7 @@ async fn test_poll() -> anyhow::Result<()> {
         .await?
         .await?;
     let legacy = nats_service.get_request_mapping(legacy_id).await?.unwrap();
-    assert!(legacy.polling_owner.is_none());
+    assert_eq!(legacy.polling_owner, PollingRequestOwnership::Missing);
     assert_eq!(legacy.worker_result_tracking, legacy_mapping);
     for route in ["exec", "pexec"] {
         let request = http::Request::builder()
@@ -286,8 +290,11 @@ async fn test_bad_poll_header() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::recorded(false)]
+#[case::legacy(true)]
 #[tokio::test]
-async fn test_cross_region_poll() -> anyhow::Result<()> {
+async fn test_cross_region_poll(#[case] legacy: bool) -> anyhow::Result<()> {
     let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
     let mut nats_properties_region_1 = config.nats_properties.clone();
     nats_properties_region_1.region = "region_1".into();
@@ -295,6 +302,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
     let mut config_region_1 = config.clone();
     config_region_1.nats_properties = nats_properties_region_1.clone();
     config_region_1.worker_stream_properties.self_address = Some("server_1".into());
+    config_region_1.enforce_polling_owner = true;
 
     let mut nats_properties_region_2 = config.nats_properties.clone();
     nats_properties_region_2.region = "region_2".into();
@@ -317,7 +325,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
             instance_id: INSTANCE_ID.into(),
         },
         Box::new(PollAwareHandler {
-            sleep_time: Duration::from_secs(2),
+            sleep_time: Duration::from_secs(if legacy { 10 } else { 2 }),
             enable_echo_request: false,
             echo_polling_request_headers: true,
         }),
@@ -366,13 +374,68 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         .to_string();
     drop(response);
 
-    // verify another region can get the request status
+    if legacy {
+        // Simulate an older regional replica writing the shared payload alone.
+        let client = async_nats::connect(&config.nats_properties.nats_address).await?;
+        let jetstream = async_nats::jetstream::new(client);
+        let subject = format!("requestToFunctionVersion.region_1.{request_id}");
+        let stream = jetstream
+            .get_stream_no_info("requestToFunctionVersion_region_1")
+            .await?;
+        let message = stream.direct_get_last_for_subject(&subject).await?;
+        let legacy_sequence = jetstream
+            .publish(subject.clone(), message.payload)
+            .await?
+            .await?
+            .sequence;
+
+        for route in ["exec", "pexec"] {
+            let request = http::Request::builder()
+                .uri(format!("/v2/nvcf/{route}/status/{request_id}"))
+                .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+                .body(Body::empty())?;
+            assert_eq!(
+                app_region_1.call(request).await?.status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+
+        // A preparation-stage reader accepts the legacy record, but an
+        // intermediate 202 must not assign that record to the polling caller.
+        let request = http::Request::builder()
+            .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
+            .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .header("nvcf-poll-seconds", "1")
+            .body(Body::empty())?;
+        let response = app_region_2.call(request).await?;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        drop(response);
+        let nats_service = NatsService::new(
+            &config_region_1.nats_properties,
+            &config.oauth2_base_url,
+            None,
+            &config.grpc_client,
+        )
+        .await?;
+        let mapping = nats_service
+            .get_request_mapping(request_id.parse::<uuid::Uuid>()?.into())
+            .await?
+            .unwrap();
+        assert_eq!(mapping.polling_owner, PollingRequestOwnership::Missing);
+        assert_eq!(
+            stream.direct_get_last_for_subject(subject).await?.sequence,
+            legacy_sequence,
+            "legacy polls must preserve the original retention deadline"
+        );
+    }
+
+    // Verify a preparation-stage replica in another region can finish the poll.
     let request = axum::http::Request::builder()
         .method(Method::GET)
         .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
         .header(CONTENT_TYPE, "text/plain")
-        .header("nvcf-poll-seconds", "3")
+        .header("nvcf-poll-seconds", if legacy { "15" } else { "3" })
         .header("NVCF-INVOCATION-REGION", "client-region")
         .body(Body::empty())?;
 

@@ -189,6 +189,7 @@ impl ApiMockServer {
             auth_cache_ttl: Duration::from_secs(AUTH_CACHE_TTL.into()),
         }
     }
+    /// Register an independent authenticated identity for caller isolation tests.
     pub async fn add_client(&self, token: &str, client: ApiClient) {
         self.api_mock
             .lock()

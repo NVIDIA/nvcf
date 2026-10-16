@@ -118,6 +118,9 @@ pub struct AppConfig {
     pub pod_ip: Option<String>,
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+    /// Enable only after every region has written ownership metadata for over an hour.
+    #[serde(default)]
+    pub enforce_polling_owner: bool,
 }
 
 impl Default for AppConfig {
@@ -134,6 +137,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Construct defaults for ownership preparation with browser access disabled.
     pub fn new(
         grpc_addr: &str,
         nats_properties: NatsProperties,
@@ -160,6 +164,7 @@ impl AppConfig {
             worker_stream_properties,
             pod_ip: None,
             cors_allowed_origins: Vec::new(),
+            enforce_polling_owner: false,
         }
     }
 }
@@ -214,12 +219,14 @@ pub fn load_app_config(config_file: Option<&str>) -> Result<AppConfig, config::C
         .and_then(|c| c.try_deserialize::<AppConfig>())
 }
 
+/// Parse known comma-separated allowlists while leaving other values scalar.
 fn environment_source() -> config::Environment {
     config::Environment::default()
         .separator("__")
         .try_parsing(true)
         .list_separator(",")
         .with_list_parse_key("server.tracing.baggage_attribute_allowlist")
+        .with_list_parse_key("cors_allowed_origins")
 }
 
 /// Load application config from a YAML file and environment variable overrides.
@@ -296,6 +303,8 @@ mod tests {
             expected.secrets_watcher_interval_seconds
         );
         assert_eq!(config.tcp_nodelay, expected.tcp_nodelay);
+        assert!(!config.enforce_polling_owner);
+        assert!(config.cors_allowed_origins.is_empty());
     }
 
     // Verify that a config file overrides defaults. If APP_CONFIG were still being
@@ -372,5 +381,40 @@ mod tests {
             settings.server.tracing.baggage_attribute_allowlist,
             vec!["allowed.one", "allowed.two"]
         );
+    }
+
+    #[test]
+    fn environment_source_parses_cors_and_polling_policy() {
+        for (origins, expected, enforce) in [
+            (
+                "https://console.example",
+                vec!["https://console.example"],
+                false,
+            ),
+            (
+                "https://console.example,https://other.example",
+                vec!["https://console.example", "https://other.example"],
+                true,
+            ),
+        ] {
+            let env = std::collections::HashMap::from([
+                ("CORS_ALLOWED_ORIGINS".into(), origins.into()),
+                ("ENFORCE_POLLING_OWNER".into(), enforce.to_string()),
+                ("NVCF_API_ADDRESS".into(), "http://api.example:9090".into()),
+            ]);
+            let settings = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &serde_json::to_string(&AppConfig::default()).unwrap(),
+                    config::FileFormat::Json,
+                ))
+                .add_source(environment_source().source(Some(env)))
+                .build()
+                .unwrap()
+                .try_deserialize::<AppConfig>()
+                .unwrap();
+            assert_eq!(settings.cors_allowed_origins, expected);
+            assert_eq!(settings.enforce_polling_owner, enforce);
+            assert_eq!(settings.nvcf_api_address, "http://api.example:9090");
+        }
     }
 }

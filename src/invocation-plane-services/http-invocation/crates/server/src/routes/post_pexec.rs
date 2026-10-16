@@ -179,6 +179,7 @@ impl Drop for InflightRequestGuard {
     }
 }
 
+/// Authorize an initial invocation and retain its caller for subsequent polling.
 #[allow(clippy::too_many_arguments)]
 pub async fn pexec(
     Path(function_routing): Path<FunctionRouting>,
@@ -390,8 +391,10 @@ pub async fn pexec(
         nats_service.clone(),
         function_id,
         function_version_id,
-        nca_id,
-        allowed_functions.authed_client_subject,
+        Some(PollingRequestOwner {
+            nca_id,
+            subject: allowed_functions.authed_client_subject,
+        }),
         request_id,
         poll_duration,
         start_time,
@@ -475,6 +478,7 @@ fn is_tlb(extensions: &Extensions) -> bool {
     extensions.get::<FunctionId>().is_some()
 }
 
+/// Preserve known ownership on intermediate responses without adopting legacy polls.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     level = Level::DEBUG,
@@ -482,15 +486,14 @@ fn is_tlb(extensions: &Extensions) -> bool {
         nats_service,
         attach_response_rx,
         start_time,
-        subject
+        owner
     )
 )]
 pub(crate) async fn handle_streaming_response(
     nats_service: Arc<NatsService>,
     function_id: Uuid,
     function_version_id: Uuid,
-    nca_id: String,
-    subject: String,
+    owner: Option<PollingRequestOwner>,
     request_id: RequestId,
     poll_duration: Duration,
     start_time: SystemTime,
@@ -510,7 +513,9 @@ pub(crate) async fn handle_streaming_response(
         }
     };
 
-    if response.status() == StatusCode::ACCEPTED {
+    // Legacy polls must neither adopt the polling caller nor extend the old
+    // record's expiry; otherwise a rolling upgrade cannot age out old records.
+    if let (StatusCode::ACCEPTED, Some(owner)) = (response.status(), owner.as_ref()) {
         nats_service
             .record_polling_request(
                 region,
@@ -520,7 +525,7 @@ pub(crate) async fn handle_streaming_response(
                     function_version_id: function_version_id.to_string(),
                     request_time: Some(start_time.into()),
                 },
-                &PollingRequestOwner { nca_id, subject },
+                owner,
             )
             .await?;
     }
