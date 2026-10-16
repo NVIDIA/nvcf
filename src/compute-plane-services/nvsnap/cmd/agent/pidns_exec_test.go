@@ -35,6 +35,10 @@ func TestPlaceFD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Closed here, not by a finalizer at some later GC: a later test
+	// snapshots this process's open fds and must not see one close
+	// under it.
+	defer func() { _ = f.Close() }()
 	fd, err := unix.Dup(int(f.Fd()))
 	if err != nil {
 		t.Fatal(err)
