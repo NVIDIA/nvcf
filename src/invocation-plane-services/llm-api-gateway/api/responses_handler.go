@@ -105,9 +105,6 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 		copyProxyHeaders(c.Response().Header(), resp.Header)
 		setMultiTurnSessionResponseHeader(c)
 		if err := proxyUpstreamError(resp); err != nil {
-			if resp.Body != nil {
-				resp.Body.Close()
-			}
 			h.finalizeNativeResponsesUsage(c, normalized, nil, clientWantsStream)
 			return err
 		}

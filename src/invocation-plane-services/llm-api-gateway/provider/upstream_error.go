@@ -19,8 +19,10 @@ package provider
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -29,8 +31,36 @@ import (
 )
 
 // MaxUpstreamErrorBodyBytes bounds how much of a non-2xx upstream body the
-// gateway reads to render an error response.
-const MaxUpstreamErrorBodyBytes = 32 * 1024
+// gateway reads to render an error response. Validation errors can echo the
+// request input, so the bound is well above a typical error body.
+const MaxUpstreamErrorBodyBytes = 1 << 20
+
+// ReadUpstreamErrorBody reads a non-2xx upstream body for error rendering and
+// decodes gzip. It returns nil when the body is larger than
+// MaxUpstreamErrorBodyBytes, uses another encoding, or fails to read, so a
+// partial body is never parsed or relayed.
+func ReadUpstreamErrorBody(body io.Reader, contentEncoding string) []byte {
+	if body == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(contentEncoding)) {
+	case "", "identity":
+	case "gzip", "x-gzip":
+		decoded, err := gzip.NewReader(body)
+		if err != nil {
+			return nil
+		}
+		defer decoded.Close()
+		body = decoded
+	default:
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(body, MaxUpstreamErrorBodyBytes+1))
+	if err != nil || len(data) > MaxUpstreamErrorBodyBytes {
+		return nil
+	}
+	return data
+}
 
 // UpstreamError is a non-2xx response from the request router or the model
 // server. The API layer renders it in the endpoint's error envelope, or relays

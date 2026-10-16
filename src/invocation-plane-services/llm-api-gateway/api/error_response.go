@@ -18,12 +18,9 @@ limitations under the License.
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"strings"
 
 	echo "github.com/labstack/echo/v4"
 
@@ -82,6 +79,9 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 			return
 		}
 
+		// The handler always writes an uncompressed body; drop any encoding
+		// copied from the upstream response.
+		c.Response().Header().Del(echo.HeaderContentEncoding)
 		anthropic := c.Request().URL.Path == messagesEndpointPath
 		var upstream *provider.UpstreamError
 		if errors.As(err, &upstream) && upstream.RouterCode == "" {
@@ -187,27 +187,15 @@ func isAnthropicErrorBody(body []byte) bool {
 
 // proxyUpstreamError returns the error for a non-2xx proxy response so the
 // HTTP error handler renders it like any other gateway error. It returns nil
-// and leaves resp.Body readable for successful responses and for compressed
-// or oversized error bodies, which are relayed unchanged.
+// for successful responses.
 func proxyUpstreamError(resp *provider.ProxyResponse) error {
 	if resp.StatusCode < http.StatusBadRequest {
 		return nil
 	}
-	if encoding := resp.Header.Get(echo.HeaderContentEncoding); encoding != "" &&
-		!strings.EqualFold(encoding, "identity") {
-		return nil
-	}
-
 	var body []byte
 	if resp.Body != nil {
-		body, _ = io.ReadAll(io.LimitReader(resp.Body, provider.MaxUpstreamErrorBodyBytes+1))
-		if len(body) > provider.MaxUpstreamErrorBodyBytes {
-			resp.Body = struct {
-				io.Reader
-				io.Closer
-			}{io.MultiReader(bytes.NewReader(body), resp.Body), resp.Body}
-			return nil
-		}
+		body = provider.ReadUpstreamErrorBody(resp.Body, resp.Header.Get(echo.HeaderContentEncoding))
+		_ = resp.Body.Close()
 	}
 	return provider.NewUpstreamHTTPError(resp.StatusCode, resp.Header, body)
 }

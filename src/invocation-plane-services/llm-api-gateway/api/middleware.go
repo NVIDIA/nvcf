@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
@@ -205,13 +206,29 @@ func logCompletedHTTPRequest(ctx context.Context, gc *GatewayContext, requestSta
 	log.Msg("completed http request")
 }
 
+// completionLogEvent logs request-router rejections at info or above with
+// router_error_code, because clients see the code only when
+// ExposeRouterErrorCodes is enabled.
 func completionLogEvent(ctx context.Context, statusCode int, err error) *zerolog.Event {
-	if statusCode < http.StatusInternalServerError {
+	var upstream *provider.UpstreamError
+	routerCode := ""
+	if errors.As(err, &upstream) {
+		routerCode = upstream.RouterCode
+	}
+	var log *zerolog.Event
+	switch {
+	case statusCode >= http.StatusInternalServerError:
+		log = telemetry.Logger(ctx).Warn()
+		if err != nil {
+			log = log.Err(err)
+		}
+	case routerCode != "":
+		log = telemetry.Logger(ctx).Info()
+	default:
 		return telemetry.Logger(ctx).Debug()
 	}
-	log := telemetry.Logger(ctx).Warn()
-	if err != nil {
-		log = log.Err(err)
+	if routerCode != "" {
+		log = log.Str("router_error_code", routerCode)
 	}
 	return log
 }

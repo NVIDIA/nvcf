@@ -19,6 +19,7 @@ package api
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,8 @@ import (
 	"testing"
 
 	echo "github.com/labstack/echo/v4"
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
@@ -323,30 +326,132 @@ func TestGatewayErrorHandlerHead(t *testing.T) {
 	require.Empty(t, rec.Body.String())
 }
 
-func TestProxyUpstreamErrorRelaysUnreadableBodies(t *testing.T) {
+func TestUpstreamErrorBodyEncodingAndSize(t *testing.T) {
 	t.Parallel()
 
-	oversized := `{"error":"` + strings.Repeat("x", provider.MaxUpstreamErrorBodyBytes) + `"}`
+	const (
+		routerBody = `{"error":"no eligible candidates","code":"no_eligible_candidates"}`
+		nativeBody = `{"error":{"message":"max_tokens is too large","type":"invalid_request_error","param":"max_tokens","code":"invalid_value"}}`
+	)
+	padding := strings.Repeat("x", provider.MaxUpstreamErrorBodyBytes)
 	for _, tc := range []struct {
-		name   string
-		header http.Header
-		body   string
+		name        string
+		status      int
+		routerCode  string
+		encoding    string
+		body        []byte
+		wantMessage string
+		// wantRelay is the body OpenAI endpoints relay unchanged, if any.
+		wantRelay string
 	}{
-		{"compressed", http.Header{echo.HeaderContentEncoding: []string{"gzip"}}, "\x1f\x8b compressed"},
-		{"oversized", http.Header{}, oversized},
+		{
+			name:   "gzip router rejection",
+			status: http.StatusNotFound, routerCode: "no_eligible_candidates",
+			encoding: "gzip", body: gzipBytes(t, routerBody),
+			wantMessage: "no eligible candidates",
+		},
+		{
+			name:     "gzip native backend error",
+			status:   http.StatusBadRequest,
+			encoding: "gzip", body: gzipBytes(t, nativeBody),
+			wantMessage: "max_tokens is too large", wantRelay: nativeBody,
+		},
+		{
+			name:     "unsupported encoding",
+			status:   http.StatusBadRequest,
+			encoding: "br", body: []byte("\x1b\x00 compressed"),
+			wantMessage: "Bad Request",
+		},
+		{
+			name:        "oversized validation error",
+			status:      http.StatusUnprocessableEntity,
+			body:        []byte(`{"detail":[{"loc":["body","input"],"msg":"too long","input":"` + padding + `"}]}`),
+			wantMessage: "Unprocessable Entity",
+		},
+		{
+			name:        "oversized native backend error",
+			status:      http.StatusBadRequest,
+			body:        []byte(`{"error":{"message":"` + padding + `","type":"invalid_request_error"}}`),
+			wantMessage: "Bad Request",
+		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+		for _, endpoint := range upstreamErrorEndpoints {
+			t.Run(tc.name+"/"+endpoint.name, func(t *testing.T) {
+				t.Parallel()
 
-			resp := &provider.ProxyResponse{
-				StatusCode: http.StatusBadRequest,
-				Header:     tc.header,
-				Body:       io.NopCloser(strings.NewReader(tc.body)),
-			}
-			require.NoError(t, proxyUpstreamError(resp))
-			relayed, err := io.ReadAll(resp.Body)
-			require.NoError(t, err)
-			require.True(t, bytes.Equal([]byte(tc.body), relayed))
-		})
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					if tc.routerCode != "" {
+						w.Header().Set("X-Stargate-Error-Code", tc.routerCode)
+					}
+					if tc.encoding != "" {
+						w.Header().Set(echo.HeaderContentEncoding, tc.encoding)
+					}
+					w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+					w.WriteHeader(tc.status)
+					_, _ = w.Write(tc.body)
+				}))
+				defer upstream.Close()
+
+				e, _ := messagesTestAPI(t, upstream.URL, config.Default(), nil, nil)
+				req := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(endpoint.payload))
+				req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+				req.Header.Set(echo.HeaderAcceptEncoding, "gzip, br")
+				req.Header.Set("Authorization", "Bearer caller-token")
+				req.Header.Set(HeaderRequestID, "request-a")
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+
+				require.Equal(t, tc.status, rec.Code, rec.Body.String())
+				require.Empty(t, rec.Header().Get(echo.HeaderContentEncoding))
+				switch {
+				case endpoint.anthropic:
+					require.JSONEq(t, anthropicErrorJSON(t, anthropicTypes[tc.status], tc.wantMessage, "request-a"), rec.Body.String())
+				case tc.wantRelay != "":
+					require.Equal(t, tc.wantRelay, rec.Body.String())
+				default:
+					require.JSONEq(t, openAIErrorJSON(t, openAITypes[tc.status], tc.wantMessage, nil), rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func gzipBytes(t *testing.T, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	_, err := writer.Write([]byte(body))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return buf.Bytes()
+}
+
+func TestRouterRejectionLogsErrorCode(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := zlog.Logger
+	zlog.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { zlog.Logger = oldLogger })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Stargate-Error-Code", "no_eligible_candidates")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":"no eligible candidates","code":"no_eligible_candidates"}`)
+	}))
+	defer upstream.Close()
+
+	e, _ := messagesTestAPI(t, upstream.URL, config.Default(), nil, nil)
+	for _, endpoint := range upstreamErrorEndpoints {
+		logs.Reset()
+		req := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(endpoint.payload))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		req.Header.Set("Authorization", "Bearer caller-token")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code, endpoint.name)
+		require.NotContains(t, rec.Body.String(), "no_eligible_candidates", endpoint.name)
+		require.Contains(t, logs.String(), `"level":"info"`, endpoint.name)
+		require.Contains(t, logs.String(), `"router_error_code":"no_eligible_candidates"`, endpoint.name)
+		require.Contains(t, logs.String(), `"message":"completed http request"`, endpoint.name)
 	}
 }

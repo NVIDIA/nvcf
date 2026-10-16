@@ -916,14 +916,16 @@ The `type` follows the HTTP status. For example, `401` is
 Model server errors already in the endpoint's format are returned unchanged,
 including the server's `type` and `code`. Other model server bodies are
 converted to the endpoint's format, keeping the server's message when the
-gateway can read it.
+gateway can read it. The gateway reads uncompressed and gzip error bodies up
+to 1 MiB. For larger bodies or other encodings, the message is the HTTP
+status text.
 
 To return the request router's rejection reason, such as
 `no_eligible_candidates`, in `error.code`, set
 `llmApiGateway.config.exposeRouterErrorCodes: true` in the LLM API Gateway
 chart. The Anthropic format has no `code` field, so `/v1/messages` returns
-only the message. The request router logs the reason as `rejection_reason`
-in either case.
+only the message. In either case, the request router logs the reason as
+`rejection_reason` and the gateway logs it as `router_error_code`.
 
 ## Troubleshooting
 

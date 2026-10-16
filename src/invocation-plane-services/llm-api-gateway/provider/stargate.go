@@ -51,6 +51,7 @@ const (
 
 	headerAuthorization      = "Authorization"
 	headerContentType        = "Content-Type"
+	headerContentEncoding    = "Content-Encoding"
 	headerAccept             = "Accept"
 	headerRequestID          = "X-Request-Id"
 	headerTargetRegion       = "X-NVCF-Target-Region"
@@ -641,7 +642,7 @@ func checkHTTPError(resp *http.Response) error {
 		return nil
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxUpstreamErrorBodyBytes))
+	body := ReadUpstreamErrorBody(resp.Body, resp.Header.Get(headerContentEncoding))
 	return NewUpstreamHTTPError(clientStatusCode(resp), resp.Header, body)
 }
 
