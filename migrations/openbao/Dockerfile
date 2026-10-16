@@ -103,6 +103,7 @@ RUN KUBECTL_METADATA="$(/out/kubectl version --client -o json)" && \
 FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
 ARG TARGETARCH
 ARG GIT_SHA
+RUN test -n "${GIT_SHA}"
 LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
