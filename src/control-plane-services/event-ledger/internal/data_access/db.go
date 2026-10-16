@@ -105,6 +105,13 @@ type DBHandlerV2 interface {
 	Close() error // Include Close in V2 as well, assuming the underlying connection needs closing.
 }
 
+// GuardedEventsWriter writes events to the events table only when each event is
+// newer than the row already stored for its key, so a delayed write cannot
+// replace newer data. It is optional: callers type-assert for it.
+type GuardedEventsWriter interface {
+	UpsertEventsIfNewerV3(traceCtx context.Context, events []EventV3UpsertRecord) error
+}
+
 // StatsV3Record represents a single row from the stats_v3 table
 type StatsV3Record struct {
 	Context   string

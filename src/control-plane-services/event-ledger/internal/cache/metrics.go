@@ -89,7 +89,7 @@ func newCacheMetrics(meter metric.Meter, entryCount func() int64) (*cacheMetrics
 		return nil, fmt.Errorf("cache: failed to create %s: %w", evictionsMetricName, err)
 	}
 	flushes, err := meter.Int64Counter(flushesMetricName,
-		metric.WithDescription("Flushes of evicted pending entries to the database, by result. A failure means every retry failed and the entry was dropped"))
+		metric.WithDescription("Pending entries written to the database by a flush, by result. A failed eviction flush drops its entries, and a failed scheduled flush is tried again"))
 	if err != nil {
 		return nil, fmt.Errorf("cache: failed to create %s: %w", flushesMetricName, err)
 	}
@@ -145,6 +145,7 @@ func (cacheMetrics *cacheMetrics) recordEviction(reason evictionReason) {
 	cacheMetrics.evictions.Add(context.Background(), 1, cacheMetrics.reasonOptions[reason])
 }
 
-func (cacheMetrics *cacheMetrics) recordFlush(result flushResult) {
-	cacheMetrics.flushes.Add(context.Background(), 1, cacheMetrics.resultOptions[result])
+// recordFlushes counts count entries whose write ended with result.
+func (cacheMetrics *cacheMetrics) recordFlushes(result flushResult, count int) {
+	cacheMetrics.flushes.Add(context.Background(), int64(count), cacheMetrics.resultOptions[result])
 }
