@@ -96,6 +96,9 @@ func setShadowSpanAttribute(span trace.Span, req *http.Request) {
 func newShadowRequest(req *http.Request, body []byte, ctx context.Context) *http.Request {
 	shadowReq := req.Clone(middleware.ShadowTelemetryContext(ctx))
 	shadowReq.Header.Set(shadowHeader, shadowHeaderValue)
+	// A shadow is a separate upstream request, so it gets its own ID. The
+	// shadow span keeps it linked to the primary trace.
+	shadowReq.Header.Set(middleware.RequestIDHeader, middleware.NewRequestID())
 	shadowReq.Body = io.NopCloser(bytes.NewReader(body))
 	shadowReq.ContentLength = int64(len(body))
 	return shadowReq
