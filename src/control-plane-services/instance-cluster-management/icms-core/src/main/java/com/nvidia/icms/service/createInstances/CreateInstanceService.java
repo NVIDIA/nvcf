@@ -34,6 +34,7 @@ import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
+import com.nvidia.icms.service.gating.ClusterGatingService;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
@@ -73,6 +74,8 @@ public class CreateInstanceService {
     private final ComputePlatformService computePlatformService;
     private final InstanceValidationService instanceValidationService;
     private final GpuGatingService gpuGatingService;
+
+    private final ClusterGatingService clusterGatingService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -156,6 +159,7 @@ public class CreateInstanceService {
         // Applied last, on the destinations that would otherwise be used, so the errors above
         // still report their own cause and a gating rejection always means gating was the reason.
         gpuGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
+        clusterGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
 
         return filteredDestinations;
     }
