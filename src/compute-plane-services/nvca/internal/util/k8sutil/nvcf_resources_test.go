@@ -300,7 +300,7 @@ func TestSetConfigDefaultResources(t *testing.T) {
 	})
 }
 
-func TestSetConfigDefaultResourcesFromConfig(t *testing.T) {
+func TestSetConfigDefaultResourcesConfigOnly(t *testing.T) {
 	// The deprecated variables belong to the agent's process, so they must not leak in.
 	t.Setenv(utilsCPULimitEnv, "1")
 	t.Setenv(additionalOverheadResourcesEnv, base64.StdEncoding.EncodeToString([]byte(`{"cpu":"3"}`)))
@@ -313,7 +313,7 @@ func TestSetConfigDefaultResourcesFromConfig(t *testing.T) {
 			},
 		},
 	}
-	SetConfigDefaultResourcesFromConfig(&cfg)
+	SetConfigDefaultResourcesConfigOnly(&cfg)
 
 	quantities := func(rl nvcaconfig.ResourceList) map[corev1.ResourceName]string {
 		out := map[corev1.ResourceName]string{}

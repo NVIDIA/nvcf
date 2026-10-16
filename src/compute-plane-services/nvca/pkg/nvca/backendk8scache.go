@@ -1967,8 +1967,8 @@ func (c *BackendK8sCache) overheadRemovedInstanceTypesHint(ctx context.Context) 
 		names[i] = it.Name
 	}
 	return fmt.Sprintf("the infrastructure resource overhead of %s leaves no room in instance types %s, so NVCA "+
-		"left them out of the registration, which ICMS rejects while they have active instances; lower "+
-		"byoo.additionalResourceOverhead or another infrastructure container resource (utils.resources, "+
+		"left them out of the registration; if they have active instances, ICMS rejects the registration for that "+
+		"reason: lower byoo.additionalResourceOverhead or another infrastructure container resource (utils.resources, "+
 		"byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources), or remove those instances",
 		k8sutil.FormatResourceList(overhead), strings.Join(names, ", "))
 }

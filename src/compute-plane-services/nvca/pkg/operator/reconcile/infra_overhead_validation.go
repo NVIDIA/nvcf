@@ -76,7 +76,7 @@ func (bc *BackendK8sCache) validateInfraOverheadForActiveInstances(
 		log.WithError(err).Warn("Skipping the instance type overhead check: decode the agent configuration")
 		return nil
 	}
-	k8sutil.SetConfigDefaultResourcesFromConfig(&cfg)
+	k8sutil.SetConfigDefaultResourcesConfigOnly(&cfg)
 	fetcher, err := featureflag.NewListFetcher(cfg.Agent.FeatureFlags, cfg.Cluster.Attributes)
 	if err != nil {
 		log.WithError(err).Warn("Skipping the instance type overhead check: evaluate the agent feature flags")

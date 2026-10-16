@@ -95,12 +95,12 @@ func SetConfigDefaultResources(cfg *nvcaconfig.Config) error {
 	return nil
 }
 
-// SetConfigDefaultResourcesFromConfig applies the defaults of SetConfigDefaultResources
+// SetConfigDefaultResourcesConfigOnly applies the defaults of SetConfigDefaultResources
 // using cfg alone. It skips the deprecated resource environment variables, which the
 // agent reads from its own process, so a caller outside the agent can derive the
 // resources an agent will use from the configuration rendered for it.
 // DeprecatedResourceEnvs lists the variables it does not account for.
-func SetConfigDefaultResourcesFromConfig(cfg *nvcaconfig.Config) {
+func SetConfigDefaultResourcesConfigOnly(cfg *nvcaconfig.Config) {
 	setConfigDefaultResources(cfg, nil, featureflag.SharedStorageSpec{}, nil)
 }
 

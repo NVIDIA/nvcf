@@ -3038,14 +3038,27 @@ func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
 		name        string
 		registerErr error
 		overheadCPU string
+		wantStatus  int
 		wantHint    bool
 	}{
-		{name: "conflict after the overhead removed an instance type", registerErr: conflict, overheadCPU: "7910m", wantHint: true},
-		{name: "conflict while every instance type fits", registerErr: conflict, overheadCPU: "100m"},
+		{
+			name:        "conflict after the overhead removed an instance type",
+			registerErr: conflict,
+			overheadCPU: "7910m",
+			wantStatus:  http.StatusConflict,
+			wantHint:    true,
+		},
+		{
+			name:        "conflict while every instance type fits",
+			registerErr: conflict,
+			overheadCPU: "100m",
+			wantStatus:  http.StatusConflict,
+		},
 		{
 			name:        "other registration errors",
 			registerErr: nvcaerrors.HTTPStatusError(http.StatusInternalServerError, fmt.Errorf("error response from ICMS")),
 			overheadCPU: "7910m",
+			wantStatus:  http.StatusInternalServerError,
 		},
 	}
 	for _, tt := range tests {
@@ -3066,12 +3079,14 @@ func TestRegisterWithICMSExplainsOverheadConflict(t *testing.T) {
 
 			_, err := a.registerWithICMS(newTestContext(), nil)
 			require.Error(t, err)
+			assert.Equal(t, tt.wantStatus, nvcaerrors.GetHTTPStatusCode(err), "the ICMS error must stay wrapped")
 			if !tt.wantHint {
 				assert.NotContains(t, err.Error(), "leaves no room")
 				return
 			}
 			assert.ErrorContains(t, err, "409 Conflict; the infrastructure resource overhead of cpu 7910m "+
 				"leaves no room in instance types NCP.GPU.A100_1x")
+			assert.ErrorContains(t, err, "if they have active instances, ICMS rejects the registration for that reason")
 			assert.ErrorContains(t, err, "lower byoo.additionalResourceOverhead")
 		})
 	}
