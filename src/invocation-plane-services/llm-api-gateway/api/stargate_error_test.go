@@ -307,6 +307,7 @@ func TestGatewayErrorEnvelopes(t *testing.T) {
 			require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 			message := "bearer authorization is required"
 			if endpoint.anthropic {
+				message = "authorization required: send the API key in Authorization: Bearer or x-api-key"
 				require.JSONEq(t, anthropicErrorJSON(t, "authentication_error", message, "request-a"), rec.Body.String())
 				return
 			}

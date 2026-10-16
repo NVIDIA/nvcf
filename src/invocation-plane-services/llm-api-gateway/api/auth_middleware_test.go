@@ -307,6 +307,7 @@ func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
 		path          string
 		body          string
 		authorization string
+		emptyAuth     bool
 		apiKey        string
 		wantStatus    int
 		wantToken     string
@@ -335,6 +336,14 @@ func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
 			apiKey:        "sk-api-key",
 			wantStatus:    http.StatusUnauthorized,
 		},
+		{
+			name:       "messages treats an empty authorization header as present",
+			path:       messagesEndpointPath,
+			body:       `{"model":"fn-alpha/company-name/model-name","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
+			emptyAuth:  true,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
 	}
 
 	for _, tc := range cases {
@@ -353,6 +362,9 @@ func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			if tc.authorization != "" {
 				req.Header.Set(echo.HeaderAuthorization, tc.authorization)
+			}
+			if tc.emptyAuth {
+				req.Header[echo.HeaderAuthorization] = []string{""}
 			}
 			if tc.apiKey != "" {
 				req.Header.Set("X-Api-Key", tc.apiKey)

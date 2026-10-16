@@ -282,7 +282,7 @@ const headerAPIKey = "X-Api-Key"
 // accepts X-Api-Key so Anthropic SDK clients work with their default settings.
 // The Stargate provider strips both headers from outbound Messages requests.
 func callerCredential(header http.Header, routePath string) string {
-	if header.Get(echo.HeaderAuthorization) != "" {
+	if len(header.Values(echo.HeaderAuthorization)) > 0 {
 		return bearerTokenFromHeader(header.Get(echo.HeaderAuthorization))
 	}
 	if routePath == messagesEndpointPath {
