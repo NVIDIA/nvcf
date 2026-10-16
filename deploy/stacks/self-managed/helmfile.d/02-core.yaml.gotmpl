@@ -135,6 +135,23 @@ releases:
       - template: service
     needs:
       - nvcf/api
+      {{- if dig "workerCallbackProxy" "enabled" false .Values }}
+      # grpc-proxy mounts the pod certificate this release issues.
+      - nvcf/worker-callback-proxy
+      {{- end }}
+
+  - name: worker-callback-proxy
+    {{- $workerCallbackProxyChartPath := dig "workerCallbackProxy" "chartPath" "" .Values }}
+    chart: {{ $workerCallbackProxyChartPath | default "nvcf/helm-nvcf-worker-callback-proxy" | quote }}
+    {{- if not $workerCallbackProxyChartPath }}
+    version: 0.1.0
+    {{- end }}
+    namespace: nvcf
+    condition: workerCallbackProxy.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
 
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
