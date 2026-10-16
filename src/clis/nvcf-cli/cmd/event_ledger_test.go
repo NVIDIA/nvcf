@@ -104,6 +104,21 @@ func TestStagesEventsListRendersEvents(t *testing.T) {
 	assert.Contains(t, out.String(), "Successfully pulled image")
 }
 
+func TestStagesEventsListRendersStructuredBody(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"namespace":"ns","context":"","events":[` +
+			`{"event_name":"Pod.utils.Started","timestamp":"2026-01-01T00:00:01Z",` +
+			`"details":{"severity":"INFO","body":{"type":"Normal","reason":"Started"}}}]}`))
+	})
+
+	var out bytes.Buffer
+	stagesEventsListCmd.SetOut(&out)
+	t.Cleanup(func() { stagesEventsListCmd.SetOut(nil) })
+	require.NoError(t, stagesEventsListCmd.RunE(stagesEventsListCmd, nil))
+	assert.Contains(t, out.String(), "Pod.utils.Started")
+	assert.Contains(t, out.String(), `"type":"Normal"`)
+}
+
 func TestResolveEventLedgerURL(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()

@@ -100,12 +100,13 @@ type Event struct {
 	UpdatedAt string       `json:"updated_at,omitempty"`
 }
 
-// EventDetails carries the event payload attributes.
+// EventDetails carries the event payload attributes. Body can be a
+// structured map for k8s-object events, not just a plain string.
 type EventDetails struct {
-	Severity       string            `json:"severity,omitempty"`
-	SeverityNumber int               `json:"severity_number,omitempty"`
-	Body           string            `json:"body,omitempty"`
-	Attributes     map[string]string `json:"attributes,omitempty"`
+	Severity       string         `json:"severity,omitempty"`
+	SeverityNumber int            `json:"severity_number,omitempty"`
+	Body           any            `json:"body,omitempty"`
+	Attributes     map[string]any `json:"attributes,omitempty"`
 }
 
 // StatsOptions filters a stats query.

@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -260,7 +261,20 @@ func renderEvents(w io.Writer, events *eventledger.EventsResponse) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "TIMESTAMP\tEVENT\tSEVERITY\tMESSAGE")
 	for _, e := range events.Events {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Timestamp, e.EventName, e.Details.Severity, strings.TrimSpace(e.Details.Body))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Timestamp, e.EventName, e.Details.Severity, formatEventBody(e.Details.Body))
 	}
 	_ = tw.Flush()
+}
+
+// formatEventBody renders a string or structured event body for the text table.
+func formatEventBody(body any) string {
+	s, ok := body.(string)
+	if ok {
+		return strings.TrimSpace(s)
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Sprintf("%v", body)
+	}
+	return string(b)
 }

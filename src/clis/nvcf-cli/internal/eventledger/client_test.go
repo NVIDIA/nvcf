@@ -77,6 +77,21 @@ func TestListEventsSendsContextAndHost(t *testing.T) {
 	assert.Equal(t, "p", got.Events[0].Details.Attributes["k8s.pod.name"])
 }
 
+// A k8s-object event's body is a map, not a string; decoding must not fail.
+func TestListEventsDecodesStructuredBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"namespace":"fv-1","context":"x","events":[{"event_name":"Pod.utils.Started","timestamp":"t",` +
+			`"details":{"severity":"INFO","body":{"type":"Normal","object":{"kind":"Pod","name":"p"}}}}]}`))
+	}, "")
+
+	got, err := c.ListEvents(context.Background(), "fv-1", EventsContext{}, EventsAttribute{})
+	require.NoError(t, err)
+	require.Len(t, got.Events, 1)
+	body, ok := got.Events[0].Details.Body.(map[string]interface{})
+	require.True(t, ok, "expected a structured body, got %T", got.Events[0].Details.Body)
+	assert.Equal(t, "Normal", body["type"])
+}
+
 func TestListEventsSendsResourceAndAttributeFilter(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
