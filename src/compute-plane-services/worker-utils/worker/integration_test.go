@@ -52,6 +52,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/internal/testsupport"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -170,22 +171,27 @@ func (e *itEnv) runWorker(t *testing.T, workFunc testutils.DoWorkFunc) {
 	}
 	defer workerServer.Shutdown()
 
-	go func() {
-		defer cancel()
-		if err := workerServer.Wait(ctx); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, e.cfg)
-	if err != nil {
-		t.Fatalf("NewNVCFWorker: %v", err)
+	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+		func(ctx context.Context) error {
+			nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, e.cfg)
+			if err != nil {
+				return fmt.Errorf("NewNVCFWorker: %w", err)
+			}
+			if err := nvcfWorker.SetupWorkDirs(); err != nil {
+				return fmt.Errorf("SetupWorkDirs: %w", err)
+			}
+			if err := nvcfWorker.Run(false); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("Run: %w", err)
+			}
+			return nil
+		},
+		workerServer.Wait,
+	)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t.Error(runErr)
 	}
-	if err := nvcfWorker.SetupWorkDirs(); err != nil {
-		t.Fatalf("SetupWorkDirs: %v", err)
-	}
-	if err := nvcfWorker.Run(false); err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run: %v", err)
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		t.Error(waitErr)
 	}
 }
 

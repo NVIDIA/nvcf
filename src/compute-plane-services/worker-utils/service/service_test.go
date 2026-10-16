@@ -38,6 +38,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/internal/testsupport"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
@@ -264,17 +265,18 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 		}
 
 		defer workerServer.Shutdown()
-		// cancel when the work scenarios have finished
-		go func() {
-			defer cancel()
-			if err := workerServer.Wait(ctx); err != nil {
-				t.Error(err)
-			}
-		}()
-
-		err = runTestWorker(ctx, zapLogger, workerConfig)
+		runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+			func(ctx context.Context) error {
+				return runTestWorker(ctx, zapLogger, workerConfig)
+			},
+			workerServer.Wait,
+		)
+		err = runErr
 		if err != nil {
 			t.Fatal(err)
+		}
+		if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			t.Error(waitErr)
 		}
 	})
 
@@ -698,17 +700,18 @@ func runWorkerTest(t *testing.T, natsSuperCluster *testutils.SuperCluster, workF
 	}
 
 	defer workerServer.Shutdown()
-	// cancel when the work scenarios have finished
-	go func() {
-		defer cancel()
-		if err := workerServer.Wait(ctx); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	err = runTestWorker(ctx, zapLogger, workerConfig)
+	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+		func(ctx context.Context) error {
+			return runTestWorker(ctx, zapLogger, workerConfig)
+		},
+		workerServer.Wait,
+	)
+	err = runErr
 	if err != nil {
 		t.Fatal(err)
+	}
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		t.Error(waitErr)
 	}
 }
 
