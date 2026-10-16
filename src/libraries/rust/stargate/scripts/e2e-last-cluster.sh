@@ -71,6 +71,10 @@ mkdir -p "${work_dir}"
 
 model="e2e-model"
 routing_key="e2e"
+# Both Pylons register with one worker token. The dev auth fixture also
+# requires Stargate's service token.
+worker_token="e2e-worker-token"
+service_token="e2e-service-token"
 session_id="e2e-last-cluster-session"
 follow_up_count=10
 # Each mock-dynamo token takes token_delay_ms. Holders generate
@@ -85,6 +89,7 @@ sg_metrics=$((port_base + 2))
 sg_discovery=$((port_base + 3))
 sg_reverse=$((port_base + 4))
 worker_auth=$((port_base + 5))
+worker_auth_http=$((port_base + 6))
 gw_http=$((port_base + 30))
 gw_metrics=$((port_base + 31))
 mock_port() { echo $((port_base + 10 + 10 * $1)); }
@@ -200,6 +205,7 @@ both_tunnels_connected() {
 start_stack() {
     local algorithm="$1" flag="$2" index name port
     for port in "${sg_grpc}" "${sg_http}" "${sg_metrics}" "${sg_discovery}" "${worker_auth}" \
+        "${worker_auth_http}" \
         "${gw_http}" "${gw_metrics}" "$(mock_port 0)" "$(mock_port 1)" \
         "$(pylon_metrics_port 0)" "$(pylon_metrics_port 1)"; do
         if port_open "${port}"; then
@@ -222,10 +228,17 @@ start_stack() {
 }
 EOF
 
+    cat >"${run_dir}/worker-auth.json" <<EOF
+{"serviceToken": "${service_token}", "workerToken": "${worker_token}", "routingKey": "${routing_key}"}
+EOF
+    cat >"${run_dir}/stargate-secrets.json" <<EOF
+{"authToken": "${service_token}"}
+EOF
     start "${run_dir}/worker-auth.log" \
-        "${release_dir}/stargate-worker-auth-gateway" \
-        --listen-addr "127.0.0.1:${worker_auth}" \
-        --worker "token-a=${routing_key}" --worker "token-b=${routing_key}"
+        "${release_dir}/stargate-dev-auth" \
+        --config-path "${run_dir}/worker-auth.json" \
+        --grpc-listen-addr "127.0.0.1:${worker_auth}" \
+        --http-listen-addr "127.0.0.1:${worker_auth_http}"
     wait_for "worker-auth fixture" port_open "${worker_auth}"
     start "${run_dir}/stargate.log" env RUST_LOG=info \
         "${release_dir}/stargate" \
@@ -242,6 +255,7 @@ EOF
         --reverse-tunnel-listen-addr "127.0.0.1:${sg_reverse}" \
         --advertised-hostname-template localhost \
         --worker-auth-endpoint "http://127.0.0.1:${worker_auth}" \
+        --secrets-path "${run_dir}/stargate-secrets.json" \
         --quic-insecure
 
     for index in 0 1; do
@@ -264,7 +278,7 @@ EOF
             --stargate-address "127.0.0.1:${sg_grpc}" \
             --inference-server-id "pylon-${name}" \
             --cluster-id "cluster-${name}" \
-            --auth-token "token-${name}" \
+            --auth-token "${worker_token}" \
             --backend-connectivity reverse \
             --quic-insecure \
             --kv-cache-stats-path /kv-cache/stats \
@@ -352,7 +366,7 @@ if [[ ${build} -eq 1 ]]; then
     (cd "${gateway_root}" && go build -o "${release_dir}/llm-api-gateway" ./cmd/llm-api-gateway)
     (cd "${stargate_root}" && cargo build --locked --release -q -p stargate -p pylon -p mock-dynamo)
 fi
-for binary in llm-api-gateway stargate pylon mock-dynamo stargate-worker-auth-gateway; do
+for binary in llm-api-gateway stargate stargate-dev-auth pylon mock-dynamo; do
     [[ -x "${release_dir}/${binary}" ]] || fail "missing ${release_dir}/${binary}; run without --no-build"
 done
 

@@ -9,13 +9,13 @@ to pull. Release automation publishes those inventories as separate assets,
 then the documentation sync combines them into one customer-facing manifest.
 
 This split keeps ownership close to the stack that installs the dependency.
-Each stack is packaged, tagged, inventoried, and documented independently, on
-its own release trains. Which trains run together is recorded in the
-compatibility matrix, not implied by a shared version.
+Each stack is packaged, tagged, and inventoried on its own release trains.
+The compatibility matrix records which trains run together. An umbrella
+release packages a qualified combination without changing those versions.
 
 ## Architecture
 
-The flow has three layers:
+The flow has four layers:
 
 1. Each directory under `deploy/stacks/` owns its Helmfile states and
    `release-inventory.yaml`. An inventory config must reference only states
@@ -32,8 +32,10 @@ The flow has three layers:
    `docs/overview/compatibility-matrix.md`.
 1. The catalog records the latest released control-plane, compute-plane, and
    observability versions, and the `compatibility:` block records which trains
-   run together. Each stack's documentation is frozen on its own when its
-   train first releases.
+   run together. A qualified umbrella manifest locks one exact combination.
+   The umbrella bundle selects each stack from its own commit and publishes
+   immutable inventories and checksums. Maintained docs select approved prose
+   commits against that manifest; legacy docs editions remain immutable.
 
 The version catalog is the handoff between release facts and public
 documentation. Released inventories provide immutable versions and source
@@ -57,7 +59,8 @@ sequenceDiagram
     participant Sync as docs-version-sync
     participant QA
     participant Catalog as Development catalog
-    participant Stable as Versioned docs
+    participant Product as Umbrella release
+    participant Stable as Canonical versioned docs
     participant Manifest as Manifest page
 
     Contributor->>Stack: Update dependency and release-inventory.yaml
@@ -79,8 +82,13 @@ sequenceDiagram
 
     QA->>QA: Confirm the minimum train of each other stack this train works with
     QA->>Catalog: Update the compatibility block
-    Catalog->>Stable: Freeze that stack's docs and catalog for the train
-    Stable->>Stable: Make the train the stack's default docs version
+    QA->>Product: Qualify exact combination and upgrade paths
+    Catalog->>Product: Lock reviewed catalog and component identities
+    Product->>Assets: Publish verified bundle and checksums
+    Product->>Stable: Bind product tag and manifest digest
+    Contributor->>Stable: Approve docs commit and preview canonical site
+    Stable->>Manifest: Publish selected version without changing artifacts
+    Contributor->>Stable: Approve same-version prose correction
 ```
 
 ## Ownership Model
@@ -96,6 +104,9 @@ Keep each fact in one source:
   `compatibility:` block, which trains run together.
 - `docs/version-catalog/main.yaml` records public distribution locations and
   human-authored descriptions and source links.
+- The umbrella manifest pins the qualified product combination; the canonical
+  docs registry pins its independently approved documentation revision. See
+  [the umbrella release procedure](../../docs/dev/umbrella-releases.md).
 - Generated blocks in `docs/overview/manifest.md` and
   `docs/overview/compatibility-matrix.md` present the catalog to users.
 

@@ -22,6 +22,7 @@ go_library(
         "body_limit.go",
         "chat_handler.go",
         "context.go",
+        "error_response.go",
         "handlers.go",
         "last_cluster_keys.go",
         "messages_handler.go",

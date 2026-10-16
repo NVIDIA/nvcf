@@ -335,7 +335,7 @@ class FunctionDeploymentReconciliationServiceTest {
     }
 
     @Test
-    void shouldUpdateRunningFunctionStatusWhenRemoteInstanceLookupFails() {
+    void shouldKeepRunningFunctionStatusWhenRemoteInstanceLookupFails() {
         var failingIcmsClient = Mockito.mock(IcmsClient.class);
         var serviceWithFailingRemoteCall = new FunctionDeploymentReconciliationService(
                 failingIcmsClient, functionDeploymentService, instanceService,
@@ -374,7 +374,7 @@ class FunctionDeploymentReconciliationServiceTest {
                 functionLookupService.lookupUsingFunctionIdAndVersionId(TEST_FUNCTION_ID,
                                                                         TEST_VERSION_ID_1);
         assertThat(resultFunction).isPresent();
-        assertThat(resultFunction.get().getFunctionStatus()).isEqualTo(FunctionStatus.DEGRADED);
+        assertThat(resultFunction.get().getFunctionStatus()).isEqualTo(FunctionStatus.ACTIVE);
     }
 
     @Test

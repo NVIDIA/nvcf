@@ -211,6 +211,15 @@ nvctApi:
 #       repository: <your-repository>/alpine-k8s
 #       tag: "1.37.0"
 
+# The bundled upgrade receipt uses its chart's public upstream helper image.
+# Global NVCF image settings do not select this third-party image. To use a
+# mirror, set upgradeReceipt.image.registry and repository together. A tag
+# override is optional and must be qualified for the cluster's Kubernetes version.
+#   upgradeReceipt:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+
 accounts:
   limits:
     maxFunctions: 10
@@ -221,6 +230,22 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # How workers authenticate to NATS.
+  #   nkey: the NVCF API gives every worker the control plane's shared NATS
+  #     NKey as NKEY_SEED. The default.
+  #   token: each worker authenticates with its own worker token, into APP. The
+  #     NATS auth callout passes it to the NVCF API, which returns that function
+  #     version's permissions, and the API stops sending NKEY_SEED. Needs an NVCF
+  #     API and worker-utils that support NVCF_NATS_ACCOUNT. Use it when workers
+  #     run outside the control-plane cluster.
+  # Switching an existing install: see "Worker NATS Authentication" in
+  # docs/self-managed/control-plane-operations.md.
+  workerAuth: nkey
+  authCallout:
+    workerTokenAuth:
+      # token mode: the NVCF API endpoint the NATS auth callout sends worker
+      # tokens to. Changing it restarts the auth callout.
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
@@ -308,7 +333,8 @@ cassandra:
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
   # the self-managed PKI stack. Enabling addons.llm.pki with the managed
-  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # issuer, or workerCallbackProxy, provisions the OpenBao service PKI and
+  # creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
   # and has no namespace. The nvcf-pki Helm release that creates it and the
   # cert-manager ServiceAccount it authenticates as both live in the
   # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships

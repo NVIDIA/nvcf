@@ -7,6 +7,15 @@ the sole tag and release authority, publishing is live, and a merge to
 except the three under `deploy/stacks/`, which release from a
 maintenance branch instead.
 
+## Umbrella product releases
+
+An umbrella product release packages exact independently released stacks. It
+uses the explicit `Publish Umbrella Release` workflow and `nvcf/X.Y.Z` tag
+namespace. Component release triggers remain unchanged. Documentation
+corrections can advance an approved docs revision under the same umbrella
+version without creating another release. Follow the
+[qualification, activation, and rollback procedure](umbrella-releases.md).
+
 ## Publish gate
 
 The workflow reads these repository variables:
@@ -257,6 +266,38 @@ Examples:
 | `nvcf-ratelimiter-v1.15.1` | `release-nvcf-ratelimiter-v1.15` |
 
 Slashes remain branch namespace separators.
+
+### Patch an existing component minor
+
+Start from the latest stable patch in the required major/minor line, rather
+than the older patch currently selected by a stack. Reuse that release if it
+already contains the required fix and its published artifacts pass validation.
+Otherwise backport the missing fix and release the next ordinary patch version.
+
+Use `main` when it still belongs to the required minor and its unreleased changes
+are compatible with the patch. When development has moved to a later minor,
+create `release-<component-path>/vX.Y` from the latest release in the selected
+line. Preserve the released tree and comply with the release branch's linear
+history rules. Review the backport through a Pull Request targeting that branch.
+The `branch-cut` command is restricted to version-file registrations; it does
+not create ordinary service or chart maintenance branches.
+
+A service or chart maintenance merge does not create a tag automatically. After
+review and validation, publish the unused tag rendered from the registration's
+`tag_format`, or `<component-path>/vX.Y.Z` when no override exists, from the
+reviewed maintenance commit. Tag publication creates the GitHub Release and
+starts the existing downstream artifact delivery. Confirm the tag and workflow
+behavior in historical source before creating a branch or publishing a tag.
+
+Automatic chart and stack pin updates skip releases with a lower major, minor,
+or patch than the selected pin. A patch for an older minor must not downgrade
+the default branch. Update maintenance stack pins through their own reviewed
+Pull Requests after the component artifacts are verified.
+
+Qualify the complete stack combination before merging its release branch.
+Stack merges can publish automatically. For an umbrella release, assemble and
+qualify the final bundle from those exact component stack releases as described
+in [the umbrella release workflow](umbrella-releases.md).
 
 ## The version-file model
 

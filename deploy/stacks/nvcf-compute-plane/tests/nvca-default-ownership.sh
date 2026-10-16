@@ -80,6 +80,17 @@ render_values "${collector_values}"
 test "$(yq -r '.selfManaged.otelCollector.enabled' "${collector_values}")" = "false" ||
   fail "registration selfManaged.otelCollector.enabled must not auto-enable the OTel collector"
 
+test "$(yq -r '.utils // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack shadowed the chart utils reservation default without an explicit value"
+utils_values="${work_dir}/utils-values.yaml"
+render_values "${utils_values}" \
+  --state-values-set-string global.nvcaOperator.utils.resources.cpu=1 \
+  --state-values-set-string global.nvcaOperator.utils.resources.memory=2Gi
+test "$(yq -r '.utils.resources.cpu | tag + " " + .' "${utils_values}")" = '!!str 1' ||
+  fail "global.nvcaOperator.utils.resources.cpu was not forwarded to the chart as a string"
+test "$(yq -r '.utils.resources.memory' "${utils_values}")" = "2Gi" ||
+  fail "global.nvcaOperator.utils.resources.memory was not forwarded to the chart"
+
 write_registration '    workload:
       defaultOwnershipProbe: true'
 extended_values="${work_dir}/extended-values.yaml"

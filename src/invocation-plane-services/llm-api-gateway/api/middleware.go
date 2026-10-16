@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
@@ -45,6 +46,9 @@ const (
 	HeaderRequestID          = "X-Request-ID"
 	HeaderTargetRegion       = "X-NVCF-Target-Region"
 	HeaderLegacyTargetRegion = "X-Groq-Region"
+
+	// Anthropic SDKs read the request ID only from this header.
+	headerMessagesRequestID = "Request-Id"
 )
 
 func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
@@ -63,6 +67,8 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 
 			requestID := requestIDHeader(gc.Request().Header)
 			gc.store.Set(contextKeyRequestID, requestID)
+			// The error handler receives the original echo context.
+			ec.Set(contextKeyRequestID, requestID)
 
 			parentCtx := otel.GetTextMapPropagator().Extract(
 				gc.UserContext(),
@@ -83,7 +89,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				routingKey = requestRoutingKey(gc.Request())
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
+			bearerToken := callerCredential(gc.Request())
 			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
 
 			span.SetAttributes(
@@ -103,6 +109,14 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			gc.SetRequest(gc.Request().WithContext(ctx))
 			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
+			if isMessagesRequest(gc.Request()) {
+				// Runs as headers are written, after backend headers are
+				// copied, so the NVCF ID replaces any backend request ID.
+				gc.Response().Before(func() {
+					gc.Response().Header().Set(HeaderRequestID, requestID)
+					gc.Response().Header().Set(headerMessagesRequestID, requestID)
+				})
+			}
 
 			metricAttrs := []attribute.KeyValue{
 				attribute.String("method", gc.Request().Method),
@@ -205,13 +219,29 @@ func logCompletedHTTPRequest(ctx context.Context, gc *GatewayContext, requestSta
 	log.Msg("completed http request")
 }
 
+// completionLogEvent logs request-router rejections at info or above with
+// router_error_code, because clients see the code only when
+// ExposeRouterErrorCodes is enabled.
 func completionLogEvent(ctx context.Context, statusCode int, err error) *zerolog.Event {
-	if statusCode < http.StatusInternalServerError {
+	var upstream *provider.UpstreamError
+	routerCode := ""
+	if errors.As(err, &upstream) {
+		routerCode = upstream.RouterCode
+	}
+	var log *zerolog.Event
+	switch {
+	case statusCode >= http.StatusInternalServerError:
+		log = telemetry.Logger(ctx).Warn()
+		if err != nil {
+			log = log.Err(err)
+		}
+	case routerCode != "":
+		log = telemetry.Logger(ctx).Info()
+	default:
 		return telemetry.Logger(ctx).Debug()
 	}
-	log := telemetry.Logger(ctx).Warn()
-	if err != nil {
-		log = log.Err(err)
+	if routerCode != "" {
+		log = log.Str("router_error_code", routerCode)
 	}
 	return log
 }
@@ -245,6 +275,30 @@ func httpStatusCode(gc *GatewayContext, err error) int {
 		return http.StatusInternalServerError
 	}
 	return http.StatusOK
+}
+
+// headerAPIKey is the Anthropic SDK default credential header.
+const headerAPIKey = "X-Api-Key"
+
+// callerCredential returns the NVCF API key that authorizes the request.
+// Authorization, when present, is authoritative on every route. Messages also
+// accepts X-Api-Key so Anthropic SDK clients work with their default settings.
+// The Stargate provider strips both headers from outbound Messages requests.
+func callerCredential(r *http.Request) string {
+	if len(r.Header.Values(echo.HeaderAuthorization)) > 0 {
+		return bearerTokenFromHeader(r.Header.Get(echo.HeaderAuthorization))
+	}
+	if isMessagesRequest(r) {
+		return r.Header.Get(headerAPIKey)
+	}
+	return ""
+}
+
+// isMessagesRequest reports whether r targets the Anthropic Messages route.
+// Credential selection, request-id, the 401 message, and the error envelope
+// all use it so they stay in step.
+func isMessagesRequest(r *http.Request) bool {
+	return r.URL.Path == messagesEndpointPath
 }
 
 func bearerTokenFromHeader(value string) string {

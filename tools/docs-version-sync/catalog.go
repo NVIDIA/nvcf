@@ -91,21 +91,22 @@ type ManifestEntry struct {
 }
 
 type Catalog struct {
-	DocsEdition           *DocsEdition         `yaml:"docs_edition,omitempty"`
-	Version               int                  `yaml:"version"`
-	Target                string               `yaml:"target"`
-	Registries            map[string]Registry  `yaml:"registries"`
-	Publications          []Publication        `yaml:"publications,omitempty"`
-	VersionOverrides      []VersionOverride    `yaml:"version_overrides,omitempty"`
-	PublicationPending    []string             `yaml:"publication_pending,omitempty"`
-	Manifest              ManifestMetadata     `yaml:"manifest,omitempty"`
-	ReleaseSet            ReleaseSetMetadata   `yaml:"release_set,omitempty"`
-	Compatibility         []CompatibilityEntry `yaml:"compatibility,omitempty"`
-	Stack                 StackMetadata        `yaml:"stack"`
-	Denylist              []DenylistEntry      `yaml:"denylist,omitempty"`
-	Artifacts             []Artifact           `yaml:"artifacts"`
-	SupplementalArtifacts []Artifact           `yaml:"supplemental_artifacts"`
-	Outputs               []OutputFile         `yaml:"outputs"`
+	UmbrellaManifestSHA256 string               `yaml:"umbrella_manifest_sha256,omitempty"`
+	DocsEdition            *DocsEdition         `yaml:"docs_edition,omitempty"`
+	Version                int                  `yaml:"version"`
+	Target                 string               `yaml:"target"`
+	Registries             map[string]Registry  `yaml:"registries"`
+	Publications           []Publication        `yaml:"publications,omitempty"`
+	VersionOverrides       []VersionOverride    `yaml:"version_overrides,omitempty"`
+	PublicationPending     []string             `yaml:"publication_pending,omitempty"`
+	Manifest               ManifestMetadata     `yaml:"manifest,omitempty"`
+	ReleaseSet             ReleaseSetMetadata   `yaml:"release_set,omitempty"`
+	Compatibility          []CompatibilityEntry `yaml:"compatibility,omitempty"`
+	Stack                  StackMetadata        `yaml:"stack"`
+	Denylist               []DenylistEntry      `yaml:"denylist,omitempty"`
+	Artifacts              []Artifact           `yaml:"artifacts"`
+	SupplementalArtifacts  []Artifact           `yaml:"supplemental_artifacts"`
+	Outputs                []OutputFile         `yaml:"outputs"`
 }
 
 type ReleaseSetStatus string

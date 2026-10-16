@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- if or .Values.invocation.env .Values.invocation.metrics.enabled }}
+{{- $env := .Values.invocation.env | default dict }}
+{{- if or $env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,8 +23,16 @@ metadata:
   labels:
     {{- include "nvcf-invocation-service.labels" . | nindent 4 }}
 data:
-  {{- range $key, $value := .Values.invocation.env }}
+  {{- range $key, $value := $env }}
   {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- if not (hasKey $env "ENFORCE_POLLING_OWNER") }}
+  ENFORCE_POLLING_OWNER: {{ .Values.invocation.polling.enforceOwnership | quote }}
+  {{- end }}
+  {{- if not (hasKey $env "CORS_ALLOWED_ORIGINS") }}
+  {{- with .Values.invocation.cors.allowedOrigins }}
+  CORS_ALLOWED_ORIGINS: {{ join "," . | quote }}
+  {{- end }}
   {{- end }}
   {{- if .Values.invocation.metrics.enabled }}
   APP_CONFIG: "/etc/nvcf-invocation/settings.yaml"
@@ -37,7 +46,7 @@ data:
   {{- with .Values.invocation.tracing.baggageAttributeAllowlist }}
   SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST: {{ join "," . | quote }}
   {{- end }}
-  {{- if not (hasKey .Values.invocation.env "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS") }}
+  {{- if not (hasKey $env "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS") }}
   WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://invocation.{{ include "nvcf-invocation-service.namespace" . }}.svc.cluster.local:{{ (index .Values.invocation.service.ports 0).port }}"
   {{- end }}
 {{- end }}

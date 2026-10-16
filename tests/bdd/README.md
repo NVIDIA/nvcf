@@ -26,6 +26,7 @@ godog_test.go
             Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
             TestMultiClusterUp, TestSingleClusterHelmfile, TestSingleClusterHA,
             TestMultiClusterHelmfile,
+            TestMultiClusterHelmfileLLMLastClusterAffinity,
             TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
@@ -52,7 +53,12 @@ public task and function chart references. `SAMPLE_HELM_TASK_CHART` and
 `SAMPLE_HELM_FUNCTION_CHART` must declare CPU and memory resources. Their
 `_WITHOUT_RESOURCES` counterparts must omit them. The function charts must
 expose an `entrypoint` Service on port 8000, answer `/health`, and echo the
-request message from `/echo`.
+request message from `/echo`. The single-cluster LLM field-fidelity scenario
+deploys the in-repo `examples/function-samples/openai-compatible-sample`, which
+supports the `x_load_tester_echo` body control, and reads the forwarded request
+from its reply. It defaults to the released
+`nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:5.1.0`;
+set `SAMPLE_LLM_ECHO_IMAGE` to override it.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -79,6 +85,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_LLM_ECHO_IMAGE=<optional-image-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Single-cluster HA Helmfile feature: installs the control plane with
@@ -106,6 +113,20 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
+
+# Multi-cluster last-cluster affinity feature: control plane on
+# k3d-ncp-local-cp plus two compute clusters, k3d-ncp-local-compute-1 and
+# k3d-ncp-local-compute-2. One LLM function runs a version on each compute
+# cluster; returning sessions, a new session, and failover are checked through
+# router and gateway metrics. The image tag variables are optional. Set them
+# when the stack-pinned LLM API gateway or request router images predate
+# last-cluster affinity. LAST_CLUSTER_INSTANCE_TYPE overrides the instance
+# type the feature deploys, NCP.GPU.H100_1x by default.
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  LLM_API_GATEWAY_IMAGE_TAG=<optional-tag> \
+  LLM_REQUEST_ROUTER_IMAGE_TAG=<optional-tag> \
+  LAST_CLUSTER_INSTANCE_TYPE=<optional-type> \
+  go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 
 ### EKS Helmfile features (non-local)
@@ -178,6 +199,9 @@ If a new step is genuinely needed:
 
 - Docker + k3d on `PATH`. The Make target the suite invokes does the
   cluster create.
+- 8 CPUs visible to Docker. The local compute-plane fixtures reserve about
+  1.75 CPU per function instance, so 8 CPUs are enough for the
+  `NCP.GPU.H100_1x` instance type the features deploy.
 - `kubectl` and `helm` on `PATH` for the assertion-side commands.
 - `make` in the repo root so the `make -C deploy/stacks/self-managed`
   invocations resolve.

@@ -93,6 +93,7 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 				captured <- messagesCapturedRequest{body, r.Header.Clone(), r.URL.RequestURI()}
 				w.Header().Set("Content-Type", tc.contentType)
 				w.Header().Set("Request-Id", "msg-request")
+				w.Header().Set(HeaderRequestID, "backend-request")
 				w.Header().Set("X-Stargate-Private", "remove")
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.response)
@@ -110,12 +111,16 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 			e.ServeHTTP(rec, messagesHTTPRequest(body))
 			require.Equal(t, tc.status, rec.Code, rec.Body.String())
 			require.Equal(t, tc.response, rec.Body.String())
-			require.Equal(t, "msg-request", rec.Header().Get("Request-Id"))
+			requestID := rec.Header().Get(headerMessagesRequestID)
+			require.NotEmpty(t, requestID)
+			require.NotEqual(t, "msg-request", requestID, "NVCF id replaces the backend request-id")
+			require.Equal(t, []string{requestID}, rec.Header().Values(HeaderRequestID), "NVCF id replaces the backend X-Request-Id")
 			require.Equal(t, "session-test", rec.Header().Get(HeaderMultiTurnSessionID))
 			require.Empty(t, rec.Header().Get("X-Stargate-Private"))
 			require.Equal(t, "caller-token", auth.authorizeToken)
 			require.Equal(t, "fn-alpha", auth.authorizeRoutingKey)
 			got := <-captured
+			require.Equal(t, requestID, got.headers.Get(HeaderRequestID), "backend sees the same id")
 			require.Equal(t, "/v1/messages?beta=test", got.uri)
 			want := jsonObject(t, []byte(body))
 			delete(want, "extra-headers")
@@ -437,6 +442,48 @@ func TestMessagesNativeGatewayErrors(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "model must be prefixed")
 }
 
+// Anthropic SDKs read the request id only from the request-id header, so
+// gateway-generated errors must carry it alongside the body request_id.
+func TestMessagesGatewayErrorsCarryRequestIDHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		maxBody int64
+		edit    func(*http.Request)
+		status  int
+	}{
+		{name: "malformed body", status: http.StatusBadRequest, edit: func(r *http.Request) {}},
+		{name: "missing credentials", status: http.StatusUnauthorized, edit: func(r *http.Request) {
+			r.Header.Del("Authorization")
+			r.Header.Del("X-API-Key")
+		}},
+		{name: "body too large", status: http.StatusRequestEntityTooLarge, maxBody: 32, edit: func(r *http.Request) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			if tc.maxBody > 0 {
+				cfg.Server.MaxRequestBodyBytes = tc.maxBody
+			}
+			e, _ := messagesTestAPI(t, "http://127.0.0.1:1", cfg, nil, nil)
+			body := messagesTestBody
+			if tc.status == http.StatusBadRequest {
+				body = `{`
+			}
+			req := messagesHTTPRequest(body)
+			tc.edit(req)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			var envelope struct {
+				RequestID string `json:"request_id"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+			require.NotEmpty(t, envelope.RequestID)
+			require.Equal(t, envelope.RequestID, rec.Header().Get(headerMessagesRequestID))
+			require.Equal(t, envelope.RequestID, rec.Header().Get(HeaderRequestID))
+		})
+	}
+}
+
 func TestMessagesInBandErrorsAndUsageObservability(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -535,4 +582,30 @@ func TestMessagesUnknownDispatchOutcomeRetainsReservation(t *testing.T) {
 	}
 	input := estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["messages"])) + estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["system"])) + estimatedTokenCountForText(string(jsonObject(t, []byte(messagesTestBody))["tools"]))
 	require.EqualValues(t, input+64, charged)
+}
+
+func TestMessagesGatewayRenderedUpstreamErrorUsesNVCFRequestID(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set(HeaderRequestID, "backend-request")
+		w.Header().Set("Request-Id", "backend-request")
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "Internal Server Error")
+	}))
+	defer backend.Close()
+	cfg := config.Default()
+	cfg.ModelURIAllowlistEnabled = true
+	e, _ := messagesTestAPI(t, backend.URL, cfg, &recordingRateLimiter{}, []string{messagesEndpointPath})
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, messagesHTTPRequest(messagesTestBody))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+	requestID := rec.Header().Get(headerMessagesRequestID)
+	require.NotEmpty(t, requestID)
+	require.NotEqual(t, "backend-request", requestID)
+	require.Equal(t, []string{requestID}, rec.Header().Values(HeaderRequestID))
+	var body anthropicErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, requestID, body.RequestID)
 }

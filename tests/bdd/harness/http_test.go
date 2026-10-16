@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNetHTTPClientSendsHeadersAndBody(t *testing.T) {
@@ -71,5 +72,27 @@ func TestNetHTTPClientErrorOmitsHeaderValues(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("error leaks header value: %v", err)
+	}
+}
+
+type deadlineTransport struct{ deadline time.Time }
+
+func (tr *deadlineTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	tr.deadline, _ = req.Context().Deadline()
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("done")), Header: make(http.Header)}, nil
+}
+
+func TestNetHTTPClientHonorsExplicitDeadline(t *testing.T) {
+	client := NewHTTPClient().(*netHTTPClient)
+	transport := &deadlineTransport{}
+	client.client.Transport = transport
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	if _, err := client.Do(ctx, "POST", "http://sample.test", nil, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if !transport.deadline.Equal(want) {
+		t.Fatalf("request deadline %s, want explicit deadline %s", transport.deadline, want)
 	}
 }

@@ -18,7 +18,7 @@ OCI_REGISTRY_NAMESPACE ?= 0651155215864979/ncp-dev
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: deploy delete status lint template clean package push-oci install uninstall validate
+.PHONY: deploy delete status lint template clean package push-oci install uninstall validate test
 
 install:
 ifndef values
@@ -63,6 +63,10 @@ template:
 validate: template
 	@echo "Validating manifest with kubeconform..."
 	@kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
+
+test:
+	@echo "Running chart tests..."
+	@./tests/sidecar_release_artifacts_test.sh
 
 
 # Publish Chart

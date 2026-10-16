@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nvidia.boot.exceptions.BadRequestException;
+import java.util.ArrayList;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -37,11 +39,7 @@ class LlmRoutingMethodValidatorTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-        "power-of-two", "wait-and-widen", "round-robin", "random", "pulsar",
-        "pulsar-wait-and-widen", "groq-multiregion", "pulsar-multiregion",
-        "Power-Of-Two", "power_of_two", "wait_and_widen", "pulsar_wait_and_widen",
-        "groq_multiregion", "pulsar_multiregion", "  pulsar  ",
-        "pulsar;seed=stable-a",
+        "  pulsar  ", "pulsar;seed=stable-a",
         "pulsar; seed=stable-a; consider_kv_free_tokens=true",
         "pulsar-wait-and-widen;seed=stable-a;n=2;max_queue_time_floor_ms=100;"
                 + "max_queue_time_ceil_ms=500",
@@ -57,6 +55,15 @@ class LlmRoutingMethodValidatorTest {
     })
     @MethodSource("routingMethodsAtLimits")
     void validRoutingMethodsAccepted(String routingMethod) {
+        assertThatCode(() -> LlmRoutingMethodValidator.validate(MODEL, routingMethod))
+                .doesNotThrowAnyException();
+    }
+
+    // The router owns routing method names and parameters. Whatever its manifest lists, the
+    // format check must accept.
+    @ParameterizedTest
+    @MethodSource("manifestRoutingMethods")
+    void manifestRoutingMethodsAccepted(String routingMethod) {
         assertThatCode(() -> LlmRoutingMethodValidator.validate(MODEL, routingMethod))
                 .doesNotThrowAnyException();
     }
@@ -124,6 +131,28 @@ class LlmRoutingMethodValidatorTest {
                 Arguments.of("  pulsar  ", "pulsar"),
                 Arguments.of("  Power_Of_Two;seed=x  ", "Power_Of_Two;seed=x"),
                 Arguments.of("pulsar;  seed=x", "pulsar;  seed=x"));
+    }
+
+    // Every name and alias in the case and underscore forms the router also accepts, the canonical
+    // name with each parameter the method accepts, and with all of them at once, which checks the
+    // parameter-count and length limits. Values are not interpreted here, so 1 stands in for every
+    // parameter type.
+    private static Stream<String> manifestRoutingMethods() {
+        var manifest = RoutingMethodManifest.load();
+        var routingMethods = new ArrayList<String>();
+        for (var method : manifest.methods()) {
+            method.spellings()
+                    .flatMap(spelling -> Stream.of(spelling, spelling.toUpperCase(Locale.ROOT),
+                            spelling.replace('-', '_')))
+                    .distinct()
+                    .forEach(routingMethods::add);
+            var parameters = manifest.parameters(method).stream()
+                    .map(parameter -> ";" + parameter + "=1")
+                    .toList();
+            parameters.forEach(parameter -> routingMethods.add(method.name() + parameter));
+            routingMethods.add(method.name() + String.join("", parameters));
+        }
+        return routingMethods.stream();
     }
 
     private static Stream<String> routingMethodsAtLimits() {

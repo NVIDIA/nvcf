@@ -18,7 +18,7 @@
 //!
 //! The function API stores `llmConfig.routingMethod` after a format check only,
 //! so Stargate is the first component that rejects an unknown method. These
-//! tests compare `load_balancer/routing_methods.json` with the serde names, the
+//! tests compare `routing_methods.json` with the serde names, the
 //! `x-routing-method` request path, routing-expression parameters, load
 //! balancer names, the published docs, and the bundled benchmark and simulator
 //! configs. Metrics labels are checked in `metrics.rs`.
