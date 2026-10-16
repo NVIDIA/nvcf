@@ -651,8 +651,10 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		return nil, fmt.Errorf("failed to create checkpoint dir: %w", mkErr)
 	}
 	defer func() {
-		// A failed capture leaves nothing a restore could use.
+		// A failed capture leaves nothing a restore could use; its logs are
+		// kept to say why.
 		if retErr != nil {
+			keepFailureLogs(a.config.CheckpointDir, checkpointDir, log)
 			if err := os.RemoveAll(checkpointDir); err != nil {
 				log.WithError(err).WithField("dir", checkpointDir).Warn("cannot remove the failed capture's directory")
 			}
