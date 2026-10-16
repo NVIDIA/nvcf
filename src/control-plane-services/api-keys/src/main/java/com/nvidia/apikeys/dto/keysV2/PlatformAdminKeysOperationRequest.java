@@ -27,8 +27,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * The route fixes nothing. A single "*" selects every value of a dimension. Selecting every
- * account, issuer service, and user also requires confirmPlatformWide.
+ * A single "*" entry in a list selects every value for that dimension. Setting all three
+ * lists to ["*"] also requires confirmPlatformWide to be true; this class does not enforce
+ * that pairing.
  */
 @Data
 @Builder(toBuilder = true)
