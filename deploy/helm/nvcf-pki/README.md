@@ -20,7 +20,7 @@ configure:
 
 Provision those dependencies before enabling the issuer. The self-managed
 OpenBao migrations can provision the NVCF service-issuing PKI backend. See the
-[LLM OpenBao addon](../../../migrations/openbao/addons/llm/README.md) for its
+[service PKI OpenBao addon](../../../migrations/openbao/addons/service-pki/README.md) for its
 default paths and role bindings.
 
 ## Prerequisites
