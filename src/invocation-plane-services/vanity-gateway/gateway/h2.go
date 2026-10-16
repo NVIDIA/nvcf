@@ -111,6 +111,7 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 	serverTelemetry := middleware.ServerTelemetryMiddleware()
 
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
 	r.Use(middleware.RejectSpoofedShadowRequests(shadowHeader, serverTelemetry))
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
