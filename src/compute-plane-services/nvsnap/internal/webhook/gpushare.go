@@ -180,7 +180,7 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 		}
 	}
 	if len(libMountedAt) < len(gpuContainers) {
-		vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: bundleRoot + "/nvsnap", Type: &dir}}})
+		vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.bundleDir(m.BundleID), Type: &dir}}})
 	}
 	patches = append(patches, addVolumes(pod, vols)...)
 

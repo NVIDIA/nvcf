@@ -59,6 +59,14 @@ type WebhookConfig struct {
 	// affinity as JSON (webhook.AgentPlacement), set by the chart.
 	AgentPlacement string
 
+	// DynamoNamespace is the fixed Dynamo namespace for Dynamo components
+	// (webhook.Mutator.DynamoNamespace).
+	DynamoNamespace string
+	// DynamoLeaseTTL is webhook.Mutator.DynamoLeaseTTL.
+	DynamoLeaseTTL int
+	// CaptureLivenessBudget is webhook.Mutator.CaptureLivenessBudget.
+	CaptureLivenessBudget int
+
 	// CacheSalt is folded into every cache identity the webhook composes
 	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
 	// cluster-wide; empty leaves identities unchanged.
@@ -139,8 +147,11 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 	}
 
 	mut := &webhook.Mutator{
-		Backend:        backend,
-		AgentPlacement: placement,
+		Backend:               backend,
+		AgentPlacement:        placement,
+		DynamoNamespace:       cfg.DynamoNamespace,
+		DynamoLeaseTTL:        cfg.DynamoLeaseTTL,
+		CaptureLivenessBudget: cfg.CaptureLivenessBudget,
 		// nvsnap#194 + #88: per-pod OverlayFS unions over every captured
 		// volume (rootfs-extract subpaths AND hostPath/emptyDir user-data
 		// volumes). The Mutator calls PrepareOverlay synchronously during
@@ -200,6 +211,8 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
+		// New pods mount the bundle version this node's agent staged.
+		BundleID: a.currentBundle(),
 		// gpushare: per-pod chunk stores live on the node-local checkpoint
 		// disk, next to the checkpoints they are collected into.
 		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),
@@ -231,6 +244,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 			// Helm instances restore from their group captures.
 			mut.CRIUGroups = a.lookupCRIUGroupFor
 			mut.CRIUGroupAdmits = a.criuGroupAdmits
+			mut.CRIUCompanionAdmits = a.criuCompanionAdmits
+			mut.CRIUCompanionSlot = a.claimCompanionSlot
+			a.specCacheURI = mut.SpecCacheURI
 		}
 	}
 	handler := &webhook.Handler{

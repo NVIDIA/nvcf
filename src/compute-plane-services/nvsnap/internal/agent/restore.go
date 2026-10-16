@@ -94,7 +94,7 @@ func precreateUnixSocketDirs(filesImg string, placeholderPID int, log *logrus.En
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	created := 0
 	for d := range dirs {
-		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", "mkdir", "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", inContainerTool(placeholderPID, "mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 		if err := mk.Run(); err != nil {
 			log.WithError(err).WithField("dir", d).Warn("Failed to mkdir unix-socket parent dir in placeholder")
 			continue
@@ -410,12 +410,27 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// loopback so CRIU's TCP socket restore can re-bind to it.
 		// Without this, bind(2) returns EADDRNOTAVAIL — the placeholder
 		// was assigned a different pod IP by the K8s CNI.
-		if metadata.SourcePodIP != "" {
+		//
+		// Not when the inet address map moves that address: criu then
+		// re-binds the sockets to the new one, and the instance's DNAT
+		// rules send the pod's own traffic to its old address here. An
+		// alias would make the old address local, and capture the traffic
+		// of another pod of the instance that now has it.
+		if inetAddrMapMoves(req.InetAddrMap, metadata.SourcePodIP) {
+			log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Source pod IP moved by the inet address map; no alias on placeholder lo")
+		} else if metadata.SourcePodIP != "" {
 			if aerr := addSourcePodIPToPlaceholderLo(placeholderMntnsPID, metadata.SourcePodIP); aerr != nil {
 				log.WithError(aerr).Warn("Failed to alias source pod IP on placeholder lo; TCP restore may fail")
 			} else {
 				log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Aliased source pod IP on placeholder lo")
 			}
+		}
+
+		// Stage the bundle first: the steps below and criu's own tmpfs
+		// restore run tools inside the placeholder, and must not depend
+		// on what the workload image ships.
+		if sErr := a.stageV2Bundle(fmt.Sprintf("/proc/%d/root", placeholderMntnsPID), log); sErr != nil {
+			log.WithError(sErr).Warn("Failed to stage the criu bundle into the placeholder; the replay uses the image's tools")
 		}
 
 		// Pre-create parent dirs of every path-bound unix socket the dump
@@ -461,27 +476,18 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// checkpoint can't be reopened. See
 		// docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 		//
-		// Per-mount failures are logged and skipped — CRIU may still
-		// succeed if the workload didn't depend on the missing content
-		// (Q6 in design). Rootfs mirror failure above is fatal; this is
-		// not.
-		var replayed, replayFailed int
+		// A failed or incomplete replay fails the restore: the archive
+		// holds files the workload has open or mapped (and the parent
+		// directories of its deleted ones), and CRIU would fail on the
+		// first one missing, or restore a workload without them.
 		for _, rm := range metadata.ReplayMounts {
 			tarAbs := filepath.Join(checkpointDir, rm.Tarball)
 			if rErr := untarIntoMntns(placeholderMntnsPID, rm.Path, tarAbs, log); rErr != nil {
-				log.WithError(rErr).WithField("mp", rm.Path).
-					Warn("Failed to replay mount into placeholder; CRIU may fail for this mount")
-				replayFailed++
-				continue
+				return nil, fmt.Errorf("replay %s into the placeholder: %w", rm.Path, rErr)
 			}
-			replayed++
 		}
-		if replayed > 0 || replayFailed > 0 {
-			log.WithFields(logrus.Fields{
-				"replayed": replayed,
-				"failed":   replayFailed,
-				"total":    len(metadata.ReplayMounts),
-			}).Info("Cross-pod mount replay complete")
+		if len(metadata.ReplayMounts) > 0 {
+			log.WithField("total", len(metadata.ReplayMounts)).Info("Cross-pod mount replay complete")
 		}
 	}
 

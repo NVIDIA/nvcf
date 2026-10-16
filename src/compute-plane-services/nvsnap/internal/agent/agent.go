@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -55,6 +56,9 @@ import (
 type Config struct {
 	ListenAddr    string
 	CheckpointDir string
+	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
+	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
+	CRIUGhostLimit int64
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -288,6 +292,11 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 
 // Agent is the NVSNAP node agent
 type Agent struct {
+	// freezes are this node's members waiting at a group capture's freeze point.
+	freezes freezePoints
+	// holds are this node's member pods frozen for a group capture
+	// (pod_hold.go).
+	holds podHolds
 	// capturing holds the container IDs with a checkpoint in progress: two
 	// captures of one workload would each suspend it and both fail.
 	capturing sync.Map
@@ -298,7 +307,10 @@ type Agent struct {
 
 	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
 	// is the cluster's capture method (criu_auto_restore.go).
-	criuRestore     *criuAutoRestorer
+	criuRestore *criuAutoRestorer
+	// specCacheURI hashes a pod's configuration as admission does (the
+	// webhook's SpecCacheURI); nil when the webhook is off.
+	specCacheURI    func(*corev1.Pod) (string, bool)
 	criuRestoreOnce sync.Once
 	// checkpointing holds the pods being checkpointed (namespace/pod).
 	checkpointing sync.Map
@@ -503,6 +515,8 @@ func New(cfg Config) (*Agent, error) {
 // Run starts the agent
 func (a *Agent) Run(ctx context.Context) error {
 	metrics.RegisterAgent()
+	// A capture this agent was holding pods for ended with its last run.
+	a.recoverPodHolds(a.log.WithField("subsys", "pod-hold"))
 
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset,
 	// so prod clusters without Jaeger pay zero overhead.
@@ -564,6 +578,17 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/unlock", a.fabricUnlockHandler).Methods("PUT")
 	router.HandleFunc("/v1/gpushare/group-restore", a.groupRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
+	// Instance companions (criu_companion.go): a rank's connections, and
+	// the continue of a companion restored stopped.
+	router.HandleFunc("/v1/pods/{namespace}/{pod}/peers", a.peersHandler).Methods("GET")
+	// Capture preflight (capture_preflight.go): an instance's report, and
+	// the host checks of a pod on this node.
+	router.HandleFunc("/v1/capture-preflight/pod/{namespace}/{pod}", a.podPreflightHandler).Methods("GET")
+	router.HandleFunc("/v1/capture-preflight/{namespace}/{pod}", a.instancePreflightHandler).Methods("GET")
+	// A node bundle version, for a peer whose restore placeholder needs it
+	// (bundle_versions.go).
+	router.HandleFunc("/v1/bundles/{id}", a.bundleHandler).Methods("GET")
+	router.HandleFunc("/v1/group-freeze/{session}/{namespace}/{pod}", a.freezeHandler).Methods("GET", "POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
 	// A ready rank's cache tree for the agent collecting its set

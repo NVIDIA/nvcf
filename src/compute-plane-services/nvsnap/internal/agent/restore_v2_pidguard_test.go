@@ -185,7 +185,7 @@ func TestAwaitPlaceholderPIDReservation(t *testing.T) {
 			5000: {ns: "pid:[111]", nspid: "1"},
 			5001: {ns: "pid:[111]", nspid: "100002"},
 		})
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 5*time.Second, log)
+		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 5*time.Second, nil, log)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -200,7 +200,7 @@ func TestAwaitPlaceholderPIDReservation(t *testing.T) {
 			5001: {ns: "pid:[111]", nspid: "363"},
 		})
 		start := time.Now()
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 1200*time.Millisecond, log)
+		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 1200*time.Millisecond, nil, log)
 		if err == nil {
 			t.Fatalf("expected an error, got max=%d", got)
 		}
@@ -216,7 +216,7 @@ func TestAwaitPlaceholderPIDReservation(t *testing.T) {
 
 	t.Run("does not fail the restore when the namespace cannot be read", func(t *testing.T) {
 		// A procfs read error is ambiguous, not proof of a missing reservation.
-		_, err := awaitPlaceholderPIDReservationFor(t.TempDir(), 5000, 600*time.Millisecond, log)
+		_, err := awaitPlaceholderPIDReservationFor(t.TempDir(), 5000, 600*time.Millisecond, nil, log)
 		if err == nil {
 			t.Fatal("expected an error describing the unreadable namespace")
 		}
@@ -256,7 +256,7 @@ func TestAwaitPlaceholderPIDReservation_LowTaskBlocks(t *testing.T) {
 	if max, low, err := placeholderPIDs(base, 5000); err != nil || max != 100002 || low != 9 {
 		t.Fatalf("placeholderPIDs = %d, %d, %v; want 100002, 9 (the init's thread)", max, low, err)
 	}
-	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, log)
+	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log)
 	if err == nil || !strings.Contains(err.Error(), "still holds pid 9") {
 		t.Fatalf("a low thread must block the restore with its pid named, got %v", err)
 	}
@@ -265,7 +265,53 @@ func TestAwaitPlaceholderPIDReservation_LowTaskBlocks(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(base, "5000", "task", "5003")); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, log); err != nil || got != 100002 {
+	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log); err != nil || got != 100002 {
 		t.Fatalf("got %d, %v; want 100002", got, err)
+	}
+}
+
+// In a pod whose containers share one pid namespace, a sidecar started
+// before the placeholder holds a low pid. Only a pid the checkpoint
+// restores blocks the restore.
+func TestAwaitPlaceholderPIDReservation_ExactClash(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	log.Logger.SetOutput(io.Discard)
+	base := fakeProc(t, map[int]procEntry{
+		5000: {ns: "pid:[111]", nspid: "1"},
+		5001: {ns: "pid:[111]", nspid: "37"}, // a native sidecar
+		5002: {ns: "pid:[111]", nspid: "100002"},
+	})
+	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 2*time.Second, map[int]bool{45: true, 591: true}, log); err != nil || got != 100002 {
+		t.Fatalf("a sidecar on a pid the dump does not use blocked the restore: %d %v", got, err)
+	}
+	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, map[int]bool{37: true, 45: true}, log)
+	if err == nil || !strings.Contains(err.Error(), "pid 37, which the checkpoint restores") {
+		t.Fatalf("a held pid the dump restores: %v", err)
+	}
+	if _, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log); err == nil {
+		t.Fatal("without the dumped ids, any low pid must block the restore")
+	}
+}
+
+func TestParsePstreeIDs(t *testing.T) {
+	ids, err := parsePstreeIDs([]byte(`{"magic":"PSTREE","entries":[
+		{"pid":45,"ppid":0,"pgid":45,"sid":7,"threads":[45,46,47]},
+		{"pid":591,"ppid":45,"pgid":45,"sid":7,"threads":[591]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{45, 46, 47, 591, 7} {
+		if !ids[id] {
+			t.Errorf("task id %d missing from %v", id, ids)
+		}
+	}
+	if len(ids) != 5 {
+		t.Errorf("ids = %v, want 5", ids)
+	}
+	if _, err := parsePstreeIDs([]byte(`{"entries":[]}`)); err == nil {
+		t.Error("an empty pstree is an error")
+	}
+	if _, err := parsePstreeIDs([]byte(`not json`)); err == nil {
+		t.Error("unreadable crit output is an error")
 	}
 }

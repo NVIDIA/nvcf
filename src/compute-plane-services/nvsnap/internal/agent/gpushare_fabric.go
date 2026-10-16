@@ -134,9 +134,15 @@ type GPUShareGroupInfo struct {
 	Session string `json:"session"`
 	Index   int    `json:"index"`
 	Size    int    `json:"size"`
+	// Companion marks a member without GPUs: restored stopped and
+	// continued once the GPU ranks resume (criu_companion.go).
+	Companion bool `json:"companion,omitempty"`
 }
 
 func gpushareGroupInfo(req CheckpointRequest) *GPUShareGroupInfo {
+	if req.Companion && req.GroupSession != "" {
+		return &GPUShareGroupInfo{Session: req.GroupSession, Index: req.GPUShareGroupIndex, Size: req.GPUShareGroupSize, Companion: true}
+	}
 	if req.GPUShareFabricSession == "" {
 		return nil
 	}
@@ -448,9 +454,18 @@ type fabricOutcome struct {
 type fabricDriveOpts struct {
 	// Vote: a suspend's quiesce vote (group checkpoint).
 	Vote bool
+	// LostOther reports a member of the group outside the session (a
+	// companion) that ended before the vote passed: the capture is lost,
+	// so the vote is aborted too. Nil: none.
+	LostOther func() bool
+	// OnGo runs once, when the vote goes: the GPU ranks stop now.
+	OnGo func()
 	// Unlock: hold every member until all are restored, then unlock them
 	// together (group restore). The exchange waits for the unlock.
 	Unlock bool
+	// NoExchange: this drive does not exchange handle lists (another drive
+	// of the session does, over the members that have them).
+	NoExchange bool
 }
 
 // driveFabric runs one session until every member's operation has returned
@@ -505,11 +520,14 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 		}
 
 		if opts.Vote && !out.Went {
-			if lostOne && !aborted {
+			if (lostOne || (opts.LostOther != nil && opts.LostOther())) && !aborted {
 				aborted = true
 				log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
 			}
 			vote.drive(ctx, members, running, states, aborted, &out, log)
+			if out.Went && opts.OnGo != nil {
+				opts.OnGo()
+			}
 		}
 
 		if opts.Unlock && !unlockDone {
@@ -540,7 +558,7 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 			}
 		}
 
-		if !exchanged && (!opts.Unlock || out.Unlocked) {
+		if !exchanged && !opts.NoExchange && (!opts.Unlock || out.Unlocked) {
 			if exchange == nil {
 				var merged bytes.Buffer
 				ready := true
@@ -797,6 +815,16 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		bases[i] = base
 		members[i] = &httpFabricMember{client: fabricHTTPClient, base: base, session: session, ns: m.Namespace, pod: m.PodName}
 	}
+	// Companions have no GPU state: no fabric session, no vote. Only the
+	// GPU members take part in the fabric.
+	var fabric []fabricMember
+	var fabricIdx []int
+	for i, m := range req.Members {
+		if !m.Companion {
+			fabric = append(fabric, members[i])
+			fabricIdx = append(fabricIdx, i)
+		}
+	}
 
 	res := &GroupCheckpointResult{Session: session, Members: make([]GroupMemberResult, len(req.Members))}
 	var mu sync.Mutex
@@ -804,8 +832,13 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	var wg sync.WaitGroup
 	for i, m := range req.Members {
 		m.LeaveRunning = req.LeaveRunning
-		m.GPUShareFabricSession = session
+		if m.Companion {
+			m.GroupSession = session
+		} else {
+			m.GPUShareFabricSession = session
+		}
 		m.GPUShareGroupIndex, m.GPUShareGroupSize = i, len(req.Members)
+		m.GroupFreeze = true
 		wg.Add(1)
 		go func(i int, m CheckpointRequest) {
 			defer wg.Done()
@@ -822,10 +855,55 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	done := func(i int) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return finished[i]
+		return finished[fabricIdx[i]]
 	}
-	res.Fabric = driveFabric(ctx, members, done, fabricDriveOpts{Vote: true}, log)
+	// Every member, GPU rank or companion, waits at the group's freeze
+	// point once ready; released together, they stop together.
+	freezeMembers := make([]freezeMember, len(req.Members))
+	for i, m := range req.Members {
+		i := i
+		freezeMembers[i] = freezeMember{Base: bases[i], Namespace: m.Namespace, Pod: m.PodName, Done: func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return finished[i]
+		}}
+	}
+	// Once the GPU ranks stop, the rest of the instance stops with them:
+	// every member pod is held (pod_hold.go), a rank's engine container
+	// excepted while it saves its GPU memory. The members are released
+	// from the freeze point only once all are held.
+	holdsDone := make(chan struct{})
+	onGo := sync.OnceFunc(func() {
+		go func() {
+			defer close(holdsDone)
+			holdMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
+		}()
+	})
+	defer releaseMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
+	freezeDone := make(chan struct{})
+	go func() {
+		defer close(freezeDone)
+		if driveGroupFreeze(ctx, fabricHTTPClient, session, "", freezeMembers, 200*time.Millisecond, log, holdsDone) {
+			// Dumped, the members wait stopped until all are: none
+			// resumes to talk to one not dumped yet.
+			driveGroupFreeze(ctx, fabricHTTPClient, session, "post", freezeMembers, 100*time.Millisecond, log, nil)
+		}
+	}()
+	// A companion that ends before the vote passed loses the capture: the
+	// GPU ranks must not suspend for it.
+	lostCompanion := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := range req.Members {
+			if req.Members[i].Companion && finished[i] {
+				return true
+			}
+		}
+		return false
+	}
+	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true, LostOther: lostCompanion, OnGo: onGo}, log)
 	wg.Wait()
+	<-freezeDone
 
 	var failed []string
 	for _, m := range res.Members {

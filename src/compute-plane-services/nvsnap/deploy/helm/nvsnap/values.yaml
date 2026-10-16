@@ -94,6 +94,12 @@ nvsnap:
 agent:
   enabled: true
 
+  # Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit).
+  # Engines keep state in deleted shared-memory files: a vLLM CPU KV-cache
+  # tier (--kv-offloading-size 600) is one 600 GiB file in /dev/shm. A dump
+  # saves it whole, so the checkpoint grows by that much. Empty is 1 TiB.
+  criuGhostLimit: ""
+
   # cachedir (ember) mode. When set (e.g. "/opt/nvsnap"), the webhook
   # redirects every JIT/compile cache + the model into this single in-pod
   # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on
@@ -535,6 +541,37 @@ webhook:
   # pods and the agent admits them unchanged even if the registration
   # is stale.
   inject: true
+
+  # Which namespaces the registration covers while inject is true.
+  # "all": every namespace not labelled nvsnap.io/inject=false.
+  # "optIn": only namespaces labelled nvsnap.io/inject=true, for a
+  # cluster that shares its GPUs with workloads nvsnap must not touch,
+  # or for a gradual rollout. The pod-level opt-out applies in both.
+  injectScope: all
+
+  # Fixed Dynamo namespace (DYN_NAMESPACE and DYN_NAMESPACE_PREFIX) for
+  # Dynamo components whose etcd and NATS are services of their own
+  # Kubernetes namespace. The operator derives the Dynamo namespace from the
+  # Kubernetes namespace, which is new for every instance; a restored
+  # component would keep the old one and the new instance's frontend would
+  # not find it. Components that reach a shared etcd or NATS keep the
+  # operator's name. Empty disables.
+  dynamoNamespace: nvcf-nvsnap
+  # etcd lease TTL in seconds (ETCD_LEASE_TTL) for those components, unless
+  # they set one. A capture stops the whole instance, its etcd included, so
+  # no lease runs out during it; this only covers the moments a restore's
+  # members come back one after another. Costs only a slower removal of a
+  # crashed component from routing. 0 keeps Dynamo's default (10 s).
+  dynamoLeaseTTL: 60
+  # Seconds of silence every liveness probe is widened to tolerate (its
+  # failureThreshold raised, never lowered). A capture stops the instance
+  # while its GPU memory is saved and its pods are dumped: minutes for a
+  # large model (Kimi-K3, 4 x 250 GB per pod: about 2.5 minutes). The
+  # kubelet keeps probing, and a probe that gives up first restarts a
+  # container being dumped. Costs only a slower restart of an engine that
+  # really hangs. An instance with a pod whose probe tolerates less is not
+  # captured. 0 leaves probes as they are and does not check.
+  captureLivenessBudget: 300
 
   # Operator salt folded into every cache identity the webhook composes.
   # The identity covers image, model, arguments, cache-relevant env, driver

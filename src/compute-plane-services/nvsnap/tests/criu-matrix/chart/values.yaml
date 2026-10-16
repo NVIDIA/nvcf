@@ -64,11 +64,21 @@ dynamo:
   etcdImage: quay.io/coreos/etcd:v3.5.17
   natsImage: docker.io/library/nats:2.10-alpine
 
+# A fresh cache and capture identity (nvsnap.io/cache-salt) for runs that
+# must not reuse another run's cache set or checkpoints. Empty keeps the
+# configuration's own.
+cacheSalt: ""
+
 # Memory-backed /dev/shm for NCCL (the container default is 64 MiB).
 shmSize: 8Gi
 
 # Anything else the case needs in the engine's env.
 extraEnv: []
+
+# An IMEX channel for every GPU pod, from a ComputeDomain of the instance's
+# own: multi-node NVLink (GB200/GB300) needs one, or NCCL fails ("MNNVL ...
+# is available but not working ... Check the IMEX channel configuration").
+computeDomain: false
 
 resources:
   requests: {cpu: "4", memory: 32Gi}

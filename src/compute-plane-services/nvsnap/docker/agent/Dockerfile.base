@@ -100,6 +100,20 @@ RUN mkdir -p /criu-bundle/lib /criu-bundle/plugins && \
     patchelf --set-interpreter "/criu-bundle/lib/$(cat /criu-bundle/lib/.ld-name)" \
              --set-rpath /criu-bundle/lib /criu-bundle/criu
 
+# CRIU saves and restores tmpfs contents by running `tar --gzip` (which runs
+# `gzip`) from PATH, and the agent's restore replay runs tar and mkdir. At
+# restore both run inside the placeholder, whose image may have no tar
+# (distroless) or a tar without GNU options (busybox). Bundle GNU tar, gzip
+# and mkdir, pinned to the bundle's loader and libraries like criu.
+RUN set -e; \
+    for bin in tar gzip mkdir; do \
+        src="$(command -v $bin)"; \
+        cp "$src" /criu-bundle/$bin; \
+        ldd "$src" | awk '/=> \// {print $3}' | xargs -r -I {} cp -n {} /criu-bundle/lib/; \
+        patchelf --set-interpreter "/criu-bundle/lib/$(cat /criu-bundle/lib/.ld-name)" \
+                 --set-rpath /criu-bundle/lib /criu-bundle/$bin; \
+    done
+
 # Make the bundle fully self-contained via per-library RPATH. DT_RUNPATH on
 # the criu binary is NOT inherited by its libraries' own dependencies, so a
 # transitive dep (e.g. libnftables -> libmnl) would not resolve from the bundle
@@ -194,6 +208,8 @@ RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && \
 
 # Verify CRIU and crit work
 RUN echo "=== CRIU version ===" && /criu-bundle/criu --version && \
+    /criu-bundle/tar --version | head -1 && /criu-bundle/gzip --version | head -1 && \
+    /criu-bundle/mkdir --version | head -1 && \
     echo "=== crit version ===" && python3 -m crit --version
 
 # Labels

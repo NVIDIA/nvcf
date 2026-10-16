@@ -67,7 +67,7 @@ func TestClassifyMount(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyMount(tc.mp, tc.fsType, tc.opts, allowlist)
+			got := classifyMount("/", tc.mp, tc.fsType, tc.opts, allowlist)
 			if got != tc.want {
 				t.Errorf("classifyMount(%q, %q, %q, %v) = %v; want %v",
 					tc.mp, tc.fsType, tc.opts, allowlist, got, tc.want)
@@ -76,12 +76,63 @@ func TestClassifyMount(t *testing.T) {
 	}
 }
 
+// A writable emptyDir is the pod's own state and is replayed wherever it is
+// mounted; a read-only one, or another kubelet volume, is not.
+func TestClassifyMount_EmptyDir(t *testing.T) {
+	const pod = "/kubelet/pods/e6b76896-8981-4f2f-b7a4-810bfc065439"
+	tests := []struct {
+		name, root, opts string
+		want             MountClass
+	}{
+		{"emptyDir rw", pod + "/volumes/kubernetes.io~empty-dir/data", "rw,noatime", MountClassReplay},
+		{"emptyDir ro", pod + "/volumes/kubernetes.io~empty-dir/data", "ro,noatime", MountClassSkip},
+		{"configMap", pod + "/volumes/kubernetes.io~configmap/cfg", "rw,noatime", MountClassSkip},
+		{"hosts file", pod + "/etc-hosts", "rw,noatime", MountClassSkip},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyMount(tc.root, "/var/lib/etcd", "xfs", tc.opts, nil); got != tc.want {
+				t.Errorf("classifyMount(%q) = %v; want %v", tc.root, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTreeBytesOver(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/member/snap", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"member/snap/db", "member/wal"} {
+		if err := os.WriteFile(dir+"/"+f, make([]byte, 600), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if over, n, err := treeBytesOver(dir, 2000); err != nil || over || n != 1200 {
+		t.Errorf("treeBytesOver(2000) = %v, %d, %v; want false, 1200", over, n, err)
+	}
+	if over, _, err := treeBytesOver(dir, 1000); err != nil || !over {
+		t.Errorf("treeBytesOver(1000) = %v, %v; want over", over, err)
+	}
+}
+
+func TestReplayEmptyDirMaxBytes(t *testing.T) {
+	t.Setenv("NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES", "")
+	if got := ReplayEmptyDirMaxBytes(); got != defaultReplayEmptyDirMaxBytes {
+		t.Errorf("default = %d", got)
+	}
+	t.Setenv("NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES", "0")
+	if got := ReplayEmptyDirMaxBytes(); got != 0 {
+		t.Errorf("0 = %d", got)
+	}
+}
+
 func TestClassifyMount_EmptyAllowlist(t *testing.T) {
 	// Empty allowlist disables the replay class entirely; only rootfs survives.
-	if got := classifyMount("/", "overlay", "rw", nil); got != MountClassRootfs {
+	if got := classifyMount("/", "/", "overlay", "rw", nil); got != MountClassRootfs {
 		t.Errorf("/ with empty allowlist: got %v, want rootfs", got)
 	}
-	if got := classifyMount("/dev/shm", "tmpfs", "rw", nil); got != MountClassSkip {
+	if got := classifyMount("/", "/dev/shm", "tmpfs", "rw", nil); got != MountClassSkip {
 		t.Errorf("/dev/shm with empty allowlist: got %v, want skip", got)
 	}
 }
@@ -90,10 +141,10 @@ func TestClassifyMount_AllowlistMatchIsExact(t *testing.T) {
 	// Substring matching would let "/dev/shm" allowlist "/dev/shm-foo".
 	// We require exact path equality to keep the allowlist predictable.
 	allowlist := []string{"/dev/shm"}
-	if got := classifyMount("/dev/shm-foo", "tmpfs", "rw", allowlist); got != MountClassSkip {
+	if got := classifyMount("/", "/dev/shm-foo", "tmpfs", "rw", allowlist); got != MountClassSkip {
 		t.Errorf("/dev/shm-foo (substring of /dev/shm): got %v, want skip (exact match required)", got)
 	}
-	if got := classifyMount("/dev/shm/sub", "tmpfs", "rw", allowlist); got != MountClassSkip {
+	if got := classifyMount("/", "/dev/shm/sub", "tmpfs", "rw", allowlist); got != MountClassSkip {
 		t.Errorf("/dev/shm/sub (child of /dev/shm): got %v, want skip (exact match required)", got)
 	}
 }
@@ -188,13 +239,22 @@ func TestMountIsRW(t *testing.T) {
 func TestDefaultReplayAllowlistCoversTheCachedir(t *testing.T) {
 	t.Setenv("NVSNAP_REPLAY_MOUNTS", "")
 	al := ReplayMountAllowlist()
-	if got := classifyMount("/opt/nvsnap", "tmpfs", "rw", al); got != MountClassReplay {
+	if got := classifyMount("/", "/opt/nvsnap", "tmpfs", "rw", al); got != MountClassReplay {
 		t.Errorf("writable cachedir mount must be replayed, got %v", got)
 	}
-	if got := classifyMount("/opt/nvsnap", "tmpfs", "ro", al); got != MountClassSkip {
+	if got := classifyMount("/", "/opt/nvsnap", "tmpfs", "ro", al); got != MountClassSkip {
 		t.Errorf("a read-only cachedir mount is left alone, got %v", got)
 	}
-	if got := classifyMount("/dev/shm", "tmpfs", "rw", al); got != MountClassReplay {
+	if got := classifyMount("/", "/dev/shm", "tmpfs", "rw", al); got != MountClassReplay {
 		t.Errorf("/dev/shm stays on the default allowlist, got %v", got)
+	}
+}
+
+// The allowlist is replayed whatever its size; the size limit is for the
+// other emptyDirs only.
+func TestOnAllowlist(t *testing.T) {
+	al := []string{"/dev/shm", "/opt/nvsnap"}
+	if !onAllowlist("/opt/nvsnap", al) || onAllowlist("/opt/nvsnap/cache", al) || onAllowlist("/var/lib/etcd", al) {
+		t.Error("onAllowlist must match allowlisted mountpoints exactly")
 	}
 }

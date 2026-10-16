@@ -495,3 +495,22 @@ func TestCompose_CacheSalt(t *testing.T) {
 		t.Fatalf("each salt value must yield its own identity: plain=%s salted=%s resalted=%s", plain, salted, resalted)
 	}
 }
+
+// Env the webhook adds to a Dynamo component (ETCD_LEASE_TTL, the fixed
+// DYN_NAMESPACE) must not change its identity: the capture hashes the
+// running pod, admission the pod before the webhook's patches.
+func TestComposeIgnoresWebhookDynamoEnv(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 610}
+	pod := func(env ...corev1.EnvVar) *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.4.1",
+			Args: []string{"--model", "Qwen/Qwen2.5-7B-Instruct"},
+			Env:  append([]corev1.EnvVar{{Name: "DYN_NAMESPACE", Value: "sr-1"}}, env...),
+		}}}}
+	}
+	admitted := checkpointstore.ComputeHash(c.Compose(pod(), 0))
+	running := checkpointstore.ComputeHash(c.Compose(pod(corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "60"}), 0))
+	if admitted != running {
+		t.Error("ETCD_LEASE_TTL changed the configuration identity")
+	}
+}

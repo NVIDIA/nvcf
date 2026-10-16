@@ -56,6 +56,11 @@ COPY --from=go-builder /bin/nvsnap-mount-prep /criu-bundle/nvsnap-mount-prep
 COPY --from=go-builder /bin/nvsnap-rootfs-restore /criu-bundle/nvsnap-rootfs-restore
 # Runs the steps the webhook adds to pods, from the node bundle (cmd/nvsnap-helper).
 COPY --from=go-builder /bin/nvsnap-helper /criu-bundle/nvsnap-helper
+# The node bundle version this image stages (docs/design/
+# VERSIONED-NODE-BUNDLE.md): its tag, the same for every architecture, so
+# a pod admitted by any node's agent mounts a version its own node stages.
+ARG APP_VERSION=dev
+RUN echo "${APP_VERSION}" > /criu-bundle/BUNDLE_VERSION
 # Keeps restore placeholders and staging pods alive, from the node bundle.
 COPY --from=idle-builder /bin/nvsnap-idle /criu-bundle/nvsnap-idle
 

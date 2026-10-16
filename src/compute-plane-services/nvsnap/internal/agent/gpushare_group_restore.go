@@ -53,6 +53,10 @@ type GroupRestoreRequest struct {
 	// their network lock until their pod (and its network namespace) is
 	// gone.
 	KeepFailedPods bool `json:"keepFailedPods,omitempty"`
+	// ServiceAddrs are the cluster addresses of the instance's Services
+	// that led to one of its pods at capture ("CLUSTERIP=OLDPODIP,...");
+	// connections through them are restored to that pod's new address.
+	ServiceAddrs string `json:"serviceAddrs,omitempty"`
 }
 
 // GroupRestoreMemberResult is one member's outcome.
@@ -129,6 +133,16 @@ func planGroupRestore(entries []groupRestoreEntry) (string, error) {
 			return "", fmt.Errorf("%s and %s have the same target IP %s", other, e.Name, newIP)
 		}
 		seenOld[oldIP.String()], seenNew[newIP.String()] = e.Name, e.Name
+	}
+	var collide []string
+	for _, e := range entries {
+		if other, ok := seenOld[net.ParseIP(e.NewIP).String()]; ok && other != e.Name {
+			collide = append(collide, e.Name)
+		}
+	}
+	if len(collide) > 0 {
+		sort.Strings(collide)
+		return "", &addressCollision{Pods: collide}
 	}
 	sorted := append([]groupRestoreEntry(nil), entries...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Group.Index < sorted[j].Group.Index })
@@ -207,22 +221,35 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	if err != nil {
 		return nil, err
 	}
+	addrMap = aliasAddrMap(addrMap, req.ServiceAddrs)
 	res.InetAddrMap = addrMap
 	res.Session = newFabricSession()
 	log = log.WithFields(logrus.Fields{"fabricSession": res.Session, "inetAddrMap": addrMap})
 	log.Info("group restore: starting every member's restore")
 
-	// c-e. Restore every pod, unlock them together, then exchange handles.
+	// c-e. Restore every pod and unlock them together. The GPU ranks go
+	// first: each reloads its GPU memory (exchanging handle lists with the
+	// others) before it reports restored, its network still locked. The
+	// members without GPU state are restored once every rank has, so their
+	// clocks start after the reload: an etcd among them would otherwise
+	// count a reload of minutes against the ranks' leases, which the ranks
+	// cannot renew while gpushare holds them frozen.
 	members := make([]fabricMember, len(req.Members))
+	var ranks, companions []int
 	for i, m := range req.Members {
 		members[i] = &httpFabricMember{client: fabricHTTPClient, base: bases[i], session: res.Session, ns: m.PlaceholderNamespace, pod: m.PlaceholderPodName}
+		if entries[i].Group.Companion {
+			companions = append(companions, i)
+		} else {
+			ranks = append(ranks, i)
+		}
 	}
 	var mu sync.Mutex
 	finished := make([]bool, len(req.Members))
 	var wg sync.WaitGroup
-	for i, m := range req.Members {
-		wg.Add(1)
-		go func(i int, m GroupRestoreMember) {
+	launch := func(i int) {
+		m := req.Members[i]
+		go func() {
 			defer wg.Done()
 			r, err := postRestore(ctx, fabricHTTPClient, bases[i], RestoreRequest{
 				CheckpointID:             m.CheckpointID,
@@ -240,15 +267,48 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 				res.Members[i].Error = err.Error()
 			}
 			finished[i] = true
-		}(i, m)
+		}()
 	}
 	done := func(i int) bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return finished[i]
 	}
-	res.Fabric = driveFabric(ctx, members, done, fabricDriveOpts{Unlock: true}, log)
+	wg.Add(len(req.Members))
+	for _, i := range ranks {
+		launch(i)
+	}
+	go func() {
+		if len(companions) == 0 {
+			return
+		}
+		if !awaitRestored(ctx, members, ranks, done) {
+			mu.Lock()
+			for _, i := range companions {
+				res.Members[i].Error = "not restored: a GPU rank of the instance did not restore"
+				finished[i] = true
+			}
+			mu.Unlock()
+			wg.Add(-len(companions))
+			return
+		}
+		log.WithField("companions", len(companions)).Info("group restore: every GPU rank restored; restoring the members without GPU state")
+		for _, i := range companions {
+			launch(i)
+		}
+	}()
+	rankMembers := make([]fabricMember, len(ranks))
+	for k, i := range ranks {
+		rankMembers[k] = members[i]
+	}
+	exchanged := make(chan fabricOutcome, 1)
+	go func() {
+		exchanged <- driveFabric(ctx, rankMembers, func(k int) bool { return done(ranks[k]) }, fabricDriveOpts{}, log)
+	}()
+	res.Fabric = driveFabric(ctx, members, done, fabricDriveOpts{Unlock: true, NoExchange: true}, log)
 	wg.Wait()
+	ex := <-exchanged
+	res.Fabric.Exchanged, res.Fabric.Handles = ex.Exchanged, ex.Handles
 
 	var failed []string
 	for _, m := range res.Members {
@@ -284,6 +344,19 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 // checkpoints themselves are suspect. Any other error of groupRestore
 // (a pod without an IP, a fetch that did not finish) says nothing about
 // them.
+// addressCollision is a placement the instance cannot restore into: a
+// target pod got the address another pod of the instance had at capture.
+// The restored instance reaches its pods under the addresses it captured
+// (DNAT to the new ones), so inside it that address would name two pods: a
+// connection to the remembered pod and one to the new pod found afresh
+// (DNS, a registry) cannot both go where they mean. Pods (namespace/name)
+// are the target pods to replace; nothing has been restored yet.
+type addressCollision struct{ Pods []string }
+
+func (e *addressCollision) Error() string {
+	return "target pods " + strings.Join(e.Pods, ", ") + " got addresses other pods of the instance had at capture"
+}
+
 type groupRestoreFailure struct{ err error }
 
 func (e *groupRestoreFailure) Error() string { return e.err.Error() }
@@ -420,4 +493,30 @@ func (a *Agent) groupRestoreHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// awaitRestored reports whether every member in idx reports its restore
+// done; false as soon as one of them ends first (it failed) or ctx ends.
+func awaitRestored(ctx context.Context, members []fabricMember, idx []int, done func(int) bool) bool {
+	tick := time.NewTicker(fabricPollInterval)
+	defer tick.Stop()
+	for {
+		all := true
+		for _, i := range idx {
+			if done(i) {
+				return false
+			}
+			if st, ok, err := members[i].State(ctx); err != nil || !ok || !st.Restored {
+				all = false
+			}
+		}
+		if all {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
 }

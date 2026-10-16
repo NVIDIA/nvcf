@@ -96,7 +96,7 @@ func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
 
 func TestPIDNSArgs(t *testing.T) {
 	dump := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
-		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, true, true, false), " ")
+		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, false, defaultGhostLimit), " ")
 	if !strings.Contains(dump, "--skip-mnt /dev/nvidia0") {
 		t.Errorf("GPU-identity mount not skipped: %s", dump)
 	}
@@ -112,12 +112,12 @@ func TestPIDNSArgs(t *testing.T) {
 	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"},
 		[]UnixListener{{Inode: 719101449, Type: 1, Path: "/tmp/ipc-a"}, {Inode: 719101460, Type: 5, Path: "/tmp/ipc-b"}},
 		false, false, "10.0.0.1=10.0.0.2"), " ")
-	for _, want := range []string{"--inherit-fd fd[4]:socket:[719101449]", "--inherit-fd fd[5]:socket:[719101460]"} {
+	for _, want := range []string{"--inherit-fd fd[101]:socket:[719101449]", "--inherit-fd fd[102]:socket:[719101460]"} {
 		if !strings.Contains(restore, want) {
 			t.Errorf("restore lacks %q: %s", want, restore)
 		}
 	}
-	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[3]:extNetNs",
+	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[100]:extNetNs",
 		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:/etc/hosts", "--restore-detached",
 		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir"} {
 		if !strings.Contains(restore, want) {
@@ -231,11 +231,11 @@ func TestParseListeningUnixSockets(t *testing.T) {
 // the listeners; one pipe for both is declared once.
 func TestStdioInheritFDs(t *testing.T) {
 	c := pidNSCapture{UnixListeners: []UnixListener{{Inode: 1}, {Inode: 2}}, StdoutPipe: 300, StderrPipe: 301}
-	if got := strings.Join(stdioInheritFDs(c), " "); got != "--inherit-fd fd[6]:pipe:[300] --inherit-fd fd[7]:pipe:[301]" {
+	if got := strings.Join(stdioInheritFDs(c), " "); got != "--inherit-fd fd[103]:pipe:[300] --inherit-fd fd[104]:pipe:[301]" {
 		t.Errorf("got %q", got)
 	}
 	same := pidNSCapture{StdoutPipe: 300, StderrPipe: 300}
-	if got := strings.Join(stdioInheritFDs(same), " "); got != "--inherit-fd fd[4]:pipe:[300]" {
+	if got := strings.Join(stdioInheritFDs(same), " "); got != "--inherit-fd fd[101]:pipe:[300]" {
 		t.Errorf("shared pipe: %q", got)
 	}
 	if got := stdioInheritFDs(pidNSCapture{}); got != nil {
@@ -285,5 +285,24 @@ func TestListeningUnixSockets_OnlyTheTreesOwn(t *testing.T) {
 	}
 	if !reflect.DeepEqual(paths, []string{"/tmp/engine.sock", "/tmp/worker.sock"}) {
 		t.Errorf("listeners = %v, want the engine's and its worker's only", paths)
+	}
+}
+
+// A tree without GPU devices is dumped without the CUDA plugin, which would
+// run cuda-checkpoint for nothing before criu freezes it.
+func TestDumpArgsNoCUDAPluginWithoutGPUs(t *testing.T) {
+	pidns := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
+		[]string{"/etc/hosts"}, nil, nil, dumpLeaveRunning, false, false, defaultGhostLimit), " ")
+	if strings.Contains(pidns, "--libdir") {
+		t.Errorf("pid-namespace dump of a CPU-only tree loads the CUDA plugin: %s", pidns)
+	}
+	inns := strings.Join(dumpV2Args(10, 51, nil, dumpLeaveRunning, false, false, "", defaultGhostLimit), " ")
+	if strings.Contains(inns, "--libdir") {
+		t.Errorf("in-namespace dump of a CPU-only tree loads the CUDA plugin: %s", inns)
+	}
+	gpu := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
+		[]string{"/etc/hosts"}, nil, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, false, false, defaultGhostLimit), " ")
+	if !strings.Contains(gpu, "--libdir /criu-bundle/plugins") {
+		t.Errorf("pid-namespace dump of a GPU tree without gpushare lacks the CUDA plugin: %s", gpu)
 	}
 }

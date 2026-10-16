@@ -14,10 +14,12 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -119,9 +121,18 @@ func CRIUNamespaceScope(ns string) string { return "namespace/" + ns }
 // container before the restored process answers them. The readiness probe
 // stays, so the pod becomes Ready when the restored engine serves.
 func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest) ([]PatchOp, error) {
-	// The capture checkpoints the first container with GPUs; that one
-	// becomes the placeholder, wherever the chart put it.
+	// The capture checkpoints the first container with GPUs, or the
+	// container the record names (a companion's, captured by its
+	// connections to the ranks); that one becomes the placeholder,
+	// wherever the chart put it. The pod's other containers run as they
+	// are.
 	i := gpuContainerIndex(pod, m.MainContainer)
+	if name := man.SourcePodMeta[restoreContainerMeta]; name != "" {
+		i = containerIndex(pod, name)
+		if i < 0 {
+			return nil, fmt.Errorf("the checkpoint was taken from container %q, which this pod does not have", name)
+		}
+	}
 	if i < 0 || i >= len(pod.Spec.Containers) {
 		return nil, fmt.Errorf("MainContainer index %d out of range (have %d containers)", i, len(pod.Spec.Containers))
 	}
@@ -184,7 +195,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		}
 		if !libMounted {
 			vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-				Path: bundleRoot + "/nvsnap", Type: &dir}}})
+				Path: m.bundleDir(restoreBundle(man, m.BundleID)), Type: &dir}}})
 			mounts = append(mounts, corev1.VolumeMount{Name: gpushareLibVolume, MountPath: nvsnapToolsMountPath, ReadOnly: true})
 		}
 	}
@@ -204,6 +215,20 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 
 // gpuContainerIndex is the index of the first container with GPUs, else
 // fallback.
+// restoreContainerMeta is the manifest key naming the container a
+// checkpoint was taken from.
+const restoreContainerMeta = "restore_container"
+
+// containerIndex returns the index of the container named name, or -1.
+func containerIndex(pod *corev1.Pod, name string) int {
+	for i, c := range pod.Spec.Containers {
+		if c.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func gpuContainerIndex(pod *corev1.Pod, fallback int) int {
 	for i, c := range pod.Spec.Containers {
 		if _, ok := c.Resources.Limits["nvidia.com/gpu"]; ok {
@@ -255,6 +280,11 @@ func jsonPointerEscape(s string) string {
 // wait-for-leader) never starts, and the leader is a placeholder until the
 // whole group is restored. A skipped init runs the helper's skip instead,
 // keeping its place so the other patches' indices hold.
+//
+// A native sidecar (an init container with restartPolicy Always) is no
+// startup step: it serves beside the main container for the pod's life,
+// like any other sidecar, and runs unchanged. Skipped, it would exit, be
+// restarted, and hold back every init container after it.
 func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	volumes := map[string]corev1.Volume{}
 	for _, v := range pod.Spec.Volumes {
@@ -267,7 +297,7 @@ func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	var patches []PatchOp
 	for i := range pod.Spec.InitContainers {
 		init := &pod.Spec.InitContainers[i]
-		if writesSharedVolume(init, volumes, seen) {
+		if NativeSidecar(init) || writesSharedVolume(init, volumes, seen) {
 			continue
 		}
 		base := fmt.Sprintf("/spec/initContainers/%d", i)
@@ -307,4 +337,54 @@ func writesSharedVolume(init *corev1.Container, volumes map[string]corev1.Volume
 		}
 	}
 	return false
+}
+
+// NativeSidecar reports an init container that runs for the pod's life.
+func NativeSidecar(c *corev1.Container) bool {
+	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
+const (
+	// PIDReserveInit is the first init container of a restore placeholder
+	// whose containers share one pid namespace: it waits until the agent
+	// has raised the namespace's next pid to PIDReserveFloor, so every
+	// process the pod starts after it (a native sidecar, a sidecar, the
+	// placeholder) gets a pid above the range the restore recreates.
+	// Without it a sidecar started before the placeholder can hold a pid
+	// of the dumped tree, and the restore cannot recreate it.
+	PIDReserveInit = "nvsnap-reserve-pids"
+	// PIDReserveFloor is the next pid the agent raises a placeholder's pid
+	// namespace to.
+	PIDReserveFloor = 100000
+)
+
+var pidReserveResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
+}
+
+// withPIDReserve appends to a placeholder's patches the PIDReserveInit
+// step, first among its init containers, when its containers share one pid
+// namespace. It goes last: other patches address init containers by
+// index or insert at the front.
+func withPIDReserve(pod *corev1.Pod, patches []PatchOp) []PatchOp {
+	if pod.Spec.ShareProcessNamespace == nil || !*pod.Spec.ShareProcessNamespace || len(pod.Spec.Containers) == 0 {
+		return patches
+	}
+	main := &pod.Spec.Containers[0]
+	c := corev1.Container{
+		Name:         PIDReserveInit,
+		Image:        main.Image,
+		Command:      []string{HelperBin, "await-pid-floor", "--floor", strconv.Itoa(PIDReserveFloor)},
+		VolumeMounts: []corev1.VolumeMount{helperMount()},
+	}
+	harden(&c, pidReserveResources, inheritPosture, main)
+	listExists := len(pod.Spec.InitContainers) > 0
+	for _, p := range patches {
+		listExists = listExists || (p.Op == "add" && p.Path == "/spec/initContainers")
+	}
+	if !listExists {
+		return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []corev1.Container{c}})
+	}
+	return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: c})
 }

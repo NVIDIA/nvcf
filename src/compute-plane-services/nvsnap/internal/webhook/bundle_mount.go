@@ -20,6 +20,7 @@ package webhook
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -182,4 +183,76 @@ func runtimeDirsJSON(dirs []checkpointstore.EntryRuntimeDir) string {
 		return ""
 	}
 	return string(b)
+}
+
+// bundleDir is the host directory of node bundle version id: the version
+// staged under <root>/versions (docs/design/VERSIONED-NODE-BUNDLE.md), or
+// with no id the legacy tree, <root>/nvsnap.
+func (m *Mutator) bundleDir(id string) string {
+	root := m.HostBundleRoot
+	if root == "" {
+		root = DefaultHostBundleRoot
+	}
+	if id == "" {
+		return root + "/nvsnap"
+	}
+	return root + "/" + BundleVersionsDir + "/" + id
+}
+
+// BundleVersionsDir holds one directory per node bundle version under the
+// bundle root.
+const BundleVersionsDir = "versions"
+
+// BundleMeta is the checkpoint metadata key naming the node bundle version
+// its pod mounted.
+const BundleMeta = "bundle"
+
+// restoreBundle is the bundle version a restore of a checkpoint mounts:
+// the one its capture recorded, so the restored process maps the files it
+// mapped; the current one for a checkpoint that recorded none.
+func restoreBundle(man checkpointstore.Manifest, current string) string {
+	if id := man.SourcePodMeta[BundleMeta]; id != "" {
+		return id
+	}
+	return current
+}
+
+// PodBundleID is the node bundle version a pod mounts for its library
+// (the first it mounts), "" for none or the legacy tree.
+func PodBundleID(pod *corev1.Pod) string {
+	if ids := PodBundleIDs(pod); len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+// PodBundleIDs are the node bundle versions a pod mounts, in volume order:
+// a restore placeholder mounts its checkpoint's version for the restored
+// process and the current one for the helper.
+func PodBundleIDs(pod *corev1.Pod) []string {
+	marker := "/" + BundleVersionsDir + "/"
+	var ids []string
+	seen := map[string]bool{}
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.HostPath == nil {
+			continue
+		}
+		j := strings.LastIndex(v.HostPath.Path, marker)
+		if j < 0 {
+			continue
+		}
+		id := v.HostPath.Path[j+len(marker):]
+		if id == "" || strings.Contains(id, "/") || seen[id] {
+			continue
+		}
+		// The library's volume first: it is the version a capture records.
+		if v.Name == gpushareLibVolume {
+			ids = append([]string{id}, ids...)
+		} else {
+			ids = append(ids, id)
+		}
+		seen[id] = true
+	}
+	return ids
 }

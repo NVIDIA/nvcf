@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"k8s.io/apimachinery/pkg/types"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,11 @@ const (
 
 	criuGroupStateCapturing = "capturing"
 	criuGroupStateComplete  = "complete"
+	// criuGroupStateVerifying is a capture whose instance was stopped for
+	// it and is being restored from it. Only that instance's namespace
+	// (data "sourceNamespace") restores from it; its first restore makes
+	// it complete, for every instance of the configuration.
+	criuGroupStateVerifying = "verifying"
 	criuGroupStateFailed    = "failed"
 	// criuGroupStateRestoreFailed is a capture whose restore failed: its
 	// checkpoints are blocked and the next Ready instance captures anew.
@@ -68,6 +74,10 @@ const (
 	// get to run (a rank never scheduled, a checkpoint never fetched).
 	// Past it the configuration starts cold, keeping its checkpoints.
 	criuGroupMaxStalls = 3
+	// criuGroupMaxReplacements bounds the target pods one capture's
+	// restores replace for an address collision (see addressCollision).
+	// Past it the instance starts cold, keeping its checkpoints.
+	criuGroupMaxReplacements = 3
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
 
@@ -79,9 +89,24 @@ const (
 
 func criuGroupConfigMapName(key string) string { return criuGroupConfigMapPrefix + key }
 
+// recordUsable reports a group record whose checkpoints may be restored:
+// complete, or being verified by its own instance's restore.
+func recordUsable(d map[string]string) bool {
+	return d["state"] == criuGroupStateComplete || (d["state"] == criuGroupStateVerifying && d["sourceNamespace"] != "")
+}
+
+// verifyNamespace is the only namespace a record being verified restores
+// into; "" for a complete one.
+func verifyNamespace(d map[string]string) string {
+	if d["state"] == criuGroupStateVerifying {
+		return d["sourceNamespace"]
+	}
+	return ""
+}
+
 // parseCRIUGroup reads a complete group record.
 func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool) {
-	if data["state"] != criuGroupStateComplete {
+	if !recordUsable(data) {
 		return webhook.CRIUGroup{}, false
 	}
 	if n, _ := strconv.Atoi(data["stalls"]); n >= criuGroupMaxStalls {
@@ -91,14 +116,17 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 	if err != nil || size < 1 {
 		return webhook.CRIUGroup{}, false
 	}
-	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true",
-		Checkpoints: make([]string, size), Nodes: make([]string, size)}
+	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true", VerifyNamespace: verifyNamespace(data),
+		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size), Bundles: make([]string, size)}
 	for i := range size {
 		g.Checkpoints[i] = data[fmt.Sprintf("checkpoint.%d", i)]
 		if g.Checkpoints[i] == "" {
 			return webhook.CRIUGroup{}, false
 		}
 		g.Nodes[i] = data[fmt.Sprintf("node.%d", i)]
+		g.Companion[i] = data[fmt.Sprintf("companion.%d", i)] == "true"
+		g.Containers[i] = data[fmt.Sprintf("container.%d", i)]
+		g.Bundles[i] = data[fmt.Sprintf("bundle.%d", i)]
 	}
 	return g, true
 }
@@ -115,11 +143,14 @@ func (a *Agent) lookupCRIUGroup(ctx context.Context, key string) (webhook.CRIUGr
 	if cm.Data["state"] == criuGroupStateAlias {
 		// A rank of an instance whose ranks differ in configuration finds
 		// the instance's record through the alias of its own.
-		target := cm.Data["alias"]
+		// A companion's alias also names its slots.
+		target, slots := cm.Data["alias"], parseSlots(cm.Data)
 		if cm, err = a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(target), metav1.GetOptions{}); err != nil {
 			return webhook.CRIUGroup{}, false
 		}
-		return parseCRIUGroup(target, cm.Data)
+		g, ok := parseCRIUGroup(target, cm.Data)
+		g.Slots = slots
+		return g, ok
 	}
 	return parseCRIUGroup(key, cm.Data)
 }
@@ -173,7 +204,7 @@ func instanceRanks(pods []corev1.Pod, leader *corev1.Pod, size int, ordinalKey, 
 	ranks := make([]*corev1.Pod, size)
 	for i := range pods {
 		p := &pods[i]
-		if p.DeletionTimestamp != nil || !sameInstance(leader, p) || !keep(p) {
+		if p.DeletionTimestamp != nil || !groupMember(leader, p) || !keep(p) {
 			continue
 		}
 		o, s, ok := podRank(p, ordinalKey, sizeKey)
@@ -211,11 +242,6 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (uri string, size int, ok bool) {
 	if !isRank || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
 		return "", 0, false
 	}
-	// A pod that names its own instance would restore as the wrong one
-	// (webhook.NamesOwnInstance): not captured.
-	if webhook.NamesOwnInstance(pod) != "" {
-		return "", 0, false
-	}
 	return uri, s, true
 }
 
@@ -249,7 +275,7 @@ func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
-	if name := webhook.NamesOwnInstance(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
+	if name := c.a.identityBlocksCapture(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
 		if _, seen := c.attempted.LoadOrStore("identity/"+string(pod.UID), struct{}{}); !seen {
 			c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "env": name}).
 				Info("CRIU group capture: skipped; the pod names its own instance in its configuration, so a restore would run as the wrong instance (it starts from the caches)")
@@ -311,10 +337,44 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Info("CRIU group capture: waiting for the whole instance")
 		return true
 	}
-	key := criuGroupKey(instanceConfigURI(ranks), scope)
+	for _, r := range ranks {
+		if name := a.identityBlocksCapture(r); name != "" {
+			log.WithFields(logrus.Fields{"rank": r.Name, "env": name}).Info("CRIU group capture: skipped; a rank names its own instance in its configuration")
+			return false
+		}
+	}
+	companions, companionContainers, err := a.discoverCompanions(ctx, ranks, log)
+	if err != nil {
+		log.WithError(err).Warn("CRIU group capture: skipped; a companion of the instance cannot be captured")
+		return false
+	}
+	for _, r := range ranks {
+		if webhook.DynamoComponent(r) && len(companions) == 0 {
+			log.WithField("rank", r.Name).Warn("CRIU group capture: skipped; a Dynamo rank is connected to no etcd or NATS of its namespace to capture with it")
+			return false
+		}
+	}
+	uris := make([]string, 0, len(ranks)+len(companions))
+	for _, r := range ranks {
+		uris = append(uris, r.Annotations[cacheURIAnnotation])
+	}
+	for _, p := range companions {
+		// The identity its replacement is admitted by: the stamp admission
+		// left, else (pods admitted before the stamp) its spec re-hashed.
+		u, ok := p.Annotations[webhook.AdmittedConfigAnnotation], p.Annotations[webhook.AdmittedConfigAnnotation] != ""
+		if !ok {
+			u, ok = a.specCacheURI(p)
+		}
+		if !ok {
+			log.WithField("companion", p.Name).Warn("CRIU group capture: skipped; no configuration for a companion")
+			return false
+		}
+		uris = append(uris, u)
+	}
+	key := criuGroupKey(instanceConfigURIOf(uris), scope)
 	log = log.WithField("criuGroup", key)
 	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
-		c.writeGroupAliases(ctx, key, scope, ranks, log)
+		c.writeGroupAliases(ctx, key, scope, uris, len(ranks), log)
 		return false // captured, being captured, or out of attempts
 	}
 	for _, r := range ranks {
@@ -331,7 +391,35 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Warn("CRIU group capture: skipped; the instance is not the whole engine")
 		return false
 	}
-	record, err := c.claimGroupRecord(ctx, key, leader, size)
+	members := append(append([]*corev1.Pod{}, ranks...), companions...)
+	if ferr := freezeTolerated(members, a.config.Webhook.CaptureLivenessBudget); ferr != nil {
+		// Capturing it would take down the instance it captures.
+		log.WithError(ferr).Warn("CRIU group capture: skipped; the instance would not outlast its capture's freeze")
+		return false
+	}
+	if serr := a.agentsSettled(ctx, members); serr != nil {
+		// A rollout of the agents restarts them one by one; a member
+		// whose agent restarts fails the capture, and the instance,
+		// stopped for it, restarts cold.
+		log.WithError(serr).Info("CRIU group capture: waiting for the node agents to settle")
+		return true
+	}
+	// Everything that would fail the capture, found before it is claimed:
+	// a capture that fails stops the instance and uses an attempt.
+	findings := a.capturePreflight(ctx, ranks, companions, companionContainers, log)
+	for _, f := range findings {
+		fl := log.WithFields(logrus.Fields{"member": f.Pod, "container": f.Container, "check": f.Check, "severity": f.Severity})
+		if f.Severity == preflightInfo {
+			fl.Info("CRIU group capture preflight: " + f.Detail)
+		} else {
+			fl.Warn("CRIU group capture preflight: " + f.Detail)
+		}
+	}
+	if b := blocking(findings); len(b) > 0 {
+		log.WithField("blocking", len(b)).Warn("CRIU group capture: skipped; the preflight found what would fail it")
+		return false
+	}
+	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
 	if err != nil {
 		log.WithError(err).Warn("CRIU group capture: cannot claim the group record")
 		return true
@@ -344,34 +432,45 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	cctx, cancel := context.WithTimeout(ctx, criuGroupCaptureTimeout)
 	defer cancel()
 	t0 := time.Now()
-	results, err := c.checkpointInstance(cctx, ranks, log)
+	results, stopped, err := c.checkpointInstance(cctx, ranks, companions, companionContainers, log)
 	data := record.Data
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
 		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)
-		if strings.Contains(err.Error(), errSourceLeftSuspended.Error()) {
-			// A rank could not be resumed: the instance serves nothing.
-			// Its controllers replace every pod of it.
-			log.Error("CRIU group capture left a rank suspended; deleting the instance's pods")
-			for _, r := range ranks {
-				if derr := a.kubeClient.CoreV1().Pods(r.Namespace).Delete(context.WithoutCancel(ctx), r.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-					log.WithError(derr).WithField("pod", r.Name).Error("cannot delete a pod of the suspended instance")
-				}
-			}
+		if stopped || strings.Contains(err.Error(), errSourceLeftSuspended.Error()) {
+			// The instance was stopped for the capture: rather than resume
+			// a stopped instance, its controllers replace every pod of it,
+			// cold.
+			log.Error("CRIU group capture: the instance was stopped for it; replacing its pods, which start fresh")
+			c.deleteInstance(context.WithoutCancel(ctx), members, log)
 		}
 	} else {
-		data["state"] = criuGroupStateComplete
+		// The dump stopped the instance for good. Its replacements restore
+		// from the capture, which verifies it: until then, only they may.
+		data["state"], data["sourceNamespace"] = criuGroupStateVerifying, leader.Namespace
 		for i, r := range results {
 			data[fmt.Sprintf("checkpoint.%d", i)] = r.CheckpointID
-			data[fmt.Sprintf("node.%d", i)] = ranks[i].Spec.NodeName
+			data[fmt.Sprintf("node.%d", i)] = members[i].Spec.NodeName
+			if id := webhook.PodBundleID(members[i]); id != "" {
+				data[fmt.Sprintf("bundle.%d", i)] = id
+			}
+			if i >= len(ranks) {
+				data[fmt.Sprintf("companion.%d", i)] = "true"
+				data[fmt.Sprintf("container.%d", i)] = companionContainers[members[i].Name]
+			} else {
+				data[fmt.Sprintf("container.%d", i)] = gpuContainer(members[i])
+			}
 		}
 		if c.a.gpushareEnabledFor(ranks[0]) {
 			data["gpushare"] = "true"
 		}
-		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded")
+		if aliases := c.a.instanceServiceAliases(ctx, members); aliases != "" {
+			data["serviceAddrs"] = aliases
+		}
+		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded; the instance restores from it to verify it")
 	}
 	started := record.Data["startedAt"]
-	if err := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
+	if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
 		if d["state"] != criuGroupStateCapturing || d["startedAt"] != started {
 			return false // another capture took the record over
 		}
@@ -382,12 +481,28 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 			d[k] = v
 		}
 		return true
-	}); err != nil {
-		log.WithError(err).Error("CRIU group capture: cannot update the group record")
-	} else if data["state"] == criuGroupStateComplete {
-		c.writeGroupAliases(context.WithoutCancel(ctx), key, scope, ranks, log)
+	}); uerr != nil {
+		log.WithError(uerr).Error("CRIU group capture: cannot update the group record")
+	} else if data["state"] == criuGroupStateVerifying {
+		c.writeGroupAliases(context.WithoutCancel(ctx), key, scope, uris, len(ranks), log)
+	}
+	if err == nil && data["state"] == criuGroupStateVerifying {
+		// Its pods were dumped and are gone; their replacements are
+		// admitted as the restore's placeholders (or cold, without the
+		// record).
+		c.deleteInstance(context.WithoutCancel(ctx), members, log)
 	}
 	return false
+}
+
+// deleteInstance deletes the pods of a captured instance so its
+// controllers replace them.
+func (c *criuAutoRestorer) deleteInstance(ctx context.Context, members []*corev1.Pod, log *logrus.Entry) {
+	for _, p := range members {
+		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).WithField("pod", p.Name).Error("CRIU group capture: cannot delete a pod of the captured instance")
+		}
+	}
 }
 
 // instanceConfigURI is the configuration of an instance: its ranks' shared
@@ -398,6 +513,12 @@ func instanceConfigURI(ranks []*corev1.Pod) string {
 	for i, r := range ranks {
 		uris[i] = r.Annotations[cacheURIAnnotation]
 	}
+	return instanceConfigURIOf(uris)
+}
+
+// instanceConfigURIOf is instanceConfigURI of the members' configurations
+// in slot order.
+func instanceConfigURIOf(uris []string) string {
 	if instanceUniform(uris) {
 		return uris[0]
 	}
@@ -436,30 +557,46 @@ func ranksAgreePerTemplate(ranks []*corev1.Pod) error {
 // configuration find the instance's record from its own configuration, as
 // admission looks it up. A real record already under a rank's key (a
 // uniform instance of that configuration) is left alone.
-func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope string, ranks []*corev1.Pod, log *logrus.Entry) {
+func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope string, uris []string, ranks int, log *logrus.Entry) {
 	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
+	// A companion is admitted by its own configuration alone: its alias
+	// names its slot, or the slots of every companion of that
+	// configuration (replicas of one template), which are
+	// interchangeable.
+	slots := map[string][]string{}
+	for i := ranks; i < len(uris); i++ {
+		slots[uris[i]] = append(slots[uris[i]], strconv.Itoa(i))
+	}
 	done := map[string]bool{key: true}
-	for _, r := range ranks {
-		akey := criuGroupKey(r.Annotations[cacheURIAnnotation], scope)
+	for i, uri := range uris {
+		akey := criuGroupKey(uri, scope)
 		if done[akey] {
 			continue
 		}
 		done[akey] = true
+		data := map[string]string{"state": criuGroupStateAlias, "alias": key}
+		if i >= ranks {
+			data["slots"] = strings.Join(slots[uri], ",")
+			if len(slots[uri]) == 1 {
+				data["slot"] = slots[uri][0] // for agents that read one slot
+			}
+		}
 		alias := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(akey), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
-			Data:       map[string]string{"state": criuGroupStateAlias, "alias": key},
+			Data:       data,
 		}
 		_, err := cms.Create(ctx, alias, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			prev, gerr := cms.Get(ctx, alias.Name, metav1.GetOptions{})
-			if gerr != nil || prev.Data["state"] != criuGroupStateAlias || prev.Data["alias"] == key {
+			if gerr != nil || prev.Data["state"] != criuGroupStateAlias ||
+				(prev.Data["alias"] == key && prev.Data["slot"] == data["slot"] && prev.Data["slots"] == data["slots"]) {
 				continue
 			}
-			prev.Data["alias"] = key
+			prev.Data = data
 			_, err = cms.Update(ctx, prev, metav1.UpdateOptions{})
 		}
 		if err != nil {
-			log.WithError(err).WithField("rank", r.Name).Warn("CRIU group capture: cannot record the rank's alias; it will start cold")
+			log.WithError(err).WithField("slot", i).Warn("CRIU group capture: cannot record a member's alias; it will start cold")
 		}
 	}
 }
@@ -472,6 +609,10 @@ func criuGroupRecaptures(data map[string]string, now time.Time) bool {
 	switch data["state"] {
 	case criuGroupStateFailed, criuGroupStateRestoreFailed:
 		return n < criuGroupMaxCaptures
+	case criuGroupStateVerifying:
+		// Its own instance never got to restore from it.
+		stalls, _ := strconv.Atoi(data["stalls"])
+		return n < criuGroupMaxCaptures && stalls >= criuGroupMaxStalls
 	case criuGroupStateCapturing:
 		started, err := time.Parse(time.RFC3339, data["startedAt"])
 		return n < criuGroupMaxCaptures && (err != nil || now.Sub(started) > criuGroupCaptureTimeout+10*time.Minute)
@@ -553,33 +694,61 @@ func recordOf(d map[string]string, id string) bool {
 	return false
 }
 
-// checkpointInstance checkpoints the ranks in place and returns their
-// results in rank order.
-func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks []*corev1.Pod, log *logrus.Entry) ([]*CheckpointResult, error) {
+// checkpointInstance checkpoints the instance, ranks then companions, and
+// returns their results in that order. The dump stops the instance for
+// good (no --leave-running): a capture freezes it for minutes, and what
+// keeps time around a frozen engine (an etcd lease, a watchdog sidecar, a
+// liveness probe) would take down an instance resumed after it. Its pods
+// are replaced by a restore instead (captureGroup). stopped reports that
+// a failed capture got as far as stopping the instance.
+func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks, companions []*corev1.Pod, companionContainers map[string]string, log *logrus.Entry) (results []*CheckpointResult, stopped bool, err error) {
 	capture := time.Now().UTC().Format("20060102T150405.000000000")
-	reqs := make([]CheckpointRequest, len(ranks))
-	for i, p := range ranks {
-		reqs[i] = CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: gpuContainer(p), LeaveRunning: true, CaptureID: capture}
+	reqs := make([]CheckpointRequest, 0, len(ranks)+len(companions))
+	for _, p := range ranks {
+		reqs = append(reqs, CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: gpuContainer(p), CaptureID: capture})
+	}
+	for _, p := range companions {
+		reqs = append(reqs, CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: companionContainers[p.Name],
+			CaptureID: capture, Companion: true})
 	}
 	if len(reqs) == 1 {
-		r, err := c.a.Checkpoint(ctx, reqs[0])
-		if err != nil {
-			return nil, err
+		// A failed dump puts the pod back as it was.
+		r, cerr := c.a.Checkpoint(ctx, reqs[0])
+		if cerr != nil {
+			return nil, false, cerr
 		}
-		return []*CheckpointResult{r}, nil
+		return []*CheckpointResult{r}, true, nil
 	}
-	res, err := c.a.groupCheckpoint(ctx, GroupCheckpointRequest{Members: reqs, LeaveRunning: true}, log)
+	res, err := c.a.groupCheckpoint(ctx, GroupCheckpointRequest{Members: reqs}, log)
+	stopped = res != nil && res.Fabric.Went
 	if err != nil {
-		return nil, err
+		return nil, stopped, err
 	}
 	out := make([]*CheckpointResult, len(res.Members))
 	for i, m := range res.Members {
 		if m.Result == nil || m.Result.CheckpointID == "" {
-			return nil, fmt.Errorf("member %s/%s returned no checkpoint", m.Namespace, m.PodName)
+			return nil, stopped, fmt.Errorf("member %s/%s returned no checkpoint", m.Namespace, m.PodName)
 		}
 		out[i] = m.Result
 	}
-	return out, nil
+	return out, stopped, nil
+}
+
+// identityBlocksCapture returns the env variable through which a GPU pod
+// names its own instance, unless a group restore keeps that identity
+// consistent: a Dynamo component that runs under the fixed Dynamo
+// namespace and registers in its instance's etcd (webhook.DynamoRestorable),
+// whose etcd is captured with it as a companion.
+func (a *Agent) identityBlocksCapture(pod *corev1.Pod) string {
+	name := webhook.NamesOwnInstance(pod)
+	if name == "" {
+		return ""
+	}
+	fixed := a.config.Webhook.DynamoNamespace
+	if webhook.DynamoRestorable(pod, fixed) && webhook.DynamoNamespaceIs(pod, fixed) {
+		return ""
+	}
+	return name
 }
 
 // gpushareEnabledFor reports whether the pod runs under the gpushare
@@ -639,6 +808,11 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	for {
 		pods, err := a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
 		if err == nil {
+			if err := doubledSlot(pods.Items, leader, key); err != nil {
+				// No restore can use both; replacements are admitted anew.
+				c.failGroup(ctx, leader, key, false, err, log)
+				return
+			}
 			ranks, waitErr = instanceRanks(pods.Items, leader, size, webhook.CRIUGroupOrdinalAnnotation, webhook.CRIUGroupSizeAnnotation, func(p *corev1.Pod) bool {
 				_, _, running := criuRestoreTarget(p)
 				return p.Annotations[webhook.CRIUGroupAnnotation] == key && running
@@ -659,7 +833,11 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		time.Sleep(5 * time.Second)
 	}
 
-	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size)}
+	// failGroup deletes the pods after it has blocked their checkpoints. Were
+	// the driver to delete them first, their replacements could be admitted
+	// as placeholders of the same checkpoints and wait for a restore that
+	// never comes.
+	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size), KeepFailedPods: true, ServiceAddrs: c.groupServiceAddrs(ctx, key)}
 	for i, p := range ranks {
 		req.Members[i] = GroupRestoreMember{
 			CheckpointID:             p.Annotations[webhook.CRIURestoreAnnotation],
@@ -673,6 +851,10 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
 	defer cancel()
 	_, err := a.groupRestore(rctx, req, log)
+	if ac := new(addressCollision); errors.As(err, &ac) {
+		c.replaceColliding(ctx, leader, key, ac, log)
+		return
+	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
 		for _, p := range ranks {
@@ -686,6 +868,47 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		return // the agent stops before the restore ran
 	}
 	c.failGroup(ctx, leader, key, errors.As(err, new(*groupRestoreFailure)), err, log)
+}
+
+// replaceColliding deletes the target pods of an address collision so their
+// replacements get other addresses; nothing has been restored. The
+// replacements are admitted as placeholders of the same checkpoints, and
+// their instance's leader drives the restore again (this one, unless it is
+// among them). The group record counts the replacements across leaders;
+// past criuGroupMaxReplacements the instance starts cold.
+func (c *criuAutoRestorer) replaceColliding(agentCtx context.Context, leader *corev1.Pod, key string, ac *addressCollision, log *logrus.Entry) {
+	ctx := context.WithoutCancel(agentCtx)
+	id := leader.Annotations[webhook.CRIURestoreAnnotation]
+	n := 0
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		if !recordOf(d, id) {
+			return false
+		}
+		n, _ = strconv.Atoi(d["replacements"])
+		n++
+		d["replacements"] = strconv.Itoa(n)
+		return true
+	}); err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
+	}
+	log = log.WithFields(logrus.Fields{"replace": ac.Pods, "replacements": n})
+	if n > criuGroupMaxReplacements {
+		c.failGroup(ctx, leader, key, false, fmt.Errorf("%w; replaced target pods %d times", ac, n-1), log)
+		return
+	}
+	log.Warn("CRIU group restore: a target pod got an address another pod of the instance had at capture; replacing it before restoring")
+	for _, name := range ac.Pods {
+		ns, pod, _ := strings.Cut(name, "/")
+		if err := c.a.kubeClient.CoreV1().Pods(ns).Delete(ctx, pod, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).WithField("placeholder", name).Error("CRIU group restore: could not replace the target pod")
+		}
+	}
+	if slices.Contains(ac.Pods, leader.Namespace+"/"+leader.Name) {
+		return // the leader's replacement drives the restore
+	}
+	// The same leader drives it again once the replacements run.
+	c.attempted.Delete("restore/" + string(leader.UID))
+	c.considerGroupRestore(agentCtx, leader)
 }
 
 // failGroup ends a group restore that did not succeed: it deletes every
@@ -745,7 +968,7 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 // failed (restoreFailed) or did not get to run. A record of another
 // capture is left as it is.
 func recordFailure(d map[string]string, id string, restoreFailed bool, cause error) bool {
-	if d["state"] != criuGroupStateComplete || !recordOf(d, id) {
+	if !recordUsable(d) || !recordOf(d, id) {
 		return false
 	}
 	if restoreFailed {
@@ -757,14 +980,25 @@ func recordFailure(d map[string]string, id string, restoreFailed bool, cause err
 	return true
 }
 
-// recordRestored clears the stalls of the capture checkpoint id belongs to:
-// its restores run.
+// recordRestored records a restore of the capture checkpoint id belongs
+// to: a capture being verified is verified, for every instance of its
+// configuration, and its stalls are cleared, as its restores run.
 func recordRestored(d map[string]string, id string) bool {
-	if d["stalls"] == "" || !recordOf(d, id) {
+	if !recordOf(d, id) {
 		return false
 	}
-	delete(d, "stalls")
-	return true
+	changed := false
+	if d["state"] == criuGroupStateVerifying {
+		d["state"], d["verifiedAt"] = criuGroupStateComplete, time.Now().UTC().Format(time.RFC3339)
+		delete(d, "sourceNamespace")
+		changed = true
+	}
+	if d["stalls"] != "" || d["replacements"] != "" {
+		delete(d, "stalls")
+		delete(d, "replacements")
+		changed = true
+	}
+	return changed
 }
 
 // groupPlaceholders returns the pods of leader's instance admitted as
@@ -775,7 +1009,7 @@ func groupPlaceholders(pods []corev1.Pod, leader *corev1.Pod, key string, includ
 	for i := range pods {
 		p := &pods[i]
 		if p.DeletionTimestamp == nil && p.Annotations[webhook.CRIUGroupAnnotation] == key &&
-			(includeRestored || p.Annotations[webhook.CRIURestoredAnnotation] == "") && sameInstance(leader, p) {
+			(includeRestored || p.Annotations[webhook.CRIURestoredAnnotation] == "") && groupMember(leader, p) {
 			out = append(out, p)
 		}
 	}
@@ -787,4 +1021,15 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// groupServiceAddrs returns the Service aliases group key's capture
+// recorded (serviceAliases), "" when there are none or the record cannot
+// be read.
+func (c *criuAutoRestorer) groupServiceAddrs(ctx context.Context, key string) string {
+	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return cm.Data["serviceAddrs"]
 }

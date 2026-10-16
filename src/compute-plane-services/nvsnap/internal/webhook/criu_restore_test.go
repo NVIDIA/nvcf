@@ -346,6 +346,7 @@ func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
 // only wait or check, and a wait on a peer that is itself a placeholder
 // (a Dynamo worker waiting for its leader) would never end.
 func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
+	alwaysRestart := corev1.ContainerRestartPolicyAlways
 	m := criuMutator(t, criuCaptureRecord())
 	pod := podWithAnnotation("abc123")
 	pod.Spec = criuFunctionPod().Spec
@@ -360,6 +361,9 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 		{Name: "wait-for-leader", Image: "img", Command: []string{"sh", "-c"}, Args: []string{"wait"}, VolumeMounts: []corev1.VolumeMount{{Name: "scripts", MountPath: "/scripts"}}},
 		{Name: "wait-for-nats", Image: "curl", Command: []string{"sh", "-c", "until curl nats; do sleep 5; done"}},
 		{Name: "own-scratch", Image: "img", Command: []string{"prep"}, VolumeMounts: []corev1.VolumeMount{{Name: "scratch", MountPath: "/s"}}},
+		// A native sidecar serves for the pod's life (a Dynamo model-ready
+		// beacon): skipped, it would exit and be restarted for ever.
+		{Name: "beacon", Image: "img", Command: []string{"serve"}, RestartPolicy: &alwaysRestart},
 	}
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
@@ -380,10 +384,74 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 			}
 		}
 	}
-	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false}
+	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
 	for n, w := range want {
 		if run[n] != w {
 			t.Errorf("%s runs = %v, want %v", n, run[n], w)
 		}
+	}
+}
+
+// A companion's checkpoint names its container (one of several, picked by
+// its connections to the ranks); the placeholder is that container, and the
+// pod's other containers run unchanged.
+func TestCRIURestore_PlaceholderIsTheRecordedContainer(t *testing.T) {
+	pod := criuFunctionPod()
+	pod.Spec.Containers[0].Name, pod.Spec.Containers[1].Name = "frontend-readiness-http", "main"
+	for i := range pod.Spec.Containers {
+		pod.Spec.Containers[i].Resources.Limits = nil
+	}
+	man := criuCaptureRecord()
+	man.SourcePodMeta[restoreContainerMeta] = "main"
+	m := criuMutator(t, man)
+	patches, err := m.criuRestorePatches(pod, "abc123__20261008-101010", man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var placeholder bool
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/containers/0/") {
+			t.Errorf("patched the sidecar: %s %s", p.Op, p.Path)
+		}
+		placeholder = placeholder || p.Path == "/spec/containers/1/command"
+	}
+	if !placeholder {
+		t.Error("the recorded container did not become the placeholder")
+	}
+	man.SourcePodMeta[restoreContainerMeta] = "gone"
+	if _, err := m.criuRestorePatches(pod, "abc123__20261008-101010", man); err == nil {
+		t.Error("restored into a pod without the recorded container")
+	}
+}
+
+func TestWithPIDReserve(t *testing.T) {
+	share := true
+	base := []PatchOp{{Op: "replace", Path: "/spec/initContainers/1/command", Value: []string{"skip"}}}
+	plain := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "img"}}}}
+	if got := withPIDReserve(plain, base); len(got) != 1 {
+		t.Fatalf("a pod with its own pid namespaces needs no reserve step: %+v", got)
+	}
+	shared := plain.DeepCopy()
+	shared.Spec.ShareProcessNamespace = &share
+	shared.Spec.InitContainers = []corev1.Container{{Name: "a"}, {Name: "b"}}
+	got := withPIDReserve(shared, base)
+	last := got[len(got)-1]
+	c, ok := last.Value.(corev1.Container)
+	if last.Op != "add" || last.Path != "/spec/initContainers/0" || !ok || c.Name != PIDReserveInit || c.Image != "img" {
+		t.Fatalf("reserve step must go first, added last: %+v", last)
+	}
+	if len(c.Command) < 2 || c.Command[0] != HelperBin || c.Command[1] != "await-pid-floor" {
+		t.Errorf("command: %v", c.Command)
+	}
+	// No init containers: the list is created, or joined when another
+	// patch created it.
+	none := plain.DeepCopy()
+	none.Spec.ShareProcessNamespace = &share
+	if got := withPIDReserve(none, nil); got[0].Path != "/spec/initContainers" {
+		t.Errorf("no list: %+v", got)
+	}
+	boot := []PatchOp{{Op: "add", Path: "/spec/initContainers", Value: []corev1.Container{{Name: "x"}}}}
+	if got := withPIDReserve(none, boot); got[len(got)-1].Path != "/spec/initContainers/0" {
+		t.Errorf("a list another patch created must be joined, not replaced: %+v", got)
 	}
 }

@@ -18,10 +18,14 @@ limitations under the License.
 package agent
 
 import (
+	"archive/tar"
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -76,7 +80,7 @@ func TestTarMount_RoundTrip(t *testing.T) {
 	// tarMount expects mp to be reachable at /proc/<pid>/root/<mp>. We pass
 	// the absolute path of srcDir; under /proc/self/root/<srcDir> resolves
 	// to the same content via the procfs magic-link.
-	if err := tarMount(pid, srcDir, out, nil); err != nil {
+	if err := tarMount(pid, srcDir, out, nil, nil); err != nil {
 		t.Fatalf("tarMount: %v", err)
 	}
 
@@ -117,7 +121,7 @@ func TestTarMount_MissingSource(t *testing.T) {
 	// transient missing path.
 	tmp := t.TempDir()
 	out := filepath.Join(tmp, "should-not-exist.tar")
-	if err := tarMount(os.Getpid(), filepath.Join(tmp, "nope"), out, nil); err != nil {
+	if err := tarMount(os.Getpid(), filepath.Join(tmp, "nope"), out, nil, nil); err != nil {
 		t.Errorf("tarMount missing source: got err %v, want nil", err)
 	}
 	if _, err := os.Stat(out); err == nil {
@@ -151,3 +155,102 @@ type tarErr struct {
 }
 
 func (e *tarErr) Error() string { return e.err.Error() + ": " + string(e.out) }
+
+// A mount nested in a replayed one (the model under nvsnap's cachedir) is the
+// restore pod's own volume: its mountpoint must not be in the archive, or
+// extracting it over the read-only mount fails the replay.
+func TestTarMount_ExcludesNestedMounts(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	for _, d := range []string{"cache/.triton/C6", "hf/model"} {
+		if err := os.MkdirAll(filepath.Join(src, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "cache/.triton/C6/launcher.so"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(tmp, "s.tar")
+	if err := tarMount(os.Getpid(), src, out, []string{"hf"}, nil); err != nil {
+		t.Fatalf("tarMount: %v", err)
+	}
+	names := tarNames(t, out)
+	for _, n := range names {
+		if n == "hf" || strings.HasPrefix(n, "hf/") {
+			t.Errorf("nested mount %q is in the archive", n)
+		}
+	}
+	if !slices.Contains(names, "cache/.triton/C6/launcher.so") {
+		t.Errorf("archive lacks the cache file: %v", names)
+	}
+}
+
+func TestNestedMountPoints(t *testing.T) {
+	got := nestedMountPoints([]string{"/", "/opt/nvsnap", "/opt/nvsnap/hf", "/opt/nvsnapx", "/opt/nvsnap/a/b", "/dev/shm"}, "/opt/nvsnap")
+	if strings.Join(got, ",") != "hf,a/b" {
+		t.Errorf("got %v", got)
+	}
+}
+
+// The replay check names what an extraction left out, and ignores the
+// placeholder's own nested mounts.
+func TestVerifyReplayed(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	for _, d := range []string{"cache/.triton/C6", "hf"} {
+		if err := os.MkdirAll(filepath.Join(src, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "cache/.triton/C6/launcher.so"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(tmp, "s.tar")
+	if err := tarMount(os.Getpid(), src, out, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHostTar("-C", dst, "-xf", out); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := verifyReplayed(os.Getpid(), dst, out, nil); err != nil || n == 0 {
+		t.Fatalf("complete replay: %d entries, %v", n, err)
+	}
+	if err := os.RemoveAll(filepath.Join(dst, "cache/.triton/C6")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := verifyReplayed(os.Getpid(), dst, out, nil)
+	if err == nil || !strings.Contains(err.Error(), "cache/.triton/C6") {
+		t.Fatalf("missing dir not reported: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dst, "hf")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyReplayed(os.Getpid(), dst, out, []string{"hf", "cache"}); err != nil {
+		t.Errorf("skipped paths still checked: %v", err)
+	}
+}
+
+func tarNames(t *testing.T, path string) []string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var names []string
+	tr := tar.NewReader(f)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, filepath.Clean(strings.TrimPrefix(h.Name, "./")))
+	}
+}

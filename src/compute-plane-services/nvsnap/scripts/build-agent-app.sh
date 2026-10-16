@@ -72,6 +72,7 @@ echo "Building Docker image..."
     --platform linux/amd64 \
     --build-arg BASE_IMAGE="${BASE_IMAGE}" \
     --build-arg ENABLE_LIBUV_INTERCEPT="${ENABLE_LIBUV_INTERCEPT}" \
+    --build-arg APP_VERSION="${VERSION}" \
     -t "${REGISTRY}/${IMAGE_NAME}:${VERSION}" \
     "${BUILD_CONTEXT}"
 

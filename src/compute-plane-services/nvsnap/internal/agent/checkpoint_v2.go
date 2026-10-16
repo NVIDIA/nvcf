@@ -94,6 +94,48 @@ const v2ImagesDirInContainer = "/opt/nvsnap-imgs"
 // ENOENT inside the container (first criu-v2 e2e, 2026-07-12).
 const v2BinDirInContainer = "/criu-bundle"
 
+// dumpFinal is what a dump leaves of the dumped tree.
+type dumpFinal int
+
+const (
+	// dumpKill: the tree is killed (criu's default).
+	dumpKill dumpFinal = iota
+	// dumpLeaveRunning: the tree runs on.
+	dumpLeaveRunning
+)
+
+func (f dumpFinal) flag() string {
+	switch f {
+	case dumpLeaveRunning:
+		return "--leave-running"
+	}
+	return ""
+}
+
+func finalOf(leaveRunning bool) dumpFinal {
+	if leaveRunning {
+		return dumpLeaveRunning
+	}
+	return dumpKill
+}
+
+// placeholderTools are the bundle's own copies of the tools run inside a
+// container's mount namespace, where the workload image may have none
+// (distroless) or ones without the options used (busybox): GNU tar and the
+// gzip it runs for criu's tmpfs contents, and mkdir for the agent's replay.
+var placeholderTools = []string{"tar", "gzip", "mkdir"}
+
+// inContainerTool is the path to run name at inside the mount namespace of
+// host pid pid: the staged bundle copy when there is one, else name from the
+// container's PATH.
+func inContainerTool(pid int, name string) string {
+	staged := v2BinDirInContainer + "/" + name
+	if fileExists(fmt.Sprintf("/proc/%d/root%s", pid, staged)) {
+		return staged
+	}
+	return name
+}
+
 // stageV2Bundle copies the criu bundle into the container rootfs at
 // /criu-bundle, including lib/ (criu's INTERP and RUNPATH point there —
 // it runs against its own staged glibc, never the container's).
@@ -115,6 +157,14 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 	// gpushare do not; only a gpushare capture needs it).
 	if tool := filepath.Join(bundleDir, gpushareToolName); fileExists(tool) {
 		stage[tool] = gpushareToolName
+	}
+	// The tools run inside the container's mount namespace: criu's tmpfs
+	// restore and the agent's replay steps. Base images before they were
+	// bundled do not carry them.
+	for _, name := range placeholderTools {
+		if tool := filepath.Join(bundleDir, name); fileExists(tool) {
+			stage[tool] = name
+		}
 	}
 	for src, name := range stage {
 		if err := copyFileExec(src, filepath.Join(stageDir, name)); err != nil {
@@ -216,7 +266,31 @@ func procOwner(procBase string, pid int) (uid, gid int, err error) {
 // still reads Ready.
 var errSourceLeftSuspended = errors.New("gpushare: the source workload could not be resumed and stays suspended")
 
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, fabricSession string, log *logrus.Entry) (*GPUShareInfo, error) {
+// dumpV2Opts are the choices of one dumpV2.
+type dumpV2Opts struct {
+	LeaveRunning  bool
+	FabricSession string
+	// Freeze, for a member of a group capture, returns once every member
+	// of the group is ready to be dumped (group_freeze.go); it runs right
+	// before criu starts, so the members stop together.
+	Freeze func(context.Context) error
+	// HeldCgroup, for a held member, is its frozen container cgroup (or "")
+	// once it is past the freeze point; ThawTarget thaws that container.
+	HeldCgroup func() string
+	ThawTarget func()
+	// PostDumpDir, for a member of a group capture, is its post-dump
+	// barrier: criu's post-dump hook waits there, the tree still stopped,
+	// until every member is dumped (group_freeze.go).
+	PostDumpDir string
+	// Snapshot copies what a restore puts back beside the dump (the replay
+	// mounts). dumpV2 runs it from criu's post-dump hook, the tree stopped,
+	// so the copy matches the dumped memory (dump_snapshot.go); a dump whose
+	// snapshot was not taken fails.
+	Snapshot func() error
+}
+
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
+	leaveRunning, fabricSession := o.LeaveRunning, o.FabricSession
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -325,11 +399,54 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
 	}
 
+	final := finalOf(leaveRunning)
+	freeze := func() error {
+		if o.Freeze == nil {
+			return nil
+		}
+		return o.Freeze(ctx)
+	}
 	if nsPID == 1 {
+		hooks := pidnsDumpHooks{Before: freeze, FreezeCgroup: o.HeldCgroup}
+		// criu runs from the agent here: its action script sees the
+		// agent's paths.
+		var snapDir string
+		if o.Snapshot != nil {
+			snapDir = filepath.Join(checkpointDir, dumpHookDir)
+			if err := os.MkdirAll(snapDir, 0o755); err != nil {
+				return nil, fmt.Errorf("dump snapshot hook: %w", err)
+			}
+			defer func() { _ = os.RemoveAll(snapDir) }()
+		}
+		if o.PostDumpDir != "" {
+			if err := os.MkdirAll(o.PostDumpDir, 0o755); err != nil {
+				return nil, fmt.Errorf("post-dump barrier: %w", err)
+			}
+			defer func() { _ = os.RemoveAll(o.PostDumpDir) }()
+		}
+		if snapDir != "" || o.PostDumpDir != "" {
+			dir := snapDir
+			if dir == "" {
+				dir = o.PostDumpDir
+			}
+			script := filepath.Join(dir, "action.sh")
+			if err := writeDumpActionScript(script, snapDir, o.PostDumpDir); err != nil {
+				return nil, fmt.Errorf("dump action script: %w", err)
+			}
+			hooks.ActionScript = script
+		}
+		stopSnapshot := func() (bool, error) { return true, nil }
+		if snapDir != "" {
+			stopSnapshot = serveSnapshot(ctx, snapDir, o.Snapshot)
+		}
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
 		_ = os.RemoveAll(imgsDir)
-		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, leaveRunning, gsOn, log); err != nil {
+		err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, hooks, log)
+		if taken, serr := stopSnapshot(); err == nil && !taken {
+			err = snapshotNotTaken(serr)
+		}
+		if err != nil {
 			if gsOn {
 				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
@@ -362,7 +479,23 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
-	args := dumpV2Args(hostPID, nsPID, externals, leaveRunning, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"))
+	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"), a.ghostLimit())
+	// criu runs in the container's mount namespace here: its action script
+	// and the snapshot request live in the images dir, which the agent sees
+	// through the container's root while the tree runs.
+	stopSnapshot := func() (bool, error) { return true, nil }
+	if o.Snapshot != nil {
+		hookHost := filepath.Join(imgsDir, dumpHookDir)
+		hookIn := v2ImagesDirInContainer + "/" + dumpHookDir
+		if err := os.MkdirAll(hookHost, 0o755); err != nil {
+			return nil, fmt.Errorf("dump snapshot hook: %w", err)
+		}
+		if err := writeDumpActionScript(filepath.Join(hookHost, "action.sh"), hookIn, ""); err != nil {
+			return nil, fmt.Errorf("dump action script: %w", err)
+		}
+		args = append(args, "--action-script", hookIn+"/action.sh")
+		stopSnapshot = serveSnapshot(ctx, hookHost, o.Snapshot)
+	}
 	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -376,7 +509,27 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
 	}
-	out, runErr := cmd.CombinedOutput()
+	// The tree's stdio, read before the dump takes the tree away
+	// (restore_stdio.go).
+	stdio := readStdio(procBase, targetHostPID)
+	var out []byte
+	runErr := freeze()
+	if runErr == nil && o.ThawTarget != nil {
+		// criu runs inside the container here; it seizes running tasks.
+		o.ThawTarget()
+	}
+	if runErr == nil {
+		out, runErr = cmd.CombinedOutput()
+		if runErr == nil && o.PostDumpDir != "" {
+			// No post-dump hook here (criu runs in the container's mount
+			// namespace): this member resumed with its dump, and only says
+			// so, for the group's driver not to wait for it.
+			markPostDumpReached(o.PostDumpDir, log)
+		}
+	}
+	if taken, serr := stopSnapshot(); runErr == nil && !taken {
+		runErr = snapshotNotTaken(serr)
+	}
 
 	// 6. Move images host-side into the standard checkpoint dir. After a
 	// non-leave-running dump the target tree is gone and /proc/<pid>/root
@@ -405,6 +558,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	if _, statErr := os.Stat(imgsDir); statErr != nil {
 		imgsHost = filepath.Join(sourceUpperdir, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	}
+	_ = os.RemoveAll(filepath.Join(imgsHost, dumpHookDir))
 	moveErr := moveDirContents(imgsHost, checkpointDir)
 	// Only clear the mirror once its contents are safely moved. Removing it
 	// unconditionally destroys dump.log on any move failure, which is exactly
@@ -442,6 +596,10 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	if moveErr != nil {
 		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
+	if err := writeStdioMarker(checkpointDir, stdio); err != nil {
+		// The restore then logs to a pipe nobody reads; the workload is fine.
+		log.WithError(err).Warn("criu-v2: could not record the workload's stdio; its restore will not log to the new pod")
+	}
 	if gsOn {
 		if leaveRunning {
 			if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
@@ -470,7 +628,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 var gpuDevPatterns = []string{"nvidia*", "gdrdrv"}
 
 // nvidiaDevExternals builds CRIU --external dev[maj/min]:name entries for
-// every GPU character device visible in the container.
+// every GPU character device visible in the container, none for a
+// container without GPUs.
 func nvidiaDevExternals(devDir string) ([]string, error) {
 	var matches []string
 	for _, pat := range gpuDevPatterns {
@@ -493,9 +652,8 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 		min := uint32(st.Rdev & 0xff)       //nolint:gosec // masked device-number bits
 		exts = append(exts, fmt.Sprintf("dev[%d/%d]:%s", maj, min, filepath.Base(m)))
 	}
-	if len(exts) == 0 {
-		return nil, fmt.Errorf("no GPU devices under %s", devDir)
-	}
+	// A container without GPUs (an instance's companion) has none to
+	// declare.
 	return exts, nil
 }
 
@@ -654,7 +812,7 @@ func bundledCompressBlockFlag() string {
 // dumpV2Args builds the nsenter + criu dump argv. A gpushare dump omits the
 // CUDA plugin: nvsnap-gpu-suspend has already checkpointed the GPU state.
 // directIO writes the pages image with O_DIRECT (--image-io-mode direct).
-func dumpV2Args(hostPID, nsPID int, externals []string, leaveRunning, gpushare, directIO bool, compress string) []string {
+func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushare, directIO bool, compress string, ghostLimit int64) []string {
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "dump",
@@ -662,9 +820,10 @@ func dumpV2Args(hostPID, nsPID int, externals []string, leaveRunning, gpushare, 
 		"-D", v2ImagesDirInContainer,
 		"-o", "dump.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
-		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--link-remap", "--ghost-links", "--ghost-limit", strconv.FormatInt(ghostLimit, 10),
 	}
-	if !gpushare {
+	// The CUDA plugin only for a tree with GPU devices (pidNSDumpArgs).
+	if !gpushare && len(externals) > 0 {
 		args = append(args, "--libdir", v2BinDirInContainer)
 	}
 	args = append(args,
@@ -692,8 +851,8 @@ func dumpV2Args(hostPID, nsPID int, externals []string, leaveRunning, gpushare, 
 		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
 	default: // "" / "off": no compression
 	}
-	if leaveRunning {
-		args = append(args, "--leave-running")
+	if f := final.flag(); f != "" {
+		args = append(args, f)
 	}
 	for _, e := range externals {
 		args = append(args, "--external", e)
@@ -755,4 +914,18 @@ func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, ro
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// defaultGhostLimit is the largest deleted file a dump saves by default.
+// Engines keep large buffers in deleted shared-memory files: a vLLM CPU
+// KV-cache tier (--kv-offloading-size) is one such file, hundreds of GiB,
+// part of the engine's state like its GPU memory.
+const defaultGhostLimit int64 = 1 << 40
+
+// ghostLimit is the agent's criu --ghost-limit.
+func (a *Agent) ghostLimit() int64 {
+	if a.config.CRIUGhostLimit > 0 {
+		return a.config.CRIUGhostLimit
+	}
+	return defaultGhostLimit
 }

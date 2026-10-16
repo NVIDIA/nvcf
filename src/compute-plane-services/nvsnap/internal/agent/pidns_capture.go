@@ -79,7 +79,7 @@ func pipeInode(procBase string, pid, fd int) uint64 {
 // placeholder's own on: right after the unix listeners.
 func stdioInheritFDs(c pidNSCapture) []string {
 	var args []string
-	base := pidNSUnixListenerFD + len(c.UnixListeners)
+	base := PIDNSUnixListenerFD + len(c.UnixListeners)
 	if c.StdoutPipe != 0 {
 		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:pipe:[%d]", base, c.StdoutPipe))
 	}
@@ -199,12 +199,21 @@ func parseListeningUnixSockets(data string) []UnixListener {
 	return out
 }
 
-// pidNSUnixListenerFD is the first fd the restore helper hands CRIU a
-// listener on (fd 3 is the network namespace).
-const pidNSUnixListenerFD = 4
+// PIDNSNetFD is the fd the restore helper hands CRIU the pod's network
+// namespace on; the unix listeners follow from PIDNSUnixListenerFD, then the
+// placeholder's stdout and stderr. The helper is a Go program, and its
+// runtime keeps descriptors of its own (the netpoller's epoll and eventfd) on
+// the lowest free fds: a fixed low fd here would replace one under the
+// running runtime, which then aborts at its next poll. The helper opens a
+// handful of fds, so 100 and up are free.
+const PIDNSNetFD = 100
+
+// PIDNSUnixListenerFD is the first fd the restore helper hands CRIU a
+// listener on.
+const PIDNSUnixListenerFD = PIDNSNetFD + 1
 
 // PIDNSUnixListenersEnv passes the listeners to the restore helper:
-// "<type>:<path>" per line, in fd order from pidNSUnixListenerFD.
+// "<type>:<path>" per line, in fd order from PIDNSUnixListenerFD.
 const PIDNSUnixListenersEnv = "NVSNAP_PIDNS_UNIX_LISTENERS"
 
 func encodeUnixListeners(ls []UnixListener) string {
@@ -374,7 +383,7 @@ func pathUnder(p, dir string) bool {
 
 // pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
 // agent's namespaces against the container's host pid.
-func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, leaveRunning, gpushare, directIO bool) []string {
+func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool, ghostLimit int64) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(hostPID),
@@ -382,7 +391,7 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 		"-D", imgsDir,
 		"-o", "dump.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
-		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--link-remap", "--ghost-links", "--ghost-limit", strconv.FormatInt(ghostLimit, 10),
 		"--skip-in-flight",
 		"--network-lock", "nftables",
 		"--manage-cgroups=ignore",
@@ -391,14 +400,17 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 		// The pod's network stays the pod's: restore joins the placeholder's.
 		"--external", fmt.Sprintf("net[%d]:%s", netNSInode, pidNSExtNetKey),
 	}
-	if !gpushare {
+	// The CUDA plugin only for a tree with GPU devices: for one without
+	// (an etcd, a NATS) it runs cuda-checkpoint for nothing, seconds before
+	// criu even freezes the tree.
+	if !gpushare && len(deviceExternals) > 0 {
 		args = append(args, "--libdir", pluginDir)
 	}
 	if directIO {
 		args = append(args, "--image-io-mode", "direct")
 	}
-	if leaveRunning {
-		args = append(args, "--leave-running")
+	if f := final.flag(); f != "" {
+		args = append(args, f)
 	}
 	for _, mp := range mounts {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
@@ -418,7 +430,7 @@ const pidNSExtNetKey = "extNetNs"
 // pidNSRestoreArgs is the criu restore argv for a checkpoint that carries
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
-// namespace on fd 3).
+// namespace on PIDNSNetFD).
 func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap string) []string {
 	args := []string{
 		"restore",
@@ -429,7 +441,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		"--network-lock", "nftables",
 		"--manage-cgroups=ignore",
 		"--restore-detached",
-		"--inherit-fd", "fd[3]:" + pidNSExtNetKey,
+		"--inherit-fd", fmt.Sprintf("fd[%d]:%s", PIDNSNetFD, pidNSExtNetKey),
 		// SysV IPC is the pod's; the hostname stays the source pod's, in a
 		// nested UTS namespace (the placeholder's /proc/sys is read-only).
 		"--join-ns", "ipc:/proc/1/ns/ipc",
@@ -447,7 +459,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
 	}
 	for i, l := range listeners {
-		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", pidNSUnixListenerFD+i, l.Inode))
+		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", PIDNSUnixListenerFD+i, l.Inode))
 	}
 	return args
 }
@@ -547,7 +559,19 @@ func parentPID(procBase string, pid int) (int, error) {
 // dumpPIDNamespace dumps the container whose pid 1 is hostPID into
 // checkpointDir, running the agent's criu from the agent's namespaces, and
 // records the external mounts for the restore.
-func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, leaveRunning, gpushare bool, log *logrus.Entry) error {
+// pidnsDumpHooks are a group member's steps around its dump
+// (group_freeze.go): Before runs right before criu starts, ActionScript is
+// criu's --action-script.
+type pidnsDumpHooks struct {
+	Before       func() error
+	ActionScript string
+	// FreezeCgroup, read after Before, is the frozen cgroup of the
+	// container to dump, "" for none: criu seizes its tasks frozen
+	// (--freeze-cgroup) and they never run before the dump.
+	FreezeCgroup func() string
+}
+
+func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, final dumpFinal, gpushare bool, hooks pidnsDumpHooks, log *logrus.Entry) error {
 	if err := awaitSettledZombies(procBase, hostPID, 15*time.Second); err != nil {
 		return fmt.Errorf("pid-namespace dump: %w", err)
 	}
@@ -581,9 +605,23 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, gpuMounts, deviceExternals, leaveRunning, gpushare, gpushare && bundledSupportsDirectImageIO())
+		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO(), a.ghostLimit())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
+	if hooks.ActionScript != "" {
+		args = append(args, "--action-script", hooks.ActionScript)
+	}
+	if hooks.Before != nil {
+		if err := hooks.Before(); err != nil {
+			return err
+		}
+	}
+	if hooks.FreezeCgroup != nil {
+		if cg := hooks.FreezeCgroup(); cg != "" {
+			args = append(args, "--freeze-cgroup", cg)
+			log.WithField("cgroup", cg).Info("criu-v2: dumping the held container from its frozen cgroup")
+		}
+	}
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	// CRIU locks TCP in the network namespace it runs in. The agent runs on

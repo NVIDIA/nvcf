@@ -67,7 +67,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 #   fatal: couldn't find remote ref 169595fd8
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-52877d285276feb372fc3fb68db51d6a26553d3f}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-19933f201661a0b947369266361a3803e8b1bc6e}"
 
 
 # vLLM base image

@@ -349,6 +349,28 @@ type Mutator struct {
 	// Job runs within it.
 	AgentPlacement AgentPlacement
 
+	// DynamoNamespace is the fixed Dynamo namespace the webhook gives
+	// every Dynamo component whose etcd and NATS are its instance's own
+	// (dynamo.go). Empty leaves the operator's.
+	DynamoNamespace string
+	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
+	// those components get unless they set one; 0 leaves Dynamo's default.
+	DynamoLeaseTTL int
+	// CaptureLivenessBudget, in seconds, is the silence every liveness
+	// probe is widened to tolerate, so a capture's freeze does not get the
+	// pod restarted (liveness.go); 0 leaves probes as they are.
+	CaptureLivenessBudget int
+
+	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
+	// as a companion of a group restore: not while a GPU rank of its
+	// namespace already runs. Nil admits.
+	CRIUCompanionAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// CRIUCompanionSlot claims for pod one of slots, the slots of identical
+	// companions of group g, that no other placeholder of its instance
+	// holds; two pods admitted together never get the same one. Nil
+	// leaves identical companions to start cold.
+	CRIUCompanionSlot func(ctx context.Context, pod *corev1.Pod, g CRIUGroup, slots []int) (int, error)
+
 	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
 	// container POSTs to. Typically
 	// http://nvsnap-server.<ns>.svc.cluster.local:8080. Empty
@@ -374,6 +396,10 @@ type Mutator struct {
 	// Operators don't get a Helm knob, by design: a single
 	// config value can't safely span all three.
 	HostBundleRoot string
+	// BundleID is the node bundle version the agent staged
+	// (<root>/current-bundle); pods mount <root>/versions/<BundleID>.
+	// Empty mounts the legacy <root>/nvsnap.
+	BundleID string
 
 	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
 	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.
@@ -542,10 +568,14 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// Patches accumulated by the model-volume and cachedir branches below,
 	// merged ahead of the restore-from patches.
 	var injectPatches []PatchOp
+	// The identity of the spec as received, before any patch below.
+	injectPatches = append(injectPatches, m.admittedConfigPatches(pod)...)
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
+	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
+	injectPatches = append(injectPatches, m.livenessBudgetPatches(pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
@@ -614,7 +644,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
 		// Not injectPatches: a gpushare restore mounts the checkpoint's
 		// chunk store, not the pod's own empty one.
-		return mergePatchPlan(cp), nil
+		return mergePatchPlan(withPIDReserve(pod, cp)), nil
 	}
 
 	// Resolve the manifest so the L2 dispatch can branch on the capture

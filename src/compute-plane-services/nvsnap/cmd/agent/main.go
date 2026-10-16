@@ -200,6 +200,18 @@ func main() {
 	flag.StringVar(&config.Webhook.AgentPlacement, "webhook-agent-placement", "",
 		"The agent DaemonSet's nodeSelector and nodeAffinity as JSON; pods nvsnap creates without a GPU request run within it.")
 
+	flag.StringVar(&config.Webhook.DynamoNamespace, "webhook-dynamo-namespace", "",
+		"Fixed Dynamo namespace (DYN_NAMESPACE, DYN_NAMESPACE_PREFIX) for Dynamo components whose etcd and NATS are their instance's own; empty keeps the operator's.")
+
+	flag.Int64Var(&config.CRIUGhostLimit, "criu-ghost-limit", 0,
+		"Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit), such as an engine's CPU KV-cache tier in /dev/shm; 0 is 1 TiB.")
+
+	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
+		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
+
+	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
+		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
+
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")
 
