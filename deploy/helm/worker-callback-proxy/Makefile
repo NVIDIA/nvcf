@@ -82,7 +82,6 @@ validate: template
 # Publish Chart
 # NOTE: this is manual until the CI pipeline is updated to push the chart to the NVCR OCI registry
 clean:
-	rm -rf $(charts_dir)/*.tgz
 	rm -rf ./packaged-charts
 
 package: clean lint
