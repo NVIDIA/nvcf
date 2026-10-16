@@ -329,11 +329,6 @@
       }
     },
     {
-      "id": "nonroot-images",
-      "path": "infra/nonroot-images",
-      "service_name": "nvcf-nonroot-images"
-    },
-    {
       "id": "cert-manager",
       "path": "deploy/helm/cert-manager",
       "service_name": "helm-nvcf-cert-manager",

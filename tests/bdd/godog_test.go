@@ -2920,9 +2920,8 @@ func TestMultiClusterHelmfileLLMLastClusterAffinity(t *testing.T) {
 	runLiveFeature(t, "multi-cluster-helmfile-llm-last-cluster-affinity.feature")
 }
 
-// lastClusterInstanceTypeEnv selects the instance type the last-cluster
-// affinity feature deploys to. Hosts with too few CPUs for the fake GPU
-// sizing register only NCP.GPU.H100_2x, so such hosts set it to that type.
+// lastClusterInstanceTypeEnv overrides the instance type the last-cluster
+// affinity feature deploys to.
 const (
 	lastClusterInstanceTypeEnv     = "LAST_CLUSTER_INSTANCE_TYPE"
 	lastClusterDefaultInstanceType = "NCP.GPU.H100_1x"

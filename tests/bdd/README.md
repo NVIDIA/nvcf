@@ -120,9 +120,8 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 # cluster; returning sessions, a new session, and failover are checked through
 # router and gateway metrics. The image tag variables are optional. Set them
 # when the stack-pinned LLM API gateway or request router images predate
-# last-cluster affinity. LAST_CLUSTER_INSTANCE_TYPE defaults to
-# NCP.GPU.H100_1x; on a host with about 8 CPUs the fake GPU sizing registers
-# only NCP.GPU.H100_2x, so set it to that there.
+# last-cluster affinity. LAST_CLUSTER_INSTANCE_TYPE overrides the instance
+# type the feature deploys, NCP.GPU.H100_1x by default.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   LLM_API_GATEWAY_IMAGE_TAG=<optional-tag> \
   LLM_REQUEST_ROUTER_IMAGE_TAG=<optional-tag> \
@@ -200,6 +199,9 @@ If a new step is genuinely needed:
 
 - Docker + k3d on `PATH`. The Make target the suite invokes does the
   cluster create.
+- 8 CPUs visible to Docker. The local compute-plane fixtures reserve about
+  1.75 CPU per function instance, so 8 CPUs are enough for the
+  `NCP.GPU.H100_1x` instance type the features deploy.
 - `kubectl` and `helm` on `PATH` for the assertion-side commands.
 - `make` in the repo root so the `make -C deploy/stacks/self-managed`
   invocations resolve.
