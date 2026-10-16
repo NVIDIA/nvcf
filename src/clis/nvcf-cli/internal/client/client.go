@@ -1104,6 +1104,11 @@ type GPUSpecificationDto struct {
 	Storage       string `json:"storage,omitempty"`       // The amount of available storage, e.g. 80G
 	SystemMemory  string `json:"systemMemory,omitempty"`  // The amount of RAM
 	GPUMemory     string `json:"gpuMemory,omitempty"`     // The amount of GPU memory
+
+	// HelmValidationPolicy is the Helm validation policy the deployment
+	// requests (name plus extra group/version/kind types). Helm-based
+	// functions only; the server rejects it for container-based functions.
+	HelmValidationPolicy *HelmValidationPolicyDto `json:"helmValidationPolicy,omitempty"`
 }
 
 // AutoscalingConfigurationPolicy mirrors server AutoscalingConfigurationPolicyEnum.

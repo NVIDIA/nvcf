@@ -293,6 +293,9 @@ var taskCreateFlags struct {
 	models    []string
 	resources []string
 	secrets   []string
+
+	validationPolicy    string
+	validationExtraType []string
 }
 
 var taskListFlags struct {
@@ -376,6 +379,9 @@ func init() {
 	taskCreateCmd.Flags().StringSliceVar(&taskCreateFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
 	taskCreateCmd.Flags().StringSliceVar(&taskCreateFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
 	taskCreateCmd.Flags().StringSliceVar(&taskCreateFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g. NGC_API_KEY=nvapi-...)")
+
+	taskCreateCmd.Flags().StringVar(&taskCreateFlags.validationPolicy, flagValidationPolicy, "", "Helm validation policy name (e.g. Default, Unrestricted); Helm-based tasks only")
+	taskCreateCmd.Flags().StringArrayVar(&taskCreateFlags.validationExtraType, flagValidationExtraType, nil, "Required extra Kubernetes type as group/version/kind (repeatable)")
 
 	// task list flags
 	taskListCmd.Flags().IntVar(&taskListFlags.limit, "limit", 0, "Maximum number of tasks to return")
@@ -644,8 +650,48 @@ func loadTaskCreateConfig(cmd *cobra.Command) (*TaskCreateConfig, error) {
 	if cmd.Flags().Changed("secrets") {
 		// Secrets from CLI flags are merged in runTaskCreate via parseSecretsList.
 	}
+	if cmd.Flags().Changed(flagValidationPolicy) || cmd.Flags().Changed(flagValidationExtraType) ||
+		(cfg.GpuSpecification != nil && cfg.GpuSpecification.HelmValidationPolicy != nil) {
+		if cfg.GpuSpecification == nil {
+			cfg.GpuSpecification = &TaskGpuSpecificationInput{}
+		}
+		if err := applyTaskValidationPolicyFlags(cmd, cfg.GpuSpecification); err != nil {
+			return nil, err
+		}
+	}
 
 	return cfg, nil
+}
+
+// applyTaskValidationPolicyFlags merges the --validation-policy and
+// --validation-extra-type flags over any helmValidationPolicy already present
+// from --input-file. The name flag overrides the file name, extra-type flags
+// replace the file list, and a missing name defaults to Default. Task extra
+// types are three-part group/version/kind.
+func applyTaskValidationPolicyFlags(cmd *cobra.Command, spec *TaskGpuSpecificationInput) error {
+	policy := spec.HelmValidationPolicy
+	if policy == nil {
+		policy = &TaskHelmValidationInput{}
+	}
+	if cmd.Flags().Changed(flagValidationPolicy) {
+		policy.Name = taskCreateFlags.validationPolicy
+	}
+	if cmd.Flags().Changed(flagValidationExtraType) {
+		types := make([]TaskKubernetesTypeIn, 0, len(taskCreateFlags.validationExtraType))
+		for _, raw := range taskCreateFlags.validationExtraType {
+			kt, err := parseWorkloadExtraType(raw)
+			if err != nil {
+				return err
+			}
+			types = append(types, TaskKubernetesTypeIn{Group: kt.Group, Version: kt.Version, Kind: kt.Kind})
+		}
+		policy.ExtraKubernetesTypes = types
+	}
+	if policy.Name == "" {
+		policy.Name = defaultValidationPolicyName
+	}
+	spec.HelmValidationPolicy = policy
+	return nil
 }
 
 // ============================================================================
