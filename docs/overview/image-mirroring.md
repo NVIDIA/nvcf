@@ -18,20 +18,18 @@ For ECR mirroring, make sure your AWS credentials have permission to create repo
 
 ## Prerequisites
 
-You must have access to the NGC `nvcf-onprem` organization to begin.
+NVCF artifacts are available from the public `nvidia/nvcf` namespace in NGC.
+You can mirror these artifacts using a Personal API key from any NGC
+organization. Keep `nvidia/nvcf` as the source namespace in the pull commands,
+regardless of the organization used to create your key.
 
-1. Navigate to [https://org.ngc.nvidia.com/setup/api-keys](https://org.ngc.nvidia.com/setup/api-keys) and ensure you have selected the `nvcf-onprem` organization in the upper right.
+1. Navigate to [NGC API Keys](https://org.ngc.nvidia.com/setup/api-keys) and select your organization.
 2. Create a Personal API key with the required scopes to pull entities.
+3. Set the NGC API key as an environment variable for use in subsequent commands:
 
-<Frame caption="The User Organization in the drop-down will be whichever NCA Organization your account is registered against. It will not be nvcf-onprem.">
-  <img src="images/apipersonalkey.png" alt="Personal API key creation for nvcf-onprem organization" />
-</Frame>
-
-1. Set the NGC API key as an environment variable for use in any subsequent commands:
-
-```bash
-export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key
-```
+   ```bash
+   export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key
+   ```
 
 ## LLS-Specific Artifacts
 
