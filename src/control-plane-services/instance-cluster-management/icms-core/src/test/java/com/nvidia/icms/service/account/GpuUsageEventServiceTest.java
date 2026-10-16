@@ -46,6 +46,7 @@ import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import com.nvidia.icms.outbound.cassandra.reservation.ReservationRepository;
+import com.nvidia.icms.service.gating.ClusterGatingService;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleHelper;
@@ -112,7 +113,8 @@ class GpuUsageEventServiceTest {
                 icmsConfigurationProperties,
                 clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(icmsConfigurationProperties, null));
+                new GpuGatingService(icmsConfigurationProperties, null),
+                new ClusterGatingService(icmsConfigurationProperties, null, null));
     }
 
     @Test

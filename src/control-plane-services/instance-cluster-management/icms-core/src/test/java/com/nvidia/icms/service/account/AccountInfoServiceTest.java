@@ -22,6 +22,7 @@ import com.nvidia.icms.inbound.rest.model.account.InstanceTypeAvailabilityRespon
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
+import com.nvidia.icms.service.gating.ClusterGatingService;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +68,8 @@ class AccountInfoServiceTest {
     void setUp() {
         accountInfoService = new AccountInfoService(null, null, clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(null, null));
+                new GpuGatingService(null, null),
+                new ClusterGatingService(null, null, null));
     }
 
     @Test
@@ -239,7 +241,8 @@ class AccountInfoServiceTest {
         properties.setGpuGating(Map.of(ncaId, allowedInstanceTypesByGpu));
         accountInfoService = new AccountInfoService(clusterTargetingHelper, properties,
                 clusterGpuInfoHelper, ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(properties, null));
+                new GpuGatingService(properties, null),
+                new ClusterGatingService(properties, null, null));
     }
 
     private static InstanceTypeV5Udt instanceType(String name) {

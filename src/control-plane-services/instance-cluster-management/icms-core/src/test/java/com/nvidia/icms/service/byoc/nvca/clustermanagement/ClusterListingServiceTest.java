@@ -40,6 +40,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.service.CloudHealthService;
+import com.nvidia.icms.service.gating.ClusterGatingService;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.TestUtil;
@@ -115,6 +116,9 @@ class ClusterListingServiceTest {
 
     @Mock
     private GpuGatingService gpuGatingService;
+
+    @Mock
+    private ClusterGatingService clusterGatingService;
 
     @InjectMocks
     private ClusterListingService clusterListingService;
