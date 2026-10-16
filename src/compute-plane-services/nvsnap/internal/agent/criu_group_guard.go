@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 var (
@@ -119,6 +121,28 @@ func instanceCoversEngine(ranks []*corev1.Pod) error {
 	}
 	if multiNode != "" && len(ranks) == 1 {
 		return fmt.Errorf("the engine spans nodes (%s) but nvsnap found it as one pod", multiNode)
+	}
+	return nil
+}
+
+// freezeTolerated refuses an instance one of whose pods would not outlast
+// its capture's freeze. Capturing stops every member at once, the GPU ranks
+// for as long as saving their GPU memory, the dump and the reload take
+// (minutes for a large model), while the instance's etcd keeps counting. A
+// liveness probe that gives up first has the kubelet restart the engine; a
+// Dynamo lease that runs out first has the engine shut itself down. The
+// webhook gives every pod it admits at least livenessBudget seconds of
+// probe tolerance and a Dynamo lease of leaseTTL seconds; a pod admitted
+// with less (before those budgets, or setting its own lease) is not
+// captured. A zero budget is not checked.
+func freezeTolerated(members []*corev1.Pod, livenessBudget, leaseTTL int) error {
+	for _, p := range members {
+		if t, ok := webhook.LivenessTolerance(p); ok && livenessBudget > 0 && t < livenessBudget {
+			return fmt.Errorf("pod %s: its liveness probe tolerates %d s of silence, less than the %d s capture budget", p.Name, t, livenessBudget)
+		}
+		if t, ok := webhook.DynamoLeaseTTL(p); ok && leaseTTL > 0 && t < leaseTTL {
+			return fmt.Errorf("pod %s: its Dynamo etcd lease (ETCD_LEASE_TTL) is %d s, less than the %d s capture budget", p.Name, t, leaseTTL)
+		}
 	}
 	return nil
 }

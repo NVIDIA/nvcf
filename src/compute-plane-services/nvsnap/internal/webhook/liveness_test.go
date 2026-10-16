@@ -35,3 +35,39 @@ func TestLivenessBudgetPatches(t *testing.T) {
 		t.Errorf("budget off: patched %v", p)
 	}
 }
+
+func TestLivenessTolerance(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+		{Name: "a", LivenessProbe: &corev1.Probe{PeriodSeconds: 10, FailureThreshold: 30}},
+		{Name: "b", LivenessProbe: &corev1.Probe{}}, // API defaults: 10 s x 3
+		{Name: "c"},
+	}}}
+	if got, ok := LivenessTolerance(pod); !ok || got != 30 {
+		t.Errorf("got %d %v, want the tightest probe's 30 s", got, ok)
+	}
+	if _, ok := LivenessTolerance(&corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c"}}}}); ok {
+		t.Error("a pod without a liveness probe has no tolerance")
+	}
+}
+
+func TestDynamoLeaseTTLOf(t *testing.T) {
+	c := func(env ...corev1.EnvVar) corev1.Container { return corev1.Container{Name: "x", Env: env} }
+	dyn := corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "ns"}
+	for _, tc := range []struct {
+		name string
+		cs   []corev1.Container
+		want int
+		ok   bool
+	}{
+		{"not Dynamo", []corev1.Container{c()}, 0, false},
+		{"default", []corev1.Container{c(dyn)}, 10, true},
+		{"set", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "300"})}, 300, true},
+		{"unreadable", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "x"})}, 10, true},
+		{"shortest", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "300"}), c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "60"})}, 60, true},
+	} {
+		got, ok := DynamoLeaseTTL(&corev1.Pod{Spec: corev1.PodSpec{Containers: tc.cs}})
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: got %d %v, want %d %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}

@@ -50,3 +50,27 @@ func (m *Mutator) livenessBudgetPatches(pod *corev1.Pod) []PatchOp {
 	}
 	return patches
 }
+
+// LivenessTolerance returns the seconds of silence the pod's tightest
+// liveness probe tolerates before the kubelet restarts its container
+// (period times failure threshold); false when the pod has none.
+func LivenessTolerance(pod *corev1.Pod) (int, bool) {
+	least, found := 0, false
+	for i := range pod.Spec.Containers {
+		p := pod.Spec.Containers[i].LivenessProbe
+		if p == nil {
+			continue
+		}
+		period, threshold := p.PeriodSeconds, p.FailureThreshold
+		if period <= 0 {
+			period = 10 // the API default
+		}
+		if threshold <= 0 {
+			threshold = 3 // the API default
+		}
+		if t := int(period * threshold); !found || t < least {
+			least, found = t, true
+		}
+	}
+	return least, found
+}

@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,6 +225,33 @@ func TestDriveFabric_AbortsWhenAMemberEndsBeforeTheGo(t *testing.T) {
 	ds.set(1)
 	if out := <-res; out.Went {
 		t.Errorf("outcome = %+v: the session must not go without every member", out)
+	}
+}
+
+// A companion of the group (outside the fabric session) that ended before
+// the go loses the capture: the GPU ranks get aborts, not a go to suspend.
+func TestDriveFabric_AbortsWhenACompanionEndsBeforeTheGo(t *testing.T) {
+	a, b := &fakeFabricMember{name: "a"}, &fakeFabricMember{name: "b"}
+	var lost atomic.Bool
+	ds, res, cancel := startDriveOpts([]fabricMember{a, b}, fabricDriveOpts{Vote: true, LostOther: lost.Load})
+	defer cancel()
+	lost.Store(true)
+	a.vote(0, true)
+	b.vote(0, true)
+	eventually(t, "abort", func() bool {
+		va, _ := a.sent()
+		vb, _ := b.sent()
+		return len(va) == 1 && len(vb) == 1
+	})
+	for _, m := range []*fakeFabricMember{a, b} {
+		if v, _ := m.sent(); !reflect.DeepEqual(v, []string{"0 abort"}) {
+			t.Errorf("%s verdicts = %v, want an abort", m.name, v)
+		}
+	}
+	ds.set(0)
+	ds.set(1)
+	if out := <-res; out.Went {
+		t.Errorf("outcome = %+v: the session must not go once a companion ended", out)
 	}
 }
 

@@ -454,6 +454,10 @@ type fabricOutcome struct {
 type fabricDriveOpts struct {
 	// Vote: a suspend's quiesce vote (group checkpoint).
 	Vote bool
+	// LostOther reports a member of the group outside the session (a
+	// companion) that ended before the vote passed: the capture is lost,
+	// so the vote is aborted too. Nil: none.
+	LostOther func() bool
 	// Unlock: hold every member until all are restored, then unlock them
 	// together (group restore). The exchange waits for the unlock.
 	Unlock bool
@@ -514,7 +518,7 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 		}
 
 		if opts.Vote && !out.Went {
-			if lostOne && !aborted {
+			if (lostOne || (opts.LostOther != nil && opts.LostOther())) && !aborted {
 				aborted = true
 				log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
 			}
@@ -868,7 +872,19 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 			driveGroupFreeze(ctx, fabricHTTPClient, session, "post", freezeMembers, 100*time.Millisecond, log)
 		}
 	}()
-	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true}, log)
+	// A companion that ends before the vote passed loses the capture: the
+	// GPU ranks must not suspend for it.
+	lostCompanion := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := range req.Members {
+			if req.Members[i].Companion && finished[i] {
+				return true
+			}
+		}
+		return false
+	}
+	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true, LostOther: lostCompanion}, log)
 	wg.Wait()
 	<-freezeDone
 
