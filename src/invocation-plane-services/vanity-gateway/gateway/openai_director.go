@@ -1109,6 +1109,11 @@ func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
 		return openAIRequestBody{}, err
 	}
 
+	// A top-level null decodes without error, but the body must be a JSON object.
+	if bytes.Equal(bytes.TrimSpace(bodyBytes.peek()), []byte("null")) {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, fmt.Errorf("%w: body is null", errInvalidJSONBody)
+	}
 	body := openAIRequestBody{}
 	err = json.UnmarshalWithOption(bodyBytes.peek(), &body, json.DecodeFieldPriorityFirstWin())
 	if err != nil {

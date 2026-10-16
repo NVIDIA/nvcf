@@ -1263,6 +1263,8 @@ func TestOpenAIRoutesRejectInvalidJSONAsClientError(t *testing.T) {
 		{"array", `[{"model":"m"}]`},
 		{"empty", ``},
 		{"model wrong type", `{"model":1}`},
+		{"null", `null`},
+		{"null with whitespace", " null\n"},
 	}
 	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", "http://llm.invalid")
 	for _, route := range routes {
