@@ -1945,6 +1945,34 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 	return regBackendGPUs, nil
 }
 
+// overheadRemovedInstanceTypesHint explains, for a registration that ICMS
+// rejected, which instance types the infrastructure resource overhead leaves out
+// of the registration. It returns "" when the overhead leaves none out.
+func (c *BackendK8sCache) overheadRemovedInstanceTypesHint(ctx context.Context) string {
+	overhead, err := c.infraOverheadGetter.GetInfraOverhead(ctx)
+	if err != nil || len(overhead) == 0 {
+		return ""
+	}
+	backendGPUs, err := c.GetAllBackendGPUs(ctx)
+	if err != nil {
+		return ""
+	}
+	removed := types.BackendGPUs(backendGPUs).InstanceTypesRemovedByOverhead(
+		c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.MultiNodeWorkloads), overhead)
+	if len(removed) == 0 {
+		return ""
+	}
+	names := make([]string, len(removed))
+	for i, it := range removed {
+		names[i] = it.Name
+	}
+	return fmt.Sprintf("the infrastructure resource overhead of %s leaves no room in instance types %s, so NVCA "+
+		"left them out of the registration; if they have active instances, ICMS rejects the registration for that "+
+		"reason: lower byoo.additionalResourceOverhead or another infrastructure container resource (utils.resources, "+
+		"byoo.resources, byoo.fluentbit.resources, storage.sharedStorage.server.resources), or remove those instances",
+		k8sutil.FormatResourceList(overhead), strings.Join(names, ", "))
+}
+
 func (c *BackendK8sCache) UpdateInstanceTypeMetrics(
 	ctx context.Context,
 	gpus []types.RegistrationGPU,

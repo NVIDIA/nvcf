@@ -1303,6 +1303,12 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 
 	// finalizer added proceed with sync
 	if shouldNVCARollout(ctx, nvcaRolloutChecks...) {
+		// Checked only before a rollout because it lists nodes and ICMS requests.
+		if err := bc.validateInfraOverheadForActiveInstances(ctx,
+			effectiveConfigForComparison.OverrideEnvironmentVars, desiredAgentConfigCM); err != nil {
+			return err
+		}
+
 		if nbMerged.Status.Version == "" {
 			bc.eventRecorder.Eventf(nbMerged, corev1.EventTypeNormal,
 				string(nvcaoptypes.EventCategoryInstall), "Starting %v %v installation", AgentName, nbMerged.Spec.Version)
