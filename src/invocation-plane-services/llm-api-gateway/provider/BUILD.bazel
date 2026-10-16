@@ -21,6 +21,7 @@ go_library(
         "echo.go",
         "provider.go",
         "stargate.go",
+        "upstream_error.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider",
     visibility = ["//visibility:public"],

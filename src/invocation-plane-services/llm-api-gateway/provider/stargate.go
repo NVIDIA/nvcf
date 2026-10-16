@@ -33,7 +33,6 @@ import (
 	"strings"
 	"time"
 
-	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -642,60 +641,8 @@ func checkHTTPError(resp *http.Response) error {
 		return nil
 	}
 
-	statusCode := clientStatusCode(resp)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-	message := string(body)
-
-	var errorResponse models.ErrorResponse
-	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
-		if statusCode == statusOverloaded && errorResponse.Error.Code == overloadErrorCode {
-			return echo.NewHTTPError(statusCode, errorResponse)
-		}
-		message = errorResponse.Error.Message
-	} else if decoded := upstreamErrorMessage(body); decoded != "" {
-		message = decoded
-	}
-	if message == "" {
-		message = http.StatusText(resp.StatusCode)
-	}
-
-	httpErr := echo.NewHTTPError(statusCode, message)
-	if codes := resp.Header.Values(headerStargateErrorCode); len(codes) > 0 {
-		// The router error code is internal; keep it for the request log only.
-		httpErr = httpErr.SetInternal(fmt.Errorf("stargate error code %s", strings.Join(codes, ",")))
-	}
-	return httpErr
-}
-
-// upstreamErrorMessage returns the message from error bodies that do not
-// decode as models.ErrorResponse: Stargate rejections
-// ({"error":"no eligible candidates","code":"no_eligible_candidates"}),
-// OpenAI-style errors with a numeric code, and pylon problem details
-// ({"title":"Service Unavailable","detail":"..."}). It returns "" for any
-// other body.
-func upstreamErrorMessage(body []byte) string {
-	var fields struct {
-		Error  json.RawMessage `json:"error"`
-		Detail json.RawMessage `json:"detail"`
-		Title  json.RawMessage `json:"title"`
-	}
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return ""
-	}
-
-	var openAIError struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(fields.Error, &openAIError); err == nil && openAIError.Message != "" {
-		return openAIError.Message
-	}
-	for _, field := range []json.RawMessage{fields.Error, fields.Detail, fields.Title} {
-		var message string
-		if err := json.Unmarshal(field, &message); err == nil && message != "" {
-			return message
-		}
-	}
-	return ""
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, MaxUpstreamErrorBodyBytes))
+	return NewUpstreamHTTPError(clientStatusCode(resp), resp.Header, body)
 }
 
 type chatCompletionChoiceAccumulator struct {
