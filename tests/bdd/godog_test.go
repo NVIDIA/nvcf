@@ -47,6 +47,9 @@ type fakeRunner struct {
 	results map[string]harness.Result
 	runs    []string
 	onRun   func(string) error
+	// respond, when set, answers a command before the canned results are
+	// consulted. It reports false to fall through to them.
+	respond func(string) (harness.Result, bool)
 }
 
 // Run records the command, applies an optional test side effect, and returns
@@ -58,10 +61,37 @@ func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, err
 			return harness.Result{}, err
 		}
 	}
+	if f.respond != nil {
+		if result, ok := f.respond(command); ok {
+			return result, nil
+		}
+	}
 	if result, ok := f.results[command]; ok {
 		return result, nil
 	}
 	return harness.Result{ExitCode: 0}, nil
+}
+
+// taskLifecycleResponder answers `task get --json` for the task most recently
+// created through a fake `nvcf-cli`. A task created from a chart whose name
+// mentions missing resources reports ERRORED; every other task reports
+// COMPLETED. It stands in for NVCT status transitions in wiring tests only.
+func taskLifecycleResponder() func(string) (harness.Result, bool) {
+	lastTask := ""
+	return func(command string) (harness.Result, bool) {
+		if _, after, found := strings.Cut(command, " task create --name "); found {
+			lastTask, _, _ = strings.Cut(after, " ")
+			return harness.Result{ExitCode: 0}, true
+		}
+		if strings.HasSuffix(command, " task get --json") {
+			status := "COMPLETED"
+			if strings.Contains(lastTask, "missing-resources") {
+				status = "ERRORED"
+			}
+			return harness.Result{ExitCode: 0, Stdout: `{"task":{"id":"task-1","name":"` + lastTask + `","status":"` + status + `"}}`}, true
+		}
+		return harness.Result{}, false
+	}
 }
 
 // RunWithSensitiveStdin records only the command. Sensitive input must never
@@ -84,7 +114,7 @@ func (f *fakeRunner) RunWithTTY(ctx context.Context, command string) (harness.Re
 // specific commands. Commands not in the map resolve to ExitCode 0
 // with empty streams. Pass nil for an all-zero-exit runner.
 func newFakeRunner(canned map[string]harness.Result) *fakeRunner {
-	return &fakeRunner{results: canned, runs: nil}
+	return &fakeRunner{results: canned, runs: nil, respond: taskLifecycleResponder()}
 }
 
 // newWiringSuite builds a Suite tailored for the wiring tests: a
@@ -446,12 +476,6 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
 	const helmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function invoke --request-body '{\"message\":\"bdd-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
-	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
 	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function deploy create --backend ncp-local --gpu H100 --instance-type NCP.GPU.H100_1x" +
 		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
@@ -492,14 +516,6 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		helmInvokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
-		},
-		helmTaskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
-		},
-		invalidHelmTaskSmokeCommand: {
-			ExitCode: 1,
-			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
@@ -631,12 +647,22 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmInvokeCommand) {
 		t.Fatal("Helm sample function was not invoked")
 	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script was not invoked on the local cluster")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local cluster")
-	}
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml",
+		name:   "bdd-nvct-helm-task-smoke",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local",
+		},
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml",
+		name:   "bdd-nvct-helm-task-missing-resources",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test-missing-resources.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local",
+		},
+	})
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
@@ -1270,13 +1296,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
 	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function deploy create --backend ncp-local-compute-1 --gpu H100 --instance-type NCP.GPU.H100_1x" +
 		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
@@ -1348,18 +1367,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			`-d '{"model":"unauthenticated/check","messages":[]}'`: {
 			ExitCode: 0,
 			Stdout:   "401",
-		},
-		taskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
-		},
-		helmTaskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
-		},
-		invalidHelmTaskSmokeCommand: {
-			ExitCode: 1,
-			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
@@ -1523,18 +1530,33 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if cleanupCount != 5 {
 		t.Fatalf("function deployment cleanup commands = %d, want 5", cleanupCount)
 	}
-	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
-		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
-		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script was not invoked on the local compute cluster")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local compute cluster")
-	}
+	const multiLocalConfig = "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-task-smoke",
+		createParts: []string{
+			"--image nvcr.io/test-org/test-team/task-simple-sample:local",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+			"--container-env DELAY_BETWEEN_RESULTS_IN_MINUTES=0",
+		},
+		deleted: true,
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-helm-task-smoke",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+		},
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-helm-task-missing-resources",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test-missing-resources.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+		},
+	})
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
 }
 
@@ -2632,17 +2654,6 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	// EKS_GATEWAY_ADDR is intentionally NOT preset: @gateway-setup's
 	// export step captures it from the canned gateway stdout below. The
 	// gateway-domain export is likewise exercised from its canned result.
-	taskSmokeCommand := strings.Join([]string{
-		"env",
-		"NVCT_BDD_STATE_PATH=/home/wiring/.nvcf-cli.nvcf-cli-eks-bdd-multi.state",
-		"NVCT_BDD_API_KEYS_URL=http://" + wiringGatewayLB + "/v1/keys",
-		"NVCT_BDD_API_KEYS_HOST=api-keys." + wiringGatewayDomain,
-		"NVCT_BDD_TASKS_URL=http://" + wiringGatewayLB + "/v1/nvct/tasks",
-		"NVCT_BDD_TASKS_HOST=tasks." + wiringGatewayDomain,
-		"NVCT_BDD_TASK_BACKEND=" + computeClusterName,
-		"NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x",
-		"tests/bdd/scripts/run-nvct-task-smoke.sh",
-	}, " ")
 	pullSecretCommand := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context " + computeContext + " -o name"
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
@@ -2675,10 +2686,6 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
-		},
-		taskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
 		},
 	}))
 	seedStackBaseYaml(t, suite.Config.RepoRoot)
@@ -2732,8 +2739,26 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
 	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
-		t.Fatal("NVCT task API smoke script was not invoked with the EKS instance type")
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml",
+		name:   "bdd-nvct-task-smoke",
+		createParts: []string{
+			"--image nvcr.io/test-org/test-team/task-simple-sample:local",
+			"--instance-type NCP.GPU.H100_8x", "--backend " + computeClusterName,
+		},
+		deleted: true,
+	})
+	generatedConfig, err := os.ReadFile(filepath.Join(suite.Config.RepoRoot, "tests", "bdd", "out", "nvcf-cli-eks-bdd-multi.yaml"))
+	if err != nil {
+		t.Fatalf("read generated EKS CLI config: %v", err)
+	}
+	for _, want := range []string{
+		"base_nvct_url: http://" + wiringGatewayLB,
+		"nvct_host: tasks." + wiringGatewayDomain,
+	} {
+		if !strings.Contains(string(generatedConfig), want) {
+			t.Fatalf("generated EKS CLI config does not contain %q:\n%s", want, generatedConfig)
+		}
 	}
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_8x", 1)
 }
@@ -3042,6 +3067,42 @@ func commandOptionEquals(command, option, want string) bool {
 		}
 	}
 	return false
+}
+
+// taskLifecycleExpectation describes one visible `nvcf-cli` task lifecycle:
+// the selected config, the created task, the arguments it must carry, and
+// whether the scenario deletes it.
+type taskLifecycleExpectation struct {
+	config      string
+	name        string
+	createParts []string
+	deleted     bool
+}
+
+// assertTaskLifecycle checks that the visible task steps ran through the
+// selected CLI config and that no script-based path remains. Exact status
+// matching is covered by the scenario passing against taskLifecycleResponder.
+func assertTaskLifecycle(t *testing.T, runs []string, want taskLifecycleExpectation) {
+	t.Helper()
+	cli := "/usr/bin/nvcf-cli --config " + want.config
+	if !commandRanThatContainsAll(runs, cli, "api-key generate --for task", "--scopes launch_task,task_details,delete_task") {
+		t.Fatalf("task API key was not generated through %s", want.config)
+	}
+	createNeedles := append([]string{cli + " task create --name " + want.name}, want.createParts...)
+	if !commandRanThatContainsAll(runs, createNeedles...) {
+		t.Fatalf("task %s was not created with %v", want.name, want.createParts)
+	}
+	if !commandRanExactly(runs, cli+" task get --json") {
+		t.Fatalf("task %s status was never polled through %s", want.name, want.config)
+	}
+	if want.deleted && !commandRanExactly(runs, cli+" task delete") {
+		t.Fatalf("task %s was not deleted through %s", want.name, want.config)
+	}
+	for _, run := range runs {
+		if strings.Contains(run, "run-nvct-task-smoke") || strings.Contains(run, "NVCT_BDD_") {
+			t.Fatalf("command %q still uses the task smoke script plumbing", run)
+		}
+	}
 }
 
 func commandRanExactly(runs []string, want string) bool {
