@@ -43,15 +43,16 @@ sleep 12; roles
 echo "--- webhook decisions"; agentlog 5m "election:" | tail -6
 echo "--- lease"; k get lease -n $AGENT_NS -l nvsnap.io/kind=capture-election -o custom-columns=NAME:.metadata.name,HOLDER:.spec.holderIdentity,DEADLINE:.metadata.annotations.nvsnap\\.io/deadline --no-headers
 LEADER=$(k get pods -n $NS -l app=$REL -o json | python3 -c "import json,sys; print(next((p['metadata']['name'] for p in json.load(sys.stdin)['items'] if p['metadata'].get('annotations',{}).get('nvsnap.io/role')=='leader'),''))")
-FOLLOWER=$(k get pods -n $NS -l app=$REL -o json | python3 -c "import json,sys; print(next((p['metadata']['name'] for p in json.load(sys.stdin)['items'] if p['metadata'].get('annotations',{}).get('nvsnap.io/role')=='follower'),''))")
-H=$(k get pod $LEADER -n $NS -o jsonpath='{.metadata.annotations.nvsnap\.io/hash}' | cut -c1-8); echo "leader=$LEADER follower=$FOLLOWER hash=$H"; [ -n "$LEADER" ] && [ -n "$FOLLOWER" ] || { echo "ELECTION DID NOT HAPPEN"; exit 1; }
+FOLLOWERS=$(k get pods -n $NS -l app=$REL -o json | python3 -c "import json,sys; print(' '.join(p['metadata']['name'] for p in json.load(sys.stdin)['items'] if p['metadata'].get('annotations',{}).get('nvsnap.io/role')=='follower'))")
+FOLLOWER=${FOLLOWERS%% *}; NF=$(echo $FOLLOWERS | wc -w)
+H=$(k get pod $LEADER -n $NS -o jsonpath='{.metadata.annotations.nvsnap\.io/hash}' | cut -c1-8); echo "leader=$LEADER followers=$FOLLOWERS hash=$H"; [ -n "$LEADER" ] && [ "$NF" = $((REPLICAS-1)) ] || { echo "ELECTION DID NOT HAPPEN (leader='$LEADER', $NF of $((REPLICAS-1)) followers)"; exit 1; }
 echo "=== 2. leader cold start"; waitfor "leader Ready" 1800 "[ \"\$(k get pod $LEADER -n $NS -o jsonpath='{.status.containerStatuses[0].ready}')\" = true ]" || exit 1; echo "   leader Ready at +$(( $(date +%s)-T0 ))s"
 echo "=== 3. capture + promote"; waitfor "capture committed" 600 "agentlog 20m 'capture committed' | grep -q '$LEADER'" || exit 1; agentlog 20m "capture committed|L2 promote complete|pvc-state" | grep "$LEADER|$H" | tail -3
-echo "=== 4. follower release"; waitfor "follower ungated" 1500 "[ \"\$(k get pod $FOLLOWER -n $NS -o jsonpath='{.spec.schedulingGates}')\" = '' ]" || exit 1; echo "   follower ungated at +$(( $(date +%s)-T0 ))s"; T1=$(date +%s)
+echo "=== 4. follower release"; for F in $FOLLOWERS; do waitfor "$F ungated" 1500 "[ \"\$(k get pod $F -n $NS -o jsonpath='{.spec.schedulingGates}')\" = '' ]" || exit 1; done; echo "   followers ungated at +$(( $(date +%s)-T0 ))s"; T1=$(date +%s)
 k logs -n $AGENT_NS deploy/nvsnap-server --since=20m 2>/dev/null | grep -E "election" | tail -3 | cut -c1-200
-waitfor "follower Ready" 1200 "[ \"\$(k get pod $FOLLOWER -n $NS -o jsonpath='{.status.containerStatuses[0].ready}')\" = true ]" || exit 1; echo "   follower Ready $(( $(date +%s)-T1 ))s after ungate (leader cold: $(( T1-T0 ))s incl capture)"
+for F in $FOLLOWERS; do waitfor "$F Ready" 1200 "[ \"\$(k get pod $F -n $NS -o jsonpath='{.status.containerStatuses[0].ready}')\" = true ]" || exit 1; done; echo "   followers Ready $(( $(date +%s)-T1 ))s after ungate (leader cold: $(( T1-T0 ))s incl capture)"
 roles
-DL=$(k logs -n $NS $FOLLOWER 2>/dev/null | grep -ciE "downloading|Fetching .* files"); echo "--- follower downloads: $DL (0 expected)"; [ "$DL" = 0 ] || { echo "FOLLOWER DOWNLOADED THE MODEL"; exit 1; }
+for F in $FOLLOWERS; do DL=$(k logs -n $NS $F 2>/dev/null | grep -ciE "downloading|Fetching .* files"); echo "--- $F downloads: $DL (0 expected)"; [ "$DL" = 0 ] || { echo "FOLLOWER $F DOWNLOADED THE MODEL"; exit 1; }; done
 echo "--- follower inits"; k get pod $FOLLOWER -n $NS -o jsonpath='{range .spec.initContainers[*]}{.name} {end}{"\n"}'
 echo "--- follower serves"; k exec -n $NS $FOLLOWER -c vllm -- curl -s -m 60 http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json' -d '{"model":"'"$MODEL"'","prompt":"The capital of France is","max_tokens":4,"temperature":0}' 2>/dev/null | python3 -c "import json,sys; print('  ', repr(json.load(sys.stdin)['choices'][0]['text']))"
 phases() { k logs -n $NS $1 2>/dev/null | grep -E "Starting to load model|Loading weights took|Model loading took|torch.compile takes|compiled graph|Graph capturing finished|init engine|Application startup complete" | sed -E 's/^\(([A-Za-z_0-9]+) pid=[0-9]+\) //' | cut -c1-150 | sed 's/^/      /'; }
