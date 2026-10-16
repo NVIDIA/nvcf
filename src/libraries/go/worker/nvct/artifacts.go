@@ -40,7 +40,7 @@ func (c *Client) GetArtifacts(ctx context.Context) (*types.ArtifactsList, error)
 		var err error
 		response, err = c.Client.GetArtifacts(ctx, &pb.ArtifactsRequest{
 			TaskId: c.taskId,
-		}, auth.GrpcTokenFromSource(c.NvctTokenProvider))
+		}, auth.GrpcTokenFromSource(c.NvctTokenProvider, c.delegatedToken))
 		if err != nil {
 			zap.L().Warn("failed to get artifacts from NVCT", zap.Error(err))
 		}

@@ -36,7 +36,7 @@ type stubTokenSource struct {
 func (s stubTokenSource) Token() (*oauth2.Token, error) { return s.tok, s.err }
 
 func newSource(ts oauth2.TokenSource) allowInsecureOauthTokenSource {
-	return allowInsecureOauthTokenSource{oauth.TokenSource{TokenSource: ts}}
+	return allowInsecureOauthTokenSource{TokenSource: oauth.TokenSource{TokenSource: ts}}
 }
 
 func TestGetRequestMetadata(t *testing.T) {
@@ -54,10 +54,18 @@ func TestGetRequestMetadata(t *testing.T) {
 	})
 }
 
-func TestRequireTransportSecurityIsFalse(t *testing.T) {
-	// Deliberate posture: worker RPCs carry tokens over in-cluster plaintext.
-	// Pin it so it is not flipped accidentally.
-	require.False(t, newSource(stubTokenSource{}).RequireTransportSecurity())
+func TestRequireTransportSecurity(t *testing.T) {
+	t.Run("legacy NVCF-issued tokens may travel over in-cluster plaintext", func(t *testing.T) {
+		require.False(t, newSource(stubTokenSource{}).RequireTransportSecurity())
+	})
+	t.Run("mounted projected ServiceAccount tokens require TLS", func(t *testing.T) {
+		src := allowInsecureOauthTokenSource{TokenSource: oauth.TokenSource{TokenSource: stubTokenSource{}}, requireTLS: true}
+		require.True(t, src.RequireTransportSecurity())
+	})
+	t.Run("GrpcTokenFromSource propagates the flag", func(t *testing.T) {
+		require.NotNil(t, GrpcTokenFromSource(stubTokenSource{}, true))
+		require.NotNil(t, GrpcTokenFromSource(stubTokenSource{}, false))
+	})
 }
 
 func TestSettableTokenSource(t *testing.T) {
