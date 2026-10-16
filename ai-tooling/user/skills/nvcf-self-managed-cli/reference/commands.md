@@ -14,7 +14,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted install --compute-plane --cluster-name=X` | Register cluster + render compute manifests | YAML on stdout | One invocation per GPU cluster |
 | `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `compute-plane register` and `compute-plane install` |
 | `self-hosted up --plan-only --cluster-name=X` | Dry-run preview | JSONL on stderr | Agent-friendly, no cluster changes |
-| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched |
+| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched. The NVCA OTel collector is never enabled automatically from the control plane's Event Ledger state; set `global.nvcaOperator.selfManaged.otelCollector.enabled: true` explicitly on each compute plane that should send events to the Event Ledger |
 | `self-hosted compute-plane install --values=V --kube-context=Y` | Install a compute plane from the values `compute-plane register` wrote | progress on stderr | Run after `compute-plane register`. Installs V whatever its name, never another values file beside it |
 | `self-hosted status [--cluster-name=X] [--watch]` | Snapshot cluster health | TTY/plain/JSONL | `--watch` for live re-render |
 | `self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on one compute plane (no ICMS unregister, no drain) | progress | Just the helm releases on that compute plane |
@@ -23,8 +23,6 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted down --cluster-name=X [--drain-active] [--remove-persistent]` | Orchestrator: drain → uninstall --compute-plane → cluster delete in ICMS | progress | Symmetric companion to `up --cluster-name=X` |
 | `self-hosted down --all [--confirm]` | Orchestrator: tear down every registered compute plane + control plane | progress | Bounded parallelism via `--all-concurrency` (default 4); `--confirm` required in non-interactive |
 | `self-hosted down --plan-only ...` | Orchestrator dry-run: phases + helm releases + ICMS rows + ETAs (no helm/helmfile contact) | JSONL | **Always run before any actual `down`** |
-
-The NVCA OTel collector is never enabled automatically, even when the control plane runs the Event Ledger. Set `global.nvcaOperator.selfManaged.otelCollector.enabled: true` explicitly in each compute plane's environment config to send its events to the Event Ledger.
 
 ## Cluster management
 
