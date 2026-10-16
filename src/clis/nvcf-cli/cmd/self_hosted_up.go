@@ -646,7 +646,6 @@ func isHTTP401Err(err error) bool {
 
 func (r *selfHostedUpRun) writeRegistrationValues(stackPath, icmsURL string, registration upClusterRegistration, p6Start time.Time) error {
 	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL)
-	endpoints.EventLedger = resolveEventLedgerAddon(r.ctx, selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL)
 	if err := writeRegisterValuesYAML(registerValuesWriteRequest{
 		StackPath:      stackPath,
 		ClusterName:    upClusterName,

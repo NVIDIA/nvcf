@@ -423,7 +423,6 @@ func registerComputePlaneCluster(
 		Hosts:                cp.Hosts,
 		TransportTLS:         transport,
 		RequestRouterAddress: requestRouterAddress,
-		EventLedger:          cp.Addons.EventLedger,
 	}); err != nil {
 		return nil, nil, err
 	}
@@ -600,7 +599,6 @@ type computePlaneNVCAValuesRequest struct {
 	Hosts                controlplaneprofile.Hosts
 	TransportTLS         controlplaneprofile.TransportTLS
 	RequestRouterAddress string
-	EventLedger          controlplaneprofile.EventLedgerAddon
 }
 
 func writeComputePlaneNVCAValues(req computePlaneNVCAValuesRequest) error {
@@ -622,7 +620,6 @@ func writeComputePlaneNVCAValues(req computePlaneNVCAValuesRequest) error {
 			ReValServiceHostHeaderOverride: req.Hosts.ReVal,
 			NATSURL:                        req.Endpoints.NATSURL,
 			NATSHostOverride:               req.Hosts.NATS,
-			EventLedgerServiceURL:          req.EventLedger.ServiceURL,
 		},
 		Agent:       agentValues(req.RequestRouterAddress),
 		AgentConfig: agentConfig,

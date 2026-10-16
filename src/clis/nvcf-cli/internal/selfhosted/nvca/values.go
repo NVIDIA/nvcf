@@ -65,7 +65,6 @@ type SelfManagedValues struct {
 	ReValServiceHostHeaderOverride string `yaml:"revalServiceHostHeaderOverride,omitempty"`
 	NATSURL                        string `yaml:"natsURL,omitempty"`
 	NATSHostOverride               string `yaml:"natsHostOverride,omitempty"`
-	EventLedgerServiceURL          string `yaml:"eventLedgerServiceURL,omitempty"`
 }
 
 func WriteFile(path string, values Values) error {

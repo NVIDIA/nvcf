@@ -573,7 +573,6 @@ type selfManagedValues struct {
 	ReValServiceHostHeaderOverride string `yaml:"revalServiceHostHeaderOverride,omitempty"`
 	NATSURL                        string `yaml:"natsURL,omitempty"`
 	NATSHostOverride               string `yaml:"natsHostOverride,omitempty"`
-	EventLedgerServiceURL          string `yaml:"eventLedgerServiceURL,omitempty"`
 }
 
 // printRegistrationOutput prints the registration result and helm values YAML.
@@ -626,7 +625,6 @@ func newSelfManagedValuesFromEndpoints(identitySource, region string, endpoints 
 		ReValServiceHostHeaderOverride: endpoints.ReValServiceHostHeaderOverride,
 		NATSURL:                        endpoints.NATSURL,
 		NATSHostOverride:               endpoints.NATSHostOverride,
-		EventLedgerServiceURL:          endpoints.EventLedger.ServiceURL,
 	}
 }
 

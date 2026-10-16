@@ -26,7 +26,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"nvcf-cli/internal/client"
-	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 	"nvcf-cli/internal/selfhosted/kubectx"
 )
 
@@ -69,9 +68,6 @@ type registerEndpointValues struct {
 	ReValServiceHostHeaderOverride string
 	NATSURL                        string
 	NATSHostOverride               string
-	// EventLedger is set from the control plane's event-ledger release; see
-	// resolveEventLedgerAddon.
-	EventLedger controlplaneprofile.EventLedgerAddon
 }
 
 type localEndpointDefaults struct {

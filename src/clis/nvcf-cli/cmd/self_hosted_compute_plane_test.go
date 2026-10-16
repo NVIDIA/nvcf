@@ -1072,31 +1072,7 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.Equal(t, "nca-from-generated", meta.NCAID)
 	})
 
-	t.Run("generated values plumb the event ledger service URL without enabling the otel collector", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "gpu-e-register-values.yaml")
-		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{
-			Path:           path,
-			ClusterName:    "gpu-e",
-			NCAID:          "nca-from-generated",
-			Region:         "us-west-1",
-			IdentitySource: "psat",
-			Registration:   &selfhosted.RegisterResponse{ClusterID: "cluster-id", ClusterGroupID: "group-id"},
-			EventLedger:    controlplaneprofile.EventLedgerAddon{Enabled: true, ServiceURL: "https://events.example.com"},
-		}))
-
-		body, err := os.ReadFile(path)
-		require.NoError(t, err)
-		var values struct {
-			SelfManaged struct {
-				EventLedgerServiceURL string `yaml:"eventLedgerServiceURL"`
-			} `yaml:"selfManaged"`
-		}
-		require.NoError(t, yaml.Unmarshal(body, &values))
-		assert.Equal(t, "https://events.example.com", values.SelfManaged.EventLedgerServiceURL)
-		assert.NotContains(t, string(body), "otelCollector")
-	})
-
-	t.Run("generated values omit the otel collector when the event ledger is absent", func(t *testing.T) {
+	t.Run("generated values never write otel collector or event ledger fields", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "gpu-f-register-values.yaml")
 		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{
 			Path:           path,

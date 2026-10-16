@@ -48,32 +48,3 @@ func TestAddonsAbsentIsValid(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, res.Profile.ControlPlane.Addons.LLM.RequestRouterAddress)
 }
-
-func TestAddonsEventLedgerParsed(t *testing.T) {
-	doc := strings.Replace(validControlPlaneProfileYAML(), `
-  addons:
-`, `
-  addons:
-    eventLedger:
-      enabled: true
-      serviceURL: https://events.nvcf-cp.internal
-`, 1)
-	res, err := ParseAndValidate([]byte(doc), ValidateOptions{Require: RequireBoth})
-	require.NoError(t, err)
-	require.True(t, res.Profile.ControlPlane.Addons.EventLedger.Enabled)
-	require.Equal(t, "https://events.nvcf-cp.internal", res.Profile.ControlPlane.Addons.EventLedger.ServiceURL)
-}
-
-func TestAddonsEventLedgerRejectsNonHTTPURL(t *testing.T) {
-	doc := strings.Replace(validControlPlaneProfileYAML(), `
-  addons:
-`, `
-  addons:
-    eventLedger:
-      enabled: true
-      serviceURL: events.nvcf-cp.internal
-`, 1)
-	_, err := ParseAndValidate([]byte(doc), ValidateOptions{Require: RequireBoth})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "controlPlane.addons.eventLedger.serviceURL")
-}

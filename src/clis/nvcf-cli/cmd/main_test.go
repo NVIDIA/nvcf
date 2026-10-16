@@ -90,8 +90,6 @@ func TestMain(m *testing.M) {
 	resolveLatestValidatorTagForSelfHosted = func(_ context.Context, _ string) (string, bool) {
 		return "", false
 	}
-	// No helm call against the current kube context to look for event-ledger.
-	eventLedgerDeployed = func(context.Context, string) (bool, error) { return false, nil }
 	// Nil prober: the inotify check is skipped rather than creating pods.
 	newInotifyProberForSelfHosted = func(string) selfhosted.NodeInotifyProber { return nil }
 	// No cluster contact, and a clean result so the category still renders.
