@@ -110,12 +110,15 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 			e.ServeHTTP(rec, messagesHTTPRequest(body))
 			require.Equal(t, tc.status, rec.Code, rec.Body.String())
 			require.Equal(t, tc.response, rec.Body.String())
-			require.Equal(t, "msg-request", rec.Header().Get("Request-Id"))
+			requestID := rec.Header().Get(HeaderRequestID)
+			require.NotEmpty(t, requestID)
+			require.Equal(t, []string{requestID}, rec.Header().Values(headerMessagesRequestID), "NVCF id replaces the backend request-id")
 			require.Equal(t, "session-test", rec.Header().Get(HeaderMultiTurnSessionID))
 			require.Empty(t, rec.Header().Get("X-Stargate-Private"))
 			require.Equal(t, "caller-token", auth.authorizeToken)
 			require.Equal(t, "fn-alpha", auth.authorizeRoutingKey)
 			got := <-captured
+			require.Equal(t, requestID, got.headers.Get(HeaderRequestID), "backend sees the same id")
 			require.Equal(t, "/v1/messages?beta=test", got.uri)
 			want := jsonObject(t, []byte(body))
 			delete(want, "extra-headers")
@@ -435,6 +438,48 @@ func TestMessagesNativeGatewayErrors(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"error"`)
 	require.Contains(t, rec.Body.String(), `"type":"invalid_request_error"`)
 	require.NotContains(t, rec.Body.String(), "model must be prefixed")
+}
+
+// Anthropic SDKs read the request id only from the request-id header, so
+// gateway-generated errors must carry it alongside the body request_id.
+func TestMessagesGatewayErrorsCarryRequestIDHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		maxBody int64
+		edit    func(*http.Request)
+		status  int
+	}{
+		{name: "malformed body", status: http.StatusBadRequest, edit: func(r *http.Request) {}},
+		{name: "missing credentials", status: http.StatusUnauthorized, edit: func(r *http.Request) {
+			r.Header.Del("Authorization")
+			r.Header.Del("X-API-Key")
+		}},
+		{name: "body too large", status: http.StatusRequestEntityTooLarge, maxBody: 32, edit: func(r *http.Request) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			if tc.maxBody > 0 {
+				cfg.Server.MaxRequestBodyBytes = tc.maxBody
+			}
+			e, _ := messagesTestAPI(t, "http://127.0.0.1:1", cfg, nil, nil)
+			body := messagesTestBody
+			if tc.status == http.StatusBadRequest {
+				body = `{`
+			}
+			req := messagesHTTPRequest(body)
+			tc.edit(req)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			var envelope struct {
+				RequestID string `json:"request_id"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+			require.NotEmpty(t, envelope.RequestID)
+			require.Equal(t, envelope.RequestID, rec.Header().Get(headerMessagesRequestID))
+			require.Equal(t, envelope.RequestID, rec.Header().Get(HeaderRequestID))
+		})
+	}
 }
 
 func TestMessagesInBandErrorsAndUsageObservability(t *testing.T) {

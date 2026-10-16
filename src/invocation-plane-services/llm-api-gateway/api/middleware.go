@@ -45,6 +45,9 @@ const (
 	HeaderRequestID          = "X-Request-ID"
 	HeaderTargetRegion       = "X-NVCF-Target-Region"
 	HeaderLegacyTargetRegion = "X-Groq-Region"
+
+	// Anthropic SDKs read the request ID only from this header.
+	headerMessagesRequestID = "Request-Id"
 )
 
 func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
@@ -83,7 +86,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				routingKey = requestRoutingKey(gc.Request())
 			}
 			targetRegion := targetRegionHeader(gc.Request().Header)
-			bearerToken := bearerTokenFromHeader(gc.Request().Header.Get(echo.HeaderAuthorization))
+			bearerToken := callerCredential(gc.Request().Header, routePath)
 			storeRequestContext(gc, requestID, bearerToken, routingKey, targetRegion)
 
 			span.SetAttributes(
@@ -103,6 +106,13 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			gc.SetRequest(gc.Request().WithContext(ctx))
 			logRequestBodyReadFailure(ctx, bodyErr)
 			gc.Response().Header().Set(HeaderRequestID, requestID)
+			if gc.Request().URL.Path == messagesEndpointPath {
+				// Runs as headers are written, after backend headers are
+				// copied, so the NVCF ID replaces any backend request-id.
+				gc.Response().Before(func() {
+					gc.Response().Header().Set(headerMessagesRequestID, requestID)
+				})
+			}
 
 			metricAttrs := []attribute.KeyValue{
 				attribute.String("method", gc.Request().Method),
@@ -245,6 +255,23 @@ func httpStatusCode(gc *GatewayContext, err error) int {
 		return http.StatusInternalServerError
 	}
 	return http.StatusOK
+}
+
+// headerAPIKey is the Anthropic SDK default credential header.
+const headerAPIKey = "X-Api-Key"
+
+// callerCredential returns the NVCF API key that authorizes the request.
+// Authorization, when present, is authoritative on every route. Messages also
+// accepts X-Api-Key so Anthropic SDK clients work with their default settings.
+// The Stargate provider strips both headers from outbound Messages requests.
+func callerCredential(header http.Header, routePath string) string {
+	if header.Get(echo.HeaderAuthorization) != "" {
+		return bearerTokenFromHeader(header.Get(echo.HeaderAuthorization))
+	}
+	if routePath == messagesEndpointPath {
+		return header.Get(headerAPIKey)
+	}
+	return ""
 }
 
 func bearerTokenFromHeader(value string) string {
