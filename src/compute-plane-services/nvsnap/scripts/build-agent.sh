@@ -342,6 +342,7 @@ build_app() {
             --platform "${PLATFORMS}" \
             --push \
             --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            --build-arg APP_VERSION="${APP_VERSION}" \
             -t "${APP_IMAGE}" \
             "${BUILD_CTX}"
         docker pull --platform linux/amd64 "${APP_IMAGE}"
@@ -350,6 +351,7 @@ build_app() {
             $cache_flag \
             --platform "${PLATFORMS:-linux/amd64}" \
             --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            --build-arg APP_VERSION="${APP_VERSION}" \
             -t "${APP_IMAGE}" \
             "${BUILD_CTX}"
     fi

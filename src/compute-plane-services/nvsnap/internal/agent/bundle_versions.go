@@ -62,14 +62,15 @@ func (a *Agent) currentBundle() string {
 	return id
 }
 
-// validBundleID accepts the hex ids staging computes, and nothing that
-// could name another path.
+// validBundleID accepts the ids staging writes (an image version, or a
+// content hash) and nothing that could name another path: letters,
+// digits, '.', '_' and '-', not starting with '.'.
 func validBundleID(id string) bool {
-	if id == "" || len(id) > 64 {
+	if id == "" || len(id) > 128 || id[0] == '.' {
 		return false
 	}
 	for _, c := range id {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '.' && c != '_' && c != '-' {
 			return false
 		}
 	}
@@ -330,10 +331,13 @@ func (a *Agent) fetchBundle(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// A version holds one architecture's binaries: only a node of this
+	// node's architecture has the right ones.
+	arch := a.nodeArch(ctx, a.config.NodeName)
 	var errs []error
 	for i := range pods.Items {
 		node := pods.Items[i].Spec.NodeName
-		if node == "" || node == a.config.NodeName {
+		if node == "" || node == a.config.NodeName || a.nodeArch(ctx, node) != arch {
 			continue
 		}
 		if err := a.fetchBundleFrom(ctx, node, id); err != nil {
@@ -388,4 +392,13 @@ func (a *Agent) fetchBundleFrom(ctx context.Context, node, id string) error {
 		return err
 	}
 	return nil
+}
+
+// nodeArch is a node's CPU architecture label, "" when unreadable.
+func (a *Agent) nodeArch(ctx context.Context, node string) string {
+	n, err := a.kubeClient.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return n.Labels[corev1.LabelArchStable]
 }

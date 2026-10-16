@@ -65,7 +65,7 @@ func TestCurrentBundle(t *testing.T) {
 		t.Fatal("no staging yet: no current version")
 	}
 	stageVersion(t, a, "8ab0d751c1f6277b", 0)
-	for content, want := range map[string]string{"8ab0d751c1f6277b\n": "8ab0d751c1f6277b", "../etc": "", "0000000000000000": ""} {
+	for content, want := range map[string]string{"8ab0d751c1f6277b\n": "8ab0d751c1f6277b", "../etc": "", "v9-unstaged": ""} {
 		if err := os.WriteFile(filepath.Join(a.bundleRoot(), "current-bundle"), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -188,7 +188,7 @@ func TestReapBundleVersions(t *testing.T) {
 }
 
 func TestValidBundleID(t *testing.T) {
-	for id, want := range map[string]bool{"8ab0d751c1f6277b": true, "": false, "../x": false, "ABCD": false, "a/b": false} {
+	for id, want := range map[string]bool{"8ab0d751c1f6277b": true, "v0.2.76-mv152": true, "": false, "../x": false, ".hidden": false, "a/b": false, "a b": false, "..": false} {
 		if validBundleID(id) != want {
 			t.Errorf("%q: want %v", id, want)
 		}

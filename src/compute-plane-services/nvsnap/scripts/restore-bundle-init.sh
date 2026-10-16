@@ -67,10 +67,18 @@ if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
 # ─── Phase 1b: versioned copy (docs/design/VERSIONED-NODE-BUNDLE.md) ──
 # Pods mount <root>/versions/<id>, never changed once staged: a process
 # keeps mapping the files it started with, and a checkpoint's restore mounts
-# the version its capture ran. The id is the content hash of the bundle.
+# the version its capture ran. The id is the image's version, the same on
+# every architecture (each node stages its own architecture's files under
+# it); an unversioned build falls back to the bundle's content hash.
 ROOT="$(dirname "$NVSNAP_DST")"
 VERSIONS="$ROOT/versions"
-BUNDLE_ID="$(cd "$TOOLS_TMP" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)"
+BUNDLE_ID=""
+if [[ -f /criu-bundle/BUNDLE_VERSION ]]; then
+  BUNDLE_ID="$(tr -d '[:space:]' < /criu-bundle/BUNDLE_VERSION)"
+fi
+if [[ ! "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || [[ "$BUNDLE_ID" == dev || "$BUNDLE_ID" == latest ]]; then
+  BUNDLE_ID="$(cd "$TOOLS_TMP" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)"
+fi
 mkdir -p "$VERSIONS"
 if [[ ! -d "$VERSIONS/$BUNDLE_ID" ]]; then
   rm -rf "$VERSIONS/.$BUNDLE_ID.tmp"
