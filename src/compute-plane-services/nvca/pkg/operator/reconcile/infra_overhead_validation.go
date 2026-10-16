@@ -37,7 +37,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
@@ -58,16 +57,17 @@ const maxListedWorkloads = 3
 // once those instances are gone or the overhead is lowered.
 //
 // The check repeats the agent's dynamic GPU discovery from the rendered agent
-// configuration and the current nodes. When it cannot evaluate the
+// configuration and the current nodes. agentEnvOverrides are the environment
+// overrides the agent Deployment applies. When it cannot evaluate the
 // configuration the way the agent would, it allows the rollout.
 func (bc *BackendK8sCache) validateInfraOverheadForActiveInstances(
 	ctx context.Context,
-	nb *nvidiaiov1.NVCFBackend,
+	agentEnvOverrides map[string]string,
 	agentConfigCM *corev1.ConfigMap,
 ) error {
 	log := core.GetLogger(ctx)
 
-	if overridesOverheadEnvs(nb.Spec.AgentConfig.OverrideEnvironmentVars) {
+	if overridesOverheadEnvs(agentEnvOverrides) {
 		log.Debug("Skipping the instance type overhead check: agent environment overrides change the overhead")
 		return nil
 	}

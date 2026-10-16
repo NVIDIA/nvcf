@@ -244,10 +244,8 @@ func TestValidateInfraOverheadForActiveInstances(t *testing.T) {
 				K8s:           fakek8sclient.NewSimpleClientset(overheadTestGPUNode("gpu-node-1")),
 				DynamicClient: fakedynamic.NewSimpleDynamicClient(newTestScheme(), overheadTestObjects(t, tt.requests...)...),
 			}}
-			nb := &nvidiaiov1.NVCFBackend{}
-			nb.Spec.AgentConfig.DeploymentConfig.OverrideEnvironmentVars = tt.agentEnv
 
-			err := bc.validateInfraOverheadForActiveInstances(ctx, nb, overheadTestAgentConfigCM(t, tt.cfg))
+			err := bc.validateInfraOverheadForActiveInstances(ctx, tt.agentEnv, overheadTestAgentConfigCM(t, tt.cfg))
 			if len(tt.wantError) == 0 {
 				require.NoError(t, err)
 				return
@@ -292,7 +290,7 @@ func TestValidateInfraOverheadForActiveInstances_ListErrors(t *testing.T) {
 				DynamicClient: dynamicClient,
 			}}
 
-			err := bc.validateInfraOverheadForActiveInstances(ctx, &nvidiaiov1.NVCFBackend{}, overheadTestAgentConfigCM(t, cfg))
+			err := bc.validateInfraOverheadForActiveInstances(ctx, nil, overheadTestAgentConfigCM(t, cfg))
 			if !tt.wantRetry {
 				require.NoError(t, err)
 				return
@@ -321,50 +319,15 @@ func TestFormatWorkloads(t *testing.T) {
 // once those instances are gone.
 func TestSyncNVCFBackend_OverheadRemovingActiveInstanceTypeDoesNotRollOutAgent(t *testing.T) {
 	ctx := newTestContext()
-	clients := mockKubeClients()
+	bc, backend, mergeCM := newOverheadSyncTest(t, "100m")
+	clients := bc.clients
 	fakeK8s := clients.K8s.(*fakek8sclient.Clientset)
-	_, err := fakeK8s.CoreV1().Nodes().Create(ctx, overheadTestGPUNode("gpu-node-1"), metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	backend := getTestNVCFBackendAllFeatures()
-	backend.Spec.Overrides = nil
-	backend.Spec.ClusterSource = nvcaoptypes.ClusterSourceSelfHosted
-	backend.Spec.ClusterConfig.ClusterID = "test-cluster-id"
-	backend.Spec.ClusterConfig.ClusterGroupID = "test-cluster-group-id"
-	backend.Spec.ClusterConfig.CloudProvider = "NCP"
-	backend.Spec.FeatureGate.Values = append(backend.Spec.FeatureGate.Values,
-		featureflag.EnforceContainerFunctionResourceLimits.Key)
-	_, err = clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Create(ctx, backend, metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	require.NoError(t, indexer.Add(backend))
-	recorder := record.NewFakeRecorder(200)
-	bc := &BackendK8sCache{
-		clients:                 clients,
-		operatorNamespace:       NVCAOperatorNamespace,
-		nvcfBackendLister:       nvcabelister.NewNVCFBackendLister(indexer),
-		eventRecorder:           recorder,
-		tracer:                  nvcaopotel.NewTracer(),
-		ngcServiceKeyFetcher:    &mockTokenFetcher{token: "randomkey"},
-		now:                     time.Now,
-		clusterSource:           nvcaoptypes.ClusterSourceSelfHosted,
-		generateImagePullSecret: false,
-	}
+	recorder := bc.eventRecorder.(*record.FakeRecorder)
 	systemNamespace := getSystemNamespace(backend)
-
-	mergeCM, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
-		Data:       map[string]string{agentConfigFile: "agent:\n  additionalResourceOverhead:\n    cpu: 100m\n"},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
 	require.NoError(t, bc.syncNVCFBackend(ctx, backend, false))
 
 	icmsRequests := clients.DynamicClient.Resource(icmsRequestGVR).Namespace("nvcf-backend")
-	activeRequest := overheadTestICMSRequest("sr-1", overheadTestInstanceType,
-		nvcav2beta1.ICMSRequestStatusCompleted, string(nvcatypes.ICMSInstanceRunning))
-	created, err := icmsRequests.Create(ctx,
-		overheadTestObjects(t, activeRequest)[0].(*unstructured.Unstructured), metav1.CreateOptions{})
+	created, err := icmsRequests.Create(ctx, overheadTestActiveRequest(t), metav1.CreateOptions{})
 	require.NoError(t, err)
 
 	lastGood, err := clients.K8s.CoreV1().ConfigMaps(systemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
@@ -415,4 +378,104 @@ func TestSyncNVCFBackend_OverheadRemovingActiveInstanceTypeDoesNotRollOutAgent(t
 	require.NoError(t, err)
 	additionalCPU := managedConfig.Agent.AdditionalResourceOverhead[corev1.ResourceCPU]
 	assert.Equal(t, "6360m", additionalCPU.String())
+}
+
+// TestSyncNVCFBackend_OverheadCheckFollowsAgentEnvOverrides checks that the
+// overhead check sees the environment overrides the agent Deployment applies.
+// The operator's overrides, set from the chart's
+// agent.overrideEnvironmentVariables, replace those of the NVCFBackend.
+func TestSyncNVCFBackend_OverheadCheckFollowsAgentEnvOverrides(t *testing.T) {
+	overheadEnv := map[string]string{"NVCF_UTILS_CPU_LIMIT": "100m"}
+	tests := []struct {
+		name        string
+		backendEnv  map[string]string
+		operatorEnv map[string]string
+		wantRollout bool
+	}{
+		{name: "no overrides"},
+		{name: "NVCFBackend overrides", backendEnv: overheadEnv, wantRollout: true},
+		{name: "operator overrides", operatorEnv: overheadEnv, wantRollout: true},
+		{
+			name:        "operator overrides replace NVCFBackend overrides",
+			backendEnv:  overheadEnv,
+			operatorEnv: map[string]string{"LOG_LEVEL": "debug"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			bc, backend, _ := newOverheadSyncTest(t, "6360m")
+			backend.Spec.AgentConfig.OverrideEnvironmentVars = tt.backendEnv
+			backend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).
+				Update(ctx, backend, metav1.UpdateOptions{})
+			require.NoError(t, err)
+			bc.deploymentConfig.OverrideEnvironmentVars = tt.operatorEnv
+			_, err = bc.clients.DynamicClient.Resource(icmsRequestGVR).Namespace("nvcf-backend").
+				Create(ctx, overheadTestActiveRequest(t), metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			err = bc.syncNVCFBackend(ctx, backend, false)
+			if !tt.wantRollout {
+				require.Error(t, err)
+				assert.True(t, isInvalidAgentConfigError(err))
+				return
+			}
+			require.NoError(t, err)
+			_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(backend)).
+				Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// newOverheadSyncTest returns a BackendK8sCache for a self-hosted NVCFBackend on
+// a cluster with one overheadTestInstanceType GPU node, and the agent
+// configuration merge ConfigMap, which sets the additional CPU overhead.
+func newOverheadSyncTest(t *testing.T, additionalCPU string) (*BackendK8sCache, *nvidiaiov1.NVCFBackend, *corev1.ConfigMap) {
+	t.Helper()
+	ctx := newTestContext()
+	clients := mockKubeClients()
+	_, err := clients.K8s.CoreV1().Nodes().Create(ctx, overheadTestGPUNode("gpu-node-1"), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	backend := getTestNVCFBackendAllFeatures()
+	backend.Spec.Overrides = nil
+	backend.Spec.ClusterSource = nvcaoptypes.ClusterSourceSelfHosted
+	backend.Spec.ClusterConfig.ClusterID = "test-cluster-id"
+	backend.Spec.ClusterConfig.ClusterGroupID = "test-cluster-group-id"
+	backend.Spec.ClusterConfig.CloudProvider = "NCP"
+	backend.Spec.FeatureGate.Values = append(backend.Spec.FeatureGate.Values,
+		featureflag.EnforceContainerFunctionResourceLimits.Key)
+	_, err = clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Create(ctx, backend, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	require.NoError(t, indexer.Add(backend))
+	bc := &BackendK8sCache{
+		clients:                 clients,
+		operatorNamespace:       NVCAOperatorNamespace,
+		nvcfBackendLister:       nvcabelister.NewNVCFBackendLister(indexer),
+		eventRecorder:           record.NewFakeRecorder(200),
+		tracer:                  nvcaopotel.NewTracer(),
+		ngcServiceKeyFetcher:    &mockTokenFetcher{token: "randomkey"},
+		now:                     time.Now,
+		clusterSource:           nvcaoptypes.ClusterSourceSelfHosted,
+		generateImagePullSecret: false,
+	}
+
+	mergeCM, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+		Data:       map[string]string{agentConfigFile: "agent:\n  additionalResourceOverhead:\n    cpu: " + additionalCPU + "\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	return bc, backend, mergeCM
+}
+
+// overheadTestActiveRequest returns an ICMSRequest with one running
+// overheadTestInstanceType instance.
+func overheadTestActiveRequest(t *testing.T) *unstructured.Unstructured {
+	t.Helper()
+	req := overheadTestICMSRequest("sr-1", overheadTestInstanceType,
+		nvcav2beta1.ICMSRequestStatusCompleted, string(nvcatypes.ICMSInstanceRunning))
+	return overheadTestObjects(t, req)[0].(*unstructured.Unstructured)
 }
