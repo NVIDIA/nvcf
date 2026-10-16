@@ -17,7 +17,8 @@ source in `src/`; the Envoy configuration is rendered by the chart.
 | --- | --- | --- |
 | 10443 | UDP, HTTP/3 | grpc-proxy worker tunnels. TLS for `*.<workerDomain>` terminates here and is re-encrypted to the grpc-proxy pod on its HTTP/3 port. |
 | 10084 | TCP, HTTP/1 | invocation-service worker tunnels. CONNECT and forward-proxy requests, allowed only to `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`. |
-| 8081 | TCP | Envoy admin. Serves `/ready` for probes; not exposed by the Service. |
+| 8081 | TCP | Probe listener. Serves only `/ready`, from the admin API; not exposed by the Service. |
+| 9901 | TCP | Envoy admin, on `127.0.0.1` only. The preStop drain uses it. |
 
 Envoy only completes the upstream TLS handshake with grpc-proxy pods whose
 certificate matches `grpcProxy.tlsServerName` and chains to

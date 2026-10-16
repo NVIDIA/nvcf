@@ -77,8 +77,8 @@ spec:
               containerPort: {{ $c.ports.invocationTcp }}
               protocol: TCP
             {{- end }}
-            - name: admin
-              containerPort: {{ $c.ports.admin }}
+            - name: health
+              containerPort: {{ $c.ports.health }}
               protocol: TCP
           {{- with $c.readinessProbe }}
           readinessProbe:
