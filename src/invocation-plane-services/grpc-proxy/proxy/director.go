@@ -102,6 +102,8 @@ const departurePurgeTimeout = 5 * time.Second
 
 type StreamDirector struct {
 	shuttingDown *atomic.Bool
+	// Requests between asking for a worker and getting one. See AwaitWorkers.
+	awaitingWorker atomic.Int64
 	// Bounds in-flight departure purges. See departurePurgeConcurrency.
 	departurePurges chan struct{}
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
@@ -475,12 +477,9 @@ func (s *StreamDirector) runDeparturePurge(purger pendingWorkPurger, requestId u
 // purgePendingWork drops the work requests for sessions that never got a
 // worker CONNECT.
 //
-// Best effort by design. A session records its pending work just before the
-// invocation publishes the work request, so a shutdown landing precisely
-// between those two steps will miss that one request. Closing that window
-// needs an admission gate and a drain timeout, which is more machinery and
-// another tunable than the gap justifies: a missed request is simply left as
-// it is today, and today every one of them is left.
+// Best effort by design. Shutdown first gives requests already waiting on a
+// worker time to get one (see AwaitWorkers), so what is left here is work
+// whose wait ran out. A missed request is simply left in the queue.
 //
 // Their tokens exist only in this pod's memory, so once it is
 // gone every one of them is guaranteed to be rejected; leaving them queued
@@ -536,6 +535,35 @@ func (s *StreamDirector) purgePendingWork() {
 	zap.L().Info("purged pending stateful work requests on shutdown",
 		zap.Int("purged", purged),
 		zap.Int("failed", failed))
+}
+
+// awaitWorkersPollInterval is how often AwaitWorkers rechecks. A worker
+// normally attaches within about a second, so finer polling buys nothing.
+const awaitWorkersPollInterval = 50 * time.Millisecond
+
+// AwaitWorkers returns once no request is waiting on a worker, or when ctx
+// ends. Shutdown calls it before closing the worker listeners: a waiting
+// request's work is already queued with a token only this pod accepts, so
+// closing first fails it even though its worker is about to arrive.
+func (s *StreamDirector) AwaitWorkers(ctx context.Context) {
+	start := time.Now()
+	ticker := time.NewTicker(awaitWorkersPollInterval)
+	defer ticker.Stop()
+	for {
+		waiting := s.awaitingWorker.Load()
+		if waiting == 0 {
+			zap.L().Info("no requests waiting on a worker", zap.Duration("waited", time.Since(start)))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			zap.L().Warn("stopped waiting for workers, shutting down with requests still waiting",
+				zap.Int64("waiting", waiting),
+				zap.Duration("waited", time.Since(start)))
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *StreamDirector) Close() error {
@@ -651,13 +679,16 @@ func (s *StreamDirector) serveStatefulRequest(w http.ResponseWriter, r *http.Req
 		zap.Stringer("request id", requestId),
 		zap.String("path", r.URL.Path))
 
+	s.awaitingWorker.Add(1)
 	workerConn, err := s.getAndInitWorkerConnection(ctx, conn, auth, functionId, functionVersionId, requestId)
 	if err != nil {
+		s.awaitingWorker.Add(-1)
 		return spanError(span, err)
 	}
 	reqLogger.Info("directing client to worker connection", zap.Stringer("request id", workerConn.RequestId))
 
 	upstreamHandler, ok := workerConn.WaitForConnection(ctx)
+	s.awaitingWorker.Add(-1)
 	if !ok {
 		// maps to 504 if non-grpc
 		err := nverrors.NewNVError(fmt.Errorf("failed to establish link to worker")).WithCode(grpcCodes.DeadlineExceeded)
