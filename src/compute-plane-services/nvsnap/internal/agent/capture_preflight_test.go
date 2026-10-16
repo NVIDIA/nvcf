@@ -146,3 +146,35 @@ func TestPIDReserveFloorMatchesTheAgent(t *testing.T) {
 		t.Error("initRunning")
 	}
 }
+
+// A deleted file on a read-only mount (a node bundle replaced under a
+// running pod) blocks: a restore cannot recreate it there.
+func TestGhostOnReadOnlyMountBlocks(t *testing.T) {
+	mounts := readMountinfoFrom(t, `22 1 0:1 / / rw,relatime - overlay overlay rw
+30 22 259:1 /bundle/nvsnap /nvsnap ro,relatime - ext4 /dev/x rw
+31 30 0:2 / /nvsnap/scratch rw - tmpfs tmpfs rw
+32 22 0:3 / /dev/shm rw - tmpfs shm rw`)
+	for path, want := range map[string]bool{
+		"/nvsnap/libnvsnap_gpushare.so": true,
+		"/nvsnap/scratch/x":             false,
+		"/dev/shm/kv.mmap":              false,
+		"/usr/lib/x":                    false,
+	} {
+		if got := mountReadOnly(mounts, path); got != want {
+			t.Errorf("%s: read-only = %v, want %v", path, got, want)
+		}
+	}
+	fs := ghostFindings("w", "main", map[string]ghostFile{"1:1": {path: "/nvsnap/libnvsnap_gpushare.so", allocated: 4 << 20, readOnly: true}}, 0, 1<<40)
+	if b := blocking(fs); len(b) != 1 || !strings.Contains(b[0].Detail, "read-only mount") {
+		t.Fatalf("want one blocking finding about the read-only mount: %+v", fs)
+	}
+}
+
+func readMountinfoFrom(t *testing.T, content string) []mountEntry {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "mountinfo")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return readMountinfo(p)
+}

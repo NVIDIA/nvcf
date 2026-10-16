@@ -152,6 +152,11 @@ type ghostFile struct {
 	path       string
 	allocated  int64 // what criu --ghost-limit is compared with
 	apparently int64
+	// readOnly: the file's mount is read-only in the process's mount
+	// namespace. A restore recreates a ghost file beside its path, which
+	// it cannot there: the capture would never restore. A node bundle
+	// replaced under a running pod (an agent upgrade) leaves such files.
+	readOnly bool
 }
 
 // ghostFindings turns what the host checks saw into findings.
@@ -159,6 +164,9 @@ func ghostFindings(pod, container string, ghosts map[string]ghostFile, anon, lim
 	var fs []PreflightFinding
 	for _, g := range ghosts {
 		switch {
+		case g.readOnly:
+			fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "ghost-file",
+				Detail: fmt.Sprintf("deleted file %s is on a read-only mount: a restore cannot recreate it (a file replaced under the running pod; restarting the pod clears it)", g.path)})
 		case g.allocated > limit:
 			fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "ghost-file",
 				Detail: fmt.Sprintf("deleted file %s holds %s, over the dump's ghost limit (%s; agent.criuGhostLimit)", g.path, gib(g.allocated), gib(limit))})
@@ -193,6 +201,8 @@ func cgroupPIDs(dir string) ([]int, error) {
 // mapped to ghosts, keyed by device and inode. memfd files are not ghost
 // files (criu dumps them as memfd) and are left out.
 func deletedFiles(procBase string, pid int, ghosts map[string]ghostFile) {
+	base := filepath.Join(procBase, strconv.Itoa(pid))
+	mounts := readMountinfo(filepath.Join(base, "mountinfo"))
 	see := func(link, target string) {
 		if !strings.HasSuffix(target, " (deleted)") || strings.HasPrefix(target, "/memfd:") || !strings.HasPrefix(target, "/") {
 			return
@@ -203,10 +213,10 @@ func deletedFiles(procBase string, pid int, ghosts map[string]ghostFile) {
 		}
 		key := fmt.Sprintf("%d:%d", st.Dev, st.Ino)
 		if _, ok := ghosts[key]; !ok {
-			ghosts[key] = ghostFile{path: strings.TrimSuffix(target, " (deleted)"), allocated: st.Blocks * 512, apparently: st.Size}
+			path := strings.TrimSuffix(target, " (deleted)")
+			ghosts[key] = ghostFile{path: path, allocated: st.Blocks * 512, apparently: st.Size, readOnly: mountReadOnly(mounts, path)}
 		}
 	}
-	base := filepath.Join(procBase, strconv.Itoa(pid))
 	if ents, err := os.ReadDir(filepath.Join(base, "fd")); err == nil {
 		for _, e := range ents {
 			link := filepath.Join(base, "fd", e.Name())
@@ -363,4 +373,46 @@ func (a *Agent) instancePreflightHandler(w http.ResponseWriter, r *http.Request)
 	rep.Capturable = len(blocking(rep.Findings)) == 0
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rep)
+}
+
+// mountEntry is one line of a mountinfo: a mount point and whether it is
+// read-only.
+type mountEntry struct {
+	point    string
+	readOnly bool
+}
+
+// readMountinfo reads the mount points of a mount namespace; nil when it
+// cannot.
+func readMountinfo(path string) []mountEntry {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []mountEntry
+	for _, line := range strings.Split(string(b), "\n") {
+		// id parent major:minor root mount-point options ...
+		f := strings.Fields(line)
+		if len(f) < 6 {
+			continue
+		}
+		ro := false
+		for _, o := range strings.Split(f[5], ",") {
+			ro = ro || o == "ro"
+		}
+		out = append(out, mountEntry{point: unescapeMountinfo(f[4]), readOnly: ro})
+	}
+	return out
+}
+
+// mountReadOnly reports whether path's mount (the longest mount point
+// above it; the last mounted wins) is read-only.
+func mountReadOnly(mounts []mountEntry, path string) bool {
+	best, ro := -1, false
+	for _, m := range mounts {
+		if (path == m.point || strings.HasPrefix(path, strings.TrimSuffix(m.point, "/")+"/") || m.point == "/") && len(m.point) >= best {
+			best, ro = len(m.point), m.readOnly
+		}
+	}
+	return ro
 }
