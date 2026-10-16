@@ -364,7 +364,7 @@ func generateNVCTAPIKey(config *client.Config, description string, expiresAt tim
 func generateEventLedgerAPIKey(config *client.Config, description string, expiresAt time.Time, customScopes []string) (string, error) {
 	apiKeysConfig := &apikeys.Config{
 		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
-		ServiceID:     getConfigValueWithDefault("API_KEYS_SERVICE_ID", "nvidia-cloud-functions-ncp-service-id-aketm"),
+		ServiceID:     getConfigValueWithDefault("api_keys_event_ledger_service_id", "nvidia-event-ledger-ncp-service-id-ckozoh6f"),
 		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
 		OwnerID:       getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local"),
 		JWTToken:      config.Token,

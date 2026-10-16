@@ -92,15 +92,25 @@ func resetApikeyFlags(t *testing.T) {
 // (/v1/keys) and introspection (/v1/introspect). It records which issuer
 // services and introspect audiences were used so callers can assert on them.
 func fakeAPIKeysServer(t *testing.T) (srv *httptest.Server, issuers *[]string, audiences *[]string) {
+	srv, issuers, audiences, _ = fakeAPIKeysServerWithKeyIssuerIDs(t)
+	return srv, issuers, audiences
+}
+
+// fakeAPIKeysServerWithKeyIssuerIDs is fakeAPIKeysServer plus the
+// Key-Issuer-Id header captured on each /v1/keys generation call, so tests
+// can assert on the audience/ServiceID actually sent to mint a key.
+func fakeAPIKeysServerWithKeyIssuerIDs(t *testing.T) (srv *httptest.Server, issuers *[]string, audiences *[]string, keyIssuerIDs *[]string) {
 	t.Helper()
 	var capturedIssuers []string
 	var capturedAudiences []string
+	var capturedKeyIssuerIDs []string
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch r.URL.Path {
 		case "/v1/keys":
 			issuer := r.Header.Get("Key-Issuer-Service")
 			capturedIssuers = append(capturedIssuers, issuer)
+			capturedKeyIssuerIDs = append(capturedKeyIssuerIDs, r.Header.Get("Key-Issuer-Id"))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"value":"nvapi-fake-key"}`))
@@ -114,7 +124,7 @@ func fakeAPIKeysServer(t *testing.T) (srv *httptest.Server, issuers *[]string, a
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &capturedIssuers, &capturedAudiences
+	return srv, &capturedIssuers, &capturedAudiences, &capturedKeyIssuerIDs
 }
 
 // configureApikeyTest points the API keys config at srv and installs a fake
@@ -210,6 +220,24 @@ func TestApikeyGenerate_EventLedgerOnly(t *testing.T) {
 	assert.Equal(t, "event-ledger", entry["service"])
 	assert.Equal(t, []interface{}{"fnds:getEvents"}, entry["scopes"])
 	assert.NotEmpty(t, GetCurrentState().EventLedgerAPIKey)
+}
+
+// The Event Ledger key must be minted against Event Ledger's own audience,
+// not the general NVCF function-key audience, or the real service rejects
+// it with 403.
+func TestApikeyGenerate_EventLedgerUsesEventLedgerAudience(t *testing.T) {
+	resetApikeyFlags(t)
+	srv, _, _, keyIssuerIDs := fakeAPIKeysServerWithKeyIssuerIDs(t)
+	configureApikeyTest(t, srv.URL)
+
+	apikeyFor = "event-ledger"
+	apikeyExpiresIn = "1h"
+
+	require.NoError(t, runAPIKeyGenerate(nil, nil))
+
+	require.Len(t, *keyIssuerIDs, 1, "expected exactly one key generation call")
+	assert.Equal(t, "nvidia-event-ledger-ncp-service-id-ckozoh6f", (*keyIssuerIDs)[0],
+		"Event Ledger key must be minted with the Event Ledger service ID, not the NVCF function-key ID")
 }
 
 func TestApikeyGenerate_BothKeys(t *testing.T) {
