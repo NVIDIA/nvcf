@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -184,6 +183,9 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 	generationPossible = upstreamAccepted
 	copyProxyHeaders(c.Response().Header(), resp.Header)
 	setMultiTurnSessionResponseHeader(c)
+	if err := proxyUpstreamError(resp); err != nil {
+		return err
+	}
 	c.Response().WriteHeader(resp.StatusCode)
 	if resp.Body == nil {
 		return nil
@@ -259,39 +261,6 @@ func validateMessagesFieldNames(body []byte) error {
 		}
 	}
 	return nil
-}
-
-// Only gateway-generated errors use this envelope. Backend bodies are relayed.
-func messagesHTTPErrorHandler(err error, c echo.Context) {
-	if c.Response().Committed {
-		return
-	}
-	status, message := http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError)
-	var he *echo.HTTPError
-	if errors.As(err, &he) {
-		status = he.Code
-		if public, ok := he.Message.(string); ok {
-			message = public
-		}
-	}
-	kind := "api_error"
-	switch status {
-	case 400, 405, 422:
-		kind = "invalid_request_error"
-	case 401:
-		kind = "authentication_error"
-	case 403:
-		kind = "permission_error"
-	case 404:
-		kind = "not_found_error"
-	case 413:
-		kind = "request_too_large"
-	case 429:
-		kind = "rate_limit_error"
-	case 529:
-		kind = "overloaded_error"
-	}
-	_ = c.JSON(status, map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": message}, "request_id": c.Response().Header().Get(HeaderRequestID)})
 }
 
 // NVCF authenticates with Authorization before proxying. Stargate adds its own
