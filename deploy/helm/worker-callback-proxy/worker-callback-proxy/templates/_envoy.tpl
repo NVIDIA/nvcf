@@ -63,6 +63,30 @@ overload_manager:
         max_active_downstream_connections: {{ int $limits.maxActiveDownstreamConnections }}
 static_resources:
   listeners:
+    # Kubelet probes. Forwards only /ready to the pod-local admin API.
+    - name: health
+      address:
+        socket_address: { protocol: TCP, address: 0.0.0.0, port_value: {{ int $c.ports.health }} }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: health
+                route_config:
+                  name: health
+                  virtual_hosts:
+                    - name: health
+                      domains: ["*"]
+                      routes:
+                        - match: { path: "/ready" }
+                          route: { cluster: admin }
+                        - match: { prefix: "/" }
+                          direct_response: { status: 404 }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   {{- if $c.grpcProxy.enabled }}
     # grpc-proxy worker tunnels: HTTP/3 from the worker. TLS ends here and is
     # re-established to the grpc-proxy pod named by the callback hostname.
@@ -196,6 +220,16 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   {{- end }}
   clusters:
+    - name: admin
+      connect_timeout: 1s
+      type: STATIC
+      load_assignment:
+        cluster_name: admin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: {{ int $c.ports.admin }} }
   {{- if $c.grpcProxy.enabled }}
     - name: grpc_proxy_pods
       connect_timeout: {{ $t.connect }}

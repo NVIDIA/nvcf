@@ -82,7 +82,9 @@ workerCallbackProxy:
   ports:
     grpcQuic: 10443
     invocationTcp: 10084
-    admin: 8081
+    # Serves only /ready, for the kubelet probes. Not exposed by the Service.
+    health: 8081
+    admin: 9901
 
   service:
     create: true
@@ -99,9 +101,9 @@ workerCallbackProxy:
       invocationTcp: 10084
 
   admin:
-    # Bound on all interfaces so the kubelet can probe /ready. Not exposed by
-    # the Service.
-    address: 0.0.0.0
+    # The admin API can drain or stop Envoy and dump its config, so it listens
+    # only inside the pod. Probes use ports.health instead.
+    address: 127.0.0.1
 
   logLevel: info
 
@@ -165,12 +167,12 @@ workerCallbackProxy:
   readinessProbe:
     httpGet:
       path: /ready
-      port: admin
+      port: health
     periodSeconds: 5
   livenessProbe:
     httpGet:
       path: /ready
-      port: admin
+      port: health
     initialDelaySeconds: 10
     periodSeconds: 10
 

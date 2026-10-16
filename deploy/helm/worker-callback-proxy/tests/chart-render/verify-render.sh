@@ -52,6 +52,9 @@ assert_contains "${rendered}" 'domain ~= "grpc-worker.example.com"'
 assert_contains "${rendered}" 'drain_listeners?graceful'
 assert_contains "${rendered}" '- gradual'
 assert_contains "${rendered}" 'readOnlyRootFilesystem: true'
+assert_contains "${rendered}" 'socket_address: { protocol: TCP, address: "127.0.0.1", port_value: 9901 }'
+assert_contains "${rendered}" '- match: { path: "/ready" }'
+assert_contains "${rendered}" 'port: health'
 
 rendered="$(render --set-string workerCallbackProxy.tls.frontend.existingSecret=worker-tls)"
 assert_kind_count "${rendered}" Certificate 1
