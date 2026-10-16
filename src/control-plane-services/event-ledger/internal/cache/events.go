@@ -55,15 +55,22 @@ func (handler *CachingDBHandler) BulkUpsertEventsV3(traceCtx context.Context, ev
 	now := time.Now()
 	var uncached []data_access.EventV3UpsertRecord
 	var misses []data_access.EventV3UpsertRecord
+	var evicted []data_access.EventV3UpsertRecord
 	for _, record := range events {
 		if !cacheable(record.Details) {
 			uncached = append(uncached, record)
 			continue
 		}
-		if handler.processEvent(record, now) == outcomeMiss {
+		eventOutcome, recordEvicted := handler.recordEvent(record, now)
+		handler.metrics.recordOutcome(eventOutcome)
+		evicted = append(evicted, recordEvicted...)
+		if eventOutcome == outcomeMiss {
 			misses = append(misses, record)
 		}
 	}
+	// One write for the whole batch, not one per record, so a slow database
+	// cannot hold the request for the flush timeout once per eviction.
+	handler.flushEvicted(evicted)
 	missesErr := handler.writeMisses(traceCtx, misses)
 	if len(uncached) == 0 {
 		return missesErr

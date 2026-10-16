@@ -240,6 +240,25 @@ func TestBulkUpsertEventsV3_WritesMissesInOneFlushAndLargeEventsInOneDirectCall(
 	assert.False(t, largeCached)
 }
 
+func TestBulkUpsertEventsV3_FlushesTheEvictedEntriesOfABatchInOneCall(t *testing.T) {
+	handler, _, flushed := newEventsHandler(t, evictionConfig(2))
+	for _, eventKey := range []key{keyN(1), keyN(2)} {
+		require.NoError(t, upsertEvent(handler, eventKey, 1, `{"n":1}`))
+		require.NoError(t, upsertEvent(handler, eventKey, 2, `{"n":2}`)) // a hit, so the entry is pending
+	}
+	callsBefore := flushed.flushCalls()
+	recordsBefore := len(flushed.records())
+
+	err := handler.BulkUpsertEventsV3(context.Background(), []data_access.EventV3UpsertRecord{
+		eventRecord(keyN(3), 3, `{"n":3}`), // each miss evicts one pending entry
+		eventRecord(keyN(4), 3, `{"n":3}`),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, flushed.flushCalls()-callsBefore, "one call for both evicted entries, one for both misses")
+	assert.Len(t, flushed.records()[recordsBefore:], 4)
+}
+
 func TestBulkUpsertEventsV3_WithNothingToWriteMakesNoCall(t *testing.T) {
 	handler, db, flushed := newEventsHandler(t, evictionConfig(10))
 	require.NoError(t, upsertEvent(handler, keyN(1), 1, `{"n":1}`))

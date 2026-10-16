@@ -227,7 +227,8 @@ func waitOrDone(ctx context.Context, delay time.Duration) bool {
 
 // writeMisses writes cache misses, with retries. A miss was stored as not pending,
 // so if every try fails it is made pending for a later flush, or a redelivery with
-// the same timestamp would be dropped as stale. The error is still returned.
+// the same timestamp would be dropped as stale. The error it returns says so, and
+// is for the caller to report.
 func (handler *CachingDBHandler) writeMisses(ctx context.Context, records []data_access.EventV3UpsertRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -237,10 +238,9 @@ func (handler *CachingDBHandler) writeMisses(ctx context.Context, records []data
 	attempts, err := handler.flushWithRetry(ctx, records)
 	if err != nil {
 		handler.keepForLaterFlush(records)
-		logging.GetLogger(ctx).WarnContext(ctx, "kept cache misses for a later flush after their write failed",
-			append(batchFields(records), zap.Int("attempts", attempts))...)
+		return fmt.Errorf("cache: write of %d misses failed after %d attempts, kept for a later flush: %w", len(records), attempts, err)
 	}
-	return err
+	return nil
 }
 
 // keepForLaterFlush stores the records as pending entries and writes the pending

@@ -874,6 +874,8 @@ func TestWriteMisses_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
 		err := handler.writeMisses(context.Background(), singleMiss(recordWith(keyN(1), at(1), "src", nil)))
 
 		require.ErrorIs(t, err, recorder.err)
+		assert.ErrorContains(t, err, "kept for a later flush")
+		assert.ErrorContains(t, err, "failed after "+strconv.Itoa(evictionFlushAttempts)+" attempts")
 		assert.Len(t, recorder.records(), evictionFlushAttempts)
 		cachedEntry, ok := handler.lookup(keyN(1))
 		require.True(t, ok)
