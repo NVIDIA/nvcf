@@ -54,6 +54,7 @@ go_test(
         "chat_passthrough_test.go",
         "stargate_last_cluster_test.go",
         "stargate_test.go",
+        "upstream_error_test.go",
     ],
     embed = [":provider"],
     deps = [

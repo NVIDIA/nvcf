@@ -35,6 +35,23 @@ import (
 // request input, so the bound is well above a typical error body.
 const MaxUpstreamErrorBodyBytes = 1 << 20
 
+// maxUpstreamErrorMessageBytes bounds the upstream text copied into a
+// gateway-generated error message.
+const maxUpstreamErrorMessageBytes = 32 * 1024
+
+// truncateMessage cuts message to maxUpstreamErrorMessageBytes on a UTF-8
+// boundary.
+func truncateMessage(message string) string {
+	if len(message) <= maxUpstreamErrorMessageBytes {
+		return message
+	}
+	cut := maxUpstreamErrorMessageBytes
+	for cut > 0 && !utf8.RuneStart(message[cut]) {
+		cut--
+	}
+	return message[:cut]
+}
+
 // ReadUpstreamErrorBody reads a non-2xx upstream body for error rendering and
 // decodes gzip. It returns nil when the body is larger than
 // MaxUpstreamErrorBodyBytes, uses another encoding, or fails to read, so a
@@ -92,16 +109,16 @@ func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("upstream status %d", e.Status)
 }
 
-// Message returns the human-readable reason from the upstream body, falling
-// back to the HTTP status text. JSON bodies in an unknown shape are never
-// returned verbatim.
+// Message returns the human-readable reason from the upstream body, capped at
+// maxUpstreamErrorMessageBytes, falling back to the HTTP status text. JSON
+// bodies in an unknown shape are never returned verbatim.
 func (e *UpstreamError) Message() string {
 	if message := upstreamErrorMessage(e.Body); message != "" {
-		return message
+		return truncateMessage(message)
 	}
 	trimmed := bytes.TrimSpace(e.Body)
 	if len(trimmed) > 0 && !json.Valid(trimmed) && utf8.Valid(trimmed) {
-		return string(trimmed)
+		return truncateMessage(string(trimmed))
 	}
 	if text := http.StatusText(e.Status); text != "" {
 		return text

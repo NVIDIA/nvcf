@@ -915,8 +915,8 @@ The `type` follows the HTTP status. For example, `401` is
 
 Model server errors already in the endpoint's format are returned unchanged,
 including the server's `type` and `code`. Other model server bodies are
-converted to the endpoint's format, keeping the server's message when the
-gateway can read it. The gateway reads uncompressed and gzip error bodies up
+converted to the endpoint's format, keeping up to 32 KiB of the server's
+message when the gateway can read it. The gateway reads uncompressed and gzip error bodies up
 to 1 MiB. For larger bodies or other encodings, the message is the HTTP
 status text.
 
