@@ -61,7 +61,7 @@ func (a *Agent) retirableCheckpoints(ctx context.Context, pods []corev1.Pod, now
 		}
 	}
 	for _, r := range records.Items {
-		if !strings.HasPrefix(r.Name, criuGroupConfigMapPrefix) || r.Data["state"] != criuGroupStateComplete {
+		if !strings.HasPrefix(r.Name, criuGroupConfigMapPrefix) || !recordUsable(r.Data) {
 			continue
 		}
 		for k, v := range r.Data {

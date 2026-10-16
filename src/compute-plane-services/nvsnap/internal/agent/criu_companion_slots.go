@@ -85,7 +85,7 @@ func (a *Agent) claimCompanionSlot(ctx context.Context, pod *corev1.Pod, g webho
 		if gerr != nil {
 			return gerr
 		}
-		if cm.Data["state"] != criuGroupStateComplete {
+		if !recordUsable(cm.Data) {
 			return fmt.Errorf("group record is %q", cm.Data["state"])
 		}
 		slot = pickCompanionSlot(cm.Data, pod.Namespace, slots, held, time.Now())

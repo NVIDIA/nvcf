@@ -741,8 +741,17 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		if session == "" {
 			session = req.GroupSession
 		}
+		// The member's pod may be held (pod_hold.go); the hold ends with
+		// the member's capture, whatever its outcome.
+		defer a.releaseHold(holdKey(session, req.Namespace, req.PodName), log)
 		dopts.Freeze = func(ctx context.Context) error {
-			return a.awaitGroupFreeze(ctx, session, req.Namespace, req.PodName, log)
+			if ferr := a.awaitGroupFreeze(ctx, session, req.Namespace, req.PodName, log); ferr != nil {
+				return ferr
+			}
+			// A held companion's container is frozen: thawed now, the
+			// dump stops it at once.
+			a.thawHoldTarget(holdKey(session, req.Namespace, req.PodName), log)
+			return nil
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}

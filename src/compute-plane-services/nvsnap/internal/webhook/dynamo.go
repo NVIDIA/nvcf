@@ -141,33 +141,6 @@ func DynamoRestorable(pod *corev1.Pod, fixed string) bool {
 // namespace.
 func DynamoComponent(pod *corev1.Pod) bool { return dynamoComponent(pod) }
 
-// dynamoDefaultLeaseTTL is the lease TTL, in seconds, of a Dynamo component
-// that sets none.
-const dynamoDefaultLeaseTTL = 10
-
-// DynamoLeaseTTL returns the shortest etcd lease TTL, in seconds, a Dynamo
-// container of the pod registers under (ETCD_LEASE_TTL, else Dynamo's
-// default); false for a pod that is no Dynamo component.
-func DynamoLeaseTTL(pod *corev1.Pod) (int, bool) {
-	least, found := 0, false
-	for i := range pod.Spec.Containers {
-		c := &pod.Spec.Containers[i]
-		if _, names := envValue(c, dynNamespaceEnv); !names {
-			continue
-		}
-		ttl := dynamoDefaultLeaseTTL
-		if v, set := envValue(c, dynLeaseTTLEnv); set {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				ttl = n
-			}
-		}
-		if !found || ttl < least {
-			least, found = ttl, true
-		}
-	}
-	return least, found
-}
-
 // DynamoNamespaceIs reports whether every container of the pod that names
 // a Dynamo namespace names fixed: the running pod got the profile.
 func DynamoNamespaceIs(pod *corev1.Pod, fixed string) bool {

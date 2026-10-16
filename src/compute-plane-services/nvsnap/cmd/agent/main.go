@@ -203,6 +203,9 @@ func main() {
 	flag.StringVar(&config.Webhook.DynamoNamespace, "webhook-dynamo-namespace", "",
 		"Fixed Dynamo namespace (DYN_NAMESPACE, DYN_NAMESPACE_PREFIX) for Dynamo components whose etcd and NATS are their instance's own; empty keeps the operator's.")
 
+	flag.Int64Var(&config.CRIUGhostLimit, "criu-ghost-limit", 0,
+		"Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit), such as an engine's CPU KV-cache tier in /dev/shm; 0 is 1 TiB.")
+
 	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
 		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
 

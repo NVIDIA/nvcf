@@ -443,7 +443,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
-	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"))
+	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"), a.ghostLimit())
 	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -745,7 +745,7 @@ func bundledCompressBlockFlag() string {
 // dumpV2Args builds the nsenter + criu dump argv. A gpushare dump omits the
 // CUDA plugin: nvsnap-gpu-suspend has already checkpointed the GPU state.
 // directIO writes the pages image with O_DIRECT (--image-io-mode direct).
-func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushare, directIO bool, compress string) []string {
+func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushare, directIO bool, compress string, ghostLimit int64) []string {
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "dump",
@@ -753,7 +753,7 @@ func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushar
 		"-D", v2ImagesDirInContainer,
 		"-o", "dump.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
-		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--link-remap", "--ghost-links", "--ghost-limit", strconv.FormatInt(ghostLimit, 10),
 	}
 	// The CUDA plugin only for a tree with GPU devices (pidNSDumpArgs).
 	if !gpushare && len(externals) > 0 {
@@ -847,4 +847,18 @@ func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, ro
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// defaultGhostLimit is the largest deleted file a dump saves by default.
+// Engines keep large buffers in deleted shared-memory files: a vLLM CPU
+// KV-cache tier (--kv-offloading-size) is one such file, hundreds of GiB,
+// part of the engine's state like its GPU memory.
+const defaultGhostLimit int64 = 1 << 40
+
+// ghostLimit is the agent's criu --ghost-limit.
+func (a *Agent) ghostLimit() int64 {
+	if a.config.CRIUGhostLimit > 0 {
+		return a.config.CRIUGhostLimit
+	}
+	return defaultGhostLimit
 }

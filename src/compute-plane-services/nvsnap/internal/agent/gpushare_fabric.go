@@ -458,6 +458,8 @@ type fabricDriveOpts struct {
 	// companion) that ended before the vote passed: the capture is lost,
 	// so the vote is aborted too. Nil: none.
 	LostOther func() bool
+	// OnGo runs once, when the vote goes: the GPU ranks stop now.
+	OnGo func()
 	// Unlock: hold every member until all are restored, then unlock them
 	// together (group restore). The exchange waits for the unlock.
 	Unlock bool
@@ -523,6 +525,9 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 				log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
 			}
 			vote.drive(ctx, members, running, states, aborted, &out, log)
+			if out.Went && opts.OnGo != nil {
+				opts.OnGo()
+			}
 		}
 
 		if opts.Unlock && !unlockDone {
@@ -863,13 +868,25 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 			return finished[i]
 		}}
 	}
+	// Once the GPU ranks stop, the rest of the instance stops with them:
+	// every member pod is held (pod_hold.go), a rank's engine container
+	// excepted while it saves its GPU memory. The members are released
+	// from the freeze point only once all are held.
+	holdsDone := make(chan struct{})
+	onGo := sync.OnceFunc(func() {
+		go func() {
+			defer close(holdsDone)
+			holdMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
+		}()
+	})
+	defer releaseMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
 	freezeDone := make(chan struct{})
 	go func() {
 		defer close(freezeDone)
-		if driveGroupFreeze(ctx, fabricHTTPClient, session, "", freezeMembers, 200*time.Millisecond, log) {
+		if driveGroupFreeze(ctx, fabricHTTPClient, session, "", freezeMembers, 200*time.Millisecond, log, holdsDone) {
 			// Dumped, the members wait stopped until all are: none
 			// resumes to talk to one not dumped yet.
-			driveGroupFreeze(ctx, fabricHTTPClient, session, "post", freezeMembers, 100*time.Millisecond, log)
+			driveGroupFreeze(ctx, fabricHTTPClient, session, "post", freezeMembers, 100*time.Millisecond, log, nil)
 		}
 	}()
 	// A companion that ends before the vote passed loses the capture: the
@@ -884,7 +901,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		}
 		return false
 	}
-	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true, LostOther: lostCompanion}, log)
+	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true, LostOther: lostCompanion, OnGo: onGo}, log)
 	wg.Wait()
 	<-freezeDone
 

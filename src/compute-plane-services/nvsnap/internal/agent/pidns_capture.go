@@ -383,7 +383,7 @@ func pathUnder(p, dir string) bool {
 
 // pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
 // agent's namespaces against the container's host pid.
-func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool) []string {
+func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool, ghostLimit int64) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(hostPID),
@@ -391,7 +391,7 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 		"-D", imgsDir,
 		"-o", "dump.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
-		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--link-remap", "--ghost-links", "--ghost-limit", strconv.FormatInt(ghostLimit, 10),
 		"--skip-in-flight",
 		"--network-lock", "nftables",
 		"--manage-cgroups=ignore",
@@ -601,7 +601,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO())
+		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO(), a.ghostLimit())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	if hooks.ActionScript != "" {

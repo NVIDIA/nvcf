@@ -49,25 +49,3 @@ func TestLivenessTolerance(t *testing.T) {
 		t.Error("a pod without a liveness probe has no tolerance")
 	}
 }
-
-func TestDynamoLeaseTTLOf(t *testing.T) {
-	c := func(env ...corev1.EnvVar) corev1.Container { return corev1.Container{Name: "x", Env: env} }
-	dyn := corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "ns"}
-	for _, tc := range []struct {
-		name string
-		cs   []corev1.Container
-		want int
-		ok   bool
-	}{
-		{"not Dynamo", []corev1.Container{c()}, 0, false},
-		{"default", []corev1.Container{c(dyn)}, 10, true},
-		{"set", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "300"})}, 300, true},
-		{"unreadable", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "x"})}, 10, true},
-		{"shortest", []corev1.Container{c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "300"}), c(dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "60"})}, 60, true},
-	} {
-		got, ok := DynamoLeaseTTL(&corev1.Pod{Spec: corev1.PodSpec{Containers: tc.cs}})
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("%s: got %d %v, want %d %v", tc.name, got, ok, tc.want, tc.ok)
-		}
-	}
-}

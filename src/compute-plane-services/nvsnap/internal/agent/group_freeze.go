@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -153,6 +154,25 @@ func markPostDumpReached(dir string, log *logrus.Entry) {
 // or aborts it. ?phase=post is the member's post-dump barrier.
 func (a *Agent) freezeHandler(w http.ResponseWriter, r *http.Request) {
 	v := mux.Vars(r)
+	switch r.URL.Query().Get("phase") {
+	case "hold":
+		// POST ?container=&keep=: freeze the member's pod (pod_hold.go).
+		if r.Method != http.MethodPost {
+			http.Error(w, "hold is POST", http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query()
+		if err := a.holdMember(r.Context(), v["session"], v["namespace"], v["pod"], q.Get("container"), q.Get("keep") == "true"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case "release":
+		a.releaseHold(holdKey(v["session"], v["namespace"], v["pod"]), a.log.WithField("pod", v["namespace"]+"/"+v["pod"]))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.URL.Query().Get("phase") == "post" {
 		dir := a.postDumpDir(v["session"], v["namespace"], v["pod"])
 		if r.Method == http.MethodPost {
@@ -211,7 +231,7 @@ type freezeMember struct {
 // driveGroupFreeze releases every member from the freeze point of phase
 // ("" before the dump, "post" after it) once all wait there, or aborts them
 // all when one ends before it, or none of that happens in time.
-func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase string, members []freezeMember, poll time.Duration, log *logrus.Entry) bool {
+func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase string, members []freezeMember, poll time.Duration, log *logrus.Entry, gate <-chan struct{}) bool {
 	wait := groupFreezeWait
 	if phase == "post" {
 		wait = postDumpWait
@@ -254,6 +274,16 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase s
 			all = false
 		}
 		if all {
+			if gate != nil {
+				// The rest of the instance is being held; bounded, a
+				// hold that does not finish leaves its pod running.
+				select {
+				case <-gate:
+				case <-time.After(holdGateWait):
+					log.Warn("group capture: the instance's pods are not all held yet; releasing the members anyway")
+				case <-ctx.Done():
+				}
+			}
 			release(true)
 			log.WithFields(logrus.Fields{"members": len(members), "phase": phaseName(phase)}).Info("group capture: every member at the freeze point; released together")
 			return true
@@ -287,4 +317,56 @@ func freezeReached(ctx context.Context, client *http.Client, base, session, phas
 	defer resp.Body.Close()
 	var out map[string]bool
 	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&out) == nil && out["reached"]
+}
+
+// holdGateWait bounds the wait at the freeze point for the members' pods
+// to be held.
+const holdGateWait = 30 * time.Second
+
+// holdMembers holds every member pod of capture session (pod_hold.go): a
+// companion's whole pod, a GPU rank's but for the container it saves.
+func holdMembers(ctx context.Context, client *http.Client, session string, members []CheckpointRequest, bases []string, log *logrus.Entry) {
+	var wg sync.WaitGroup
+	for i := range members {
+		wg.Add(1)
+		go func(base string, m *CheckpointRequest) {
+			defer wg.Done()
+			u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?phase=hold&container=%s&keep=%t", base, url.PathEscape(session),
+				url.PathEscape(m.Namespace), url.PathEscape(m.PodName), url.QueryEscape(m.ContainerName), !m.Companion)
+			if err := postNoContent(ctx, client, u); err != nil {
+				log.WithError(err).WithField("pod", m.Namespace+"/"+m.PodName).Warn("group capture: cannot hold a member's pod; it keeps running during the capture")
+			}
+		}(bases[i], &members[i])
+	}
+	wg.Wait()
+	log.WithField("members", len(members)).Info("group capture: the instance's pods are held")
+}
+
+// releaseMembers ends every member's hold; a member ends its own with its
+// capture, so this only covers one that did not.
+func releaseMembers(ctx context.Context, client *http.Client, session string, members []CheckpointRequest, bases []string, log *logrus.Entry) {
+	for i := range members {
+		m := &members[i]
+		u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?phase=release", bases[i], url.PathEscape(session), url.PathEscape(m.Namespace), url.PathEscape(m.PodName))
+		if err := postNoContent(context.WithoutCancel(ctx), client, u); err != nil {
+			log.WithError(err).WithField("pod", m.Namespace+"/"+m.PodName).Warn("group capture: cannot release a member's hold; its agent thaws it on its own")
+		}
+	}
+}
+
+func postNoContent(ctx context.Context, client *http.Client, u string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
 }

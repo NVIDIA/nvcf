@@ -94,6 +94,12 @@ nvsnap:
 agent:
   enabled: true
 
+  # Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit).
+  # Engines keep state in deleted shared-memory files: a vLLM CPU KV-cache
+  # tier (--kv-offloading-size 600) is one 600 GiB file in /dev/shm. A dump
+  # saves it whole, so the checkpoint grows by that much. Empty is 1 TiB.
+  criuGhostLimit: ""
+
   # cachedir (ember) mode. When set (e.g. "/opt/nvsnap"), the webhook
   # redirects every JIT/compile cache + the model into this single in-pod
   # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on
@@ -552,20 +558,19 @@ webhook:
   # operator's name. Empty disables.
   dynamoNamespace: nvcf-nvsnap
   # etcd lease TTL in seconds (ETCD_LEASE_TTL) for those components, unless
-  # they set one. Capturing a running instance freezes its GPU workers while
-  # their GPU memory is saved, dumped and reloaded: minutes for a large model
-  # (Kimi-K3, 4 x 250 GB per pod: about 3 minutes). The instance's etcd keeps
-  # counting meanwhile, and a lease that runs out has the engine shut itself
-  # down. Costs only a slower removal of a crashed component from routing.
-  # An instance with a pod whose lease is shorter is not captured. 0 keeps
-  # Dynamo's default and does not check.
-  dynamoLeaseTTL: 300
+  # they set one. A capture stops the whole instance, its etcd included, so
+  # no lease runs out during it; this only covers the moments a restore's
+  # members come back one after another. Costs only a slower removal of a
+  # crashed component from routing. 0 keeps Dynamo's default (10 s).
+  dynamoLeaseTTL: 60
   # Seconds of silence every liveness probe is widened to tolerate (its
-  # failureThreshold raised, never lowered). Capturing a running pod freezes
-  # it (see dynamoLeaseTTL); a probe that gives up first has the kubelet
-  # restart the engine being captured. Costs only a slower restart of an
-  # engine that really hangs. An instance with a pod whose probe tolerates
-  # less is not captured. 0 leaves probes as they are and does not check.
+  # failureThreshold raised, never lowered). A capture stops the instance
+  # while its GPU memory is saved and its pods are dumped: minutes for a
+  # large model (Kimi-K3, 4 x 250 GB per pod: about 2.5 minutes). The
+  # kubelet keeps probing, and a probe that gives up first restarts a
+  # container being dumped. Costs only a slower restart of an engine that
+  # really hangs. An instance with a pod whose probe tolerates less is not
+  # captured. 0 leaves probes as they are and does not check.
   captureLivenessBudget: 300
 
   # Operator salt folded into every cache identity the webhook composes.

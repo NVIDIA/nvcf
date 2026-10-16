@@ -255,6 +255,30 @@ func TestDriveFabric_AbortsWhenACompanionEndsBeforeTheGo(t *testing.T) {
 	}
 }
 
+// OnGo runs once the vote goes, and only once.
+func TestDriveFabric_OnGo(t *testing.T) {
+	a, b := &fakeFabricMember{name: "a"}, &fakeFabricMember{name: "b"}
+	var gone atomic.Int32
+	ds, res, cancel := startDriveOpts([]fabricMember{a, b}, fabricDriveOpts{Vote: true, OnGo: func() { gone.Add(1) }})
+	defer cancel()
+	a.vote(0, false)
+	b.vote(0, true)
+	eventually(t, "retry", func() bool { v, _ := a.sent(); return len(v) == 1 })
+	if gone.Load() != 0 {
+		t.Fatal("OnGo ran on a retry")
+	}
+	a.vote(1, true)
+	b.vote(1, true)
+	eventually(t, "go", func() bool { return gone.Load() > 0 })
+	time.Sleep(3 * fabricPollInterval)
+	ds.set(0)
+	ds.set(1)
+	<-res
+	if n := gone.Load(); n < 1 {
+		t.Fatalf("OnGo ran %d times", n)
+	}
+}
+
 func TestDriveFabric_ExchangeLeavesOutMembersThatEnded(t *testing.T) {
 	a, b, c := &fakeFabricMember{name: "a"}, &fakeFabricMember{name: "b"}, &fakeFabricMember{name: "c"}
 	ds, res, cancel := startDrive([]fabricMember{a, b, c})

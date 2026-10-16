@@ -74,8 +74,8 @@ func TestGroveInstance(t *testing.T) {
 	}
 }
 
-func probedPod(name string, threshold int32, env ...corev1.EnvVar) *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{Containers: []corev1.Container{{
+func probedPod(threshold int32, env ...corev1.EnvVar) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "w"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{
 		Name: "main", Env: env,
 		LivenessProbe: &corev1.Probe{PeriodSeconds: 10, FailureThreshold: threshold},
 	}}}}
@@ -83,25 +83,22 @@ func probedPod(name string, threshold int32, env ...corev1.EnvVar) *corev1.Pod {
 
 func TestFreezeTolerated(t *testing.T) {
 	dyn := corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "nvcf-nvsnap"}
-	ttl := func(v string) corev1.EnvVar { return corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: v} }
 	for _, tc := range []struct {
 		name string
 		pod  *corev1.Pod
 		ok   bool
 	}{
-		{"wide probe, long lease", probedPod("w", 30, dyn, ttl("300")), true},
-		{"liveness too tight", probedPod("w", 6, dyn, ttl("300")), false},
-		{"lease too short", probedPod("w", 30, dyn, ttl("60")), false},
-		{"Dynamo default lease", probedPod("w", 30, dyn), false},
-		{"not Dynamo: lease not checked", probedPod("etcd", 30), true},
+		{"wide probe", probedPod(30, dyn), true},
+		{"liveness too tight", probedPod(6, dyn), false},
+		{"a short Dynamo lease does not matter: etcd stops too", probedPod(30, dyn, corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "10"}), true},
 		{"no liveness probe", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nats"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "nats"}}}}, true},
 	} {
-		err := freezeTolerated([]*corev1.Pod{tc.pod}, 300, 300)
+		err := freezeTolerated([]*corev1.Pod{tc.pod}, 300)
 		if (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
 	}
-	if err := freezeTolerated([]*corev1.Pod{probedPod("w", 6, dyn, ttl("60"))}, 0, 0); err != nil {
-		t.Errorf("zero budgets are not checked: %v", err)
+	if err := freezeTolerated([]*corev1.Pod{probedPod(6, dyn)}, 0); err != nil {
+		t.Errorf("a zero budget is not checked: %v", err)
 	}
 }

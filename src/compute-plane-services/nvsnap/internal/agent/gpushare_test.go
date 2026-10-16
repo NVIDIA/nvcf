@@ -106,13 +106,16 @@ func TestGPUShareTargets_NoShim(t *testing.T) {
 }
 
 func TestDumpV2Args_GPUShare(t *testing.T) {
-	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "")
+	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "", defaultGhostLimit)
 	if !slices.Contains(plain, "--libdir") || slices.Contains(plain, "--image-io-mode") {
 		t.Errorf("plain dump must load the CUDA plugin and keep buffered I/O: %v", plain)
 	}
-	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "")
+	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "", defaultGhostLimit)
 	if slices.Contains(gs, "--libdir") {
 		t.Errorf("gpushare dump must not load the CUDA plugin: %v", gs)
+	}
+	if g := slices.Index(gs, "--ghost-limit"); g < 0 || gs[g+1] != "1099511627776" {
+		t.Errorf("dump must save deleted files up to the ghost limit: %v", gs)
 	}
 	i := slices.Index(gs, "--image-io-mode")
 	if i < 0 || gs[i+1] != "direct" {
@@ -123,7 +126,7 @@ func TestDumpV2Args_GPUShare(t *testing.T) {
 			t.Errorf("gpushare dump lacks %q: %v", want, gs)
 		}
 	}
-	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, ""), "--image-io-mode") {
+	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, "", defaultGhostLimit), "--image-io-mode") {
 		t.Errorf("--image-io-mode added although the bundled CRIU lacks it")
 	}
 }

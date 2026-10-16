@@ -56,6 +56,9 @@ import (
 type Config struct {
 	ListenAddr    string
 	CheckpointDir string
+	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
+	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
+	CRIUGhostLimit int64
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -291,6 +294,9 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 type Agent struct {
 	// freezes are this node's members waiting at a group capture's freeze point.
 	freezes freezePoints
+	// holds are this node's member pods frozen for a group capture
+	// (pod_hold.go).
+	holds podHolds
 	// capturing holds the container IDs with a checkpoint in progress: two
 	// captures of one workload would each suspend it and both fail.
 	capturing sync.Map
@@ -509,6 +515,8 @@ func New(cfg Config) (*Agent, error) {
 // Run starts the agent
 func (a *Agent) Run(ctx context.Context) error {
 	metrics.RegisterAgent()
+	// A capture this agent was holding pods for ended with its last run.
+	a.recoverPodHolds(a.log.WithField("subsys", "pod-hold"))
 
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset,
 	// so prod clusters without Jaeger pay zero overhead.

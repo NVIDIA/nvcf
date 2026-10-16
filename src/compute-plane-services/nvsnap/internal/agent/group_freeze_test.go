@@ -50,7 +50,7 @@ func TestGroupFreeze_ReleasesTogether(t *testing.T) {
 	}()
 	ok := driveGroupFreeze(ctx, http.DefaultClient, "s1", "", []freezeMember{
 		{Base: b1, Namespace: "ns", Pod: "worker-0"}, {Base: b2, Namespace: "ns", Pod: "etcd-0"},
-	}, 20*time.Millisecond, log)
+	}, 20*time.Millisecond, log, nil)
 	if !ok {
 		t.Fatal("driver did not release the group")
 	}
@@ -61,6 +61,26 @@ func TestGroupFreeze_ReleasesTogether(t *testing.T) {
 	}
 	if d := time.Duration(released[0].Load() - released[1].Load()); d > 100*time.Millisecond || d < -100*time.Millisecond {
 		t.Errorf("members released %s apart", d)
+	}
+}
+
+// Every member at the freeze point is released only once the gate opens:
+// the instance's pods are held.
+func TestGroupFreeze_WaitsForTheGate(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	a1, b1 := freezeServer(t)
+	ctx := context.Background()
+	errs := make(chan error, 1)
+	go func() { errs <- a1.awaitGroupFreeze(ctx, "s5", "ns", "worker-0", log) }()
+	gate := make(chan struct{})
+	opened := time.Now().Add(300 * time.Millisecond)
+	time.AfterFunc(300*time.Millisecond, func() { close(gate) })
+	ok := driveGroupFreeze(ctx, http.DefaultClient, "s5", "", []freezeMember{{Base: b1, Namespace: "ns", Pod: "worker-0"}}, 20*time.Millisecond, log, gate)
+	if !ok || time.Now().Before(opened) {
+		t.Fatalf("released before the gate opened (ok=%v)", ok)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -75,7 +95,7 @@ func TestGroupFreeze_AbortsWhenAMemberEnds(t *testing.T) {
 	ok := driveGroupFreeze(ctx, http.DefaultClient, "s2", "", []freezeMember{
 		{Base: b1, Namespace: "ns", Pod: "worker-0"},
 		{Base: b2, Namespace: "ns", Pod: "etcd-0", Done: func() bool { return true }},
-	}, 20*time.Millisecond, log)
+	}, 20*time.Millisecond, log, nil)
 	if ok {
 		t.Fatal("driver released a group with a failed member")
 	}
@@ -154,7 +174,7 @@ func TestGroupFreeze_PostPhaseAcceptsAMemberWithoutHook(t *testing.T) {
 	markPostDumpReached(a.postDumpDir("s4", "ns", "etcd-0"), log)
 	ok := driveGroupFreeze(context.Background(), http.DefaultClient, "s4", "post", []freezeMember{
 		{Base: base, Namespace: "ns", Pod: "etcd-0", Done: func() bool { return true }},
-	}, 20*time.Millisecond, log)
+	}, 20*time.Millisecond, log, nil)
 	if !ok {
 		t.Fatal("a member past its dump aborted the group")
 	}

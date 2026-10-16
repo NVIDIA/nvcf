@@ -125,23 +125,19 @@ func instanceCoversEngine(ranks []*corev1.Pod) error {
 	return nil
 }
 
-// freezeTolerated refuses an instance one of whose pods would not outlast
-// its capture's freeze. Capturing stops every member at once, the GPU ranks
-// for as long as saving their GPU memory, the dump and the reload take
-// (minutes for a large model), while the instance's etcd keeps counting. A
-// liveness probe that gives up first has the kubelet restart the engine; a
-// Dynamo lease that runs out first has the engine shut itself down. The
+// freezeTolerated refuses an instance one of whose pods would be
+// restarted by the kubelet during its capture. Capturing stops the whole
+// instance, its pods held (pod_hold.go), for as long as saving the GPU
+// memory and the dump take: minutes for a large model. Nothing of the
+// instance counts that time, but the kubelet still probes, and a liveness
+// probe that gives up first restarts a container being dumped. The
 // webhook gives every pod it admits at least livenessBudget seconds of
-// probe tolerance and a Dynamo lease of leaseTTL seconds; a pod admitted
-// with less (before those budgets, or setting its own lease) is not
-// captured. A zero budget is not checked.
-func freezeTolerated(members []*corev1.Pod, livenessBudget, leaseTTL int) error {
+// probe tolerance; a pod admitted with less is not captured. A zero
+// budget is not checked.
+func freezeTolerated(members []*corev1.Pod, livenessBudget int) error {
 	for _, p := range members {
 		if t, ok := webhook.LivenessTolerance(p); ok && livenessBudget > 0 && t < livenessBudget {
 			return fmt.Errorf("pod %s: its liveness probe tolerates %d s of silence, less than the %d s capture budget", p.Name, t, livenessBudget)
-		}
-		if t, ok := webhook.DynamoLeaseTTL(p); ok && leaseTTL > 0 && t < leaseTTL {
-			return fmt.Errorf("pod %s: its Dynamo etcd lease (ETCD_LEASE_TTL) is %d s, less than the %d s capture budget", p.Name, t, leaseTTL)
 		}
 	}
 	return nil

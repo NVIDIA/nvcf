@@ -36,6 +36,8 @@ func TestCRIUGroupRecaptures(t *testing.T) {
 		{"restore failed", map[string]string{"state": "restore-failed", "captures": "2"}, true},
 		{"out of attempts", map[string]string{"state": "restore-failed", "captures": "3"}, false},
 		{"record before the counter", map[string]string{"state": "failed"}, true},
+		{"being verified", map[string]string{"state": "verifying", "captures": "1", "sourceNamespace": "fn"}, false},
+		{"its verification never ran", map[string]string{"state": "verifying", "captures": "1", "stalls": "3"}, true},
 	} {
 		if got := criuGroupRecaptures(tc.data, now); got != tc.want {
 			t.Errorf("%s: recaptures = %v, want %v", tc.name, got, tc.want)
@@ -194,6 +196,62 @@ func TestRecordRestored_ClearsStallsOfItsCapture(t *testing.T) {
 	}
 	if !recordRestored(d, "c0") || d["stalls"] != "" {
 		t.Error("a restore did not clear its capture's stalls")
+	}
+}
+
+// The first restore of a capture being verified makes it complete, for
+// every instance; a restore of another capture changes nothing.
+func TestRecordRestored_VerifiesItsCapture(t *testing.T) {
+	d := map[string]string{"state": "verifying", "sourceNamespace": "fn", "checkpoint.0": "c0", "checkpoint.1": "c1"}
+	if recordRestored(d, "other") || d["state"] != "verifying" {
+		t.Fatal("a restore of another capture verified this one")
+	}
+	if !recordRestored(d, "c0") || d["state"] != "complete" || d["sourceNamespace"] != "" || d["verifiedAt"] == "" {
+		t.Fatalf("record = %v, want complete and verified", d)
+	}
+	if recordRestored(d, "c0") {
+		t.Error("a later restore changed a verified record with nothing to clear")
+	}
+}
+
+// A capture being verified is restored only into its own instance's
+// namespace; once verified, into any.
+func TestLookupCRIUGroupFor_VerifyingOnlyItsNamespace(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	a := &Agent{kubeClient: kc, log: logrus.New()}
+	for _, ns := range []string{"fn-a", "fn-b"} {
+		if _, err := kc.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns,
+			Labels: map[string]string{"function-version-id": "fv-verify"}}}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope, err := a.criuGroupScope(ctx, "fn-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := criuGroupKey("cache://w", scope)
+	record := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Namespace: "nvsnap-system"},
+		Data: map[string]string{"state": "verifying", "sourceNamespace": "fn-a", "size": "1", "checkpoint.0": "c0"}}
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(ctx, record, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if g, ok := a.lookupCRIUGroupFor(ctx, "fn-a", "cache://w"); !ok || g.VerifyNamespace != "fn-a" {
+		t.Fatalf("its own namespace: %+v %v", g, ok)
+	}
+	if _, ok := a.lookupCRIUGroupFor(ctx, "fn-b", "cache://w"); ok {
+		t.Fatal("another instance restored from a capture not verified yet")
+	}
+	record.Data["state"] = "complete"
+	delete(record.Data, "sourceNamespace")
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Update(ctx, record, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if g, ok := a.lookupCRIUGroupFor(ctx, "fn-b", "cache://w"); !ok || g.VerifyNamespace != "" {
+		t.Fatalf("a verified capture is for every instance: %+v %v", g, ok)
+	}
+	if _, ok := parseCRIUGroup("k", map[string]string{"state": "verifying", "size": "1", "checkpoint.0": "c0"}); ok {
+		t.Error("a capture being verified without its namespace is usable")
 	}
 }
 

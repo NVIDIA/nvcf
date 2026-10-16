@@ -52,6 +52,10 @@ type CRIUGroup struct {
 	// Containers names the container each member's checkpoint was taken
 	// from (by slot); empty in records from before it was recorded.
 	Containers []string
+	// VerifyNamespace, when set, is the only namespace that may restore
+	// from the capture: the instance stopped for it, whose restore
+	// verifies it. Empty once a restore has succeeded.
+	VerifyNamespace string
 	// Slots are the members a companion's own configuration names, when
 	// the record was found through a companion's alias: one, or several
 	// for identical companions (replicas of one template), any of which a
