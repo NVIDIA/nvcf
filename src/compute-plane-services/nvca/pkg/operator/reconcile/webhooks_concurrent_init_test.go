@@ -352,6 +352,74 @@ func TestCreateOrUpdateWebhookConfiguration_RetriesOnConflict(t *testing.T) {
 	assertWebhookCABundles(ctx, t, bc, desired.CACertBytes)
 }
 
+// Rotating a certificate that is about to expire must publish the new CA to the
+// webhook caBundles, not only to the Secrets, and leave the rest of each webhook
+// configuration untouched.
+func TestRotateTLSCert_UpdatesWebhookCABundles(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	issuedAt := now.AddDate(-1, 0, 10)
+	require.NoError(t, publishWebhookCert(ctx, bc, nb, issuedAt))
+
+	admission := bc.clients.K8s.AdmissionregistrationV1()
+	vwcBefore, err := admission.ValidatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	mwcBefore, err := admission.MutatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	oldCA := vwcBefore.Webhooks[0].ClientConfig.CABundle
+
+	require.NoError(t, bc.rotateTLSCert(ctx, nb, now))
+	require.NoError(t, webhookCAConsistency(ctx, bc, nb, now))
+
+	vwcAfter, err := admission.ValidatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	mwcAfter, err := admission.MutatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	newCA := vwcAfter.Webhooks[0].ClientConfig.CABundle
+	assert.NotEqual(t, oldCA, newCA)
+
+	require.Len(t, vwcAfter.Webhooks, len(vwcBefore.Webhooks))
+	for i := range vwcBefore.Webhooks {
+		vwcBefore.Webhooks[i].ClientConfig.CABundle = newCA
+		assert.Equal(t, vwcBefore.Webhooks[i], vwcAfter.Webhooks[i])
+	}
+	require.Len(t, mwcAfter.Webhooks, len(mwcBefore.Webhooks))
+	for i := range mwcBefore.Webhooks {
+		mwcBefore.Webhooks[i].ClientConfig.CABundle = newCA
+		assert.Equal(t, mwcBefore.Webhooks[i], mwcAfter.Webhooks[i])
+	}
+}
+
+// A rotation that loses the claim on the serving cert Secret must publish the
+// certificate the other writer stored rather than overwrite it with its own.
+func TestRotateTLSCert_AdoptsCertOnUpdateConflict(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	require.NoError(t, publishWebhookCert(ctx, bc, nb, now.AddDate(-1, 0, 10)))
+	winner, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+
+	cs := bc.clients.K8s.(*fake.Clientset)
+	var conflicted atomic.Bool
+	cs.PrependReactor("update", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		sec := a.(k8stesting.UpdateAction).GetObject().(*v1.Secret)
+		if sec.Name != NVCAWebhookTLSCertSecretName || conflicted.Swap(true) {
+			return false, nil, nil
+		}
+		require.NoError(t, cs.Tracker().Update(v1.SchemeGroupVersion.WithResource("secrets"),
+			newTLSCertSecret(nb, winner), sec.Namespace))
+		return true, nil, k8serrors.NewConflict(schema.GroupResource{Resource: "secrets"}, sec.Name,
+			fmt.Errorf("the object has been modified"))
+	})
+
+	require.NoError(t, bc.rotateTLSCert(ctx, nb, now))
+	assert.True(t, conflicted.Load())
+	require.NoError(t, webhookCAConsistency(ctx, bc, nb, now))
+	assertWebhookCABundles(ctx, t, bc, winner.CACertBytes)
+}
+
 // A newly minted certificate is stored together with its CA in the serving cert
 // Secret, so the pair can never be written half by one reconcile and half by another.
 func TestEnsureWebhookCert_StoresCAWithServingCert(t *testing.T) {

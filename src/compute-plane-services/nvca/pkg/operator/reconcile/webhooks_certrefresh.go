@@ -30,14 +30,17 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/util/retry"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const defaultCertRefreshPeriod = 24 * time.Hour
 
 // runTLSCertRotate starts a blocking loop that checks NVCA TLS certs for expiration every certRefreshPeriod.
-// If certs will expire within 2 weeks, it attempts to regenerate them and update their secrets.
+// If certs will expire within 2 weeks, it attempts to regenerate them and update their secrets
+// and the webhook caBundles.
 // NVCA's webhook server is configured with "--tls-secret-name" so secret updates are handled.
 func (bc *BackendK8sCache) runTLSCertRotate(ctx context.Context, certRefreshPeriod time.Duration) {
 	log := core.GetLogger(ctx)
@@ -97,12 +100,70 @@ func (bc *BackendK8sCache) rotateTLSCert(ctx context.Context, nb *nvidiaiov1.NVC
 
 	log.Info("Rotating webhook TLS certs")
 
-	webhookCert, err := generateWebhookCerts(nb, now)
+	stored, err := secretClient.Get(ctx, NVCAWebhookTLSCertSecretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get webhook TLS cert secret: %w", err)
+	}
+	generated, err := generateWebhookCerts(nb, now)
 	if err != nil {
 		return fmt.Errorf("generate updated webhook TLS certs: %w", err)
 	}
+	webhookCert, err := bc.claimOrAdoptWebhookCert(ctx, nb, generated, stored, now)
+	if err != nil {
+		return err
+	}
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
 		return fmt.Errorf("update webhook secrets: %w", err)
+	}
+	// The API server only trusts the caBundle in the webhook configurations, so a
+	// rotated CA that is written only to the Secrets rejects every admission call.
+	if err := bc.updateWebhookCABundles(ctx, webhookCert.CACertBytes); err != nil {
+		return fmt.Errorf("update webhook caBundles: %w", err)
+	}
+	return nil
+}
+
+// updateWebhookCABundles sets caBundle on every webhook in the NVCA validating and
+// mutating webhook configurations and leaves the rest of each configuration as setup
+// wrote it. A configuration that does not exist yet is skipped; setup creates it.
+func (bc *BackendK8sCache) updateWebhookCABundles(ctx context.Context, caBundle []byte) error {
+	admission := bc.clients.K8s.AdmissionregistrationV1()
+	name := nvcaoptypes.NVCAModuleName
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		vwc, err := admission.ValidatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for i := range vwc.Webhooks {
+			vwc.Webhooks[i].ClientConfig.CABundle = caBundle
+		}
+		_, err = admission.ValidatingWebhookConfigurations().Update(ctx, vwc, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("update %v ValidatingWebhookConfiguration: %w", name, err)
+	}
+
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		mwc, err := admission.MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for i := range mwc.Webhooks {
+			mwc.Webhooks[i].ClientConfig.CABundle = caBundle
+		}
+		_, err = admission.MutatingWebhookConfigurations().Update(ctx, mwc, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("update %v MutatingWebhookConfiguration: %w", name, err)
 	}
 	return nil
 }
@@ -154,6 +215,15 @@ func (bc *BackendK8sCache) ensureWebhookCert(
 	if err != nil {
 		return WebhookCert{}, err
 	}
+	return bc.claimOrAdoptWebhookCert(ctx, nb, generated, stored, now)
+}
+
+// claimOrAdoptWebhookCert stores generated as the webhook certificate if the serving
+// cert Secret is unchanged since stored was read, and returns it. If another writer
+// changed the Secret first, it returns the certificate that writer stored instead.
+func (bc *BackendK8sCache) claimOrAdoptWebhookCert(
+	ctx context.Context, nb *nvidiaiov1.NVCFBackend, generated WebhookCert, stored *v1.Secret, now time.Time,
+) (WebhookCert, error) {
 	claimed, err := bc.claimWebhookCertSecret(ctx, nb, generated, stored)
 	if err != nil {
 		return WebhookCert{}, err
@@ -162,14 +232,14 @@ func (bc *BackendK8sCache) ensureWebhookCert(
 		return generated, nil
 	}
 
-	existing, _, ok, err = bc.reusableWebhookCert(ctx, nb, now)
+	existing, _, ok, err := bc.reusableWebhookCert(ctx, nb, now)
 	if err != nil {
 		return WebhookCert{}, err
 	}
 	if !ok {
 		return WebhookCert{}, fmt.Errorf("%s was replaced concurrently with unusable cert material", NVCAWebhookTLSCertSecretName)
 	}
-	log.Info("Adopting webhook TLS certs stored by a concurrent reconcile")
+	core.GetLogger(ctx).Info("Adopting webhook TLS certs stored by a concurrent writer")
 	return existing, nil
 }
 
