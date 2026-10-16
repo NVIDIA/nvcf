@@ -69,6 +69,13 @@ func (r *electionReleaser) listGated(ctx context.Context, hash string) ([]corev1
 // release drops the scheduling gate on every gated follower of hash and
 // deletes the election Lease; the rox is Bound at this point so the pods
 // schedule straight into a warm start. Idempotent.
+//
+// A follower whose restore claim is missing from its namespace is not
+// ungated: it was admitted in a namespace the promote did not see yet,
+// and once ungated it would stay Pending on the missing claim. Such a
+// follower is deleted after the Lease, so its controller recreates it
+// and admission takes the completed-capture path, which mints the claim.
+// One whose claim cannot be checked stays gated for the orphan sweep.
 func (r *electionReleaser) release(ctx context.Context, hash string) (released int, err error) {
 	pods, err := r.listGated(ctx, hash)
 	if err != nil {
@@ -78,8 +85,19 @@ func (r *electionReleaser) release(ctx context.Context, hash string) (released i
 		"metadata": map[string]any{"labels": map[string]string{election.GatedLabel: "false"}},
 		"spec":     map[string]any{"schedulingGates": []any{}},
 	})
+	var claimless []*corev1.Pod
 	for i := range pods {
 		p := &pods[i]
+		present, err := r.restoreClaimPresent(ctx, p, hash)
+		if err != nil {
+			r.log.WithError(err).WithFields(logrus.Fields{"pod": p.Namespace + "/" + p.Name, "hash": checkpointstore.ShortHash(hash)}).
+				Warn("election: restore claim check failed; follower left gated for the next sweep")
+			continue
+		}
+		if !present {
+			claimless = append(claimless, p)
+			continue
+		}
 		if _, err := r.kube.CoreV1().Pods(p.Namespace).Patch(ctx, p.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -89,7 +107,37 @@ func (r *electionReleaser) release(ctx context.Context, hash string) (released i
 		released++
 	}
 	r.deleteLease(ctx, hash)
+	for _, p := range claimless {
+		log := r.log.WithFields(logrus.Fields{"pod": p.Namespace + "/" + p.Name, "hash": checkpointstore.ShortHash(hash)})
+		if metav1.GetControllerOf(p) == nil {
+			log.Warn("election: follower's restore claim is missing and it has no controller; left gated (delete it by hand)")
+			continue
+		}
+		if err := r.kube.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return released, fmt.Errorf("recreate %s/%s without its restore claim: %w", p.Namespace, p.Name, err)
+		}
+		log.Info("election: follower's restore claim is missing; deleted so admission restores it with the claim")
+	}
 	return released, nil
+}
+
+// restoreClaimPresent reports whether the restore claim of hash that pod
+// mounts exists in the pod's namespace. A pod that mounts no such claim
+// has nothing to check.
+func (r *electionReleaser) restoreClaimPresent(ctx context.Context, pod *corev1.Pod, hash string) (bool, error) {
+	claim := "rox-" + checkpointstore.ShortHash(hash)
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != claim {
+			continue
+		}
+		_, err := r.kube.CoreV1().PersistentVolumeClaims(pod.Namespace).Get(ctx, claim, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	return true, nil
 }
 
 // evict deletes the gated followers of hash that a controller will

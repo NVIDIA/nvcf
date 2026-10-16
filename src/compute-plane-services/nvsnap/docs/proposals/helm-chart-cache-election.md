@@ -150,7 +150,11 @@ Two call sites. `Mount` on a claim miss mints the claim and retries, which
 covers a restore admitted after the promote in any namespace. The promote
 itself, before publishing `ready`, mints the claim in every namespace that
 already holds pods stamped with the hash (gated followers admitted before
-the promote), so they find it bound when the server releases them. All
+the promote), so they find it bound when the server releases them. A
+follower whose first admission in a namespace overlaps that scan can still
+lack its claim; the server checks the claim before ungating and instead
+deletes such a follower, so its controller recreates it through the
+`Mount` path above. All
 minted objects carry `nvsnap.io/hash-short` and `nvsnap.io/namespace`;
 `Delete` lists and reaps them.
 
