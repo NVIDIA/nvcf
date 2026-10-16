@@ -511,13 +511,6 @@ Choose one compute-plane workflow:
 Do not run `cluster register` before `self-hosted install --compute-plane`. The
 combined install command performs registration itself.
 
-Registering a compute plane does not enable the NVCA OTel collector, even when
-the control plane runs the Event Ledger. A control plane can have many
-registered compute planes, and some are registered through GitOps rather than
-the CLI, so set `global.nvcaOperator.selfManaged.otelCollector.enabled: true`
-explicitly in each compute plane's environment config to send its events to
-the Event Ledger.
-
 Bundle sources:
 
 - `--control-plane-stack` selects the control-plane stack bundle.
@@ -672,6 +665,13 @@ nvcf-cli stages events list \
   --deployment-id <uuid> \
   --gpu-specification-id gpu-a100
 ```
+
+To send compute-plane events to the Event Ledger, enable the NVCA OTel
+collector explicitly on each compute plane: set
+`global.nvcaOperator.selfManaged.otelCollector.enabled: true` in that cluster's
+compute-plane environment config. The CLI does not enable it automatically,
+since a control plane can have many registered compute planes and some are
+registered through GitOps rather than the CLI.
 
 ### Task Commands
 
