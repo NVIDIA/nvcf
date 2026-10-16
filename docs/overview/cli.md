@@ -666,12 +666,10 @@ nvcf-cli stages events list \
   --gpu-specification-id gpu-a100
 ```
 
-To send compute-plane events to the Event Ledger, enable the NVCA OTel
-collector explicitly on each compute plane: set
-`global.nvcaOperator.selfManaged.otelCollector.enabled: true` in that cluster's
-compute-plane environment config. The CLI does not enable it automatically,
-since a control plane can have many registered compute planes and some are
-registered through GitOps rather than the CLI.
+To see events, each compute plane must also send them to the Event Ledger; this
+is a separate, explicit opt-in on the compute plane, not something registration
+enables automatically. See [self-managed-clusters](../compute-plane/cluster-management/self-managed.md#installing-the-nvca-operator)
+for the required value.
 
 ### Task Commands
 
