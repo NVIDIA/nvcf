@@ -266,10 +266,18 @@ func (c *ConfigMapBackend) Delete(ctx context.Context, hash string) error {
 	if errors.Is(cmErr, ErrNotFound) {
 		cmErr = nil
 	}
-	if cmErr != nil {
-		cmErr = fmt.Errorf("delete manifest ConfigMap: %w", cmErr)
+	innerErr := c.inner.Delete(ctx, hash)
+	if cmErr == nil {
+		return innerErr
 	}
-	return errors.Join(cmErr, c.inner.Delete(ctx, hash))
+	cmErr = fmt.Errorf("delete manifest ConfigMap: %w", cmErr)
+	// Missing inner data must not turn a failed manifest delete into
+	// ErrNotFound: callers stop retrying on ErrNotFound, and the stale
+	// manifest would stay behind.
+	if errors.Is(innerErr, ErrNotFound) {
+		return cmErr
+	}
+	return errors.Join(cmErr, innerErr)
 }
 
 // Mount delegates to the inner Backend.
