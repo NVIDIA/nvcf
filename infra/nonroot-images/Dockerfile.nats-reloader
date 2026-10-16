@@ -1,7 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-FROM docker.io/natsio/nats-server-config-reloader:0.24.0@sha256:d758a82a9c20337e46c2f7356a413faa52cf4d6b02497c3ad81f72f1ba106464
-LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
-      org.opencontainers.image.base.name="docker.io/natsio/nats-server-config-reloader:0.24.0" \
-      org.opencontainers.image.base.digest="sha256:d758a82a9c20337e46c2f7356a413faa52cf4d6b02497c3ad81f72f1ba106464"
-USER 1000:1000
