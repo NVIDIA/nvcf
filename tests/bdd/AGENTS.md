@@ -67,6 +67,11 @@ logic into `dsl/`.
   OpenAI-compatible sample that replies with the request it received when
   `x_load_tester_echo` is true. Do not point it at the `:local` sample, which
   returns a fixed reply other scenarios assert.
+- The Vanity Gateway shadow sampling scenario reads shadow decisions from the
+  gateway's metrics, because a client cannot see whether a request was
+  shadowed. Its session keys and first messages are chosen for fixed hash
+  buckets on either side of 50 percent; if the sampling hash or canonical
+  first-message form changes, pick new values and update the comment.
 - Gateway API route readiness tables expose each route's kind, name,
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but

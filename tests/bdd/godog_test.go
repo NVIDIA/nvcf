@@ -29,11 +29,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cucumber/godog"
+	"github.com/google/shlex"
 
 	"nvcf-bdd/dsl"
 	"nvcf-bdd/harness"
@@ -547,7 +550,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	seedFunctionAPIKey(t, home)
 
-	suite.HTTP = &llmRoutingHTTPFake{seen: map[string]bool{}}
+	vanityShadow := newVanityShadowFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	vanityShadow.attach(runner)
+	suite.HTTP = vanityShadow
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
 	var out strings.Builder
@@ -656,7 +661,20 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 6)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 8)
+	for _, key := range []string{"shadow-warmup", "promptCacheKey", "firstMessageHash", "continuation", "failing-shadow"} {
+		if !vanityShadow.seen[key] {
+			t.Errorf("vanity shadow scenario never exercised %s", key)
+		}
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function delete --deployment-only --function-id", "--version-id") {
+		t.Error("vanity shadow functions are not undeployed by ID at teardown")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function delete --function-id", "--version-id") {
+		t.Error("vanity shadow functions are not deleted by ID at teardown")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
@@ -3714,6 +3732,247 @@ func TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// vanityShadowFake stands in for the Vanity Gateway's OpenAI routes in the
+// sticky shadow sampling scenario. It decides from fixed buckets for the
+// scenario's keys and first messages, keeps the decision and shadow replay
+// counters, and serves them as Prometheus text. Each broken mode reproduces
+// one gateway failure the scenario must reject.
+type vanityShadowFake struct {
+	broken   string
+	seen     map[string]bool
+	counters map[string]float64
+	inner    harness.HTTPClient
+}
+
+// vanityShadowAdmitted mirrors the buckets named in the feature at 50 percent.
+var vanityShadowAdmitted = map[string]bool{
+	"bdd-shadow-session-a":      true,
+	"bdd-shadow-session-03":     false,
+	"bdd shadow conversation a": true,
+	"bdd shadow conversation c": false,
+}
+
+func newVanityShadowFake(broken string, inner harness.HTTPClient) *vanityShadowFake {
+	return &vanityShadowFake{broken: broken, seen: map[string]bool{}, counters: map[string]float64{}, inner: inner}
+}
+
+func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	if u.Host != "vanity-openai.localhost:8080" {
+		return f.inner.Do(ctx, method, rawURL, headers, body)
+	}
+	if method != "POST" || headers["Authorization"] != "Bearer wiring-function-api-key" || headers["Content-Type"] != "application/json" {
+		return harness.HTTPResponse{Status: 401}, nil
+	}
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 10*time.Second {
+		return harness.HTTPResponse{}, fmt.Errorf("vanity request has no 10 s deadline")
+	}
+	var payload struct {
+		Model              string `json:"model"`
+		PromptCacheKey     string `json:"prompt_cache_key"`
+		PreviousResponseID string `json:"previous_response_id"`
+		Messages           []struct {
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return harness.HTTPResponse{}, err
+	}
+	reply := `{"object":"chat.completion","choices":[{"message":{"content":"bdd-primary-reply"}}]}`
+	if f.broken == "shadow-leak" {
+		reply = strings.Replace(reply, "bdd-primary-reply", "bdd-shadow-reply", 1)
+	}
+	switch {
+	case u.Path == "/v1/chat/completions" && payload.Model == "bdd-primary":
+		key, method := payload.PromptCacheKey, "promptCacheKey"
+		if key == "" {
+			key = headers["x-multi-turn-session-id"]
+		}
+		if key == "" && len(payload.Messages) > 0 {
+			key, method = payload.Messages[0].Content, "firstMessageHash"
+		}
+		admitted, known := vanityShadowAdmitted[key]
+		if !known {
+			return harness.HTTPResponse{}, fmt.Errorf("no fixed bucket for %q", key)
+		}
+		if f.broken == "non-sticky" && len(payload.Messages) > 1 {
+			admitted = !admitted
+		}
+		f.decide("chatCompletions", method, admitted)
+		f.seen[method] = true
+	case u.Path == "/v1/chat/completions" && payload.Model == "bdd-primary-failing-shadow":
+		f.counters["replay|404"]++
+		f.seen["failing-shadow"] = true
+		if f.broken == "failing-shadow-breaks-primary" {
+			return harness.HTTPResponse{Status: 502}, nil
+		}
+	case u.Path == "/v1/responses" && payload.Model == "bdd-primary" && payload.PreviousResponseID != "":
+		method := "random"
+		if f.broken == "no-fallback" {
+			method = "firstMessageHash"
+		}
+		f.decide("responses", method, true)
+		f.seen["continuation"] = true
+		reply = `{"object":"response","status":"completed","output":[{"content":[{"type":"output_text","text":"bdd-primary-reply"}]}]}`
+	default:
+		return harness.HTTPResponse{}, fmt.Errorf("unexpected vanity request %s %s", rawURL, body)
+	}
+	if f.broken == "primary-waits" {
+		return harness.HTTPResponse{}, fmt.Errorf("waited for the shadow: %w", context.DeadlineExceeded)
+	}
+	return harness.HTTPResponse{Status: 200, Body: reply}, nil
+}
+
+func (f *vanityShadowFake) decide(endpoint, method string, admitted bool) {
+	outcome := "rejected"
+	if admitted {
+		outcome = "admitted"
+		if f.broken != "replay-missing" {
+			f.counters["replay|200"]++
+		}
+	}
+	f.counters[endpoint+"|"+method+"|"+outcome]++
+}
+
+// total sums the fake counters for one metric and label filter, the way the
+// totals script sums samples whose labels include each name=value pair.
+func (f *vanityShadowFake) total(metric, labels string) float64 {
+	want := map[string]string{}
+	for _, pair := range strings.Split(labels, ",") {
+		if name, value, ok := strings.Cut(pair, "="); ok {
+			want[name] = value
+		}
+	}
+	sum := 0.0
+	for key, value := range f.counters {
+		parts := strings.Split(key, "|")
+		var have map[string]string
+		switch {
+		case metric == "nvcf_ai_api_gateway_shadow_sampling_decisions_total" && len(parts) == 3:
+			have = map[string]string{"sampling_endpoint": parts[0], "method": parts[1], "outcome": parts[2]}
+		case metric == "http_server_request_duration_seconds_count" && parts[0] == "replay":
+			have = map[string]string{"nvcf_shadow": "true", "http_response_status_code": parts[1]}
+		default:
+			continue
+		}
+		matches := true
+		for name, value := range want {
+			matches = matches && have[name] == value
+		}
+		if matches {
+			sum += value
+		}
+	}
+	return sum
+}
+
+// totals answers a wait-prometheus-totals.sh command for the vanity gateway
+// pods: exit 0 when every expectation holds, 1 otherwise.
+func (f *vanityShadowFake) totals(command string) (harness.Result, error) {
+	args, err := shlex.Split(command)
+	if err != nil {
+		return harness.Result{}, err
+	}
+	expectations := args[7:]
+	if len(expectations)%4 != 0 {
+		return harness.Result{}, fmt.Errorf("malformed totals command %q", command)
+	}
+	for i := 0; i < len(expectations); i += 4 {
+		want, err := strconv.ParseFloat(expectations[i+3], 64)
+		if err != nil {
+			return harness.Result{}, err
+		}
+		got := f.total(expectations[i], expectations[i+1])
+		if (expectations[i+2] == "exactly" && got != want) || (expectations[i+2] == "at least" && got < want) {
+			return harness.Result{ExitCode: 1, Stderr: fmt.Sprintf("%s{%s} = %v, want %s %v", expectations[i], expectations[i+1], got, expectations[i+2], want)}, nil
+		}
+	}
+	return harness.Result{}, nil
+}
+
+// attach answers the scenario's metrics and HTTPRoute reads on the runner.
+func (f *vanityShadowFake) attach(runner *fakeRunner) {
+	previous := runner.onRun
+	runner.onRun = func(command string) error {
+		switch {
+		case strings.HasPrefix(command, "bash tests/bdd/scripts/wait-prometheus-totals.sh 10083 "):
+			result, err := f.totals(command)
+			if err != nil {
+				return err
+			}
+			runner.results[command] = result
+		case strings.Contains(command, " function invoke ") && strings.Contains(command, "--model-name bdd-shadow"):
+			f.seen["shadow-warmup"] = true
+			runner.results[command] = harness.Result{Stdout: `{"object":"chat.completion","choices":[{"message":{"content":"bdd-shadow-reply"}}]}`}
+		case strings.Contains(command, "httproute/vanity-gateway") && strings.Contains(command, "-o yaml"):
+			runner.results[command] = harness.Result{Stdout: "spec:\n  hostnames:\n    - vanity.localhost\n    - vanity-openai.localhost\n"}
+		}
+		if previous != nil {
+			return previous(command)
+		}
+		return nil
+	}
+}
+
+func TestVanityShadowScenarioRejectsBrokenGateway(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-sample:test")
+	seedFunctionAPIKey(t, home)
+	data, err := os.ReadFile(mustResolveFeaturePath(t, "single-cluster-helmfile.feature"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, scenario, found := strings.Cut(string(data), "    @vanity-shadow-sampling\n")
+	scenario, _, ended := strings.Cut(scenario, "\n    # Proves the serve path")
+	if !found || !ended {
+		t.Fatal("missing vanity shadow scenario")
+	}
+	// The fake updates its counters before replying, so a broken gateway is
+	// detected without waiting out the live metric deadlines.
+	scenario = regexp.MustCompile(`within "\d+s"`).ReplaceAllString(scenario, `within "1s"`)
+	for _, broken := range []string{"", "non-sticky", "primary-waits", "shadow-leak", "no-fallback", "failing-shadow-breaks-primary", "replay-missing"} {
+		t.Run(broken, func(t *testing.T) {
+			runner := newFakeRunner(map[string]harness.Result{})
+			runner.onRun = func(command string) error {
+				if strings.Contains(command, " status --json") {
+					runner.results[command] = harness.Result{Stdout: `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`}
+				}
+				return nil
+			}
+			suite := newWiringSuite(t, runner)
+			envFile := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+			if err := os.MkdirAll(filepath.Dir(envFile), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(envFile, []byte("addons: {}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fake := newVanityShadowFake(broken, &llmRoutingHTTPFake{seen: map[string]bool{}})
+			fake.attach(runner)
+			suite.HTTP = fake
+			sc := steps.NewScenarioContext(suite)
+			var out strings.Builder
+			status := godog.TestSuite{
+				Name:                "vanity-shadow-feature",
+				ScenarioInitializer: func(ctx *godog.ScenarioContext) { steps.RegisterAll(ctx, sc) },
+				Options:             &godog.Options{Format: "pretty", Output: &out, Strict: true, FeatureContents: []godog.Feature{{Name: "vanity", Contents: []byte("Feature: Vanity shadow sampling\n" + scenario)}}},
+			}.Run()
+			if broken != "" && status == 0 {
+				t.Fatalf("feature did not reject broken %s gateway:\n%s", broken, out.String())
+			}
+			if broken == "" && status != 0 {
+				t.Fatalf("feature failed:\n%s", out.String())
+			}
+		})
 	}
 }
 

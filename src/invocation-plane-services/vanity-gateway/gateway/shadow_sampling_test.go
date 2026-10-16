@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	config "ai-api-gateway-service/gateway_config"
@@ -570,4 +571,42 @@ func mustJSONFields(t *testing.T, body string) map[string]json.RawMessage {
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(body), &fields))
 	return fields
+}
+
+func TestStickyShadowSamplingAdmitsConfiguredShareOfConversations(t *testing.T) {
+	const conversations = 10_000
+	bodies := map[config.ShadowSamplingMethod]func(int) string{
+		config.ShadowSamplingMethodPromptCacheKey: func(i int) string {
+			return `{"prompt_cache_key":"session-` + strconv.Itoa(i) + `"}`
+		},
+		config.ShadowSamplingMethodFirstMessageHash: func(i int) string {
+			return `{"messages":[{"role":"user","content":"conversation ` + strconv.Itoa(i) + `"}]}`
+		},
+	}
+	for method, body := range bodies {
+		for _, percentage := range []int{1, 10, 25, 50, 90} {
+			t.Run(string(method)+"/"+strconv.Itoa(percentage), func(t *testing.T) {
+				shadow := shadowConfig{
+					modelName:       "shadow",
+					percentage:      percentage,
+					samplingMethods: testShadowSamplingMethods(method),
+				}
+				admitted := 0
+				for i := range conversations {
+					sampler := newShadowRequestSampler(
+						httptest.NewRequest(http.MethodPost, "/", nil),
+						[]byte(body(i)),
+						shadowSamplingEndpointChatCompletions,
+						nil,
+						func() int { t.Fatal("random fallback used"); return 0 },
+					)
+					admitted += len(admittedShadowsWithSampler([]shadowConfig{shadow}, sampler))
+				}
+				lower := conversations * max(percentage-3, 0) / 100
+				upper := conversations * (percentage + 3) / 100
+				assert.GreaterOrEqual(t, admitted, lower, "admitted %d of %d at %d%%", admitted, conversations, percentage)
+				assert.LessOrEqual(t, admitted, upper, "admitted %d of %d at %d%%", admitted, conversations, percentage)
+			})
+		}
+	}
 }
