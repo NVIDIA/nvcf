@@ -142,3 +142,12 @@ invocation:
   tracing:
     # Comma-delimited W3C baggage keys copied to invocation span attributes.
     baggageAttributeAllowlist: []
+
+  cors:
+    # Exact browser origins for legacy exec/pexec routes. Empty disables CORS.
+    allowedOrigins: []
+
+  polling:
+    # First deploy false to every region. Enable in a later rollout only after
+    # every writer has emitted ownership metadata for more than 60 minutes.
+    enforceOwnership: false

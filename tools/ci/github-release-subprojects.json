@@ -329,6 +329,11 @@
       }
     },
     {
+      "id": "nonroot-images",
+      "path": "infra/nonroot-images",
+      "service_name": "nvcf-nonroot-images"
+    },
+    {
       "id": "cert-manager",
       "path": "deploy/helm/cert-manager",
       "service_name": "helm-nvcf-cert-manager",
@@ -495,6 +500,12 @@
       "id": "nvcf-ui",
       "path": "src/uis/nvcf-ui",
       "service_name": "nvcf-ui"
+    },
+    {
+      "id": "openai-compatible-sample",
+      "path": "examples/function-samples/openai-compatible-sample",
+      "service_name": "nvcf-openai-compatible-sample",
+      "initial_version": "5.0.0"
     }
   ]
 }

@@ -13,6 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- if not (kindIs "bool" .Values.invocation.polling.enforceOwnership) }}
+{{- fail "invocation.polling.enforceOwnership must be a boolean" }}
+{{- end }}
+{{- if not (kindIs "slice" .Values.invocation.cors.allowedOrigins) }}
+{{- fail "invocation.cors.allowedOrigins must be a list" }}
+{{- end }}
+{{- range .Values.invocation.cors.allowedOrigins }}
+{{- if not (kindIs "string" .) }}
+{{- fail "invocation.cors.allowedOrigins entries must be strings" }}
+{{- end }}
+{{- if or (empty .) (contains "," .) }}
+{{- fail "invocation.cors.allowedOrigins entries must be nonempty origins without commas" }}
+{{- end }}
+{{- end }}
+
 {{- if and .Values.invocation.metrics.serviceMonitor.enabled (not .Values.invocation.metrics.enabled) }}
 {{- fail "invocation.metrics.enabled must be true when invocation.metrics.serviceMonitor.enabled is true" }}
 {{- end }}

@@ -65,6 +65,9 @@ const cachedNvcfTokenFilename = "nvcf-worker-token.json"
 // By default, grpc-go doesn't have a timeout.
 const DefaultNvcfClientTimeout = 20 * time.Second
 
+// DefaultNatsAccount is the NATS account a worker asks for when the control plane names none.
+const DefaultNatsAccount = "Worker"
+
 type ConnectionRegions struct {
 	Primary     string
 	Secondaries []string
@@ -91,7 +94,27 @@ type Client struct {
 	CurrentNatsConsumer    atomic.Pointer[consumer.GlobalNatsConsumer]
 }
 
-func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string, nkeySeed *string, ncaId string, instanceId string, functionId string, functionVersionId string, sharedConfigDir string, nvcfClientTimeout time.Duration) (*Client, error) {
+// ClientOption customizes CreateClient.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	natsAccount string
+}
+
+// WithNatsAccount names the NATS account the worker asks for when it logs in with its worker
+// token. An empty account keeps DefaultNatsAccount.
+func WithNatsAccount(account string) ClientOption {
+	return func(o *clientOptions) {
+		o.natsAccount = account
+	}
+}
+
+func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string, nkeySeed *string, ncaId string, instanceId string, functionId string, functionVersionId string, sharedConfigDir string, nvcfClientTimeout time.Duration, opts ...ClientOption) (*Client, error) {
+	var options clientOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	workerClient, err := createWorkerClient(nvcfFqdn, nvcfClientTimeout)
 	if err != nil {
 		return nil, err
@@ -143,7 +166,7 @@ func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string,
 	}
 
 	if nvcfFqdnNats != nil {
-		nc, err := newNatsConnection(*nvcfFqdnNats, nkeySeed, tokenProvider, instanceId, functionVersionId)
+		nc, err := newNatsConnection(*nvcfFqdnNats, nkeySeed, options.natsAccount, tokenProvider, instanceId, functionVersionId)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to nats: %w", err)
 		}
@@ -375,7 +398,7 @@ func createWorkerClient(nvcfFqdn string, timeout time.Duration) (pb.WorkerClient
 	return workerClient, nil
 }
 
-func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider *auth.SettableTokenSource, instanceId string, functionVersionId string) (*nats.Conn, error) {
+func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, natsAccount string, nvcfTokenProvider *auth.SettableTokenSource, instanceId string, functionVersionId string) (*nats.Conn, error) {
 	const maxNatsReconnectDelay = 15 * time.Second
 	const maxNatsReconnects = 12
 	// backoff is not thread-safe, so we need to lock it
@@ -383,7 +406,7 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider 
 	expBackoff := backoff.NewExponentialBackOff(
 		backoff.WithMaxInterval(maxNatsReconnectDelay),
 	)
-	authOption, err := natsAuthOption(nkeySeed, nvcfTokenProvider)
+	authOption, err := natsAuthOption(nkeySeed, natsAccount, nvcfTokenProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -460,9 +483,13 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider 
 	)
 }
 
-// natsAuthOption will use the nkey if provided, else will use the worker token
-func natsAuthOption(nkeySeed *string, nvcfTokenProvider *auth.SettableTokenSource) (nats.Option, error) {
+// natsAuthOption will use the nkey if provided, else will use the worker token to ask for
+// natsAccount, or DefaultNatsAccount when it is empty
+func natsAuthOption(nkeySeed *string, natsAccount string, nvcfTokenProvider *auth.SettableTokenSource) (nats.Option, error) {
 	if nkeySeed == nil {
+		if natsAccount == "" {
+			natsAccount = DefaultNatsAccount
+		}
 		return nats.TokenHandler(func() string {
 			token, err := nvcfTokenProvider.Token()
 			if err != nil {
@@ -477,7 +504,7 @@ func natsAuthOption(nkeySeed *string, nvcfTokenProvider *auth.SettableTokenSourc
 				PluginName string `json:"pluginName"`
 				Payload    string `json:"payload"`
 			}{
-				Account:    "Worker",
+				Account:    natsAccount,
 				PluginName: "webhook",
 				Payload:    token.AccessToken,
 			})

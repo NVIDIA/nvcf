@@ -178,12 +178,16 @@ original order. Repeated options and empty values are preserved.
 
 ### HTTP requests (Given / When / Then)
 
-These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Pending headers apply to the next send or poll step only.
+These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Requests default to a 30-second deadline unless an explicit timeout is supplied. Pending headers apply to the next send or poll step only.
 
 | Step | Notes |
 |------|-------|
 | `Given the HTTP request header {string} is {string}` | Queues one request header for the next request. `${VAR}` expansion applies to the value. |
 | `Given the HTTP request header {string} is the NVCF CLI admin token with prefix {string}` | Queues a header whose value is the prefix plus the admin token stored by `nvcf-cli init` in the state file of the selected NVCF CLI config. The token never enters argv, env, or logs. |
+| `Given the HTTP request header {string} is the NVCF CLI function API key with prefix {string}` | Reads the saved function API key for the selected config. The key never enters argv, env, or logs. |
+| `When I send a {string} request to {string} with timeout {int} seconds and body:` (docstring) | Sends one request with an explicit positive deadline, including the full response body. Preserves status and body for existing assertions; no retries. |
+| `Then the HTTP response should take at least {string}` | Compares the full exchange duration with an explicit non-negative Go duration such as `60s`. Fails when a delay control was ignored. |
+| `Then the HTTP response body should end with {string}` | Matches a non-empty suffix after trimming trailing whitespace, for terminal stream markers such as `data: [DONE]`. |
 | `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
 | `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
 | `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
@@ -191,7 +195,8 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
 | `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
-| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. |
+| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. A path continues into a string that holds a JSON object or array, such as a request an echo sample returns as its reply. |
+| `Then the HTTP response JSON field {string} should be absent` | Passes only when the last key is missing from an object that exists at the parent path, so a misspelled parent fails. |
 | `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
 | `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
 
@@ -241,6 +246,7 @@ Cleanup written as a later step is skipped when an earlier step fails, because t
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
+| `Then Prometheus metrics on port {string} of pods selected by {string} in namespace {string} using context {string} should total within {string}:` (table) | Requires `metric`, `labels`, `comparison`, and `total` headers. Polls every running pod selected by the visible label selector in the explicit namespace and context, and scrapes `/metrics` on the visible port through the Kubernetes API proxy. For each row it sums every sample of the metric whose labels include each comma-separated `name=value` pair in `labels`; an empty `labels` cell matches every sample. `comparison` is `exactly` or `at least` against the visible non-negative total. `${VAR}` interpolation applies to every argument and cell. Discovery and scrape failures remain failures rather than zero totals. |
 | `Then DNS name {string} should resolve within {string} seconds` | Waits for the explicit DNS name to resolve through the host resolver within the explicit timeout. `${VAR}` interpolation applies to the name and timeout. Resolution must remain successful for three consecutive checks. Failures report the unresolved name and timeout without printing resolver output. |
 | `Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context {string} and kubeconfig {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then reads `cluster agent list-functions --json` with the explicit compute-plane context and kubeconfig. The compute-plane CLI lists only scheduled functions, so no matching row and a matching row reporting zero instances both satisfy the assertion. |
 | `Then the function selected by NVCF CLI should report {string} compute-plane instances with status {string} using context {string} and kubeconfig {string} within {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then polls `cluster agent get-function --json` with the explicit compute-plane context and kubeconfig until the reported instance count matches and that many instances report the visible status, compared case-insensitively. The expected count, status, and timeout stay visible. Each attempt is a separate runner invocation, so every poll is logged. |
@@ -606,6 +612,20 @@ type PylonMetricExpectation struct {
 // Pylon pod selected by function name and container name in an explicit
 // Kubernetes context and polling window.
 func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
+
+// PrometheusTotalExpectation describes the expected sum of every sample of
+// one metric whose labels include each comma-separated name=value pair.
+type PrometheusTotalExpectation struct {
+    Metric     string
+    Labels     string
+    Comparison string
+    Total      int
+}
+
+// PrometheusTotalsCommand builds an observation that sums matching samples
+// across every running pod selected by an explicit label selector, namespace,
+// metrics port, and Kubernetes context, polling until every expectation holds.
+func PrometheusTotalsCommand(port, selector, namespace, kubeContext, timeout string, expectations []PrometheusTotalExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.

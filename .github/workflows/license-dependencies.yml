@@ -5,9 +5,9 @@ name: license-dependencies
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
