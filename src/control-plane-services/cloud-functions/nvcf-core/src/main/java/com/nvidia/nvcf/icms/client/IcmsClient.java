@@ -718,7 +718,10 @@ public class IcmsClient {
         try {
             return service.getInstancesByDeploymentId(
                     ncaId, deploymentId, includeTerminated, true, includeExpiredAckedInstances);
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             log.info(MSG_NO_INSTANCES_FOUND, ncaId, deploymentId);
             return IcmsStubService.Instances.builder().Instances(List.of()).build();
         }

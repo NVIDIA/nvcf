@@ -250,7 +250,10 @@ public class IcmsClient {
                 return List.of();
             }
             return response.getInstances();
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             return List.of();
         }
     }
@@ -266,7 +269,10 @@ public class IcmsClient {
                 return List.of();
             }
             return response.getInstances();
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             return List.of();
         }
     }
@@ -320,7 +326,10 @@ public class IcmsClient {
     public void terminateInstanceByTaskId(String ncaId, UUID taskId) {
         try {
             icmsStubService.terminateInstancesByTaskId(ncaId, taskId);
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             log.info(MESG_NO_ICMS_WORKLOAD, ncaId, taskId);
         }
     }
