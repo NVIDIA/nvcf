@@ -35,6 +35,36 @@ const (
 // NVMesh will fail if the cache size is less than 1Gi
 const minCacheSize = 1 << 30 // 1Gi
 
+// The control plane reports the artifact bytes. The writer stores them on an
+// XFS volume whose internal log, allocation group metadata and reserve pool
+// are not available for data, close to 100Mi on a 1Gi volume, and it writes a
+// manifest alongside the files. Two 484Mi checkpoints therefore fail with
+// ENOSPC on a 1Gi claim. Size the claim with headroom over the reported bytes
+// and round up to whole GiB, the granularity the storage classes provision in.
+const (
+	cacheSizeHeadroomPercent int64 = 10
+	cacheSizeHeadroomMin     int64 = 128 << 20 // 128Mi
+	gib                      int64 = 1 << 30
+)
+
+// cacheVolumeSize returns the claim size for the reported artifact bytes. A
+// missing or non-positive report keeps the historical 1Gi minimum.
+func cacheVolumeSize(artifactBytes int64) int64 {
+	if artifactBytes <= 0 {
+		return minCacheSize
+	}
+	headroom := artifactBytes * cacheSizeHeadroomPercent / 100
+	if headroom < cacheSizeHeadroomMin {
+		headroom = cacheSizeHeadroomMin
+	}
+	total := artifactBytes + headroom
+	rounded := (total + gib - 1) / gib * gib
+	if rounded < minCacheSize {
+		return minCacheSize
+	}
+	return rounded
+}
+
 func Translate(
 	cacheLaunchSpec *common.CacheLaunchSpecification,
 	allEnvSet map[string]string,
@@ -50,9 +80,7 @@ func Translate(
 	if cls.CacheHandle == "" {
 		cls.CacheHandle = altCacheHandle
 	}
-	if cls.CacheSize < minCacheSize {
-		cls.CacheSize = minCacheSize
-	}
+	cls.CacheSize = cacheVolumeSize(cls.CacheSize)
 
 	imagePullSecretRefs := make([]corev1.LocalObjectReference, len(workerImagePullSecrets))
 	for i, pullSecret := range workerImagePullSecrets {
@@ -202,8 +230,13 @@ func newInitJob(
 								RunAsUser:  &systemID,
 								RunAsGroup: &systemID,
 							},
-							VolumeMounts: initContainerVolumeMounts,
-							Env:          envs,
+							// The writer reports its failure on stdout and exits
+							// non-zero. Surface those last lines as the termination
+							// message so NVCA can classify the failure, for example
+							// a full cache volume, without reading pod logs.
+							TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+							VolumeMounts:             initContainerVolumeMounts,
+							Env:                      envs,
 						},
 					},
 					Volumes: volumes,

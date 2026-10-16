@@ -588,6 +588,7 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 | `pvc_bind_failed` | RO PVC bind failures |
 | `rw_pvc_bind_failed` | RW PVC bind failures |
 | `job_not_found` | Init cache job not found |
+| `cache_volume_full` | Writer job hit ENOSPC on the cache volume (from the writer pod termination message) |
 | `job_backoff_exceeded` | Job exceeded backoff limit |
 | `job_timeout` | Job timed out waiting for completion |
 | `image_pull` | Container image pull issues |
