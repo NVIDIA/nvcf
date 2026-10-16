@@ -565,6 +565,10 @@ func parentPID(procBase string, pid int) (int, error) {
 type pidnsDumpHooks struct {
 	Before       func() error
 	ActionScript string
+	// FreezeCgroup, read after Before, is the frozen cgroup of the
+	// container to dump, "" for none: criu seizes its tasks frozen
+	// (--freeze-cgroup) and they never run before the dump.
+	FreezeCgroup func() string
 }
 
 func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, final dumpFinal, gpushare bool, hooks pidnsDumpHooks, log *logrus.Entry) error {
@@ -610,6 +614,12 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	if hooks.Before != nil {
 		if err := hooks.Before(); err != nil {
 			return err
+		}
+	}
+	if hooks.FreezeCgroup != nil {
+		if cg := hooks.FreezeCgroup(); cg != "" {
+			args = append(args, "--freeze-cgroup", cg)
+			log.WithField("cgroup", cg).Info("criu-v2: dumping the held container from its frozen cgroup")
 		}
 	}
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)

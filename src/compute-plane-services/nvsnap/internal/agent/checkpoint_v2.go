@@ -274,6 +274,10 @@ type dumpV2Opts struct {
 	// of the group is ready to be dumped (group_freeze.go); it runs right
 	// before criu starts, so the members stop together.
 	Freeze func(context.Context) error
+	// HeldCgroup, for a held member, is its frozen container cgroup (or "")
+	// once it is past the freeze point; ThawTarget thaws that container.
+	HeldCgroup func() string
+	ThawTarget func()
 	// PostDumpDir, for a member of a group capture, is its post-dump
 	// barrier: criu's post-dump hook waits there, the tree still stopped,
 	// until every member is dumped (group_freeze.go).
@@ -398,7 +402,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		return o.Freeze(ctx)
 	}
 	if nsPID == 1 {
-		hooks := pidnsDumpHooks{Before: freeze}
+		hooks := pidnsDumpHooks{Before: freeze, FreezeCgroup: o.HeldCgroup}
 		if o.PostDumpDir != "" {
 			script, err := writePostDumpScript(o.PostDumpDir)
 			if err != nil {
@@ -459,6 +463,10 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	var out []byte
 	runErr := freeze()
+	if runErr == nil && o.ThawTarget != nil {
+		// criu runs inside the container here; it seizes running tasks.
+		o.ThawTarget()
+	}
 	if runErr == nil {
 		out, runErr = cmd.CombinedOutput()
 		if runErr == nil && o.PostDumpDir != "" {

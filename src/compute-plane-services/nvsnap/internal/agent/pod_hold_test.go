@@ -80,7 +80,13 @@ func TestPodHold_Companion(t *testing.T) {
 	if _, err := os.Stat(a.holdRecordPath(key)); err != nil {
 		t.Errorf("the hold is not recorded: %v", err)
 	}
+	if a.heldTargetDir(key) != target {
+		t.Errorf("held target %q, want %q: a dump from outside seizes it frozen", a.heldTargetDir(key), target)
+	}
 	a.thawHoldTarget(key, log)
+	if a.heldTargetDir(key) != "" {
+		t.Error("a thawed target is no longer held frozen")
+	}
 	if frozenState(t, target) != "0" || frozenState(t, filepath.Join(pod, "cri-pause")) != "1" {
 		t.Error("before its dump only the companion's container is thawed")
 	}
@@ -105,6 +111,9 @@ func TestPodHold_RankKeepsItsContainer(t *testing.T) {
 	}
 	if frozenState(t, filepath.Join(pod, "cri-main")) != "0" || frozenState(t, filepath.Join(pod, "cri-gang-health")) != "1" {
 		t.Error("a rank's hold must freeze its sidecar and keep its engine running")
+	}
+	if a.heldTargetDir(key) != "" {
+		t.Error("a rank's engine container is not held frozen")
 	}
 	a.thawHoldTarget(key, log) // nothing to thaw
 	if err := a.holdCgroups(key, filepath.Join(pod, "cri-main"), true, log); err != nil {

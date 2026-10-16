@@ -206,6 +206,20 @@ func (a *Agent) thawHoldTarget(key string, log *logrus.Entry) {
 	h.target = ""
 }
 
+// heldTargetDir is the cgroup of a hold's dumped container while it is
+// frozen (a companion's), "" otherwise. A dump of it from outside seizes
+// its tasks straight from the frozen cgroup (criu --freeze-cgroup), so the
+// container never runs between the freeze point and its dump.
+func (a *Agent) heldTargetDir(key string) string {
+	h := a.holds.get(key)
+	if h == nil {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.target
+}
+
 // releaseHold thaws every container a hold froze; a key without a hold
 // is a no-op.
 func (a *Agent) releaseHold(key string, log *logrus.Entry) {
