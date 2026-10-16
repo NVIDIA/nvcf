@@ -52,6 +52,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/internal/testsupport"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -164,28 +165,42 @@ func (e *itEnv) runWorker(t *testing.T, workFunc testutils.DoWorkFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, e.nats.Clusters[0].Servers[0].ClientURL(), workFunc, nil)
+	callbacks := testsupport.NewCallbackGroup()
+	trackedWorkFunc := workFunc
+	if workFunc != nil {
+		trackedWorkFunc = func(ctx context.Context, nc *nats.Conn) error {
+			return callbacks.Run(func() error { return workFunc(ctx, nc) })
+		}
+	}
+	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, e.nats.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, nil)
 	if err != nil {
 		t.Fatalf("mock nvcf api: %v", err)
 	}
 	defer workerServer.Shutdown()
 
-	go func() {
-		defer cancel()
-		if err := workerServer.Wait(ctx); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, e.cfg)
-	if err != nil {
-		t.Fatalf("NewNVCFWorker: %v", err)
+	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+		func(ctx context.Context) error {
+			nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, e.cfg)
+			if err != nil {
+				return fmt.Errorf("NewNVCFWorker: %w", err)
+			}
+			if err := nvcfWorker.SetupWorkDirs(); err != nil {
+				return fmt.Errorf("SetupWorkDirs: %w", err)
+			}
+			if err := nvcfWorker.Run(false); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("Run: %w", err)
+			}
+			return nil
+		},
+		func(ctx context.Context) error {
+			return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
+		},
+	)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t.Error(runErr)
 	}
-	if err := nvcfWorker.SetupWorkDirs(); err != nil {
-		t.Fatalf("SetupWorkDirs: %v", err)
-	}
-	if err := nvcfWorker.Run(false); err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run: %v", err)
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		t.Error(waitErr)
 	}
 }
 
@@ -332,38 +347,47 @@ func TestIntegrationResponseDirCreateFailure(t *testing.T) {
 		})
 	}
 
-	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, env.nats.Clusters[0].Servers[0].ClientURL(), workFunc, nil)
+	callbacks := testsupport.NewCallbackGroup()
+	trackedWorkFunc := func(ctx context.Context, nc *nats.Conn) error {
+		return callbacks.Run(func() error { return workFunc(ctx, nc) })
+	}
+	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, env.nats.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, nil)
 	if err != nil {
 		t.Fatalf("mock nvcf api: %v", err)
 	}
 	defer workerServer.Shutdown()
 
-	go func() {
-		w, err := NewNVCFWorker(ctx, env.zapLogger, env.cfg)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if err := w.SetupWorkDirs(); err != nil {
-			t.Error(err)
-			return
-		}
-		// Point baseResponseDir at a regular file so per-request response dir
-		// creation fails with a non-NotExist stat error.
-		badBase := w.baseResponseDir + "-file"
-		if err := os.WriteFile(badBase, []byte("x"), 0644); err != nil {
-			t.Error(err)
-			return
-		}
-		w.baseResponseDir = badBase
-		close(workerReady)
-		if err := w.Run(false); err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("Run: %v", err)
-		}
-	}()
-
-	if err := workerServer.Wait(ctx); err != nil {
-		t.Error(err)
+	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+		func(ctx context.Context) error {
+			w, err := NewNVCFWorker(ctx, env.zapLogger, env.cfg)
+			if err != nil {
+				return fmt.Errorf("NewNVCFWorker: %w", err)
+			}
+			if err := w.SetupWorkDirs(); err != nil {
+				return fmt.Errorf("SetupWorkDirs: %w", err)
+			}
+			// Point baseResponseDir at a regular file so per-request response dir
+			// creation fails with a non-NotExist stat error.
+			badBase := w.baseResponseDir + "-file"
+			if err := os.WriteFile(badBase, []byte("x"), 0644); err != nil {
+				return fmt.Errorf("write invalid response directory fixture: %w", err)
+			}
+			w.baseResponseDir = badBase
+			close(workerReady)
+			if err := w.Run(false); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("Run: %w", err)
+			}
+			return nil
+		},
+		func(ctx context.Context) error {
+			return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
+		},
+	)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t.Error(runErr)
+	}
+	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		t.Error(waitErr)
 	}
 }
 
@@ -394,7 +418,11 @@ func TestIntegrationGracefulShutdown(t *testing.T) {
 		return nil
 	}
 
-	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, env.nats.Clusters[0].Servers[0].ClientURL(), workFunc, nil)
+	callbacks := testsupport.NewCallbackGroup()
+	trackedWorkFunc := func(ctx context.Context, nc *nats.Conn) error {
+		return callbacks.Run(func() error { return workFunc(ctx, nc) })
+	}
+	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, env.nats.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, nil)
 	if err != nil {
 		t.Fatalf("mock nvcf api: %v", err)
 	}
@@ -415,7 +443,7 @@ func TestIntegrationGracefulShutdown(t *testing.T) {
 		runErr <- w.Run(false)
 	}()
 
-	if err := workerServer.Wait(ctx); err != nil {
+	if err := testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks); err != nil {
 		t.Error(err)
 	}
 	select {
