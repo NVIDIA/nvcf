@@ -245,6 +245,13 @@ configure-compute-control-plane-dns: ## Configure compute-cluster DNS for local 
 	@CONTROL_PLANE_DOMAIN="$(CONTROL_PLANE_DOMAIN)" \
 		bash ./scripts/configure-control-plane-dns.sh
 
+.PHONY: configure-worker-callback-dns
+configure-worker-callback-dns: ## Resolve *.WORKER_CALLBACK_DOMAIN to the worker-callback-proxy Service
+	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
+	@$(MAKE) ensure-context
+	@WORKER_CALLBACK_DOMAIN="$(WORKER_CALLBACK_DOMAIN)" \
+		bash ./scripts/configure-worker-callback-dns.sh
+
 deploy-compute-control-plane-endpoints: ## Deploy compute-cluster aliases for control-plane services
 	$(call require,docker,See https://docs.docker.com/get-docker/)
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
