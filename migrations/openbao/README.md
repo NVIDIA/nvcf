@@ -67,7 +67,8 @@ on a fresh installation before release. An upgrade alone does not exercise the
 enabled addon before updating downstream chart and stack pins.
 
 ```bash
-docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" \
+  -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
