@@ -25,11 +25,26 @@ use uuid::Uuid;
 pub mod policy_cache;
 pub mod policy_client;
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveFunctionSource {
+    #[default]
+    Cassandra,
+    LocalDiscovery,
+}
+
 fn default_scaling_loop_interval() -> Duration {
     Duration::from_secs(15)
 }
 fn default_discover_interval() -> Duration {
     Duration::from_secs(15)
+}
+pub fn validate_discovery_interval(interval: Duration) -> Result<(), &'static str> {
+    if interval.is_zero() {
+        Err("scaling.discover_new_functions_interval_seconds must be greater than zero")
+    } else {
+        Ok(())
+    }
 }
 fn default_lookback() -> Duration {
     Duration::from_secs(600)
@@ -68,6 +83,8 @@ fn default_discovery_recently_invoked_lookback_minutes() -> u64 {
 #[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScalingSettings {
+    #[serde(default)]
+    pub active_function_source: ActiveFunctionSource,
     #[serde_as(as = "serde_with::DurationSeconds<u64>")]
     #[serde(
         default = "default_scaling_loop_interval",
@@ -121,6 +138,7 @@ pub struct ScalingSettings {
 impl Default for ScalingSettings {
     fn default() -> Self {
         Self {
+            active_function_source: ActiveFunctionSource::Cassandra,
             scaling_loop_interval: default_scaling_loop_interval(),
             discover_new_functions_interval: default_discover_interval(),
             decay_factor: 0.0,
@@ -514,6 +532,39 @@ mod tests {
         assert_eq!(config.request_timeout_seconds, 30);
         assert_eq!(config.default_thresholds, ScalingThresholds::default());
         assert_eq!(config.default_factors, ScalingFactors::default());
+    }
+
+    #[test]
+    fn active_function_source_defaults_to_cassandra_and_rejects_unknown_values() {
+        let defaults = ScalingSettings::default();
+        assert_eq!(
+            defaults.active_function_source,
+            ActiveFunctionSource::Cassandra
+        );
+        assert_eq!(
+            serde_json::from_str::<ActiveFunctionSource>("\"local_discovery\"").unwrap(),
+            ActiveFunctionSource::LocalDiscovery
+        );
+        assert!(serde_json::from_str::<ActiveFunctionSource>("\"unknown\"").is_err());
+        let defaults_from_config: crate::settings::AppSettings =
+            serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            defaults_from_config.scaling.active_function_source,
+            ActiveFunctionSource::Cassandra
+        );
+        let mut serialized = serde_json::to_value(ScalingSettings::default()).unwrap();
+        serialized["active_function_source"] = serde_json::json!("local_discovery");
+        let local: ScalingSettings = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            local.active_function_source,
+            ActiveFunctionSource::LocalDiscovery
+        );
+    }
+
+    #[test]
+    fn discovery_interval_must_be_positive() {
+        assert!(validate_discovery_interval(Duration::ZERO).is_err());
+        assert!(validate_discovery_interval(Duration::from_secs(1)).is_ok());
     }
 
     fn default_policy() -> ResolvedScalingPolicy {
