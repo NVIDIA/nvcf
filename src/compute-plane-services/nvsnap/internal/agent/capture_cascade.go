@@ -55,7 +55,7 @@ import (
 //	http://<nodeIP>:<port>/v1/captures/{hash}/manifest and
 //	.../file?path=<rel>. First peer that succeeds wins.
 //
-// Tier 3: nvsnap-blobstore. If all peers fail (or none exist — e.g.
+// (The former tier 3, the blob store, was retired; if all peers fail — e.g.
 // the source node was drained), fall back to fetching from the
 // cluster's nvsnap-blobstore. The blobstore stores per-file content-
 // addressed blobs + a path→sha256 manifest under
@@ -148,42 +148,8 @@ func (a *Agent) EnsureCaptureLocal(ctx context.Context, hash string) error {
 		return nil
 	}
 
-	// Tier 3: nvsnap-blobstore (content-addressed). Reachable if the
-	// agent's upload pipeline put this capture's blobs there. Builds
-	// the same on-disk layout as the peer fetch via fetchFromBlobStore
-	// (reused from the CRIU cascade — content-addressed lookup is
-	// identical for both paths).
-	if a.config.BlobStoreURL != "" {
-		blobLog := log.WithField("blobstore", a.config.BlobStoreURL)
-		blobLog.Info("EnsureCaptureLocal: trying tier-3 nvsnap-blobstore")
-		// Stage under .tmp.<pid> like fetchCaptureFromPeer for atomicity.
-		tmpDir := localDir + fmt.Sprintf(".tmp.%d", os.Getpid())
-		_ = os.RemoveAll(tmpDir)
-		start := time.Now()
-		if err := a.fetchFromBlobStore(ctx, a.config.BlobStoreURL, hash, tmpDir); err != nil {
-			_ = os.RemoveAll(tmpDir)
-			blobLog.WithError(err).Warn("EnsureCaptureLocal: blobstore fetch failed")
-		} else if err := os.Rename(tmpDir, localDir); err != nil {
-			_ = os.RemoveAll(tmpDir)
-			blobLog.WithError(err).Warn("EnsureCaptureLocal: promote blobstore tmpdir failed")
-		} else {
-			blobLog.WithField("elapsed", time.Since(start).String()).
-				Info("EnsureCaptureLocal: blobstore fetch complete")
-			return nil
-		}
-	}
-
-	return fmt.Errorf("all %d peers failed for capture %s (blobstore %s)",
-		len(manifest.CapturedOnNodes), checkpointstore.ShortHash(hash),
-		coalesce(a.config.BlobStoreURL, "not configured"))
-}
-
-// coalesce returns the first non-empty string.
-func coalesce(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
+	return fmt.Errorf("all %d peers failed for capture %s",
+		len(manifest.CapturedOnNodes), checkpointstore.ShortHash(hash))
 }
 
 // fetchCaptureFromPeer pulls every file under <cacheRoot>/<hash>/ on

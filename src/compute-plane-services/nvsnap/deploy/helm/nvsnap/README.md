@@ -7,12 +7,12 @@ GPU checkpoint/restore for Kubernetes. Deploys the nvsnap-agent DaemonSet on GPU
 - Kubernetes 1.25+
 - GPU nodes labeled `nvidia.com/gpu.present=true` (NVIDIA GPU operator sets this; GKE GPU node pools too)
 - A pull secret named `nvsnap-pull-secret` in the install namespace, authorized for `nvcr.io/0651155215864979/ncp-dev/*`. See [docs/PULL-SECRET-SETUP.md](../../../docs/PULL-SECRET-SETUP.md) for setup.
-- cert-manager — only if you keep `webhook.enabled=true` (default). The chart's webhook block creates a self-signed Issuer + Certificate; cert-manager reconciles them into the TLS Secret the agent mounts.
+- cert-manager: only if you keep `webhook.enabled=true` (default). The chart's webhook block creates a self-signed Issuer + Certificate; cert-manager reconciles them into the TLS Secret the agent mounts.
 
 ## Install
 
 ```bash
-# Namespace (chart does not create it — set up the pull-secret first)
+# Namespace (chart does not create it; set up the pull-secret first)
 kubectl create namespace nvsnap-system
 kubectl create secret docker-registry nvsnap-pull-secret \
   --namespace=nvsnap-system \
@@ -41,7 +41,8 @@ The defaults in `values.yaml` are the conventional production setup (all four co
 | `--set global.imagePullSecrets[0]=my-secret` | Use a different pull-secret name |
 | `--set agent.enabled=false` | Server-only install (no agents on GPU nodes) |
 | `--set server.enabled=false --set blobstore.enabled=false` | Agent-only install (no UI, no durable backstop) |
-| `--set webhook.enabled=false` | Skip cert-manager + admission webhook; agent runs without auto-inject |
+| `--set webhook.enabled=false` | Skip cert-manager + admission webhook; agent runs without pod mutation |
+| `--set webhook.inject=false` | Keep the webhook Service and cert but drop the registration: no pod is mutated until set back to true (see Disabling injection) |
 | `--set server.service.type=ClusterIP` | Use port-forward instead of LoadBalancer |
 | `--set agent.runtime=crio` | CRI-O variant (default: containerd) |
 | `--set server.persistence.storageClassName=my-sc` | Override storage class for the SQLite DB PVC |
@@ -66,6 +67,36 @@ With defaults (nvsnap-system namespace, all components enabled):
 - 1 MutatingWebhookConfiguration
 
 That's 18 resources total. With `agent-only` (`server.enabled=false`, `blobstore.enabled=false`, `webhook.enabled=false`) you get just 4: the agent ServiceAccount, ClusterRole, ClusterRoleBinding, DaemonSet, and headless Service.
+
+## Disabling injection
+
+Every nvsnap change to a function pod (cachedir env and emptyDir, the
+one-downloader election, shared model and cache-set volumes, checkpoint
+restore) is applied by the one MutatingWebhookConfiguration the chart
+registers. `agent.modelVolume.enabled` and `agent.election.enabled` switch
+off only their own mechanism; the cachedir inject stays on. To stop nvsnap
+touching pods at all, drop the registration:
+
+```bash
+helm upgrade nvsnap deploy/helm/nvsnap --namespace nvsnap-system \
+  --reuse-values --set webhook.inject=false
+kubectl get mutatingwebhookconfiguration nvsnap-rootfs-restore   # NotFound
+```
+
+Only the registration changes. Agents, server and TLS cert stay as they
+are, so nothing rolls and `--set webhook.inject=true` resumes at once.
+Pods admitted while it is off carry no nvsnap volumes, env or labels.
+Pods admitted before are unchanged; nvsnap never edits the owning
+Deployment or StatefulSet, so deleting them brings back plain replicas:
+
+```bash
+kubectl delete pods -n <function namespace> -l nvsnap.io/hash
+```
+
+To exempt one workload without touching the release, label the pod
+template or its namespace `nvsnap.io/inject=false`. The registration skips
+such pods and the agent admits them unchanged even if the registration is
+stale.
 
 ## Uninstall
 

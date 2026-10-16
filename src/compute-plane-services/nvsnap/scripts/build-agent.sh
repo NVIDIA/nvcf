@@ -4,11 +4,11 @@
 
 # Build NVSNAP agent with layered caching
 # - Base image: CRIU, system deps (slow, rarely changes)
-# - App image: Go binaries, intercept lib (fast, changes often)
+# - App image: Go binaries (fast, changes often)
 #
 # Commands:
 #   base             Build base image (CRIU, system deps) - slow, ~5 min
-#   app              Build app image (Go, intercept) - fast, ~30 sec
+#   app              Build app image (Go) - fast, ~30 sec
 #   all              Build both images
 #   push-base        Push base image to registry
 #   push-app         Push app image to registry
@@ -62,7 +62,7 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  base             - Build base image (CRIU, system deps) - slow, ~5 min"
-    echo "  app              - Build app image (Go, intercept) - fast, ~30 sec"
+    echo "  app              - Build app image (Go) - fast, ~30 sec"
     echo "  all              - Build both images"
     echo "  push-base        - Push base image to registry"
     echo "  push-app         - Push app image to registry"
@@ -72,6 +72,7 @@ usage() {
     echo "  build-and-deploy - sync-versions + build app + push + deploy"
     echo "  full-cycle       - sync + build base + verify + push + build app + push + deploy"
     echo "  show-versions    - Display current versions from versions.sh"
+    echo "  check-criu-ref   - Verify the CRIU checkout and the last base build match NVSNAP_CRIU_REF"
     echo ""
     echo "Environment (override via env vars or versions.sh):"
     echo "  BASE_VERSION=${BASE_VERSION}"
@@ -107,6 +108,48 @@ record_criu_commit() {
     git -C "${CRIU_SRC}" rev-parse HEAD > "$CRIU_BASE_COMMIT_FILE" 2>/dev/null || true
 }
 
+# The CRIU the base image is built from must be the pinned ref. Two forks
+# drifted apart once (2026-10-03): a local sibling checkout on one line
+# built the shipped base while versions.sh pointed the OSS build at the
+# other. The pin is the fork of record (github.com/balajinvda/criu); a
+# local checkout is only an optimisation and has to be at the same commit.
+# NVSNAP_CRIU_ALLOW_REF_MISMATCH=1 overrides for a deliberate experiment.
+check_criu_ref() {
+    local head pinned
+    head=$(git -C "${CRIU_SRC}" rev-parse HEAD 2>/dev/null || echo "unknown")
+    pinned=$(git -C "${CRIU_SRC}" rev-parse --verify --quiet "${NVSNAP_CRIU_REF}^{commit}" 2>/dev/null || echo "${NVSNAP_CRIU_REF}")
+    case "$head" in
+        "$pinned"|"${pinned}"*) ;;
+        *)
+            if [ "${NVSNAP_CRIU_ALLOW_REF_MISMATCH:-0}" = "1" ]; then
+                echo "WARNING: CRIU source ${CRIU_SRC} is at ${head:0:12}, pinned ref is ${NVSNAP_CRIU_REF:0:12}; building anyway (NVSNAP_CRIU_ALLOW_REF_MISMATCH=1)"
+                return 0
+            fi
+            echo "ERROR: CRIU source ${CRIU_SRC} is at ${head:0:12} but versions.sh pins NVSNAP_CRIU_REF=${NVSNAP_CRIU_REF:0:12}"
+            echo "  The base image must be built from the fork of record at the pinned ref."
+            echo "  Fix: check out ${NVSNAP_CRIU_REF:0:12} from ${NVSNAP_CRIU_REPO} in ${CRIU_SRC}, or bump NVSNAP_CRIU_REF in scripts/versions.sh."
+            echo "  Override for an experiment only: NVSNAP_CRIU_ALLOW_REF_MISMATCH=1"
+            return 1
+            ;;
+    esac
+    echo "  CRIU source at pinned ref ${head:0:12}"
+}
+
+# The recorded base commit must be the pinned ref too, or the app image
+# would be layered on a base nobody can reproduce from versions.sh.
+warn_base_commit_drift() {
+    [ -f "$CRIU_BASE_COMMIT_FILE" ] || return 0
+    local last
+    last=$(cat "$CRIU_BASE_COMMIT_FILE")
+    case "$last" in
+        "${NVSNAP_CRIU_REF}"*|"${NVSNAP_CRIU_REF%%[!0-9a-f]*}") ;;
+        *)
+            echo "WARNING: the last base build used CRIU ${last:0:12}, versions.sh pins ${NVSNAP_CRIU_REF:0:12}."
+            echo "  Rebuild the base from the pinned ref before shipping this app image."
+            ;;
+    esac
+}
+
 build_base() {
     echo "=== Building BASE image (CRIU, system deps) ==="
     echo "This takes ~5 minutes but caches well"
@@ -131,6 +174,8 @@ build_base() {
             git -C "${CRIU_SRC}" checkout -q FETCH_HEAD || {
                 echo "ERROR: fetch ${NVSNAP_CRIU_REF} from ${NVSNAP_CRIU_REPO} failed"; exit 1; }
     fi
+
+    check_criu_ref || exit 1
 
     # Smart --no-cache: auto-detect if CRIU source changed
     local cache_flag=""
@@ -164,11 +209,25 @@ build_base() {
     # (the wrapper that the CRIU plugin actually invokes via PATH).
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/cuda-checkpoint-wrapper.sh"
 
-    docker build \
-        $cache_flag \
-        --platform linux/amd64 \
-        -t "${BASE_IMAGE}" \
-        "${BUILD_CTX}"
+    # PLATFORMS with a comma builds a multi-arch manifest with buildx and
+    # pushes it straight to the registry (multi-platform images cannot be
+    # loaded into the local daemon); the CRIU verification below then runs
+    # against the amd64 slice pulled back.
+    if [[ "${PLATFORMS:-linux/amd64}" == *,* ]]; then
+        docker buildx build ${BUILDX_BUILDER:+--builder "$BUILDX_BUILDER"} \
+            $cache_flag \
+            --platform "${PLATFORMS}" \
+            --push \
+            -t "${BASE_IMAGE}" \
+            "${BUILD_CTX}"
+        docker pull --platform linux/amd64 "${BASE_IMAGE}"
+    else
+        docker build \
+            $cache_flag \
+            --platform "${PLATFORMS:-linux/amd64}" \
+            -t "${BASE_IMAGE}" \
+            "${BUILD_CTX}"
+    fi
 
     # Verify the CRIU binary has expected PIE restorer strings
     echo ""
@@ -209,25 +268,20 @@ build_base() {
 }
 
 build_app() {
-    echo "=== Building APP image (Go binaries, intercept lib) ==="
+    echo "=== Building APP image (Go binaries) ==="
     echo "Base: ${BASE_IMAGE}"
     echo "Image: ${APP_IMAGE}"
     echo ""
+    warn_base_commit_drift
 
-    # Warn about untracked .c files in intercept library
-    local untracked
-    untracked=$(cd "$PROJECT_ROOT" && git ls-files --others --exclude-standard lib/nvsnap_intercept/src/*.c 2>/dev/null)
-    if [ -n "$untracked" ]; then
-        echo "WARNING: Untracked .c files in intercept library: $untracked"
-        echo "  These will be missing from the Docker build context!"
-        echo "  Run: git add $untracked"
-    fi
 
     # Verify base image CRIU binary
     echo "Verifying base image CRIU binary..."
+    # docker create prints its error on stdout as well, so a failed create
+    # must not be taken for a container id (a missing base once made the
+    # build exit silently here, 2026-10-02).
     local verify_id
-    verify_id=$(docker create "${BASE_IMAGE}" 2>/dev/null)
-    if [ -z "$verify_id" ]; then
+    if ! verify_id=$(docker create "${BASE_IMAGE}" 2>/dev/null) || [ -z "$verify_id" ]; then
         echo "ERROR: Base image ${BASE_IMAGE} not found locally or in registry"
         echo "Run './scripts/build-agent.sh base' first, or './scripts/build-agent.sh full-cycle'"
         exit 1
@@ -262,9 +316,6 @@ build_app() {
         --exclude='*.tar.gz' \
         "${PROJECT_ROOT}/" "${BUILD_CTX}/"
 
-    # Copy intercept library source
-    cp -r "${PROJECT_ROOT}/lib/nvsnap_intercept" "${BUILD_CTX}/lib/"
-
     # cuda-checkpoint wrapper only: the real binary is built from source in
     # the BASE image (Dockerfile.base cuda-cli-builder stage); Dockerfile.app
     # just re-overlays the wrapper at /criu-bundle/cuda-checkpoint.
@@ -277,15 +328,23 @@ build_app() {
         echo "Building with --no-cache (forced rebuild)"
     fi
 
-    docker build \
-        $cache_flag \
-        --platform linux/amd64 \
-        --build-arg BASE_IMAGE="${BASE_IMAGE}" \
-        --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
-        --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
-        --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
-        -t "${APP_IMAGE}" \
-        "${BUILD_CTX}"
+    if [[ "${PLATFORMS:-linux/amd64}" == *,* ]]; then
+        docker buildx build ${BUILDX_BUILDER:+--builder "$BUILDX_BUILDER"} \
+            $cache_flag \
+            --platform "${PLATFORMS}" \
+            --push \
+            --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            -t "${APP_IMAGE}" \
+            "${BUILD_CTX}"
+        docker pull --platform linux/amd64 "${APP_IMAGE}"
+    else
+        docker build \
+            $cache_flag \
+            --platform "${PLATFORMS:-linux/amd64}" \
+            --build-arg BASE_IMAGE="${BASE_IMAGE}" \
+            -t "${APP_IMAGE}" \
+            "${BUILD_CTX}"
+    fi
 
     # Verify final app image CRIU binary
     echo ""
@@ -318,28 +377,6 @@ push_app() {
     echo "Pushing app image: ${APP_IMAGE}"
     docker push "${APP_IMAGE}"
 
-    # Auto-build and push nvsnap-init with matching agent version.
-    # nvsnap-init bundles the agent's intercept lib + patched dependencies.
-    # Using the same tag as the agent prevents build-ID mismatch on restore.
-    local INIT_IMAGE="${REGISTRY}/nvsnap-init:${APP_VERSION}"
-    echo ""
-    echo "Building nvsnap-init: ${INIT_IMAGE}"
-    # --network=host so the build container's apt-get can reach
-    # archive.ubuntu.com via the host's DNS + proxy config. Without
-    # this, on a corp VPN the build container ends up in an isolated
-    # bridge network with no working DNS for ubuntu.com mirrors.
-    docker build --no-cache --network=host \
-        -t "${INIT_IMAGE}" \
-        --build-arg UVLOOP_IMAGE="${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}" \
-        --build-arg LIBUV_IMAGE="${REGISTRY}/libuv-builder:${NVSNAP_LIBUV_VERSION}" \
-        --build-arg LIBZMQ_IMAGE="${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}" \
-        --build-arg PYZMQ_IMAGE="${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}" \
-        --build-arg AGENT_IMAGE="${APP_IMAGE}" \
-        -f "${PROJECT_ROOT}/docker/init/Dockerfile" \
-        "${PROJECT_ROOT}"
-
-    echo "Pushing nvsnap-init: ${INIT_IMAGE}"
-    docker push "${INIT_IMAGE}"
     echo "Done."
 }
 
@@ -418,9 +455,6 @@ sync_versions() {
     echo "=== Syncing versions from versions.sh to manifests ==="
     echo "  APP_VERSION:   ${APP_VERSION}"
     echo "  BASE_VERSION:  ${BASE_VERSION}"
-    echo "  UVLOOP:        ${NVSNAP_UVLOOP_VERSION}"
-    echo "  LIBZMQ:        ${NVSNAP_LIBZMQ_VERSION}"
-    echo "  PYZMQ:         ${NVSNAP_PYZMQ_VERSION}"
     echo "  VLLM:          ${NVSNAP_VLLM_VERSION}"
     echo ""
 
@@ -452,11 +486,7 @@ sync_versions() {
     sync_workload_manifest() {
         local manifest="$1"
         sed -i \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:[^ ]*|image: ${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:[^ ]*|image: ${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/pyzmq-builder:[^ ]*|image: ${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}|" \
             -e "s|image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:[^ ]*|image: ${REGISTRY}/nvsnap-agent:${APP_VERSION}|" \
-            -e "s|image: nvcr.io/0651155215864979/ncp-dev/nvsnap-init:[^ ]*|image: ${REGISTRY}/nvsnap-init:${NVSNAP_INIT_VERSION}|" \
             -e "s|image: vllm/vllm-openai:[^ ]*|image: vllm/vllm-openai:${NVSNAP_VLLM_VERSION}|" \
             "$manifest"
         # Restore manifests reference the agent's checkpoint hostPath.
@@ -506,9 +536,6 @@ show_versions() {
     echo "  App image:     ${REGISTRY}/nvsnap-agent:${APP_VERSION}"
     echo ""
     echo "  Dependencies:"
-    echo "    uvloop:      ${REGISTRY}/uvloop-builder:${NVSNAP_UVLOOP_VERSION}"
-    echo "    libzmq:      ${REGISTRY}/libzmq-builder:${NVSNAP_LIBZMQ_VERSION}"
-    echo "    pyzmq:       ${REGISTRY}/pyzmq-builder:${NVSNAP_PYZMQ_VERSION}"
     echo "    vllm:        vllm/vllm-openai:${NVSNAP_VLLM_VERSION}"
     echo ""
     echo "  DOCKER_HOST:   ${DOCKER_HOST:-<not set>}"
@@ -601,6 +628,11 @@ case "${1:-help}" in
         ;;
     show-versions)
         show_versions
+        ;;
+    check-criu-ref)
+        [ -d "${CRIU_SRC}" ] || { echo "No local CRIU checkout (CRIU_SRC=${CRIU_SRC:-unset}); the base build fetches ${NVSNAP_CRIU_REPO} at ${NVSNAP_CRIU_REF:0:12}"; exit 0; }
+        check_criu_ref
+        warn_base_commit_drift
         ;;
     help|--help|-h)
         usage

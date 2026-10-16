@@ -57,7 +57,7 @@ NvSnap's image references appear in three places:
 | Manifest | Namespace it lands in |
 |---|---|
 | `deploy/k8s/agent-daemonset.yaml` (nvsnap-agent DaemonSet) | `nvsnap-system` |
-| `deploy/k8s/nvsnap-server.yaml` + `nvsnap-blobstore.yaml` | `nvsnap-system` |
+| `deploy/k8s/nvsnap-server.yaml` | `nvsnap-system` |
 | `deploy/k8s/workloads/*.yaml` (vLLM / SGLang / TRT-LLM / NIM pods) | whatever your workloads use |
 | `nvsnap-init` (init container injected into restored pods) | matches the workload's namespace |
 
@@ -104,7 +104,6 @@ kubectl create secret docker-registry nvsnap-pull-secret \
 # 3. Restart the pods that were authed by the old key:
 kubectl rollout restart daemonset/nvsnap-agent -n nvsnap-system
 kubectl rollout restart deployment/nvsnap-server -n nvsnap-system
-kubectl rollout restart deployment/nvsnap-blobstore -n nvsnap-system
 ```
 
 Already-pulled images keep working until the kubelet's image GC runs or the pod is rescheduled to a node that doesn't have the image cached — so a few minutes of overlap during rotation is normal.

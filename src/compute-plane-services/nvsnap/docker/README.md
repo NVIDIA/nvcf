@@ -13,20 +13,18 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
 **Agent (two-stage: heavy base + fast app)**
 
 - [`agent/Dockerfile.base`](agent/) — CRIU + system deps; changes rarely.
-- [`agent/Dockerfile.app`](agent/) — Go binaries + `libnvsnap_intercept.so`,
-  layered on the base; the one you rebuild most.
-- [`init/`](init/) — combined init image (patched deps + agent bundle).
+- [`agent/Dockerfile.app`](agent/) — Go binaries layered on the base; the
+  one you rebuild most.
 
 **Services**
 
 - [`Dockerfile.server`](Dockerfile.server), [`nvsnap-blobstore/`](nvsnap-blobstore/),
   [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
 
-**Dependency builders** (patched forks; see
+**CRIU fork build** (see
 [docs/THIRD-PARTY-FORKS.md](../docs/THIRD-PARTY-FORKS.md))
 
-- [`uvloop/`](uvloop/), [`libzmq/`](libzmq/), [`libuv/`](libuv/),
-  [`pyzmq/`](pyzmq/), [`criu-builder/`](criu-builder/).
+- [`criu-builder/`](criu-builder/).
 
 ## Rules
 
@@ -34,4 +32,3 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
   Dockerfile (`CLAUDE.md` rule 13).
 - Bump the image tag in `versions.sh` on every rebuild; nodes cache by tag
   (rule 19).
-- Dependency builders must smoke-test the produced `.so`/wheel loads before push.

@@ -62,17 +62,11 @@ const (
 // emitted the hostPath volumes referencing the deterministic merged
 // mountpoints those mounts will eventually expose.
 //
-// needInitArray / bootstrappedInit mirror the same bootstrap pattern
-// used elsewhere in Mutate (emitMount): when pod.Spec.InitContainers
-// is nil we have to emit /spec/initContainers as an empty array
-// BEFORE we can /spec/initContainers/- into it. *bootstrappedInit
-// tracks whether the bootstrap has been emitted already by a
-// previous emitter (e.g. the L2-wait init container or a hostPath
-// staging container).
+// The init container list is created once across the admission by
+// appendInits (reader_steps.go), whichever emitter gets there first.
 func (m *Mutator) emitMountPrepInitContainer(
+	pod *corev1.Pod,
 	patches *[]PatchOp,
-	bootstrappedInit *bool,
-	needInitArray bool,
 	podUID, captureHash, captureNode string,
 	initMounts []checkpointstore.VolumeMeta,
 ) error {
@@ -148,14 +142,6 @@ func (m *Mutator) emitMountPrepInitContainer(
 		},
 	}
 
-	if needInitArray && !*bootstrappedInit {
-		*patches = append(*patches, PatchOp{
-			Op: "add", Path: "/spec/initContainers", Value: []any{},
-		})
-		*bootstrappedInit = true
-	}
-	*patches = append(*patches, PatchOp{
-		Op: "add", Path: "/spec/initContainers/-", Value: c,
-	})
+	*patches = appendInits(pod, *patches, c)
 	return nil
 }

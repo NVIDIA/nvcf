@@ -7,7 +7,7 @@ sequenceDiagram
     participant Init as init containers
     participant Agent as nvsnap-agent<br/>(node N2)
     participant PeerN1 as nvsnap-agent<br/>(node N1, source)
-    participant Blob as nvsnap-blobstore
+    participant Blob as object store (replication)
     participant Entry as restore-entrypoint
     participant CRIU as CRIU
     participant CC as cuda-checkpoint

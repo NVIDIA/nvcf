@@ -76,7 +76,7 @@ func (d *DB) RemovePeer(checkpointID, nodeName string) error {
 
 // ListPeers returns all registered peers for a checkpoint, ordered
 // most-recently-seen first. The restore-side cascading fetch tries
-// peers in this order before falling back to the blob store; a peer
+// peers in this order; a peer
 // that responded recently is more likely to still be reachable.
 func (d *DB) ListPeers(checkpointID string) ([]CheckpointPeer, error) {
 	rows, err := d.db.Query(`
@@ -124,42 +124,9 @@ func (d *DB) TouchPeer(checkpointID, nodeName string) error {
 	return nil
 }
 
-// SetCheckpointBlobURI updates a checkpoint with the nvsnap-blobstore
-// URI after a successful background upload (stage 5d.2). For 5d.1
-// this is unused; the schema column exists but stays empty.
-func (d *DB) SetCheckpointBlobURI(id, s3URI string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := d.db.Exec(`
-		UPDATE checkpoints
-		SET s3_uri = ?, blob_uploaded_at = ?
-		WHERE id = ?
-	`, s3URI, now, id)
-	if err != nil {
-		return fmt.Errorf("set blob uri: %w", err)
-	}
-	return nil
-}
-
 // GetCheckpointSources is the routing query the restore-side cascade
-// reads on every fanout. Returns:
-//
-//   - peers: ordered list of {node_name, agent_url} the restore should
-//     try, most-recently-seen first.
-//   - blobURI: the nvsnap-blobstore URI as a final fallback (empty if
-//     blob upload hasn't completed yet — only peers usable then).
-//
-// One DB round-trip — kept lean because every restore hits this.
-func (d *DB) GetCheckpointSources(checkpointID string) (peers []CheckpointPeer, blobURI string, err error) {
-	peers, err = d.ListPeers(checkpointID)
-	if err != nil {
-		return nil, "", err
-	}
-	row := d.db.QueryRow(`SELECT s3_uri FROM checkpoints WHERE id = ?`, checkpointID)
-	if err := row.Scan(&blobURI); err != nil {
-		if err == sql.ErrNoRows {
-			return peers, "", nil // checkpoint may have been recently deleted
-		}
-		return nil, "", fmt.Errorf("read s3_uri: %w", err)
-	}
-	return peers, blobURI, nil
+// reads on every fanout: the ordered list of {node_name, agent_url} the
+// restore should try, most-recently-seen first.
+func (d *DB) GetCheckpointSources(checkpointID string) ([]CheckpointPeer, error) {
+	return d.ListPeers(checkpointID)
 }

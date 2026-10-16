@@ -8,7 +8,7 @@
 # workloads).
 #
 # Two destinations:
-#   $NVSNAP_BUNDLE_TOOLS_DST  (default /nvsnap)      — restore-entrypoint +
+#   $NVSNAP_BUNDLE_TOOLS_DST  (default /nvsnap)      — criu bundle +
 #                                                  criu + cuda-checkpoint
 #                                                  + plugins + lib/. The
 #                                                  webhook rewrites the
@@ -54,7 +54,7 @@ atomic_swap() {
 TOOLS_TMP="${NVSNAP_DST}.new"
 rm -rf "$TOOLS_TMP"
 mkdir -p "$TOOLS_TMP"
-# cp -a preserves modes (the exec bit on criu, restore-entrypoint,
+# cp -a preserves modes (the exec bit on criu, nvsnap-rootfs-restore,
 # cuda-checkpoint). Trailing /. on the source copies contents-of, not
 # the directory itself.
 cp -a /criu-bundle/. "$TOOLS_TMP/"
@@ -63,8 +63,8 @@ if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
 atomic_swap "$NVSNAP_DST" "$TOOLS_TMP"
 
 # ─── Sanity checks ────────────────────────────────────────────────────
-if [[ ! -x "$NVSNAP_DST/restore-entrypoint" ]]; then
-  echo "restore-bundle-init: $NVSNAP_DST/restore-entrypoint missing or not executable" >&2
+if [[ ! -x "$NVSNAP_DST/criu" ]]; then
+  echo "restore-bundle-init: $NVSNAP_DST/criu missing or not executable" >&2
   ls -la "$NVSNAP_DST" >&2
   exit 1
 fi

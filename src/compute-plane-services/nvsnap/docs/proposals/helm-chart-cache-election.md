@@ -16,7 +16,7 @@ sequenceDiagram
     participant A as agent watcher
     participant S as nvsnap-server
     RS->>WH: create pod 1 (GPU + model)
-    WH->>WH: hash = compose(spec); stamp nvsnap.io/hash
+    WH->>WH: hash = compose(spec), stamp nvsnap.io/hash
     WH->>L: create (holder = pod 1 UID)
     L-->>WH: created
     WH-->>RS: leader: capture decoration, capture label

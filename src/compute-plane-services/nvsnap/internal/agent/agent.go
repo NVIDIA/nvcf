@@ -41,10 +41,10 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
@@ -133,13 +133,6 @@ type Config struct {
 	// genuinely mean "this node".
 	AdvertiseIP string
 
-	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
-	// (Phase 5d.2 durable backstop). Empty disables capture-side
-	// upload AND cascade tier-3 fallback — agents fall back to
-	// peer-only fanout. Default in cluster:
-	// http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000
-	BlobStoreURL string
-
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
 	// Filestore, NFS, etc. Phase 2c of the 16-node distribution
@@ -163,6 +156,9 @@ type Config struct {
 	// for chart-shaped model workloads. Needs L2 (the followers mount the
 	// promoted rox); ignored when L2 is off.
 	Election ElectionConfig
+
+	// ModelVolume enables the write-once model volume for Helm functions.
+	ModelVolume ModelVolumeConfig
 
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
@@ -222,6 +218,31 @@ type ElectionConfig struct {
 	Deadline time.Duration
 }
 
+// ModelVolumeConfig configures docs/proposals/helm-shared-model-volume.md.
+type ModelVolumeConfig struct {
+	// Enabled turns the write-once model volume on. Needs L2 and a storage
+	// profile that resolves a mode (block on NVMesh, rwx when declared).
+	Enabled bool
+	// WaitDeadline bounds a reader's wait for the marker before it downloads
+	// itself. Zero means one hour.
+	WaitDeadline time.Duration
+	// HostRoot is the host directory, mounted Bidirectional into the agent
+	// at the same path, where completed model volumes are bound for
+	// readers on block storage. Default /var/lib/containerd/nvsnap-models.
+	HostRoot string
+	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
+	// least time between generations of one set (zero: 6 hours).
+	// docs/proposals/helm-chart-cache-refresh.md.
+	RefreshDisabled bool
+	RefreshCooldown time.Duration
+	// ReapInterval is how often the reaper removes read-only model PVs
+	// without a claim and abandoned primaries. Zero means ten minutes.
+	ReapInterval time.Duration
+	// Retention is how long a complete model or cache volume is kept
+	// after its last use before the reaper frees it. Zero keeps forever.
+	Retention time.Duration
+}
+
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
 // docs/L2-PVC-CRIU-DESIGN.md.
 type L2BackendConfig struct {
@@ -269,7 +290,6 @@ type Agent struct {
 	runtime    runtime.Runtime
 	containerd *containerd.Client // non-nil only when runtime is containerd (for containerd-specific calls)
 	cuda       *cuda.Manager
-	criu       *criu.Manager
 	server     *http.Server
 
 	// captureBackend is the rootfs-only auto-capture loop's backend
@@ -294,6 +314,14 @@ type Agent struct {
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
+	// modelVolume and modelMinter are built with the L2 backend when
+	// ModelVolume.Enabled; the webhook and the controller share them.
+	modelVolume *modelvolume.Provisioner
+	// cacheVolume is the KindCache twin of modelVolume (block mode only).
+	cacheVolume *modelvolume.Provisioner
+	modelMinter *checkpointstore.SharedVolumePromoter
+	// mvc is the model volume controller, which also serves ranks.
+	mvc *ModelVolumeController
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
@@ -422,16 +450,10 @@ func New(cfg Config) (*Agent, error) {
 			log.WithField("detectionMethod", detectionMethod).Info("Detected containerized environment, enabling nsenter mode")
 		}
 	}
-	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA and CRIU managers")
+	log.WithField("useNsenter", useNsenter).Info("Initializing CUDA manager")
 
 	// Initialize CUDA manager (with nsenter support for containerized agents)
 	cudaManager := cuda.New(cfg.CudaCheckpointPath, useNsenter, log)
-
-	// Initialize CRIU manager (with nsenter support for containerized agents)
-	criuManager, err := criu.New(log, cfg.CRIUPath, useNsenter)
-	if err != nil {
-		log.WithError(err).Warn("CRIU initialization failed (optional)")
-	}
 
 	// Create checkpoint directory
 	if err := os.MkdirAll(cfg.CheckpointDir, 0o755); err != nil {
@@ -444,7 +466,6 @@ func New(cfg Config) (*Agent, error) {
 		runtime:    rt,
 		containerd: containerdClient,
 		cuda:       cudaManager,
-		criu:       criuManager,
 		peerLoad:   newPeerLoadTracker(),
 		fsStore:    newFSStore(cfg.FSStorePath, log),
 		overlay:    NewOverlayManager(cfg.OverlayRoot, log, nil),
@@ -517,12 +538,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
-	router.HandleFunc("/v1/restore/trigger", a.triggerRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
+	// A ready rank's cache tree for the agent collecting its set
+	// (bearer-guarded like every agent-to-agent route).
+	router.HandleFunc("/v1/cache-rank/{key}/{ordinal}", a.cacheRankHandler).Methods("GET")
 	router.HandleFunc("/v1/containers", a.listContainersHandler).Methods("GET")
 	router.HandleFunc("/v1/gpu/processes", a.gpuProcessesHandler).Methods("GET")
-	router.HandleFunc("/v1/gpu/restore", a.gpuRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints/{id}", a.deleteCheckpointHandler).Methods("DELETE")
 	router.HandleFunc("/v1/checkpoints/{id}/files", a.listCheckpointFilesHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoints/{id}/file", a.readCheckpointFileHandler).Methods("GET")
@@ -641,6 +663,34 @@ func (a *Agent) Run(ctx context.Context) error {
 	// + cache data + injected pod fragments stay consistent.
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
+	}
+	if a.modelVolume != nil {
+		// Completes writer volumes and binds them into pending readers on
+		// this node (docs/proposals/helm-shared-model-volume.md).
+		mvc := &ModelVolumeController{
+			Kube:              a.kubeClient,
+			Provisioner:       a.modelVolume,
+			Minter:            a.modelMinter,
+			NodeName:          a.config.NodeName,
+			HostRoot:          a.modelHostRoot(),
+			HolderImage:       a.config.L2.WriterImage,
+			HolderPullSecrets: l2PullSecrets(a.config.L2),
+			Copier:            NewAgentCopier("/host", a.log.WithField("subsys", "modelvolume.copy")),
+			Cache:             a.cacheVolume,
+			RefreshDisabled:   a.config.ModelVolume.RefreshDisabled,
+			RefreshCooldown:   a.config.ModelVolume.RefreshCooldown,
+			Log:               a.log.WithField("subsys", "modelvolume"),
+		}
+		a.mvc = mvc
+		go func() {
+			if err := mvc.Run(ctx); err != nil {
+				a.log.WithError(err).Error("model volume controller stopped")
+			}
+		}()
+		// Read-only PVs whose namespace is gone and primaries whose copy
+		// never completed; idempotent, so every agent may run it.
+		reaper := &modelvolume.Reaper{Kube: a.kubeClient, Log: a.log.WithField("subsys", "modelvolume.reaper"), Retention: a.config.ModelVolume.Retention}
+		go reaper.Run(ctx, a.config.ModelVolume.ReapInterval)
 	}
 
 	// nvsnap#194: OverlayFS cleanup-on-pod-delete + startup sweep. Safe
@@ -860,25 +910,6 @@ func (a *Agent) gpuProcessesHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Trigger restore in a placeholder pod
-func (a *Agent) triggerRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req TriggerRestoreRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	result, err := a.TriggerRestore(r.Context(), req)
-	if err != nil {
-		a.log.WithError(err).Error("Trigger restore failed")
-		http.Error(w, fmt.Sprintf("trigger restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
-}
-
 // Get placeholder pod manifest
 func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Request) {
 	var req PlaceholderManifestRequest
@@ -896,75 +927,6 @@ func (a *Agent) getPlaceholderManifestHandler(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "text/yaml")
 	_, _ = w.Write([]byte(manifest))
-}
-
-// GPU restore handler - called by restore-entrypoint after CRIU restore
-func (a *Agent) gpuRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CheckpointID string `json:"checkpointId"`
-		PID          int    `json:"pid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-	// Body-supplied, unlike the {id} routes the middleware covers.
-	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	log := a.log.WithFields(logrus.Fields{
-		"checkpointId": req.CheckpointID,
-		"pid":          req.PID,
-	})
-	log.Info("GPU restore requested")
-
-	// Load checkpoint metadata to check if GPU was used
-	checkpointDir := filepath.Join(a.config.CheckpointDir, req.CheckpointID)
-	metadataPath := filepath.Join(checkpointDir, "metadata.json")
-	metadataBytes, err := os.ReadFile(metadataPath)
-	if err != nil {
-		log.WithError(err).Warn("Could not read metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no metadata"})
-		return
-	}
-
-	var metadata CheckpointMetadata
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-		log.WithError(err).Warn("Invalid metadata, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "invalid metadata"})
-		return
-	}
-
-	if metadata.GPUPID == 0 {
-		log.Info("No GPU process in checkpoint, skipping GPU restore")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "skipped", "reason": "no GPU"})
-		return
-	}
-
-	// Restore GPU state
-	log.Info("Restoring GPU state")
-	if err := a.cuda.Restore(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU restore failed")
-		http.Error(w, fmt.Sprintf("GPU restore failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Unlock GPU
-	log.Info("Unlocking GPU")
-	if err := a.cuda.Unlock(r.Context(), req.PID); err != nil {
-		log.WithError(err).Error("GPU unlock failed")
-		http.Error(w, fmt.Sprintf("GPU unlock failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	log.Info("GPU restore completed")
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // List files in a checkpoint directory
@@ -1215,4 +1177,12 @@ func (a *Agent) readCheckpointFileHandler(w http.ResponseWriter, r *http.Request
 	// GET, etc. For peer fanout, Range support is the critical feature —
 	// receivers can pull one large pages-*.img via parallel ranges.
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// modelHostRoot is the bind root for completed model volumes.
+func (a *Agent) modelHostRoot() string {
+	if a.config.ModelVolume.HostRoot != "" {
+		return a.config.ModelVolume.HostRoot
+	}
+	return "/var/lib/containerd/nvsnap-models"
 }

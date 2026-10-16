@@ -183,6 +183,30 @@ func TestCompose_DistinguishesByConfig(t *testing.T) {
 	}
 }
 
+// A cluster salt changes every identity; the same salt is stable; the pod
+// annotation still applies on top.
+func TestCompose_ClusterSalt(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Image: "vllm/vllm-openai:v0.11.2", Args: []string{"vllm serve --model m"}}}}}
+	plain := (&HashInputComposer{CUDADriverMajor: 580}).Compose(pod, 0)
+	a := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	b := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0)
+	c := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-02"}).Compose(pod, 0)
+	if checkpointstore.ComputeHash(plain) == checkpointstore.ComputeHash(a) {
+		t.Error("a cluster salt must change the identity")
+	}
+	if checkpointstore.ComputeHash(a) != checkpointstore.ComputeHash(b) {
+		t.Error("the same cluster salt must be stable")
+	}
+	if checkpointstore.ComputeHash(a) == checkpointstore.ComputeHash(c) {
+		t.Error("a different cluster salt must change the identity again")
+	}
+	pod.Annotations = map[string]string{CacheSaltAnnotation: "chart"}
+	if d := (&HashInputComposer{CUDADriverMajor: 580, Salt: "2026-10-01"}).Compose(pod, 0); checkpointstore.ComputeHash(d) == checkpointstore.ComputeHash(a) {
+		t.Error("the pod annotation still applies on top of the cluster salt")
+	}
+}
+
 func TestCompose_DistinguishesByDriverMajor(t *testing.T) {
 	mk := func() *corev1.Pod {
 		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
@@ -398,5 +422,32 @@ func TestCompose_RoleNeutral_LiveDynamoOperatorPods(t *testing.T) {
 	}
 	if hd != hr {
 		t.Errorf("two replicas of one component must hash the same: %s vs %s", hd[:8], hr[:8])
+	}
+}
+
+// nvsnap.io/cache-salt folds an operator-chosen value into the identity, so
+// an engine change inside an unchanged image (a wheel installed at start,
+// a floating tag re-pointed) can start a fresh cache. Absent, nothing
+// changes, so existing captures stay valid.
+func TestCompose_CacheSalt(t *testing.T) {
+	c := HashInputComposer{CUDADriverMajor: 580}
+	mk := func(salt string) *corev1.Pod {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Image: "vllm/vllm-openai:v0.20.0", Args: []string{"vllm serve --model m"},
+		}}}}
+		if salt != "" {
+			p.Annotations = map[string]string{CacheSaltAnnotation: salt}
+		}
+		return p
+	}
+	plain := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	again := checkpointstore.ComputeHash(c.Compose(mk(""), 0))
+	salted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.6.9"), 0))
+	resalted := checkpointstore.ComputeHash(c.Compose(mk("flashinfer-0.7.0"), 0))
+	if plain != again {
+		t.Fatal("identity must be stable without a salt")
+	}
+	if salted == plain || resalted == salted {
+		t.Fatalf("each salt value must yield its own identity: plain=%s salted=%s resalted=%s", plain, salted, resalted)
 	}
 }

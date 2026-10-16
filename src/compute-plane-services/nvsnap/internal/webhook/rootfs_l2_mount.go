@@ -20,7 +20,7 @@ limitations under the License.
 // Rootfs captures and CRIU dumps restore through different mechanisms:
 //
 //   - CRIU dump  → L2 per-capture PVC fast path (read-only rox mount at
-//     /nvsnap-checkpoint + restore-entrypoint). See l2_mount.go.
+//     /nvsnap-checkpoint). See l2_mount.go.
 //   - Rootfs tree → L1 overlay reinjection in buildPatches: a writable
 //     per-pod OverlayFS over the read-only captured tree, with the
 //     captured bytes cascade-fetched to the restore node by the agent.
