@@ -107,6 +107,19 @@ if [ -n "$capturing" ]; then
   fi
 fi
 
+# A release left pending (an upgrade whose helm lost the cluster midway, e.g.
+# an expired login) blocks every later upgrade with "another operation is in
+# progress". Say which revision and how to recover rather than fail on it.
+status="$(helm -n "$ns" status "$release" 2>/dev/null | sed -n 's/^STATUS: *//p')"
+case "$status" in
+  pending-*)
+    rev="$(helm -n "$ns" history "$release" --max 20 2>/dev/null | awk '$3 == "deployed" {r=$1} END {print r}')"
+    echo "release $release is $status (an earlier helm run did not finish)." >&2
+    echo "if no other helm run is going on, roll it back to its last deployed revision, then rerun this:" >&2
+    echo "  helm -n $ns rollback $release ${rev:-<revision>} --wait --timeout $timeout" >&2
+    exit 1 ;;
+esac
+
 # 3. Upgrade.
 upgrade=(helm upgrade "$release" "$chart" -n "$ns" -f "$values" --set "agent.image.tag=$tag"
   --disable-openapi-validation --timeout "$timeout")
