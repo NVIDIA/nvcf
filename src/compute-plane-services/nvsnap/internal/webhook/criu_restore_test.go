@@ -292,6 +292,7 @@ func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
 // only wait or check, and a wait on a peer that is itself a placeholder
 // (a Dynamo worker waiting for its leader) would never end.
 func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
+	alwaysRestart := corev1.ContainerRestartPolicyAlways
 	m := criuMutator(t, criuCaptureRecord())
 	pod := podWithAnnotation("abc123")
 	pod.Spec = criuFunctionPod().Spec
@@ -306,6 +307,9 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 		{Name: "wait-for-leader", Image: "img", Command: []string{"sh", "-c"}, Args: []string{"wait"}, VolumeMounts: []corev1.VolumeMount{{Name: "scripts", MountPath: "/scripts"}}},
 		{Name: "wait-for-nats", Image: "curl", Command: []string{"sh", "-c", "until curl nats; do sleep 5; done"}},
 		{Name: "own-scratch", Image: "img", Command: []string{"prep"}, VolumeMounts: []corev1.VolumeMount{{Name: "scratch", MountPath: "/s"}}},
+		// A native sidecar serves for the pod's life (a Dynamo model-ready
+		// beacon): skipped, it would exit and be restarted for ever.
+		{Name: "beacon", Image: "img", Command: []string{"serve"}, RestartPolicy: &alwaysRestart},
 	}
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
@@ -326,7 +330,7 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 			}
 		}
 	}
-	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false}
+	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false, "beacon": true}
 	for n, w := range want {
 		if run[n] != w {
 			t.Errorf("%s runs = %v, want %v", n, run[n], w)

@@ -240,6 +240,11 @@ func jsonPointerEscape(s string) string {
 // wait-for-leader) never starts, and the leader is a placeholder until the
 // whole group is restored. A skipped init runs the helper's skip instead,
 // keeping its place so the other patches' indices hold.
+//
+// A native sidecar (an init container with restartPolicy Always) is no
+// startup step: it serves beside the main container for the pod's life,
+// like any other sidecar, and runs unchanged. Skipped, it would exit, be
+// restarted, and hold back every init container after it.
 func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	volumes := map[string]corev1.Volume{}
 	for _, v := range pod.Spec.Volumes {
@@ -252,7 +257,7 @@ func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	var patches []PatchOp
 	for i := range pod.Spec.InitContainers {
 		init := &pod.Spec.InitContainers[i]
-		if writesSharedVolume(init, volumes, seen) {
+		if nativeSidecar(init) || writesSharedVolume(init, volumes, seen) {
 			continue
 		}
 		base := fmt.Sprintf("/spec/initContainers/%d", i)
@@ -292,4 +297,9 @@ func writesSharedVolume(init *corev1.Container, volumes map[string]corev1.Volume
 		}
 	}
 	return false
+}
+
+// nativeSidecar reports an init container that runs for the pod's life.
+func nativeSidecar(c *corev1.Container) bool {
+	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
