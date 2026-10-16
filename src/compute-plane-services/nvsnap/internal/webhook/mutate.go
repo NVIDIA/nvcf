@@ -424,6 +424,10 @@ type Mutator struct {
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
 	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+	// CRIUScope returns the tenant scope of a namespace, the value a CRIU
+	// capture records under checkpointstore.CRIUScopeMetaKey. Nil: the
+	// scope is the namespace itself.
+	CRIUScope func(ctx context.Context, namespace string) (string, error)
 
 	// CRIUGroupAdmits reports whether pod's instance of several ranks can
 	// restore as a group, and why not: a group restore needs every rank to

@@ -304,6 +304,13 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 			return
 		}
 	}
+	// The restore admits only pods of the capture's tenant scope; without
+	// it recorded, no pod could restore this checkpoint.
+	scope, err := a.criuGroupScope(ctx, req.Namespace)
+	if err != nil {
+		log.WithError(err).Warn("CRIU capture not recorded: cannot read the namespace's tenant scope; pods restoring from it will start fresh")
+		return
+	}
 	m := checkpointstore.Manifest{
 		Hash:          hash,
 		CaptureMethod: "criu",
@@ -311,6 +318,7 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		SourcePodMeta: map[string]string{
 			"engine": "criu", "checkpoint_id": checkpointID,
 			"namespace": req.Namespace, "pod": req.PodName, "image": image, "node": a.config.NodeName,
+			checkpointstore.CRIUScopeMetaKey: scope,
 		},
 	}
 	if gpushare {

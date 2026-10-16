@@ -236,6 +236,8 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 	if a.kubeClient != nil {
 		// A checkpoint that failed to restore starts its next pods fresh.
 		mut.CRIURestoreBlocked = a.criuRestorer().Blocked
+		// An explicit CRIU restore admits only captures of the pod's scope.
+		mut.CRIUScope = a.criuGroupScope
 		if criuIsDefault() {
 			// Helm instances restore from their group captures.
 			mut.CRIUGroups = a.lookupCRIUGroupFor

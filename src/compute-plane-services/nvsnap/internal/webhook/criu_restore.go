@@ -69,12 +69,50 @@ func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash stri
 	if id == "" {
 		return "", man
 	}
+	if why := m.criuScopeMismatch(ctx, pod, man); why != "" {
+		log.WithField("checkpoint", id).Warn("CRIU restore: " + why + "; cold start")
+		return "", checkpointstore.Manifest{}
+	}
 	if m.CRIURestoreBlocked != nil && m.CRIURestoreBlocked(ctx, id) {
 		log.WithField("checkpoint", id).Warn("CRIU restore: this checkpoint failed to restore before; cold start")
 		return "", man
 	}
 	return id, man
 }
+
+// criuScopeMismatch returns why pod may not restore the CRIU capture man,
+// or "" when it may. A checkpoint holds the captured process's memory
+// (tokens, keys, request data), and the restore-from annotation is the
+// pod author's to write, so the capture must come from the pod's own
+// tenant scope, recorded at capture time. A rank of an instance capture
+// restores only with its instance, through the group record.
+func (m *Mutator) criuScopeMismatch(ctx context.Context, pod *corev1.Pod, man checkpointstore.Manifest) string {
+	if man.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] == "true" {
+		return "the checkpoint is one rank of an instance capture"
+	}
+	captured := man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey]
+	if captured == "" {
+		return "the capture records no tenant scope"
+	}
+	if pod.Namespace == "" {
+		return "the pod's namespace is unknown"
+	}
+	scope := CRIUNamespaceScope(pod.Namespace)
+	if m.CRIUScope != nil {
+		var err error
+		if scope, err = m.CRIUScope(ctx, pod.Namespace); err != nil {
+			return fmt.Sprintf("cannot read the namespace's tenant scope: %v", err)
+		}
+	}
+	if scope != captured {
+		return "the capture belongs to another tenant scope"
+	}
+	return ""
+}
+
+// CRIUNamespaceScope is the tenant scope of a namespace the platform has
+// not labelled with a function version: the namespace itself.
+func CRIUNamespaceScope(ns string) string { return "namespace/" + ns }
 
 // criuRestorePatches turns the pod into the restore placeholder for
 // checkpointID. The liveness and startup probes go: they would kill the

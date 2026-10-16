@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 
 	"github.com/sirupsen/logrus"
@@ -1006,23 +1007,34 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		if hostPathErr != nil {
 			log.WithError(hostPathErr).Warn("L2 promote skipped: cannot translate checkpoint dir to host path")
 		} else {
+			podMeta := map[string]string{
+				"namespace":     req.Namespace,
+				"pod":           req.PodName,
+				"image":         containerInfo.Image,
+				"engine":        "criu",
+				"node":          a.config.NodeName,
+				"gpu_type":      catalog.GPUType,
+				"gpu_count":     fmt.Sprintf("%d", catalog.GPUCount),
+				"gpu_vram_gb":   vramGBFromGPUType(catalog.GPUType),
+				"checkpoint_id": checkpointID,
+			}
+			// The same restore scope and instance marking as the capture
+			// record (recordCRIUCapture): the webhook may read either.
+			if scope, scopeErr := a.criuGroupScope(ctx, req.Namespace); scopeErr == nil {
+				podMeta[checkpointstore.CRIUScopeMetaKey] = scope
+			} else {
+				log.WithError(scopeErr).Warn("L2 record carries no tenant scope; pods cannot restore from it")
+			}
+			if req.CaptureID != "" {
+				podMeta[checkpointstore.InstanceCaptureMetaKey] = "true"
+			}
 			runL2PromoteAsync(a.l2Backend, log, l2PromoteInput{
 				Hash:        catalog.Hash,
 				HostDumpDir: hostDumpPath,
 				NodeName:    a.config.NodeName,
 				SizeBytes:   diskUsage(checkpointDir),
-				PodMeta: map[string]string{
-					"namespace":     req.Namespace,
-					"pod":           req.PodName,
-					"image":         containerInfo.Image,
-					"engine":        "criu",
-					"node":          a.config.NodeName,
-					"gpu_type":      catalog.GPUType,
-					"gpu_count":     fmt.Sprintf("%d", catalog.GPUCount),
-					"gpu_vram_gb":   vramGBFromGPUType(catalog.GPUType),
-					"checkpoint_id": checkpointID,
-				},
-				CapturedAt: time.Now().UTC(),
+				PodMeta:     podMeta,
+				CapturedAt:  time.Now().UTC(),
 			})
 		}
 	}

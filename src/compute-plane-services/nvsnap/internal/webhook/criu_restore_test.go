@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,7 +33,8 @@ func criuCaptureRecord() checkpointstore.Manifest {
 	return checkpointstore.Manifest{
 		CaptureMethod:   "criu",
 		CapturedOnNodes: []string{"node-a"},
-		SourcePodMeta:   map[string]string{"engine": "criu", "checkpoint_id": "abc123__20261008-101010"},
+		SourcePodMeta: map[string]string{"engine": "criu", "checkpoint_id": "abc123__20261008-101010",
+			checkpointstore.CRIUScopeMetaKey: CRIUNamespaceScope("default")},
 	}
 }
 
@@ -128,6 +130,36 @@ func TestCRIURestore_SkipsWhenItCannotRestore(t *testing.T) {
 			man.SourcePodMeta = map[string]string{"engine": "criu"}
 			m.L2Backend = &criuL2Backend{man: man}
 		},
+		// The restore-from annotation is the pod author's: a hash of
+		// another tenant's capture must not restore its memory here.
+		"capture of another namespace": func(m *Mutator, _ *corev1.Pod) {
+			man := criuCaptureRecord()
+			man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] = CRIUNamespaceScope("tenant-a")
+			m.L2Backend = &criuL2Backend{man: man}
+		},
+		"capture of another function version": func(m *Mutator, _ *corev1.Pod) {
+			man := criuCaptureRecord()
+			man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] = "function-version/a"
+			m.L2Backend = &criuL2Backend{man: man}
+			m.CRIUScope = func(context.Context, string) (string, error) { return "function-version/b", nil }
+		},
+		"capture records no scope": func(m *Mutator, _ *corev1.Pod) {
+			man := criuCaptureRecord()
+			delete(man.SourcePodMeta, checkpointstore.CRIUScopeMetaKey)
+			m.L2Backend = &criuL2Backend{man: man}
+		},
+		"scope unreadable": func(m *Mutator, _ *corev1.Pod) {
+			m.CRIUScope = func(context.Context, string) (string, error) { return "", errors.New("apiserver unavailable") }
+		},
+		"pod namespace unknown": func(_ *Mutator, pod *corev1.Pod) {
+			pod.Namespace = ""
+		},
+		// A rank of an instance capture restores only with its instance.
+		"rank of an instance capture": func(m *Mutator, _ *corev1.Pod) {
+			man := criuCaptureRecord()
+			man.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] = "true"
+			m.L2Backend = &criuL2Backend{man: man}
+		},
 	}
 	for name, mod := range cases {
 		m := criuMutator(t, criuCaptureRecord())
@@ -151,6 +183,28 @@ func TestCRIUNodePreference_KeepsExistingAffinity(t *testing.T) {
 	na := got.Spec.Affinity.NodeAffinity
 	if na.RequiredDuringSchedulingIgnoredDuringExecution == nil || len(na.PreferredDuringSchedulingIgnoredDuringExecution) != 2 {
 		t.Errorf("affinity = %+v; the function's own terms must stay and ours be added", na)
+	}
+}
+
+// The scope comes from the namespace through CRIUScope: a capture of the
+// same function version restores in another namespace.
+func TestCRIURestore_SameScopeInAnotherNamespace(t *testing.T) {
+	man := criuCaptureRecord()
+	man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] = "function-version/v1"
+	m := criuMutator(t, man)
+	var asked string
+	m.CRIUScope = func(_ context.Context, ns string) (string, error) { asked = ns; return "function-version/v1", nil }
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "abc123__20261008-101010" {
+		t.Errorf("capture of the pod's own scope not restored: annotations %v", got.Annotations)
+	}
+	if asked != "default" {
+		t.Errorf("scope asked for namespace %q, want the pod's", asked)
 	}
 }
 
