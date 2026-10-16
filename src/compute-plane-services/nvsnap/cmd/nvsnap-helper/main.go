@@ -50,6 +50,8 @@ func main() {
 		seedCmd(args)
 	case "prewarm":
 		prewarmCmd(args)
+	case "await-pid-floor":
+		awaitPIDFloorCmd(args, "/proc/sys/kernel/ns_last_pid")
 	default:
 		usage()
 	}
@@ -63,7 +65,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nvsnap-helper skip | wait | write | seed | prewarm [flags] [-- command...]")
+	fmt.Fprintln(os.Stderr, "usage: nvsnap-helper skip | wait | write | seed | prewarm | await-pid-floor [flags] [-- command...]")
 	os.Exit(2)
 }
 

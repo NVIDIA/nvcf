@@ -183,7 +183,7 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	if companion {
 		cp = append(cp, PatchOp{Op: "add", Path: "/metadata/annotations/" + jsonPointerEscape(CRIUGroupCompanionAnnotation), Value: "true"})
 		log.WithFields(logrus.Fields{"checkpoint": id, "slot": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its instance's companion placeholder")
-		return mergePatchPlan(cp)
+		return mergePatchPlan(withPIDReserve(pod, cp))
 	}
 	// The restored processes keep the files they had open on the model
 	// and cache volumes, so the placeholder gets the same mounts the
@@ -199,7 +199,7 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		vp = m.cacheDirCapturePatches(pod)
 	}
 	log.WithFields(logrus.Fields{"checkpoint": id, "ordinal": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its rank's restore placeholder")
-	return mergePatchPlan(append(cp, vp...))
+	return mergePatchPlan(withPIDReserve(pod, append(cp, vp...)))
 }
 
 // companionSlot picks the slot a companion placeholder restores: its

@@ -146,3 +146,31 @@ func TestCRIUGroupRanks(t *testing.T) {
 		t.Error("a record without companions: every member is a rank")
 	}
 }
+
+// A placeholder whose containers share one pid namespace starts with the
+// pid-reserve step, ahead of every other init container, after the whole
+// admission has run.
+func TestCRIUGroupRestore_SharedPIDNamespaceReservesFirst(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"w__1"}, Companion: []bool{false}}
+	m, _ := groupMutator(t, g, "")
+	pod := singleGPUPod()
+	share, always := true, corev1.ContainerRestartPolicyAlways
+	pod.Spec.ShareProcessNamespace = &share
+	pod.Spec.InitContainers = []corev1.Container{{Name: "wait-for-nats", Image: "curl", Command: []string{"wait"}},
+		{Name: "beacon", Image: "img", Command: []string{"serve"}, RestartPolicy: &always}}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "w__1" {
+		t.Fatalf("not admitted as a placeholder: %v", got.Annotations)
+	}
+	if len(got.Spec.InitContainers) == 0 || got.Spec.InitContainers[0].Name != PIDReserveInit {
+		names := make([]string, 0, len(got.Spec.InitContainers))
+		for _, c := range got.Spec.InitContainers {
+			names = append(names, c.Name)
+		}
+		t.Fatalf("init containers %v, want %s first", names, PIDReserveInit)
+	}
+}

@@ -14,10 +14,12 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -295,7 +297,7 @@ func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
 	var patches []PatchOp
 	for i := range pod.Spec.InitContainers {
 		init := &pod.Spec.InitContainers[i]
-		if nativeSidecar(init) || writesSharedVolume(init, volumes, seen) {
+		if NativeSidecar(init) || writesSharedVolume(init, volumes, seen) {
 			continue
 		}
 		base := fmt.Sprintf("/spec/initContainers/%d", i)
@@ -337,7 +339,52 @@ func writesSharedVolume(init *corev1.Container, volumes map[string]corev1.Volume
 	return false
 }
 
-// nativeSidecar reports an init container that runs for the pod's life.
-func nativeSidecar(c *corev1.Container) bool {
+// NativeSidecar reports an init container that runs for the pod's life.
+func NativeSidecar(c *corev1.Container) bool {
 	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
+const (
+	// PIDReserveInit is the first init container of a restore placeholder
+	// whose containers share one pid namespace: it waits until the agent
+	// has raised the namespace's next pid to PIDReserveFloor, so every
+	// process the pod starts after it (a native sidecar, a sidecar, the
+	// placeholder) gets a pid above the range the restore recreates.
+	// Without it a sidecar started before the placeholder can hold a pid
+	// of the dumped tree, and the restore cannot recreate it.
+	PIDReserveInit = "nvsnap-reserve-pids"
+	// PIDReserveFloor is the next pid the agent raises a placeholder's pid
+	// namespace to.
+	PIDReserveFloor = 100000
+)
+
+var pidReserveResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
+}
+
+// withPIDReserve appends to a placeholder's patches the PIDReserveInit
+// step, first among its init containers, when its containers share one pid
+// namespace. It goes last: other patches address init containers by
+// index or insert at the front.
+func withPIDReserve(pod *corev1.Pod, patches []PatchOp) []PatchOp {
+	if pod.Spec.ShareProcessNamespace == nil || !*pod.Spec.ShareProcessNamespace || len(pod.Spec.Containers) == 0 {
+		return patches
+	}
+	main := &pod.Spec.Containers[0]
+	c := corev1.Container{
+		Name:         PIDReserveInit,
+		Image:        main.Image,
+		Command:      []string{HelperBin, "await-pid-floor", "--floor", strconv.Itoa(PIDReserveFloor)},
+		VolumeMounts: []corev1.VolumeMount{helperMount()},
+	}
+	harden(&c, pidReserveResources, inheritPosture, main)
+	listExists := len(pod.Spec.InitContainers) > 0
+	for _, p := range patches {
+		listExists = listExists || (p.Op == "add" && p.Path == "/spec/initContainers")
+	}
+	if !listExists {
+		return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []corev1.Container{c}})
+	}
+	return append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: c})
 }

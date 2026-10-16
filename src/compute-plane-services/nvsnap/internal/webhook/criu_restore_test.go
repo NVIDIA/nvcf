@@ -423,3 +423,35 @@ func TestCRIURestore_PlaceholderIsTheRecordedContainer(t *testing.T) {
 		t.Error("restored into a pod without the recorded container")
 	}
 }
+
+func TestWithPIDReserve(t *testing.T) {
+	share := true
+	base := []PatchOp{{Op: "replace", Path: "/spec/initContainers/1/command", Value: []string{"skip"}}}
+	plain := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "img"}}}}
+	if got := withPIDReserve(plain, base); len(got) != 1 {
+		t.Fatalf("a pod with its own pid namespaces needs no reserve step: %+v", got)
+	}
+	shared := plain.DeepCopy()
+	shared.Spec.ShareProcessNamespace = &share
+	shared.Spec.InitContainers = []corev1.Container{{Name: "a"}, {Name: "b"}}
+	got := withPIDReserve(shared, base)
+	last := got[len(got)-1]
+	c, ok := last.Value.(corev1.Container)
+	if last.Op != "add" || last.Path != "/spec/initContainers/0" || !ok || c.Name != PIDReserveInit || c.Image != "img" {
+		t.Fatalf("reserve step must go first, added last: %+v", last)
+	}
+	if len(c.Command) < 2 || c.Command[0] != HelperBin || c.Command[1] != "await-pid-floor" {
+		t.Errorf("command: %v", c.Command)
+	}
+	// No init containers: the list is created, or joined when another
+	// patch created it.
+	none := plain.DeepCopy()
+	none.Spec.ShareProcessNamespace = &share
+	if got := withPIDReserve(none, nil); got[0].Path != "/spec/initContainers" {
+		t.Errorf("no list: %+v", got)
+	}
+	boot := []PatchOp{{Op: "add", Path: "/spec/initContainers", Value: []corev1.Container{{Name: "x"}}}}
+	if got := withPIDReserve(none, boot); got[len(got)-1].Path != "/spec/initContainers/0" {
+		t.Errorf("a list another patch created must be joined, not replaced: %+v", got)
+	}
+}

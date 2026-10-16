@@ -403,6 +403,21 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(serr).Info("CRIU group capture: waiting for the node agents to settle")
 		return true
 	}
+	// Everything that would fail the capture, found before it is claimed:
+	// a capture that fails stops the instance and uses an attempt.
+	findings := a.capturePreflight(ctx, ranks, companions, companionContainers, log)
+	for _, f := range findings {
+		fl := log.WithFields(logrus.Fields{"member": f.Pod, "container": f.Container, "check": f.Check, "severity": f.Severity})
+		if f.Severity == preflightInfo {
+			fl.Info("CRIU group capture preflight: " + f.Detail)
+		} else {
+			fl.Warn("CRIU group capture preflight: " + f.Detail)
+		}
+	}
+	if b := blocking(findings); len(b) > 0 {
+		log.WithField("blocking", len(b)).Warn("CRIU group capture: skipped; the preflight found what would fail it")
+		return false
+	}
 	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
 	if err != nil {
 		log.WithError(err).Warn("CRIU group capture: cannot claim the group record")

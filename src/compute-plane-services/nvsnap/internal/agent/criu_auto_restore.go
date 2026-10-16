@@ -15,7 +15,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +121,7 @@ func (a *Agent) criuRestorer() *criuAutoRestorer {
 }
 
 func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
+	c.considerReservePIDs(ctx, pod)
 	c.considerGroupCapture(ctx, pod)
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
@@ -345,4 +348,41 @@ func (a *Agent) markRestored(ctx context.Context, ns, pod string, log *logrus.En
 	if _, err := a.kubeClient.CoreV1().Pods(ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU restore: could not mark the pod restored; an agent restart may try it again")
 	}
+}
+
+// considerReservePIDs raises the next pid of a restore placeholder's pid
+// namespace while its webhook.PIDReserveInit step waits for it, before any
+// of the pod's long-lived processes start (webhook.withPIDReserve).
+func (c *criuAutoRestorer) considerReservePIDs(ctx context.Context, pod *corev1.Pod) {
+	if pod.Annotations[webhook.CRIURestoreAnnotation] == "" || !initRunning(pod, webhook.PIDReserveInit) {
+		return
+	}
+	if _, done := c.attempted.LoadOrStore("reserve-pids/"+string(pod.UID), struct{}{}); done {
+		return
+	}
+	log := c.a.log.WithField("pod", pod.Namespace+"/"+pod.Name)
+	info, err := c.a.runtime.FindContainerByPod(ctx, pod.Namespace, pod.Name, webhook.PIDReserveInit)
+	if err != nil || info == nil || info.PID == 0 {
+		log.WithError(err).Warn("CRIU restore: cannot find the placeholder's pid-reserve step; its sidecars may take pids the restore needs")
+		c.attempted.Delete("reserve-pids/" + string(pod.UID))
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(rctx, "nsenter", criuReservePIDArgs(int(info.PID))...).CombinedOutput(); err != nil { //nolint:gosec // fixed command; the pid comes from the runtime
+		log.WithError(err).WithField("output", strings.TrimSpace(string(out))).Warn("CRIU restore: cannot raise the placeholder's next pid")
+		c.attempted.Delete("reserve-pids/" + string(pod.UID))
+		return
+	}
+	log.Info("CRIU restore: placeholder's pid range reserved before its sidecars start")
+}
+
+// initRunning reports whether the pod's init container name runs.
+func initRunning(pod *corev1.Pod, name string) bool {
+	for i := range pod.Status.InitContainerStatuses {
+		if s := &pod.Status.InitContainerStatuses[i]; s.Name == name {
+			return s.State.Running != nil
+		}
+	}
+	return false
 }
