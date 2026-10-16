@@ -116,6 +116,7 @@ case "$COMPONENT" in
     trap 'rm -f "$ROOT/cuda-checkpoint-wrapper.sh"' EXIT
     bud -f docker/agent/Dockerfile.app \
         --build-arg BASE_IMAGE="$REG/nvsnap-agent-base:$NVSNAP_BASE_VERSION" \
+        --build-arg APP_VERSION="$NVSNAP_APP_VERSION" \
         -t "$img" .
     push_img "$img"
     ;;

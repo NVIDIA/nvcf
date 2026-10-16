@@ -39,11 +39,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" \
 FROM ${BASE_IMAGE}
 
 COPY --from=go-builder /bin/nvsnap-agent /criu-bundle/nvsnap-agent
-# The node bundle version this image stages (docs/design/
-# VERSIONED-NODE-BUNDLE.md): its tag, the same for every architecture, so
-# a pod admitted by any node's agent mounts a version its own node stages.
-ARG APP_VERSION=dev
-RUN echo "${APP_VERSION}" > /criu-bundle/BUNDLE_VERSION
 
 # cuda-checkpoint wrapper: unsets LD_PRELOAD / disables /etc/ld.so.preload
 # before exec'ing cuda-checkpoint.real, so the CUDA plugin can parse its stdout
