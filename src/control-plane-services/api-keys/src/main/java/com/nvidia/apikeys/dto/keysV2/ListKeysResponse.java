@@ -26,7 +26,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * The cursor is present only when another page is available.
+ * Supports pagination based on limit and cursor.
  */
 @Data
 @Builder(toBuilder = true)
@@ -39,5 +39,6 @@ public class ListKeysResponse {
 
     private Integer limit;
 
+    // Opaque token for the next page; present only when another page is available.
     private String cursor;
 }
