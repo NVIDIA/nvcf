@@ -20,6 +20,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
@@ -1413,5 +1414,68 @@ func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
 	none := readerScript("", "/model/.nvsnap-complete", 60, true)
 	if strings.Count(none, "no download step to fall back to") != 2 {
 		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
+	}
+}
+
+// The download mounts the landing volume at downloadMount, the engine at
+// its own path. The Hugging Face cache paths are translated relative to
+// the engine's mount, so the files land where the engine reads them.
+func TestDownloadEnv_TranslatesEngineCacheLayout(t *testing.T) {
+	cases := []struct {
+		name      string
+		env       []corev1.EnvVar
+		land      modelid.Landing
+		home, hub string
+	}{
+		{"default home on rootfs", nil,
+			modelid.Landing{Path: modelid.DefaultHFHome}, downloadMount, downloadMount + "/hub"},
+		{"HF_HOME at the volume mount", []corev1.EnvVar{{Name: "HF_HOME", Value: "/models"}},
+			modelid.Landing{Path: "/models", VolumeName: "m", MountPath: "/models"}, downloadMount, downloadMount + "/hub"},
+		{"HF_HUB_CACHE at the volume mount", []corev1.EnvVar{{Name: "HF_HUB_CACHE", Value: "/data/hub"}},
+			modelid.Landing{Path: "/data/hub", VolumeName: "d", MountPath: "/data/hub"}, downloadMount, downloadMount},
+		{"nested HF_HOME", []corev1.EnvVar{{Name: "HF_HOME", Value: "/models/hf"}},
+			modelid.Landing{Path: "/models/hf", VolumeName: "m", MountPath: "/models"}, downloadMount + "/hf", downloadMount + "/hf/hub"},
+		{"HF_HUB_CACHE nested on rootfs", []corev1.EnvVar{{Name: "HF_HUB_CACHE", Value: "/cache/hub/"}},
+			modelid.Landing{Path: "/cache/hub"}, downloadMount, downloadMount},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := map[string]string{}
+			for _, e := range downloadEnv(&corev1.Container{Env: tc.env}, tc.land) {
+				got[e.Name] = e.Value
+			}
+			if got["HF_HOME"] != tc.home || got["HF_HUB_CACHE"] != tc.hub || got["HOME"] != downloadMount {
+				t.Errorf("HF_HOME=%q HF_HUB_CACHE=%q HOME=%q, want %q %q %q", got["HF_HOME"], got["HF_HUB_CACHE"], got["HOME"], tc.home, tc.hub, downloadMount)
+			}
+		})
+	}
+}
+
+// End to end through admission: a chart with HF_HUB_CACHE on an emptyDir
+// mounted at that path gets a download Job that writes the hub tree at the
+// volume root, which is what the engine reads once the volume is mounted
+// at /data/hub.
+func TestModelVolume_EngineDownload_HubCacheOverride(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
+	pod := stockVLLMPod()
+	pod.Spec.Volumes = []corev1.Volume{{Name: "hub", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = []corev1.VolumeMount{{Name: "hub", MountPath: "/data/hub"}}
+	c.Env = append(c.Env, corev1.EnvVar{Name: "HF_HUB_CACHE", Value: "/data/hub"})
+	if _, err := m.Mutate(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+	job, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName("hf://Qwen/Qwen2.5-32B-Instruct"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("engine-download needs a download Job: %v", err)
+	}
+	jenv := map[string]string{}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		jenv[e.Name] = e.Value
+	}
+	if jenv["HF_HUB_CACHE"] != downloadMount {
+		t.Errorf("job HF_HUB_CACHE = %q, want the volume root %q (engine reads /data/hub)", jenv["HF_HUB_CACHE"], downloadMount)
 	}
 }
