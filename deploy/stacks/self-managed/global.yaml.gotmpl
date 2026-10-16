@@ -1484,6 +1484,9 @@ functionautoscaler:
         "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
         "TIMESERIES_DB__AUTH_MODE" (dig "metricsBackend" "authentication" "mode" "none" .Values)
         "TIMESERIES_DB__IGNORE_ENV" (printf "%v" (dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values)) -}}
+  {{- if eq (requiredEnv "HELMFILE_ENV") "stg" }}
+  {{- $_ := set $functionAutoscalerEnv "SCALING__ACTIVE_FUNCTION_SOURCE" "local_discovery" }}
+  {{- end }}
   {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
   {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__AUTHN_URL" . }}
   {{- end }}
