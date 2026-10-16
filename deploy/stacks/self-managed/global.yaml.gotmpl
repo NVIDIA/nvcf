@@ -114,6 +114,29 @@ merge:
 {{- if gt $servers 1 }}{{ min $servers 3 }}{{ end -}}
 {{- end -}}
 
+{{/* OpenBao service PKI role allowed_domains: addons.llm.pki.allowedDomains plus
+     the worker callback proxy's frontend and grpc-proxy pod domains when they
+     are not already covered. Only called with the proxy enabled, so the LLM
+     value renders unchanged otherwise. Keep in sync with
+     openbao-migrations-env.yaml.gotmpl. */}}
+{{- define "nvcf.servicePki.allowedDomains" -}}
+{{- $domains := dig "addons" "llm" "pki" "allowedDomains" "" . | toString | trim -}}
+{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" -}}
+{{- range $need := $required -}}
+{{- $covered := false -}}
+{{- range $allowed := splitList "," $domains -}}
+{{- $allowed = trim $allowed | lower -}}
+{{- if and $allowed (or (eq $need $allowed) (hasSuffix (printf ".%s" $allowed) $need)) -}}
+{{- $covered = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and $need (not $covered) -}}
+{{- $domains = ternary $need (printf "%s,%s" $domains $need) (eq $domains "") -}}
+{{- end -}}
+{{- end -}}
+{{- $domains -}}
+{{- end -}}
+
 {{/* Hostname anti-affinity body: hard under enforced, soft under preferred. */}}
 {{- define "nvcf.ha._generatedPodAntiAffinity" -}}
 {{- if eq .haMode "enforced" -}}
@@ -1902,6 +1925,11 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* This hook rewrites the same OpenBao role as the stack migration, so
+       it must keep the worker callback proxy domains too. */ -}}
+  {{- if eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" }}
+  {{- $allowedDomains = include "nvcf.servicePki.allowedDomains" .Values }}
+  {{- end }}
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
