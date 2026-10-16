@@ -77,10 +77,8 @@ test "$(yq -r '.selfManaged.otelCollector.enabled' "${default_values}")" = "fals
 printf '  otelCollector:\n    enabled: true\n' >>"${registration_values}"
 collector_values="${work_dir}/collector-values.yaml"
 render_values "${collector_values}"
-test "$(yq -r '.selfManaged.otelCollector.enabled' "${collector_values}")" = "true" ||
-  fail "registration selfManaged.otelCollector.enabled did not enable the OTel collector"
-test "$(yq -r '.otelCollector.enabled' "${collector_values}")" = "true" ||
-  fail "registration selfManaged.otelCollector.enabled did not reach the operator otelCollector value"
+test "$(yq -r '.selfManaged.otelCollector.enabled' "${collector_values}")" = "false" ||
+  fail "registration selfManaged.otelCollector.enabled must not auto-enable the OTel collector"
 
 write_registration '    workload:
       defaultOwnershipProbe: true'

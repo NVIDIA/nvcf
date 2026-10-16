@@ -623,21 +623,10 @@ func writeComputePlaneNVCAValues(req computePlaneNVCAValuesRequest) error {
 			NATSURL:                        req.Endpoints.NATSURL,
 			NATSHostOverride:               req.Hosts.NATS,
 			EventLedgerServiceURL:          req.EventLedger.ServiceURL,
-			OTelCollector:                  otelCollectorValues(req.EventLedger),
 		},
 		Agent:       agentValues(req.RequestRouterAddress),
 		AgentConfig: agentConfig,
 	})
-}
-
-// otelCollectorValues turns the NVCA OTel collector on only when the control
-// plane advertises a running Event Ledger. It returns nil otherwise so the
-// compute-plane default (disabled) applies.
-func otelCollectorValues(el controlplaneprofile.EventLedgerAddon) *nvca.OTelCollectorValues {
-	if !el.Enabled {
-		return nil
-	}
-	return &nvca.OTelCollectorValues{Enabled: true}
 }
 
 // agentValues renders the control-plane profile's LLM request router address

@@ -66,13 +66,6 @@ type SelfManagedValues struct {
 	NATSURL                        string `yaml:"natsURL,omitempty"`
 	NATSHostOverride               string `yaml:"natsHostOverride,omitempty"`
 	EventLedgerServiceURL          string `yaml:"eventLedgerServiceURL,omitempty"`
-	// OTelCollector is omitted unless the control plane runs the Event Ledger.
-	OTelCollector *OTelCollectorValues `yaml:"otelCollector,omitempty"`
-}
-
-// OTelCollectorValues carries selfManaged.otelCollector.* nvca-operator values.
-type OTelCollectorValues struct {
-	Enabled bool `yaml:"enabled"`
 }
 
 func WriteFile(path string, values Values) error {

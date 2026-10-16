@@ -96,11 +96,7 @@ func TestNewSelfManagedValuesEventLedger(t *testing.T) {
 	enabled := registerEndpointValues{EventLedger: controlplaneprofile.EventLedgerAddon{Enabled: true, ServiceURL: "https://events.example.com"}}
 	got := newSelfManagedValuesFromEndpoints("psat", "us-west-1", enabled)
 	assert.Equal(t, "https://events.example.com", got.EventLedgerServiceURL)
-	if assert.NotNil(t, got.OTelCollector) {
-		assert.True(t, got.OTelCollector.Enabled)
-	}
 
 	disabled := newSelfManagedValuesFromEndpoints("psat", "us-west-1", registerEndpointValues{})
-	assert.Nil(t, disabled.OTelCollector)
 	assert.Empty(t, disabled.EventLedgerServiceURL)
 }

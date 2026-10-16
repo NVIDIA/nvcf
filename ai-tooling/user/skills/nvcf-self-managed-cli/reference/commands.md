@@ -24,7 +24,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted down --all [--confirm]` | Orchestrator: tear down every registered compute plane + control plane | progress | Bounded parallelism via `--all-concurrency` (default 4); `--confirm` required in non-interactive |
 | `self-hosted down --plan-only ...` | Orchestrator dry-run: phases + helm releases + ICMS rows + ETAs (no helm/helmfile contact) | JSONL | **Always run before any actual `down`** |
 
-When the control plane runs the Event Ledger, `self-hosted up`, `self-hosted install --compute-plane`, and `compute-plane register` turn on the NVCA OTel collector for the new cluster. `up` and `install` detect it from the `event-ledger` Helm release on the control-plane context. `compute-plane register` reads `controlPlane.addons.eventLedger` from the control-plane profile. If the check fails, the collector stays off.
+The NVCA OTel collector is never enabled automatically, even when the control plane runs the Event Ledger. Set `global.nvcaOperator.selfManaged.otelCollector.enabled: true` explicitly in each compute plane's environment config to send its events to the Event Ledger.
 
 ## Cluster management
 
