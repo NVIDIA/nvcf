@@ -216,7 +216,6 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 	})
 
 	t.Run("provision streams if absent", func(t *testing.T) {
-		t.SkipNow() // racy test
 		regions := []string{"region-1", "region-2", "region-3"}
 		requests := make([]Scenario, 100)
 		for i := range requests {
@@ -259,7 +258,11 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 		ctx, cancel := contextWithCancelAndTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		// Start nvcf api grpc mock
-		workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), workFunc, []string{"region-2"})
+		callbacks := testsupport.NewCallbackGroup()
+		trackedWorkFunc := func(ctx context.Context, nc *nats.Conn) error {
+			return callbacks.Run(func() error { return workFunc(ctx, nc) })
+		}
+		workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, []string{"region-2"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +272,9 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 			func(ctx context.Context) error {
 				return runTestWorker(ctx, zapLogger, workerConfig)
 			},
-			workerServer.Wait,
+			func(ctx context.Context) error {
+				return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
+			},
 		)
 		err = runErr
 		if err != nil {
@@ -694,7 +699,11 @@ func runWorkerTest(t *testing.T, natsSuperCluster *testutils.SuperCluster, workF
 	ctx, cancel := contextWithCancelAndTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// Start nvcf api grpc mock
-	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), workFunc, nil)
+	callbacks := testsupport.NewCallbackGroup()
+	trackedWorkFunc := func(ctx context.Context, nc *nats.Conn) error {
+		return callbacks.Run(func() error { return workFunc(ctx, nc) })
+	}
+	workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +713,9 @@ func runWorkerTest(t *testing.T, natsSuperCluster *testutils.SuperCluster, workF
 		func(ctx context.Context) error {
 			return runTestWorker(ctx, zapLogger, workerConfig)
 		},
-		workerServer.Wait,
+		func(ctx context.Context) error {
+			return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
+		},
 	)
 	err = runErr
 	if err != nil {
@@ -1500,39 +1511,47 @@ func TestWorkerGracefulShutdown(t *testing.T) {
 		}
 
 		// Start NVCF API mock
-		workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), workFunc, nil)
+		callbacks := testsupport.NewCallbackGroup()
+		trackedWorkFunc := func(ctx context.Context, nc *nats.Conn) error {
+			return callbacks.Run(func() error { return workFunc(ctx, nc) })
+		}
+		workerServer, err := testutils.NewMockNVCFAPI(ctx, t, natsSuperCluster.Clusters[0].Servers[0].ClientURL(), trackedWorkFunc, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer workerServer.Shutdown()
 
-		// Run the worker in a goroutine
-		go func() {
-			nvcfWorker, err := worker.NewNVCFWorker(ctx, zapLogger, workerConfig)
-			if err != nil {
-				t.Error(err)
-				return
-			}
+		runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
+			func(ctx context.Context) error {
+				nvcfWorker, err := worker.NewNVCFWorker(ctx, zapLogger, workerConfig)
+				if err != nil {
+					return fmt.Errorf("NewNVCFWorker: %w", err)
+				}
 
-			err = nvcfWorker.SetupWorkDirs()
-			if err != nil {
-				t.Error(err)
-				return
-			}
+				err = nvcfWorker.SetupWorkDirs()
+				if err != nil {
+					return fmt.Errorf("SetupWorkDirs: %w", err)
+				}
 
-			// Send the worker instance through the channel
-			workerRunning <- nvcfWorker
+				// Send the worker instance through the channel
+				workerRunning <- nvcfWorker
 
-			// Run the worker
-			err = nvcfWorker.Run(false)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				t.Error(err)
-			}
-		}()
-
-		// Wait for worker server to complete (which happens when all requests are processed)
-		if err := workerServer.Wait(ctx); err != nil {
-			t.Error(err)
+				// Run the worker
+				err = nvcfWorker.Run(false)
+				if err != nil && !errors.Is(err, context.Canceled) {
+					return fmt.Errorf("Run: %w", err)
+				}
+				return nil
+			},
+			func(ctx context.Context) error {
+				return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
+			},
+		)
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Error(runErr)
+		}
+		if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			t.Error(waitErr)
 		}
 
 		// Verify results
