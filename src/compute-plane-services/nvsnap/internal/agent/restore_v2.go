@@ -38,6 +38,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -134,7 +135,13 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, err
 	}
 	if !pidns {
-		if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
+		need, nerr := dumpedTaskIDs(checkpointDir)
+		if nerr != nil {
+			// Without the dumped ids every low pid counts as a clash.
+			log.WithError(nerr).Warn("criu-v2: cannot read the dumped task ids; any placeholder pid below the reserved range blocks the restore")
+			need = nil
+		}
+		if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, need, log); perr != nil {
 			return nil, perr
 		} else if maxPID > 0 {
 			log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
@@ -426,23 +433,34 @@ const reservedPIDFloor = 50000
 // namespace to measure it would itself allocate a pid there, which is the very
 // resource under test.
 func placeholderPIDs(procBase string, hostPID int) (max, low int, err error) {
+	max, held, err := placeholderTaskIDs(procBase, hostPID)
+	for _, id := range held {
+		if id != 1 && (low == 0 || id < low) {
+			low = id
+		}
+	}
+	return max, low, err
+}
+
+// placeholderTaskIDs returns the highest in-container task id live in the
+// placeholder's pid namespace and every task id held there (processes and
+// threads).
+func placeholderTaskIDs(procBase string, hostPID int) (highest int, held []int, err error) {
 	want, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "pid"))
 	if err != nil {
-		return 0, 0, fmt.Errorf("read placeholder pid namespace: %w", err)
+		return 0, nil, fmt.Errorf("read placeholder pid namespace: %w", err)
 	}
 
 	entries, err := os.ReadDir(procBase)
 	if err != nil {
-		return 0, 0, fmt.Errorf("read %s: %w", procBase, err)
+		return 0, nil, fmt.Errorf("read %s: %w", procBase, err)
 	}
 
 	see := func(nspid int) {
-		if nspid > max {
-			max = nspid
+		if nspid > highest {
+			highest = nspid
 		}
-		if nspid != 1 && (low == 0 || nspid < low) {
-			low = nspid
-		}
+		held = append(held, nspid)
 	}
 	for _, e := range entries {
 		pid, aerr := strconv.Atoi(e.Name())
@@ -467,10 +485,10 @@ func placeholderPIDs(procBase string, hostPID int) (max, low int, err error) {
 			}
 		}
 	}
-	if max == 0 {
-		return 0, 0, fmt.Errorf("no processes found in the placeholder's pid namespace")
+	if highest == 0 {
+		return 0, nil, fmt.Errorf("no processes found in the placeholder's pid namespace")
 	}
-	return max, low, nil
+	return highest, held, nil
 }
 
 func atoiOr0(s string) int {
@@ -519,23 +537,49 @@ const pidReservationTimeout = 90 * time.Second
 // A procfs read error is not fatal: the pid namespace may still be settling,
 // and treating a transient read as a missing reservation would reintroduce
 // exactly the false negative this function exists to avoid.
-func awaitPlaceholderPIDReservation(procBase string, hostPID int, log *logrus.Entry) (int, error) {
-	return awaitPlaceholderPIDReservationFor(procBase, hostPID, pidReservationTimeout, log)
+//
+// need, when known, is the set of task ids the dump recreates
+// (dumpedTaskIDs): a placeholder task below the floor is then a collision
+// only when it holds one of them. In a pod that shares its pid namespace
+// across containers, a sidecar started before the placeholder (a native
+// sidecar, which starts ahead of every container) holds a low pid, as it
+// did beside the captured process; only an exact clash matters.
+func awaitPlaceholderPIDReservation(procBase string, hostPID int, need map[int]bool, log *logrus.Entry) (int, error) {
+	return awaitPlaceholderPIDReservationFor(procBase, hostPID, pidReservationTimeout, need, log)
+}
+
+// placeholderClash returns a task id held in the placeholder that the
+// restore needs: one of need, or with need unknown, any but init's below
+// reservedPIDFloor; 0 when none.
+func placeholderClash(held []int, need map[int]bool) int {
+	clash := 0
+	for _, id := range held {
+		hit := false
+		if need != nil {
+			hit = need[id]
+		} else {
+			hit = id != 1 && id < reservedPIDFloor
+		}
+		if hit && (clash == 0 || id < clash) {
+			clash = id
+		}
+	}
+	return clash
 }
 
 // awaitPlaceholderPIDReservationFor is the body, with the wait injectable so
 // tests can exercise the timeout path without waiting it out.
-func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, log *logrus.Entry) (int, error) {
+func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, need map[int]bool, log *logrus.Entry) (int, error) {
 	deadline := time.Now().Add(timeout)
 	var lastSeen, lastLow int
 	var lastErr error
 	warned := false
 
 	for {
-		maxPID, low, err := placeholderPIDs(procBase, hostPID)
+		maxPID, held, err := placeholderTaskIDs(procBase, hostPID)
 		if err == nil {
-			lastSeen, lastLow = maxPID, low
-			if maxPID >= reservedPIDFloor && (low == 0 || low >= reservedPIDFloor) {
+			lastSeen, lastLow = maxPID, placeholderClash(held, need)
+			if maxPID >= reservedPIDFloor && lastLow == 0 {
 				return maxPID, nil
 			}
 		} else {
@@ -557,6 +601,11 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 	if lastSeen == 0 && lastErr != nil {
 		return 0, fmt.Errorf("criu-v2: could not read the placeholder's pid namespace "+
 			"to verify its pid range was reserved: %w", lastErr)
+	}
+	if lastSeen >= reservedPIDFloor && need != nil {
+		return lastSeen, fmt.Errorf(
+			"criu-v2: placeholder holds pid %d, which the checkpoint restores, after %s: "+
+				"CRIU's exact-pid fork would collide with it", lastLow, timeout)
 	}
 	if lastSeen >= reservedPIDFloor {
 		return lastSeen, fmt.Errorf(
@@ -643,4 +692,56 @@ func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool,
 		args = append(args, "--inet-addr-map", inetAddrMap, "--keep-network-lock")
 	}
 	return args
+}
+
+// dumpedTaskIDs returns the task ids a restore of the checkpoint in dir
+// recreates at their dumped values: every process and thread of its
+// pstree.img, and the session and process-group ids, which CRIU recreates
+// as helper tasks when their leader is not in the tree.
+func dumpedTaskIDs(dir string) (map[int]bool, error) {
+	img := ""
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "pstree.img" && img == "" {
+			img = p
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if img == "" {
+		return nil, fmt.Errorf("no pstree.img under %s", dir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "crit", "decode", "-i", img).Output()
+	if err != nil {
+		return nil, fmt.Errorf("crit decode %s: %w", img, err)
+	}
+	return parsePstreeIDs(out)
+}
+
+// parsePstreeIDs reads the task ids out of crit's JSON of a pstree.img.
+func parsePstreeIDs(b []byte) (map[int]bool, error) {
+	var doc struct {
+		Entries []struct {
+			PID     int   `json:"pid"`
+			PGID    int   `json:"pgid"`
+			SID     int   `json:"sid"`
+			Threads []int `json:"threads"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse pstree: %w", err)
+	}
+	if len(doc.Entries) == 0 {
+		return nil, fmt.Errorf("pstree has no tasks")
+	}
+	ids := map[int]bool{}
+	for _, e := range doc.Entries {
+		for _, id := range append([]int{e.PID, e.PGID, e.SID}, e.Threads...) {
+			if id > 0 {
+				ids[id] = true
+			}
+		}
+	}
+	return ids, nil
 }
