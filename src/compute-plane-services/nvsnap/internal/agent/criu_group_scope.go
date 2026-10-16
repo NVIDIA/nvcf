@@ -45,6 +45,9 @@ var criuScopeCache sync.Map // namespace -> criuScopeEntry
 // criuGroupScope returns the tenant scope of namespace ns: its function
 // version when the platform labelled it, else the namespace itself.
 func (a *Agent) criuGroupScope(ctx context.Context, ns string) (string, error) {
+	if a.kubeClient == nil {
+		return criuScopeOf(ns, nil), nil
+	}
 	if e, ok := criuScopeCache.Load(ns); ok && time.Since(e.(criuScopeEntry).at) < criuScopeTTL {
 		return e.(criuScopeEntry).scope, nil
 	}
@@ -68,7 +71,7 @@ func criuScopeOf(ns string, labels map[string]string) string {
 			return "function-version/" + v
 		}
 	}
-	return "namespace/" + ns
+	return webhook.CRIUNamespaceScope(ns)
 }
 
 // criuGroupKey is the group record key of a configuration (its cache URI)

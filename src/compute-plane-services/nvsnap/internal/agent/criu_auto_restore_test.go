@@ -126,3 +126,42 @@ func TestRecordCRIUCapture_FirstCaptureOfAHashWins(t *testing.T) {
 		t.Errorf("record = %+v, want the first checkpoint", got)
 	}
 }
+
+// The record carries the tenant scope of the capture's namespace, which
+// the webhook matches against a restoring pod's namespace: the function
+// version when the platform labelled the namespace, else the namespace.
+func TestRecordCRIUCapture_RecordsTheTenantScope(t *testing.T) {
+	const hash = "5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0be5c0"
+	ctx, log := context.Background(), logrus.NewEntry(logrus.New())
+	labelled := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "scope-fv-ns", Labels: map[string]string{"function-version-id": "fv-1"}}}
+	plain := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "scope-plain-ns"}}
+	for ns, want := range map[string]string{"scope-fv-ns": "function-version/fv-1", "scope-plain-ns": "namespace/scope-plain-ns"} {
+		local, err := checkpointstore.NewLocal(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cm := checkpointstore.NewConfigMapBackend(local, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
+		a := &Agent{captureBackend: cm, kubeClient: fake.NewSimpleClientset(labelled, plain), log: logrus.New(), config: Config{NodeName: "n1"}}
+		a.recordCRIUCapture(ctx, hash, "5c0b__1", CheckpointRequest{Namespace: ns, PodName: "p"}, "img", false, log)
+		got, err := cm.Stat(ctx, hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.SourcePodMeta[checkpointstore.CRIUScopeMetaKey] != want {
+			t.Errorf("%s: recorded scope %q, want %q", ns, got.SourcePodMeta[checkpointstore.CRIUScopeMetaKey], want)
+		}
+	}
+
+	// A scope that cannot be read leaves no record: the capture could
+	// never be restored, and an unscoped record must not exist.
+	local, err := checkpointstore.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := checkpointstore.NewConfigMapBackend(local, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
+	a := &Agent{captureBackend: cm, kubeClient: fake.NewSimpleClientset(), log: logrus.New(), config: Config{NodeName: "n1"}}
+	a.recordCRIUCapture(ctx, hash, "5c0b__1", CheckpointRequest{Namespace: "scope-missing-ns", PodName: "p"}, "img", false, log)
+	if _, err := cm.Stat(ctx, hash); !errors.Is(err, checkpointstore.ErrNotFound) {
+		t.Errorf("capture recorded although its scope was unreadable: %v", err)
+	}
+}

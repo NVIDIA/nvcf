@@ -16,4 +16,9 @@ const (
 	// InstanceCaptureMetaKey marks such a rank's capture manifest
 	// (SourcePodMeta), so a catalog row rebuilt from it is marked too.
 	InstanceCaptureMetaKey = "instance_capture"
+	// CRIUScopeMetaKey records the tenant scope of the namespace a CRIU
+	// capture was taken in (SourcePodMeta). A CRIU checkpoint holds the
+	// process's memory, so it is restored only into a pod of the same
+	// scope.
+	CRIUScopeMetaKey = "criu_scope"
 )
