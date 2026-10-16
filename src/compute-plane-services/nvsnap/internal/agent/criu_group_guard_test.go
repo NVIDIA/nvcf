@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -100,5 +101,38 @@ func TestFreezeTolerated(t *testing.T) {
 	}
 	if err := freezeTolerated([]*corev1.Pod{probedPod(6, dyn)}, 0); err != nil {
 		t.Errorf("a zero budget is not checked: %v", err)
+	}
+}
+
+func agentPod(name, node, rev string, ready bool) corev1.Pod {
+	cond := corev1.ConditionFalse
+	if ready {
+		cond = corev1.ConditionTrue
+	}
+	return corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"controller-revision-hash": rev}},
+		Spec:   corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: cond}}}}
+}
+
+func TestAgentsSettledOn(t *testing.T) {
+	settled := []corev1.Pod{agentPod("a1", "n1", "r2", true), agentPod("a2", "n2", "r2", true), agentPod("a3", "n3", "r2", true)}
+	if err := agentsSettledOn(settled, []string{"n1", "n2"}); err != nil {
+		t.Fatalf("settled agents: %v", err)
+	}
+	terminating := agentPod("a2", "n2", "r2", true)
+	terminating.DeletionTimestamp = &metav1.Time{}
+	for name, tc := range map[string]struct {
+		agents []corev1.Pod
+		nodes  []string
+		want   string
+	}{
+		"a rollout in progress":             {[]corev1.Pod{settled[0], agentPod("a2", "n2", "r1", true)}, []string{"n1"}, "two revisions"},
+		"an agent not ready":                {[]corev1.Pod{settled[0], agentPod("a2", "n2", "r2", false)}, []string{"n1"}, "not ready"},
+		"an agent terminating":              {[]corev1.Pod{settled[0], terminating}, []string{"n1"}, "terminating"},
+		"a member's node without its agent": {settled[:1], []string{"n1", "n2"}, "no agent runs on node n2"},
+	} {
+		if err := agentsSettledOn(tc.agents, tc.nodes); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
 	}
 }

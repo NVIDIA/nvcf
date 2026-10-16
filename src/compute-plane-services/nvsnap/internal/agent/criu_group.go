@@ -390,10 +390,18 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Warn("CRIU group capture: skipped; the instance is not the whole engine")
 		return false
 	}
-	if err := freezeTolerated(append(append([]*corev1.Pod{}, ranks...), companions...), a.config.Webhook.CaptureLivenessBudget); err != nil {
+	members := append(append([]*corev1.Pod{}, ranks...), companions...)
+	if ferr := freezeTolerated(members, a.config.Webhook.CaptureLivenessBudget); ferr != nil {
 		// Capturing it would take down the instance it captures.
-		log.WithError(err).Warn("CRIU group capture: skipped; the instance would not outlast its capture's freeze")
+		log.WithError(ferr).Warn("CRIU group capture: skipped; the instance would not outlast its capture's freeze")
 		return false
+	}
+	if serr := a.agentsSettled(ctx, members); serr != nil {
+		// A rollout of the agents restarts them one by one; a member
+		// whose agent restarts fails the capture, and the instance,
+		// stopped for it, restarts cold.
+		log.WithError(serr).Info("CRIU group capture: waiting for the node agents to settle")
+		return true
 	}
 	record, err := c.claimGroupRecord(ctx, key, leader, len(uris))
 	if err != nil {
@@ -410,7 +418,6 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	t0 := time.Now()
 	results, stopped, err := c.checkpointInstance(cctx, ranks, companions, companionContainers, log)
 	data := record.Data
-	members := append(append([]*corev1.Pod{}, ranks...), companions...)
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
 		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)

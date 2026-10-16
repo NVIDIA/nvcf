@@ -12,12 +12,15 @@ package agent
 // single pod.
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -138,6 +141,52 @@ func freezeTolerated(members []*corev1.Pod, livenessBudget int) error {
 	for _, p := range members {
 		if t, ok := webhook.LivenessTolerance(p); ok && livenessBudget > 0 && t < livenessBudget {
 			return fmt.Errorf("pod %s: its liveness probe tolerates %d s of silence, less than the %d s capture budget", p.Name, t, livenessBudget)
+		}
+	}
+	return nil
+}
+
+// agentLabelSelector selects the node agents' pods (the chart's selector).
+const agentLabelSelector = "app=nvsnap-agent"
+
+// agentsSettled refuses to start a capture while the node agents are not
+// all up on one revision: a rollout restarts them one by one, and a member
+// whose agent restarts mid-capture fails it.
+func (a *Agent) agentsSettled(ctx context.Context, members []*corev1.Pod) error {
+	pods, err := a.kubeClient.CoreV1().Pods(a.criuFailedNamespace()).List(ctx, metav1.ListOptions{LabelSelector: agentLabelSelector})
+	if err != nil {
+		return fmt.Errorf("list the node agents: %w", err)
+	}
+	nodes := make([]string, 0, len(members))
+	for _, m := range members {
+		nodes = append(nodes, m.Spec.NodeName)
+	}
+	return agentsSettledOn(pods.Items, nodes)
+}
+
+// agentsSettledOn reports why agents (the node agents' pods) are not
+// settled for a capture on nodes: one terminating or not Ready, two
+// revisions (a rollout in progress), or a node without an agent.
+func agentsSettledOn(agents []corev1.Pod, nodes []string) error {
+	rev, onNode := "", map[string]bool{}
+	for i := range agents {
+		p := &agents[i]
+		if p.DeletionTimestamp != nil {
+			return fmt.Errorf("agent %s on %s is terminating", p.Name, p.Spec.NodeName)
+		}
+		if h := p.Labels["controller-revision-hash"]; rev == "" {
+			rev = h
+		} else if h != rev {
+			return fmt.Errorf("agents run two revisions (%s, %s): a rollout is in progress", rev, h)
+		}
+		if !rootfsonly.IsPodReady(p) {
+			return fmt.Errorf("agent %s on %s is not ready", p.Name, p.Spec.NodeName)
+		}
+		onNode[p.Spec.NodeName] = true
+	}
+	for _, n := range nodes {
+		if !onNode[n] {
+			return fmt.Errorf("no agent runs on node %s", n)
 		}
 	}
 	return nil
