@@ -180,3 +180,72 @@ func TestShadowCopyGetsItsOwnRequestID(t *testing.T) {
 	require.NotEmpty(t, got[true][0])
 	require.NotEqual(t, "caller-id-1", got[true][0], "shadow copy must not reuse the primary id")
 }
+
+// Pass-through vanity hosts keep their pre-existing header behavior: the
+// gateway neither creates nor replaces request IDs there, so a function that
+// mints its own ID still reaches the client.
+func TestVanityHostPassesRequestIDsThrough(t *testing.T) {
+	const vanityHost = "vanity.test"
+	tests := []struct {
+		name      string
+		path      string
+		inboundID string
+	}{
+		{"no caller id", "/v1/example/infer", ""},
+		{"caller id", "/v1/example/infer", "caller-id-1"},
+		{"messages path no caller id", "/v1/messages", ""},
+		{"messages path caller id", "/v1/messages", "caller-id-1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan capturedRequest, 1)
+			upstream := captureServer(t, requests, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set(xRequestIDHeader, "function-x-request-id")
+				w.Header().Set(messagesRequestIDHeader, "function-request-id")
+				io.WriteString(w, `{}`)
+			})
+			mappings := requestIDMappings()
+			mappings.Vanity = map[string]config.VanityEntry{
+				"example": {
+					Host: vanityHost,
+					Paths: map[string]config.PathFunctionDetails{
+						"infer":    {Path: "/v1/example/infer", FunctionID: "vanity-func"},
+						"messages": {Path: "/v1/messages", FunctionID: "vanity-messages-func"},
+					},
+				},
+			}
+			mux := openAIMux(t, mappings, upstream.URL, upstream.URL)
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{}`))
+			req.Host = vanityHost
+			if tc.inboundID != "" {
+				req.Header.Set(xRequestIDHeader, tc.inboundID)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			require.Equal(t, []string{"function-x-request-id"}, rec.Header().Values(xRequestIDHeader), "the function's X-Request-Id must reach the client")
+			require.Equal(t, []string{"function-request-id"}, rec.Header().Values(messagesRequestIDHeader), "the function's Request-Id must reach the client")
+
+			received := awaitRequest(t, requests)
+			if tc.inboundID == "" {
+				require.Empty(t, received.headers.Values(xRequestIDHeader), "the gateway must not add an X-Request-Id on vanity hosts")
+			} else {
+				require.Equal(t, []string{tc.inboundID}, received.headers.Values(xRequestIDHeader), "the caller's X-Request-Id is forwarded unchanged")
+			}
+		})
+	}
+}
+
+// Requests to a host the gateway does not route keep the pre-existing
+// behavior too.
+func TestUnroutedHostGetsNoRequestID(t *testing.T) {
+	mux := openAIMux(t, requestIDMappings(), "http://nvcf.invalid", "http://llm.invalid")
+	req := httptest.NewRequest(http.MethodGet, "/info", nil)
+	req.Host = "other.test"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, rec.Header().Values(xRequestIDHeader))
+}

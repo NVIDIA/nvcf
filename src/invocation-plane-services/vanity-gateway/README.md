@@ -597,10 +597,13 @@ combinations are emitted at zero on startup. The primary request span records
 the deciding methods in the `shadow.sampling_methods` attribute. Neither
 records cache keys, credentials, or message content.
 
-Every response carries one `X-Request-Id`. The gateway keeps the caller's value
-or creates a UUID and sends the same value upstream, so the LLM Gateway logs the
-request under the same ID. An ID the upstream returns is replaced. Each shadow
-copy gets its own ID. The request log line includes the ID.
+Every response on the model API host (`openai.host`) carries one
+`X-Request-Id`. The gateway keeps the caller's value or creates a UUID and sends
+the same value upstream, so the LLM Gateway logs the request under the same ID.
+An ID the upstream returns is replaced. Each shadow copy gets its own ID. The
+request log line includes the ID. Pass-through vanity hosts do not add or
+replace request IDs; the caller's and the function's headers pass through
+unchanged.
 
 `gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
 Gateway server metric (`http_server_request_duration_seconds`) and as the

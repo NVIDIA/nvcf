@@ -110,8 +110,14 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 
 	serverTelemetry := middleware.ServerTelemetryMiddleware()
 
+	// Request IDs apply only on the model API host. Pass-through vanity hosts
+	// keep the caller's and the function's headers unchanged. The middleware
+	// runs on the root router so errors from the root middleware carry an ID.
+	requestIDRouter := &middleware.HostRouter{}
+	requestIDRouter.Register(mappings.OpenAI.Host, middleware.RequestID)
+
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
+	r.Use(requestIDRouter.Handler)
 	r.Use(middleware.RejectSpoofedShadowRequests(shadowHeader, serverTelemetry))
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
