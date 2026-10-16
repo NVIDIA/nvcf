@@ -21,6 +21,7 @@ go_library(
         "echo.go",
         "provider.go",
         "stargate.go",
+        "upstream_error.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider",
     visibility = ["//visibility:public"],
@@ -53,6 +54,7 @@ go_test(
         "chat_passthrough_test.go",
         "stargate_last_cluster_test.go",
         "stargate_test.go",
+        "upstream_error_test.go",
     ],
     embed = [":provider"],
     deps = [

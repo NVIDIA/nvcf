@@ -60,6 +60,7 @@ data:
   {{- end }}
   NVCF_DEFAULT_RPM: {{ $cfg.defaultRpm | toString | quote }}
   NVCF_DEFAULT_TPM: {{ $cfg.defaultTpm | toString | quote }}
+  NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES: {{ $cfg.exposeRouterErrorCodes | default false | toString | quote }}
   {{- with .Values.llmApiGateway.metrics }}
   {{- if .enabled }}
   METRICS_PORT: {{ .port | toString | quote }}

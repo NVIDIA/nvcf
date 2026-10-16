@@ -47,6 +47,10 @@ type Config struct {
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	// ExposeRouterErrorCodes puts the request router's rejection reason, such
+	// as no_eligible_candidates, in error.code of OpenAI-format error
+	// responses. When false, the reason is only logged.
+	ExposeRouterErrorCodes bool
 }
 
 type ServerConfig struct {
@@ -279,6 +283,9 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("MODEL_URI_ALLOWLIST_ENABLED"); ok {
 		cfg.ModelURIAllowlistEnabled = v
+	}
+	if v, ok := errs.boolean("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES"); ok {
+		cfg.ExposeRouterErrorCodes = v
 	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.

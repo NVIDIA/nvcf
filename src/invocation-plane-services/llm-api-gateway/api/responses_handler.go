@@ -101,6 +101,14 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 	if resp == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		copyProxyHeaders(c.Response().Header(), resp.Header)
+		setMultiTurnSessionResponseHeader(c)
+		if err := proxyUpstreamError(resp); err != nil {
+			h.finalizeNativeResponsesUsage(c, normalized, nil, clientWantsStream)
+			return err
+		}
+	}
 
 	if clientWantsStream {
 		return h.relayNativeResponsesStream(c, normalized, resp)
