@@ -195,7 +195,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		}
 		if !libMounted {
 			vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-				Path: bundleRoot + "/nvsnap", Type: &dir}}})
+				Path: m.bundleDir(restoreBundle(man, m.BundleID)), Type: &dir}}})
 			mounts = append(mounts, corev1.VolumeMount{Name: gpushareLibVolume, MountPath: nvsnapToolsMountPath, ReadOnly: true})
 		}
 	}

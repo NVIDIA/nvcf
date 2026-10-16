@@ -306,6 +306,11 @@ spec:
               name: webhook
             {{- end }}
           volumeMounts:
+            # The node bundle root: the agent reads the current bundle
+            # version, fetches a version a restore needs, and removes
+            # unused ones (docs/design/VERSIONED-NODE-BUNDLE.md).
+            - name: host-bundle
+              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
             - name: checkpoints
               mountPath: /var/lib/nvsnap/checkpoints
             {{- if .Values.agent.podCacheDir }}

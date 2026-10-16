@@ -121,6 +121,7 @@ func (a *Agent) criuRestorer() *criuAutoRestorer {
 }
 
 func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
+	c.ensurePlaceholderBundles(ctx, pod)
 	c.considerReservePIDs(ctx, pod)
 	c.considerGroupCapture(ctx, pod)
 	c.considerCompanionPlaceholder(ctx, pod)
@@ -327,6 +328,10 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 	if gpushare {
 		// The restore mounts the checkpoint's chunk store and the library.
 		m.SourcePodMeta["gpushare"] = "true"
+	}
+	if id := a.podBundle(ctx, req.Namespace, req.PodName); id != "" {
+		// ... the library of the bundle version the pod ran with.
+		m.SourcePodMeta[webhook.BundleMeta] = id
 	}
 	if req.CaptureID != "" {
 		m.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] = "true"

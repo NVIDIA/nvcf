@@ -72,13 +72,9 @@ func (m *Mutator) onAgentNodes(sel map[string]string) (map[string]string, *corev
 // helperVolume is the node directory the agent stages its bundle into,
 // the helper among it.
 func (m *Mutator) helperVolume() corev1.Volume {
-	root := m.HostBundleRoot
-	if root == "" {
-		root = DefaultHostBundleRoot
-	}
 	dir := corev1.HostPathDirectory
 	return corev1.Volume{Name: helperVolumeName, VolumeSource: corev1.VolumeSource{
-		HostPath: &corev1.HostPathVolumeSource{Path: root + "/nvsnap", Type: &dir}}}
+		HostPath: &corev1.HostPathVolumeSource{Path: m.bundleDir(m.BundleID), Type: &dir}}}
 }
 
 // withHelperVolume adds the helper's volume to the pod once.

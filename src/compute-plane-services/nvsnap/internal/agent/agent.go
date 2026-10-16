@@ -585,6 +585,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// the host checks of a pod on this node.
 	router.HandleFunc("/v1/capture-preflight/pod/{namespace}/{pod}", a.podPreflightHandler).Methods("GET")
 	router.HandleFunc("/v1/capture-preflight/{namespace}/{pod}", a.instancePreflightHandler).Methods("GET")
+	// A node bundle version, for a peer whose restore placeholder needs it
+	// (bundle_versions.go).
+	router.HandleFunc("/v1/bundles/{id}", a.bundleHandler).Methods("GET")
 	router.HandleFunc("/v1/group-freeze/{session}/{namespace}/{pod}", a.freezeHandler).Methods("GET", "POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")

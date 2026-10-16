@@ -174,3 +174,33 @@ func TestCRIUGroupRestore_SharedPIDNamespaceReservesFirst(t *testing.T) {
 		t.Fatalf("init containers %v, want %s first", names, PIDReserveInit)
 	}
 }
+
+// A placeholder mounts, for the restored process, the bundle version its
+// capture recorded; the helper comes from the current one.
+func TestCRIUGroupRestore_MountsTheRecordedBundle(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"w__1"}, Companion: []bool{false}, GPUShare: true, Bundles: []string{"0ld0"}}
+	m, _ := groupMutator(t, g, "")
+	m.BundleID = "cafe"
+	m.HostBundleRoot = "/b"
+	pod := singleGPUPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	paths := map[string]string{}
+	for _, v := range got.Spec.Volumes {
+		if v.HostPath != nil {
+			paths[v.Name] = v.HostPath.Path
+		}
+	}
+	if paths[gpushareLibVolume] != "/b/versions/0ld0" {
+		t.Errorf("library volume %q, want the recorded version", paths[gpushareLibVolume])
+	}
+	if ids := PodBundleIDs(got); len(ids) == 0 || ids[0] != "0ld0" {
+		t.Errorf("PodBundleIDs = %v, want the library's version first", ids)
+	}
+	if b := (&Mutator{HostBundleRoot: "/b"}).bundleDir(""); b != "/b/nvsnap" {
+		t.Errorf("no version: %q, want the legacy tree", b)
+	}
+}

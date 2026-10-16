@@ -63,6 +63,25 @@ mkdir -p "$TOOLS_TMP"
 cp -a /criu-bundle/. "$TOOLS_TMP/"
 if [[ -x /usr/local/bin/py-spy ]]; then cp /usr/local/bin/py-spy "$TOOLS_TMP/"; fi
 if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
+
+# ─── Phase 1b: versioned copy (docs/design/VERSIONED-NODE-BUNDLE.md) ──
+# Pods mount <root>/versions/<id>, never changed once staged: a process
+# keeps mapping the files it started with, and a checkpoint's restore mounts
+# the version its capture ran. The id is the content hash of the bundle.
+ROOT="$(dirname "$NVSNAP_DST")"
+VERSIONS="$ROOT/versions"
+BUNDLE_ID="$(cd "$TOOLS_TMP" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)"
+mkdir -p "$VERSIONS"
+if [[ ! -d "$VERSIONS/$BUNDLE_ID" ]]; then
+  rm -rf "$VERSIONS/.$BUNDLE_ID.tmp"
+  cp -a "$TOOLS_TMP" "$VERSIONS/.$BUNDLE_ID.tmp"
+  mv "$VERSIONS/.$BUNDLE_ID.tmp" "$VERSIONS/$BUNDLE_ID"
+  echo "restore-bundle-init: staged version $BUNDLE_ID"
+fi
+echo "$BUNDLE_ID" > "$ROOT/.current-bundle.tmp"
+mv -f "$ROOT/.current-bundle.tmp" "$ROOT/current-bundle"
+
+# Legacy tree, for pods admitted before versions.
 atomic_swap "$NVSNAP_DST" "$TOOLS_TMP"
 
 # ─── Sanity checks ────────────────────────────────────────────────────
@@ -71,4 +90,8 @@ if [[ ! -x "$NVSNAP_DST/criu" ]]; then
   ls -la "$NVSNAP_DST" >&2
   exit 1
 fi
-echo "restore-bundle-init: staged into $NVSNAP_DST"
+if [[ ! -x "$VERSIONS/$BUNDLE_ID/criu" ]]; then
+  echo "restore-bundle-init: $VERSIONS/$BUNDLE_ID/criu missing or not executable" >&2
+  exit 1
+fi
+echo "restore-bundle-init: staged into $NVSNAP_DST and version $BUNDLE_ID"

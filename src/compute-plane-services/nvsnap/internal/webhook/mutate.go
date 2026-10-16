@@ -396,6 +396,10 @@ type Mutator struct {
 	// Operators don't get a Helm knob, by design: a single
 	// config value can't safely span all three.
 	HostBundleRoot string
+	// BundleID is the node bundle version the agent staged
+	// (<root>/current-bundle); pods mount <root>/versions/<BundleID>.
+	// Empty mounts the legacy <root>/nvsnap.
+	BundleID string
 
 	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
 	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.

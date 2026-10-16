@@ -211,6 +211,8 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
+		// New pods mount the bundle version this node's agent staged.
+		BundleID: a.currentBundle(),
 		// gpushare: per-pod chunk stores live on the node-local checkpoint
 		// disk, next to the checkpoints they are collected into.
 		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),

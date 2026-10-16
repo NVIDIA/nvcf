@@ -117,7 +117,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		return webhook.CRIUGroup{}, false
 	}
 	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true", VerifyNamespace: verifyNamespace(data),
-		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size)}
+		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size), Bundles: make([]string, size)}
 	for i := range size {
 		g.Checkpoints[i] = data[fmt.Sprintf("checkpoint.%d", i)]
 		if g.Checkpoints[i] == "" {
@@ -126,6 +126,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		g.Nodes[i] = data[fmt.Sprintf("node.%d", i)]
 		g.Companion[i] = data[fmt.Sprintf("companion.%d", i)] == "true"
 		g.Containers[i] = data[fmt.Sprintf("container.%d", i)]
+		g.Bundles[i] = data[fmt.Sprintf("bundle.%d", i)]
 	}
 	return g, true
 }
@@ -450,6 +451,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		for i, r := range results {
 			data[fmt.Sprintf("checkpoint.%d", i)] = r.CheckpointID
 			data[fmt.Sprintf("node.%d", i)] = members[i].Spec.NodeName
+			if id := webhook.PodBundleID(members[i]); id != "" {
+				data[fmt.Sprintf("bundle.%d", i)] = id
+			}
 			if i >= len(ranks) {
 				data[fmt.Sprintf("companion.%d", i)] = "true"
 				data[fmt.Sprintf("container.%d", i)] = companionContainers[members[i].Name]

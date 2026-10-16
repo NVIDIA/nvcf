@@ -52,6 +52,9 @@ type CRIUGroup struct {
 	// Containers names the container each member's checkpoint was taken
 	// from (by slot); empty in records from before it was recorded.
 	Containers []string
+	// Bundles names the node bundle version each member's pod mounted (by
+	// slot); its placeholder mounts the same. Empty for none recorded.
+	Bundles []string
 	// VerifyNamespace, when set, is the only namespace that may restore
 	// from the capture: the instance stopped for it, whose restore
 	// verifies it. Empty once a restore has succeeded.
@@ -168,6 +171,9 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	if ordinal < len(g.Containers) && g.Containers[ordinal] != "" {
 		man.SourcePodMeta[restoreContainerMeta] = g.Containers[ordinal]
+	}
+	if ordinal < len(g.Bundles) && g.Bundles[ordinal] != "" {
+		man.SourcePodMeta[BundleMeta] = g.Bundles[ordinal]
 	}
 	id := g.Checkpoints[ordinal]
 	cp, err := m.criuRestorePatches(pod, id, man)

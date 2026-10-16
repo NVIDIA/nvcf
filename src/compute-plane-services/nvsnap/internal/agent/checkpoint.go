@@ -344,8 +344,12 @@ type CheckpointMetadata struct {
 	CatalogInfo *CatalogInfo `json:"catalogInfo,omitempty"`
 
 	// Container info
-	PodName        string            `json:"podName"`
-	PodNamespace   string            `json:"podNamespace"`
+	PodName      string `json:"podName"`
+	PodNamespace string `json:"podNamespace"`
+	// Bundle is the node bundle version the pod mounted
+	// (docs/design/VERSIONED-NODE-BUNDLE.md): its restore mounts the same,
+	// and the version stays on the node while the checkpoint does.
+	Bundle         string            `json:"bundle,omitempty"`
 	NodeName       string            `json:"nodeName"`
 	ContainerName  string            `json:"containerName"`
 	ContainerID    string            `json:"containerID"`
@@ -868,6 +872,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	}
 	metadata.CapturePath = CapturePathCRIUV2
 	metadata.GPUShare = gpushareInfo
+	metadata.Bundle = a.podBundle(ctx, req.Namespace, req.PodName)
 
 	// Calculate checkpoint size (skip integrity checksums — too slow for 28 GB+)
 	var checkpointSize int64
