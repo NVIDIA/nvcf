@@ -46,6 +46,7 @@ const (
 	HeaderRequestID          = "X-Request-ID"
 	HeaderTargetRegion       = "X-NVCF-Target-Region"
 	HeaderLegacyTargetRegion = "X-Groq-Region"
+	maxRequestIDLength       = 128
 
 	// Anthropic SDKs read the request ID only from this header.
 	headerMessagesRequestID = "Request-Id"
@@ -66,6 +67,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			requestStart := time.Now()
 
 			requestID := requestIDHeader(gc.Request().Header)
+			gc.Request().Header.Set(HeaderRequestID, requestID)
 			gc.store.Set(contextKeyRequestID, requestID)
 			// The error handler receives the original echo context.
 			ec.Set(contextKeyRequestID, requestID)
@@ -162,9 +164,28 @@ func logRequestBodyReadFailure(ctx context.Context, err error) {
 
 func requestIDHeader(headers http.Header) string {
 	if requestID := headers.Get(HeaderRequestID); requestID != "" {
-		return requestID
+		if validRequestID(requestID) {
+			return requestID
+		}
 	}
 	return uuid.NewString()
+}
+
+func validRequestID(id string) bool {
+	if len(id) == 0 || len(id) > maxRequestIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '.' || c == '_' || c == ':' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func storeRequestContext(
