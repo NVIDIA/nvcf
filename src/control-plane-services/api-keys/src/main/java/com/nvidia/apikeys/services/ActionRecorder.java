@@ -30,7 +30,7 @@ public class ActionRecorder {
 
     public enum ResourceType {SERVICE, KEY_OWNER, API_KEY, USER}
 
-    public enum Action {SUSPEND, UPDATE, CREATE, DELETE, INTROSPECT, ACTIVE, SUSPENDED, NOT_APPLICABLE}
+    public enum Action {SUSPEND, REVOKE, UPDATE, CREATE, DELETE, INTROSPECT, ACTIVE, SUSPENDED, NOT_APPLICABLE}
 
     public static final String VALUE_NOT_APPLICABLE = "N/A";
 

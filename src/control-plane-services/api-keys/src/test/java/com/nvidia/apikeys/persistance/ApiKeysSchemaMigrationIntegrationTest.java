@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
 class ApiKeysSchemaMigrationIntegrationTest {
 
     @Test
-    void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied() throws IOException {
+    void migrationAddsOwnerIndexesAndKeysV2AndPreservesLegacyKeysWhenReapplied() throws IOException {
         Session session = IntegrationTestConfiguration.CQL_SESSION;
         String keyspace = "api_keys_test_" + UUID.randomUUID().toString().replace("-", "");
         session.execute("CREATE KEYSPACE " + keyspace + " WITH replication = "
@@ -112,6 +112,9 @@ class ApiKeysSchemaMigrationIntegrationTest {
                 .extracting(row -> row.getString("api_key_hash"), row -> row.getString("status"),
                         row -> row.getString("key_details"))
                 .containsExactly(tuple("legacy-hash", "ACTIVE", "legacy-details"));
+        assertThat(session.getCluster().getMetadata().getKeyspace(keyspace).getTable("keys")
+                .getColumn("nca_id")).isNull();
+        assertThat(session.execute("SELECT * FROM " + keyspace + ".keys_v2").all()).isEmpty();
         assertThat(session.execute("SELECT owner_type, owner_id, issuer_service_id, key_id, key_status"
                 + " FROM " + keyspace + ".keys_by_owner_and_service").all())
                 .extracting(row -> row.getString("owner_type"), row -> row.getString("owner_id"),
