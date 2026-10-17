@@ -28,7 +28,8 @@ import (
 const (
 	// RequestIDHeader carries the NVCF request ID. The LLM Gateway reuses an
 	// inbound value, so one ID spans both services.
-	RequestIDHeader = "X-Request-Id"
+	RequestIDHeader    = "X-Request-Id"
+	maxRequestIDLength = 128
 	// messagesRequestIDHeader is the header Anthropic SDKs report as the request ID.
 	messagesRequestIDHeader = "Request-Id"
 	messagesPath            = "/v1/messages"
@@ -43,7 +44,7 @@ type requestIDContextKey struct{}
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
-		if id == "" {
+		if !validRequestID(id) {
 			id = NewRequestID()
 		}
 		r.Header.Set(RequestIDHeader, id)
@@ -61,6 +62,23 @@ func RequestID(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, chimiddleware.RequestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func validRequestID(id string) bool {
+	if len(id) == 0 || len(id) > maxRequestIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '.' || c == '_' || c == ':' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // NewRequestID returns a new random request ID.

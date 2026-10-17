@@ -138,6 +138,44 @@ func TestProxiedResponsesCarryOneRequestIDSentUpstream(t *testing.T) {
 	}
 }
 
+func TestInvalidCallerRequestIDsAreRegenerated(t *testing.T) {
+	tests := []struct {
+		name      string
+		inboundID string
+		wantKept  bool
+	}{
+		{"maximum length and allowed characters", strings.Repeat("a", 122) + "._:-Z9", true},
+		{"too long", strings.Repeat("a", 129), false},
+		{"space", "caller id", false},
+		{"disallowed character", "caller+id", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan capturedRequest, 1)
+			upstream := captureServer(t, requests, func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, `{}`)
+			})
+			mux := openAIMux(t, requestIDMappings(), upstream.URL, upstream.URL)
+			req := openAIRequest(t, "/v1/chat/completions", `{"model":"nvcf/model","messages":[]}`)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(xRequestIDHeader, tc.inboundID)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			id := requireOneRequestID(t, rec.Header(), false)
+			if tc.wantKept {
+				require.Equal(t, tc.inboundID, id)
+			} else {
+				require.NotEqual(t, tc.inboundID, id)
+				require.Len(t, id, 36, "regenerated request ID should be a UUID")
+			}
+			received := awaitRequest(t, requests)
+			require.Equal(t, []string{id}, received.headers.Values(xRequestIDHeader))
+		})
+	}
+}
+
 // Each shadow copy is a separate upstream request, so it gets its own ID. The
 // trace still links it to the primary.
 func TestShadowCopyGetsItsOwnRequestID(t *testing.T) {
