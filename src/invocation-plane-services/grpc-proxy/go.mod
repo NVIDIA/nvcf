@@ -11,7 +11,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.1
 	github.com/carlmjohnson/versioninfo v0.22.5
-	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v4 v4.2.1
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/cloudevents/sdk-go/v2 v2.16.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/cors v1.2.2
