@@ -37,10 +37,6 @@ on:
         description: Optional stack tag to render and validate without publishing.
         required: false
         type: string
-      release_tag:
-        description: Optional existing release tag to replay, including an unpublished Helm chart.
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -84,7 +80,7 @@ jobs:
   # work.
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || (inputs.operation == 'auto' && inputs.inventory_tag == '' && inputs.release_tag == ''))
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || (inputs.operation == 'auto' && inputs.inventory_tag == ''))
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
@@ -303,7 +299,7 @@ jobs:
 
   tag-release-notes:
     name: tag release
-    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    if: github.ref_type == 'tag'
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
@@ -313,32 +309,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Prepare existing chart tag for replay
-        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          case "${RELEASE_TAG}" in
-            deploy/helm/*/v*) ;;
-            *) echo "ERROR: release_tag must be a deploy/helm/*/v* tag." >&2; exit 1 ;;
-          esac
-          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
-            echo "ERROR: release_tag does not identify an existing tag." >&2
-            exit 1
-          fi
-          git worktree add --detach \
-            "${RUNNER_TEMP}/release-source" \
-            "refs/tags/${RELEASE_TAG}"
-          echo "NVCF_RELEASE_SOURCE_ROOT=${RUNNER_TEMP}/release-source" >> "${GITHUB_ENV}"
-
       - uses: actions/setup-go@v5
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
+        if: startsWith(github.ref_name, 'deploy/stacks/')
         with:
           go-version-file: tools/go-toolchain/go.mod
 
       - name: Install Helm release tool
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/') || startsWith(inputs.release_tag || github.ref_name, 'deploy/helm/')
+        if: startsWith(github.ref_name, 'deploy/stacks/')
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
@@ -352,7 +329,7 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Install Helmfile inventory tool
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
+        if: startsWith(github.ref_name, 'deploy/stacks/')
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
@@ -367,8 +344,7 @@ jobs:
 
       - name: Validate tag and create release notes
         env:
-          HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json
-          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
           NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
         run: ./tools/ci/github-release tag "$RELEASE_TAG"
