@@ -743,6 +743,10 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
 	dopts := dumpV2Opts{LeaveRunning: req.LeaveRunning, FabricSession: req.GPUShareFabricSession, Snapshot: snapshot}
+	var (
+		frozenAt, dumpAt clocks
+		held             bool
+	)
 	if req.GroupFreeze {
 		session := req.GPUShareFabricSession
 		if session == "" {
@@ -756,9 +760,21 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 			return a.awaitGroupFreeze(ctx, session, req.Namespace, req.PodName, log)
 		}
 		// A held companion's container is frozen: a dump from outside
-		// seizes it frozen; one from inside thaws it first.
-		dopts.HeldCgroup = func() string { return a.heldTargetDir(key) }
-		dopts.ThawTarget = func() { a.thawHoldTarget(key, log) }
+		// seizes it frozen; one from inside thaws it first. Either hook runs
+		// as the dump starts: the clocks then say how long the container
+		// was held (frozen_clock.go).
+		dumpStarts := func() {
+			frozenAt, held = a.heldTargetSince(key)
+			dumpAt, _ = readClocks()
+		}
+		dopts.HeldCgroup = func() string {
+			dumpStarts()
+			return a.heldTargetDir(key)
+		}
+		dopts.ThawTarget = func() {
+			dumpStarts()
+			a.thawHoldTarget(key, log)
+		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
 	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, dopts, log)
@@ -780,6 +796,14 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	criuSpan.End()
 
 	log.Info("Process checkpointed with CRIU")
+	if held && dumpAt != (clocks{}) {
+		by := frozenAt.heldFor(dumpAt)
+		if n, serr := shiftTimensImages(checkpointDir, by); serr != nil {
+			log.WithError(serr).Warn("held container: cannot take its hold out of its dumped clocks; its restore counts the hold as time it ran")
+		} else if n > 0 {
+			log.WithField("held", by.monotonic.Round(time.Millisecond).String()).Info("held container: its dumped clocks continue from when the hold froze it")
+		}
+	}
 
 	// Snapshot the source container's overlay upperdir into the checkpoint
 	// directory. The upperdir is the container's writable diff layer —

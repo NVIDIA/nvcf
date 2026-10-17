@@ -45,8 +45,11 @@ type podHold struct {
 	mu     sync.Mutex
 	frozen []string // cgroup directories the hold froze
 	target string   // the dumped container's directory, while frozen
-	record string   // the hold's record, for an agent that restarts
-	timer  *time.Timer
+	// frozenAt is when target was frozen (frozen_clock.go); zero when the
+	// hold left it running.
+	frozenAt clocks
+	record   string // the hold's record, for an agent that restarts
+	timer    *time.Timer
 }
 
 type podHolds struct {
@@ -177,6 +180,9 @@ func (a *Agent) holdCgroups(key, target string, keep bool, log *logrus.Entry) er
 		h.frozen = append(h.frozen, d)
 		if d == target {
 			h.target = d
+			if c, cerr := readClocks(); cerr == nil {
+				h.frozenAt = c
+			}
 		}
 	}
 	h.timer = time.AfterFunc(podHoldTimeout, func() {
@@ -218,6 +224,17 @@ func (a *Agent) heldTargetDir(key string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.target
+}
+
+// heldTargetSince is when the hold froze its dumped container, if it did.
+func (a *Agent) heldTargetSince(key string) (clocks, bool) {
+	h := a.holds.get(key)
+	if h == nil {
+		return clocks{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.frozenAt, h.frozenAt != (clocks{})
 }
 
 // releaseHold thaws every container a hold froze; a key without a hold
