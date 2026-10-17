@@ -34,7 +34,7 @@ func main() {
 	logger := setupLogger()
 	defer tracing.Shutdown()
 	err := NewRootCommand(logger).Execute()
-	if err != nil && err.Error() != "received signal interrupt" {
+	if err != nil && err.Error() != "received signal interrupt" && err.Error() != "received signal terminated" {
 		zap.S().Panic(err)
 	}
 }
