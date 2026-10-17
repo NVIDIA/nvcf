@@ -179,6 +179,9 @@ public class IcmsConfigurationProperties {
     // Empty by default = existing behavior. Read directly by isGpuAllowedForNca and isInstanceTypeAllowedForNca
     private Map<String, Map<String, List<String>>> gpuGating = new HashMap<>();
 
+    // Per-NCA allowlist of clusters: ncaId -> clusterIds
+    private Map<String, List<String>> clusterGating = new HashMap<>();
+
     private Set<String> supportedInstanceTypes = new HashSet<>();
     private Set<String> supportedGpus = new HashSet<>();
 
@@ -196,6 +199,14 @@ public class IcmsConfigurationProperties {
     private static final String MESG_GPU_GATING_BLANK_GPU_NAME =
             "icms.gpu-gating lists an entry with a null or blank GPU name for ncaId {}, dropping " +
                     "the entry";
+
+    private static final String MESG_CLUSTER_GATING_NO_CLUSTERS =
+            "icms.cluster-gating lists ncaId {} with no clusters, ignoring the entry and leaving " +
+                    "the account ungated";
+
+    private static final String MESG_CLUSTER_GATING_BLANK_CLUSTER_ID =
+            "icms.cluster-gating lists a null or blank cluster id for ncaId {}, the entry can " +
+                    "never match a cluster";
 
     // Temporary verification hook; remove after remote config support is complete.
     @EventListener(RefreshScopeRefreshedEvent.class)
@@ -233,6 +244,8 @@ public class IcmsConfigurationProperties {
         }
 
         logGpuGatingIssues();
+
+        logClusterGatingIssues();
     }
 
     private void createSqsQueues() {
@@ -331,6 +344,10 @@ public class IcmsConfigurationProperties {
         return allowedGpusFor(ncaId) != null;
     }
 
+    public boolean hasClusterGating(@Nullable String ncaId) {
+        return allowedClustersFor(ncaId) != null;
+    }
+
     private void logGpuGatingIssues() {
         if (gpuGating == null || gpuGating.isEmpty()) {
             return;
@@ -348,6 +365,54 @@ public class IcmsConfigurationProperties {
                 }
             });
         });
+    }
+
+    private void logClusterGatingIssues() {
+        if (clusterGating == null || clusterGating.isEmpty()) {
+            return;
+        }
+        clusterGating.forEach((ncaId, configuredClusters) -> {
+            if (!hasNonBlank(configuredClusters)) {
+                log.error(MESG_CLUSTER_GATING_NO_CLUSTERS, ncaId);
+                return;
+            }
+            if (configuredClusters.stream().anyMatch(id -> id == null || id.isBlank())) {
+                log.error(MESG_CLUSTER_GATING_BLANK_CLUSTER_ID, ncaId);
+            }
+        });
+    }
+
+    /**
+     * Whether {@code icms.cluster-gating} lets the NCA ID see and allocate in the given cluster.
+     * For compute-platform rows the cluster id is the zone name, so this is also the zone gate.
+     *
+     * @param ncaId     the NGC org / NCA ID
+     * @param clusterId the cluster id, which is the zone name for compute-platform clusters
+     * @return {@code true} if allowed, including when the NCA ID has no gating entry
+     */
+    public boolean isClusterAllowedForNca(@Nullable String ncaId, @Nullable String clusterId) {
+        List<String> allowedClusters = allowedClustersFor(ncaId);
+        if (allowedClusters == null) {
+            return true;
+        }
+        if (clusterId == null || clusterId.isBlank()) {
+            return false;
+        }
+        return allowedClusters.contains(clusterId);
+    }
+
+    /**
+     * The clusters {@code icms.cluster-gating} configures for this NCA ID, or {@code null} when
+     * the account is ungated. An entry present but empty, or holding nothing but blanks, counts
+     * as ungated: a truncated config must not black-hole an account.
+     */
+    @Nullable
+    private List<String> allowedClustersFor(@Nullable String ncaId) {
+        if (ncaId == null || clusterGating == null) {
+            return null;
+        }
+        List<String> allowedClusters = clusterGating.get(ncaId);
+        return hasNonBlank(allowedClusters) ? allowedClusters : null;
     }
 
     /**
