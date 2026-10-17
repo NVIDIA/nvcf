@@ -429,6 +429,13 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 
 	log.Info("CRIU group capture: instance ready; checkpointing it")
+	// The Services that lead to the instance's pods, read while it serves:
+	// once the capture holds the pods, their readiness probes fail and the
+	// Services no longer list them, so read after the dump they lead
+	// nowhere, and the restore closes every connection through them (seen
+	// 2026-10-17: the ranks' etcd and NATS connections, and a worker that
+	// shut down when its etcd lease could not reconnect).
+	aliases := c.a.instanceServiceAliases(ctx, members)
 	cctx, cancel := context.WithTimeout(ctx, criuGroupCaptureTimeout)
 	defer cancel()
 	t0 := time.Now()
@@ -464,7 +471,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		if c.a.gpushareEnabledFor(ranks[0]) {
 			data["gpushare"] = "true"
 		}
-		if aliases := c.a.instanceServiceAliases(ctx, members); aliases != "" {
+		if aliases != "" {
 			data["serviceAddrs"] = aliases
 		}
 		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded; the instance restores from it to verify it")
