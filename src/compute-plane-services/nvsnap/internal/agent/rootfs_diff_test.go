@@ -162,13 +162,15 @@ func (e *tarErr) Error() string { return e.err.Error() + ": " + string(e.out) }
 func TestTarMount_ExcludesNestedMounts(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "src")
-	for _, d := range []string{"cache/.triton/C6", "hf/model"} {
+	for _, d := range []string{"cache/.triton/C6", "hf/model", "cache/inductor/hf"} {
 		if err := os.MkdirAll(filepath.Join(src, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(src, "cache/.triton/C6/launcher.so"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"cache/.triton/C6/launcher.so", "cache/inductor/hf/k.py"} {
+		if err := os.WriteFile(filepath.Join(src, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	out := filepath.Join(tmp, "s.tar")
 	if err := tarMount(os.Getpid(), src, out, []string{"hf"}, nil); err != nil {
@@ -180,8 +182,62 @@ func TestTarMount_ExcludesNestedMounts(t *testing.T) {
 			t.Errorf("nested mount %q is in the archive", n)
 		}
 	}
-	if !slices.Contains(names, "cache/.triton/C6/launcher.so") {
-		t.Errorf("archive lacks the cache file: %v", names)
+	for _, want := range []string{"cache/.triton/C6/launcher.so", "cache/inductor/hf/k.py"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("archive lacks %s: %v", want, names)
+		}
+	}
+}
+
+// Extraction leaves out only the placeholder's nested mount at the top of
+// the replayed mount, not every directory deeper down that shares its name
+// (vLLM's inductor cache has an hf/ of its own).
+func TestReplayExtractArgs_ExcludesOnlyTheNestedMount(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	files := map[string]string{
+		"hf/model/w.bin":             "model",
+		"cache/inductor/hf/k.py":     "kernel",
+		"cache/inductor/hf/k.config": "config",
+		"a/b/c":                      "nested",
+		"x/a/b/c":                    "deep",
+	}
+	for f, body := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(src, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, f), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An archive that still carries the nested mounts, as older captures do.
+	out := filepath.Join(tmp, "s.tar")
+	if err := tarMount(os.Getpid(), src, out, nil, nil); err != nil {
+		t.Fatalf("tarMount: %v", err)
+	}
+	dst := filepath.Join(tmp, "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	cmd := exec.CommandContext(t.Context(), "tar", replayExtractArgs(dst, []string{"hf", "a/b"})...) //nolint:gosec // test: the args under test
+	cmd.Stdin = f
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v: %s", err, b)
+	}
+	for f := range files {
+		_, err := os.Lstat(filepath.Join(dst, f))
+		excluded := strings.HasPrefix(f, "hf/") || strings.HasPrefix(f, "a/b/")
+		if excluded && err == nil {
+			t.Errorf("%s was extracted over the nested mount", f)
+		}
+		if !excluded && err != nil {
+			t.Errorf("%s was not extracted: %v", f, err)
+		}
 	}
 }
 

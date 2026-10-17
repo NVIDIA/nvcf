@@ -398,11 +398,7 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 		}
 		nested = nestedMountPoints(mps, mp)
 	}
-	args := []string{"-C", mp, "-xf", "-", "--xattrs", "--acls", "--numeric-owner", "--preserve-permissions", "--overwrite"}
-	for _, e := range nested {
-		args = append(args, "--exclude=./"+e, "--exclude="+e)
-	}
-	cmd := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", inContainerTool(placeholderPID, "tar")}, args...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	cmd := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", inContainerTool(placeholderPID, "tar")}, replayExtractArgs(mp, nested)...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	cmd.Stdin = f
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -423,6 +419,23 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 		}).Info("Replayed mount snapshot into placeholder mntns")
 	}
 	return nil
+}
+
+// replayExtractArgs is the tar command line that extracts a replay archive
+// from stdin into mp, leaving out the placeholder's nested mounts (relative to
+// mp). The excludes are anchored at the archive's root: unanchored, GNU tar
+// matches "hf" at any depth and drops every directory of that name, such as
+// the inductor cache's hf/ under the cachedir (seen 2026-10-17), and the
+// replay check then fails the restore.
+func replayExtractArgs(mp string, nested []string) []string {
+	args := []string{"-C", mp, "-xf", "-", "--xattrs", "--acls", "--numeric-owner", "--preserve-permissions", "--overwrite"}
+	if len(nested) > 0 {
+		args = append(args, "--anchored", "--no-wildcards")
+	}
+	for _, e := range nested {
+		args = append(args, "--exclude=./"+e, "--exclude="+e)
+	}
+	return args
 }
 
 // underAny reports whether the relative path name is one of dirs or under one.
