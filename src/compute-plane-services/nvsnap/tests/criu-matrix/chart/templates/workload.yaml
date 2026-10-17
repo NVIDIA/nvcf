@@ -126,7 +126,8 @@ spec:
             claims: [{name: imex-channel}]
           {{- end }}
           command: ["python3", "-m", "dynamo.vllm"]
-          args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"]
+          args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"
+                 {{- range $v.dynamo.extraArgs }}, {{ . | quote }}{{ end }}]
           env:
             - {name: HF_HUB_DISABLE_XET, value: "1"}
             {{- with $v.extraEnv }}
