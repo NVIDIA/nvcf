@@ -127,6 +127,12 @@ func TestExtractOpenAIJSONBody(t *testing.T) {
 			expectedStream: false,
 		},
 		{
+			name:           "Duplicate fields use the first value",
+			requestBody:    `{"model":"first","model":"second","stream":false,"stream":true}`,
+			expectedModel:  "first",
+			expectedStream: false,
+		},
+		{
 			name:        "Invalid JSON",
 			requestBody: `{invalid json}`,
 			expectError: true,
@@ -1260,9 +1266,9 @@ func TestOpenAIRoutesRejectInvalidJSONAsClientError(t *testing.T) {
 	bodies := []struct{ name, body string }{
 		{"malformed", `{not json`},
 		{"truncated", `{"model":`},
+		{"type mismatch before malformed tail", `{"model":1,`},
 		{"array", `[{"model":"m"}]`},
 		{"empty", ``},
-		{"model wrong type", `{"model":1}`},
 		{"null", `null`},
 		{"null with whitespace", " null\n"},
 	}
@@ -1283,6 +1289,47 @@ func TestOpenAIRoutesRejectInvalidJSONAsClientError(t *testing.T) {
 				require.Equal(t, "invalid_request_error", payload.Error.Type)
 				require.Equal(t, "invalid_json", payload.Error.Code)
 				require.NotEmpty(t, payload.Error.Message)
+			})
+		}
+	}
+}
+
+func TestOpenAIRoutesReportInvalidFieldTypes(t *testing.T) {
+	routes := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/responses",
+		"/v1/images/generations",
+		"/v1/images/edits",
+		"/v1/images/variations",
+	}
+	bodies := []struct {
+		name, body, param, expectedType string
+	}{
+		{"model must be a string", `{"model":1}`, "model", "string"},
+		{"model cannot be null", `{"model":null}`, "model", "string"},
+		{"stream must be a boolean", `{"model":"llm","stream":"true"}`, "stream", "boolean"},
+		{"stream cannot be null", `{"model":"llm","stream":null}`, "stream", "boolean"},
+	}
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", "http://llm.invalid")
+	for _, route := range routes {
+		for _, tc := range bodies {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				req := openAIRequest(t, route, tc.body)
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+				require.Equal(t, "gateway_rejected", rec.Header().Get("NVCF-Error-Source"))
+				var payload OpenAIError
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+				require.Equal(t, "invalid_request_error", payload.Error.Type)
+				require.Equal(t, "invalid_type", payload.Error.Code)
+				assert.Contains(t, payload.Error.Message, tc.expectedType)
+				assert.Equal(t, tc.param, payload.Error.Param)
 			})
 		}
 	}
