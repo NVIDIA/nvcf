@@ -308,7 +308,11 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
-        {{- if or $agentTolerations $workloadTolerations }}
+        {{- $proxyCaPem := dig "workerCallbackProxyCaPem" "" $agent | toString | trim }}
+        {{- if and $proxyCaPem (not (regexMatch "^(-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----\\s*)+$" $proxyCaPem)) }}
+        {{- fail "global.nvcaOperator.agent.workerCallbackProxyCaPem must be a PEM certificate bundle" }}
+        {{- end }}
+        {{- if or $agentTolerations $workloadTolerations $proxyCaPem }}
         agent:
           {{- with $agentTolerations }}
           tolerations:
@@ -318,6 +322,12 @@ releases:
           workload:
             tolerations:
 {{ toYaml . | nindent 14 }}
+          {{- end }}
+          {{- if $proxyCaPem }}
+          {{- /* NVCA unquotes each launch env value, so a multi-line PEM must be
+                 passed as one quoted line or only its first line survives. */}}
+          functionEnvOverrides:
+            NVCF_PROXY_CA_PEM: {{ printf "%s\n" $proxyCaPem | toJson | quote }}
           {{- end }}
         {{- end }}
     labels:
