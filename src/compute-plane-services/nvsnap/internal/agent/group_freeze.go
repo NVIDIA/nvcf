@@ -151,6 +151,18 @@ func markPostDumpReached(dir string, log *logrus.Entry) {
 	log.Warn("group capture: cannot report the member dumped; its group's driver will abort the capture")
 }
 
+// markPostDumpFailed reports a member whose dump failed: its group's
+// driver aborts the others at once instead of waiting out the barrier.
+func markPostDumpFailed(dir string, log *logrus.Entry) {
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		err = os.WriteFile(filepath.Join(dir, "failed"), nil, 0o644)
+		if err == nil {
+			return
+		}
+	}
+	log.Warn("group capture: cannot report the member's dump failed; its group's driver aborts the capture when the barrier times out")
+}
+
 // freezeHandler serves a member's freeze point to its group's driver:
 // GET reports whether the member waits there, POST ?go=true|false releases
 // or aborts it. ?phase=post is the member's post-dump barrier.
@@ -194,8 +206,9 @@ func (a *Agent) freezeHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, err := os.Stat(filepath.Join(dir, "reached"))
+		_, ferr := os.Stat(filepath.Join(dir, "failed"))
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"reached": err == nil})
+		_ = json.NewEncoder(w).Encode(map[string]bool{"reached": err == nil, "failed": ferr == nil})
 		return
 	}
 	key := freezeKey(v["session"], v["namespace"], v["pod"])
@@ -265,10 +278,11 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase s
 			// Read the end before the point: a member without a post-dump
 			// hook reports it and returns at once.
 			done := m.Done != nil && m.Done()
-			if freezeReached(ctx, client, m.Base, session, phase, m.Namespace, m.Pod) {
+			reached, failed := freezeState(ctx, client, m.Base, session, phase, m.Namespace, m.Pod)
+			if reached && !failed {
 				continue
 			}
-			if done {
+			if done || failed {
 				log.WithFields(logrus.Fields{"pod": m.Namespace + "/" + m.Pod, "phase": phaseName(phase)}).Warn("group capture: a member ended before the freeze point; aborting the others")
 				release(false)
 				return false
@@ -306,19 +320,24 @@ func phaseName(phase string) string {
 	return strings.TrimSpace(phase) + "-dump"
 }
 
-func freezeReached(ctx context.Context, client *http.Client, base, session, phase, ns, pod string) bool {
+// freezeState reports whether a member waits at the freeze point of
+// phase, and whether it failed before it (post-dump: its dump failed).
+func freezeState(ctx context.Context, client *http.Client, base, session, phase, ns, pod string) (reached, failed bool) {
 	u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?phase=%s", base, url.PathEscape(session), url.PathEscape(ns), url.PathEscape(pod), url.QueryEscape(phase))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return false
+		return false, false
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer resp.Body.Close()
 	var out map[string]bool
-	return resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&out) == nil && out["reached"]
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return false, false
+	}
+	return out["reached"], out["failed"]
 }
 
 // holdGateWait bounds the wait at the freeze point for the members' pods

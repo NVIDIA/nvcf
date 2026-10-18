@@ -182,3 +182,29 @@ func TestGroupFreeze_PostPhaseAcceptsAMemberWithoutHook(t *testing.T) {
 		t.Errorf("member not released: %v", err)
 	}
 }
+
+// The post-dump phase: a member whose dump failed aborts the others at
+// once (seen 2026-10-18: they waited out the whole barrier, stopped, and
+// the failed member's fabric resume waited on them).
+func TestGroupFreeze_PostPhaseAbortsOnAFailedDump(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	a1, b1 := freezeServer(t)
+	a2, b2 := freezeServer(t)
+	a1.config.CheckpointDir, a2.config.CheckpointDir = t.TempDir(), t.TempDir()
+	markPostDumpReached(a1.postDumpDir("s6", "ns", "worker-0"), log)
+	markPostDumpFailed(a2.postDumpDir("s6", "ns", "worker-1"), log)
+	t0 := time.Now()
+	ok := driveGroupFreeze(context.Background(), http.DefaultClient, "s6", "post", []freezeMember{
+		{Base: b1, Namespace: "ns", Pod: "worker-0"},
+		{Base: b2, Namespace: "ns", Pod: "worker-1"},
+	}, 20*time.Millisecond, log, nil)
+	if ok {
+		t.Fatal("a failed dump released the group")
+	}
+	if d := time.Since(t0); d > 5*time.Second {
+		t.Errorf("aborted after %s; want at once", d)
+	}
+	if _, err := os.Stat(filepath.Join(a1.postDumpDir("s6", "ns", "worker-0"), "abort")); err != nil {
+		t.Errorf("the dumped member was not aborted: %v", err)
+	}
+}

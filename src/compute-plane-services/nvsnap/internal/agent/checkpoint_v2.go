@@ -447,6 +447,12 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			err = snapshotNotTaken(serr)
 		}
 		if err != nil {
+			if o.PostDumpDir != "" {
+				// The others wait, stopped, for this member's dump; told it
+				// failed, the group's driver aborts them now, and a fabric
+				// resume, which needs them, can proceed.
+				markPostDumpFailed(o.PostDumpDir, log)
+			}
 			if gsOn {
 				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
