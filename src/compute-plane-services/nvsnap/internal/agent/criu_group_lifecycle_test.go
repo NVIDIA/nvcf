@@ -361,3 +361,35 @@ func TestReplaceColliding(t *testing.T) {
 		t.Error("a restore did not clear the replacements")
 	}
 }
+
+// A companion replaced for an address collision gives its slot to its
+// replacement: its claim leaves the record, others' stay.
+func TestReplaceCollidingReleasesTheCompanionsSlot(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	fe := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "frontend-a", Namespace: "fn", Annotations: map[string]string{
+		webhook.CRIUGroupAnnotation: "k1", webhook.CRIUGroupCompanionAnnotation: "true", webhook.CRIUGroupOrdinalAnnotation: "4"}}}
+	if _, err := kc.CoreV1().Pods("fn").Create(ctx, fe, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	cm.Data[claimKey("fn", 4)], cm.Data[claimKey("fn", 5)] = now, now
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.replaceColliding(ctx, leader, "k1", &addressCollision{Pods: []string{"fn/frontend-a"}}, logrus.NewEntry(logrus.New()))
+	cm, _ = kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if _, held := cm.Data[claimKey("fn", 4)]; held {
+		t.Error("the replaced companion's slot is still claimed")
+	}
+	if _, held := cm.Data[claimKey("fn", 5)]; !held {
+		t.Error("another companion's claim was dropped")
+	}
+	if got := remainingPods(t, kc); slices.Contains(got, "frontend-a") {
+		t.Errorf("pods left = %v, want frontend-a replaced", got)
+	}
+}

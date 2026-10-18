@@ -886,6 +886,20 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 func (c *criuAutoRestorer) replaceColliding(agentCtx context.Context, leader *corev1.Pod, key string, ac *addressCollision, log *logrus.Entry) {
 	ctx := context.WithoutCancel(agentCtx)
 	id := leader.Annotations[webhook.CRIURestoreAnnotation]
+	// A replaced companion's slot is its replacement's: its claim, held for
+	// companionClaimTTL after its admission, would leave the replacement
+	// no slot and start it cold.
+	var claims []string
+	for _, name := range ac.Pods {
+		ns, pod, _ := strings.Cut(name, "/")
+		p, err := c.a.kubeClient.CoreV1().Pods(ns).Get(ctx, pod, metav1.GetOptions{})
+		if err != nil || !isCompanion(p) || p.Annotations[webhook.CRIUGroupAnnotation] != key {
+			continue
+		}
+		if o, aerr := strconv.Atoi(p.Annotations[webhook.CRIUGroupOrdinalAnnotation]); aerr == nil {
+			claims = append(claims, claimKey(ns, o))
+		}
+	}
 	n := 0
 	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
 		if !recordOf(d, id) {
@@ -894,6 +908,9 @@ func (c *criuAutoRestorer) replaceColliding(agentCtx context.Context, leader *co
 		n, _ = strconv.Atoi(d["replacements"])
 		n++
 		d["replacements"] = strconv.Itoa(n)
+		for _, k := range claims {
+			delete(d, k)
+		}
 		return true
 	}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
