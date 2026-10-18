@@ -11,7 +11,11 @@ package agent
 // and CRIU cannot dump it: its stdio is a file of no mount of the
 // container ("Can't lookup mount=28 for fd=0 path=/dev/null", seen
 // 2026-10-18 on a rank whose readiness probe runs every 5 s). Nor could a
-// restore give it back: the shim that waits on it is gone. So the dump
+// restore give it back: the shim that waits on it is gone. A session can
+// also leave a process behind with the same stdio: the runtime kills a
+// probe that times out, and the probe's child (a curl to an engine the
+// capture suspended) is then the orphan of the container's pid 1 (seen
+// 2026-10-18, rank 0's pid 761008). So the dump
 // first stops the container (frozen, it admits no new exec: the runtime
 // refuses to exec into a paused container), then ends the exec sessions
 // in it, and CRIU seizes the container from its frozen cgroup. A probe
@@ -34,10 +38,15 @@ const execSessionExitWait = 10 * time.Second
 
 // execSessions returns the host pids of the exec sessions in the pid
 // namespace of hostPID: each process of the namespace whose parent is
-// outside it (the runtime's shim), the namespace's init excepted, with
-// every process descended from one. Zombies are left out: they hold no
-// files, and their parent reaps them.
+// outside it (the runtime's shim), with every process descended from one,
+// and each whose stdio is a file of no mount of the container (one a
+// session left behind). The namespace's init is never one. Zombies are
+// left out: they hold no files, and their parent reaps them.
 func execSessions(procBase string, hostPID int) ([]int, error) {
+	mounts, err := mountIDs(procBase, hostPID)
+	if err != nil {
+		return nil, err
+	}
 	nsOf := func(pid int) string {
 		s, _ := os.Readlink(filepath.Join(procBase, strconv.Itoa(pid), "ns", "pid"))
 		return s
@@ -64,6 +73,10 @@ func execSessions(procBase string, hostPID int) ([]int, error) {
 	}
 	var out []int
 	for pid := range parent {
+		if foreignStdio(procBase, pid, mounts) {
+			out = append(out, pid)
+			continue
+		}
 		for p := pid; ; {
 			pp, inNS := parent[p]
 			if !inNS {
@@ -77,6 +90,44 @@ func execSessions(procBase string, hostPID int) ([]int, error) {
 		}
 	}
 	return out, nil
+}
+
+// mountIDs returns the ids of the mounts of hostPID's mount namespace.
+func mountIDs(procBase string, hostPID int) (map[string]bool, error) {
+	b, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "mountinfo"))
+	if err != nil {
+		return nil, fmt.Errorf("mounts of %d: %w", hostPID, err)
+	}
+	ids := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) > 0 {
+			ids[f[0]] = true
+		}
+	}
+	return ids, nil
+}
+
+// foreignStdio reports whether pid's stdin, stdout or stderr is a file on
+// a mount not in mounts. Pipes, sockets and other anonymous files have no
+// path and are never foreign.
+func foreignStdio(procBase string, pid int, mounts map[string]bool) bool {
+	dir := filepath.Join(procBase, strconv.Itoa(pid))
+	for fd := 0; fd <= 2; fd++ {
+		target, err := os.Readlink(filepath.Join(dir, "fd", strconv.Itoa(fd)))
+		if err != nil || !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "/memfd:") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "fdinfo", strconv.Itoa(fd)))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "mnt_id:"); ok && !mounts[strings.TrimSpace(v)] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // procParent reads the parent and whether pid is a zombie.
