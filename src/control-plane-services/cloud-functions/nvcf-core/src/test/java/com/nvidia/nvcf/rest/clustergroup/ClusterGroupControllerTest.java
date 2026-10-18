@@ -41,7 +41,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterAll;
@@ -188,7 +187,7 @@ class ClusterGroupControllerTest {
         assertThat(clusterGroups).isNotEmpty();
         assertThat(clusterGroups.stream()
                            .map(ClusterGroup::getName)
-                           .collect(Collectors.toSet()))
+                           .toList())
                 .containsExactlyInAnyOrderElementsOf(expectedGroups);
     }
 
