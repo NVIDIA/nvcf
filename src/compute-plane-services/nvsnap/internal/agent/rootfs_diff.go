@@ -153,30 +153,8 @@ func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string
 		"--preserve-permissions",
 	)
 
-	pipe, err := srcTar.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	dstTar.Stdin = pipe
-
-	var srcErr, dstErr strings.Builder
-	srcTar.Stderr = &srcErr
-	dstTar.Stderr = &dstErr
-
-	if err := dstTar.Start(); err != nil {
-		return fmt.Errorf("start dst tar: %w", err)
-	}
-	if err := srcTar.Start(); err != nil {
-		return fmt.Errorf("start src tar: %w", err)
-	}
-	srcWait := srcTar.Wait()
-	dstWait := dstTar.Wait()
-
-	if srcWait != nil {
-		return fmt.Errorf("src tar (-C %s): %w (stderr: %s)", src, srcWait, srcErr.String())
-	}
-	if dstWait != nil {
-		return fmt.Errorf("dst tar (-C %s): %w (stderr: %s)", dst, dstWait, dstErr.String())
+	if err := runTarPipe(srcTar, dstTar, "src tar (-C "+src+")", "dst tar (-C "+dst+")"); err != nil {
+		return err
 	}
 
 	if log != nil {
@@ -213,19 +191,7 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 		return fmt.Errorf("stat src %s: %w", srcDiff, err)
 	}
 
-	srcArgs := []string{
-		"-C", srcDiff,
-		"-cf", "-",
-		"--xattrs",
-		"--xattrs-exclude=trusted.overlay.*",
-		"--acls",
-		"--numeric-owner",
-		"--sparse",
-		"--one-file-system",
-	}
-	srcArgs = append(srcArgs, excludeArgsForMountpoints(excludeMountpoints)...)
-	srcArgs = append(srcArgs, ".")
-	srcTar := exec.Command("tar", srcArgs...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	srcTar := exec.Command("tar", replayDiffSourceArgs(srcDiff, excludeMountpoints)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	dstTar := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
@@ -239,28 +205,8 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 		"--preserve-permissions",
 		"--overwrite",
 	)
-	pipe, err := srcTar.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	dstTar.Stdin = pipe
-	var srcErr, dstErr strings.Builder
-	srcTar.Stderr = &srcErr
-	dstTar.Stderr = &dstErr
-
-	if err := dstTar.Start(); err != nil {
-		return fmt.Errorf("start dst tar: %w", err)
-	}
-	if err := srcTar.Start(); err != nil {
-		return fmt.Errorf("start src tar: %w", err)
-	}
-	srcWait := srcTar.Wait()
-	dstWait := dstTar.Wait()
-	if srcWait != nil {
-		return fmt.Errorf("src tar (-C %s): %w (stderr: %s)", srcDiff, srcWait, srcErr.String())
-	}
-	if dstWait != nil {
-		return fmt.Errorf("dst tar (nsenter pid=%d): %w (stderr: %s)", placeholderPID, dstWait, dstErr.String())
+	if err := runTarPipe(srcTar, dstTar, "src tar (-C "+srcDiff+")", fmt.Sprintf("dst tar (nsenter pid=%d)", placeholderPID)); err != nil {
+		return err
 	}
 	if log != nil {
 		log.WithFields(logrus.Fields{
@@ -526,4 +472,67 @@ func dirSizeBytes(path string) int64 {
 		return nil
 	})
 	return total
+}
+
+// agentContainerDirs are the directories the agent stages into a
+// container; a replay never writes them.
+var agentContainerDirs = []string{v2BinDirInContainer, v2ImagesDirInContainer}
+
+// runTarPipe runs src | dst and waits for both. The agent keeps no end of
+// the pipe: a dst that exits early leaves src a broken pipe, not a full
+// one it would block on forever (seen 2026-10-18: a restore hung on a
+// replay whose extracting tar had died). dst's failure is reported first:
+// src's broken pipe follows from it.
+func runTarPipe(src, dst *exec.Cmd, srcName, dstName string) error {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("tar pipe: %w", err)
+	}
+	src.Stdout, dst.Stdin = w, r
+	var srcErr, dstErr strings.Builder
+	src.Stderr, dst.Stderr = &srcErr, &dstErr
+	if err := dst.Start(); err != nil {
+		r.Close()
+		w.Close()
+		return fmt.Errorf("start %s: %w", dstName, err)
+	}
+	if err := src.Start(); err != nil {
+		r.Close()
+		w.Close()
+		_ = dst.Wait()
+		return fmt.Errorf("start %s: %w", srcName, err)
+	}
+	r.Close()
+	w.Close()
+	dstWait := dst.Wait()
+	srcWait := src.Wait()
+	if dstWait != nil {
+		return fmt.Errorf("%s: %w (stderr: %s)", dstName, dstWait, lastLines(dstErr.String(), 8))
+	}
+	if srcWait != nil {
+		return fmt.Errorf("%s: %w (stderr: %s)", srcName, srcWait, lastLines(srcErr.String(), 8))
+	}
+	return nil
+}
+
+// replayDiffSourceArgs is the tar that reads a captured diff for a replay.
+func replayDiffSourceArgs(srcDiff string, excludeMountpoints []string) []string {
+	args := []string{
+		"-C", srcDiff,
+		"-cf", "-",
+		"--xattrs",
+		"--xattrs-exclude=trusted.overlay.*",
+		"--acls",
+		"--numeric-owner",
+		"--sparse",
+		"--one-file-system",
+	}
+	args = append(args, excludeArgsForMountpoints(excludeMountpoints)...)
+	// The agent's own directories in the container are never the
+	// workload's: a capture taken before they were left out of the diff
+	// still carries them, and replaying the bundle would overwrite the
+	// libraries of the tar extracting it, which runs from there (seen
+	// 2026-10-18: SIGBUS).
+	args = append(args, excludeArgsForMountpoints(agentContainerDirs)...)
+	return append(args, ".")
 }
