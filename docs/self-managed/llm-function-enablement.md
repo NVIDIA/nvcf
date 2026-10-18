@@ -818,7 +818,7 @@ Invoke through the gateway. `GATEWAY_ADDR` is the control-plane gateway
 address and `DOMAIN` is the route suffix:
 
 ```bash
-curl -s "http://${GATEWAY_ADDR}/v1/chat/completions" \
+curl -sSf "http://${GATEWAY_ADDR}/v1/chat/completions" \
   -H "Host: llm.invocation.${DOMAIN}" \
   -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
@@ -1075,9 +1075,10 @@ active eligible backend. Check:
   `workload.stargateQUICInsecure: true`. The bundled gateway-to-API
   authentication hop already defaults to plaintext.
 
-An LLM worker pod stuck in `Init` or `ImagePullBackOff` on the `llm-worker`
-container means the `pylon` image is not available in the configured
-registry. Confirm the effective sidecar image reference and mirror it:
+An LLM worker pod with `ImagePullBackOff` or `ErrImagePull` on the
+`llm-worker` container means the `pylon` image is not available in the
+configured registry. Confirm the effective sidecar image reference and mirror
+it:
 
 ```bash
 kubectl -n nvcf get configmap nvcf-api-remote-config -o yaml \
