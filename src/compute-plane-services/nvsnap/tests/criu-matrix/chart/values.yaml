@@ -67,6 +67,9 @@ dynamo:
   # argument, for example a production chart's KV offload or all-reduce
   # settings.
   extraArgs: []
+  # The Dynamo runtime version of an image whose tag is not one
+  # (runtimeVersionOverride); the operator requires it for such images.
+  runtimeVersion: ""
 
 # A fresh cache and capture identity (nvsnap.io/cache-salt) for runs that
 # must not reuse another run's cache set or checkpoints. Empty keeps the

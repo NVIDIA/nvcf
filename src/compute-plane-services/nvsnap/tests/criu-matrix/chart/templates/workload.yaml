@@ -96,15 +96,25 @@ spec:
     Frontend:
       componentType: frontend
       replicas: 1
+      {{- with $v.dynamo.runtimeVersion }}
+      runtimeVersionOverride: {{ . | quote }}
+      {{- end }}
       extraPodSpec:
+        {{- if $v.ngcImagePullSecretName }}
+        imagePullSecrets: [{name: {{ $v.ngcImagePullSecretName }}}]
+        {{- end }}
         mainContainer:
           image: {{ $v.dynamo.image }}
     VllmWorker:
       componentType: worker
       replicas: 1
+      {{- with $v.dynamo.runtimeVersion }}
+      runtimeVersionOverride: {{ . | quote }}
+      {{- end }}
       {{- if gt (int $v.podsPerInstance) 1 }}
       multinode: {nodeCount: {{ $v.podsPerInstance }}}
       {{- end }}
+      sharedMemory: {size: {{ $v.shmSize | quote }}}
       resources:
         limits:
           gpu: {{ $v.gpusPerPod | quote }}
@@ -115,6 +125,9 @@ spec:
           {{ $k }}: {{ $val | quote }}
           {{- end }}
       extraPodSpec:
+        {{- if $v.ngcImagePullSecretName }}
+        imagePullSecrets: [{name: {{ $v.ngcImagePullSecretName }}}]
+        {{- end }}
         {{- if $v.computeDomain }}
         resourceClaims:
           - {name: imex-channel, resourceClaimTemplateName: {{ $name }}-imex-channel}

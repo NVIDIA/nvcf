@@ -63,7 +63,7 @@ containers:
       - {name: PYTHONUNBUFFERED, value: "1"}
       - {name: HF_HUB_DISABLE_XET, value: "1"}
       {{- if gt (int $v.podsPerInstance) 1 }}
-      - {name: NCCL_MNNVL_ENABLE, value: "0"}
+      - {name: NCCL_MNNVL_ENABLE, value: {{ ternary "1" "0" (and $v.computeDomain true) | quote }}}
       {{- end }}
       {{- with $v.hfHome }}
       - {name: HF_HOME, value: {{ . | quote }}}
@@ -86,6 +86,13 @@ containers:
       limits:
         {{- toYaml $v.resources.limits | nindent 8 }}
         nvidia.com/gpu: {{ $v.gpusPerPod | quote }}
+      {{- if $v.computeDomain }}
+      claims: [{name: imex-channel}]
+      {{- end }}
+{{- if $v.computeDomain }}
+resourceClaims:
+  - {name: imex-channel, resourceClaimTemplateName: {{ include "matrix.name" . }}-imex-channel}
+{{- end }}
 volumes:
   - {name: dshm, emptyDir: {medium: Memory, sizeLimit: {{ $v.shmSize }}}}
 {{- end -}}
