@@ -616,12 +616,38 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 			return err
 		}
 	}
+	cg := ""
 	if hooks.FreezeCgroup != nil {
-		if cg := hooks.FreezeCgroup(); cg != "" {
-			args = append(args, "--freeze-cgroup", cg)
-			log.WithField("cgroup", cg).Info("criu-v2: dumping the held container from its frozen cgroup")
-		}
+		cg = hooks.FreezeCgroup()
 	}
+	if cg == "" {
+		// Stopped now, the container admits no new exec session until the
+		// dump has seized it (exec_sessions.go).
+		rel, err := processCgroup(procBase, hostPID)
+		if err != nil {
+			return fmt.Errorf("pid-namespace dump: %w", err)
+		}
+		cg = filepath.Join(cgroupRoot(), rel)
+		if err := setFrozen(cg, true); err != nil {
+			_ = setFrozen(cg, false)
+			return fmt.Errorf("pid-namespace dump: stop the container: %w", err)
+		}
+		// criu leaves the cgroup as it found it, frozen.
+		defer func() {
+			if err := setFrozen(cg, false); err != nil {
+				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container")
+			}
+		}()
+	}
+	ended, err := endExecSessions(procBase, hostPID, killPID)
+	if err != nil {
+		return fmt.Errorf("pid-namespace dump: %w", err)
+	}
+	if len(ended) > 0 {
+		log.WithField("pids", ended).Info("criu-v2: ended the runtime's exec sessions in the container (a probe's or a kubectl exec's); they cannot be dumped")
+	}
+	args = append(args, "--freeze-cgroup", cg)
+	log.WithField("cgroup", cg).Info("criu-v2: dumping the container from its frozen cgroup")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	// CRIU locks TCP in the network namespace it runs in. The agent runs on
