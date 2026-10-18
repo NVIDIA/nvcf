@@ -4,6 +4,7 @@ go_library(
     name = "webhook",
     srcs = [
         "admission.go",
+        "admitted_config.go",
         "bundle_mount.go",
         "cache_volume.go",
         "cachedir.go",
@@ -19,6 +20,7 @@ go_library(
         "helper.go",
         "instance_identity.go",
         "l2_mount.go",
+        "liveness.go",
         "model_volume.go",
         "mount_prep_init.go",
         "mutate.go",
@@ -49,6 +51,7 @@ go_test(
     name = "webhook_test",
     srcs = [
         "admission_test.go",
+        "admitted_config_test.go",
         "cachedir_noshim_test.go",
         "cachedir_test.go",
         "criu_companion_test.go",
@@ -61,6 +64,7 @@ go_test(
         "helper_test.go",
         "instance_identity_test.go",
         "l2_mount_test.go",
+        "liveness_test.go",
         "mergeplan_test.go",
         "model_volume_test.go",
         "mutate_test.go",

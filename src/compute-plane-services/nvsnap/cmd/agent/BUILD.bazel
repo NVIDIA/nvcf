@@ -33,6 +33,7 @@ go_test(
     ],
     embed = [":agent_lib"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/agent",
         "@com_github_sirupsen_logrus//:logrus",
         "@org_golang_x_sys//unix",
     ],
