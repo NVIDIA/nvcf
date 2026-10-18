@@ -17,6 +17,15 @@ package agent
 // dump, which stops it again. The hold ends with the member's capture;
 // a hold is also written down, so an agent that restarts thaws what it
 // froze.
+//
+// A rank's container keeps only its GPU processes running: gpushare
+// suspends them, rank by rank, over seconds to minutes. Its other
+// processes (vLLM's EngineCore, the Dynamo runtime and its health canary)
+// would go on starting work the suspended ranks never run: a step begun
+// after the freeze point is captured half done, and the restored engine
+// waits for its result for good (seen 2026-10-17). So the hold moves them
+// into a frozen child cgroup of the container (quietCgroup) and moves them
+// back as the dump starts.
 
 import (
 	"context"
@@ -28,6 +37,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -45,6 +55,7 @@ type podHold struct {
 	mu     sync.Mutex
 	frozen []string // cgroup directories the hold froze
 	target string   // the dumped container's directory, while frozen
+	quiet  string   // a kept container's child cgroup of frozen processes
 	// frozenAt is when target was frozen (frozen_clock.go); zero when the
 	// hold left it running.
 	frozenAt clocks
@@ -185,12 +196,37 @@ func (a *Agent) holdCgroups(key, target string, keep bool, log *logrus.Entry) er
 			}
 		}
 	}
+	if keep {
+		if q, qerr := quietContainer(target, log); qerr != nil {
+			log.WithError(qerr).Warn("pod hold: cannot stop the rank's processes without GPU state; they run until the dump")
+		} else if q != "" {
+			h.quiet = q
+			if err := writeHoldRecord(h.record, append(append([]string{}, dirs...), q)); err != nil {
+				log.WithError(err).Warn("pod hold: cannot record the hold; an agent restart would not thaw it")
+			}
+		}
+	}
 	h.timer = time.AfterFunc(podHoldTimeout, func() {
 		log.Warn("pod hold: the capture never ended it; thawing the pod")
 		a.releaseHold(key, log)
 	})
 	log.WithFields(logrus.Fields{"containers": len(dirs), "keep": keep}).Info("pod hold: pod frozen for the capture")
 	return errors.Join(errs...)
+}
+
+// releaseQuiet puts a kept container's stopped processes back as its dump
+// starts (the dump stops them again).
+func (a *Agent) releaseQuiet(key string, log *logrus.Entry) {
+	h := a.holds.get(key)
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.quiet != "" {
+		unquietContainer(h.quiet, log)
+		h.quiet = ""
+	}
 }
 
 // thawHoldTarget thaws the dumped container of a hold just before its
@@ -252,6 +288,10 @@ func (a *Agent) releaseHold(key string, log *logrus.Entry) {
 	if h.timer != nil {
 		h.timer.Stop()
 	}
+	if h.quiet != "" {
+		unquietContainer(h.quiet, log)
+		h.quiet = ""
+	}
 	thawAll(h.frozen, log)
 	_ = os.Remove(h.record)
 	log.WithField("containers", len(h.frozen)).Info("pod hold: pod thawed")
@@ -259,6 +299,10 @@ func (a *Agent) releaseHold(key string, log *logrus.Entry) {
 
 func thawAll(dirs []string, log *logrus.Entry) {
 	for _, d := range dirs {
+		if filepath.Base(d) == quietCgroup {
+			unquietContainer(d, log)
+			continue
+		}
 		if err := setFrozen(d, false); err != nil && !os.IsNotExist(err) {
 			log.WithError(err).WithField("cgroup", d).Warn("pod hold: cannot thaw a container")
 		}
@@ -309,4 +353,87 @@ func (a *Agent) holdMember(ctx context.Context, session, ns, pod, container stri
 	}
 	log := a.log.WithFields(logrus.Fields{"pod": ns + "/" + pod, "session": session})
 	return a.holdPod(holdKey(session, ns, pod), int(info.PID), keep, log)
+}
+
+// quietCgroup is a kept container's child cgroup that holds its stopped
+// processes.
+const quietCgroup = "nvsnap-quiet"
+
+// usesGPU reports whether host pid pid holds GPU state.
+var usesGPU = func(pid int) bool {
+	dir := filepath.Join(hostProcBase(), strconv.Itoa(pid))
+	if _, gpu, _ := scanMaps(filepath.Join(dir, "maps")); gpu {
+		return true
+	}
+	return holdsNvidiaFD(filepath.Join(dir, "fd"))
+}
+
+// quietContainer stops the processes of container cgroup target that hold
+// no GPU state: it moves them into a frozen child cgroup, which it returns
+// ("" when there are none).
+func quietContainer(target string, log *logrus.Entry) (string, error) {
+	pids, err := cgroupPIDs(target)
+	if err != nil {
+		return "", err
+	}
+	var move []int
+	for _, pid := range pids {
+		if !usesGPU(pid) {
+			move = append(move, pid)
+		}
+	}
+	if len(move) == 0 {
+		return "", nil
+	}
+	q := filepath.Join(target, quietCgroup)
+	if err := os.Mkdir(q, 0o755); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+	for _, pid := range move {
+		if err := addToCgroup(q, pid); err != nil && !errors.Is(err, syscall.ESRCH) {
+			unquietContainer(q, log)
+			return "", fmt.Errorf("move pid %d: %w", pid, err)
+		}
+	}
+	if err := setFrozen(q, true); err != nil {
+		unquietContainer(q, log)
+		return "", err
+	}
+	log.WithField("processes", len(move)).Info("pod hold: the rank's processes without GPU state are stopped")
+	return q, nil
+}
+
+// unquietContainer thaws a kept container's stopped processes and moves
+// them back into it.
+func unquietContainer(q string, log *logrus.Entry) {
+	if err := setFrozen(q, false); err != nil && !os.IsNotExist(err) {
+		log.WithError(err).Warn("pod hold: cannot thaw the rank's stopped processes")
+	}
+	pids, err := cgroupPIDs(q)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.WithError(err).Warn("pod hold: cannot list the rank's stopped processes")
+		}
+		return
+	}
+	for _, pid := range pids {
+		if err := addToCgroup(filepath.Dir(q), pid); err != nil && !errors.Is(err, syscall.ESRCH) {
+			log.WithError(err).WithField("pid", pid).Warn("pod hold: cannot move a stopped process back into its container")
+		}
+	}
+	// An empty cgroup is removed with rmdir; its interface files go with it.
+	_ = syscall.Rmdir(q)
+}
+
+// addToCgroup moves pid into cgroup dir.
+func addToCgroup(dir string, pid int) error {
+	f, err := os.OpenFile(filepath.Join(dir, "cgroup.procs"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(strconv.Itoa(pid) + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
