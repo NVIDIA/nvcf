@@ -36,7 +36,10 @@ import (
 // tcpStateEstablished is the kernel TCP_ESTABLISHED state constant.
 // Vendored here to avoid pulling in a transitive header. Stable since
 // Linux's earliest userspace ABI for /proc/net/tcp and SOCK_DIAG.
-const tcpStateEstablished = 1
+const (
+	tcpStateEstablished = 1
+	tcpStateListen      = 10
+)
 
 // isExternalPeer returns true when ip is OUTSIDE any range typically
 // used for K8s pod/service networking. CRIU's TCP restore re-binds
@@ -181,33 +184,61 @@ func destroyTCPInNS(pidInNS int, keep func(remote net.IP) bool, msg string, log 
 	return destroyed, err
 }
 
-// tcpPeersInNS returns the peer addresses of the established TCP sockets
-// of the network namespace of pidInNS, loopback excluded.
-// tcpPeersOfContainer returns the remote addresses of the established TCP
-// connections whose sockets belong to the processes of the container of
-// host pid pid: the processes in its cgroup, whether or not the pod shares
-// one pid namespace between its containers. The containers of a pod share a
-// network namespace, so the namespace alone cannot tell a sidecar's
-// connections from the engine's.
+// tcpPeersOfContainer returns the remote addresses of the TCP connections
+// the processes of the container of host pid pid opened: the processes in
+// its cgroup, whether or not the pod shares one pid namespace between its
+// containers. The containers of a pod share a network namespace, so the
+// namespace alone cannot tell a sidecar's connections from the engine's.
 func tcpPeersOfContainer(pid int, log *logrus.Entry) ([]net.IP, error) {
 	inodes, err := containerSocketInodes(hostProcBase(), pid)
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
 	var peers []net.IP
 	err = inNetNS(pid, func() error {
-		for _, s := range establishedTCP(log) {
-			ip := s.ID.Destination
-			if !inodes[s.INode] || ip.IsLoopback() || seen[ip.String()] {
-				continue
-			}
-			seen[ip.String()] = true
-			peers = append(peers, ip)
-		}
+		peers = outboundPeers(allTCP(log), func(s *netlink.Socket) bool { return inodes[s.INode] })
 		return nil
 	})
 	return peers, err
+}
+
+// outboundPeers returns the remote addresses of the established
+// connections of sockets that the namespace opened, loopback excluded,
+// each once. A connection on a port the namespace listens on was opened
+// by its peer, a client (a request proxy, say): the peer depends on the
+// workload, not the workload on it. own selects the sockets to consider.
+func outboundPeers(sockets []*netlink.Socket, own func(*netlink.Socket) bool) []net.IP {
+	listening := map[uint16]bool{}
+	for _, s := range sockets {
+		if s.State == tcpStateListen {
+			listening[s.ID.SourcePort] = true
+		}
+	}
+	seen := map[string]bool{}
+	var peers []net.IP
+	for _, s := range sockets {
+		ip := s.ID.Destination
+		if s.State != tcpStateEstablished || listening[s.ID.SourcePort] || !own(s) || ip.IsLoopback() || seen[ip.String()] {
+			continue
+		}
+		seen[ip.String()] = true
+		peers = append(peers, ip)
+	}
+	return peers
+}
+
+// allTCP returns the TCP sockets of the current network namespace.
+func allTCP(log *logrus.Entry) []*netlink.Socket {
+	var out []*netlink.Socket
+	for _, family := range []uint8{syscall.AF_INET, syscall.AF_INET6} {
+		sockets, err := netlink.SocketDiagTCP(family)
+		if err != nil {
+			log.WithError(err).WithField("family", family).Warn("SocketDiagTCP failed; continuing")
+			continue
+		}
+		out = append(out, sockets...)
+	}
+	return out
 }
 
 // containerSocketInodes returns the inodes of the sockets open in the
@@ -246,18 +277,12 @@ func containerSocketInodes(procBase string, pid int) (map[uint32]bool, error) {
 	return inodes, nil
 }
 
+// tcpPeersInNS returns the remote addresses of the TCP connections the
+// network namespace of pidInNS opened (outboundPeers).
 func tcpPeersInNS(pidInNS int, log *logrus.Entry) ([]net.IP, error) {
-	seen := map[string]bool{}
 	var peers []net.IP
 	err := inNetNS(pidInNS, func() error {
-		for _, s := range establishedTCP(log) {
-			ip := s.ID.Destination
-			if ip.IsLoopback() || seen[ip.String()] {
-				continue
-			}
-			seen[ip.String()] = true
-			peers = append(peers, ip)
-		}
+		peers = outboundPeers(allTCP(log), func(*netlink.Socket) bool { return true })
 		return nil
 	})
 	return peers, err
