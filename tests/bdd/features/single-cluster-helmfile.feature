@@ -167,6 +167,41 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
+  Rule: Helmfile-installed local NVCF lists cluster groups
+
+    # This scenario intentionally has no Background. It depends on the
+    # earlier NVCA registration scenario in this feature run, and is not a
+    # standalone tag target. The final init clears the narrowly scoped API
+    # key from CLI state so later scenarios start from the admin token.
+    @cluster-groups
+    Scenario: Operator lists cluster groups with the admin token and with a scoped API key
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list
+        """
+      Then the command exit code should be 0
+      And the command output should contain "Found"
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-cluster-groups --for function --scopes list_cluster_groups
+        """
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list
+        """
+      Then the command exit code should be 0
+      And the command output should contain "Found"
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+
   Rule: Helmfile-installed local NVCF can run a Helm task
 
     # This scenario intentionally has no Background. It depends on the

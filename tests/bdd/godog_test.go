@@ -497,6 +497,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list": {
+			ExitCode: 0,
+			Stdout:   "Listing cluster groups...\nFound 1 cluster groups:\n\nID: test-cluster-group-id\n---\n",
+		},
 		invalidHelmTaskSmokeCommand: {
 			ExitCode: 1,
 			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",

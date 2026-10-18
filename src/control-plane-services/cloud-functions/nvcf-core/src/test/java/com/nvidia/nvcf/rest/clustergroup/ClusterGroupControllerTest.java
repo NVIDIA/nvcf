@@ -17,8 +17,13 @@
 package com.nvidia.nvcf.rest.clustergroup;
 
 import static com.nvidia.nvcf.IntegrationTestConfiguration.MOCK_OAUTH2_TOKEN_SERVER;
+import static com.nvidia.nvcf.util.MockApiKeysServer.resetToDefault;
+import static com.nvidia.nvcf.util.MockApiKeysServer.setResponse;
 import static com.nvidia.nvcf.util.TestConstants.SCOPE_LIST_CLUSTER_GROUPS;
+import static com.nvidia.nvcf.util.TestConstants.SCOPE_LIST_FUNCTIONS;
 import static com.nvidia.nvcf.util.TestConstants.TEST_CLIENT_SUBJECT;
+import static com.nvidia.nvcf.util.TestConstants.TEST_NCA_ID;
+import static com.nvidia.nvcf.util.TestConstants.TEST_OWNER_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nvidia.boot.mock.ngc.MockCasServer;
@@ -35,6 +40,7 @@ import com.nvidia.nvcf.util.MockIcmsServer;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
@@ -118,27 +124,44 @@ class ClusterGroupControllerTest {
     @AfterEach
     void reset() {
         testCommonService.reset();
+        resetToDefault();
     }
 
     Stream<Arguments> clusterGroupsArgs() {
         return Stream.of(
-                Arguments.of(null,
+                Arguments.of((Supplier<String>) () -> null,
                              HttpStatus.UNAUTHORIZED),
-                Arguments.of("nvapi-stg-key",
+                // apikey Auth - Missing scopes
+                Arguments.of((Supplier<String>) () -> "nvapi-stg-key",
                              HttpStatus.FORBIDDEN),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT, List.of(), 100),
+                // apikey Auth - Incorrect scope
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(),
+                                             List.of(SCOPE_LIST_FUNCTIONS));
+                                 return "nvapi-stg-some-key";
+                             },
                              HttpStatus.FORBIDDEN),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
-                                                             List.of(SCOPE_LIST_CLUSTER_GROUPS), 100),
+                // apikey Auth - Correct scope
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(),
+                                             List.of(SCOPE_LIST_CLUSTER_GROUPS));
+                                 return "nvapi-stg-some-key";
+                             },
+                             HttpStatus.OK),
+                Arguments.of((Supplier<String>) () -> MOCK_OAUTH2_TOKEN_SERVER.getJwt(
+                                     TEST_CLIENT_SUBJECT, List.of(), 100),
+                             HttpStatus.FORBIDDEN),
+                Arguments.of((Supplier<String>) () -> MOCK_OAUTH2_TOKEN_SERVER.getJwt(
+                                     TEST_CLIENT_SUBJECT, List.of(SCOPE_LIST_CLUSTER_GROUPS), 100),
                              HttpStatus.OK)
         );
     }
 
     @ParameterizedTest
     @MethodSource("clusterGroupsArgs")
-    void shouldGetClusterGroups(String token, HttpStatus expectedStatus) {
+    void shouldGetClusterGroups(Supplier<String> tokenSupplier, HttpStatus expectedStatus) {
         var requestEntity = RequestEntity.get(URI.create("/v2/nvcf/clusterGroups"))
-                .header("Authorization", "Bearer " + token)
+                .header("Authorization", "Bearer " + tokenSupplier.get())
                 .build();
         var responseEntity = testRestTemplate.exchange(requestEntity, ClusterGroupsResponse.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
