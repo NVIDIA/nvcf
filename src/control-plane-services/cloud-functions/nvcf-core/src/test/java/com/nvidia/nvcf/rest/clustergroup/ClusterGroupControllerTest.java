@@ -70,6 +70,11 @@ import tools.jackson.databind.json.JsonMapper;
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 @AutoConfigureTestRestTemplate
 class ClusterGroupControllerTest {
+    // A dedicated account, so the API-key case proves its own NCA ID reached ICMS.
+    private static final String API_KEY_NCA_ID = "cluster-group-api-key-nca-id";
+    private static final String API_KEY_CLUSTER_GROUP = "API-KEY-ACCOUNT-GROUP";
+    private static final Set<String> PUBLIC_CLUSTER_GROUPS = Set.of("GFN", "OCI");
+
     @Autowired
     private TestRestTemplate testRestTemplate;
 
@@ -102,6 +107,7 @@ class ClusterGroupControllerTest {
         log.info("{}: Started running tests", this.getClass().getSimpleName());
         MockApiKeysServer.start(apiKeysBaseUrl);
         MockIcmsServer.start(9096, jsonMapper);
+        MockIcmsServer.stubClusterGroupsForAccount(API_KEY_NCA_ID, API_KEY_CLUSTER_GROUP);
         MockEssServer.start(essBaseUrl);
         MockCasServer.start(authnBaseUrl, casBaseUrl);
         MockNgcContainerRegistryServer.start(ngcContainerRegistryUrl);
@@ -130,36 +136,43 @@ class ClusterGroupControllerTest {
     Stream<Arguments> clusterGroupsArgs() {
         return Stream.of(
                 Arguments.of((Supplier<String>) () -> null,
-                             HttpStatus.UNAUTHORIZED),
+                             HttpStatus.UNAUTHORIZED,
+                             Set.of()),
                 // apikey Auth - Missing scopes
                 Arguments.of((Supplier<String>) () -> "nvapi-stg-key",
-                             HttpStatus.FORBIDDEN),
+                             HttpStatus.FORBIDDEN,
+                             Set.of()),
                 // apikey Auth - Incorrect scope
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(),
                                              List.of(SCOPE_LIST_FUNCTIONS));
                                  return "nvapi-stg-some-key";
                              },
-                             HttpStatus.FORBIDDEN),
-                // apikey Auth - Correct scope
+                             HttpStatus.FORBIDDEN,
+                             Set.of()),
+                // apikey Auth - Correct scope, lists the key's own account
                 Arguments.of((Supplier<String>) () -> {
-                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(),
+                                 setResponse(API_KEY_NCA_ID, TEST_OWNER_ID, List.of(),
                                              List.of(SCOPE_LIST_CLUSTER_GROUPS));
                                  return "nvapi-stg-some-key";
                              },
-                             HttpStatus.OK),
+                             HttpStatus.OK,
+                             Set.of(API_KEY_CLUSTER_GROUP)),
                 Arguments.of((Supplier<String>) () -> MOCK_OAUTH2_TOKEN_SERVER.getJwt(
                                      TEST_CLIENT_SUBJECT, List.of(), 100),
-                             HttpStatus.FORBIDDEN),
+                             HttpStatus.FORBIDDEN,
+                             Set.of()),
                 Arguments.of((Supplier<String>) () -> MOCK_OAUTH2_TOKEN_SERVER.getJwt(
                                      TEST_CLIENT_SUBJECT, List.of(SCOPE_LIST_CLUSTER_GROUPS), 100),
-                             HttpStatus.OK)
+                             HttpStatus.OK,
+                             PUBLIC_CLUSTER_GROUPS)
         );
     }
 
     @ParameterizedTest
     @MethodSource("clusterGroupsArgs")
-    void shouldGetClusterGroups(Supplier<String> tokenSupplier, HttpStatus expectedStatus) {
+    void shouldGetClusterGroups(
+            Supplier<String> tokenSupplier, HttpStatus expectedStatus, Set<String> expectedGroups) {
         var requestEntity = RequestEntity.get(URI.create("/v2/nvcf/clusterGroups"))
                 .header("Authorization", "Bearer " + tokenSupplier.get())
                 .build();
@@ -176,8 +189,7 @@ class ClusterGroupControllerTest {
         assertThat(clusterGroups.stream()
                            .map(ClusterGroup::getName)
                            .collect(Collectors.toSet()))
-                .hasSize(2)
-                .containsExactlyInAnyOrderElementsOf(Set.of("GFN", "OCI"));
+                .containsExactlyInAnyOrderElementsOf(expectedGroups);
     }
 
 }
