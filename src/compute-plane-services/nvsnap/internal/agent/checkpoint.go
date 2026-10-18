@@ -764,7 +764,6 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		// as the dump starts: the clocks then say how long the container
 		// was held (frozen_clock.go).
 		dumpStarts := func() {
-			a.releaseQuiet(key, log)
 			frozenAt, held = a.heldTargetSince(key)
 			dumpAt, _ = readClocks()
 		}
