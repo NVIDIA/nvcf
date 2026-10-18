@@ -21,9 +21,56 @@ clients.
 
 The sample accepts normal OpenAI request envelopes. It reads the standard
 fields needed to select streaming and embedding output, but does not inspect
-prompt or message content for benchmark tuning. Images, files, tools,
-multimodal input, stored responses, retrieval, and token-array embeddings are
-not implemented.
+prompt or message content for benchmark tuning. Images, files, multimodal
+input, stored responses, retrieval, and token-array embeddings are not
+implemented. Tools are implemented only on `POST /v1/responses`, described in
+the next section.
+
+## Responses tool calls
+
+`POST /v1/responses` accepts `function`, `custom`, and `namespace` tools
+(namespaces hold function and custom tools) and other tool types are ignored.
+It validates tool-call history like the OpenAI API: a `function_call_output` or
+`custom_tool_call_output` needs an earlier call with the same `call_id` and
+kind, and its `output` is a string or an array of `input_text`, `input_image`,
+and `input_file` parts. Errors are 400 `invalid_request_error` responses with
+the offending `param`.
+
+The sample stores no responses, so it cannot see calls from earlier turns. When
+the request sets `previous_response_id` or `conversation`, or has an
+`item_reference` input item, a tool output does not need an earlier call in
+`input`, and the reply reads `The tool returned: <output text>`.
+
+The sample has no model, so it decides tool calls with fixed rules:
+
+| Request | Reply |
+|---------|-------|
+| `tool_choice` `none` | Text |
+| `tool_choice` `required` | A call to the first tool |
+| `tool_choice` `{"type":"function","name":"x"}` or `{"type":"custom","name":"x"}` (optional `namespace`) | A call to that tool, or 400 if it is not in `tools` |
+| `auto` or unset | A call only when the last user text contains `call <name>` or `call <namespace>.<name>`, otherwise text |
+| Last input item is a tool output | Text: `The <namespace.name> tool returned: <output text>` |
+
+A function call has `id` (`fc_*`), `call_id` (`call_*`), `name`, optional
+`namespace`, and `arguments`. Arguments are generated from the tool schema:
+required properties get the first enum value, the default, or a placeholder
+such as `mock_<property>`. `<property>=<value>` in the user text sets a value.
+A custom call is a `custom_tool_call` (`ctc_*`) with `input`, which is
+`mock input for <name>` or the text after `input=` in the user text.
+
+With `stream: true` a function call emits `response.output_item.added`,
+several `response.function_call_arguments.delta` events,
+`response.function_call_arguments.done`, `response.output_item.done`, and
+`response.completed`. A custom call uses `response.custom_tool_call_input.delta`
+and `response.custom_tool_call_input.done`. TTFT and ITL controls apply. Output
+chunk controls do not apply to tool calls or to replies to a tool output.
+
+Every `/v1/responses` reply, text or tool call, echoes `tools`, `tool_choice`,
+and `parallel_tool_calls` from the request, with the defaults `[]`, `"auto"`,
+and `true`. `usage.input_tokens` counts the words of `input` and `tools` for
+tool-call replies only; other replies report `0`. Other request fields, such as
+`max_tool_calls`, `store`, `reasoning`, and `include`, are accepted and
+ignored.
 
 ## Benchmark controls
 
