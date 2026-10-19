@@ -69,6 +69,7 @@ go_library(
         "//src/compute-plane-services/nvca/pkg/miniservice",
         "//src/compute-plane-services/nvca/pkg/nodefeatures",
         "//src/compute-plane-services/nvca/pkg/nodefeatures/sharedcluster",
+        "//src/compute-plane-services/nvca/pkg/nvca/byoofederation",
         "//src/compute-plane-services/nvca/pkg/nvca/encryption",
         "//src/compute-plane-services/nvca/pkg/nvca/enforce",
         "//src/compute-plane-services/nvca/pkg/nvca/enforce/hostisolation",
@@ -174,6 +175,7 @@ go_test(
     name = "nvca_test",
     srcs = [
         "k8scomputebackend_modelcache_rwx_readonly_test.go",
+        "agent_byoo_federation_test.go",
         "agent_http_debug_test.go",
         "agent_manager_test.go",
         "agent_metrics_test.go",
