@@ -167,15 +167,11 @@ const (
 	fluentbitVarLogPath       = "/var/log"
 	fluentbitDBVolumeName     = "fluentbit-db"
 	fluentbitDBPath           = "/fluent-bit/db"
-	fluentbitParsersConfigKey = "parsers.conf"
 )
 
 var (
 	//go:embed manifests/fluent-bit.conf.tmpl
 	fluentbitConfigTemplate string
-
-	//go:embed manifests/parsers.conf
-	fluentbitParsersConfig string
 
 	// fluentbitConfigTemplateParsed is the parsed template, initialized at package load time.
 	// If the template is invalid, the program will fail to start.
@@ -274,12 +270,12 @@ func getCommonOTelEnvs(allEnvSet map[string]string, otelPodIPOverride string) []
 func GetDefaultContainerResourcesBYOO() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI), // 500m
-			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),     // 2Gi
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI), // 1000m
+			corev1.ResourceMemory: *resource.NewQuantity(1<<31, resource.BinarySI),      // 2Gi
 		},
 	}
 }
@@ -305,8 +301,8 @@ func getOTelContainerBase(
 					Scheme: corev1.URISchemeHTTP,
 				},
 			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       30,
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
 			FailureThreshold:    3,
 			SuccessThreshold:    1,
 			TimeoutSeconds:      1,
@@ -600,8 +596,7 @@ func NewFluentbitConfigMap(name string, podName string, workloadType string) *co
 	cm := &corev1.ConfigMap{}
 	cm.Name = name
 	cm.Data = map[string]string{
-		fluentbitConfigCMKey:      fluentbitConfig,
-		fluentbitParsersConfigKey: fluentbitParsersConfig,
+		fluentbitConfigCMKey: fluentbitConfig,
 	}
 	return cm
 }
