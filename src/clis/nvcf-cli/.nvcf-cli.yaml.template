@@ -226,6 +226,18 @@ api_keys_owner_id: svc@nvcf-api.local
 # cluster_validator_external_components:
 #   - cassandra
 
+# High-availability mode the control plane was installed with: none,
+# preferred or enforced. self-hosted check --control-plane checks the HA
+# guarantee and topology that mode requires. Unset, check uses the stack's
+# highAvailability.mode when --env names the install's environment, and
+# otherwise the validator warns that no mode was supplied.
+#
+# Config key: ha_mode
+# Environment variable: NVCF_HA_MODE
+# Command-line flag: --mode (self-hosted check)
+#
+# ha_mode: preferred
+
 # ==============================================================================
 # General Settings
 # ==============================================================================

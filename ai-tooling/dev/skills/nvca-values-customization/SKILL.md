@@ -91,9 +91,15 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
   `openbao`, `cassandra`) in `clusterValidator.externalComponents`, or Tier-2
   reports them missing after install. `make render-values-from-stack` lists
   each one the stack environment disables.
-- `make render-values-from-stack` rewrites `gatewayNames`, `storageClass` and
-  `externalComponents` from the stack on every render, empty included. Set a
-  different value with `additional_values`, not on the release.
+- `clusterValidator.haMode` names the stack's `highAvailability.mode`, which
+  the control-plane validator's HA rows judge the cluster against. `make
+  render-values-from-stack` sets it, `preferred`, as `base.yaml` sets, when
+  the environment file sets no mode. Empty, the validator judges placement from
+  the rendered terms and warns that no mode was supplied.
+- `make render-values-from-stack` rewrites `gatewayNames`, `storageClass`,
+  `haMode` and `externalComponents` from the stack on every render, empty
+  included. Set a different value with `additional_values`, not on the
+  release.
 - The node-to-node probe pods have no image pull secrets. On a registry other
   than NGC (`nvcr.io` or a subdomain), `make render-values-from-stack` points
   an unset `clusterValidator.nodeToNodeProbeImage` at `busybox:1.36` under the

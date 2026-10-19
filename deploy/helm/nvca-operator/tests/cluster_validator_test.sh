@@ -63,6 +63,7 @@ clusterValidator:
   nodeToNodeProbeImage: mirror.example.com/busybox:1.36
   configMapName: site-checks
   storageClass: ceph-rbd
+  haMode: enforced
   schedule: "*/30 * * * *"
   image:
     repository: mirror.example.com/cluster-validator
@@ -81,7 +82,8 @@ EOF
 full="${work_dir}/full.yaml"
 render "${full}" --values "${full_values}"
 
-job_env_names="NVCF_ENVOY_GATEWAY_NAMESPACE NVCF_EXTERNAL_COMPONENTS NVCF_GATEWAY_NAMES NVCF_N2N_PROBE_IMAGE"
+job_env_names="NVCF_ENVOY_GATEWAY_NAMESPACE NVCF_EXTERNAL_COMPONENTS NVCF_GATEWAY_NAMES NVCF_HA_MODE"
+job_env_names+=" NVCF_N2N_PROBE_IMAGE"
 job_env_names+=" NVCF_OPENBAO_NAMESPACE NVCF_STORAGE_CLASS VALIDATOR_CONFIG_NAME VALIDATOR_CONFIG_NAMESPACE"
 job_env_names+=" VALIDATOR_POST_INSTALL VALIDATOR_REQUIRE_SUMMARY VALIDATOR_ROLE VALIDATOR_SUMMARY_NAMESPACE"
 job_env_names+=" VALIDATOR_TIMEOUT"
@@ -93,6 +95,7 @@ assert_eq "nvcf/shared-gw,nvcf/grpc-gw" "$(env_value "${job_env}" NVCF_GATEWAY_N
 assert_eq "mirror.example.com/busybox:1.36" "$(env_value "${job_env}" NVCF_N2N_PROBE_IMAGE "${full}")" "probe image"
 assert_eq "openbao" "$(env_value "${job_env}" NVCF_OPENBAO_NAMESPACE "${full}")" "OpenBao namespace"
 assert_eq "ceph-rbd" "$(env_value "${job_env}" NVCF_STORAGE_CLASS "${full}")" "storage class"
+assert_eq "enforced" "$(env_value "${job_env}" NVCF_HA_MODE "${full}")" "HA mode"
 assert_eq "site-checks" "$(env_value "${job_env}" VALIDATOR_CONFIG_NAME "${full}")" "config ConfigMap name"
 assert_eq "true" "$(env_value "${job_env}" VALIDATOR_POST_INSTALL "${full}")" "the Job declares the stack installed"
 assert_eq "true" "$(env_value "${job_env}" VALIDATOR_REQUIRE_SUMMARY "${full}")" "the Job requires its summary"
@@ -185,6 +188,7 @@ for change in \
   "clusterValidator.tolerations[0].key=other" \
   "clusterValidator.externalComponents={openbao}" \
   "clusterValidator.storageClass=local-path" \
+  "clusterValidator.haMode=preferred" \
   "clusterValidator.networkChecks.enforcement.critical=true" \
   "clusterValidator.configMapName=other-checks" \
   "clusterValidator.image.tag=v10"; do
@@ -206,6 +210,23 @@ for change in \
   esac
 done
 echo "ok the spec hash covers the Job spec and the network checks, and only init container values roll the operator"
+
+# --- HA mode: only the control-plane checks judge it ------------------------
+# Unset, the validator judges placement from the rendered terms and warns that
+# no mode was supplied. The compute-plane set has no HA checks.
+no_mode="${work_dir}/no-mode.yaml"
+render "${no_mode}" --values "${full_values}" --set-string "clusterValidator.haMode="
+assert_eq "" "$(env_value "${job_env}" NVCF_HA_MODE "${no_mode}")" "no HA mode unless one is set"
+compute_mode="${work_dir}/compute-mode.yaml"
+render "${compute_mode}" --values "${full_values}" --set "clusterValidator.role=compute-plane" \
+  --set "clusterValidator.haMode=enforced"
+assert_eq "" "$(env_value "${job_env}" NVCF_HA_MODE "${compute_mode}")" \
+  "no HA mode for the compute-plane checks"
+for mode in none preferred; do
+  render "${no_mode}" --values "${full_values}" --set "clusterValidator.haMode=${mode}"
+  assert_eq "${mode}" "$(env_value "${job_env}" NVCF_HA_MODE "${no_mode}")" "HA mode ${mode} is forwarded"
+done
+echo "ok HA mode reaches the control-plane validator only when set"
 
 # --- RBAC: exactly the inventory, per role ------------------------------------
 rendered_rbac() {
@@ -295,6 +316,8 @@ rejects() {
 rejects "an unknown clusterValidator.role" --set "clusterValidator.role=controlplane"
 rejects "a gateway name without a namespace" --set "clusterValidator.gatewayNames={gateway}"
 rejects "an unknown external component" --set "clusterValidator.externalComponents={redis}"
+rejects "an unknown HA mode" --set "clusterValidator.haMode=strict"
+rejects "an HA mode the stack would reject" --set "clusterValidator.haMode=Preferred"
 render /dev/null --set clusterValidator.enabled=true --set "clusterValidator.gatewayNames={gw/shared-gw}" \
   --set "clusterValidator.externalComponents={nats,openbao,cassandra}"
 echo "ok schema"
