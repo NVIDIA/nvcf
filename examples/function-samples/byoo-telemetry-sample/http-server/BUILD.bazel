@@ -41,8 +41,9 @@ go_test(
     embed = [":http-server_lib"],
 )
 
-# Multi-arch release image. Release automation builds :image_index from a
-# release tag and publishes it; registry destinations are not kept here.
+# Multi-arch image. The sample is not a registered release subproject, so
+# release automation does not publish :image_index; users build and push the
+# image themselves. Registry destinations are not kept here.
 # binary_path keeps the path the Dockerfile uses, so a function definition that
 # names the binary keeps working with either image.
 go_oci_image(

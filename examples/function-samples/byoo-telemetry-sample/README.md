@@ -21,7 +21,7 @@ The sample sends OTLP/HTTP with JSON payloads and uses only the Go standard libr
 docker build -t byoo-telemetry-sample .
 ```
 
-Push the image to an OCI registry your self-hosted NVCF cluster can access and register pull credentials with `nvcf-cli registry add`. See [examples/README.md](../../README.md#publishing-container-images) for the full flow.
+Push the image to an OCI registry your self-hosted NVCF cluster can access and register pull credentials with `nvcf-cli registry add`. See [examples/README.md](../../README.md#publishing-container-images) for the full flow. NVCF checks that the image exists in that registry when you create the function, so an image loaded only into the cluster nodes (for example with `k3d image import`) is rejected with `Artifact '...' presence validation failed`.
 
 ## Run the tests
 
@@ -84,7 +84,7 @@ NVCA removes NetworkPolicies from workload namespaces on self-managed clusters, 
 
 ### 2. Get credentials
 
-`nvcf-cli init` mints the admin token that carries the `manage_telemetries` scope used to register telemetry endpoints. The function API key is used to invoke the function.
+`nvcf-cli init` mints the admin token that carries the `manage_telemetries` scope used to register telemetry endpoints, and saves it to `~/.nvcf-cli.state`. If you run `nvcf-cli` with `--config <name>.yaml`, read `~/.nvcf-cli.<name>.state` instead. The function API key is used to invoke the function.
 
 ```bash
 nvcf-cli init
@@ -138,7 +138,7 @@ nvcf-cli function deploy create \
   --backend <backend>
 ```
 
-The function itself needs no GPU, but a deployment still names a GPU, instance type, and backend that your cluster advertises; `nvcf-cli cluster list` shows them. Wait for the deployment to become `ACTIVE` with `nvcf-cli function status <function-id> <version-id>`.
+`function create` prints the function ID and version ID. The function itself needs no GPU, but a deployment still names a GPU, instance type, and backend that your cluster advertises; `nvcf-cli cluster list` shows them. `function deploy create` waits up to `--timeout` seconds (default 900) for the deployment to become `ACTIVE`. Check it later with `nvcf-cli function deploy get --function-id <function-id> --version-id <version-id>`.
 
 ### 5. Invoke the function
 

@@ -25,9 +25,9 @@ Without `OTEL_EXPORTER_OTLP_*_ENDPOINT` set, signals are emitted to the console.
 
 ## Launch on self-hosted NVCF
 
-The tasks API checks that the task image exists in its registry before it accepts a task, so push the image to a registry as described above. Loading the image only into the cluster nodes (for example with `kind load` or `ctr images import`) is not enough.
+The tasks API checks that the task image exists in its registry before it accepts a task, so push the image to a registry as described above. An image loaded only into the cluster nodes (for example with `k3d image import` or `kind load`) is rejected with `Artifact '...' presence validation failed`.
 
-Resolve the cluster gateway and generate a task API key via `nvcf-cli`. Launching a task needs a key generated for the task service, which carries the `launch_task` scope; the default function key does not.
+Resolve the cluster gateway and generate a task API key via `nvcf-cli`. Launching a task needs a key generated for the task service (`--for task`), which carries the `launch_task` scope. A function key does not carry it.
 
 ```bash
 export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}')
