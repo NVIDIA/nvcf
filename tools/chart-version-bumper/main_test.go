@@ -371,6 +371,11 @@ func TestRefusalStillAppliesTheChartsThatCouldMove(t *testing.T) {
 func TestRealChartsResolve(t *testing.T) {
 	// Against the checked-in metadata and charts, so a chart directory layout
 	// this tool cannot read shows up here rather than during a release.
+	//
+	// A declared edge that refuses is caught here too. The refusal depends only
+	// on the chart, not on the version released, so such an edge refuses every
+	// release of its service. cloud-functions-helm did that once its chart
+	// gained a second image tag, until the edge named the API image's path.
 	root := repoRoot(t)
 	m, err := LoadMetadata(root)
 	if err != nil {
@@ -387,14 +392,19 @@ func TestRealChartsResolve(t *testing.T) {
 			continue
 		}
 		for _, d := range e.Deploys {
+			var p Plan
+			var err error
 			if len(d.ValuesPaths) > 0 || len(d.ValuesFiles) > 0 {
-				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion); err != nil {
-					t.Errorf("planning %s (%s values paths) failed: %v", e.ID, d.Service, err)
-				}
+				p, err = PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion)
+			} else {
+				p, err = PlanFor(root, e, "9.9.9")
+			}
+			if err != nil {
+				t.Errorf("planning %s (%s) failed: %v", e.ID, d.Service, err)
 				continue
 			}
-			if _, err := PlanFor(root, e, "9.9.9"); err != nil {
-				t.Errorf("planning %s failed: %v", e.ID, err)
+			if p.Action == ActionRefuse {
+				t.Errorf("%s refuses every %s release: %s", e.ID, d.Service, p.Detail)
 			}
 		}
 		seen++

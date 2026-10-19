@@ -126,13 +126,20 @@ jobs:
           # also makes the run idempotent: the bumper sees the current value and
           # reports "already <version>".
           #
-          # The shared branch is rebased onto the default branch first, as the
+          # The shared branch is moved onto the default branch first, as the
           # stack workflow does. Its tree can predate the tools this run needs
           # (the bumper's "bump:" line, release-bump-type), and a stale branch
           # would either fail or fall back to a patch commit for a minor bump.
+          #
+          # The default branch also moves the same chart versions, through a
+          # manual bump or a merged earlier bump. A plain rebase then stopped
+          # on that conflict and every later release failed here, so the
+          # helper regenerates a bump commit that no longer applies by running
+          # the bumper again for the release it recorded. See the helper for
+          # what it keeps, regenerates, drops, and refuses.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}"
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper
 
       - name: Apply the bump
         id: bump
