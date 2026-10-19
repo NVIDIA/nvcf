@@ -324,6 +324,81 @@ func TestDoCreationMessageDeletesRejectedMessage(t *testing.T) {
 	assert.Contains(t, GetCreationRejectionReason(&reqs[0]), "BYOObservability")
 }
 
+// TestSyncQueuesDeletesRedeliveredRejectedMessage checks that a rejected
+// creation message delivered again with a new receipt handle is deleted with
+// that handle, while a redelivered message for an accepted request is only
+// skipped.
+func TestSyncQueuesDeletesRedeliveredRejectedMessage(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	clients := mockKubeClients()
+	bk8s := &BackendK8sCache{
+		featureFlagFetcher: &featureflagmock.Fetcher{},
+		clients:            clients,
+		requestsNamespace:  RequestsNamespace,
+	}
+
+	gpuName := types.GPUName("A100")
+	rejectedQueue := queue.MessageQueueInfo{GPU: string(gpuName), QueueURL: "rejected_url", QueueType: queue.CreationQueue}
+	acceptedQueue := queue.MessageQueueInfo{GPU: string(gpuName), QueueURL: "accepted_url", QueueType: queue.CreationQueue}
+
+	// Both requests already exist from the first delivery of each message.
+	rejected, err := bk8s.CreateICMSCreationMessageRequest(ctx,
+		decodeCMTask(t, cmsgTaskContainerBYOO), "rhdl-old-rejected", "msgid-rejected", rejectedQueue.QueueURL)
+	require.NoError(t, err)
+	require.NotEmpty(t, GetCreationRejectionReason(rejected))
+	accepted, err := bk8s.CreateICMSCreationMessageRequest(ctx,
+		decodeCMTask(t, cmsgTaskContainer), "rhdl-old-accepted", "msgid-accepted", acceptedQueue.QueueURL)
+	require.NoError(t, err)
+	require.Empty(t, GetCreationRejectionReason(accepted))
+
+	srInfFactory := nvcainformers.NewSharedInformerFactoryWithOptions(clients.BART, ResyncInterval,
+		nvcainformers.WithNamespace(bk8s.requestsNamespace))
+	bk8s.icmsRequestLister = mustICMSRequestLister(t, srInfFactory)
+	srInfFactory.Start(ctx.Done())
+	srInfFactory.WaitForCacheSync(ctx.Done())
+
+	// The messages are delivered again with new receipt handles.
+	qc := &mockqueue.Client{Use10MillisForWaits: true}
+	qc.AddMessage(rejectedQueue.QueueURL, queue.ReceiveMessageOutput{
+		MessageID: "msgid-rejected", ReceiptHandle: "rhdl-new-rejected", Body: cmsgTaskContainerBYOO,
+	})
+	qc.AddMessage(acceptedQueue.QueueURL, queue.ReceiveMessageOutput{
+		MessageID: "msgid-accepted", ReceiptHandle: "rhdl-new-accepted", Body: cmsgTaskContainer,
+	})
+
+	qm := NewQueueManager(
+		bk8s,
+		staticStatusGetter{status: types.AgentHealth{
+			GPUUsage: types.GPUResourceSet{gpuName: {Capacity: 8}},
+		}},
+		qc,
+		types.QueueCredentials{
+			CreationQueues:        map[types.GPUName]queue.MessageQueueInfo{gpuName: rejectedQueue},
+			ClusterCreationQueues: map[types.GPUName]queue.MessageQueueInfo{gpuName: acceptedQueue},
+			TerminationQueue:      queue.MessageQueueInfo{QueueURL: "termurl", QueueType: queue.TerminationQueue},
+		},
+		featureflag.DefaultFetcher,
+		types.MaintenanceModeNone,
+		nvcametrics.FromContext(ctx),
+	)
+	require.NoError(t, qm.SyncQueues(ctx))
+
+	peek := func(qi queue.MessageQueueInfo) []queue.ReceiveMessageOutput {
+		t.Helper()
+		msgs, err := qc.PeekMessage(ctx, queue.ReceiveMessageInput{QueueInfo: qi, MaxNumberOfMessages: 1})
+		require.NoError(t, err)
+		return msgs
+	}
+	assert.Empty(t, peek(rejectedQueue), "redelivered rejected message should be deleted")
+	assert.Len(t, peek(acceptedQueue), 1, "redelivered accepted message should be kept")
+
+	reqs, err := clients.BART.NvcaV2beta1().ICMSRequests(bk8s.requestsNamespace).List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Len(t, reqs.Items, 2)
+}
+
 // TestRejectedTaskReportedWithAckAfterPodsScheduled checks that with
 // AckTaskRequestAfterPodsScheduled enabled, a rejected task is never
 // acknowledged, but sync still fails it and its failure reaches ICMS.
