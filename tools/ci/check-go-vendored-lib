@@ -43,28 +43,90 @@ report() {  # report <module-rel> <message>
     fi
 }
 
+# Succeed when go mod vendor leaves a Go file out because of its build
+# constraint. Like cmd/go, treat every tag except ignore as both set and unset,
+# so only a constraint that needs the ignore tag excludes the file.
+go_build_excluded() {  # go_build_excluded <go-file>
+    awk '
+        function p_or(prefer,   v, r) {
+            v = p_and(prefer)
+            while (tok[pos] == "||") { pos++; r = p_and(prefer); v = v || r }
+            return v
+        }
+        function p_and(prefer,   v, r) {
+            v = p_unary(prefer)
+            while (tok[pos] == "&&") { pos++; r = p_unary(prefer); v = v && r }
+            return v
+        }
+        function p_unary(prefer,   t, v) {
+            t = tok[pos++]
+            if (t == "!") return !p_unary(!prefer)
+            if (t == "(") {
+                v = p_or(prefer)
+                if (tok[pos++] != ")") bad = 1
+                return v
+            }
+            if (t == "ignore") return 0
+            if (t ~ /^[A-Za-z0-9_.]+$/) return prefer
+            bad = 1
+            return 0
+        }
+        function legacy(line,   n, terms, i, out) {
+            n = split(line, terms, " ")
+            out = ""
+            for (i = 1; i <= n; i++) {
+                gsub(/,/, " \\&\\& ", terms[i])
+                out = out (out == "" ? "" : " || ") "(" terms[i] ")"
+            }
+            return "(" out ")"
+        }
+        /^package[ \t]/ { exit }
+        /^\/\/go:build[ \t]/ { expr = substr($0, 11); exit }
+        /^\/\/ \+build[ \t]/ {
+            plus = plus (plus == "" ? "" : " && ") legacy(substr($0, 10))
+        }
+        END {
+            if (expr == "") expr = plus
+            if (expr == "") exit 1
+            gsub(/\(|\)|!|&&|\|\|/, " & ", expr)
+            n = split(expr, tok, " ")
+            pos = 1
+            v = p_or(1)
+            if (pos <= n) bad = 1
+            exit (bad || !v) ? 0 : 1
+        }' "$1"
+}
+
 # go mod vendor copies every regular file of a vendored package directory
-# except tests, go.mod, go.sum and Go files constrained by the ignore tag.
+# except tests, go.mod, go.sum and Go files whose build constraint excludes
+# them.
 vendorable() {  # vendorable <source-file>
     local name="${1##*/}"
     case "${name}" in
         *_test.go | go.mod | go.sum | BUILD.bazel | BUILD) return 1 ;;
-        *.go) ! grep -Eq '^//(go:build| \+build) ignore[[:space:]]*$' "$1" ;;
+        *.go) ! go_build_excluded "$1" ;;
         *) return 0 ;;
     esac
 }
 
 check_module() {  # check_module <module-dir>
-    local module_dir="$1" rel target resolved vendored f r d src
+    local module_dir="$1" rel target packages resolved vendored f r d src
     rel="${module_dir#"${repo_root}/"}"
 
     # The library's header line in modules.txt is
     #   # <import path> [version] [=> <replacement> [version]]
-    target="$(awk -v m="${lib_import}" '
-        $1 == "#" && $2 == m {
-            for (i = 3; i <= NF; i++) if ($i == "=>") { print $(i + 1); exit }
-            exit
-        }' "${module_dir}/vendor/modules.txt")"
+    # followed by the vendored package paths. Print the replacement, if any,
+    # and the number of vendored packages.
+    read -r target packages < <(awk -v m="${lib_import}" '
+        found && /^# / { exit }
+        found && !/^#/ { packages++ }
+        !found && $1 == "#" && $2 == m {
+            found = 1
+            for (i = 3; i <= NF; i++) if ($i == "=>") target = $(i + 1)
+        }
+        END { print (target == "" ? "-" : target), packages + 0 }
+    ' "${module_dir}/vendor/modules.txt")
+    [[ "${target}" == "-" ]] && target=""
 
     if [[ -z "${target}" ]]; then
         if grep -Fq "# ${lib_import} " "${module_dir}/vendor/modules.txt"; then
@@ -85,6 +147,11 @@ check_module() {  # check_module <module-dir>
     fi
     if [[ "${resolved}" != "${lib_real}" ]]; then
         echo "skip  ${rel}: replaces the library with ${target}"
+        return 0
+    fi
+
+    if [[ "${packages}" -eq 0 ]]; then
+        echo "skip  ${rel}: vendors none of the library's packages"
         return 0
     fi
 

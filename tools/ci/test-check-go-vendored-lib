@@ -97,6 +97,16 @@ run
 expect "ignore-tagged Go file added to the source exits 0" 0 "match the source"
 
 fixture
+printf '//go:build ignore && linux\n\npackage main\n' > "${root}/${lib}/pkg/a/gen.go"
+run
+expect "Go file excluded by ignore && linux exits 0" 0 "match the source"
+
+fixture
+printf '//go:build ignore || linux\n\npackage a\n' > "${root}/${lib}/pkg/a/gen.go"
+run
+expect "Go file kept by ignore || linux exits 1" 1 "${lib}/pkg/a/gen.go is not vendored"
+
+fixture
 printf 'notes\n' > "${root}/${lib}/pkg/a/README.md"
 run
 expect "non-Go file added to a vendored package exits 1" 1 "${lib}/pkg/a/README.md is not vendored"
@@ -123,6 +133,13 @@ sed 's#=> ../../libraries/go/lib#=> ../../nowhere#' "${modules_txt}" > "${module
 mv "${modules_txt}.new" "${modules_txt}"
 run
 expect "replace target that does not exist exits 1" 1 "replace target ../../nowhere does not exist"
+
+fixture
+mkdir -p "${root}/src/svc/nopkgs/vendor"
+printf '# %s v0.0.0-00010101000000-000000000000 => ../../libraries/go/lib\n## explicit; go 1.25.0\n# %s => ../../libraries/go/lib\n' \
+    "${lib_import}" "${lib_import}" > "${root}/src/svc/nopkgs/vendor/modules.txt"
+run
+expect "module that vendors no library package is skipped" 0 "skip  src/svc/nopkgs: vendors none of the library's packages"
 
 fixture
 rm -rf "${root}/src/svc/local"
