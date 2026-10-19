@@ -337,6 +337,22 @@ func TestBucketIndex(t *testing.T) {
 	}
 }
 
+func TestRecordAfterCloseIsDropped(t *testing.T) {
+	sink := newFakeSink(t)
+	_, tel := startSample(t, sink)
+	flush(t, tel)
+	flush(t, tel)
+
+	now := time.Now()
+	tel.record(requestRecord{
+		route: "/echo", method: http.MethodPost, status: http.StatusOK,
+		traceID: randomHex(16), spanID: randomHex(8), start: now, end: now,
+	})
+	if got := sink.byPath(); len(got) != 0 {
+		t.Fatalf("records after close must be dropped, got %v", got)
+	}
+}
+
 func mustUnmarshal(t *testing.T, body []byte, out any) {
 	t.Helper()
 	if err := json.Unmarshal(body, out); err != nil {

@@ -166,8 +166,13 @@ type telemetry struct {
 	requests  map[seriesKey]uint64
 	durations map[seriesKey]*durationSeries
 
-	queue chan exportJob
-	done  chan struct{}
+	// queueMu guards closed so that a record arriving after close (for
+	// example from a handler that outlived server shutdown) is dropped
+	// instead of sending on a closed channel.
+	queueMu sync.Mutex
+	closed  bool
+	queue   chan exportJob
+	done    chan struct{}
 }
 
 func newTelemetry(cfg config, logger *slog.Logger) *telemetry {
@@ -206,9 +211,15 @@ func (t *telemetry) record(rec requestRecord) {
 	t.enqueue(signalMetrics, t.cfg.metricsEndpoint, snapshot)
 }
 
-// close stops accepting records and waits for queued exports to finish.
+// close stops accepting records and waits for queued exports to finish. It is
+// safe to call more than once.
 func (t *telemetry) close(ctx context.Context) error {
-	close(t.queue)
+	t.queueMu.Lock()
+	if !t.closed {
+		t.closed = true
+		close(t.queue)
+	}
+	t.queueMu.Unlock()
 	select {
 	case <-t.done:
 		return nil
@@ -224,6 +235,12 @@ func (t *telemetry) enqueue(signal, url string, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.logger.Error("encode OTLP payload", "signal", signal, "error", err)
+		return
+	}
+	t.queueMu.Lock()
+	defer t.queueMu.Unlock()
+	if t.closed {
+		t.logger.Warn("telemetry closed; dropping payload", "signal", signal)
 		return
 	}
 	select {
