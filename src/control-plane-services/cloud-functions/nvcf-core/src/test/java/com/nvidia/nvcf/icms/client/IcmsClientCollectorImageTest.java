@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvct.service.icms;
+package com.nvidia.nvcf.icms.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,18 +23,21 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-class IcmsClientOtlpEndpointTest {
+class IcmsClientCollectorImageTest {
 
     @ParameterizedTest
     @NullAndEmptySource
-    @ValueSource(strings = {" ", "https://dummy:8282", "http://DUMMY:4318", "dummy", "not a uri"})
-    void shouldNotSendUnsetOrPlaceholderEndpointToWorkers(String endpoint) {
-        assertThat(IcmsClient.toWorkerOtlpEndpoint(endpoint)).isEmpty();
+    @ValueSource(strings = {" "})
+    void shouldLeaveCollectorImageToComputePlaneWhenUnset(String image) {
+        assertThat(IcmsClient.byooOtelCollectorContainerEnv(image)).isEmpty();
     }
 
     @Test
-    void shouldSendConfiguredEndpointToWorkers() {
-        assertThat(IcmsClient.toWorkerOtlpEndpoint(" http://otel-collector.observability:4318 "))
-                .contains("http://otel-collector.observability:4318");
+    void shouldSendConfiguredCollectorImage() {
+        var image = "registry.example.com/byoo-otel-collector:1.2.3";
+        assertThat(IcmsClient.byooOtelCollectorContainerEnv(image))
+                .singleElement()
+                .extracting("first", "second")
+                .containsExactly("BYOO_OTEL_COLLECTOR_CONTAINER", image);
     }
 }

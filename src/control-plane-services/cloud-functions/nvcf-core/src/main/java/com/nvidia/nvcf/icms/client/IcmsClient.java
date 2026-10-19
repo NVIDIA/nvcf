@@ -97,8 +97,6 @@ import tools.jackson.databind.json.JsonMapper;
 @Service
 @RefreshScope
 public class IcmsClient {
-    private static final String PLACEHOLDER_OTLP_HOST = "dummy";
-
     public static final int BATCH_SIZE = 32;
     public static final String CLIENT_REGISTRATION_ID = "icms";
 
@@ -154,7 +152,7 @@ public class IcmsClient {
     private final IcmsStubService service;
     private final String selfFqdn;
     private final String globalFqdnGrpc;
-    private final Optional<String> workerOtlpEndpoint;
+    private final URI tracingUrl;
     private final String tracingAccessToken;
     private final Optional<String> workerNKeySeed;
     private final String inferenceContainer;
@@ -211,8 +209,7 @@ public class IcmsClient {
             @Value("${nvcf.llm-request-router.worker-address}") String llmRequestRouterAddress,
             @Value("${nvcf.fqdn}") String selfFqdn,
             @Value("${nvcf.global-fqdn-grpc}") String globalFqdnGrpc,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}")
-            String otlpTracingEndpoint,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") URI tracingUrl,
             // ESS_FQDN advertised to the LLM worker is the worker-facing ESS address,
             // which differs from EssClient's in-cluster base-url when the compute plane
             // is external. Defaults to nvcf.ess.base-url (colocated); split deployments
@@ -269,7 +266,7 @@ public class IcmsClient {
                 .builderFor(WebClientAdapter.create(webClient))
                 .build()
                 .createClient(IcmsStubService.class);
-        this.workerOtlpEndpoint = toWorkerOtlpEndpoint(otlpTracingEndpoint);
+        this.tracingUrl = tracingUrl;
         this.clusterGroupCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -458,6 +455,7 @@ public class IcmsClient {
                 Pair.of("INFERENCE_URL", function.getInferenceUrl()),
                 Pair.of("INFERENCE_PORT", inferencePort),
                 Pair.of("INFERENCE_PROTOCOL", getInferenceProtocol(function)),
+                Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                 Pair.of("TRACING_ACCESS_TOKEN", tracingAccessToken),
                 Pair.of("INIT_CONTAINER", initContainer),
                 Pair.of("OTEL_CONTAINER", otelContainer),
@@ -490,14 +488,7 @@ public class IcmsClient {
             envStream = Stream.concat(envStream,
                                       Stream.of(Pair.of("NKEY_SEED", workerNKeySeed.get())));
         }
-        if (workerOtlpEndpoint.isPresent()) {
-            envStream = Stream.concat(envStream, Stream.of(
-                    Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", workerOtlpEndpoint.get())));
-        }
-        if (StringUtils.isNotBlank(otelCollectorContainer)) {
-            envStream = Stream.concat(envStream, Stream.of(
-                    Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer)));
-        }
+        envStream = Stream.concat(envStream, byooOtelCollectorContainerEnv(otelCollectorContainer));
 
         // ### Keep the option to send legacy properties in case we need to troubleshoot.
         //     By default, sendLegacyCredProps is false. When sending legacy properties, we are
@@ -846,23 +837,11 @@ public class IcmsClient {
         return null;
     }
 
-    // Self-managed profiles historically configured a placeholder OTLP endpoint. Workers
-    // must not receive it, otherwise the collector retries trace exports to a host that
-    // does not exist.
-    static Optional<String> toWorkerOtlpEndpoint(String endpoint) {
-        if (StringUtils.isBlank(endpoint)) {
-            return Optional.empty();
-        }
-        var trimmed = endpoint.trim();
-        try {
-            var host = URI.create(trimmed).getHost();
-            if (host == null || PLACEHOLDER_OTLP_HOST.equalsIgnoreCase(host)) {
-                return Optional.empty();
-            }
-        } catch (IllegalArgumentException e) {
-            log.warn("Ignoring invalid OTLP tracing endpoint '{}'", trimmed);
-            return Optional.empty();
-        }
-        return Optional.of(trimmed);
+    // An empty collector image means the compute plane supplies it. The NVCA operator chart
+    // sets BYOO_OTEL_COLLECTOR_CONTAINER through its function and task env overrides.
+    static Stream<Pair<String, String>> byooOtelCollectorContainerEnv(String image) {
+        return StringUtils.isBlank(image)
+                ? Stream.empty()
+                : Stream.of(Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", image));
     }
 }

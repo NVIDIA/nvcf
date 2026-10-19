@@ -616,7 +616,7 @@ class IcmsClientTest {
         assertThat(env.get("INFERENCE_URL")).isEqualTo(TEST_INFERENCE_URL.toString());
         assertThat(env.get("INFERENCE_PORT")).isEqualTo("8000");
         assertThat(env.get("INFERENCE_PROTOCOL")).isEqualTo("REST");
-        assertThat(env).doesNotContainKey("OTEL_EXPORTER_OTLP_ENDPOINT");
+        assertThat(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")).isEqualTo("https://dummy:8282");
         assertThat(env.get("TRACING_ACCESS_TOKEN")).isEqualTo("dummy-lightstep-access-token");
         assertThat(env.get("INIT_CONTAINER")).isEqualTo(
                 "stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_init:0.7.0");

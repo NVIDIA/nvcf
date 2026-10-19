@@ -280,7 +280,7 @@ class IcmsServiceTest {
                 .containsEntry("UTILS_CONTAINER",
                                "stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_utils:2.2.1")
                 .containsEntry("ESS_AGENT_CONTAINER", "stg.nvcr.io/nv-cf/nvcf-core/ess-agent:0.0.4")
-                .doesNotContainKey("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .containsEntry("OTEL_EXPORTER_OTLP_ENDPOINT", "https://dummy:8282")
                 .containsEntry("TASK_CONTAINER_ENV",
                                "W3sia2V5IjoiS0VZXzEiLCJ2YWx1ZSI6IlZBTFVFXzEifSx7ImtleSI6IktFWV8yIiwidmFsdWUiOiJWQUxVRV8yIn0seyJrZXkiOiJLRVlfMyIsInZhbHVlIjoiVkFMVUVfMyJ9XQ==")
                 .containsEntry("RESULTS_LOCATION",

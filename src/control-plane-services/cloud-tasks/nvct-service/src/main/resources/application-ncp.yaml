@@ -68,6 +68,7 @@ management:
     tracing:
       export:
         otlp:
+          endpoint: https://dummy:8282
           headers:
             lightstep-access-token: unused
 

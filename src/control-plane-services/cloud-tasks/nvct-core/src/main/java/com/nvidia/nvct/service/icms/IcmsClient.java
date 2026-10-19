@@ -75,7 +75,6 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 @Service
 @RefreshScope
 public class IcmsClient {
-    private static final String PLACEHOLDER_OTLP_HOST = "dummy";
 
     private static final String MESG_NO_REQUEST_ID_FROM_ICMS =
             "Task id '%s': No request-id returned from ICMS";
@@ -107,7 +106,7 @@ public class IcmsClient {
     private final IcmsStubService icmsStubService;
     private final String selfFqdn;
     private final String globalFqdnGrpc;
-    private final Optional<String> workerOtlpEndpoint;
+    private final URI tracingUrl;
     private final AccountService accountService;
     private final String tracingAccessToken;
     private final String initContainer;
@@ -148,7 +147,7 @@ public class IcmsClient {
             String clientSecret,
             @Value("${spring.security.oauth2.client.registration.icms.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.icms.token-uri}") String tokenUri,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String otlpTracingEndpoint,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") String otlpTracingEndpoint,
             AccountService accountService,
             TokenService tokenService,
             TelemetryService telemetryService,
@@ -185,7 +184,7 @@ public class IcmsClient {
         var adapter = WebClientAdapter.create(webClient);
         var factory = HttpServiceProxyFactory.builderFor(adapter).build();
         this.icmsStubService = factory.createClient(IcmsStubService.class);
-        this.workerOtlpEndpoint = toWorkerOtlpEndpoint(otlpTracingEndpoint);
+        this.tracingUrl = URI.create(otlpTracingEndpoint);
         this.clustersCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -434,6 +433,7 @@ public class IcmsClient {
                         Pair.of("UTILS_CONTAINER", utilsContainer),
                         Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
                         Pair.of("ESS_FQDN", essFqdn),
+                        Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                         Pair.of("TASK_TAGS", getTaskTags(task)),
                         Pair.of("TASK_ID", task.getTaskId()),
                         Pair.of("TASK_NAME", task.getName()),
@@ -448,15 +448,7 @@ public class IcmsClient {
                         Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
                         Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
                         Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded));
-        if (workerOtlpEndpoint.isPresent()) {
-            envStream = Stream.concat(envStream, Stream.of(
-                    Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", workerOtlpEndpoint.get())));
-        }
-        if (StringUtils.isNotBlank(otelCollectorContainer)) {
-            envStream = Stream.concat(envStream, Stream.of(
-                    Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer)));
-        }
-        var env = envStream
+        var env = Stream.concat(envStream, byooOtelCollectorContainerEnv(otelCollectorContainer))
                 .map(pair -> pair.getFirst() + "=" + pair.getSecond())
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
@@ -536,23 +528,11 @@ public class IcmsClient {
         return null;
     }
 
-    // Self-managed profiles historically configured a placeholder OTLP endpoint. Workers
-    // must not receive it, otherwise the collector retries trace exports to a host that
-    // does not exist.
-    static Optional<String> toWorkerOtlpEndpoint(String endpoint) {
-        if (StringUtils.isBlank(endpoint)) {
-            return Optional.empty();
-        }
-        var trimmed = endpoint.trim();
-        try {
-            var host = URI.create(trimmed).getHost();
-            if (host == null || PLACEHOLDER_OTLP_HOST.equalsIgnoreCase(host)) {
-                return Optional.empty();
-            }
-        } catch (IllegalArgumentException e) {
-            log.warn("Ignoring invalid OTLP tracing endpoint '{}'", trimmed);
-            return Optional.empty();
-        }
-        return Optional.of(trimmed);
+    // An empty collector image means the compute plane supplies it. The NVCA operator chart
+    // sets BYOO_OTEL_COLLECTOR_CONTAINER through its function and task env overrides.
+    static Stream<Pair<String, String>> byooOtelCollectorContainerEnv(String image) {
+        return StringUtils.isBlank(image)
+                ? Stream.empty()
+                : Stream.of(Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", image));
     }
 }
