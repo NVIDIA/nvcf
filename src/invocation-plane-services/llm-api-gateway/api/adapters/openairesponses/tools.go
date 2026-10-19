@@ -235,8 +235,8 @@ func (t *NamespaceTool) Validate() error {
 	return nil
 }
 
-// UnmarshalJSON decodes nested tools, rejecting types other than function and
-// custom with a clear error instead of silently dropping them.
+// UnmarshalJSON decodes nested function and custom tools. Other nested tools
+// are kept raw.
 func (t *NamespaceTool) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		ToolBase
@@ -250,25 +250,18 @@ func (t *NamespaceTool) UnmarshalJSON(data []byte) error {
 	}
 
 	tools := make([]Tool, 0, len(raw.Tools))
-	for i, rawTool := range raw.Tools {
+	for _, rawTool := range raw.Tools {
 		var base ToolBase
-		if err := json.Unmarshal(rawTool, &base); err != nil {
-			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, err)
-		}
+		_ = json.Unmarshal(rawTool, &base) // a tool without a string type stays raw
 		var tool Tool
 		switch base.Type {
 		case ToolTypeFunction:
 			tool = &FunctionTool{}
 		case ToolTypeCustom:
 			tool = &CustomTool{}
-		default:
-			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, &UnmarshalError{
-				Field: "type",
-				Msg:   fmt.Sprintf("unsupported namespace tool type: %s", base.Type),
-			})
 		}
-		if err := json.Unmarshal(rawTool, tool); err != nil {
-			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, err)
+		if tool == nil || json.Unmarshal(rawTool, tool) != nil {
+			tool = newRawTool(rawTool)
 		}
 		tools = append(tools, tool)
 	}
@@ -664,6 +657,28 @@ func UnmarshalTool(data []byte) (Tool, error) {
 	}
 }
 
+// RawTool is a tool that the gateway does not model or that fails to decode.
+// It is forwarded as is, and the backend validates it.
+type RawTool struct {
+	ToolBase
+
+	Raw json.RawMessage
+}
+
+func newRawTool(data []byte) *RawTool {
+	var base ToolBase
+	_ = json.Unmarshal(data, &base) // a type that is not a string stays empty
+	return &RawTool{ToolBase: base, Raw: append(json.RawMessage(nil), data...)}
+}
+
+func (t *RawTool) Validate() error {
+	return nil
+}
+
+func (t *RawTool) MarshalJSON() ([]byte, error) {
+	return t.Raw, nil
+}
+
 // ToolSlice is a slice of Tools with custom JSON unmarshaling
 type ToolSlice []Tool
 
@@ -675,12 +690,11 @@ func (ts *ToolSlice) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Unmarshal each tool individually
 	tools := make([]Tool, 0, len(raw))
-	for i, rawTool := range raw {
+	for _, rawTool := range raw {
 		tool, err := UnmarshalTool(rawTool)
 		if err != nil {
-			return fmt.Errorf("failed to unmarshal tool at index %d: %w", i, err)
+			tool = newRawTool(rawTool)
 		}
 		tools = append(tools, tool)
 	}

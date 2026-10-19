@@ -26,7 +26,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 type UnmarshalError struct {
@@ -259,6 +258,18 @@ func (cp ContentPartDocument) ContentType() ContentPartType {
 	return ContentPartTypeDocument
 }
 
+// ContentPartRaw is a content part that the gateway does not model or that
+// fails its checks. It is forwarded as is, and the backend validates it.
+type ContentPartRaw json.RawMessage
+
+func (cp ContentPartRaw) ContentType() ContentPartType {
+	var part struct {
+		Type ContentPartType `json:"type"`
+	}
+	_ = json.Unmarshal(cp, &part) // a part without a string type has no type
+	return part.Type
+}
+
 func (content *ChatMessageContent) HasNoMultimodalContent() bool {
 	for _, part := range *content {
 		if _, ok := part.(ContentPartText); !ok {
@@ -309,6 +320,29 @@ type ChatMessage struct {
 	FunctionCall *ChatCompletionFunctionCall `json:"function_call,omitempty"`
 	ToolCallID   *string                     `json:"tool_call_id,omitempty"`
 	Channel      string                      `json:"channel,omitempty"`
+	// Raw holds a message that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatMessage) DecodesMembers() {}
+
+func (m *ChatMessage) UnmarshalJSON(data []byte) error {
+	type alias ChatMessage
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*m = ChatMessage{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*m = ChatMessage(decoded)
+	return nil
+}
+
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	if m.Raw != nil {
+		return m.Raw, nil
+	}
+	type alias ChatMessage
+	return json.Marshal(alias(m))
 }
 
 type ChatResponseFormat struct {
@@ -332,7 +366,7 @@ type ChatCompletionRequest struct {
 	Messages            *[]ChatMessage                    `json:"messages"`
 	Model               string                            `json:"model"`
 	Debug               bool                              `json:"-"`
-	ServiceTier         servicetier.Tier                  `json:"service_tier"`
+	ServiceTier         *string                           `json:"service_tier,omitempty"`
 	FrequencyPenalty    *float32                          `json:"frequency_penalty,omitempty"`
 	IncludeReasoning    *bool                             `json:"include_reasoning,omitempty"`
 	LogitBias           *map[string]int                   `json:"logit_bias,omitempty"`
@@ -360,6 +394,20 @@ type ChatCompletionRequest struct {
 	StreamOptions       *ChatCompletionStreamOptions      `json:"stream_options,omitempty"`
 	Metadata            *map[string]string                `json:"metadata,omitempty"`
 	Store               *bool                             `json:"store,omitempty"`
+	// UndecodedMembers holds declared members that fail to decode. The gateway
+	// does not need them, so it forwards them for the backend to validate.
+	UndecodedMembers map[string]json.RawMessage `json:"-"`
+}
+
+func (*ChatCompletionRequest) DecodesMembers() {}
+
+// UnmarshalJSON checks only the members that the gateway needs for routing,
+// relay mode, admission and session affinity.
+func (r *ChatCompletionRequest) UnmarshalJSON(data []byte) error {
+	failed, err := DecodeMembers(data, r,
+		"model", "stream", "max_completion_tokens", "max_tokens", "prompt_cache_key", "stream_options", "messages")
+	r.UndecodedMembers = failed
+	return err
 }
 
 type ChatCompletionStreamOptions struct {
@@ -595,7 +643,7 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	parts := make([]outboundContentPart, 0, len(content))
+	parts := make([]any, 0, len(content))
 	for _, part := range content {
 		switch typed := part.(type) {
 		case ContentPartText:
@@ -635,6 +683,8 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: typed})
 		case ContentPartDocument:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: &typed})
+		case ContentPartRaw:
+			parts = append(parts, json.RawMessage(typed))
 		default:
 			return nil, fmt.Errorf("marshal content: unsupported content part %T", part)
 		}
@@ -672,82 +722,11 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 			}
 		}
 
-		type union struct {
-			Type       ContentPartType        `json:"type"`
-			Text       string                 `json:"text,omitempty"`
-			ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
-			AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
-			InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
-			VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
-			Document   *ContentPartDocument   `json:"document,omitempty"`
-		}
-
-		var raw []union
-		result := ptr.Deref(content)
+		var raw []json.RawMessage
 		if err := json.Unmarshal(data, &raw); err == nil {
+			result := ptr.Deref(content)
 			for _, rawPart := range raw {
-				switch rawPart.Type {
-				case ContentPartTypeText:
-					if rawPart.ImageURL != nil {
-						return &UnmarshalError{
-							Field: "image_url",
-							Msg:   "image_url not supported with content type = text",
-						}
-					}
-					if rawPart.Document != nil {
-						return &UnmarshalError{
-							Field: "document",
-							Msg:   "document not supported with content type = text",
-						}
-					}
-					if rawPart.AudioURL != nil || rawPart.VideoURL != nil {
-						return &UnmarshalError{Field: "content", Msg: "audio_url and video_url not supported with content type = text"}
-					}
-					if rawPart.InputAudio != nil {
-						return &UnmarshalError{Field: "content", Msg: "input_audio not supported with content type = text"}
-					}
-					result = append(result, ContentPartText(rawPart.Text))
-				case ContentPartTypeImageURL:
-					if rawPart.ImageURL == nil || rawPart.ImageURL.URL == "" {
-						return &UnmarshalError{
-							Field: "image_url.url",
-							Msg:   "no image_url supplied in content of type image_url",
-						}
-					}
-					result = append(result, rawPart.ImageURL)
-				case ContentPartTypeAudioURL:
-					if rawPart.AudioURL == nil || rawPart.AudioURL.URL == "" {
-						return &UnmarshalError{Field: "audio_url.url", Msg: "no audio_url supplied in content of type audio_url"}
-					}
-					result = append(result, rawPart.AudioURL)
-				case ContentPartTypeInputAudio:
-					if rawPart.InputAudio == nil || rawPart.InputAudio.Data == "" || rawPart.InputAudio.Format == "" {
-						return &UnmarshalError{Field: "input_audio", Msg: "data and format are required for content type input_audio"}
-					}
-					result = append(result, rawPart.InputAudio)
-				case ContentPartTypeVideoURL:
-					if rawPart.VideoURL == nil || rawPart.VideoURL.URL == "" {
-						return &UnmarshalError{Field: "video_url.url", Msg: "no video_url supplied in content of type video_url"}
-					}
-					result = append(result, rawPart.VideoURL)
-				case ContentPartTypeDocument:
-					if rawPart.Document == nil || rawPart.Document.Data == nil {
-						return &UnmarshalError{
-							Field: "document.data",
-							Msg:   "no document data supplied in content of type document",
-						}
-					}
-					result = append(result, rawPart.Document)
-				default:
-					return &UnmarshalError{
-						Field: "content",
-						Msg: fmt.Sprintf(
-							"unknown content type %v. Supported content types are: %v",
-							rawPart.Type,
-							SupportedContentType,
-						),
-					}
-				}
+				result = append(result, decodeContentPart(rawPart))
 			}
 			*content = result
 			return nil
@@ -758,6 +737,54 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 		Field: "content",
 		Msg:   "Must be either a string or an array of ContentPart",
 	}
+}
+
+// decodeContentPart returns the typed part, or the raw part when its type is
+// unknown or it fails the checks for its type.
+func decodeContentPart(data json.RawMessage) ContentPart {
+	var part struct {
+		Type       ContentPartType        `json:"type"`
+		Text       string                 `json:"text,omitempty"`
+		ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
+		AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
+		InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
+		VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
+		Document   *ContentPartDocument   `json:"document,omitempty"`
+	}
+	raw := ContentPartRaw(append(json.RawMessage(nil), data...))
+	if err := json.Unmarshal(data, &part); err != nil {
+		return raw
+	}
+
+	switch part.Type {
+	case ContentPartTypeText:
+		if part.ImageURL != nil || part.Document != nil || part.AudioURL != nil || part.VideoURL != nil ||
+			part.InputAudio != nil {
+			return raw
+		}
+		return ContentPartText(part.Text)
+	case ContentPartTypeImageURL:
+		if part.ImageURL != nil && part.ImageURL.URL != "" {
+			return part.ImageURL
+		}
+	case ContentPartTypeAudioURL:
+		if part.AudioURL != nil && part.AudioURL.URL != "" {
+			return part.AudioURL
+		}
+	case ContentPartTypeInputAudio:
+		if part.InputAudio != nil && part.InputAudio.Data != "" && part.InputAudio.Format != "" {
+			return part.InputAudio
+		}
+	case ContentPartTypeVideoURL:
+		if part.VideoURL != nil && part.VideoURL.URL != "" {
+			return part.VideoURL
+		}
+	case ContentPartTypeDocument:
+		if part.Document != nil && part.Document.Data != nil {
+			return part.Document
+		}
+	}
+	return raw
 }
 
 // Without this encoding/json writes the Go field names onto the wire.

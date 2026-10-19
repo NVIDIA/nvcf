@@ -94,6 +94,8 @@
       "include_usage": true
     }
   },
+  "upstream_input_tokens": "84",
+  "upstream_affinity_key": "mt:v1:payload:c992c9ee7ae47d5ce2c2b4577813fa12d3b31ffa7b44966d47b65cac8535f453",
   "upstream_response": {
     "sse": [
       {

@@ -1,0 +1,328 @@
+{
+  "description": "Values that only the backend uses reach it unchanged: ranges, enums, metadata limits, an unknown role, a message without content, a function tool without a name, an unknown MCP require_approval and wrong JSON types.",
+  "path": "/v1/responses",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      {
+        "role": "critic",
+        "content": "Review."
+      },
+      {
+        "role": "user"
+      }
+    ],
+    "temperature": 3,
+    "top_p": 2,
+    "max_tool_calls": 0,
+    "top_logprobs": 50,
+    "service_tier": "priority",
+    "truncation": "smart",
+    "tool_choice": "any",
+    "tools": [
+      {
+        "type": "mcp",
+        "server_label": "docs",
+        "server_url": "https://example.com/mcp",
+        "require_approval": "sometimes"
+      },
+      {
+        "type": "function"
+      }
+    ],
+    "metadata": {
+      "a": "x",
+      "b": "x",
+      "c": "x",
+      "d": "x",
+      "e": "x",
+      "f": "x",
+      "g": "x",
+      "h": "x",
+      "i": "x",
+      "j": "x",
+      "k": "x",
+      "l": "x",
+      "m": "x",
+      "n": "x",
+      "o": "x",
+      "p": "x",
+      "q": "x"
+    },
+    "store": "yes",
+    "parallel_tool_calls": "no"
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      {
+        "role": "critic",
+        "content": "Review."
+      },
+      {
+        "role": "user"
+      }
+    ],
+    "temperature": 3,
+    "top_p": 2,
+    "max_tool_calls": 0,
+    "top_logprobs": 50,
+    "service_tier": "priority",
+    "truncation": "smart",
+    "tool_choice": "any",
+    "tools": [
+      {
+        "type": "mcp",
+        "server_label": "docs",
+        "server_url": "https://example.com/mcp",
+        "require_approval": "sometimes"
+      },
+      {
+        "type": "function"
+      }
+    ],
+    "metadata": {
+      "a": "x",
+      "b": "x",
+      "c": "x",
+      "d": "x",
+      "e": "x",
+      "f": "x",
+      "g": "x",
+      "h": "x",
+      "i": "x",
+      "j": "x",
+      "k": "x",
+      "l": "x",
+      "m": "x",
+      "n": "x",
+      "o": "x",
+      "p": "x",
+      "q": "x"
+    },
+    "store": "yes",
+    "parallel_tool_calls": "no",
+    "stream": true
+  },
+  "upstream_input_tokens": "97",
+  "upstream_response": {
+    "sse": [
+      {
+        "event": "response.created",
+        "data": {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp-fidelity",
+            "object": "response",
+            "status": "in_progress",
+            "model": "company/model",
+            "output": []
+          },
+          "vendor_event": {
+            "enabled": false
+          }
+        }
+      },
+      {
+        "event": "response.output_text.delta",
+        "data": {
+          "type": "response.output_text.delta",
+          "sequence_number": 1,
+          "item_id": "msg-fidelity",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "OK",
+          "logprobs": [
+            {
+              "token": "O",
+              "logprob": -0.1234567890123456,
+              "bytes": [
+                79
+              ],
+              "top_logprobs": [
+                {
+                  "token": "O",
+                  "logprob": -0.1
+                }
+              ],
+              "vendor_rank": 0
+            }
+          ]
+        }
+      },
+      {
+        "event": "response.completed",
+        "data": {
+          "type": "response.completed",
+          "sequence_number": 2,
+          "response": {
+            "id": "resp-fidelity",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "company/model",
+            "output": [
+              {
+                "type": "function_call",
+                "id": "fc-weather",
+                "call_id": "call-weather",
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}",
+                "status": "completed",
+                "vendor_tool": {
+                  "rank": 0
+                }
+              },
+              {
+                "type": "message",
+                "id": "msg-fidelity",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "OK",
+                    "annotations": [],
+                    "logprobs": [
+                      {
+                        "token": "O",
+                        "logprob": -0.1234567890123456,
+                        "bytes": [
+                          79
+                        ],
+                        "top_logprobs": [
+                          {
+                            "token": "O",
+                            "logprob": -0.1
+                          }
+                        ],
+                        "vendor_rank": 0
+                      }
+                    ],
+                    "vendor_content": null
+                  }
+                ]
+              },
+              {
+                "type": "future_item",
+                "payload": {
+                  "score": 0.12345678901234568,
+                  "active": false
+                }
+              }
+            ],
+            "usage": {
+              "input_tokens": 17,
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "vendor_cached": null
+              },
+              "output_tokens": 8,
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              },
+              "total_tokens": 25,
+              "vendor_usage": {
+                "revision": 9007199254740993
+              }
+            },
+            "metadata": {
+              "session": "fixture-session"
+            },
+            "store": false,
+            "system_fingerprint": "fp-responses",
+            "vendor_response": {
+              "empty": null,
+              "enabled": false
+            }
+          },
+          "vendor_event": null
+        }
+      }
+    ]
+  },
+  "response": {
+    "json": {
+      "id": "resp-fidelity",
+      "object": "response",
+      "created_at": 1700000000,
+      "status": "completed",
+      "model": "company/model",
+      "output": [
+        {
+          "type": "function_call",
+          "id": "fc-weather",
+          "call_id": "call-weather",
+          "name": "weather",
+          "arguments": "{\"city\":\"Paris\"}",
+          "status": "completed",
+          "vendor_tool": {
+            "rank": 0
+          }
+        },
+        {
+          "type": "message",
+          "id": "msg-fidelity",
+          "role": "assistant",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK",
+              "annotations": [],
+              "logprobs": [
+                {
+                  "token": "O",
+                  "logprob": -0.1234567890123456,
+                  "bytes": [
+                    79
+                  ],
+                  "top_logprobs": [
+                    {
+                      "token": "O",
+                      "logprob": -0.1
+                    }
+                  ],
+                  "vendor_rank": 0
+                }
+              ],
+              "vendor_content": null
+            }
+          ]
+        },
+        {
+          "type": "future_item",
+          "payload": {
+            "score": 0.12345678901234568,
+            "active": false
+          }
+        }
+      ],
+      "usage": {
+        "input_tokens": 17,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "vendor_cached": null
+        },
+        "output_tokens": 8,
+        "output_tokens_details": {
+          "reasoning_tokens": 4
+        },
+        "total_tokens": 25,
+        "vendor_usage": {
+          "revision": 9007199254740993
+        }
+      },
+      "metadata": {
+        "session": "fixture-session"
+      },
+      "store": false,
+      "system_fingerprint": "fp-responses",
+      "vendor_response": {
+        "empty": null,
+        "enabled": false
+      }
+    }
+  }
+}

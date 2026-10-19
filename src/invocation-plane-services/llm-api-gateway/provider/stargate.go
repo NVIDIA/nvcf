@@ -514,8 +514,8 @@ func outboundChatRequest(
 		streamOptions.IncludeUsage = ptr.To(true)
 		outbound.StreamOptions = &streamOptions
 	}
-	if !outbound.ServiceTier.IsValid() {
-		outbound.ServiceTier = servicetier.Auto
+	if outbound.ServiceTier == nil {
+		outbound.ServiceTier = ptr.To(servicetier.Auto.String())
 	}
 
 	return &outbound
@@ -523,7 +523,8 @@ func outboundChatRequest(
 
 // gatewayOwnedChatFields are replaced or removed in the forwarded client body.
 // Keys are matched case-insensitively because encoding/json binds them that way.
-var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "service_tier", "debug"}
+// service_tier is not owned: the gateway adds it only when the client omits it.
+var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "debug"}
 
 func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, error) {
 	outbound := outboundChatRequest(request, stream)
@@ -541,7 +542,9 @@ func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, e
 	}
 
 	var clientStreamOptions json.RawMessage
+	hasServiceTier := false
 	for key, value := range payload {
+		hasServiceTier = hasServiceTier || strings.EqualFold(key, "service_tier")
 		for _, owned := range gatewayOwnedChatFields {
 			if strings.EqualFold(key, owned) {
 				if owned == "stream_options" {
@@ -566,8 +569,10 @@ func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, e
 	if err := setJSONField(payload, "stream", outbound.Stream); err != nil {
 		return nil, err
 	}
-	if err := setJSONField(payload, "service_tier", outbound.ServiceTier); err != nil {
-		return nil, err
+	if !hasServiceTier {
+		if err := setJSONField(payload, "service_tier", outbound.ServiceTier); err != nil {
+			return nil, err
+		}
 	}
 
 	body, err := json.Marshal(payload)

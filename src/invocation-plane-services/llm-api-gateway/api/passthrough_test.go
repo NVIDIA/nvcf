@@ -48,15 +48,20 @@ data: [DONE]
 `
 
 type passthroughUpstream struct {
-	server      *httptest.Server
-	requests    chan []byte
-	inputTokens chan string
+	server       *httptest.Server
+	requests     chan []byte
+	inputTokens  chan string
+	affinityKeys chan string
 }
 
 func newPassthroughUpstream(t *testing.T, contentType string, responseBody string) *passthroughUpstream {
 	t.Helper()
 
-	upstream := &passthroughUpstream{requests: make(chan []byte, 1), inputTokens: make(chan string, 1)}
+	upstream := &passthroughUpstream{
+		requests:     make(chan []byte, 1),
+		inputTokens:  make(chan string, 1),
+		affinityKeys: make(chan string, 1),
+	}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, err := io.ReadAll(r.Body)
@@ -65,6 +70,7 @@ func newPassthroughUpstream(t *testing.T, contentType string, responseBody strin
 		}
 		upstream.requests <- body
 		upstream.inputTokens <- r.Header.Get("X-Input-Tokens")
+		upstream.affinityKeys <- r.Header.Get("X-Cache-Affinity-Key")
 		w.Header().Set(echo.HeaderContentType, contentType)
 		_, _ = io.WriteString(w, responseBody)
 	}))
@@ -265,15 +271,15 @@ func TestChatCompletionsAdmissionEstimateCountsUnmodeledPromptFields(t *testing.
 func TestEstimatedTokenCountForUnmodeledChatFields(t *testing.T) {
 	t.Parallel()
 
-	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(nil))
+	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(nil, nil))
 	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(
-		[]byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"n"}],"temperature":0.1}`),
+		[]byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"n"}],"temperature":0.1}`), nil,
 	))
 	require.Equal(
 		t,
 		estimatedTokenCountForText(`{"enable_thinking":false}`)+estimatedTokenCountForText(`"why"`),
 		estimatedTokenCountForUnmodeledChatFields(
-			[]byte(`{"model":"m","messages":[{"role":"assistant","content":"x","reasoning_content":"why"}],"chat_template_kwargs":{"enable_thinking":false}}`),
+			[]byte(`{"model":"m","messages":[{"role":"assistant","content":"x","reasoning_content":"why"}],"chat_template_kwargs":{"enable_thinking":false}}`), nil,
 		),
 	)
 }
