@@ -761,6 +761,71 @@ func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
 	require.Contains(t, first.body+second.body, `"model":"`+llmFunctionID+`/`+publicModel+`"`)
 }
 
+func TestMessagesShadowStickySamplingUsesSessionHeader(t *testing.T) {
+	// "session-123" hashes to bucket 95, so 96 percent admits it and 95 rejects it
+	// on every turn, whatever the body says.
+	bodies := []string{
+		`{"model":"` + publicModel + `","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`,
+		`{"model":"` + publicModel + `","max_tokens":64,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"next"}]}`,
+		`{"model":"` + publicModel + `","max_tokens":64,"system":"changed","messages":[{"role":"user","content":"other"}]}`,
+	}
+	for _, tc := range []struct {
+		name       string
+		percentage int
+		header     string
+		wantShadow bool
+	}{
+		{name: "admitted with Claude Code session", percentage: 96, header: config.ClaudeCodeSessionIDHeader, wantShadow: true},
+		{name: "rejected with Claude Code session", percentage: 95, header: config.ClaudeCodeSessionIDHeader, wantShadow: false},
+		{name: "admitted with multi-turn session", percentage: 96, header: config.DefaultPromptCacheKeyHeader, wantShadow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan capturedRequest, 8)
+			backend := captureServer(t, requests, nil)
+			primary := llmModelEntry()
+			percentage := tc.percentage
+			primary.Shadows = []config.ShadowConfig{{
+				ModelName:  "native-shadow",
+				Percentage: &percentage,
+				SamplingMethod: config.ShadowSamplingMethods{
+					config.ShadowSamplingMethodPromptCacheKey,
+					config.ShadowSamplingMethodFirstMessageHash,
+				},
+			}}
+			shadow := config.ModelFunctionDetails{ModelName: "native-shadow", FunctionID: "shadow-func", FunctionType: config.FunctionTypeLLM}
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
+			require.NoError(t, mappings.Validate())
+			mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
+
+			for _, body := range bodies {
+				req := openAIRequest(t, "/v1/messages", body)
+				req.Header.Set(tc.header, "session-123")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code)
+
+				received := []capturedRequest{awaitRequest(t, requests)}
+				if tc.wantShadow {
+					received = append(received, awaitRequest(t, requests))
+				} else {
+					select {
+					case extra := <-requests:
+						t.Fatalf("unexpected shadow request: %s", extra.body)
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				var sawShadow bool
+				for _, r := range received {
+					sawShadow = sawShadow || strings.Contains(r.body, `"model":"shadow-func/native-shadow"`)
+				}
+				assert.Equal(t, tc.wantShadow, sawShadow)
+			}
+		})
+	}
+}
+
 func TestMessagesLocalErrorsUseNativeEnvelope(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string

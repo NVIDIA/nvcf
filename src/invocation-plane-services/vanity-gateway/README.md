@@ -199,9 +199,9 @@ v2config:
 | `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
 | `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
-| `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions and Responses also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
+| `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions, Responses, and Messages also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
 | `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
-| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions and Responses. Omitted defaults to `x-multi-turn-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
+| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions, Responses, and Messages. Omitted defaults to `x-multi-turn-session-id`, and for Messages to `x-multi-turn-session-id` then `x-claude-code-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
 | `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
@@ -270,10 +270,17 @@ cannot land in different buckets depending on where it was sent. The first usabl
 body or header value makes the final admission decision. A valid rejection does
 not try another source or method. Only the resolved value is hashed, so the same
 value has the same bucket across the body, different header names, Chat
-Completions, and Responses. Header names must be valid HTTP field names and
+Completions, Responses, and Messages. Header names must be valid HTTP field names and
 cannot repeat case-insensitively. `Authorization` and `Proxy-Authorization` are
 rejected case-insensitively so credentials cannot be used as prompt cache keys.
 Set `promptCacheKeyHeaders: []` to disable header lookup.
+
+Anthropic Messages has no `prompt_cache_key` body field, so `promptCacheKey`
+on a Messages route reads only `promptCacheKeyHeaders`. When the list is
+omitted, Messages checks `x-multi-turn-session-id`, then
+`x-claude-code-session-id`, the same order the LLM Gateway uses for Messages
+session affinity. Claude Code sends `x-claude-code-session-id` on every request,
+so its sessions are sticky without client changes.
 
 The `firstMessageHash` method hashes a versioned, endpoint-specific canonical
 JSON envelope. It preserves roles, full content values, array order, and content
@@ -282,11 +289,13 @@ includes leading `system` and `developer` messages in request order and the
 first `user` message. Other preceding roles and all later messages are ignored.
 For Responses, it includes nonempty `instructions` and the first user input. A
 string `input` is user content; an array is scanned to its first `role: user`
-item. A null, empty string, empty array, or empty object first-user content makes
-the method unavailable.
+item. For Messages, it includes a nonempty top-level `system` and the first
+`user` message, with every `cache_control` key removed, because clients move
+cache breakpoints between turns. A null, empty string, empty array, or empty
+object first-user content makes the method unavailable.
 
-`promptCacheKey` and `firstMessageHash` are only valid in the `chatCompletions`
-and `responses` mapping sections. Sampling is stateless. The gateway does not
+`promptCacheKey` and `firstMessageHash` are only valid in the `chatCompletions`,
+`responses`, and `anthropicMessages` mapping sections. Sampling is stateless. The gateway does not
 resolve conversations, `previous_response_id`, or streamed deltas to recover
 earlier input. If a request does not carry the required material, evaluation
 continues to the next method.
