@@ -6,8 +6,8 @@
 [Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/self-managed/installation.md) | [API Reference](docs/overview/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 > Repository move: this repo moves from `NVIDIA/nvcf` to `dsx-ai-factory/nvcf`
-> on Monday, 2026-10-26. A PR merge freeze begins 30 minutes before the move
-> starts and lasts until the move is complete.
+> on Monday, 2026-10-26, at 11:00 AM Pacific (18:00 UTC). A PR merge freeze
+> begins at 10:30 AM Pacific (17:30 UTC) and lasts until the move is complete.
 >
 > GitHub redirects old clone, fetch, and `go get` URLs to the new location, so
 > existing links and `github.com/NVIDIA/nvcf` module paths keep working. Update
