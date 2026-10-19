@@ -169,7 +169,7 @@ func ambiguousMemberPath(data []byte, t reflect.Type, path string) string {
 	}
 	if mapped, ok := customObjectTypes[t]; ok {
 		t = mapped
-	} else if reflect.PointerTo(t).Implements(jsonUnmarshalerType) && !reflect.PointerTo(t).Implements(memberDecoderType) {
+	} else if pt := reflect.PointerTo(t); pt.Implements(jsonUnmarshalerType) && !pt.Implements(memberDecoderType) {
 		return ""
 	}
 
