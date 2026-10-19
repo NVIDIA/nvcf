@@ -43,6 +43,8 @@ import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.instance.InstanceService;
 import com.nvidia.nvcf.service.registry.RegistryArtifactService;
 import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
+import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -116,6 +118,7 @@ public class FunctionManagementService {
     private final FunctionDeploymentService deploymentService;
     private final EssService essService;
     private final TelemetryLookupService telemetryLookupService;
+    private final TelemetryMapperService telemetryMapperService;
     private final FunctionsRepository functionsRepository;
     private final RegistryArtifactService registryArtifactService;
 
@@ -518,6 +521,8 @@ public class FunctionManagementService {
             log.error(MESG_TELEMETRY_INVALID_TYPE);
             throw new BadRequestException(MESG_TELEMETRY_INVALID_TYPE);
         }
+        TelemetryProviderValidator.validateProvider(
+                telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider()));
     }
 
     private void preRegistrationValidation(
