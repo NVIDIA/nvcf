@@ -144,6 +144,10 @@ NVCA's `vendor/`; the `git checkout` restores them. If a vendored file is
 added or removed, update that package's vendor BUILD.bazel `srcs` or
 `embedsrcs` too.
 
+The check does not see a file added to an embedded subdirectory, such as a
+new template under `templates/`. When you add one, re-vendor NVCA and confirm
+the file appears under its `vendor/` tree.
+
 ## Style and Testing
 
 - Use `GOWORK=off` and `GOFLAGS=-mod=vendor` when running module-scoped Go commands that need to match this module's vendored dependency set.

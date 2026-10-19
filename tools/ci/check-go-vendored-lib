@@ -80,10 +80,17 @@ go_build_excluded() {  # go_build_excluded <go-file>
             }
             return "(" out ")"
         }
+        # A +build line counts only when a blank line follows it before the
+        # package clause, so hold each one until that blank line.
+        /^[ \t]*$/ {
+            if (pending != "") plus = plus (plus == "" ? "" : " && ") pending
+            pending = ""
+            next
+        }
         /^package[ \t]/ { exit }
         /^\/\/go:build[ \t]/ { expr = substr($0, 11); exit }
         /^\/\/ \+build[ \t]/ {
-            plus = plus (plus == "" ? "" : " && ") legacy(substr($0, 10))
+            pending = pending (pending == "" ? "" : " && ") legacy(substr($0, 10))
         }
         END {
             if (expr == "") expr = plus

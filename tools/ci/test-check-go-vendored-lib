@@ -107,6 +107,16 @@ run
 expect "Go file kept by ignore || linux exits 1" 1 "${lib}/pkg/a/gen.go is not vendored"
 
 fixture
+printf '// +build ignore\n\npackage main\n' > "${root}/${lib}/pkg/a/gen.go"
+run
+expect "Go file excluded by a legacy +build ignore exits 0" 0 "match the source"
+
+fixture
+printf '// +build ignore\npackage a\n' > "${root}/${lib}/pkg/a/gen.go"
+run
+expect "legacy +build line with no blank line after it exits 1" 1 "${lib}/pkg/a/gen.go is not vendored"
+
+fixture
 printf 'notes\n' > "${root}/${lib}/pkg/a/README.md"
 run
 expect "non-Go file added to a vendored package exits 1" 1 "${lib}/pkg/a/README.md is not vendored"
