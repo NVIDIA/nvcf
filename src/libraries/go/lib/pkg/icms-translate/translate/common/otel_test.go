@@ -529,3 +529,36 @@ func TestNewOTelContainer(t *testing.T) {
 		})
 	}
 }
+
+func TestNewOTelContainerOmitsUnsetOTLPEndpoint(t *testing.T) {
+	images := map[string]string{
+		"v1": "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.119.4",
+		"v2": "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.160.0-nv-0.2.5",
+	}
+	endpoints := map[string]*string{
+		"missing": nil,
+		"empty":   new(string),
+	}
+
+	for version, image := range images {
+		for endpointCase, endpoint := range endpoints {
+			t.Run(version+"/"+endpointCase, func(t *testing.T) {
+				allEnvSet := map[string]string{
+					OTelContainerEnv:       image,
+					"TRACING_ACCESS_TOKEN": "test-trace-token",
+				}
+				if endpoint != nil {
+					allEnvSet[OTelExporterEndpointEnv] = *endpoint
+				}
+				assert.Equal(t, version, OTelVersion(image))
+
+				container := NewOTelContainer(allEnvSet, WorkloadTypeContainer, "us-west", "test-instance",
+					"test-telemetries", "test-ns", nil, "", GetDefaultContainerResourcesBYOO())
+
+				for _, env := range container.Env {
+					assert.NotEqual(t, OTelExporterEndpointEnv, env.Name)
+				}
+			})
+		}
+	}
+}

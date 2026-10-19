@@ -37,6 +37,9 @@ import (
 
 const (
 	OTelContainerEnv = "BYOO_OTEL_COLLECTOR_CONTAINER"
+	// OTelExporterEndpointEnv is where the collector exports its own traces. It is
+	// set on the collector container only when the control plane sends a value.
+	OTelExporterEndpointEnv = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	// Envs injected into workload containers.
 	OTelExporterLogsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 	OTelExporterMetricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
@@ -368,10 +371,6 @@ func NewOTelContainer(
 				Name:  "OTEL_TRACING_ACCESS_TOKEN",
 				Value: allEnvSet["TRACING_ACCESS_TOKEN"],
 			},
-			{
-				Name:  "OTEL_EXPORTER_OTLP_ENDPOINT",
-				Value: allEnvSet["OTEL_EXPORTER_OTLP_ENDPOINT"],
-			},
 		}...)
 	} else {
 		otelEnvs = append(getCommonOTelEnvs(allEnvSet, oTelPodIPBindAddressOverride), []corev1.EnvVar{
@@ -383,11 +382,10 @@ func NewOTelContainer(
 				Name:  "OTEL_TRACING_ACCESS_TOKEN",
 				Value: allEnvSet["TRACING_ACCESS_TOKEN"],
 			},
-			{
-				Name:  "OTEL_EXPORTER_OTLP_ENDPOINT",
-				Value: allEnvSet["OTEL_EXPORTER_OTLP_ENDPOINT"],
-			},
 		}...)
+	}
+	if endpoint := allEnvSet[OTelExporterEndpointEnv]; endpoint != "" {
+		otelEnvs = append(otelEnvs, corev1.EnvVar{Name: OTelExporterEndpointEnv, Value: endpoint})
 	}
 	otelEnvs = append(otelEnvs, addtlOtelEnvs...)
 
