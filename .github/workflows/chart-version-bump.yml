@@ -13,6 +13,13 @@
 # Which charts deploy the released service is declared, not derived; see
 # tools/ci/chart-service-edge for why deriving it is wrong. A service whose
 # charts have not declared the edge yet bumps nothing and says so.
+#
+# A stack can also declare an image tag it repeats in its own values, through
+# values_files in tools/ci/github-release-subprojects.json. The compute-plane
+# stack pins its NVCA and collector image tags that way. Those pins move here,
+# with the charts, so the paths this job checks and stages cover deploy/stacks
+# as well as deploy/helm. tools/chart-version-bumper tests that these paths
+# cover every declared target.
 
 name: chart version bump
 
@@ -119,13 +126,20 @@ jobs:
           # also makes the run idempotent: the bumper sees the current value and
           # reports "already <version>".
           #
-          # The shared branch is rebased onto the default branch first, as the
+          # The shared branch is moved onto the default branch first, as the
           # stack workflow does. Its tree can predate the tools this run needs
           # (the bumper's "bump:" line, release-bump-type), and a stale branch
           # would either fail or fall back to a patch commit for a minor bump.
+          #
+          # The default branch also moves the same chart versions, through a
+          # manual bump or a merged earlier bump. A plain rebase then stopped
+          # on that conflict and every later release failed here, so the
+          # helper regenerates a bump commit that no longer applies by running
+          # the bumper again for the release it recorded. See the helper for
+          # what it keeps, regenerates, drops, and refuses.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}"
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper
 
       - name: Apply the bump
         id: bump
@@ -165,12 +179,12 @@ jobs:
           # Scoped to the same paths the commit below stages. Repo-wide, any
           # unrelated modification in the workspace would set changed=true and
           # the commit would then abort with nothing staged.
-          if git diff --quiet -- deploy/helm; then
+          if git diff --quiet -- deploy/helm deploy/stacks; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
-            echo "no chart moved"
+            echo "no chart or stack pin moved"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
-            git --no-pager diff --stat -- deploy/helm
+            git --no-pager diff --stat -- deploy/helm deploy/stacks
           fi
           # The largest semver step any chart took, reported by the bumper as
           # "bump: <level>". Empty when nothing moved.
@@ -190,7 +204,7 @@ jobs:
           set -euo pipefail
           branch="chore/chart-version-bumps"
 
-          git add deploy/helm
+          git add deploy/helm deploy/stacks
           # The commit type carries the semver step of the service release
           # into the chart release. tools/ci/github-release feeds RELEASE_RULES
           # to semantic-release: fix cuts a patch, feat a minor, "!" a major,
@@ -246,7 +260,7 @@ jobs:
             "" \
             "The released tag identifies the version and source tree, so this is a direct update rather than a lookup of the newest published image." \
             "" \
-            "Merging this does not move the self-managed stack. A chart version reaches the stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`." \
+            "Merging this does not move a stack's chart pins. A chart version reaches a stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`. Image tags that a stack repeats in its own values, such as the compute-plane NVCA tags, do move here. A change under \`deploy/stacks/nvcf-compute-plane\` also needs its golden render fixtures refreshed with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` before merge." \
             "" \
             "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
             "${notes}" \

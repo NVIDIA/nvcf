@@ -41,6 +41,25 @@ global:
     #   resources:
     #     cpu: "1"
     #     memory: 2Gi
+    # Optional Bring Your Own Observability (BYOO) sidecar settings, passed to
+    # the nvca-operator chart as its byoo values: resources (collector),
+    # fluentbit.resources, logChunking, otelCollector, and
+    # additionalResourceOverhead. The collector and Fluent Bit sidecars run in
+    # every BYOO workload. Leave unset to keep the agent defaults. Quote
+    # plain-number quantities.
+    # byoo:
+    #   resources:
+    #     requests:
+    #       cpu: 250m
+    #       memory: 1Gi
+    #     limits:
+    #       cpu: 500m
+    #       memory: 1Gi
+    #   fluentbit:
+    #     resources:
+    #       requests:
+    #         cpu: 50m
+    #         memory: 64Mi
     selfManaged:
       # The chart ships no tag for this image, only the stack knows which samba
       # build pairs with the operator it is pinning, so supply the whole
