@@ -568,7 +568,14 @@ func (d *ModelDirector) ServeImageVariations(writer http.ResponseWriter, request
 	d.proxyModelMappedRequest(writer, request, d.imageVariations.modelNameToNVCFUrl, shadowSamplingEndpointNone)
 }
 
-func (d *ModelDirector) ListModels(writer http.ResponseWriter, _ *http.Request) {
+// ListModels answers in the caller's API: Anthropic clients get the Messages
+// models in the Anthropic shape, everyone else the shared OpenAI list.
+func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Request) {
+	if middleware.IsAnthropicRequest(request) {
+		d.listAnthropicModels(writer, request)
+		return
+	}
+
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
 
@@ -598,6 +605,10 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	} else {
 		markGatewayRejected(writer, request)
 		http.Error(writer, "model name was undefined", http.StatusInternalServerError)
+		return
+	}
+	if middleware.IsAnthropicRequest(request) {
+		d.getAnthropicModel(writer, request, modelName)
 		return
 	}
 

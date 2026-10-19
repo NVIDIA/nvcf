@@ -515,6 +515,16 @@ carries `request-id` with the same value as `X-Request-Id`.
 `supported_endpoints` to them, so OpenAI clients can tell which models accept
 only Messages.
 
+A request that carries `anthropic-version`, as Anthropic SDKs and Claude Code
+send, gets the Anthropic Models API instead. `GET /v1/models` lists only
+`anthropicMessages` models, with `type`, `id`, `display_name` and `created_at`,
+plus `has_more`, `first_id` and `last_id`. Models are ordered by ID. `limit`
+defaults to 20 and accepts 1 to 1000. `after_id` returns the page after that ID
+and `before_id` the page before it; the two cannot be combined. `display_name`
+is the model name. `GET /v1/models/{model}` returns one entry, or a `404`
+`not_found_error` for a model not served on Messages. Hidden and expired models
+are left out as in the OpenAI list. These responses also carry `request-id`.
+
 The Messages path requires compatible LLM Gateway, Stargate router, and Pylon
 worker builds. See `docs/overview/llm-gateway.md` for upgrade order, token
 accounting, session affinity, and Claude Code configuration.
