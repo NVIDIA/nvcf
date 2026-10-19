@@ -192,11 +192,11 @@ Running workloads pick up the new value without a redeploy.
 
 Requires the 'update_secrets' scope, plus 'manage_telemetries' to look up the
 endpoint. The default function API key does not include 'update_secrets'.
-Generate a function key that has both; --scopes replaces the default scopes,
-so list every scope the key needs:
+--scopes replaces the default scopes and the new key replaces the saved
+function key, so keep the defaults in the list:
 
   nvcf-cli api-key generate --for function \
-    --scopes manage_telemetries,update_secrets
+    --scopes invoke_function,list_functions,queue_details,list_functions_details,manage_telemetries,update_secrets
 
 Cross-account updates use "admin secrets update-telemetry".
 

@@ -69,10 +69,11 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 
 ## Telemetry endpoints
 
-Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelemetry collector sidecar exports a function's or task's logs, metrics, or traces to an endpoint the tenant owns. Endpoint commands require the `manage_telemetries` scope, which the default function API key includes. `update-secret` also requires `update_secrets`, which the default function key does not include. Generate a key with both; `--scopes` replaces the defaults, so list every scope the key needs:
+Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelemetry collector sidecar exports a function's or task's logs, metrics, or traces to an endpoint the tenant owns. Endpoint commands require the `manage_telemetries` scope, which the default function API key includes. `update-secret` also requires `update_secrets`, which the default function key does not include. `--scopes` replaces the default scopes and the new key replaces the saved function key, so keep the defaults in the list:
 
 ```bash
-nvcf-cli api-key generate --for function --scopes manage_telemetries,update_secrets
+nvcf-cli api-key generate --for function \
+  --scopes invoke_function,list_functions,queue_details,list_functions_details,manage_telemetries,update_secrets
 ```
 
 Provider support and secret shapes are in [flags.md](flags.md).

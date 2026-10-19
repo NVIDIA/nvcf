@@ -111,7 +111,7 @@ API keys are used for general user operations.
 | `delete_function` | Function deletion | Delete functions (requires JWT token) |
 | `update_function` | Function updates | Modify function metadata (requires JWT token) |
 | `manage_registry_credentials` | Registry management | Manage container registry credentials (requires JWT token) |
-| `manage_telemetries` | Telemetry management | Configure telemetry settings (requires JWT token) |
+| `manage_telemetries` | Telemetry management | Create, list, get, and delete telemetry endpoints |
 | `authorize_clients` | Authorization management | Manage function access authorizations (requires JWT token) |
 
 #### Default Scopes
@@ -124,7 +124,7 @@ When no `--scopes` flag is provided, API keys are generated with these **default
 - `list_functions_details`
 - `manage_telemetries`
 
-These default scopes are sufficient for most read-only user operations (invoking functions, monitoring queues, and viewing function information). For write operations, you need to use JWT tokens (NVCF_TOKEN).
+These default scopes cover invoking functions, monitoring queues, viewing function information, and managing telemetry endpoints. For other write operations, use JWT tokens (NVCF_TOKEN).
 
 #### Custom Scopes Use Cases
 
@@ -147,16 +147,16 @@ For monitoring and discovery without invocation privileges.
 **Extended User Access:**
 
 ```bash
---scopes "invoke_function,list_functions,queue_details,list_functions_details"
+--scopes "invoke_function,list_functions,queue_details,list_functions_details,manage_telemetries"
 ```
 
 Default scopes for extended access.
 
 #### Important Notes on Custom Scopes
 
-**Scope Limitations**: API keys are intended for read-only operations. Write operations (create, deploy, update, delete functions) require JWT tokens (NVCF_TOKEN) with appropriate scopes.
+Scope limitations: default API keys cover read, invoke, and telemetry endpoint operations. Function write operations (create, deploy, update, delete) require JWT tokens (NVCF_TOKEN) with appropriate scopes.
 
-**Principle of Least Privilege**: Always use the minimum scopes necessary for your use case. The default read-only scopes are sufficient for most applications.
+Principle of least privilege: always use the minimum scopes necessary for your use case. The default scopes are sufficient for most applications.
 
 **Default Recommendation**: For most applications, the default scopes are sufficient and provide a good balance of functionality and security. Use JWT tokens for function management operations.
 
