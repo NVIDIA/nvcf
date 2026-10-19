@@ -131,6 +131,95 @@ test "$(yq -r '.byoo.additionalResourceOverhead.cpu | tag + " " + .' "${byoo_val
 test "$(yq -r '.byoo.fluentbit.resources.limits.memory' "${byoo_values}")" = "256Mi" ||
   fail "global.nvcaOperator.byoo.fluentbit.resources was not forwarded to the chart"
 
+base_values="${stack_dir}/environments/base.yaml"
+pinned_byoo_collector_tag="$(yq -r '.global.nvcaOperator.byooOtelCollector.imageTag' "${base_values}")"
+test -n "${pinned_byoo_collector_tag}" && test "${pinned_byoo_collector_tag}" != "null" ||
+  fail "environments/base.yaml does not pin global.nvcaOperator.byooOtelCollector.imageTag"
+test "$(yq -r '.agent.byooOtelCollector.imageTag' "${default_values}")" = "${pinned_byoo_collector_tag}" ||
+  fail "the stack BYOO collector tag pin was not forwarded to agent.byooOtelCollector.imageTag"
+test "$(yq -r '.agent.byooOtelCollector.imageRepository // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack set a BYOO collector repository without an explicit value"
+byoo_collector_values="${work_dir}/byoo-collector-values.yaml"
+render_values "${byoo_collector_values}" \
+  --state-values-set-string global.nvcaOperator.byooOtelCollector.imageRepository=mirror.example.invalid/team/byoo-otel-collector \
+  --state-values-set-string global.nvcaOperator.byooOtelCollector.imageTag=review-test
+test "$(yq -r '.agent.byooOtelCollector.imageRepository' "${byoo_collector_values}")" = "mirror.example.invalid/team/byoo-otel-collector" ||
+  fail "global.nvcaOperator.byooOtelCollector.imageRepository was not forwarded to the chart"
+test "$(yq -r '.agent.byooOtelCollector.imageTag' "${byoo_collector_values}")" = "review-test" ||
+  fail "global.nvcaOperator.byooOtelCollector.imageTag override was not forwarded to the chart"
+
+# The stack default must match the image NVCA falls back to when no
+# BYOO_FLUENTBIT_CONTAINER override is set. Docker Hub references without a
+# registry resolve to docker.io.
+nvca_otel_source="${stack_dir}/../../../src/libraries/go/lib/pkg/icms-translate/translate/common/otel.go"
+nvca_fluent_bit_default="$(sed -n 's/^[[:space:]]*DefaultFluentbitImage[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' "${nvca_otel_source}")"
+test -n "${nvca_fluent_bit_default}" || fail "could not read DefaultFluentbitImage from ${nvca_otel_source}"
+stack_fluent_bit_default="$(yq -r '.agent.byooFluentBit.imageRepository + ":" + .agent.byooFluentBit.imageTag' "${default_values}")"
+test "${stack_fluent_bit_default}" = "docker.io/${nvca_fluent_bit_default}" ||
+  fail "stack Fluent Bit default ${stack_fluent_bit_default} does not match the NVCA default ${nvca_fluent_bit_default}"
+fluent_bit_values="${work_dir}/fluent-bit-values.yaml"
+render_values "${fluent_bit_values}" \
+  --state-values-set-string global.nvcaOperator.byooFluentBit.image.registry=mirror.example.invalid \
+  --state-values-set-string global.nvcaOperator.byooFluentBit.image.repository=team/fluent-bit \
+  --state-values-set-string global.nvcaOperator.byooFluentBit.image.tag=review-test
+test "$(yq -r '.agent.byooFluentBit.imageRepository' "${fluent_bit_values}")" = "mirror.example.invalid/team/fluent-bit" ||
+  fail "global.nvcaOperator.byooFluentBit.image registry and repository were not forwarded to the chart"
+test "$(yq -r '.agent.byooFluentBit.imageTag' "${fluent_bit_values}")" = "review-test" ||
+  fail "global.nvcaOperator.byooFluentBit.image.tag was not forwarded to the chart"
+# helmfile ignores empty --state-values-set-string values, so empty fields are
+# set through state values files.
+fluent_bit_no_registry_state="${work_dir}/fluent-bit-no-registry-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      image:' \
+  '        registry: ""' \
+  '        repository: mirror.example.invalid/fluent-bit' >"${fluent_bit_no_registry_state}"
+fluent_bit_no_registry_values="${work_dir}/fluent-bit-no-registry-values.yaml"
+render_values "${fluent_bit_no_registry_values}" --state-values-file "${fluent_bit_no_registry_state}"
+test "$(yq -r '.agent.byooFluentBit.imageRepository' "${fluent_bit_no_registry_values}")" = "mirror.example.invalid/fluent-bit" ||
+  fail "an empty Fluent Bit registry should forward the repository unchanged"
+fluent_bit_missing_tag_state="${work_dir}/fluent-bit-missing-tag-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      image:' \
+  '        tag: ""' >"${fluent_bit_missing_tag_state}"
+fluent_bit_error="${work_dir}/fluent-bit-error.log"
+if render_values "${work_dir}/fluent-bit-missing-tag.yaml" \
+  --state-values-file "${fluent_bit_missing_tag_state}" 2>"${fluent_bit_error}"; then
+  fail "a Fluent Bit repository without a tag should fail to render"
+fi
+grep -Fq "global.nvcaOperator.byooFluentBit.image.tag is required" "${fluent_bit_error}" ||
+  fail "missing Fluent Bit tag failed without the expected message"
+
+has_gate() {
+  yq -r ".selfManaged.featureGateValues | any_c(. == \"$2\")" "$1"
+}
+test "$(has_gate "${default_values}" BYOOFluentBit)" = "false" ||
+  fail "BYOOFluentBit should stay off by default"
+fluent_bit_gate_values="${work_dir}/fluent-bit-gate-values.yaml"
+render_values "${fluent_bit_gate_values}" --state-values-set global.nvcaOperator.byooFluentBit.enabled=true
+test "$(has_gate "${fluent_bit_gate_values}" BYOOFluentBit)" = "true" ||
+  fail "global.nvcaOperator.byooFluentBit.enabled did not enable the BYOOFluentBit gate"
+test "$(has_gate "${fluent_bit_gate_values}" BYOObservability)" = "true" ||
+  fail "enabling Fluent Bit dropped the BYOObservability gate"
+fluent_bit_gate_disabled_state="${work_dir}/fluent-bit-gate-disabled-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      enabled: true' \
+  '    selfManaged:' \
+  '      featureGateValues:' \
+  '        - -BYOOFluentBit' >"${fluent_bit_gate_disabled_state}"
+fluent_bit_gate_disabled_values="${work_dir}/fluent-bit-gate-disabled-values.yaml"
+render_values "${fluent_bit_gate_disabled_values}" --state-values-file "${fluent_bit_gate_disabled_state}"
+test "$(has_gate "${fluent_bit_gate_disabled_values}" BYOOFluentBit)" = "false" ||
+  fail "an explicit -BYOOFluentBit gate did not win over byooFluentBit.enabled"
+
 write_registration '    workload:
       defaultOwnershipProbe: true'
 extended_values="${work_dir}/extended-values.yaml"

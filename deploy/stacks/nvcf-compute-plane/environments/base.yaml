@@ -60,6 +60,25 @@ global:
     #       requests:
     #         cpu: 50m
     #         memory: 64Mi
+    # BYOO OpenTelemetry Collector sidecar image, passed to the nvca-operator
+    # chart as agent.byooOtelCollector. A byoo-otel-collector release bumps
+    # imageTag. Set imageRepository to pull the collector from a registry the
+    # cluster can reach; leave it unset to keep the chart default repository.
+    byooOtelCollector:
+      # imageRepository: <registry>/<repository>/byoo-otel-collector
+      imageTag: "0.160.0-nv-0.2.5"
+    # BYOO Fluent Bit log collector. enabled turns on the BYOOFluentBit NVCA
+    # feature gate, which adds a Fluent Bit sidecar to BYOO workloads that
+    # export logs. It needs BYOObservability, which observability.profile
+    # compute or all enables. The image defaults to the upstream Docker Hub
+    # image that NVCA uses. Override registry, repository, and tag for a
+    # private or disconnected registry.
+    byooFluentBit:
+      enabled: false
+      image:
+        registry: docker.io
+        repository: fluent/fluent-bit
+        tag: "3.2"
     selfManaged:
       # The chart ships no tag for this image, only the stack knows which samba
       # build pairs with the operator it is pinning, so supply the whole
