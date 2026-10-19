@@ -1,0 +1,114 @@
+{
+  "description": "Token-array input and explicit null and false extension fields stay intact.",
+  "path": "/v1/embeddings",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      [
+        1,
+        2
+      ],
+      [
+        3
+      ]
+    ],
+    "encoding_format": "float",
+    "dimensions": null,
+    "user": null,
+    "vendor_options": {
+      "normalize": false,
+      "limit": 0,
+      "metadata": {}
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      [
+        1,
+        2
+      ],
+      [
+        3
+      ]
+    ],
+    "encoding_format": "float",
+    "dimensions": null,
+    "user": null,
+    "vendor_options": {
+      "normalize": false,
+      "limit": 0,
+      "metadata": {}
+    }
+  },
+  "upstream_response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.5,
+            0
+          ]
+        },
+        {
+          "object": "embedding",
+          "index": 1,
+          "embedding": [
+            0,
+            0.5
+          ]
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.5,
+            0
+          ]
+        },
+        {
+          "object": "embedding",
+          "index": 1,
+          "embedding": [
+            0,
+            0.5
+          ]
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  }
+}

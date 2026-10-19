@@ -292,6 +292,7 @@ pub async fn start_metrics_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::load_balancer::routing_methods::{UPDATE_HINT, routing_methods};
 
     impl StargateMetrics {
         fn gather_text(&self) -> anyhow::Result<String> {
@@ -408,21 +409,15 @@ mod tests {
             .collect::<Vec<_>>();
         series.sort();
 
+        // Every routing method gets a series, so the label list cannot drift.
         let mut expected = Vec::new();
-        for algorithm in [
-            "power-of-n",
-            "wait-and-widen",
-            "round-robin",
-            "random",
-            "pulsar",
-            "pulsar-wait-and-widen",
-        ] {
+        for algorithm in routing_methods().names() {
             for cache in ["hit", "build", "rebuild"] {
                 expected.push(format!("{algorithm}|{cache}"));
             }
         }
         expected.sort();
-        assert_eq!(series, expected);
+        assert_eq!(series, expected, "{UPDATE_HINT}");
     }
 
     #[test]

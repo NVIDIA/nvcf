@@ -292,7 +292,9 @@ type CacheConfig struct {
 // GetDefaultCacheConfig returns default cache configuration values
 func GetDefaultCacheConfig() CacheConfig {
 	return CacheConfig{
-		Enabled:              false,
+		Enabled: false,
+		// About 800 B per entry for a typical event: 100,000 entries is roughly 76 MiB,
+		// and larger event details add their size to every entry.
 		MaxSize:              100_000, // Entries kept before LRU eviction
 		FlushIntervalSeconds: 60,      // Seconds a pending entry waits before it is flushed
 	}

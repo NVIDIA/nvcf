@@ -48,9 +48,9 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/net v0.60.0, x/crypto v0.57.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
-The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2. It rebuilds Kubernetes v1.36.5 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.9 toolchain. The build updates `golang.org/x/net` to v0.60.0, synchronizes the Kubernetes workspace, and regenerates vendored dependencies before offline compilation. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform. The client reports a dirty source tree to identify the dependency patch. Every Go binary is checked against the HTTP/2 security baseline before it enters the runtime image.
 
 The image does not include the Helm CLI. The core migrations and LLS, LLM, and
 UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image
@@ -67,7 +67,8 @@ on a fresh installation before release. An upgrade alone does not exercise the
 enabled addon before updating downstream chart and stack pins.
 
 ```bash
-docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" \
+  -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
@@ -92,10 +93,12 @@ Environment variables consumed by the entrypoint:
 | `BAO_SERVICE` | `openbao-server.vault-system.svc.cluster.local` | DNS name of the OpenBao Service |
 | `CORE_MIGRATIONS_ENABLED` | `true` | Run the numbered scripts under `migrations/` |
 | `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` (fail-hard when enabled, see [addons/lls/README.md](addons/lls/README.md)) |
-| `ADDONS_LLM_ENABLED` | `false` | Run the LLM addon under `addons/llm/setup_llm.sh` (fail-hard when enabled, see [addons/llm/README.md](addons/llm/README.md)) |
+| `NVCF_SERVICE_PKI_ENABLED` | `false` | Run the service PKI addon under `addons/service-pki/setup_service_pki.sh` (fail-hard when enabled, see [addons/service-pki/README.md](addons/service-pki/README.md)) |
+| `ADDONS_LLM_ENABLED` | `false` | Same as `NVCF_SERVICE_PKI_ENABLED`; kept for the llm-request-router chart and existing installs |
 | `ADDONS_NVCF_UI_ENABLED` | `false` | Run the nvcf-ui addon under `addons/nvcf-ui/setup_nvcf-ui.sh` (fail-hard when enabled, see [addons/nvcf-ui/README.md](addons/nvcf-ui/README.md)) |
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
+| `ADMIN_ISSUER_PROXY_ENABLED` | `true` | Run `migrations/10_setup_admin-issuer.sh`. Set `false` alongside `adminIssuerProxy.enabled: false` so the admin signing role, policy and auth role are not created for a proxy that is not installed. Unlike the addon switches this defaults to `true`, so an existing install is unchanged |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
 | `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
 

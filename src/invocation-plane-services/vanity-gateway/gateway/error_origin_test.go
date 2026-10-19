@@ -128,6 +128,7 @@ func TestGatewayRejectedOutcomeOpenAIDirector(t *testing.T) {
 	}{
 		{"model not found", "/v1/chat/completions", `{"model":"nope"}`, http.StatusNotFound},
 		{"model field missing", "/v1/chat/completions", `{}`, http.StatusBadRequest},
+		{"invalid json", "/v1/chat/completions", `{`, http.StatusBadRequest},
 		{"offline", "/v1/chat/completions", `{"model":"offline-model"}`, http.StatusServiceUnavailable},
 		{"expired", "/v1/chat/completions", `{"model":"expired-model"}`, http.StatusGone},
 		{"messages model not found", "/v1/messages", `{"model":"nope"}`, http.StatusNotFound},

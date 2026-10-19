@@ -34,15 +34,21 @@ The top-level object has three fields:
 | `request_algorithms` | object | `{}` | Algorithms that `x-routing-method` may select for every model. |
 | `models` | object | `{}` | Exact model ID to algorithm configuration. |
 
-Valid algorithm names are `power-of-n`, `wait-and-widen`, `round-robin`,
-`random`, `pulsar`, and `pulsar-wait-and-widen`.
+Valid algorithm names, with the aliases Stargate also accepts for backward
+compatibility:
 
-For backward compatibility, Stargate also accepts `powerOfN`, `powerOf2`, and
-`power-of-two` as aliases for `power-of-n`, `groq-multiregion` as an alias for
-`wait-and-widen`, and `pulsar-multiregion` as an alias for
-`pulsar-wait-and-widen`. These aliases work in `default`, `models`,
-`request_algorithms`, detailed algorithm objects, and routing-method overrides.
-Use the canonical names for new configurations.
+| Algorithm | Accepted aliases |
+| --- | --- |
+| `power-of-n` | `powerOfN`, `powerOf2`, `power-of-two` |
+| `wait-and-widen` | `groq-multiregion` |
+| `round-robin` | none |
+| `random` | none |
+| `pulsar` | none |
+| `pulsar-wait-and-widen` | `pulsar-multiregion` |
+
+Aliases work in `default`, `models`, `request_algorithms`, detailed algorithm
+objects, and routing-method overrides. Use the canonical names for new
+configurations.
 
 An entry in `models` or `request_algorithms` can be an algorithm name:
 
@@ -728,6 +734,11 @@ was promoted. For a promoted `pulsar-wait-and-widen` request, the rank in
 ## Implementation sources
 
 - `crates/stargate/src/load_balancer/config.rs`
+- `routing_methods.json`: algorithm names, aliases, and routing-expression
+  parameters. Tests compare it with the code, this page, the NVCF routing
+  docs, `benches/`, and the routing simulator configs. NVCF function API tests
+  check that the API's `routingMethod` format check accepts every name, alias,
+  and parameter it lists.
 - `crates/stargate/src/load_balancer/factory.rs`
 - `crates/stargate/src/load_balancer/router.rs`
 - `crates/stargate/src/load_balancer/wait_and_widen.rs`

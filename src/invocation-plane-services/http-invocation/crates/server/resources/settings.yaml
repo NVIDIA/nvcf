@@ -47,3 +47,9 @@ secrets_path: vault/secrets.json
 secrets_watcher_interval_seconds: 60
 rate_limit_address: http://api.ratelimiter.svc.cluster.local:7777
 rate_limit_enabled: false
+# Browser access to legacy exec/pexec routes is disabled until origins are listed.
+# Example: ["https://console.example.com"]
+cors_allowed_origins: []
+# Preparation stage: write ownership headers and accept legacy headerless polls.
+# Enable only after all regional writers have emitted headers for over 60 minutes.
+enforce_polling_owner: false

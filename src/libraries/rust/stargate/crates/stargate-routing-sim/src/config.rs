@@ -15,6 +15,7 @@
 
 use anyhow::{Context, bail};
 use mock_engine::EngineConfig;
+use pylon_lib::PylonQueueMismatchRetryConfig;
 use serde::Deserialize;
 use stargate::load_balancer::LoadBalancerAlgorithmConfig;
 
@@ -78,6 +79,7 @@ pub struct PylonConfig {
     #[serde(default)]
     pub stats_update_coalesce_ms: Option<f64>,
     pub input_tps: InputTpsModel,
+    #[serde(default)]
     pub queue_mismatch: QueueMismatchConfig,
 }
 
@@ -100,12 +102,39 @@ pub enum InputTpsModel {
     },
 }
 
+/// Pylon queue-mismatch admission. Omitted fields take the production Pylon
+/// defaults, so scenarios that leave them out follow threshold changes.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueueMismatchConfig {
+    #[serde(default = "default_mismatch_enabled")]
     pub enabled: bool,
+    #[serde(default = "default_mismatch_min_delta_ms")]
     pub min_delta_ms: u64,
+    #[serde(default = "default_mismatch_tolerance_factor")]
     pub tolerance_factor: f64,
+}
+
+impl Default for QueueMismatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mismatch_enabled(),
+            min_delta_ms: default_mismatch_min_delta_ms(),
+            tolerance_factor: default_mismatch_tolerance_factor(),
+        }
+    }
+}
+
+fn default_mismatch_enabled() -> bool {
+    PylonQueueMismatchRetryConfig::default().enabled
+}
+
+fn default_mismatch_min_delta_ms() -> u64 {
+    PylonQueueMismatchRetryConfig::default().min_delta_ms
+}
+
+fn default_mismatch_tolerance_factor() -> f64 {
+    PylonQueueMismatchRetryConfig::default().tolerance_factor
 }
 
 #[derive(Clone, Debug, Deserialize)]

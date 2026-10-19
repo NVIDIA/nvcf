@@ -359,3 +359,22 @@ func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFromEnvReadsExposeRouterErrorCodes(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.ExposeRouterErrorCodes {
+		t.Fatal("router error codes are exposed by default")
+	}
+
+	t.Setenv("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES", "true")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.ExposeRouterErrorCodes {
+		t.Fatal("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES=true was not applied")
+	}
+}

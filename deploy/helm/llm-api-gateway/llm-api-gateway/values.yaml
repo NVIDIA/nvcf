@@ -79,6 +79,10 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
+    # Put the LLM Request Router rejection reason, such as
+    # no_eligible_candidates, in error.code of OpenAI-format error responses.
+    # When false, the reason is only logged.
+    exposeRouterErrorCodes: false
     # Session last-cluster hint (x-stargate-last-cluster-id) for the LLM
     # Request Router. Stored in Olric when olric.enabled is true, otherwise in
     # a per-pod LRU capped at localMaxEntries. Enable it after the router is

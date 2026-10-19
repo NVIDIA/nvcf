@@ -227,6 +227,26 @@ func TestBumpMovesOnlyTheMatchingRelease(t *testing.T) {
 	}
 }
 
+func TestOlderChartReleaseKeepsNewerStackPins(t *testing.T) {
+	for _, current := range []string{"2.0.0", "1.15.0", "1.14.11"} {
+		t.Run(current, func(t *testing.T) {
+			file := "releases:\n  - name: alpha\n    version: " + current + "\n"
+			f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": file})
+			f.fileAt(t, "deploy/stacks/compute/helmfile.d", "00-stack.yaml.gotmpl", "releases:\n  - name: alpha\n    version: 1.14.9\n")
+			code, out, errOut := f.bump(t, "deploy/helm/alpha/v1.14.10", true)
+			if code != 0 || !strings.Contains(out, "skipped older release") {
+				t.Fatalf("older release must be skipped: code=%d\n%s%s", code, out, errOut)
+			}
+			if got := f.read(t, "00-stack.yaml.gotmpl"); got != file {
+				t.Fatalf("older release changed newer stack pin:\n%s", got)
+			}
+			if got := f.readAt(t, "deploy/stacks/compute/helmfile.d", "00-stack.yaml.gotmpl"); !strings.Contains(got, "version: 1.14.10") {
+				t.Fatalf("another stack on an older patch must still advance:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestBumpLeavesEveryOtherLineByteIdentical(t *testing.T) {
 	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": stackFile})
 	f.bump(t, "deploy/helm/alpha/v2.0.0", true)
