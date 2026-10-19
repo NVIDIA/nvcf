@@ -131,6 +131,38 @@ func TestElectionRelease_ReconcileLeaderLiveness(t *testing.T) {
 	}
 }
 
+// A capture already promoted ready releases its followers on reconcile,
+// even when the Lease it left behind is past its deadline and the leader
+// is gone: the promote handler persists ready before it releases, and a
+// release that failed is retried here rather than taken for a failure.
+func TestElectionRelease_ReconcileReleasesReadyBeforeFailureChecks(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	cases := map[string]struct {
+		state       string
+		err         error
+		wantPresent bool
+		wantGated   bool
+	}{
+		"ready releases":                 {state: "ready", wantPresent: true, wantGated: false},
+		"unreadable state leaves gated":  {err: fmt.Errorf("catalog down"), wantPresent: true, wantGated: true},
+		"in progress keeps the failures": {state: "writing", wantPresent: false},
+	}
+	for name, tc := range cases {
+		kc := fake.NewSimpleClientset(gatedFollower("f", true), electionLease("L", now.Add(-time.Minute)))
+		r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog(), now: func() time.Time { return now },
+			promoteState: func(string) (string, error) { return tc.state, tc.err }}
+		r.reconcile(context.Background())
+		p, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{})
+		if present := err == nil; present != tc.wantPresent {
+			t.Errorf("%s: follower present=%v, want %v", name, present, tc.wantPresent)
+			continue
+		}
+		if err == nil && (p.Labels[election.GatedLabel] == "true") != tc.wantGated {
+			t.Errorf("%s: follower gated=%q, want gated=%v", name, p.Labels[election.GatedLabel], tc.wantGated)
+		}
+	}
+}
+
 func TestElectionRelease_NilClientIsNoop(t *testing.T) {
 	var r *electionReleaser
 	r.onPromoteState(context.Background(), electTestHash, "ready")

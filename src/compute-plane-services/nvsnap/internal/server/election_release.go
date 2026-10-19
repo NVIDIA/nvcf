@@ -278,6 +278,23 @@ func (r *electionReleaser) reconcile(ctx context.Context) {
 		if hash == "" {
 			continue
 		}
+		// The promote handler persists ready before it releases the
+		// followers, and a release that failed leaves the Lease behind.
+		// A ready capture releases them whatever the deadline or the
+		// leader's state; evicting them would only recreate pods that
+		// restore from it anyway.
+		if r.promoteState != nil {
+			state, err := r.promoteState(hash)
+			if err != nil {
+				r.log.WithError(err).WithField("hash", checkpointstore.ShortHash(hash)).
+					Warn("election: promote state unreadable; followers left in place")
+				continue
+			}
+			if state == "ready" {
+				r.onPromoteState(ctx, hash, state)
+				continue
+			}
+		}
 		if dl, err := time.Parse(time.RFC3339, l.Annotations[election.DeadlineAnnotation]); err == nil && now.After(dl) {
 			r.evictLogged(ctx, hash, "deadline passed", l)
 			continue
