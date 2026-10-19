@@ -499,6 +499,7 @@ func TestGenerateExportersAndServiceAddsLogChunkProcessor(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []string{
 		"memory_limiter",
+		setObservedTimeProcessorID,
 		"attributes/add-metadata",
 		"logchunk/byoo",
 		"batch",
@@ -758,7 +759,7 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"hash_seed":           samplingHashSeed,
 		"fail_closed":         samplingFailClosed,
 	}, otelConfig.Processors["probabilistic_sampler/traces"])
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, []string{"memory_limiter", setObservedTimeProcessorID, "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", dropEmptyLabelsProcessorID, "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
@@ -1266,6 +1267,72 @@ func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
 			assert.Less(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "batch"),
 				"must run before batching")
 		})
+	}
+}
+
+// TestLogsPipelineSetsMissingObservedTime pins the processor that gives log
+// records an observed time when the sender left it unset. The Fluent Bit
+// opentelemetry output never sets ObservedTimestamp, so without this processor
+// container logs reach the backend observed at the Unix epoch. The where clause
+// must keep an observed time the sender already set, and the processor must
+// run before chunking and batching so every chunk of a record shares it.
+func TestLogsPipelineSetsMissingObservedTime(t *testing.T) {
+	for _, backend := range []BackendType{K8s, VM} {
+		for _, workload := range []WorkloadType{Container, Helm} {
+			t.Run(string(backend)+"/"+string(workload), func(t *testing.T) {
+				raw, err := RenderOtelConfigFromBytes(
+					[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "https://logs.example.invalid", "name": "l"}, "tracesTelemetry": {"protocol": "GRPC", "provider": "SERVICENOW", "endpoint": "traces.example.invalid:8283", "name": "t"}}}`),
+					TemplateConfig{
+						BackendType:  backend,
+						WorkloadType: workload,
+						Namespace:    "sr-fake-namespace",
+						LogChunking:  LogChunkingConfig{Enabled: true},
+					},
+				)
+				if err != nil {
+					t.Fatalf("render failed: %v", err)
+				}
+
+				var cfg struct {
+					Processors map[string]struct {
+						ErrorMode     string `yaml:"error_mode"`
+						LogStatements []struct {
+							Context    string   `yaml:"context"`
+							Statements []string `yaml:"statements"`
+						} `yaml:"log_statements"`
+					} `yaml:"processors"`
+					Service struct {
+						Pipelines map[string]struct {
+							Processors []string `yaml:"processors"`
+						} `yaml:"pipelines"`
+					} `yaml:"service"`
+				}
+				if err := yaml.Unmarshal(raw, &cfg); err != nil {
+					t.Fatalf("unmarshal failed: %v", err)
+				}
+
+				proc, ok := cfg.Processors[setObservedTimeProcessorID]
+				if !ok {
+					t.Fatalf("%s is not defined", setObservedTimeProcessorID)
+				}
+				assert.Equal(t, "ignore", proc.ErrorMode)
+				if assert.Len(t, proc.LogStatements, 1) {
+					assert.Equal(t, "log", proc.LogStatements[0].Context)
+					assert.Equal(t, []string{
+						"set(log.observed_time, Now()) where log.observed_time_unix_nano == 0",
+					}, proc.LogStatements[0].Statements)
+				}
+
+				procs := cfg.Service.Pipelines["logs"].Processors
+				assert.Equal(t, indexOf(procs, "memory_limiter")+1, indexOf(procs, setObservedTimeProcessorID),
+					"must run right after memory_limiter")
+				assert.Less(t, indexOf(procs, setObservedTimeProcessorID), indexOf(procs, "logchunk/byoo"),
+					"must run before chunking")
+				assert.Less(t, indexOf(procs, setObservedTimeProcessorID), indexOf(procs, "batch"),
+					"must run before batching")
+				assert.NotContains(t, cfg.Service.Pipelines["traces"].Processors, setObservedTimeProcessorID)
+			})
+		}
 	}
 }
 
