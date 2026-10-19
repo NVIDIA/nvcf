@@ -721,6 +721,20 @@ func (qm *QueueManager) doCreationMessage(ctx context.Context,
 		return 0, fmt.Errorf("failed to apply creation message: %v", cerr)
 	}
 
+	if reason := GetCreationRejectionReason(icmsReq); reason != "" {
+		// The request is reported to ICMS as failed. Delete the message so it is
+		// not processed again, for example after the cluster configuration changes.
+		if err := qm.Client.DeleteMessage(ctx, queue.DeleteMessageInput{
+			QueueInfo:     qi,
+			ReceiptHandle: message.ReceiptHandle,
+		}); err != nil && !qm.Client.IsMessageNotFoundError(err) {
+			log.WithError(err).Warn("Failed to delete rejected creation message")
+		}
+		logging.NewICMSRequestFieldLogger(icmsReq, log).WithField("reason", reason).
+			Warn("Rejected creation message, reporting the request as failed")
+		return 0, nil
+	}
+
 	logging.NewICMSRequestFieldLogger(icmsReq, log).Info("Applied one creation message")
 
 	return request, nil
