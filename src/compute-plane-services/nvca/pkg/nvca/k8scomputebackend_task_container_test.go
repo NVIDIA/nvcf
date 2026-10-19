@@ -190,8 +190,11 @@ func Test_applyContainerTaskCreationMessage(t *testing.T) {
 	// BYOO without flag enabled.
 	taskMsgBYOO := decodeCMTask(t, cmsgTaskContainerBYOO)
 
-	_, err = bc.CreateICMSCreationMessageRequest(ctx, taskMsgBYOO, "mrecpt1", "msg1", "")
-	require.EqualError(t, err, "telemetries is set but required features are disabled: BYOObservability")
+	rejectedSR, err := bc.CreateICMSCreationMessageRequest(ctx, taskMsgBYOO, "mrecpt1", "msg1", "")
+	require.NoError(t, err)
+	assert.Contains(t, GetCreationRejectionReason(rejectedSR), "BYOObservability")
+	err = k8sClients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, rejectedSR.Name, metav1.DeleteOptions{})
+	require.NoError(t, err)
 
 	taskMsg := decodeCMTask(t, cmsgTaskContainer)
 

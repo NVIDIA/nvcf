@@ -64,7 +64,7 @@ The sample supports HTTP and gRPC protocols for `otlp` signals (traces, metrics,
 
 ```bash
 export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=grpc
-export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc
 ```
 

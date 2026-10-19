@@ -371,6 +371,11 @@ func TestRefusalStillAppliesTheChartsThatCouldMove(t *testing.T) {
 func TestRealChartsResolve(t *testing.T) {
 	// Against the checked-in metadata and charts, so a chart directory layout
 	// this tool cannot read shows up here rather than during a release.
+	//
+	// A declared edge that refuses is caught here too. The refusal depends only
+	// on the chart, not on the version released, so such an edge refuses every
+	// release of its service. cloud-functions-helm did that once its chart
+	// gained a second image tag, until the edge named the API image's path.
 	root := repoRoot(t)
 	m, err := LoadMetadata(root)
 	if err != nil {
@@ -387,14 +392,19 @@ func TestRealChartsResolve(t *testing.T) {
 			continue
 		}
 		for _, d := range e.Deploys {
+			var p Plan
+			var err error
 			if len(d.ValuesPaths) > 0 || len(d.ValuesFiles) > 0 {
-				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion); err != nil {
-					t.Errorf("planning %s (%s values paths) failed: %v", e.ID, d.Service, err)
-				}
+				p, err = PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion)
+			} else {
+				p, err = PlanFor(root, e, "9.9.9")
+			}
+			if err != nil {
+				t.Errorf("planning %s (%s) failed: %v", e.ID, d.Service, err)
 				continue
 			}
-			if _, err := PlanFor(root, e, "9.9.9"); err != nil {
-				t.Errorf("planning %s failed: %v", e.ID, err)
+			if p.Action == ActionRefuse {
+				t.Errorf("%s refuses every %s release: %s", e.ID, d.Service, p.Detail)
 			}
 		}
 		seen++
@@ -911,6 +921,148 @@ func TestChartlessTargetStillRefusesWhenItDeclaresAValuesPath(t *testing.T) {
 	if !strings.Contains(string(b), `imageTag: "0.157.0-nv-0.2.1"`) {
 		t.Fatalf("nothing was resolvable, so nothing may be rewritten:\n%s", b)
 	}
+}
+
+func TestStackValuesFileMovesOnlyTheReleasedServicesPins(t *testing.T) {
+	// The compute-plane stack's real shape: one values file repeats the NVCA
+	// operator and agent tags, which move together on an NVCA release, and
+	// the collector tag beside them, which belongs to another service.
+	f := newFixture(t, `{"services":[
+	 {"id":"agent","path":"src/agent"},
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"stack","path":"deploy/stacks/s","deploys":[
+	  {"service":"sidecar","values_files":[{"file":"environments/base.yaml","paths":["global.op.selfManaged.otelCollector.imageTag"]}]},
+	  {"service":"agent","values_files":[{"file":"environments/base.yaml","paths":["global.op.imageTag","global.op.selfManaged.nvcaVersion"]}]}
+	 ]}
+	]}`)
+	f.source(t, "deploy/stacks/s/environments/base.yaml",
+		"global:\n  op:\n    imageTag: \"1.0.0\"\n    selfManaged:\n      nvcaVersion: \"1.0.0\"\n      otelCollector:\n        imageTag: \"1.0.0\"\n")
+
+	code, out, errOut := f.run(t, "src/agent/v1.1.0", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	if !strings.Contains(out, "bump: minor") {
+		t.Fatalf("the stack pin's semver step should be reported:\n%s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "global:\n  op:\n    imageTag: \"1.1.0\"\n    selfManaged:\n      nvcaVersion: \"1.1.0\"\n      otelCollector:\n        imageTag: \"1.0.0\"\n"
+	if string(b) != want {
+		t.Fatalf("only the released service's pins should move:\n%s", b)
+	}
+}
+
+func TestRealStackPinsResolve(t *testing.T) {
+	// The checked-in stacks, planned the way a release would plan them. A
+	// renamed or restructured stack values key, or two pins of one service
+	// that have drifted apart, would otherwise surface only as a refused bump
+	// on the next release of that service.
+	root := repoRoot(t)
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatalf("checked-in release metadata does not load: %v", err)
+	}
+	seen := 0
+	for _, e := range m.Services {
+		if strings.HasPrefix(e.Path, ChartPrefix) {
+			continue
+		}
+		for _, d := range e.Deploys {
+			if len(d.ValuesFiles) == 0 {
+				continue
+			}
+			p, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion)
+			if err != nil {
+				t.Errorf("planning %s (%s) failed: %v", e.ID, d.Service, err)
+				continue
+			}
+			if p.Action != ActionValuesPaths {
+				t.Errorf("%s would not move its %s pins: %s", e.ID, d.Service, p.Detail)
+			}
+			seen++
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no stack declares a values_files pin; the metadata path or prefix is wrong")
+	}
+}
+
+func TestBumpWorkflowStagesEveryDeclaredTarget(t *testing.T) {
+	// The compute-plane stack declared its collector pin through values_files
+	// and the bumper rewrote it, but the workflow checked and staged only
+	// deploy/helm, so the stack edit never reached the pull request. Every
+	// target the bumper can write has to sit under the paths the workflow
+	// both checks and stages.
+	root := repoRoot(t)
+	commands := bumpWorkflowPathspecs(t, filepath.Join(root, ".github", "workflows", "chart-version-bump.yml"))
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for command, specs := range commands {
+		for _, e := range m.Services {
+			if len(e.Deploys) == 0 {
+				continue
+			}
+			if !strings.HasPrefix(e.Path, ChartPrefix) && !declaresValuesFiles(e) {
+				continue
+			}
+			if !coveredByPathspecs(e.Path, specs) {
+				t.Errorf("%q in chart-version-bump.yml does not cover %s (%s)", command, e.Path, e.ID)
+			}
+		}
+	}
+}
+
+func declaresValuesFiles(e Entry) bool {
+	for _, d := range e.Deploys {
+		if len(d.ValuesFiles) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// bumpWorkflowPathspecs returns the pathspecs of the three commands a bump
+// workflow uses to decide whether anything moved, to show it, and to stage it.
+func bumpWorkflowPathspecs(t *testing.T, workflow string) map[string][]string {
+	t.Helper()
+	b, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"if git diff --quiet --", "git --no-pager diff --stat --", "git add"}
+	found := map[string][]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range prefixes {
+			if !strings.HasPrefix(line, prefix+" ") {
+				continue
+			}
+			rest := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, prefix)), "; then")
+			found[prefix] = append(found[prefix], strings.Fields(rest)...)
+		}
+	}
+	for _, prefix := range prefixes {
+		if len(found[prefix]) == 0 {
+			t.Fatalf("%s has no %q line; update this test to follow how the workflow stages a bump", workflow, prefix)
+		}
+	}
+	return found
+}
+
+func coveredByPathspecs(path string, specs []string) bool {
+	path = filepath.ToSlash(path)
+	for _, spec := range specs {
+		spec = strings.TrimSuffix(spec, "/")
+		if path == spec || strings.HasPrefix(path, spec+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestValuesPathRerunIsANoOp(t *testing.T) {
