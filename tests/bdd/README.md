@@ -145,7 +145,10 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 `byoo.feature` registers a telemetry endpoint that points at an in-cluster
 OpenTelemetry Collector Contrib sink, runs a task and a container function
 with telemetries, and checks the sink's `otelcol_receiver_accepted_*`
-counters. It has two entry points:
+counters. The BYOO collector also forwards its own metrics, so the task
+metrics check reads `otelcol_exporter_sent_metric_points_total` from a sink
+pipeline that keeps only the task sample's `service.name`. It has two entry
+points:
 
 - `TestBYOO` brings up the single-cluster topology, installs the stack with
   the `compute` observability profile, then runs the workload scenarios. Use

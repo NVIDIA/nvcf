@@ -123,6 +123,12 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
       # per workload kind keeps task and function counters apart. NVCA removes
       # NetworkPolicies from workload namespaces on self-managed clusters, so
       # the sidecar reaches the sink without an egress policy.
+      #
+      # The BYOO collector also forwards its own and scraped metrics, which the
+      # receiver counters include. The metrics/task-sample pipeline keeps only
+      # metrics whose service.name is byoo-task-test, the resource that
+      # examples/task-samples/task-byoo-sample sets, so its exporter counter
+      # proves the task's own metrics arrived.
       And Kubernetes manifest "byoo-otlp-sinks" is:
         """
         apiVersion: v1
@@ -142,8 +148,16 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
                 protocols:
                   http:
                     endpoint: 0.0.0.0:4318
+            processors:
+              filter/task-sample:
+                error_mode: ignore
+                metrics:
+                  metric:
+                    - resource.attributes["service.name"] != "byoo-task-test"
             exporters:
               debug:
+                verbosity: basic
+              debug/task-sample:
                 verbosity: basic
             extensions:
               health_check:
@@ -165,6 +179,10 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
                 metrics:
                   receivers: [otlp]
                   exporters: [debug]
+                metrics/task-sample:
+                  receivers: [otlp]
+                  processors: [filter/task-sample]
+                  exporters: [debug/task-sample]
                 traces:
                   receivers: [otlp]
                   exporters: [debug]
@@ -272,10 +290,10 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | kind       | name           | namespace     |
         | Deployment | otlp-sink-task | bdd-byoo-sink |
       And Prometheus metrics on port "8888" of pods selected by "app=otlp-sink-task" in namespace "bdd-byoo-sink" using context "k3d-ncp-local" should total within "2m":
-        | metric                                        | labels        | comparison | total |
-        | otelcol_receiver_accepted_spans_total         | receiver=otlp | exactly    | 0     |
-        | otelcol_receiver_accepted_metric_points_total | receiver=otlp | exactly    | 0     |
-        | otelcol_receiver_accepted_log_records_total   | receiver=otlp | exactly    | 0     |
+        | metric                                      | labels                     | comparison | total |
+        | otelcol_receiver_accepted_spans_total       | receiver=otlp              | exactly    | 0     |
+        | otelcol_exporter_sent_metric_points_total   | exporter=debug/task-sample | exactly    | 0     |
+        | otelcol_receiver_accepted_log_records_total | receiver=otlp              | exactly    | 0     |
 
       # OTEL_COLLECTOR renders an OTLP HTTP exporter with a bearer header, so
       # the endpoint is the sink's HTTP port and a secret is required.
@@ -298,11 +316,12 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_IMAGE=${SAMPLE_BYOO_TASK_IMAGE} NVCT_BDD_TASK_NAME=bdd-byoo-task NVCT_BDD_TASK_NUM_RESULTS=3 NVCT_BDD_TASK_DELAY_MINUTES=1 NVCT_BDD_TASK_LOGS_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} NVCT_BDD_TASK_METRICS_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} NVCT_BDD_TASK_TRACES_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command output should contain "status: COMPLETED"
+      # Only the task sample's metrics reach the debug/task-sample exporter.
       And Prometheus metrics on port "8888" of pods selected by "app=otlp-sink-task" in namespace "bdd-byoo-sink" using context "k3d-ncp-local" should total within "5m":
-        | metric                                        | labels        | comparison | total |
-        | otelcol_receiver_accepted_spans_total         | receiver=otlp | at least   | 1     |
-        | otelcol_receiver_accepted_metric_points_total | receiver=otlp | at least   | 1     |
-        | otelcol_receiver_accepted_log_records_total   | receiver=otlp | at least   | 1     |
+        | metric                                      | labels                     | comparison | total |
+        | otelcol_receiver_accepted_spans_total       | receiver=otlp              | at least   | 1     |
+        | otelcol_exporter_sent_metric_points_total   | exporter=debug/task-sample | at least   | 1     |
+        | otelcol_receiver_accepted_log_records_total | receiver=otlp              | at least   | 1     |
 
     @function-lifecycle
     Scenario: A container function with telemetries gets the collector sidecar
