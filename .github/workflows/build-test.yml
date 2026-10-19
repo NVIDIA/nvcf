@@ -294,6 +294,11 @@ jobs:
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
 
+      - name: Check vendored copies of the shared Go library match its source
+        run: |
+          bash tools/ci/test-check-go-vendored-lib
+          bash tools/ci/check-go-vendored-lib
+
   stargate-dev-benchmark:
     name: Stargate development benchmark
     runs-on: ubuntu-latest

@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fail when a Go module's vendored copy of src/libraries/go/lib differs from
+# the source tree.
+#
+# A module that replaces the library with the in-tree path still compiles the
+# copy under its vendor/ directory, so a library fix only ships once that
+# module re-vendors. This compares the vendored files with the source directly
+# rather than running `go mod vendor`, which would also delete the Gazelle
+# BUILD.bazel files some vendor trees commit, and it needs no network.
+#
+# Modules whose vendor/modules.txt shows a pinned library version instead of a
+# local replace are skipped: their copy is meant to track that version.
+#
+# Usage: tools/ci/check-go-vendored-lib
+# REPO_ROOT overrides the repository root, for tests.
+set -euo pipefail
+
+repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+lib_import="github.com/NVIDIA/nvcf/src/libraries/go/lib"
+lib_rel="src/libraries/go/lib"
+lib_dir="${repo_root}/${lib_rel}"
+
+if [[ ! -d "${lib_dir}" ]]; then
+    echo "missing ${lib_rel} under ${repo_root}" >&2
+    exit 1
+fi
+lib_real="$(cd "${lib_dir}" && pwd -P)"
+
+drift=0
+checked=0
+
+report() {
+    printf 'DRIFT %s\n' "$*"
+    drift=1
+}
+
+check_module() {  # check_module <module-dir>
+    local module_dir="$1" rel target resolved vendored f r d src name
+    rel="${module_dir#"${repo_root}/"}"
+
+    # The library's header line in modules.txt is
+    #   # <import path> [version] [=> <replacement> [version]]
+    target="$(awk -v m="${lib_import}" '
+        $1 == "#" && $2 == m {
+            for (i = 3; i <= NF; i++) if ($i == "=>") { print $(i + 1); exit }
+            exit
+        }' "${module_dir}/vendor/modules.txt")"
+
+    if [[ -z "${target}" ]]; then
+        if grep -Fq "# ${lib_import} " "${module_dir}/vendor/modules.txt"; then
+            echo "skip  ${rel}: vendors a pinned library version"
+        fi
+        return 0
+    fi
+    case "${target}" in
+        ./* | ../* | /*) ;;
+        *)
+            echo "skip  ${rel}: replaces the library with module ${target}"
+            return 0
+            ;;
+    esac
+    if ! resolved="$(cd "${module_dir}" && cd "${target}" 2>/dev/null && pwd -P)"; then
+        report "${rel}: replace target ${target} does not exist"
+        return 0
+    fi
+    if [[ "${resolved}" != "${lib_real}" ]]; then
+        echo "skip  ${rel}: replaces the library with ${target}"
+        return 0
+    fi
+
+    vendored="${module_dir}/vendor/${lib_import}"
+    if [[ ! -d "${vendored}" ]]; then
+        report "${rel}: vendor/modules.txt lists the library but vendor/${lib_import} is missing"
+        return 0
+    fi
+    checked=$((checked + 1))
+
+    # Every vendored file must still exist in the source with the same bytes.
+    # BUILD.bazel files are generated per vendor tree by Gazelle.
+    while IFS= read -r -d '' f; do
+        r="${f#"${vendored}/"}"
+        if [[ ! -f "${lib_dir}/${r}" ]]; then
+            report "${rel}: vendor/${lib_import}/${r} is not in ${lib_rel}"
+        elif ! cmp -s "${f}" "${lib_dir}/${r}"; then
+            report "${rel}: vendor/${lib_import}/${r} differs from ${lib_rel}/${r}"
+            diff -u --label "vendored/${r}" --label "${lib_rel}/${r}" \
+                "${f}" "${lib_dir}/${r}" | head -n 40 || true
+        fi
+    done < <(find "${vendored}" -type f ! -name BUILD.bazel -print0 | sort -z)
+
+    # Every non-test Go file in a vendored package must be vendored, so a file
+    # added to the source is caught too.
+    while IFS= read -r -d '' d; do
+        r="${d#"${vendored}"}"
+        for src in "${lib_dir}${r}"/*.go; do
+            [[ -e "${src}" ]] || continue
+            name="${src##*/}"
+            [[ "${name}" == *_test.go ]] && continue
+            if [[ ! -f "${d}/${name}" ]]; then
+                report "${rel}: ${lib_rel}${r}/${name} is not vendored"
+            fi
+        done
+    done < <(find "${vendored}" -type f -name '*.go' -printf '%h\0' | sort -zu)
+}
+
+while IFS= read -r -d '' modules_txt; do
+    check_module "${modules_txt%/vendor/modules.txt}"
+done < <(find "${repo_root}" \( -name .git -o -name node_modules \) -prune -o \
+    -path '*/vendor/modules.txt' ! -path '*/vendor/*/vendor/*' -print0 | sort -z)
+
+if [[ "${drift}" -ne 0 ]]; then
+    cat <<EOF
+
+A vendored copy of ${lib_rel} is out of date. Re-vendor the module named
+above with its vendor update script (for NVCA, scripts/go_update) and commit
+the result.
+EOF
+    exit 1
+fi
+
+if [[ "${checked}" -eq 0 ]]; then
+    echo "no module vendors ${lib_rel} through a local replace; nothing was checked" >&2
+    exit 1
+fi
+
+echo "vendored copies of ${lib_rel} match the source (${checked} module(s))"
