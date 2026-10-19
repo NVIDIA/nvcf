@@ -183,9 +183,15 @@ Create the endpoint with `POST /v2/nvcf/telemetries`. The token needs the
 `manage_telemetries` scope. The account limit `maxTelemetries` caps the number
 of endpoints per account.
 
+Set `NVCF_API_URL` to the NVCF API URL of your Gateway. With DNS and HTTPS
+configured as described in
+[Production: DNS and HTTPS](./gateway-routing.md#production-dns-and-https),
+use the API hostname:
+
 ```bash
-curl -s -X POST "https://${GATEWAY_ADDR}/v2/nvcf/telemetries" \
-  -H "Host: api.${GATEWAY_ADDR}" \
+export NVCF_API_URL="https://api.<your-domain>"
+
+curl -s -X POST "${NVCF_API_URL}/v2/nvcf/telemetries" \
   -H "Authorization: Bearer ${NVCF_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -200,13 +206,20 @@ curl -s -X POST "https://${GATEWAY_ADDR}/v2/nvcf/telemetries" \
   }' | jq .
 ```
 
+The Gateway from [Gateway quickstart](./gateway-routing.md#gateway-quickstart)
+has no TLS listener. It serves the API on plain HTTP port 80 and routes by the
+`Host` header. On a test cluster with that Gateway, set
+`NVCF_API_URL="http://${GATEWAY_ADDR}"` and add
+`-H "Host: api.${GATEWAY_ADDR}"` to the command. Plain HTTP sends the API token
+and `secret.value` unencrypted. Use it only on a trusted network.
+
 | Field | Values |
 |---|---|
 | `endpoint` | Provider endpoint, as listed in [Secret shapes](#secret-shapes). |
 | `protocol` | `HTTP` or `GRPC`. |
 | `provider` | A provider from [Supported providers](#supported-providers). |
 | `types` | One or more of `LOGS`, `METRICS`, and `TRACES`. |
-| `secret` | `name` and `value`. The name may contain letters, digits, `_`, `.`, and `-`. |
+| `secret` | `name` and `value`. The name is 1 to 48 characters. It starts with a letter or digit, followed by letters, digits, `_`, `.`, or `-`. It must be unique in the account. |
 
 The response includes a `telemetryId`. Use it to attach the endpoint to
 workloads.
