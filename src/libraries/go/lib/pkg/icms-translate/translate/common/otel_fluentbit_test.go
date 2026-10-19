@@ -36,10 +36,12 @@ func TestNewFluentbitConfigMap(t *testing.T) {
 
 	require.NotNil(t, cm)
 	assert.Equal(t, cmName, cm.Name)
+	// The tail input uses built-in multiline parsers, so no parsers file is shipped.
+	assert.Len(t, cm.Data, 1)
 	assert.Contains(t, cm.Data, fluentbitConfigCMKey)
-	assert.Contains(t, cm.Data, fluentbitParsersConfigKey)
 
 	config := cm.Data[fluentbitConfigCMKey]
+	assert.NotContains(t, config, "Parsers_File")
 	assert.Contains(t, config, "[SERVICE]")
 	assert.Contains(t, config, "[INPUT]")
 	assert.Contains(t, config, "[FILTER]")
@@ -53,12 +55,6 @@ func TestNewFluentbitConfigMap(t *testing.T) {
 	assert.Contains(t, config, "logs_uri /v1/logs")
 	assert.Contains(t, config, "Host  localhost")
 	assert.Contains(t, config, "Port  14358", "Should use HTTP port 14358, not gRPC port 14357")
-
-	// Check parsers config
-	parsers := cm.Data[fluentbitParsersConfigKey]
-	assert.Contains(t, parsers, "[PARSER]")
-	assert.Contains(t, parsers, "Name        docker")
-	assert.Contains(t, parsers, "Name        cri")
 }
 
 func TestNewFluentbitContainer(t *testing.T) {

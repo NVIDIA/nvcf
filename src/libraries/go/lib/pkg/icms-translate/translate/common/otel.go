@@ -156,15 +156,11 @@ const (
 	fluentbitVarLogPath       = "/var/log"
 	fluentbitDBVolumeName     = "fluentbit-db"
 	fluentbitDBPath           = "/fluent-bit/db"
-	fluentbitParsersConfigKey = "parsers.conf"
 )
 
 var (
 	//go:embed manifests/fluent-bit.conf.tmpl
 	fluentbitConfigTemplate string
-
-	//go:embed manifests/parsers.conf
-	fluentbitParsersConfig string
 
 	// fluentbitConfigTemplateParsed is the parsed template, initialized at package load time.
 	// If the template is invalid, the program will fail to start.
@@ -589,8 +585,7 @@ func NewFluentbitConfigMap(name string, podName string, workloadType string) *co
 	cm := &corev1.ConfigMap{}
 	cm.Name = name
 	cm.Data = map[string]string{
-		fluentbitConfigCMKey:      fluentbitConfig,
-		fluentbitParsersConfigKey: fluentbitParsersConfig,
+		fluentbitConfigCMKey: fluentbitConfig,
 	}
 	return cm
 }
