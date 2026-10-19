@@ -844,6 +844,25 @@ class TelemetryControllerTest {
                                 .build(),
                         HttpStatus.OK
                 ),
+                //Telemetry provider KRATOS for traces, which does not need a collector ID
+                Arguments.of(
+                        MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                        List.of(SCOPE_MANAGE_TELEMETRIES),
+                                                        100),
+                        TelemetryRequest.builder()
+                                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                                .protocol(TelemetryProtocolEnum.HTTP)
+                                .provider(TelemetryProviderEnum.KRATOS)
+                                .types(Set.of(TelemetryTypeEnum.TRACES))
+                                .secret(SecretDto.builder()
+                                        .name("telemetry-secret")
+                                        .value(jsonMapper.createObjectNode()
+                                                .put("clientCert", "client-cert")
+                                                .put("clientKey", "client-key"))
+                                        .build())
+                                .build(),
+                        HttpStatus.OK
+                ),
                 //Telemetry provider KRATOS_THANOS
                 Arguments.of(
                         MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,

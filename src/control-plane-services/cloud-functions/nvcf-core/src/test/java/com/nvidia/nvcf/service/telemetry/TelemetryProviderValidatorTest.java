@@ -42,6 +42,8 @@ class TelemetryProviderValidatorTest {
     private static final Set<TelemetryTypeEnum> LOGS = Set.of(TelemetryTypeEnum.LOGS);
     private static final Set<TelemetryTypeEnum> METRICS = Set.of(TelemetryTypeEnum.METRICS);
     private static final Set<TelemetryTypeEnum> TRACES = Set.of(TelemetryTypeEnum.TRACES);
+    private static final Set<TelemetryTypeEnum> LOGS_AND_TRACES =
+            Set.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.TRACES);
 
     @Test
     void supportedProvidersMatchCollectorRenderedProviders() {
@@ -96,6 +98,8 @@ class TelemetryProviderValidatorTest {
                 Arguments.of(TelemetryProviderEnum.KRATOS, METRICS, object("token", "value")),
                 Arguments.of(TelemetryProviderEnum.KRATOS, TRACES, object(
                         "clientCert", "cert", "clientKey", "key")),
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES, object(
+                        "collectorId", "id", "clientCert", "cert", "clientKey", "key")),
                 Arguments.of(TelemetryProviderEnum.KRATOS, Set.of(TelemetryTypeEnum.METRICS,
                                                                   TelemetryTypeEnum.TRACES),
                              object("clientCert", "cert", "clientKey", "key", "caFile", "ca")),
@@ -146,6 +150,14 @@ class TelemetryProviderValidatorTest {
                                      + "secret is missing required fields [collectorId]"),
                 Arguments.of(TelemetryProviderEnum.KRATOS, ALL_TYPES,
                              object("clientCert", "cert", "clientKey", "key"),
+                             "Telemetry provider 'KRATOS' with types [LOGS]: "
+                                     + "secret is missing required fields [collectorId]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES,
+                             object("clientCert", "cert", "clientKey", "key"),
+                             "Telemetry provider 'KRATOS' with types [LOGS]: "
+                                     + "secret is missing required fields [collectorId]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS,
+                             object("collectorId", " ", "clientCert", "cert", "clientKey", "key"),
                              "Telemetry provider 'KRATOS' with types [LOGS]: "
                                      + "secret is missing required fields [collectorId]"),
                 Arguments.of(TelemetryProviderEnum.KRATOS, LOGS, object("collectorId", "id"),
