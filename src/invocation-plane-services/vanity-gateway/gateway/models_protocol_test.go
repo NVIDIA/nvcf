@@ -223,3 +223,33 @@ func TestGetModelForAnthropicClientsReportsOfflineModel(t *testing.T) {
 	require.Equal(t, "10800", rec.Header().Get("Retry-After"))
 	requireAnthropicError(t, rec, "api_error")
 }
+
+// Expiry for Anthropic clients follows the Messages entry, as model lookup and
+// /v1/messages do, even when the same model has expired in an OpenAI section.
+func TestListModelsForAnthropicClientsUsesMessagesExpiry(t *testing.T) {
+	entry := func(name string, eol time.Time) config.ModelFunctionDetails {
+		return config.ModelFunctionDetails{ModelName: name, FunctionID: "func-" + name, FunctionType: config.FunctionTypeLLM, EOL: eol}
+	}
+	past := time.Now().Add(-time.Hour)
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"openai-expired":   entry("shared/openai-expired", past),
+		"messages-expired": entry("shared/messages-expired", time.Time{}),
+	}
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{
+		"openai-expired":   entry("shared/openai-expired", time.Time{}),
+		"messages-expired": entry("shared/messages-expired", past),
+	}
+	mux, err := buildChiMux(mappings, Config{NvcfApiEndpoint: "http://nvcf.invalid", LLMGatewayEndpoint: "http://llm.invalid", PrivateModelNameRegexPattern: "^private/"})
+	require.NoError(t, err)
+
+	rec := getModels(t, mux, "/v1/models", true)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var page anthropicModelPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Equal(t, []string{"shared/openai-expired"}, pageIDs(page))
+
+	require.Equal(t, http.StatusOK, getModels(t, mux, "/v1/models/shared/openai-expired", true).Code)
+	require.Equal(t, http.StatusGone, getModels(t, mux, "/v1/models/shared/messages-expired", true).Code)
+}

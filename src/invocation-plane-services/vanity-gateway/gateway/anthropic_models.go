@@ -79,9 +79,11 @@ func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request 
 		return
 	}
 
+	// Expiry follows the Messages entry, as model lookup and /v1/messages do.
 	models := make([]ModelInfo, 0, len(d.messages.modelNameToModelInfo))
-	for _, info := range d.getFilteredModels() {
-		if _, ok := d.messages.modelNameToModelInfo[info.Id]; ok {
+	for _, info := range d.allPublicModels {
+		funcInfo, ok := d.messages.modelNameToNVCFUrl[info.Id]
+		if ok && !isModelExpired(funcInfo.eol) {
 			models = append(models, info)
 		}
 	}
