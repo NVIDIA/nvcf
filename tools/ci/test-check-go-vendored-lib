@@ -74,6 +74,7 @@ printf 'package a\n\nconst CPU = "500m"\n' > "${root}/${vend}/pkg/a/a.go"
 run
 expect "stale vendored Go file exits 1" 1 "vendor/${lib_import}/pkg/a/a.go differs"
 expect "  ... and shows the diff" 1 '+const CPU = "1000m"'
+expect "  ... and prints the re-vendor command" 1 "(cd src/svc/local && GOWORK=off go mod vendor)"
 
 fixture
 printf 'key: other\n' > "${root}/${lib}/pkg/a/templates/t.yaml.tmpl"
@@ -91,6 +92,22 @@ run
 expect "test file added to the source exits 0" 0 "match the source"
 
 fixture
+printf '//go:build ignore\n\npackage main\n' > "${root}/${lib}/pkg/a/gen.go"
+run
+expect "ignore-tagged Go file added to the source exits 0" 0 "match the source"
+
+fixture
+printf 'notes\n' > "${root}/${lib}/pkg/a/README.md"
+run
+expect "non-Go file added to a vendored package exits 1" 1 "${lib}/pkg/a/README.md is not vendored"
+
+fixture
+printf 'package unvendored\n\nconst X = 1\n' > "${root}/${lib}/pkg/unvendored/u.go"
+printf 'package unvendored\n' > "${root}/${lib}/pkg/unvendored/v.go"
+run
+expect "change to a package the module does not vendor exits 0" 0 "match the source"
+
+fixture
 rm "${root}/${lib}/pkg/a/a.go"
 run
 expect "file removed from the source exits 1" 1 "pkg/a/a.go is not in ${lib}"
@@ -101,7 +118,9 @@ run
 expect "missing vendored copy exits 1" 1 "is missing"
 
 fixture
-sed -i 's#=> ../../libraries/go/lib#=> ../../nowhere#' "${root}/src/svc/local/vendor/modules.txt"
+modules_txt="${root}/src/svc/local/vendor/modules.txt"
+sed 's#=> ../../libraries/go/lib#=> ../../nowhere#' "${modules_txt}" > "${modules_txt}.new"
+mv "${modules_txt}.new" "${modules_txt}"
 run
 expect "replace target that does not exist exits 1" 1 "replace target ../../nowhere does not exist"
 

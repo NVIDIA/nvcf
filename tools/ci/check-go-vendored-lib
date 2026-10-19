@@ -11,12 +11,16 @@
 # rather than running `go mod vendor`, which would also delete the Gazelle
 # BUILD.bazel files some vendor trees commit, and it needs no network.
 #
+# Only files the module actually vendors are checked: a change to a library
+# package the module does not import never fails here.
+#
 # Modules whose vendor/modules.txt shows a pinned library version instead of a
 # local replace are skipped: their copy is meant to track that version.
 #
 # Usage: tools/ci/check-go-vendored-lib
 # REPO_ROOT overrides the repository root, for tests.
 set -euo pipefail
+shopt -s nullglob dotglob
 
 repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 lib_import="github.com/NVIDIA/nvcf/src/libraries/go/lib"
@@ -29,16 +33,29 @@ if [[ ! -d "${lib_dir}" ]]; then
 fi
 lib_real="$(cd "${lib_dir}" && pwd -P)"
 
-drift=0
 checked=0
+drifted=()
 
-report() {
-    printf 'DRIFT %s\n' "$*"
-    drift=1
+report() {  # report <module-rel> <message>
+    printf 'DRIFT %s: %s\n' "$1" "$2"
+    if [[ ${#drifted[@]} -eq 0 || "${drifted[${#drifted[@]} - 1]}" != "$1" ]]; then
+        drifted+=("$1")
+    fi
+}
+
+# go mod vendor copies every regular file of a vendored package directory
+# except tests, go.mod, go.sum and Go files constrained by the ignore tag.
+vendorable() {  # vendorable <source-file>
+    local name="${1##*/}"
+    case "${name}" in
+        *_test.go | go.mod | go.sum | BUILD.bazel | BUILD) return 1 ;;
+        *.go) ! grep -Eq '^//(go:build| \+build) ignore[[:space:]]*$' "$1" ;;
+        *) return 0 ;;
+    esac
 }
 
 check_module() {  # check_module <module-dir>
-    local module_dir="$1" rel target resolved vendored f r d src name
+    local module_dir="$1" rel target resolved vendored f r d src
     rel="${module_dir#"${repo_root}/"}"
 
     # The library's header line in modules.txt is
@@ -63,7 +80,7 @@ check_module() {  # check_module <module-dir>
             ;;
     esac
     if ! resolved="$(cd "${module_dir}" && cd "${target}" 2>/dev/null && pwd -P)"; then
-        report "${rel}: replace target ${target} does not exist"
+        report "${rel}" "replace target ${target} does not exist"
         return 0
     fi
     if [[ "${resolved}" != "${lib_real}" ]]; then
@@ -73,7 +90,7 @@ check_module() {  # check_module <module-dir>
 
     vendored="${module_dir}/vendor/${lib_import}"
     if [[ ! -d "${vendored}" ]]; then
-        report "${rel}: vendor/modules.txt lists the library but vendor/${lib_import} is missing"
+        report "${rel}" "vendor/modules.txt lists the library but vendor/${lib_import} is missing"
         return 0
     fi
     checked=$((checked + 1))
@@ -83,27 +100,29 @@ check_module() {  # check_module <module-dir>
     while IFS= read -r -d '' f; do
         r="${f#"${vendored}/"}"
         if [[ ! -f "${lib_dir}/${r}" ]]; then
-            report "${rel}: vendor/${lib_import}/${r} is not in ${lib_rel}"
+            report "${rel}" "vendor/${lib_import}/${r} is not in ${lib_rel}"
         elif ! cmp -s "${f}" "${lib_dir}/${r}"; then
-            report "${rel}: vendor/${lib_import}/${r} differs from ${lib_rel}/${r}"
+            report "${rel}" "vendor/${lib_import}/${r} differs from ${lib_rel}/${r}"
             diff -u --label "vendored/${r}" --label "${lib_rel}/${r}" \
                 "${f}" "${lib_dir}/${r}" | head -n 40 || true
         fi
     done < <(find "${vendored}" -type f ! -name BUILD.bazel -print0 | sort -z)
 
-    # Every non-test Go file in a vendored package must be vendored, so a file
-    # added to the source is caught too.
+    # Every file go mod vendor would copy into a vendored package directory
+    # must be there, so a file added to the source is caught too.
     while IFS= read -r -d '' d; do
+        if ! compgen -G "${d}/*.go" >/dev/null; then
+            continue
+        fi
         r="${d#"${vendored}"}"
-        for src in "${lib_dir}${r}"/*.go; do
-            [[ -e "${src}" ]] || continue
-            name="${src##*/}"
-            [[ "${name}" == *_test.go ]] && continue
-            if [[ ! -f "${d}/${name}" ]]; then
-                report "${rel}: ${lib_rel}${r}/${name} is not vendored"
+        for src in "${lib_dir}${r}"/*; do
+            [[ -f "${src}" ]] || continue
+            vendorable "${src}" || continue
+            if [[ ! -f "${d}/${src##*/}" ]]; then
+                report "${rel}" "${lib_rel}${r}/${src##*/} is not vendored"
             fi
         done
-    done < <(find "${vendored}" -type f -name '*.go' -printf '%h\0' | sort -zu)
+    done < <(find "${vendored}" -type d -print0 | sort -z)
 }
 
 while IFS= read -r -d '' modules_txt; do
@@ -111,12 +130,28 @@ while IFS= read -r -d '' modules_txt; do
 done < <(find "${repo_root}" \( -name .git -o -name node_modules \) -prune -o \
     -path '*/vendor/modules.txt' ! -path '*/vendor/*/vendor/*' -print0 | sort -z)
 
-if [[ "${drift}" -ne 0 ]]; then
+if [[ ${#drifted[@]} -ne 0 ]]; then
     cat <<EOF
 
-A vendored copy of ${lib_rel} is out of date. Re-vendor the module named
-above with its vendor update script (for NVCA, scripts/go_update) and commit
-the result.
+A vendored copy of ${lib_rel} is out of date. A change to ${lib_rel}
+must re-vendor every module that compiles the changed files, in the same pull
+request. From the repository root, run:
+EOF
+    for rel in "${drifted[@]}"; do
+        cat <<EOF
+
+  (cd ${rel} && GOWORK=off go mod vendor)
+  git -C ${rel} checkout -- ':(glob)vendor/**/BUILD.bazel'
+EOF
+    done
+    cat <<EOF
+
+go mod vendor deletes or overwrites the Gazelle BUILD.bazel files committed
+under vendor/, and the second command restores them. If go mod vendor asks for
+go mod tidy, the library gained a dependency: run it and commit go.mod and
+go.sum too. If a vendored Go file was added or removed, also update the srcs
+of that package's vendor BUILD.bazel. Then rerun tools/ci/check-go-vendored-lib
+and commit the result.
 EOF
     exit 1
 fi
