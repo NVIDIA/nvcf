@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -908,155 +905,6 @@ def release_chart_directory(root, service):
     return chart_dir
 
 
-def helm_registry_settings():
-    """Load and validate the OCI registry path and API key used for publication."""
-    registry = os.environ.get("NVCF_RELEASE_HELM_REGISTRY", "").strip().rstrip("/")
-    registry = registry.removeprefix("oci://")
-    api_key = os.environ.get("NVCF_RELEASE_NGC_API_KEY", "")
-    if not registry or not api_key:
-        raise SystemExit(
-            "chart publishing requires NVCF_RELEASE_HELM_REGISTRY and "
-            "NVCF_RELEASE_NGC_API_KEY"
-        )
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)*", registry):
-        raise SystemExit(f"invalid Helm registry path: {registry!r}")
-    return registry, api_key
-
-
-def helm_registry_login(registry, api_key):
-    """Authenticate Helm to the registry host without exposing the API key."""
-    host = registry.split("/", 1)[0]
-    result = subprocess.run(
-        ["helm", "registry", "login", host, "-u", "$oauthtoken", "--password-stdin"],
-        input=api_key,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    if result.returncode != 0:
-        sys.stdout.write(result.stdout or "")
-        raise SystemExit(f"Helm registry login failed for {host}")
-
-
-def package_release_chart(chart_dir, version, output_dir, app_version=None):
-    """Build chart dependencies and package an isolated copy at the tag version.
-
-    `app_version` stamps Chart.yaml's appVersion into the package. A chart that
-    follows a leader deploys the release its version came from, and the chart
-    ships an empty image tag so appVersion is what the templates resolve. Left
-    at whatever is committed, the published chart would point at whichever
-    release last edited the file.
-    """
-    staged_chart = output_dir / "source" / chart_dir.name
-    staged_chart.parent.mkdir(parents=True)
-    shutil.copytree(chart_dir, staged_chart)
-    if re.search(
-        r"^[ \t]*dependencies\s*:",
-        (staged_chart / "Chart.yaml").read_text(),
-        flags=re.MULTILINE,
-    ):
-        if not (staged_chart / "Chart.lock").is_file():
-            raise SystemExit(f"{chart_dir}: dependencies require Chart.lock")
-        run(["helm", "dependency", "build", str(staged_chart)])
-
-    package_dir = output_dir / "package"
-    package_dir.mkdir()
-    package_cmd = ["helm", "package", str(staged_chart), "--version", version]
-    if app_version:
-        package_cmd += ["--app-version", app_version]
-    run(package_cmd + ["--destination", str(package_dir)])
-    packages = list(package_dir.glob("*.tgz"))
-    if len(packages) != 1:
-        raise SystemExit(f"expected one packaged Helm chart, found {len(packages)}")
-    return packages[0]
-
-
-def pull_release_chart(registry, chart_name, version, output_dir):
-    """Pull a published chart version and return Helm's result and downloaded archives."""
-    output_dir.mkdir()
-    result = subprocess.run(
-        [
-            "helm",
-            "pull",
-            f"oci://{registry}/{chart_name}",
-            "--version",
-            version,
-            "--destination",
-            str(output_dir),
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    packages = list(output_dir.glob("*.tgz"))
-    return result.returncode, result.stdout or "", packages
-
-
-def helm_archive_signature(path):
-    """Describe archive content while ignoring gzip and tar timestamp differences."""
-    signature = {}
-    with tarfile.open(path, "r:gz") as archive:
-        for member in archive.getmembers():
-            if member.isfile():
-                source = archive.extractfile(member)
-                if source is None:
-                    raise SystemExit(f"could not read {member.name} from {path}")
-                content = hashlib.sha256(source.read()).hexdigest()
-            else:
-                content = member.linkname if member.issym() or member.islnk() else ""
-            signature[member.name] = (member.type, member.mode, content)
-    return signature
-
-
-def missing_helm_chart_output(output):
-    """Return whether Helm's output specifically reports an absent OCI artifact."""
-    lowered = output.lower()
-    return any(phrase in lowered for phrase in ("manifest unknown", "status code: 404"))
-
-
-def publish_release_chart(root, service, version, dry_run, app_version=None):
-    """Publish a chart once, accepting only an identical existing immutable version."""
-    source_root = Path(os.environ.get("NVCF_RELEASE_SOURCE_ROOT") or root)
-    chart_dir = release_chart_directory(source_root, service)
-    chart_name = service["service_name"]
-    if dry_run:
-        print(
-            f"[github-release] dry-run: would publish {chart_name}:{version} "
-            f"from {chart_dir.relative_to(source_root)}"
-        )
-        return
-
-    registry, api_key = helm_registry_settings()
-    with tempfile.TemporaryDirectory(prefix="nvcf-release-chart-") as tmp:
-        package_root = Path(tmp)
-        local_package = package_release_chart(chart_dir, version, package_root, app_version)
-        helm_registry_login(registry, api_key)
-        status, output, remote_packages = pull_release_chart(
-            registry, chart_name, version, package_root / "published"
-        )
-        if status == 0:
-            if len(remote_packages) != 1:
-                raise SystemExit(
-                    f"expected one downloaded {chart_name}:{version} archive, "
-                    f"found {len(remote_packages)}"
-                )
-            if helm_archive_signature(local_package) != helm_archive_signature(remote_packages[0]):
-                raise SystemExit(
-                    f"refusing to replace existing Helm chart {chart_name}:{version} "
-                    "with different content"
-                )
-            print(f"[github-release] Helm chart {chart_name}:{version} is already published unchanged")
-            return
-        if not missing_helm_chart_output(output):
-            sys.stdout.write(output)
-            raise SystemExit(f"could not determine whether Helm chart {chart_name}:{version} exists")
-
-        run(["helm", "push", str(local_package), f"oci://{registry}"])
-        print(f"[github-release] published Helm chart {chart_name}:{version} to {registry}")
-
-
 def validate_resolved_stack_inventory(path, tag, version, commit):
     try:
         with Path(path).open() as source:
@@ -1633,19 +1481,18 @@ def deferred_publisher(service):
 
 
 def publish_app_version_refresh(root, service, metadata, dry_run, draft):
-    """Release a chart whose leader moved, so a package exists that installs it.
+    """Release a chart whose leader moved.
 
     A chart declaring only `app_version_source` keeps its own version line. Its
     own semantic-release covers commits inside the chart directory, but a leader
-    release touches nothing there, so nothing would trigger a package and the
-    newest published chart would keep installing the previous leader version.
+    release touches nothing there, so without this the chart would not release
+    when its leader does.
 
-    What the last package was stamped with needs no recorded state: stamping
-    always takes the leader's newest release at packaging time, so the leader
-    version reachable from the chart's own last release tag is exactly that
-    value. Comparing it against the leader's newest release answers "has the
-    leader moved since we last shipped", and makes this idempotent: once the
-    chart releases, the two agree and a re-run does nothing.
+    The leader release a chart last followed needs no recorded state: it is the
+    leader version reachable from the chart's own last release tag. Comparing it
+    against the leader's newest release answers "has the leader moved since we
+    last shipped", and makes this idempotent: once the chart releases, the two
+    agree and a re-run does nothing.
     """
     leader_id = service["app_version_source"]
     current = leader_release_version(root, metadata, leader_id)
@@ -1666,7 +1513,7 @@ def publish_app_version_refresh(root, service, metadata, dry_run, draft):
         sorted(stable, key=lambda item: semverish_sort_key(item[0]))[-1][1] if stable else ""
     )
     if not last_tag:
-        # Never released. Its own first release will stamp the leader anyway.
+        # Never released, so there is no earlier release to compare against.
         print(f"[github-release] {service['id']}: no release yet; nothing to refresh")
         return
     shipped = leader_release_version(root, metadata, leader_id, end=tag_sha(root, last_tag))
@@ -1686,7 +1533,7 @@ def publish_app_version_refresh(root, service, metadata, dry_run, draft):
         level = "patch"
     if not level:
         print(
-            f"[github-release] {service['id']}: already ships {leader_id} {current} "
+            f"[github-release] {service['id']}: already follows {leader_id} {current} "
             "and has no commits of its own; nothing to release"
         )
         return
@@ -1710,7 +1557,7 @@ def publish_app_version_refresh(root, service, metadata, dry_run, draft):
         version,
         dry_run,
         draft,
-        f"own commits under {service['path']}, installing {leader_id} {current}",
+        f"own commits under {service['path']}, following {leader_id} {current}",
     )
 
 
@@ -2127,7 +1974,7 @@ def auto_release(args):
     # Services reading another service's release are held back until every
     # leader has run, so the result cannot depend on where they sit in the
     # metadata file. That covers a chart taking the leader's version
-    # (version_source) and a chart only stamping it as appVersion
+    # (version_source) and a chart only following its releases
     # (app_version_source): both read a tag the leader may create this run.
     followers = []
 
@@ -2324,7 +2171,7 @@ def release_branch(parsed):
 
 
 def tag_release(args):
-    """Publish artifacts and a GitHub release for an existing release tag."""
+    """Create the GitHub release for an existing release tag, plus a stack's inventory."""
     root = repo_root()
     metadata = load_metadata(root, args.metadata)
     tag = args.tag or os.environ.get("GITHUB_REF_NAME", "")
@@ -2355,29 +2202,11 @@ def tag_release(args):
     )
     chart_service = release_chart_service(metadata, tag, root)
     if chart_service:
-        # Which service's release this chart installs, stamped into the package
-        # so the published appVersion cannot lag the operator it ships. Resolved
-        # from app_version_source, not from the chart's own version, so a chart
-        # that stops sharing that version line still declares it correctly.
-        #
-        # As of the chart tag's own commit, never HEAD. The chart files come
-        # from a worktree detached at that tag, and the branch tip can carry a
-        # newer leader release by the time this runs. Reading HEAD would stamp a
-        # version the tag never shipped: it would put appVersion ahead of the
-        # chart version this release is named for, and a re-run would build a
-        # different archive for an immutable version.
-        app_version = None
-        app_version_source = chart_service.get("app_version_source")
-        if app_version_source:
-            app_version = leader_release_version(
-                root, metadata, app_version_source, end=tag_sha(root, tag)
-            ) or None
-            if not app_version:
-                print(
-                    f"[github-release] {chart_service['id']}: {app_version_source} has no "
-                    "stable release to stamp as appVersion; leaving the committed value"
-                )
-        publish_release_chart(root, chart_service, parsed["version"], dry_run, app_version)
+        # Charts are packaged and published by a separate pipeline that reacts to
+        # the GitHub release. Only confirm the tag names one registered chart whose
+        # Chart.yaml carries the release name. For a tag pushed by hand this runs
+        # before the release exists, so a bad tag is never announced.
+        release_chart_directory(root, chart_service)
 
     asset_service = release_asset_service(metadata, tag, root)
     if not asset_service:

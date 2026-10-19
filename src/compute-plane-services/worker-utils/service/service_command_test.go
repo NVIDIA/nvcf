@@ -25,10 +25,12 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
 )
 
 // noopLogger builds the production logger only to satisfy NewRootCommand's
@@ -117,4 +119,39 @@ func TestPersistentPreRunEInvalidFunctionID(t *testing.T) {
 // TestViperDecoderConfig directly exercises the decoder-config constructor.
 func TestViperDecoderConfig(t *testing.T) {
 	assert.NotNil(t, viperDecoderConfig())
+}
+
+// TestNVCFNatsAccountBindsFromEnvironment checks that the account the NVCF API
+// puts in the launch environment reaches worker.Config.
+func TestNVCFNatsAccountBindsFromEnvironment(t *testing.T) {
+	t.Setenv("NVCF_NATS_ACCOUNT", "APP")
+
+	assert.Equal(t, "APP", loadWorkerConfig(t).NVCFNatsAccount)
+}
+
+// TestNVCFNatsAccountAbsentStaysEmpty checks that a worker started by an API
+// that sends no account gets an empty value, which the worker library treats as
+// its default account.
+func TestNVCFNatsAccountAbsentStaysEmpty(t *testing.T) {
+	t.Setenv("NVCF_NATS_ACCOUNT", "")
+	require.NoError(t, os.Unsetenv("NVCF_NATS_ACCOUNT"))
+
+	assert.Empty(t, loadWorkerConfig(t).NVCFNatsAccount)
+}
+
+// loadWorkerConfig follows PersistentPreRunE's steps up to worker construction.
+func loadWorkerConfig(t *testing.T) worker.Config {
+	t.Helper()
+	cfgFile := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("# empty but valid yaml\n"), 0o600))
+
+	cmd := NewRootCommand(context.Background(), nil)
+	v, err := config.InitConfig(cmd, cfgFile, "", "")
+	require.NoError(t, err)
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		v.MustBindEnv(flag.Name)
+	})
+	var workerConfig worker.Config
+	require.NoError(t, v.Unmarshal(&workerConfig, viperDecoderConfig()))
+	return workerConfig
 }

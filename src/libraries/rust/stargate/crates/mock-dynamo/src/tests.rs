@@ -59,6 +59,44 @@ fn test_state() -> AppState {
     }
 }
 
+/// Checks that a stargate-dev mockdc argument set parses and selects the
+/// batched engine. The rendered argv is asserted by
+/// deploy/stacks/stargate-dev/tests/test_invariants.py; update both together.
+#[test]
+fn dev_chart_argv_shapes_parse() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--http-listen-addr=0.0.0.0:8090",
+        "--model-name=stargate-dev-model",
+        "--engine-model=batched",
+        "--num-gpu-workers=14",
+        "--kv-cache-capacity-tokens=1000000",
+        "--context-length-tokens=131072",
+        "--output-tokens-min=128",
+        "--output-tokens-max=8192",
+        "--output-token-distribution=gaussian",
+    ])
+    .expect("chart argv should parse");
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("chart argv selects the batched engine");
+    assert_eq!(config.num_gpu_workers, 14);
+    // The chart sets Pylon --max-engine-concurrency to numGpuWorkers x 25.
+    assert_eq!(config.max_concurrency(), 14 * 25);
+    assert_eq!(config.kv_cache_capacity_tokens, 1_000_000);
+    // The explicit limits match the h100-llama-3.1-8b profile.
+    let profile = Profile::H100Llama31EightB;
+    assert_eq!(
+        args.behavior().unwrap().context_length_tokens,
+        profile.behavior().context_length_tokens
+    );
+    assert_eq!(
+        args.output_tokens().unwrap(),
+        profile.default_output_tokens()
+    );
+}
+
 #[test]
 fn h100_llama_profile_selects_complete_behavior() {
     let args = Args::try_parse_from(["mock-dynamo", "--profile", "h100-llama-3.1-8b"])

@@ -1,0 +1,151 @@
+{
+  "description": "Explicit false, zero and null fields survive; unary usage override keeps vendor stream options.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "stream": false,
+    "stream_options": {
+      "include_usage": false,
+      "continuous_usage_stats": true,
+      "vendor_option": null
+    },
+    "temperature": 0,
+    "top_p": 1,
+    "seed": 0,
+    "n": 1,
+    "logprobs": false,
+    "top_logprobs": 0,
+    "stop": null,
+    "max_completion_tokens": 128,
+    "reasoning_effort": "none",
+    "include_reasoning": false,
+    "reasoning_format": null,
+    "store": false,
+    "metadata": {},
+    "parallel_tool_calls": false,
+    "tool_choice": "none",
+    "debug": true,
+    "service_tier": "flex",
+    "chat_template_kwargs": {
+      "enable_thinking": false,
+      "documents": [],
+      "limit": 0
+    },
+    "ignore_eos": false,
+    "vendor_options": {
+      "exact": 0.12345678901234567890123456789,
+      "id": 9007199254740993,
+      "empty": null
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true,
+      "continuous_usage_stats": true,
+      "vendor_option": null
+    },
+    "temperature": 0,
+    "top_p": 1,
+    "seed": 0,
+    "n": 1,
+    "logprobs": false,
+    "top_logprobs": 0,
+    "stop": null,
+    "max_completion_tokens": 128,
+    "reasoning_effort": "none",
+    "include_reasoning": false,
+    "reasoning_format": null,
+    "store": false,
+    "metadata": {},
+    "parallel_tool_calls": false,
+    "tool_choice": "none",
+    "service_tier": "flex",
+    "chat_template_kwargs": {
+      "enable_thinking": false,
+      "documents": [],
+      "limit": 0
+    },
+    "ignore_eos": false,
+    "vendor_options": {
+      "exact": 0.12345678901234567890123456789,
+      "id": 9007199254740993,
+      "empty": null
+    }
+  },
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "json": {
+      "id": "chatcmpl-fidelity",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "fn-alpha/company/model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "OK"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+        "total_tokens": 9
+      }
+    }
+  }
+}

@@ -100,6 +100,16 @@ type OpenAIError struct {
 	Error CustomOpenAIError `json:"error"`
 }
 
+func writeOpenAIError(writer http.ResponseWriter, status int, message, code string) {
+	writer.Header().Set(contentTypeHeader, contentTypeApplicationJSON)
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(OpenAIError{Error: CustomOpenAIError{
+		Message: message,
+		Type:    "invalid_request_error",
+		Code:    code,
+	}})
+}
+
 type FunctionInfo struct {
 	publicModelName        string
 	functionId             string
@@ -681,9 +691,7 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		markGatewayRejected(writer, request)
 		if request.URL.Path == "/v1/messages" {
 			status, message := http.StatusInternalServerError, "failed to read Messages request"
-			var syntaxErr *json.SyntaxError
-			var typeErr *json.UnmarshalTypeError
-			if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, errModelFieldMissing) {
+			if errors.Is(err, errInvalidJSONBody) || errors.Is(err, errModelFieldMissing) {
 				status, message = http.StatusBadRequest, "invalid Messages request JSON"
 			}
 			var maxBytesErr *http.MaxBytesError
@@ -711,6 +719,10 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 			if err := json.NewEncoder(writer).Encode(errorMessage); err != nil {
 				http.Error(writer, err.Error(), http.StatusInternalServerError)
 			}
+			return resolvedOpenAIRequest{}, true
+		}
+		if errors.Is(err, errInvalidJSONBody) {
+			writeOpenAIError(writer, http.StatusBadRequest, "request body is not valid JSON", "invalid_json")
 			return resolvedOpenAIRequest{}, true
 		}
 		if errors.Is(err, errModelFieldMissing) {
@@ -1002,6 +1014,10 @@ func rewriteShadowRequestModel(body []byte, modelName string) ([]byte, error) {
 // than letting it fall through to a misleading 404 "model not found".
 var errModelFieldMissing = errors.New("model field is required")
 
+// errInvalidJSONBody signals that the client sent a body that is not a JSON
+// object with the expected field types. Callers render this as HTTP 400.
+var errInvalidJSONBody = errors.New("invalid json body")
+
 // extractOpenAIRequestBody dispatches on Content-Type: multipart/form-data requests
 // (image edits, image variations) read the model from a form field; everything
 // else parses the OpenAI JSON body.
@@ -1093,11 +1109,16 @@ func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
 		return openAIRequestBody{}, err
 	}
 
+	// A top-level null decodes without error, but the body must be a JSON object.
+	if bytes.Equal(bytes.TrimSpace(bodyBytes.peek()), []byte("null")) {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, fmt.Errorf("%w: body is null", errInvalidJSONBody)
+	}
 	body := openAIRequestBody{}
 	err = json.UnmarshalWithOption(bodyBytes.peek(), &body, json.DecodeFieldPriorityFirstWin())
 	if err != nil {
 		_ = bodyBytes.Close()
-		return openAIRequestBody{}, fmt.Errorf("failed to decode json body: %w", err)
+		return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
 	}
 	if body.Model == "" {
 		_ = bodyBytes.Close()

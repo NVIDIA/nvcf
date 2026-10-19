@@ -286,9 +286,16 @@ impl RequestInputIntervalWindow {
 
     fn refresh(&mut self, config: &StatsCollectorConfig) -> Option<InputIntervalRate> {
         self.enforce_bounds(config.smoothing_window_size);
-        let rate = self.rate(config.duration_floor);
+        let rate = self.rate(config.smoothing_window_size, config.duration_floor);
         self.has_observed_rate |= rate.is_some();
         rate
+    }
+
+    fn resolved_prefix_len(&self) -> usize {
+        self.intervals
+            .iter()
+            .position(|entry| entry.pending)
+            .unwrap_or(self.intervals.len())
     }
 
     fn enforce_bounds(&mut self, window_size: usize) {
@@ -304,58 +311,98 @@ impl RequestInputIntervalWindow {
         }
         let retained_limit = MAX_RETAINED_INPUT_INTERVALS.max(window_size.saturating_mul(8));
         loop {
-            let resolved_prefix = self
+            let resolved_prefix = self.resolved_prefix_len();
+            let window_start = resolved_prefix.saturating_sub(window_size);
+            // Older resolved entries stay while their first output can still
+            // fall inside the window's busy time, where `rate` counts them.
+            let keep_from = self
                 .intervals
-                .iter()
-                .position(|entry| entry.pending)
-                .unwrap_or(self.intervals.len());
-            let evicted = self
-                .intervals
-                .drain(..resolved_prefix.saturating_sub(window_size))
-                .next_back();
-            if let Some(evicted) = evicted {
-                self.evicted_through = self
-                    .evicted_through
-                    .max(Some(evicted.interval.first_generated_output_at));
-            }
+                .range(window_start..resolved_prefix)
+                .map(|entry| entry.interval.submitted_at)
+                .min()
+                .map_or(window_start, |window_submitted_at| {
+                    self.intervals
+                        .partition_point(|entry| {
+                            entry.interval.first_generated_output_at <= window_submitted_at
+                        })
+                        .min(window_start)
+                });
+            self.evict_oldest(keep_from);
             if self.intervals.len() <= retained_limit {
                 return;
             }
-            self.intervals.remove(resolved_prefix.min(window_size));
+            // Drop the oldest pending entry so held-back entries can resolve,
+            // or else the oldest entry counted only for overlap.
+            let resolved_prefix = resolved_prefix - keep_from;
+            if resolved_prefix < self.intervals.len() {
+                self.intervals.remove(resolved_prefix);
+            } else {
+                self.evict_oldest(1);
+            }
         }
     }
 
-    fn rate(&self, duration_floor: Duration) -> Option<InputIntervalRate> {
-        let rate_window = || self.intervals.iter().take_while(|entry| !entry.pending);
-        let input_tokens = rate_window().fold(0_u64, |total, entry| {
-            total.saturating_add(entry.input_tokens)
-        });
-        if input_tokens == 0 {
-            return None;
+    fn evict_oldest(&mut self, count: usize) {
+        if let Some(evicted) = self.intervals.drain(..count).next_back() {
+            self.evicted_through = self
+                .evicted_through
+                .max(Some(evicted.interval.first_generated_output_at));
         }
-        let max_input_tps_eligible = rate_window().all(|entry| entry.max_input_tps_eligible);
-        let mut intervals = rate_window()
+    }
+
+    // The newest `window_size` resolved entries define the busy time: the
+    // union of their submit-to-first-output intervals. The rate is the input
+    // tokens of every resolved request whose first output falls in that busy
+    // time, divided by its length. With more than `window_size` requests in
+    // prefill at once, older requests finish inside the busy time too, and
+    // counting them balances the time the window also spends on requests that
+    // have not reached first output yet. Each request is credited at most its
+    // own submit-to-first-output token rate over the busy time, so one long
+    // prefill that ends inside a short window cannot inflate the rate.
+    fn rate(&self, window_size: usize, duration_floor: Duration) -> Option<InputIntervalRate> {
+        let resolved_prefix = self.resolved_prefix_len();
+        let window_start = resolved_prefix.saturating_sub(window_size);
+        let mut intervals = self
+            .intervals
+            .range(window_start..resolved_prefix)
             .map(|entry| entry.interval)
             .collect::<Vec<_>>();
         intervals.sort_unstable_by_key(|interval| interval.submitted_at);
-        let mut intervals = intervals.into_iter();
-        let first = intervals.next()?;
-        let mut start = first.submitted_at;
-        let mut end = first.first_generated_output_at;
-        let mut union_duration = Duration::ZERO;
+        let mut busy = Vec::<(Instant, Instant)>::new();
         for interval in intervals {
-            if interval.submitted_at <= end {
-                end = end.max(interval.first_generated_output_at);
-            } else {
-                union_duration =
-                    union_duration.saturating_add(end.saturating_duration_since(start));
-                start = interval.submitted_at;
-                end = interval.first_generated_output_at;
+            match busy.last_mut() {
+                Some((_, end)) if interval.submitted_at <= *end => {
+                    *end = (*end).max(interval.first_generated_output_at);
+                }
+                _ => busy.push((interval.submitted_at, interval.first_generated_output_at)),
             }
         }
-        union_duration = union_duration.saturating_add(end.saturating_duration_since(start));
-        let duration = union_duration.max(duration_floor);
-        let input_tps = input_tokens as f64 / duration.as_secs_f64();
+        let busy_duration = busy.iter().fold(Duration::ZERO, |total, (start, end)| {
+            total.saturating_add(end.saturating_duration_since(*start))
+        });
+        let in_busy_time = |at: Instant| {
+            let index = busy.partition_point(|(_, end)| *end < at);
+            busy.get(index).is_some_and(|(start, _)| *start < at)
+        };
+        let mut input_tokens = 0.0;
+        let mut max_input_tps_eligible = true;
+        for entry in self
+            .intervals
+            .range(..resolved_prefix)
+            .filter(|entry| in_busy_time(entry.interval.first_generated_output_at))
+        {
+            let interval = entry.interval;
+            let duration = interval
+                .first_generated_output_at
+                .saturating_duration_since(interval.submitted_at);
+            let credit = (busy_duration.as_secs_f64() / duration.as_secs_f64()).min(1.0);
+            input_tokens += entry.input_tokens as f64 * credit;
+            max_input_tps_eligible &= entry.max_input_tps_eligible;
+        }
+        if input_tokens <= 0.0 {
+            return None;
+        }
+        let input_tps = input_tokens / busy_duration.max(duration_floor).as_secs_f64();
         valid_last_mean_input_tps(input_tps).then_some(InputIntervalRate {
             input_tps,
             max_input_tps_eligible,
@@ -1435,8 +1482,11 @@ mod request_input_interval_window_tests {
             .collect()
     }
 
-    fn current(window: &RequestInputIntervalWindow) -> Option<InputIntervalRate> {
-        window.rate(config(1).duration_floor)
+    fn current(
+        window: &RequestInputIntervalWindow,
+        config: &StatsCollectorConfig,
+    ) -> Option<InputIntervalRate> {
+        window.rate(config.smoothing_window_size, config.duration_floor)
     }
 
     fn assert_tps(rate: Option<InputIntervalRate>, expected: f64, eligible: bool) {
@@ -1473,12 +1523,16 @@ mod request_input_interval_window_tests {
         );
         assert_eq!(retained(&window), [("z", false), ("a", true), ("b", false)]);
 
+        // The window is A and B, and Z's first output falls in their busy time.
         assert_tps(
             window.observe(usage("a", interval(start, 100)), &config),
-            200.0 / 0.6,
+            300.0 / 0.6,
             true,
         );
-        assert_eq!(retained(&window), [("a", false), ("b", false)]);
+        assert_eq!(
+            retained(&window),
+            [("z", false), ("a", false), ("b", false)]
+        );
     }
 
     #[test]
@@ -1525,12 +1579,19 @@ mod request_input_interval_window_tests {
 
         let last = format!("n-{}", ids.len());
         let last_interval = interval(start, 200 + ids.len() as u64 * 100);
+        // Five requests are in prefill at once, so the four before the window's
+        // single entry finish inside its busy time and stay counted.
         assert_tps(
             window.observe(usage(&last, last_interval), &config),
-            200.0,
+            1_000.0,
             true,
         );
-        assert_eq!(retained(&window), [(last.as_str(), false)]);
+        let overlapping = ids[ids.len() - 4..]
+            .iter()
+            .map(|id| (id.as_str(), false))
+            .chain([(last.as_str(), false)])
+            .collect::<Vec<_>>();
+        assert_eq!(retained(&window), overlapping);
     }
 
     #[test]
@@ -1545,7 +1606,7 @@ mod request_input_interval_window_tests {
                 &config,
             );
         }
-        assert_tps(current(&window), 200.0, true);
+        assert_tps(current(&window, &config), 200.0, true);
         window.observe(placeholder("stuck", interval(start, 8_000)), &config);
 
         // Faster requests arrive every second after the stuck one.
@@ -1624,7 +1685,7 @@ mod request_input_interval_window_tests {
             first_published_ms.is_some_and(|at_ms| at_ms < arrivals_end_ms),
             "first publication at {first_published_ms:?} ms, arrivals end at {arrivals_end_ms} ms"
         );
-        assert_tps(current(&window), expected, true);
+        assert_tps(current(&window, &config), expected, true);
     }
 
     #[test]
@@ -1634,7 +1695,7 @@ mod request_input_interval_window_tests {
             40,
             100,
             |index| if index % 2 == 0 { 50 } else { 2_050 },
-            800.0 / 1.2,
+            1_000.0,
         );
     }
 
@@ -1699,6 +1760,101 @@ mod request_input_interval_window_tests {
 
         assert_tps(window.observe(hit(), &config), 500.0, true);
         assert_eq!(window.len(), 2);
+    }
+
+    // `concurrency` requests are in prefill at once: each reports `UNCACHED`
+    // uncached prompt tokens `latency_ms` after submission, and a new request
+    // arrives every `latency_ms / concurrency`. Returns the last published rate.
+    fn steady_concurrent_rate(concurrency: u64, latency_ms: u64, requests: u64) -> f64 {
+        let config = StatsCollectorConfig::default();
+        let start = Instant::now();
+        let spacing_us = latency_ms * 1_000 / concurrency;
+        let mut window = RequestInputIntervalWindow::default();
+        let mut published = None;
+        for index in 0..requests {
+            let submitted_at = start + Duration::from_micros(index * spacing_us);
+            let request_interval = RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + Duration::from_millis(latency_ms),
+            };
+            let request_id = format!("req-{index}");
+            if let Some(rate) = window.observe(usage(&request_id, request_interval), &config) {
+                assert!(rate.max_input_tps_eligible);
+                published = Some(rate.input_tps);
+            }
+        }
+        published.expect("steady traffic should publish a rate")
+    }
+
+    #[test]
+    fn concurrent_requests_measure_aggregate_prefill_throughput() {
+        for concurrency in [1, 4, 8, 25, 50, 200] {
+            let expected = UNCACHED as f64 * concurrency as f64;
+            let rate = steady_concurrent_rate(concurrency, 1_000, concurrency * 8 + 64);
+            assert!(
+                (rate - expected).abs() <= expected * 0.03,
+                "concurrency {concurrency}: expected {expected} TPS, got {rate}"
+            );
+        }
+    }
+
+    fn assert_tps_near(rate: Option<InputIntervalRate>, expected: f64) {
+        let rate = rate.expect("input rate should be available").input_tps;
+        assert!(
+            (rate - expected).abs() <= expected * 1e-3,
+            "expected {expected} TPS, got {rate}"
+        );
+    }
+
+    #[test]
+    fn simultaneous_burst_counts_every_request_in_the_batch() {
+        let config = config(8);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        let mut rate = None;
+        // 50 requests submitted together reach first output within 50 us.
+        for index in 0..50 {
+            let request_id = format!("burst-{index}");
+            let request_interval = RequestInputInterval {
+                submitted_at: start,
+                first_generated_output_at: start + Duration::from_micros(1_000_000 + index),
+            };
+            rate = window.observe(usage(&request_id, request_interval), &config);
+        }
+        assert_tps_near(rate, 50.0 * UNCACHED as f64);
+    }
+
+    #[test]
+    fn long_prefill_ending_inside_a_short_window_counts_at_its_own_rate() {
+        let config = config(8);
+        let start = Instant::now();
+        let request = |submitted_ms: u64, latency_ms: u64| {
+            let submitted_at = start + Duration::from_millis(submitted_ms);
+            RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + Duration::from_millis(latency_ms),
+            }
+        };
+        let mut window = RequestInputIntervalWindow::default();
+        // 100k prompt tokens over 10 s: 10k TPS on its own.
+        let long = InputIntervalSample {
+            prompt_tokens: 100_000,
+            input_tokens: 100_000,
+            ..usage("long", request(100, 10_000))
+        };
+        window.observe(long, &config);
+        // 50 ms requests every 10 ms: five in prefill, 10k TPS together. The
+        // newest eight cover 10_080..10_200 ms; the long request ends at 10_100.
+        let ids = (0..20)
+            .map(|index| format!("short-{index}"))
+            .collect::<Vec<_>>();
+        let mut rate = None;
+        for (index, request_id) in ids.iter().enumerate() {
+            let submitted_ms = 9_960 + index as u64 * 10;
+            rate = window.observe(usage(request_id, request(submitted_ms, 50)), &config);
+        }
+        assert!(retained(&window).contains(&("long", false)));
+        assert_tps_near(rate, 20_000.0);
     }
 
     #[test]

@@ -32,8 +32,8 @@ spec:
         {{- with .Values.invocation.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if or .Values.invocation.env .Values.invocation.metrics.enabled }}
-        checksum/config-env: {{ dict "env" .Values.invocation.env "metrics" .Values.invocation.metrics "tracing" .Values.invocation.tracing | toYaml | sha256sum }}
+        {{- if or .Values.invocation.env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
+        checksum/config-env: {{ dict "env" .Values.invocation.env "metrics" .Values.invocation.metrics "tracing" .Values.invocation.tracing "cors" .Values.invocation.cors "polling" .Values.invocation.polling | toYaml | sha256sum }}
         {{- end }}
       labels:
         {{- include "nvcf-invocation-service.selectorLabels" . | nindent 8 }}
@@ -86,7 +86,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-          {{- if or .Values.invocation.env .Values.invocation.metrics.enabled }}
+          {{- if or .Values.invocation.env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
           envFrom:
             - configMapRef:
                 name: {{ include "nvcf-invocation-service.fullname" . }}-env

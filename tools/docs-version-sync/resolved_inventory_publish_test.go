@@ -350,6 +350,7 @@ func TestReleaseInventoriesOwnOnlyTheirStackStates(t *testing.T) {
 			"deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
 			"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
 			"deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
+			"deploy/stacks/self-managed/helmfile.d/04-upgrade-receipt.yaml.gotmpl",
 		}},
 		{stackInventorySpecs[1], "compute-plane", []string{
 			"deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",

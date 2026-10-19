@@ -127,6 +127,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	registerTeardownSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerRegistrationSteps(ctx, sc)
+	registerMetricsSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }

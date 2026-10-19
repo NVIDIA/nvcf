@@ -180,7 +180,7 @@ func TestPreUpstreamProcessingLocalAndProxyOutcomes(t *testing.T) {
 			status                              int
 		}{
 			{name: "unknown model", body: `{"model":"user-supplied-unknown"}`, outcome: "gateway_rejected", status: 404},
-			{name: "invalid body", body: `{`, outcome: "gateway_rejected", status: 500},
+			{name: "invalid body", body: `{`, outcome: "gateway_rejected", status: 400},
 			{name: "offline", body: `{"model":"example/primary"}`, offline: "unavailable", outcome: "gateway_rejected", model: "example/primary", status: 503},
 			{name: "cancel before dispatch", body: `{"model":"example/primary"}`, canceled: true, proxyError: true, outcome: "client_canceled", model: "example/primary", status: 499},
 			{name: "proxy error", body: `{"model":"example/primary"}`, proxyError: true, outcome: "dispatched", model: "example/primary", status: 502},

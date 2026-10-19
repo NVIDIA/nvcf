@@ -40,12 +40,12 @@ async fn test_pexec_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -72,12 +72,12 @@ async fn test_pexec_version_id_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get("Access-Control-Allow-Credentials")
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -104,12 +104,12 @@ async fn test_exec_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -136,12 +136,12 @@ async fn test_exec_version_id_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -168,12 +168,12 @@ async fn test_pexec_status_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -203,12 +203,12 @@ async fn test_exec_status_cors() -> anyhow::Result<()> {
     let response = app.call(request).await?;
 
     assert_eq!(response.status().as_u16(), 200);
+    assert!(!response
+        .headers()
+        .contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
     assert_eq!(
-        response
-            .headers()
-            .get(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .unwrap(),
-        "true"
+        response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "http://localhost"
     );
     assert_eq!(
         response.headers().get(http::header::VARY).unwrap(),
@@ -230,7 +230,8 @@ async fn test_exec_status_cors() -> anyhow::Result<()> {
 }
 
 async fn hydrate_fixtures() -> anyhow::Result<Router> {
-    let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
+    let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
+    config.cors_allowed_origins = vec!["http://localhost".into()];
     let mut app = app(config.clone(), None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
     let _worker = Worker::new(

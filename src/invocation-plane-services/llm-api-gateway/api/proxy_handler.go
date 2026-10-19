@@ -161,6 +161,9 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	}
 
 	copyProxyHeaders(c.Response().Header(), resp.Header)
+	if err := proxyUpstreamError(resp); err != nil {
+		return err
+	}
 	c.Response().WriteHeader(resp.StatusCode)
 	if resp.Body == nil {
 		return nil

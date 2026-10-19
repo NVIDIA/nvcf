@@ -73,7 +73,8 @@ type Config struct {
 	NVCFWorkerToken                     string        `mapstructure:"NVCF_WORKER_TOKEN"`
 	NVCFFqdn                            string        `mapstructure:"NVCF_FQDN_GRPC"`
 	NVCFFqdnNATS                        string        `mapstructure:"NVCF_FQDN_NATS"`
-	NKeySeed                            *string       `mapstructure:"NKEY_SEED"` // will use the worker token if not set
+	NKeySeed                            *string       `mapstructure:"NKEY_SEED"`         // will use the worker token if not set
+	NVCFNatsAccount                     string        `mapstructure:"NVCF_NATS_ACCOUNT"` // account the worker token login asks for
 	InferencePort                       int           `mapstructure:"INFERENCE_PORT"`
 	InferenceHealthEndpoint             string        `mapstructure:"INFERENCE_HEALTH_ENDPOINT"`
 	InferenceHealthProtocol             string        `mapstructure:"INFERENCE_HEALTH_PROTOCOL"`
@@ -422,7 +423,8 @@ func (w *NVCFWorker) Run(withHttpServer bool) error {
 		w.config.FunctionId,
 		w.config.FunctionVersionId,
 		w.config.SharedConfigDir,
-		nvcf.DefaultNvcfClientTimeout)
+		nvcf.DefaultNvcfClientTimeout,
+		nvcf.WithNatsAccount(w.config.NVCFNatsAccount))
 	if err != nil {
 		return types.NewInternalError(err)
 	}

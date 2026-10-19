@@ -224,6 +224,12 @@ api:
 
   env: {}
 
+  # Send every worker the control plane's NATS NKey seed as NKEY_SEED. Set to
+  # false when the NATS auth callout authenticates workers by their worker
+  # token (helm-nvcf-nats nats.authCallout.workerTokenAuth.enabled).
+  workerNkeySeed:
+    enabled: true
+
   # Remote configuration via spring-cloud-kubernetes-client-config. When enabled,
   # the chart renders the ConfigMap + Role/RoleBinding + REMOTE_CONFIG_* env vars,
   # giving a hot-reloadable override layer over the baked-in ncp profile.

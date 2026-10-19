@@ -24,6 +24,14 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
+# The role this script creates lets any pod running as the proxy's service
+# account sign admin-scoped tokens, and OpenBao keeps it after the release is
+# uninstalled. Returning rather than exiting: the runner sources this file.
+if [ "${ADMIN_ISSUER_PROXY_ENABLED:-true}" != "true" ]; then
+  log_info "admin-issuer-proxy is disabled, skipping its OpenBao setup"
+  return 0
+fi
+
 SERVICE_ACCOUNT_NAMESPACE="api-keys"
 SERVICE_ACCOUNT_NAME="admin-issuer-proxy"
 SERVICE_NAME="admin-issuer-proxy"

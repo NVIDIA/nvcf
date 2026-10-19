@@ -1,0 +1,2113 @@
+{
+  "scope": "Persistent stargate-k8s-router backend-router proxy logs only. Counts observe registration forwarding, QUIC relays, and proxy errors; they do not directly count main Stargate auth RPCs or NACKs. Main router and backend Pods restart during resets, so those historical logs are unavailable. Window boundaries approximate raw-report completion time and duration.",
+  "backendRouterLogs": 6,
+  "retainedLogLines": 14425,
+  "overallEventCounts": {
+    "forwarding RegisterInferenceServer to stargate target": 3596,
+    "relaying QUIC connection to stargate target": 2684,
+    "registration stream read error, forwarding stream error": 92,
+    "QUIC router connection failed": 0
+  },
+  "windows": [
+    {
+      "run": "repeat-01-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 1,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 1,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 1,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 1,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 1,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 1,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 1,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-01-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 1,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 2,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 2,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 2,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 2,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 2,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 2,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 2,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-02-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 2,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 3,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-baseline-wait-and-widen",
+      "revision": "baseline",
+      "repetition": 3,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 3,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-baseline-power-of-n",
+      "revision": "baseline",
+      "repetition": 3,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 3,
+      "case": "sustained-capacity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-candidate-wait-and-widen",
+      "revision": "candidate",
+      "repetition": 3,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 3,
+      "case": "sustained-capacity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "repeat-03-candidate-power-of-n",
+      "revision": "candidate",
+      "repetition": 3,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "followup-04-candidate",
+      "revision": "candidate",
+      "repetition": 4,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "followup-04-baseline",
+      "revision": "baseline",
+      "repetition": 4,
+      "case": "session-affinity",
+      "algorithm": "wait-and-widen",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "followup-04-power-of-n-candidate",
+      "revision": "candidate",
+      "repetition": 4,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    },
+    {
+      "run": "followup-04-power-of-n-baseline",
+      "revision": "baseline",
+      "repetition": 4,
+      "case": "session-affinity",
+      "algorithm": "power-of-n",
+      "observations": [
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "a-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        },
+        {
+          "cluster": "b-hub",
+          "logStartsBeforeWindow": true,
+          "counts": {
+            "forwarding RegisterInferenceServer to stargate target": 0,
+            "relaying QUIC connection to stargate target": 0,
+            "registration stream read error, forwarding stream error": 0,
+            "QUIC router connection failed": 0
+          },
+          "matchingEventOffsetsSeconds": []
+        }
+      ]
+    }
+  ]
+}

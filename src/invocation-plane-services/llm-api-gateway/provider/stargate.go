@@ -33,7 +33,6 @@ import (
 	"strings"
 	"time"
 
-	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -52,6 +51,7 @@ const (
 
 	headerAuthorization      = "Authorization"
 	headerContentType        = "Content-Type"
+	headerContentEncoding    = "Content-Encoding"
 	headerAccept             = "Accept"
 	headerRequestID          = "X-Request-Id"
 	headerTargetRegion       = "X-NVCF-Target-Region"
@@ -642,22 +642,8 @@ func checkHTTPError(resp *http.Response) error {
 		return nil
 	}
 
-	statusCode := clientStatusCode(resp)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-	message := string(body)
-
-	var errorResponse models.ErrorResponse
-	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
-		if statusCode == statusOverloaded && errorResponse.Error.Code == overloadErrorCode {
-			return echo.NewHTTPError(statusCode, errorResponse)
-		}
-		message = errorResponse.Error.Message
-	}
-	if message == "" {
-		message = http.StatusText(resp.StatusCode)
-	}
-
-	return echo.NewHTTPError(statusCode, message)
+	body := ReadUpstreamErrorBody(resp.Body, resp.Header.Get(headerContentEncoding))
+	return NewUpstreamHTTPError(clientStatusCode(resp), resp.Header, body)
 }
 
 type chatCompletionChoiceAccumulator struct {

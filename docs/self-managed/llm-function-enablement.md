@@ -311,7 +311,7 @@ the trust bundle in every compute cluster. A successful Helm render and
 accepted Gateway routes do not prove remote TCP or UDP reachability. Test both
 paths and an LLM invocation from each region before production use.
 
-The request router uses `power-of-two` when no load-balancer configuration is
+The request router uses `power-of-n` when no load-balancer configuration is
 set, and accepts any supported `routingMethod` from a function. When a
 load-balancer configuration is set, a function can only select an algorithm
 that the configuration enables.
@@ -891,12 +891,50 @@ authentication hop.
 
 </Warning>
 
+## Error Responses
+
+The LLM API Gateway returns errors in the format OpenAI and Anthropic SDKs
+read. Errors from the gateway and the LLM request router use the OpenAI
+format on `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the
+other OpenAI-compatible endpoints:
+
+```json
+{"error":{"message":"no eligible candidates","type":"invalid_request_error","param":null,"code":null}}
+```
+
+On `/v1/messages`, they use the Anthropic format:
+
+```json
+{"type":"error","error":{"type":"not_found_error","message":"no eligible candidates"},"request_id":"<request-id>"}
+```
+
+The `type` follows the HTTP status. For example, `401` is
+`authentication_error`, `429` is `rate_limit_error`, and `529` is
+`overloaded_error`. On OpenAI-compatible endpoints, `529` always has
+`code: "overloaded_error"`.
+
+Model server errors already in the endpoint's format are returned unchanged,
+including the server's `type` and `code`. Other model server bodies are
+converted to the endpoint's format, keeping up to 32 KiB of the server's
+message when the gateway can read it. The gateway reads uncompressed and gzip error bodies up
+to 1 MiB. For larger bodies or other encodings, the message is the HTTP
+status text.
+
+To return the request router's rejection reason, such as
+`no_eligible_candidates`, in `error.code`, set
+`llmApiGateway.config.exposeRouterErrorCodes: true` in the LLM API Gateway
+chart. The Anthropic format has no `code` field, so `/v1/messages` returns
+only the message. In either case, the request router logs the reason as
+`rejection_reason` and the gateway logs it as `router_error_code`.
+
 ## Troubleshooting
 
-`404 no_eligible_candidates` from `llm.invocation.<domain>` means the request
-reached the LLM Gateway, but the requested function or model was unknown or was
-not registered on the selected request router. Similar `503` candidate errors
-mean the router knows the target but has no active eligible backend. Check:
+A `404` with `no eligible candidates` from `llm.invocation.<domain>` means the
+request reached the LLM Gateway, but the requested function or model was
+unknown or was not registered on the selected request router. The message is
+in `error.message`, as described in [Error Responses](#error-responses).
+Similar `503` candidate errors mean the router knows the target but has no
+active eligible backend. Check:
 
 - The LLM function is deployed and its pod is `Running`.
 - The request `model` value uses `<function-id>/<model-name>`.

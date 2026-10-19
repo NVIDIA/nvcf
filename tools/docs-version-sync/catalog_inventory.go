@@ -144,7 +144,7 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 	}
 	releases := make(map[string]struct{})
 	artifacts := make(map[string]*resolvedInventoryArtifact)
-	artifactIdentities := make(map[string]string)
+	artifactIdentities := make(map[string][]resolvedInventoryArtifact)
 	artifactOwners := make(map[string]string)
 	for _, spec := range stackInventorySpecs {
 		inventory, exists := inventories[spec.Key]
@@ -164,10 +164,21 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 		}
 		for _, artifact := range inventory.Artifacts {
 			identity := artifact.Type + "\x00" + artifact.Name
-			if reference, exists := artifactIdentities[identity]; exists && reference != artifact.Reference {
-				return resolvedStackInventory{}, fmt.Errorf("stack inventory version conflict for %s %s: %s uses %s and %s uses %s", artifact.Type, artifact.Name, artifactOwners[identity], reference, spec.Key, artifact.Reference)
+			for _, previous := range artifactIdentities[identity] {
+				if previous.Reference == artifact.Reference {
+					continue
+				}
+				// A single stack can consume different helper versions in separate
+				// hooks. Preserve both facts, but retain the cross-stack conflict
+				// gate and reject changed repositories or digests for the same tag.
+				if artifactOwners[identity] == spec.Key && artifact.Type == "container-image" &&
+					previous.Repository == artifact.Repository && previous.Version != "" &&
+					artifact.Version != "" && previous.Version != artifact.Version {
+					continue
+				}
+				return resolvedStackInventory{}, fmt.Errorf("stack inventory version conflict for %s %s: %s uses %s and %s uses %s", artifact.Type, artifact.Name, artifactOwners[identity], previous.Reference, spec.Key, artifact.Reference)
 			}
-			artifactIdentities[identity] = artifact.Reference
+			artifactIdentities[identity] = append(artifactIdentities[identity], artifact)
 			if _, exists := artifactOwners[identity]; !exists {
 				artifactOwners[identity] = spec.Key
 			}
@@ -294,6 +305,17 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 			Requirement:        requirement,
 		})
 	}
+	if base != nil {
+		counts := make(map[string]int)
+		for _, artifact := range artifacts {
+			counts[artifactNameAndTypeKey(artifact)]++
+		}
+		for _, override := range base.VersionOverrides {
+			if counts[artifactNameAndTypeIdentityKey(override.Name, override.Type)] > 1 {
+				return nil, fmt.Errorf("version override for %s:%s is ambiguous across multiple inventory versions", override.Name, override.Type)
+			}
+		}
+	}
 	preserveCatalogArtifactIdentity(artifacts, base)
 	assignCatalogArtifactIDs(artifacts)
 	return artifacts, nil
@@ -339,17 +361,29 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	candidates := make([]Artifact, 0, len(base.Artifacts)+len(base.SupplementalArtifacts))
 	candidates = append(candidates, base.Artifacts...)
 	candidates = append(candidates, base.SupplementalArtifacts...)
+	counts := make(map[string]int)
+	for _, artifact := range artifacts {
+		counts[artifactNameAndTypeKey(artifact)]++
+	}
 	for i := range artifacts {
-		var matches []Artifact
+		var matches, exact []Artifact
 		for _, candidate := range candidates {
 			if candidate.Name == artifacts[i].Name && candidate.Type == artifacts[i].Type {
 				matches = append(matches, candidate)
+				if candidate.Version == artifacts[i].Version && candidate.UpstreamRepository == artifacts[i].UpstreamRepository {
+					exact = append(exact, candidate)
+				}
 			}
 		}
-		if len(matches) != 1 {
+		if counts[artifactNameAndTypeKey(artifacts[i])] > 1 || len(matches) > 1 {
+			if len(exact) == 1 {
+				artifacts[i].ID = exact[0].catalogKey()
+			}
 			continue
 		}
-		artifacts[i].ID = matches[0].ID
+		if len(matches) == 1 {
+			artifacts[i].ID = matches[0].ID
+		}
 	}
 }
 
@@ -524,9 +558,11 @@ func upstreamArtifactPath(artifact Artifact) string {
 
 func assignCatalogArtifactIDs(artifacts []Artifact) {
 	counts := make(map[string]int, len(artifacts))
+	typedCounts := make(map[string]int, len(artifacts))
 	used := make(map[string]struct{}, len(artifacts))
 	for _, artifact := range artifacts {
 		counts[artifact.Name]++
+		typedCounts[artifactNameAndTypeKey(artifact)]++
 		if artifact.ID != "" {
 			used[artifact.ID] = struct{}{}
 		}
@@ -541,6 +577,9 @@ func assignCatalogArtifactIDs(artifacts []Artifact) {
 			continue
 		}
 		baseID := artifacts[i].Name + "-" + string(artifacts[i].Type)
+		if typedCounts[artifactNameAndTypeKey(artifacts[i])] > 1 {
+			baseID += "-" + artifacts[i].Version
+		}
 		candidate := baseID
 		for ordinal := 2; ; ordinal++ {
 			if _, exists := used[candidate]; !exists {

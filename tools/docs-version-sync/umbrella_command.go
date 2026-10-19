@@ -22,9 +22,18 @@ type umbrellaPreparation struct {
 
 func runUmbrella(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check|bundle|verify-bundle> [flags]")
+		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check|bundle|verify-bundle|manifest|publish|docs-prepare|docs-revise|docs-mode|docs-stage> [flags]")
 	}
 	command := args[0]
+	if command == "docs-mode" {
+		return runDocsMode(args[1:])
+	}
+	if command == "docs-stage" {
+		return runDocsStage(args[1:])
+	}
+	if strings.HasPrefix(command, "docs-") {
+		return runUmbrellaDocs(command, args[1:])
+	}
 	if command == "publish" {
 		return runUmbrellaPublish(args[1:])
 	}
