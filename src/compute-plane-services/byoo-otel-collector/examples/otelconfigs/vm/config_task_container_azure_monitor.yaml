@@ -231,6 +231,12 @@ processors:
       - context: scope
         statements:
           - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
+  transform/set_observed_time:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.observed_time, Now()) where log.observed_time_unix_nano == 0
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -291,6 +297,7 @@ service:
         - azuremonitor/AZURE_MONITOR-azure-monitor-prd-logs
       processors:
         - memory_limiter
+        - transform/set_observed_time
         - attributes/add-metadata
         - batch
     metrics:
