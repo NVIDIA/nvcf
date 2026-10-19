@@ -5,7 +5,8 @@
 # Launches a minimal NVCT task through the local Tasks API and waits
 # until the task reaches COMPLETED. The script mints a short-lived
 # NVCT-scoped API key from the nvcf-cli admin token so secrets do not
-# appear in BDD command logs.
+# appear in BDD command logs. The optional NVCT_BDD_TASK_*_TELEMETRY_ID
+# variables attach BYOO telemetry endpoints to the task.
 
 set -euo pipefail
 
@@ -69,6 +70,12 @@ TASK_NUM_RESULTS="${NVCT_BDD_TASK_NUM_RESULTS:-1}"
 TASK_DELAY_MINUTES="${NVCT_BDD_TASK_DELAY_MINUTES:-0}"
 TASK_FILE_SIZE_BYTES="${NVCT_BDD_TASK_FILE_SIZE_BYTES:-8192}"
 TASK_INCLUDE_METADATA="${NVCT_BDD_TASK_INCLUDE_METADATA:-false}"
+# Optional BYOO telemetry endpoint IDs. A non-empty value adds the matching
+# field to the task's telemetries object; when all three are empty the request
+# has no telemetries object.
+TASK_LOGS_TELEMETRY_ID="${NVCT_BDD_TASK_LOGS_TELEMETRY_ID:-}"
+TASK_METRICS_TELEMETRY_ID="${NVCT_BDD_TASK_METRICS_TELEMETRY_ID:-}"
+TASK_TRACES_TELEMETRY_ID="${NVCT_BDD_TASK_TRACES_TELEMETRY_ID:-}"
 
 if ! [[ "$TASK_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TASK_TIMEOUT_SECONDS" -eq 0 ]]; then
   echo "NVCT_BDD_TASK_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -164,7 +171,15 @@ jq -n \
   --arg delayMinutes "$TASK_DELAY_MINUTES" \
   --arg fileSizeBytes "$TASK_FILE_SIZE_BYTES" \
   --arg includeMetadata "$TASK_INCLUDE_METADATA" \
+  --arg logsTelemetryId "$TASK_LOGS_TELEMETRY_ID" \
+  --arg metricsTelemetryId "$TASK_METRICS_TELEMETRY_ID" \
+  --arg tracesTelemetryId "$TASK_TRACES_TELEMETRY_ID" \
   '({
+    logsTelemetryId: $logsTelemetryId,
+    metricsTelemetryId: $metricsTelemetryId,
+    tracesTelemetryId: $tracesTelemetryId
+  } | with_entries(select(.value != ""))) as $telemetries
+  | ({
     name: $name,
     gpuSpecification: {
       gpu: $gpu,
@@ -175,7 +190,7 @@ jq -n \
     maxRuntimeDuration: "PT10M",
     maxQueuedDuration: "PT10M",
     terminationGracePeriodDuration: "PT1M"
-  } + if $mode == "helm" then
+  } + (if $mode == "helm" then
     {helmChart: $helmChart}
   else
     {
@@ -187,7 +202,7 @@ jq -n \
         {key: "INCLUDE_METADATA", value: $includeMetadata}
       ]
     }
-  end)' > "$request_body"
+  end) + (if $telemetries == {} then {} else {telemetries: $telemetries} end))' > "$request_body"
 
 if ! http_code="$(curl -sS -o "$create_response" -w "%{http_code}" \
   -X POST "$TASKS_URL" \

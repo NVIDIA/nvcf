@@ -2738,6 +2738,245 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_8x", 1)
 }
 
+// TestBYOORenderFeatureFileWiresToSteps runs the render-only BYOO feature
+// against a fake runner. Seeded render output carries the gate only for the
+// profiles that enable it, so each outline row exercises its assertion.
+func TestBYOORenderFeatureFileWiresToSteps(t *testing.T) {
+	const registryLoginCommand = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+	for profile, body := range map[string]string{
+		"compute":  "featureGateValues:\n- BYOObservability\n",
+		"all":      "featureGateValues:\n- BYOObservability\n",
+		"control":  "featureGateValues:\n- DynamicGPUDiscovery\n",
+		"disabled": "featureGateValues:\n- DynamicGPUDiscovery\n",
+	} {
+		path := filepath.Join(suite.Config.RepoRoot, "tests", "bdd", "out", "byoo-render", profile, "nvca-operator.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create rendered output directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write rendered output for %s: %v", profile, err)
+		}
+	}
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "byoo-render.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "byoo-render-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanExactly(runs, registryLoginCommand) {
+		t.Fatal("Helm OCI registry login command was never invoked")
+	}
+	for _, profile := range []string{"compute", "all", "control", "disabled"} {
+		if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-"+profile+" ") {
+			t.Fatalf("compute-plane Helmfile template command was never invoked for the %s profile", profile)
+		}
+	}
+}
+
+// byooPendingTags excludes the BYOO scenarios that wait on product work.
+// byooExistingInstallTags also skips every scenario that changes the stack, so
+// the workload scenarios run against an existing local install.
+const (
+	byooPendingTags         = "~@pending-2601 && ~@pending-2673"
+	byooExistingInstallTags = "~@stack-change && " + byooPendingTags
+)
+
+const (
+	byooGateCommand = `kubectl --context k3d-ncp-local --namespace nvca-operator get nvcfbackend ncp-local -o 'jsonpath={range .status.featureGate.values[*]}{@}{"\n"}{end}'`
+	byooTelemetries = "http://api.localhost:8080/v2/nvcf/telemetries"
+)
+
+// byooHTTPFake answers telemetry registration and deletion for the admin
+// token and records every request and body.
+type byooHTTPFake struct {
+	requests []string
+	bodies   []string
+}
+
+func (f *byooHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
+	f.requests = append(f.requests, method+" "+rawURL)
+	f.bodies = append(f.bodies, body)
+	switch {
+	case headers["Authorization"] != "Bearer admin-jwt":
+		return harness.HTTPResponse{Status: http.StatusUnauthorized}, nil
+	case method == http.MethodPost && rawURL == byooTelemetries:
+		return harness.HTTPResponse{Status: http.StatusOK, Body: `{"telemetry":{"telemetryId":"telemetry-1"}}`}, nil
+	case method == http.MethodDelete && rawURL == byooTelemetries+"/telemetry-1":
+		return harness.HTTPResponse{Status: http.StatusNoContent}, nil
+	default:
+		return harness.HTTPResponse{Status: http.StatusNotFound}, nil
+	}
+}
+
+// runBYOOWiring runs byoo.feature against fakes with the given tag filter.
+// The fake NVCFBackend reports the BYOObservability gate until the gate-off
+// install runs, then reports it disabled.
+func runBYOOWiring(t *testing.T, tags string) ([]string, *byooHTTPFake) {
+	t.Helper()
+	const (
+		cli          = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+		taskImage    = "registry.example.com/samples/task-byoo-sample:test"
+		gateOffSetup = "make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-gate-off"
+	)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
+		t.Fatalf("seed cli state: %v", err)
+	}
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_BYOO_TASK_IMAGE", taskImage)
+	t.Setenv("SAMPLE_BYOO_FUNCTION_IMAGE", "registry.example.com/samples/byoo-function-sample:test")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	runner := newFakeRunner(map[string]harness.Result{
+		// Conflict precheck: the multi-cluster control plane must be absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		byooGateCommand:                {ExitCode: 0, Stdout: "InfraResourceOverhead\nBYOObservability\n"},
+		"date +%s":                     {ExitCode: 0, Stdout: "1700000000\n"},
+		cli + " status --json": {
+			ExitCode: 0,
+			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+		},
+		"kubectl --context k3d-ncp-local get pods --all-namespaces --selector function-id=function-1 -o jsonpath={.items[*].spec.containers[*].name}": {
+			ExitCode: 0,
+			Stdout:   "ess inference utils byoo-otel-collector",
+		},
+		"env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_IMAGE=" + taskImage +
+			" NVCT_BDD_TASK_NAME=bdd-byoo-task NVCT_BDD_TASK_NUM_RESULTS=3 NVCT_BDD_TASK_DELAY_MINUTES=1" +
+			" NVCT_BDD_TASK_LOGS_TELEMETRY_ID=telemetry-1 NVCT_BDD_TASK_METRICS_TELEMETRY_ID=telemetry-1" +
+			" NVCT_BDD_TASK_TRACES_TELEMETRY_ID=telemetry-1 tests/bdd/scripts/run-nvct-task-smoke.sh": {
+			ExitCode: 0,
+			Stdout:   "Created NVCT task bdd-byoo-task (task-1)\nTask bdd-byoo-task status: COMPLETED percentComplete=100\n",
+		},
+		cli + " function deploy create --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 600": {
+			ExitCode: 1,
+			Stderr:   "function deployment failed",
+		},
+		cli + " --json function deploy get": {
+			ExitCode: 0,
+			Stdout:   `{"deployment":{"functionStatus":"ERROR","error":"BYOObservability is disabled on cluster ncp-local"}}`,
+		},
+	})
+	runner.onRun = func(command string) error {
+		if strings.HasPrefix(command, gateOffSetup) {
+			runner.results[byooGateCommand] = harness.Result{ExitCode: 0, Stdout: "InfraResourceOverhead\n-BYOObservability\n"}
+		}
+		return nil
+	}
+	suite := newWiringSuite(t, runner)
+	httpFake := &byooHTTPFake{}
+	suite.HTTP = httpFake
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "byoo.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "byoo-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Tags:   tags,
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := runner.runs
+	for _, command := range runs {
+		if strings.Contains(command, "admin-jwt") {
+			t.Fatalf("admin token leaked into a command line: %s", command)
+		}
+	}
+	return runs, httpFake
+}
+
+// TestBYOOFeatureFileWiresToSteps runs every BYOO scenario, including the
+// pending ones, so their steps stay resolvable before they are enabled.
+func TestBYOOFeatureFileWiresToSteps(t *testing.T) {
+	runs, httpFake := runBYOOWiring(t, "")
+	for _, command := range []string{
+		"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-byoo",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo ",
+		"NVCT_BDD_TASK_TRACES_TELEMETRY_ID=telemetry-1 tests/bdd/scripts/run-nvct-task-smoke.sh",
+		" function deploy create ",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-gate-off",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("BYOO flow command was never invoked: %s", command)
+		}
+	}
+	if !strings.Contains(strings.Join(httpFake.bodies, "\n"), `"name":"bdd-byoo-task-1700000000"`) {
+		t.Fatalf("task telemetry registration did not use the per-scenario name: %v", httpFake.bodies)
+	}
+	deletes := 0
+	for _, request := range httpFake.requests {
+		if request == "DELETE "+byooTelemetries+"/telemetry-1" {
+			deletes++
+		}
+	}
+	if deletes != 4 {
+		t.Fatalf("telemetry endpoints deleted at teardown = %d, want 4", deletes)
+	}
+}
+
+// TestBYOOExistingInstallTagsLeaveTheStackAlone guards the existing-install
+// entry point: it runs the workload scenarios without bootstrapping the
+// cluster or installing, upgrading, or removing a Helm release. The pending
+// tags are left out of the filter so the check still holds once those
+// scenarios are enabled.
+func TestBYOOExistingInstallTagsLeaveTheStackAlone(t *testing.T) {
+	runs, _ := runBYOOWiring(t, "~@stack-change")
+	for _, command := range runs {
+		for _, forbidden := range []string{"make ", "helm ", "k3d "} {
+			if strings.HasPrefix(command, forbidden) || strings.Contains(command, " "+forbidden) {
+				t.Fatalf("existing-install run issued a stack or cluster command: %s", command)
+			}
+		}
+	}
+	for _, command := range []string{
+		"tests/bdd/scripts/run-nvct-task-smoke.sh",
+		" function deploy create ",
+		"rollout restart deployment/otlp-sink-task",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("BYOO workload command was never invoked: %s", command)
+		}
+	}
+}
+
 // TestSingleClusterUp is the live entry point for the single-cluster
 // CLI feature. Skipped under -short.
 func TestSingleClusterUp(t *testing.T) {
@@ -2849,6 +3088,36 @@ func TestObservabilityDisabled(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "observability-disabled.feature")
+}
+
+// TestBYOORender is the live entry point for the render-only BYOO gate
+// feature. Skipped under -short.
+func TestBYOORender(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "byoo-render.feature")
+}
+
+// TestBYOO is the live entry point for the BYOO feature. It installs the
+// local single-cluster stack with the BYOObservability gate on, then checks
+// task and function telemetry against an in-cluster OTLP sink. Scenarios that
+// wait on product work are excluded. Skipped under -short.
+func TestBYOO(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeatureTags(t, "byoo.feature", byooPendingTags)
+}
+
+// TestBYOOExistingInstall runs the BYOO workload scenarios against the
+// current local single-cluster install. It does not bring up the cluster or
+// install, upgrade, or remove the stack. Skipped under -short.
+func TestBYOOExistingInstall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeatureTags(t, "byoo.feature", byooExistingInstallTags)
 }
 
 // TestEventLedger is the live entry point for the event-ledger feature. It
