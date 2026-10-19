@@ -55,10 +55,12 @@ NVSNAP_L2WAIT_VERSION="${NVSNAP_L2WAIT_VERSION:-v0.0.1}"
 # Leave a ref blank if it is not yet pinned — ci/build-image.sh errors
 # with the var name rather than guessing a branch.
 NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
-# Pinned SHA on the io-uring-cr branch (upstream criu-dev + LZ4 compression
-# #2895 + the io_uring SQ-array identity-map restore fix that makes SQPOLL
-# rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
-# for reproducible OSS builds. Bump when the fork advances.
+# Pinned SHA on the timens-seize-clocks branch: the io-uring-cr branch
+# (upstream criu-dev + LZ4 compression #2895 + the io_uring SQ-array
+# identity-map restore fix that makes SQPOLL rings survive C/R, so
+# libuv/uvloop servers restore with UV_USE_IO_URING=1) + restored clocks
+# that count neither the dump nor the restore (--timens-budget), for
+# reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
 # Must be the full 40-character SHA. build-agent.sh reaches this ref with
 # `git fetch --depth 1 origin <ref>`, and fetch-by-object-id requires a
@@ -67,7 +69,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 #   fatal: couldn't find remote ref 169595fd8
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-19933f201661a0b947369266361a3803e8b1bc6e}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-a2cd5604a70e1e45f09d44df642114cd66941d8a}"
 
 
 # vLLM base image

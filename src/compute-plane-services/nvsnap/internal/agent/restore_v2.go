@@ -201,6 +201,13 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				stdioInheritFDs(pidnsCapture)...)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
+	// The restore does not count as time the restored tasks ran
+	// (restore_clock.go).
+	if bundledSupportsTimensBudget() {
+		budget := restoreClockBudget(checkpointDir)
+		args = append(args, "--timens-budget", strconv.FormatInt(budget.Milliseconds(), 10))
+		log.WithField("budget", budget.Round(time.Second).String()).Info("criu-v2: the restored clocks continue from the dump once the restore has taken its budget")
+	}
 	// An in-namespace restore: the restored tree logs to the placeholder's
 	// stdout and stderr (restore_stdio.go). nsenter passes the extra files
 	// on to criu.
@@ -278,6 +285,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+	if spent, ok := recordRestoreClock(checkpointDir); ok {
+		log.WithField("criuRestore", spent.Round(time.Millisecond).String()).Info("criu-v2: recorded the restore's length for the next one's clock budget")
+	}
 	if group.InetAddrMap != "" {
 		// Before the unlock: a connection to a peer outside the group goes
 		// to an address of the captured instance (criu_companion.go).
