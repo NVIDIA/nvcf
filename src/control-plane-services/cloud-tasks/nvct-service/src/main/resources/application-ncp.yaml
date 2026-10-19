@@ -68,7 +68,9 @@ management:
     tracing:
       export:
         otlp:
-          endpoint: https://dummy:8282
+          # No trace backend by default. When this is empty, workloads get no
+          # OTEL_EXPORTER_OTLP_ENDPOINT and run with tracing disabled.
+          endpoint: ""
           headers:
             lightstep-access-token: unused
 

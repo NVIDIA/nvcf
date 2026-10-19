@@ -209,7 +209,7 @@ public class IcmsClient {
             @Value("${nvcf.llm-request-router.worker-address}") String llmRequestRouterAddress,
             @Value("${nvcf.fqdn}") String selfFqdn,
             @Value("${nvcf.global-fqdn-grpc}") String globalFqdnGrpc,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") URI tracingUrl,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String tracingEndpoint,
             // ESS_FQDN advertised to the LLM worker is the worker-facing ESS address,
             // which differs from EssClient's in-cluster base-url when the compute plane
             // is external. Defaults to nvcf.ess.base-url (colocated); split deployments
@@ -266,7 +266,7 @@ public class IcmsClient {
                 .builderFor(WebClientAdapter.create(webClient))
                 .build()
                 .createClient(IcmsStubService.class);
-        this.tracingUrl = tracingUrl;
+        this.tracingUrl = parseTracingUrl(tracingEndpoint);
         this.clusterGroupCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -437,7 +437,7 @@ public class IcmsClient {
                 validateAndGetHelmRegistryImagePullSecrets(function);
         var sidecarRegistryCredentialEncoded = registryCredentialFunctionService
                 .getBase64EncodedSidecarRegistryImagePullSecret(function);
-        var envStream = Stream.of(
+        Stream<Pair<String, Object>> envStream = Stream.of(
                 Pair.of("NVCF_WORKER_TOKEN", nvcfWorkerToken),
                 Pair.of("NVCF_FQDN", selfFqdn),
                 Pair.of("NVCF_FQDN_GRPC", globalFqdnGrpc),
@@ -455,7 +455,6 @@ public class IcmsClient {
                 Pair.of("INFERENCE_URL", function.getInferenceUrl()),
                 Pair.of("INFERENCE_PORT", inferencePort),
                 Pair.of("INFERENCE_PROTOCOL", getInferenceProtocol(function)),
-                Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                 Pair.of("TRACING_ACCESS_TOKEN", tracingAccessToken),
                 Pair.of("INIT_CONTAINER", initContainer),
                 Pair.of("OTEL_CONTAINER", otelContainer),
@@ -489,6 +488,7 @@ public class IcmsClient {
             envStream = Stream.concat(envStream,
                                       Stream.of(Pair.of("NKEY_SEED", workerNKeySeed.get())));
         }
+        envStream = Stream.concat(envStream, otlpEndpointEnv(tracingUrl));
 
         // ### Keep the option to send legacy properties in case we need to troubleshoot.
         //     By default, sendLegacyCredProps is false. When sending legacy properties, we are
@@ -498,7 +498,7 @@ public class IcmsClient {
         if (sendLegacyCredProps) {
             var containerRegistryCred = getSystemContainerRegistrySecret(function.getNcaId());
             var sidecarRegistryCredential = NgcRegistryUtils.getApiKey(sidecarImagePullSecret);
-            var legacyCredPropsStream =
+            Stream<Pair<String, Object>> legacyCredPropsStream =
                     Stream.of(Pair.of("INFERENCE_CONTAINER_CREDENTIAL", containerRegistryCred),
                               Pair.of("SIDECAR_CREDENTIAL", sidecarRegistryCredential));
             envStream = Stream.concat(envStream, legacyCredPropsStream);
@@ -835,5 +835,17 @@ public class IcmsClient {
             return Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
         }
         return null;
+    }
+
+    // Workers and the BYOO collector run with tracing disabled when
+    // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
+    static URI parseTracingUrl(String endpoint) {
+        return isBlank(endpoint) ? null : URI.create(endpoint.trim());
+    }
+
+    static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {
+        return tracingUrl == null
+                ? Stream.empty()
+                : Stream.of(Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()));
     }
 }

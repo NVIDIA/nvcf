@@ -147,7 +147,7 @@ public class IcmsClient {
             String clientSecret,
             @Value("${spring.security.oauth2.client.registration.icms.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.icms.token-uri}") String tokenUri,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") String otlpTracingEndpoint,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String otlpTracingEndpoint,
             AccountService accountService,
             TokenService tokenService,
             TelemetryService telemetryService,
@@ -184,7 +184,7 @@ public class IcmsClient {
         var adapter = WebClientAdapter.create(webClient);
         var factory = HttpServiceProxyFactory.builderFor(adapter).build();
         this.icmsStubService = factory.createClient(IcmsStubService.class);
-        this.tracingUrl = URI.create(otlpTracingEndpoint);
+        this.tracingUrl = parseTracingUrl(otlpTracingEndpoint);
         this.clustersCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -422,7 +422,7 @@ public class IcmsClient {
                 validateAndGetContainerRegistryImagePullSecrets(task);
         var helmRegistryCredentialsEncoded =
                 validateAndGetHelmRegistryImagePullSecrets(task);
-        var env = Stream.of(
+        Stream<Pair<String, Object>> envStream = Stream.of(
                         Pair.of("NCA_ID", task.getNcaId()),
                         Pair.of("ACCOUNT_NAME", accountService.getAccountName(ncaId)),
                         Pair.of("NVCT_WORKER_TOKEN", nvctWorkerToken),
@@ -433,7 +433,6 @@ public class IcmsClient {
                         Pair.of("UTILS_CONTAINER", utilsContainer),
                         Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
                         Pair.of("ESS_FQDN", essFqdn),
-                        Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                         Pair.of("TASK_TAGS", getTaskTags(task)),
                         Pair.of("TASK_ID", task.getTaskId()),
                         Pair.of("TASK_NAME", task.getName()),
@@ -448,7 +447,8 @@ public class IcmsClient {
                         Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                         Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
                         Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
-                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded))
+                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded));
+        var env = Stream.concat(envStream, otlpEndpointEnv(tracingUrl))
                 .map(pair -> pair.getFirst() + "=" + pair.getSecond())
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
@@ -526,5 +526,17 @@ public class IcmsClient {
         }
 
         return null;
+    }
+
+    // Workers and the BYOO collector run with tracing disabled when
+    // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
+    static URI parseTracingUrl(String endpoint) {
+        return isBlank(endpoint) ? null : URI.create(endpoint.trim());
+    }
+
+    static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {
+        return tracingUrl == null
+                ? Stream.empty()
+                : Stream.of(Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()));
     }
 }
