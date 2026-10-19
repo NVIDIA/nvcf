@@ -472,7 +472,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 			ShadowSamplingMethod:           config.ShadowSamplingMethods{config.ShadowSamplingMethodPerBearerKey},
 			ShadowCancelOnClientDisconnect: true,
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
@@ -511,7 +511,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2PreservesPerShadow
 				{ModelName: "private/facebook/opt-125m-shadow-b"},
 			},
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
