@@ -131,7 +131,8 @@ NVCA replaces this module with the in-tree path but compiles its own copy under
 `src/compute-plane-services/nvca/vendor/`. A change to a file NVCA vendors does
 not reach NVCA until NVCA re-vendors, so re-vendor in the same Pull Request.
 `tools/ci/check-go-vendored-lib` fails when the copies differ and prints the
-commands. From the repository root:
+commands. CI runs it in the required `go-lib codegen` check, so a Pull
+Request with drift cannot merge. From the repository root:
 
 ```bash
 (cd src/compute-plane-services/nvca && GOWORK=off go mod vendor)

@@ -68,6 +68,10 @@ jobs:
           DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
         run: ./tools/ci/check-doc-version-current-release
 
+  # "go-lib codegen" is a required status check on main. It also runs the
+  # vendored go-lib drift guard so that drift blocks merges. Keep the check
+  # name and keep this job unfiltered by paths: a skipped required check
+  # counts as passing.
   go-lib-codegen:
     name: go-lib codegen
     runs-on: ubuntu-latest
@@ -78,7 +82,16 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
+      # Runs before codegen, which may leave the library tree modified when
+      # it fails.
+      - name: Test the vendored go-lib drift guard
+        run: bash tools/ci/test-check-go-vendored-lib
+
+      - name: Check vendored copies of the shared Go library match its source
+        run: bash tools/ci/check-go-vendored-lib
+
       - name: Run go-lib codegen freshness check
+        if: ${{ !cancelled() }}
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
 
   helm-charts:
@@ -293,11 +306,6 @@ jobs:
         run: |
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
-
-      - name: Check vendored copies of the shared Go library match its source
-        run: |
-          bash tools/ci/test-check-go-vendored-lib
-          bash tools/ci/check-go-vendored-lib
 
   stargate-dev-benchmark:
     name: Stargate development benchmark

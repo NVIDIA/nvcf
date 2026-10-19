@@ -17,6 +17,9 @@
 # Modules whose vendor/modules.txt shows a pinned library version instead of a
 # local replace are skipped: their copy is meant to track that version.
 #
+# CI runs this in the required "go-lib codegen" check of
+# .github/workflows/build-test.yml, so drift blocks merges.
+#
 # Usage: tools/ci/check-go-vendored-lib
 # REPO_ROOT overrides the repository root, for tests.
 set -euo pipefail
