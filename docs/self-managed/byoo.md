@@ -25,7 +25,7 @@ telemetry of the workloads that reference a telemetry endpoint.
 
 ### Feature gates
 
-NVCA (NVIDIA Cluster Agent) controls BYOO with two feature gates:
+NVCA (NVIDIA Cloud Functions Agent) controls BYOO with two feature gates:
 
 | Gate | Default | Effect |
 |---|---|---|
@@ -249,8 +249,8 @@ The function creation API uses the same `telemetries` object.
 
 ## What is exported
 
-- Traces and metrics that the workload sends with OTLP to the collector on
-  ports 14357 or 14358.
+- Logs, metrics, and traces that the workload sends with OTLP to the collector
+  on ports 14357 or 14358.
 - Container logs, when `BYOOFluentBit` is on. For container workloads, Fluent
   Bit reads the logs of the inference or task container. For Helm workloads, it
   reads the logs of the application pods in the workload namespace that run on
@@ -291,8 +291,9 @@ The collector federates platform metrics from the
 `nvcf-byoo-prometheus-kube-prometheus` service in the `monitoring` namespace.
 The self-managed stacks do not install that service. The collector log then
 shows scrape errors for the `nvcf-worker`, `nvca`, `kubernetes-cadvisor`, and
-`kube-state-metrics` jobs, and platform metrics are not exported. OTLP
-telemetry from the workload and container logs are not affected.
+`kube-state-metrics` jobs. Platform metrics are not exported, except `up`
+series with the value 0 for the failing jobs. OTLP telemetry from the workload
+and container logs are not affected.
 
 Read the collector log:
 
