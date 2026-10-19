@@ -8,7 +8,7 @@ Runnable NVCF sample containers, Helm charts, and load tests.
 
 Top-level groups:
 
-- `function-samples/`: long-running services (FastAPI echo, streaming, multi-endpoint, gRPC echo, secrets, vLLM with OTLP, load tester).
+- `function-samples/`: long-running services (FastAPI echo, streaming, multi-endpoint, gRPC echo, secrets, vLLM with OTLP, BYOO telemetry with a reference sink, load tester).
 - `function-samples/helmchart-samples/`: Helm charts that wrap the FastAPI and multi-node samples.
 - `task-samples/`: one-shot NVCT task containers and Helm charts (simple, BYOO, Helm, multi-node).
 - `load-tests/`: k6 scripts for `functions/` (HTTP, gRPC, SSE, streaming) and `tasks/` (health, create, list tasks/events/results).
