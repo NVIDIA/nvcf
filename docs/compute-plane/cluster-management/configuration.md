@@ -906,7 +906,9 @@ For `hash_seed`, use `0` or a percentage of at least `0.006103515625`.
 randomness. If you configure `samplingPriority`, record values must be greater
 than `0`; zero is not supported by the pinned collector version.
 
-BYOO platform metrics federation example:
+BYOO platform metrics federation example. This block is a top-level
+`nvca-operator` chart value, not part of `agentConfig.mergeConfig`. Put it in
+a values file passed with `helm upgrade -f`:
 
 ```yaml
 byoo:
