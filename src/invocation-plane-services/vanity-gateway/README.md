@@ -197,22 +197,22 @@ v2config:
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. |
 | `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
-| `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
+| `shadows[].modelName` | Yes | Target model name in the same mapping section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
 | `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions, Responses, and Messages also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
 | `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
 | `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions, Responses, and Messages. Omitted defaults to `x-multi-turn-session-id`, and for Messages to `x-multi-turn-session-id` then `x-claude-code-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
-| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
+| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same mapping section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
 | `shadowSamplingMethod` | No | Legacy admission method or ordered method list applied to every legacy target. It supports the same methods and fallback behavior as `shadows[].samplingMethod`. Missing, empty, or `null` defaults to `random`. |
 | `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. When `true`, cancels shadow work if the primary request context is canceled. Defaults to `false`. |
 
 ### Shadow Traffic Support
 
-Shadow traffic is supported for OpenAI-compatible mapping sections with JSON
-request bodies: `chatCompletions`, `completions`, `embeddings`, `responses`, and
-`imageGenerations`. Shadow targets must be model names in the same OpenAI
+Shadow traffic is supported for mapping sections with JSON request bodies:
+`chatCompletions`, `completions`, `embeddings`, `responses`, `imageGenerations`,
+and `anthropicMessages`. Shadow targets must be model names in the same mapping
 section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
