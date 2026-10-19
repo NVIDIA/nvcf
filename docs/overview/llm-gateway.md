@@ -256,13 +256,22 @@ Upstream status codes, error bodies, and SSE event bytes pass through.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
-`X-Request-Id` from its request context; backend response request IDs pass
-through. It requests identity response encoding so usage can be observed without decoding
-or changing the response. NVCF authentication uses `Authorization: Bearer`.
-Credentials, internal routing headers, and other unlisted headers stop before
-the model API. The gateway removes top-level `extra-headers` body members,
-including letter-case and underscore variants. Native Anthropic `metadata` and
-backend extension fields retain their JSON meaning. Request rewriting can
+`X-Request-Id` from its request context and sends it to the backend. Every
+Messages response, including gateway errors, carries the same ID in the
+Anthropic `request-id` header, which Anthropic SDKs report as the request ID.
+NVCF replaces any `request-id` or `X-Request-Id` the backend returns. Error
+bodies the gateway writes also include it as `request_id`; native Anthropic
+error bodies relayed from the backend keep the backend's own `request_id`. Use
+this ID to find the request in gateway logs. The gateway requests identity
+response encoding so usage can be observed without decoding or changing the
+response. Send the NVCF API key in
+`Authorization: Bearer` or in `x-api-key`, the Anthropic SDK default. When a
+request carries an `Authorization` header, the gateway uses it and ignores
+`x-api-key`. Other endpoints accept only `Authorization: Bearer`. Credentials,
+internal routing headers, and other unlisted headers stop before the model
+API. The gateway removes top-level `extra-headers` body members, including
+letter-case and underscore variants. Native Anthropic `metadata` and backend
+extension fields retain their JSON meaning. Request rewriting can
 change key order and JSON escaping; request bytes are not preserved.
 
 Admission fields (`model`, `max_tokens`, `stream`, `messages`, `system`, and

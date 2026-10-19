@@ -1,6 +1,6 @@
-# LLM OpenBao Addon
+# Service PKI OpenBao Addon
 
-This addon provisions the shared NVCF service-issuing PKI hierarchy that cert-manager uses to issue server certificates for the LLM stack (Stargate / LLM Request Router QUIC TLS).
+This addon provisions the shared NVCF service-issuing PKI hierarchy that cert-manager uses to issue server certificates for NVCF services: the LLM stack (Stargate / LLM Request Router QUIC TLS) and the worker callback proxy (Envoy frontend and grpc-proxy pod certificates). It has no consumer-specific steps.
 
 ## What it does
 
@@ -21,7 +21,8 @@ Fail-hard when enabled. If the script aborts (missing required env, OpenBao erro
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `ADDONS_LLM_ENABLED` | yes (set by consumer chart) | `false` | Opt-in gate. When `true`, the entrypoint invokes this addon and propagates its exit code to the Job. Set by the consumer chart's dedicated Job (mirrors the SIS chart's `hook-lls-migrations.yaml`), typically together with `CORE_MIGRATIONS_ENABLED=false` so the Job runs the addon only. |
+| `NVCF_SERVICE_PKI_ENABLED` | one gate required | `false` | Opt-in gate. When `true`, the entrypoint invokes this addon and propagates its exit code to the Job. The self-managed stack sets it when the LLM add-on or the worker callback proxy is enabled. |
+| `ADDONS_LLM_ENABLED` | one gate required | `false` | Original opt-in gate, still honoured. The llm-request-router chart's dedicated Job sets it (mirrors the SIS chart's `hook-lls-migrations.yaml`), typically together with `CORE_MIGRATIONS_ENABLED=false` so the Job runs the addon only. |
 | `NVCF_SERVICE_PKI_ALLOWED_DOMAINS` | yes (when addon enabled) | — | Comma-separated DNS suffixes the role allows cert-manager to issue against. The consumer chart derives this from its own values (typically `<customer-domain>,cluster.local`); not a manually-set operator knob. Missing value → script aborts non-zero → entrypoint accumulator → Job fails. |
 | `CERT_MANAGER_SERVICE_ACCOUNT_NAME` | no | `cert-manager` | Service account cert-manager uses to authenticate to OpenBao. |
 | `CERT_MANAGER_SERVICE_ACCOUNT_NAMESPACE` | no | `cert-manager` | Namespace for the cert-manager service account. |
@@ -42,4 +43,9 @@ Re-running this addon against an already-provisioned OpenBao is safe: CA generat
 
 ## Usage
 
-The LLM consumer chart owns invocation via a dedicated Helm hook Job (mirrors the SIS chart's `hook-lls-migrations.yaml`). The Job sets `CORE_MIGRATIONS_ENABLED=false`, `ADDONS_LLM_ENABLED=true`, and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS=<derived-from-chart-values>`, then runs this image's entrypoint which dispatches to `setup_llm.sh`. See the main [README](../../README.md) for the entrypoint contract.
+Two consumers invoke it:
+
+- The self-managed stack's OpenBao migrations Job sets `NVCF_SERVICE_PKI_ENABLED=true` and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS` when the LLM add-on or the worker callback proxy is enabled.
+- The llm-request-router chart, when installed with `pki.enabled`, runs a dedicated Helm hook Job (mirrors the SIS chart's `hook-lls-migrations.yaml`) with `CORE_MIGRATIONS_ENABLED=false`, `ADDONS_LLM_ENABLED=true`, and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS=<derived-from-chart-values>`.
+
+Both run this image's entrypoint, which dispatches to `setup_service_pki.sh`. See the main [README](../../README.md) for the entrypoint contract.

@@ -68,10 +68,53 @@ Important settings to review before deployment:
 - `invocation.image.*` for the invocation service container image
 - `invocation.imagePullSecrets` for private registry access
 - `invocation.replicaCount`, resource requests, and limits for your environment
-- `invocation.config.*` for the NVCF API address, NATS connection settings, and Rate Limiter address
+- `invocation.env.*` for the NVCF API address, NATS connection settings, and Rate Limiter address
+- `invocation.cors.allowedOrigins` for browser access to legacy exec/pexec routes
+- `invocation.polling.enforceOwnership` for the staged polling ownership rollout
 - `invocation.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
+
+### Polling ownership and browser origins
+
+Use an invocation-service image containing support for these settings.
+Before deploying it, configure the exact browser origins that need access:
+
+```yaml
+invocation:
+  cors:
+    allowedOrigins:
+      - https://console.example.com
+      - https://other.example.com
+  polling:
+    enforceOwnership: false
+```
+
+The chart renders origins as comma-separated `CORS_ALLOWED_ORIGINS` and renders
+the boolean as `ENFORCE_POLLING_OWNER`. An empty origin list disables browser
+access to legacy routes. Explicit entries in `invocation.env` take precedence
+over the corresponding settings. Both settings participate in the Deployment
+checksum, so changes restart the invocation pods.
+
+Keep enforcement false for the preparation release in every region. All new
+invocations record caller ownership. Headerless records retain the existing
+function authorization checks, and polling neither changes their owner nor
+extends their expiry. Known owner mismatches and malformed metadata are rejected.
+
+After every region and every producer writes ownership headers, wait longer
+than the tracking stream's retention (60 minutes by default). Then set
+`invocation.polling.enforceOwnership: true` in a subsequent release in every
+region. Do not enforce while legacy NVCF producers still write headerless
+records. Monitor increments of
+`nvcf_http_invocation_polling_owner_checks_total{outcome="legacy_accepted"}`
+for residual legacy polls. The preparation release alone does not provide full
+caller ownership enforcement.
+
+Validate the chart wiring locally with:
+
+```bash
+bash tests/access_policy_test.sh
+```
 
 ## Notes
 

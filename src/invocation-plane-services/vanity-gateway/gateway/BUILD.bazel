@@ -67,6 +67,7 @@ go_test(
         "llm_gateway_director_test.go",
         "openai_director_test.go",
         "processing_test.go",
+        "request_id_test.go",
         "shadow_metrics_test.go",
         "shadow_sampling_test.go",
         "shadow_test.go",

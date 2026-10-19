@@ -414,6 +414,170 @@ func TestLoadServerConfig(t *testing.T) {
 	}
 }
 
+func TestLoadServerConfigControlDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		env     map[string]string
+		want    controlDefaults
+		wantErr bool
+	}{
+		{name: "unset keeps built-in defaults", want: controlDefaults{Chunk: defaultChunk}},
+		{
+			name: "valid overrides",
+			env:  map[string]string{defaultTTFTEnv: "1500", defaultITLEnv: "20", defaultChunkEnv: "slow"},
+			want: controlDefaults{TTFT: 1500 * time.Millisecond, ITL: 20 * time.Millisecond, Chunk: "slow"},
+		},
+		{
+			name: "five minute cap accepted",
+			env:  map[string]string{defaultTTFTEnv: "300000", defaultITLEnv: "300000"},
+			want: controlDefaults{TTFT: 5 * time.Minute, ITL: 5 * time.Minute, Chunk: defaultChunk},
+		},
+		{
+			name: "zero accepted",
+			env:  map[string]string{defaultTTFTEnv: "0", defaultITLEnv: "0"},
+			want: controlDefaults{Chunk: defaultChunk},
+		},
+		{name: "TTFT above cap rejected", env: map[string]string{defaultTTFTEnv: "300001"}, wantErr: true},
+		{name: "ITL above cap rejected", env: map[string]string{defaultITLEnv: "300001"}, wantErr: true},
+		{name: "negative TTFT rejected", env: map[string]string{defaultTTFTEnv: "-1"}, wantErr: true},
+		{name: "fractional ITL rejected", env: map[string]string{defaultITLEnv: "1.5"}, wantErr: true},
+		{name: "non numeric TTFT rejected", env: map[string]string{defaultTTFTEnv: "slow"}, wantErr: true},
+		{name: "oversized chunk rejected", env: map[string]string{defaultChunkEnv: strings.Repeat("x", maxOutputBytes+1)}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := loadServerConfig(func(name string) string { return test.env[name] })
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("loadServerConfig() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadServerConfig() error = %v", err)
+			}
+			if config.defaults != test.want {
+				t.Fatalf("defaults = %#v, want %#v", config.defaults, test.want)
+			}
+			if config.maxOutputChunks != defaultMaxOutputChunks {
+				t.Fatalf("max output chunks = %d, want %d", config.maxOutputChunks, defaultMaxOutputChunks)
+			}
+		})
+	}
+}
+
+func TestRequestControlsOverrideConfiguredDefaults(t *testing.T) {
+	config := defaultServerConfig()
+	config.defaults = controlDefaults{TTFT: 1500 * time.Millisecond, ITL: 20 * time.Millisecond, Chunk: "slow"}
+	for _, test := range []struct {
+		name      string
+		headers   map[string]string
+		body      benchmarkBodyControls
+		wantTTFT  time.Duration
+		wantITL   time.Duration
+		wantChunk string
+		wantBytes int
+	}{
+		{name: "no controls use defaults", wantTTFT: 1500 * time.Millisecond, wantITL: 20 * time.Millisecond, wantChunk: "slow"},
+		{
+			name:      "body controls override defaults",
+			body:      benchmarkBodyControls{TTFT: json.RawMessage(`0`), ITL: json.RawMessage(`0`), Chunk: json.RawMessage(`"body"`)},
+			wantChunk: "body",
+		},
+		{
+			name:      "header controls override defaults",
+			headers:   map[string]string{headerTTFT: "7", headerITL: "8", headerChunk: "header"},
+			wantTTFT:  7 * time.Millisecond,
+			wantITL:   8 * time.Millisecond,
+			wantChunk: "header",
+		},
+		{
+			name:      "a load tester header ignores body controls but keeps defaults",
+			headers:   map[string]string{"X-Load-Tester-Ignored": "1"},
+			body:      benchmarkBodyControls{TTFT: json.RawMessage(`0`), Chunk: json.RawMessage(`"body"`)},
+			wantTTFT:  1500 * time.Millisecond,
+			wantITL:   20 * time.Millisecond,
+			wantChunk: "slow",
+		},
+		{
+			name:      "chunk bytes replace the default chunk",
+			body:      benchmarkBodyControls{ChunkBytes: json.RawMessage(`5`)},
+			wantTTFT:  1500 * time.Millisecond,
+			wantITL:   20 * time.Millisecond,
+			wantChunk: "slow",
+			wantBytes: 5,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", nil)
+			for name, value := range test.headers {
+				request.Header.Set(name, value)
+			}
+			tuning, err := resolveBenchmarkTuning(request, test.body, config)
+			if err != nil {
+				t.Fatalf("resolveBenchmarkTuning() error = %v", err)
+			}
+			if tuning.TTFT != test.wantTTFT || tuning.ITL != test.wantITL || tuning.Chunk != test.wantChunk || tuning.ChunkBytes != test.wantBytes {
+				t.Fatalf("tuning = %#v, want TTFT %s, ITL %s, chunk %q, chunk bytes %d",
+					tuning, test.wantTTFT, test.wantITL, test.wantChunk, test.wantBytes)
+			}
+		})
+	}
+}
+
+func TestConfiguredDefaultsShapeEveryTextRoute(t *testing.T) {
+	config := defaultServerConfig()
+	config.defaults = controlDefaults{TTFT: 30 * time.Millisecond, Chunk: "slow"}
+	for _, test := range []struct {
+		path string
+		body string
+		want string
+	}{
+		{path: "/v1/chat/completions", body: `{"model":"test-model","messages":[{"role":"user","content":"hello"}]}`, want: `"content":"slow"`},
+		{path: "/v1/completions", body: `{"model":"test-model","prompt":"hello"}`, want: `"text":"slow"`},
+		{path: "/v1/responses", body: `{"model":"test-model","input":"hello"}`, want: `"text":"slow"`},
+		{path: "/v1/messages", body: messagesBody + `}`, want: `"text":"slow"`},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			start := time.Now()
+			newRouterWithConfig(config).ServeHTTP(recorder, request)
+			elapsed := time.Since(start)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), test.want) {
+				t.Fatalf("response does not contain %s: %s", test.want, recorder.Body.String())
+			}
+			if elapsed < config.defaults.TTFT {
+				t.Fatalf("answered after %s, want at least the default TTFT %s", elapsed, config.defaults.TTFT)
+			}
+		})
+	}
+}
+
+func TestConfiguredDefaultITLPacesStreams(t *testing.T) {
+	config := defaultServerConfig()
+	config.defaults.ITL = 20 * time.Millisecond
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test-model","messages":[{"role":"user","content":"hello"}],"stream":true,"x_load_tester_output_chunks":3}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	start := time.Now()
+	newRouterWithConfig(config).ServeHTTP(recorder, request)
+	elapsed := time.Since(start)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := strings.Count(recorder.Body.String(), `"content":"`+defaultChunk+`"`); got != 3 {
+		t.Fatalf("content chunk count = %d, want 3: %s", got, recorder.Body.String())
+	}
+	if want := 2 * config.defaults.ITL; elapsed < want {
+		t.Fatalf("stream finished after %s, want at least two default ITL gaps (%s)", elapsed, want)
+	}
+}
+
 func TestOutputChunksLimit(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -426,7 +590,7 @@ func TestOutputChunksLimit(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", nil)
 			request.Header.Set(headerOutputChunks, test.value)
-			tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{}, defaultMaxOutputChunks)
+			tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{}, defaultServerConfig())
 			if test.want {
 				if err != nil {
 					t.Fatalf("resolveBenchmarkTuning() error = %v", err)
@@ -566,7 +730,7 @@ func TestBodyControlMapping(t *testing.T) {
 		StatusCode:       json.RawMessage(`503`),
 		StreamErrorAfter: json.RawMessage(`1`),
 		MaxConcurrency:   json.RawMessage(`2`),
-	}, defaultMaxOutputChunks)
+	}, defaultServerConfig())
 	if err != nil {
 		t.Fatalf("resolveBenchmarkTuning() error = %v", err)
 	}

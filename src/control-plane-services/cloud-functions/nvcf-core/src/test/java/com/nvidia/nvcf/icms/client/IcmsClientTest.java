@@ -605,6 +605,7 @@ class IcmsClientTest {
         assertThat(env.get("NVCF_FQDN_GRPC")).isEqualTo("http://localhost:9090");
         assertThat(env.get("NVCF_FQDN_NATS")).isEqualTo(
                 "tls://connect.pnats.stg.nvcf.nvidia.com:4222");
+        assertThat(env.get("NVCF_NATS_ACCOUNT")).isEqualTo("Worker");
         assertThat(env.get("INFERENCE_CONTAINER_ENV")).isEqualTo("W10=");
         assertThat(env.get("INFERENCE_HEALTH_ENDPOINT")).isEqualTo(TEST_HEALTH_ENDPOINT);
         assertThat(env.get("INFERENCE_HEALTH_PROTOCOL")).isEqualTo("HTTP");

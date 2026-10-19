@@ -33,6 +33,7 @@ go_library(
         "//src/invocation-plane-services/grpc-proxy/nvcf/pb",
         "//src/invocation-plane-services/grpc-proxy/proxy/consts",
         "//src/invocation-plane-services/grpc-proxy/proxy/credentials",
+        "//src/invocation-plane-services/grpc-proxy/proxy/eventledger",
         "//src/invocation-plane-services/grpc-proxy/proxy/geo",
         "//src/invocation-plane-services/grpc-proxy/proxy/hacks",
         "//src/invocation-plane-services/grpc-proxy/proxy/invocation",

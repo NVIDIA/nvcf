@@ -48,12 +48,12 @@ GitHub is the sole tag and release authority. The active release path
 is:
 
 ```text
-NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image release pipeline
+NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image or chart release pipeline
 ```
 
-After a GitHub tag and release appear in the mirror, the scheduled
-internal release dispatcher detects eligible releases and starts the
-image release pipeline.
+The scheduled internal release dispatcher polls GitHub releases. Once a
+release's tag has reached the mirror, it starts the image or chart
+release pipeline.
 
 ## Service auto-tags
 
@@ -217,15 +217,15 @@ release metadata still declares `legacy_tag_prefix`:
 
 Invalid tags are skipped without creating a GitHub release.
 
-## Image publishing bridge
+## Image and chart publishing bridge
 
-GitHub does not need image-publishing credentials. Tag pushes only run
-the GitHub release-note workflow. Image publishing starts after the tag
-and release appear in the mirror.
+Tag pushes do not publish images or Helm charts. They only run the
+GitHub release-note workflow. Image and chart publishing starts after
+the GitHub release is published and its tag reaches the mirror.
 
-After a GitHub tag and release are mirrored, the scheduled release
-dispatcher detects eligible releases and starts the corresponding image
-release pipeline. The pipeline uses the mirrored source ref and release
+The scheduled release dispatcher polls GitHub releases. For each
+eligible release whose tag has reached the mirror, it starts the
+corresponding image or chart release pipeline. The pipeline uses the mirrored source ref and release
 metadata to build, promote, and publish artifacts. The mirror tag
 pipeline does not publish artifacts.
 
@@ -266,6 +266,38 @@ Examples:
 | `nvcf-ratelimiter-v1.15.1` | `release-nvcf-ratelimiter-v1.15` |
 
 Slashes remain branch namespace separators.
+
+### Patch an existing component minor
+
+Start from the latest stable patch in the required major/minor line, rather
+than the older patch currently selected by a stack. Reuse that release if it
+already contains the required fix and its published artifacts pass validation.
+Otherwise backport the missing fix and release the next ordinary patch version.
+
+Use `main` when it still belongs to the required minor and its unreleased changes
+are compatible with the patch. When development has moved to a later minor,
+create `release-<component-path>/vX.Y` from the latest release in the selected
+line. Preserve the released tree and comply with the release branch's linear
+history rules. Review the backport through a Pull Request targeting that branch.
+The `branch-cut` command is restricted to version-file registrations; it does
+not create ordinary service or chart maintenance branches.
+
+A service or chart maintenance merge does not create a tag automatically. After
+review and validation, publish the unused tag rendered from the registration's
+`tag_format`, or `<component-path>/vX.Y.Z` when no override exists, from the
+reviewed maintenance commit. Tag publication creates the GitHub Release and
+starts the existing downstream artifact delivery. Confirm the tag and workflow
+behavior in historical source before creating a branch or publishing a tag.
+
+Automatic chart and stack pin updates skip releases with a lower major, minor,
+or patch than the selected pin. A patch for an older minor must not downgrade
+the default branch. Update maintenance stack pins through their own reviewed
+Pull Requests after the component artifacts are verified.
+
+Qualify the complete stack combination before merging its release branch.
+Stack merges can publish automatically. For an umbrella release, assemble and
+qualify the final bundle from those exact component stack releases as described
+in [the umbrella release workflow](umbrella-releases.md).
 
 ## The version-file model
 
@@ -358,9 +390,8 @@ For example, to ship self-managed stack `1.0.2` after `1.0.1`:
    `1.0.1`. The branch's `VERSION` can remain `1.0.0`; its patch field
    does not select the next patch once stable tags exist.
 3. The tag workflow prepares the GitHub Release and its inventory.
-   The workflow publishes any configured Helm chart before it creates
-   the GitHub Release. Image publishing follows the bridge described
-   above, after the tag and release are mirrored.
+   Image and chart publishing follows the bridge described above,
+   once the release is published and its tag reaches the mirror.
 
 Re-running `auto` at an already-tagged commit creates no additional
 patch. Merging the default-branch `VERSION` bump pull request also
