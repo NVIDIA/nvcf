@@ -57,7 +57,8 @@ type anthropicError struct {
 // newHTTPErrorHandler renders every error the gateway or the request router
 // produces in the endpoint's native envelope: Anthropic on /v1/messages and
 // OpenAI everywhere else. Model server errors already in that envelope are
-// relayed unchanged so their type and code reach the client.
+// relayed so their type and code reach the client; Anthropic ones get the
+// NVCF request_id.
 func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed {
@@ -90,8 +91,12 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 				native = isAnthropicErrorBody
 			}
 			if native(upstream.Body) {
+				body := upstream.Body
+				if anthropic {
+					body = withAnthropicRequestID(body, errorRequestID(c))
+				}
 				c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-				_ = c.JSONBlob(status, upstream.Body)
+				_ = c.JSONBlob(status, body)
 				return
 			}
 		}
@@ -171,8 +176,25 @@ func isOpenAIErrorBody(body []byte) bool {
 		envelope.Error != nil && envelope.Error.Message != nil
 }
 
+// anthropicErrorTypes are the error types the Anthropic Messages API defines.
+// Clients and SDKs map these to error classes.
+var anthropicErrorTypes = map[string]bool{
+	"invalid_request_error": true,
+	"authentication_error":  true,
+	"billing_error":         true,
+	"permission_error":      true,
+	"not_found_error":       true,
+	"request_too_large":     true,
+	"rate_limit_error":      true,
+	"api_error":             true,
+	"timeout_error":         true,
+	"overloaded_error":      true,
+}
+
 // isAnthropicErrorBody reports whether body is
-// {"type":"error","error":{"type":"...","message":"..."}}.
+// {"type":"error","error":{"type":"...","message":"..."}} with an Anthropic
+// error type. Model servers that copy the shape with their own type names,
+// such as "BadRequestError", get the gateway envelope instead.
 func isAnthropicErrorBody(body []byte) bool {
 	var envelope struct {
 		Type  string `json:"type"`
@@ -182,7 +204,28 @@ func isAnthropicErrorBody(body []byte) bool {
 		} `json:"error"`
 	}
 	return json.Unmarshal(body, &envelope) == nil && envelope.Type == "error" &&
-		envelope.Error != nil && envelope.Error.Type != nil && envelope.Error.Message != nil
+		envelope.Error != nil && envelope.Error.Type != nil && envelope.Error.Message != nil &&
+		anthropicErrorTypes[*envelope.Error.Type]
+}
+
+// withAnthropicRequestID sets the top-level request_id of a relayed Anthropic
+// error body to the NVCF request ID, replacing any backend ID, so the error
+// can be traced in gateway logs. Other fields are kept.
+func withAnthropicRequestID(body []byte, requestID string) []byte {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return body
+	}
+	id, err := json.Marshal(requestID)
+	if err != nil {
+		return body
+	}
+	fields["request_id"] = id
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // proxyUpstreamError returns the error for a non-2xx proxy response so the

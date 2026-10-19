@@ -156,6 +156,27 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 			nativeOpenAI: true, nativeAnthropic: true,
 		},
 		{
+			name:       "backend Anthropic error with a backend request ID",
+			status:     http.StatusBadRequest,
+			body:       `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens is too large"},"request_id":"req_backend"}`,
+			wantStatus: http.StatusBadRequest, wantMessage: "max_tokens is too large",
+			nativeOpenAI: true, nativeAnthropic: true,
+		},
+		{
+			name:       "backend Anthropic-shaped error with a non-Anthropic type",
+			status:     http.StatusBadRequest,
+			body:       `{"type":"error","error":{"type":"BadRequestError","message":"stop cannot contain an empty string."}}`,
+			wantStatus: http.StatusBadRequest, wantMessage: "stop cannot contain an empty string.",
+			nativeOpenAI: true,
+		},
+		{
+			name:       "vLLM request validation error",
+			status:     http.StatusBadRequest,
+			body:       `{"error":{"message":"1 validation error:\n  {'type': 'list_type', 'loc': ('body', 'stop_sequences'), 'msg': 'Input should be a valid list', 'input': 'BETA'}","type":"Bad Request","param":null,"code":400}}`,
+			wantStatus: http.StatusBadRequest, wantMessage: "1 validation error:\n  {'type': 'list_type', 'loc': ('body', 'stop_sequences'), 'msg': 'Input should be a valid list', 'input': 'BETA'}",
+			nativeOpenAI: true,
+		},
+		{
 			name:       "older vLLM error",
 			status:     http.StatusBadRequest,
 			body:       `{"object":"error","message":"The model does not exist.","type":"NotFoundError","param":null,"code":404}`,
@@ -227,7 +248,10 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 					require.Empty(t, rec.Header().Values("X-Stargate-Error-Code"))
 
 					switch {
-					case endpoint.anthropic && tc.nativeAnthropic, !endpoint.anthropic && tc.nativeOpenAI:
+					case endpoint.anthropic && tc.nativeAnthropic:
+						// Relayed with the NVCF request ID in place of the backend's.
+						require.JSONEq(t, withRequestID(t, tc.body, "request-a"), rec.Body.String())
+					case !endpoint.anthropic && tc.nativeOpenAI:
 						require.Equal(t, tc.body, rec.Body.String())
 					case endpoint.anthropic:
 						require.JSONEq(t, anthropicErrorJSON(t, anthropicTypes[tc.wantStatus], tc.wantMessage, "request-a"), rec.Body.String())
@@ -288,6 +312,16 @@ func anthropicErrorJSON(t *testing.T, errorType, message, requestID string) stri
 	})
 	require.NoError(t, err)
 	return string(body)
+}
+
+func withRequestID(t *testing.T, body, requestID string) string {
+	t.Helper()
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &fields))
+	fields["request_id"] = requestID
+	out, err := json.Marshal(fields)
+	require.NoError(t, err)
+	return string(out)
 }
 
 func TestGatewayErrorEnvelopes(t *testing.T) {

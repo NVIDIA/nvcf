@@ -252,7 +252,8 @@ curl -N -sS -X POST "http://${GATEWAY_ADDR}/v1/messages" \
 Set `stream` to `false` or omit it for a native JSON response. The gateway
 requires a positive `max_tokens` and a non-empty `messages` array. The backend
 validates content blocks, tools, thinking settings, and beta feature support.
-Upstream status codes, error bodies, and SSE event bytes pass through.
+Upstream status codes and SSE event bytes pass through. Backend error bodies
+use the Anthropic error envelope, as described below.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
@@ -260,10 +261,9 @@ The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 Messages response, including gateway errors, carries the same ID in the
 Anthropic `request-id` header, which Anthropic SDKs report as the request ID.
 NVCF replaces any `request-id` or `X-Request-Id` the backend returns. Error
-bodies the gateway writes also include it as `request_id`; native Anthropic
-error bodies relayed from the backend keep the backend's own `request_id`. Use
-this ID to find the request in gateway logs. The gateway requests identity
-response encoding so usage can be observed without decoding or changing the
+bodies also include it as `request_id`, including backend error bodies, where
+it replaces any backend value. Use this ID to find the request in gateway logs.
+The gateway requests identity response encoding so usage can be observed without decoding or changing the
 response. Send the NVCF API key in
 `Authorization: Bearer` or in `x-api-key`, the Anthropic SDK default. When a
 request carries an `Authorization` header, the gateway uses it and ignores
@@ -279,6 +279,40 @@ Admission fields (`model`, `max_tokens`, `stream`, `messages`, `system`, and
 ambiguous duplicates so the backend and admission logic use the same values.
 Messages use the existing authorization-resolved priority. Pylon strips inbound
 engine priority headers before generating its own Dynamo priority headers.
+
+#### What the gateway checks and what it passes through
+
+The gateway checks only what it needs to authenticate, route, and admit a
+request. Everything else goes to the backend unchanged, so validation of the
+remaining fields depends on the backend. A backend that accepts an invalid
+value returns `200`, where the Anthropic API would return `400`.
+
+| Field or header | Checked by the gateway | Otherwise |
+| --- | --- | --- |
+| `model` | Yes. Requires the `<function-id>/` prefix. | Rewritten to the backend model name. |
+| `max_tokens` | Yes. Must be a positive integer. | Passed through. |
+| `messages` | Yes. Must be a non-empty array. Content is not checked. | Passed through. |
+| Spelling of `model`, `max_tokens`, `stream`, `messages`, `system`, `tools` | Yes. Must use the canonical lowercase name. | Passed through. |
+| `anthropic-version`, `anthropic-beta` | No. Not required, validated, or interpreted. | Forwarded to the backend. |
+| Content blocks, images, documents | No. | Backend validates. |
+| `tools`, `tool_choice`, `tool_result` | No. Tools are only counted for token admission. | Backend validates. |
+| `thinking`, `cache_control`, `metadata`, `service_tier` | No. | Backend validates and decides support. |
+| Backend error bodies | Rendered in the Anthropic error envelope with `request_id`. | Message text comes from the backend. |
+
+The gateway relays a backend error body when it already uses the Anthropic
+envelope with an Anthropic error type, and sets its `request_id`. Any other
+backend error body, such as an OpenAI-style or FastAPI validation error, is
+rendered in the Anthropic envelope with the type that matches the status code
+and the backend's message. The message text is the backend's. Function owners
+are responsible for what their container puts in error messages.
+
+#### Known backend differences
+
+- vLLM releases without
+  [vllm-project/vllm#47598](https://github.com/vllm-project/vllm/pull/47598)
+  report `stop_reason` `end_turn` instead of `tool_use` when `tool_choice`
+  names a tool. Clients that run tools only on `stop_reason` `tool_use` skip
+  the tool. Use a vLLM build that includes the fix.
 
 Token admission estimates system, messages, and tools and reserves
 `max_tokens` for output. `X-Input-Tokens` and `X-Token-Estimate` both describe
