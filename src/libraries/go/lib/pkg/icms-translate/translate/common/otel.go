@@ -55,6 +55,7 @@ const (
 	DefaultFluentbitImage = "fluent/fluent-bit:3.2"
 
 	protocolGRPC                = "grpc"
+	protocolHTTPProtobuf        = "http/protobuf"
 	otelExporterPortGRPC        = 14357
 	otelExporterPortHTTP        = 14358
 	otelExporterPortHealthCheck = 13133
@@ -99,7 +100,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathLogs)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterLogsProtocolEnv, Value: strings.ToLower(ls.Logs.Protocol)},
+			{Name: OTelExporterLogsProtocolEnv, Value: otlpExporterProtocol(ls.Logs.Protocol)},
 			{Name: OTelExporterLogsEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -111,7 +112,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathMetrics)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterMetricsProtocolEnv, Value: strings.ToLower(ls.Metrics.Protocol)},
+			{Name: OTelExporterMetricsProtocolEnv, Value: otlpExporterProtocol(ls.Metrics.Protocol)},
 			{Name: OTelExporterMetricsEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -123,7 +124,7 @@ func MakeOTelEnvSet(
 			endpoint = fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHTTP, otelExporterHTTPPathTraces)
 		}
 		envs = append(envs, []corev1.EnvVar{
-			{Name: OTelExporterTracesProtocolEnv, Value: strings.ToLower(ls.Traces.Protocol)},
+			{Name: OTelExporterTracesProtocolEnv, Value: otlpExporterProtocol(ls.Traces.Protocol)},
 			{Name: OTelExporterTracesEndpointEnv, Value: endpoint},
 		}...)
 	}
@@ -131,6 +132,16 @@ func MakeOTelEnvSet(
 		{Name: OTelHealthCheckEndpointEnv, Value: fmt.Sprintf("%s:%d%s", svcURL, otelExporterPortHealthCheck, otelHealthCheckPath)},
 	}...)
 	return envs
+}
+
+// otlpExporterProtocol returns the OTEL_EXPORTER_OTLP_*_PROTOCOL value for a telemetry protocol.
+// The OpenTelemetry spec allows grpc, http/protobuf, and http/json, so HTTP telemetry maps to
+// http/protobuf, matching the collector's OTLP/HTTP receiver.
+func otlpExporterProtocol(protocol string) string {
+	if strings.ToLower(protocol) == protocolGRPC {
+		return protocolGRPC
+	}
+	return protocolHTTPProtobuf
 }
 
 const (
