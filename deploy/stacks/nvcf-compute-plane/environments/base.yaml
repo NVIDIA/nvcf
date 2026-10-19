@@ -70,7 +70,8 @@ global:
     # BYOO Fluent Bit log collector. enabled turns on the BYOOFluentBit NVCA
     # feature gate, which adds a Fluent Bit sidecar to BYOO workloads that
     # export logs. It needs BYOObservability, which observability.profile
-    # compute or all enables. The image defaults to the upstream Docker Hub
+    # compute or all enables; the render fails if enabled is true while
+    # BYOObservability is off. The image defaults to the upstream Docker Hub
     # image that NVCA uses. Override registry, repository, and tag for a
     # private or disconnected registry.
     byooFluentBit:

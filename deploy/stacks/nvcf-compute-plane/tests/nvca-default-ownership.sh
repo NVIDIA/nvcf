@@ -220,6 +220,61 @@ render_values "${fluent_bit_gate_disabled_values}" --state-values-file "${fluent
 test "$(has_gate "${fluent_bit_gate_disabled_values}" BYOOFluentBit)" = "false" ||
   fail "an explicit -BYOOFluentBit gate did not win over byooFluentBit.enabled"
 
+# BYOOFluentBit needs BYOObservability. The stack must refuse to enable it on
+# a profile that leaves BYOO off, unless the BYOO gate is set explicitly.
+fluent_bit_without_byoo_error="${work_dir}/fluent-bit-without-byoo.log"
+if render_values "${work_dir}/fluent-bit-without-byoo.yaml" \
+  --state-values-set global.nvcaOperator.byooFluentBit.enabled=true \
+  --state-values-set-string observability.profile=control 2>"${fluent_bit_without_byoo_error}"; then
+  fail "byooFluentBit.enabled should fail when observability.profile leaves BYOObservability off"
+fi
+grep -Fq "global.nvcaOperator.byooFluentBit.enabled requires the BYOObservability NVCA feature gate" "${fluent_bit_without_byoo_error}" ||
+  fail "byooFluentBit.enabled without BYOO failed without the expected message: $(cat "${fluent_bit_without_byoo_error}")"
+fluent_bit_byoo_disabled_state="${work_dir}/fluent-bit-byoo-disabled-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      enabled: true' \
+  '    selfManaged:' \
+  '      featureGateValues:' \
+  '        - -BYOObservability' >"${fluent_bit_byoo_disabled_state}"
+if render_values "${work_dir}/fluent-bit-byoo-disabled.yaml" \
+  --state-values-file "${fluent_bit_byoo_disabled_state}" 2>"${fluent_bit_without_byoo_error}"; then
+  fail "byooFluentBit.enabled should fail when -BYOObservability turns the BYOO gate off"
+fi
+grep -Fq "global.nvcaOperator.byooFluentBit.enabled requires the BYOObservability NVCA feature gate" "${fluent_bit_without_byoo_error}" ||
+  fail "byooFluentBit.enabled with -BYOObservability failed without the expected message: $(cat "${fluent_bit_without_byoo_error}")"
+fluent_bit_explicit_byoo_state="${work_dir}/fluent-bit-explicit-byoo-state.yaml"
+printf '%s\n' \
+  'observability:' \
+  '  profile: disabled' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      enabled: true' \
+  '    selfManaged:' \
+  '      featureGateValues:' \
+  '        - BYOObservability' >"${fluent_bit_explicit_byoo_state}"
+fluent_bit_explicit_byoo_values="${work_dir}/fluent-bit-explicit-byoo-values.yaml"
+render_values "${fluent_bit_explicit_byoo_values}" --state-values-file "${fluent_bit_explicit_byoo_state}" ||
+  fail "byooFluentBit.enabled should render when BYOObservability is set explicitly"
+test "$(has_gate "${fluent_bit_explicit_byoo_values}" BYOOFluentBit)" = "true" ||
+  fail "byooFluentBit.enabled with an explicit BYOObservability gate did not enable BYOOFluentBit"
+fluent_bit_off_state="${work_dir}/fluent-bit-off-state.yaml"
+printf '%s\n' \
+  'observability:' \
+  '  profile: disabled' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooFluentBit:' \
+  '      enabled: true' \
+  '    selfManaged:' \
+  '      featureGateValues:' \
+  '        - -BYOOFluentBit' >"${fluent_bit_off_state}"
+render_values "${work_dir}/fluent-bit-off-values.yaml" --state-values-file "${fluent_bit_off_state}" ||
+  fail "an explicit -BYOOFluentBit gate should skip the BYOObservability requirement"
+
 write_registration '    workload:
       defaultOwnershipProbe: true'
 extended_values="${work_dir}/extended-values.yaml"
