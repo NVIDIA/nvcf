@@ -1429,15 +1429,13 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig) 
 	}
 	if initConditionTrue {
 		for _, containerStatus := range podStatus.ContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedContainerRestartLoop
 			}
 		}
 	} else {
 		for _, containerStatus := range podStatus.InitContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedInitContainerRestartLoop
 			}
 		}
