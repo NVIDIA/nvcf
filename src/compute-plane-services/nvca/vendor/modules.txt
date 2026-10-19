@@ -47,8 +47,6 @@ github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/functio
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1
-github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel
@@ -405,7 +403,6 @@ github.com/gorilla/mux
 # github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0
 ## explicit; go 1.24.0
 github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule
-github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2/options
 github.com/grpc-ecosystem/grpc-gateway/v2/runtime
 github.com/grpc-ecosystem/grpc-gateway/v2/utilities
 # github.com/hashicorp/go-cleanhttp v0.5.2

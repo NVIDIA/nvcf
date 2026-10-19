@@ -51,6 +51,9 @@ type TemplateConfig struct {
 	WorkloadMetrics   WorkloadMetricsConfig
 	OTelCollector     OTelCollectorConfig
 	DebugMode         bool
+	// CollectorTracesEnabled turns on the collector's own trace export to
+	// OTEL_EXPORTER_OTLP_ENDPOINT. Leave it off when that variable is unset.
+	CollectorTracesEnabled bool
 }
 
 type LogChunkingConfig struct {

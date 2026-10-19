@@ -900,7 +900,8 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 	// health_check and healthcheckv2 extensions are present for all configurations
 	otelConfig.Service.Extensions = []string{"healthcheckv2", "cgroup_runtime"}
 
-	// Default telemetry configuration for the collector's own metrics, logs, and traces
+	// Default telemetry configuration for the collector's own metrics and logs.
+	// Its own traces are added below only when an OTLP endpoint is configured.
 	otelConfig.Service.Telemetry = map[string]map[string]interface{}{
 		"logs": {
 			"level": "warn",
@@ -923,14 +924,16 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 				},
 			},
 		},
-		"traces": {
+	}
+	if tmplConfig.CollectorTracesEnabled {
+		otelConfig.Service.Telemetry["traces"] = map[string]interface{}{
 			"processors": []map[string]interface{}{
 				{
 					"batch": map[string]interface{}{
 						"exporter": map[string]interface{}{
 							"otlp": map[string]interface{}{
 								"protocol": "grpc",
-								"endpoint": "${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}",
+								"endpoint": "${env:OTEL_EXPORTER_OTLP_ENDPOINT}",
 								"headers": []map[string]interface{}{
 									{
 										"name":  "lightstep-access-token",
@@ -942,7 +945,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 					},
 				},
 			},
-		},
+		}
 	}
 
 	resourceAttrs := []map[string]interface{}{
