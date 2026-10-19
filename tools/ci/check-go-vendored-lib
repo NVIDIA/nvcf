@@ -216,9 +216,9 @@ EOF
 go mod vendor deletes or overwrites the Gazelle BUILD.bazel files committed
 under vendor/, and the second command restores them. If go mod vendor asks for
 go mod tidy, the library gained a dependency: run it and commit go.mod and
-go.sum too. If a vendored Go file was added or removed, also update the srcs
-of that package's vendor BUILD.bazel. Then rerun tools/ci/check-go-vendored-lib
-and commit the result.
+go.sum too. If a vendored file was added or removed, also update the srcs or
+embedsrcs of that package's vendor BUILD.bazel. Then rerun
+tools/ci/check-go-vendored-lib and commit the result.
 EOF
     exit 1
 fi

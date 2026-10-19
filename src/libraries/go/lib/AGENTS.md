@@ -140,8 +140,9 @@ tools/ci/check-go-vendored-lib
 ```
 
 `go mod vendor` deletes or overwrites the BUILD.bazel files committed under
-NVCA's `vendor/`; the `git checkout` restores them. If a vendored Go file is
-added or removed, update that package's vendor BUILD.bazel `srcs` too.
+NVCA's `vendor/`; the `git checkout` restores them. If a vendored file is
+added or removed, update that package's vendor BUILD.bazel `srcs` or
+`embedsrcs` too.
 
 ## Style and Testing
 
