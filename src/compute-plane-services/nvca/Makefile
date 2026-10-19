@@ -4,7 +4,10 @@ SHELL := /bin/bash
 # NOTE: env vars in this file always win over local environment variables
 ENVFILE := .env
 -include $(ENVFILE)
-export $(shell sed 's/=.*//' $(ENVFILE) 2>/dev/null | grep '^[[:alpha:]]')
+ENVFILE_VARS := $(shell sed 's/=.*//' $(ENVFILE) 2>/dev/null | grep '^[[:alpha:]]')
+ifneq ($(strip $(ENVFILE_VARS)),)
+export $(ENVFILE_VARS)
+endif
 
 export GITLAB_USER ?= $(shell awk -F'=' '/^GITLAB_USER=/{print $$2}' .secrets 2>/dev/null || echo "gitlab-ci-token")
 export GITLAB_TOKEN ?= $(shell awk -F'=' '/^GITLAB_TOKEN=/{print $$2}' .secrets 2>/dev/null || echo "$(CI_JOB_TOKEN)")
