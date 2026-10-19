@@ -287,6 +287,14 @@ spec:
           {{- if and $byooOtelCollectorImage (or (not (hasKey $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
           {{- $_ := set $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
           {{- end }}
+          {{- with include "nvcaop.byooFluentBitImage" . }}
+          {{- if not (hasKey $functionEnvOverrides "BYOO_FLUENTBIT_CONTAINER") }}
+          {{- $_ := set $functionEnvOverrides "BYOO_FLUENTBIT_CONTAINER" . }}
+          {{- end }}
+          {{- if not (hasKey $taskEnvOverrides "BYOO_FLUENTBIT_CONTAINER") }}
+          {{- $_ := set $taskEnvOverrides "BYOO_FLUENTBIT_CONTAINER" . }}
+          {{- end }}
+          {{- end }}
           {{- if $functionEnvOverrides }}
           - --function-env-overrides-b64
           - {{ $functionEnvOverrides | toJson | b64enc | quote }}

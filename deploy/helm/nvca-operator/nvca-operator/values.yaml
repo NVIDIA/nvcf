@@ -300,8 +300,14 @@ agent:
   byooOtelCollector:
     imageRepository: ""
     imageTag: "0.160.0-nv-0.2.5"
+  ## @param agent.byooFluentBit.imageRepository Optional BYOO Fluent Bit image repository, including the registry. If unset, NVCA uses its built-in upstream Fluent Bit image.
+  ## @param agent.byooFluentBit.imageTag BYOO Fluent Bit image tag. Required when agent.byooFluentBit.imageRepository is set.
+  byooFluentBit:
+    imageRepository: ""
+    imageTag: ""
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
+  ##                 BYOO_FLUENTBIT_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
   ## Example:
   ##   functionEnvOverrides:
@@ -311,6 +317,7 @@ agent:
   functionEnvOverrides: {}
   ## Environment variable overrides for task workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
+  ##                 BYOO_FLUENTBIT_CONTAINER,
   ##                 ESS_AGENT_CONTAINER, TASK_CONTAINER
   ## Example:
   ##   taskEnvOverrides:
