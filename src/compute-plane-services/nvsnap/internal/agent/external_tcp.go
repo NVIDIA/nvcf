@@ -185,21 +185,42 @@ func destroyTCPInNS(pidInNS int, keep func(remote net.IP) bool, msg string, log 
 }
 
 // tcpPeersOfContainer returns the remote addresses of the TCP connections
-// the processes of the container of host pid pid opened: the processes in
-// its cgroup, whether or not the pod shares one pid namespace between its
-// containers. The containers of a pod share a network namespace, so the
-// namespace alone cannot tell a sidecar's connections from the engine's.
-func tcpPeersOfContainer(pid int, log *logrus.Entry) ([]net.IP, error) {
+// the processes of the container of host pid pid opened (outboundPeers), or
+// of all its connections with both: the processes in its cgroup, whether or
+// not the pod shares one pid namespace between its containers. The
+// containers of a pod share a network namespace, so the namespace alone
+// cannot tell a sidecar's connections from the engine's.
+func tcpPeersOfContainer(pid int, both bool, log *logrus.Entry) ([]net.IP, error) {
 	inodes, err := containerSocketInodes(hostProcBase(), pid)
 	if err != nil {
 		return nil, err
 	}
 	var peers []net.IP
 	err = inNetNS(pid, func() error {
-		peers = outboundPeers(allTCP(log), func(s *netlink.Socket) bool { return inodes[s.INode] })
+		peers = tcpPeers(allTCP(log), both, func(s *netlink.Socket) bool { return inodes[s.INode] })
 		return nil
 	})
 	return peers, err
+}
+
+// tcpPeers returns the remote addresses of the established connections of
+// sockets that own selects: the ones the namespace opened
+// (outboundPeers), or all of them with both, loopback excluded, each once.
+func tcpPeers(sockets []*netlink.Socket, both bool, own func(*netlink.Socket) bool) []net.IP {
+	if !both {
+		return outboundPeers(sockets, own)
+	}
+	seen := map[string]bool{}
+	var peers []net.IP
+	for _, s := range sockets {
+		ip := s.ID.Destination
+		if s.State != tcpStateEstablished || !own(s) || ip.IsLoopback() || seen[ip.String()] {
+			continue
+		}
+		seen[ip.String()] = true
+		peers = append(peers, ip)
+	}
+	return peers
 }
 
 // outboundPeers returns the remote addresses of the established
@@ -278,11 +299,12 @@ func containerSocketInodes(procBase string, pid int) (map[uint32]bool, error) {
 }
 
 // tcpPeersInNS returns the remote addresses of the TCP connections the
-// network namespace of pidInNS opened (outboundPeers).
-func tcpPeersInNS(pidInNS int, log *logrus.Entry) ([]net.IP, error) {
+// network namespace of pidInNS opened (outboundPeers), or of all its
+// connections with both.
+func tcpPeersInNS(pidInNS int, both bool, log *logrus.Entry) ([]net.IP, error) {
 	var peers []net.IP
 	err := inNetNS(pidInNS, func() error {
-		peers = outboundPeers(allTCP(log), func(*netlink.Socket) bool { return true })
+		peers = tcpPeers(allTCP(log), both, func(*netlink.Socket) bool { return true })
 		return nil
 	})
 	return peers, err

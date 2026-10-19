@@ -8,7 +8,13 @@ package agent
 // there, and a restored worker whose lease is gone shuts down. So an
 // instance's capture also takes the pods without GPUs that its GPU ranks
 // hold connections to in their namespace (the companions: an etcd, a
-// NATS), and its restore brings them back with the ranks.
+// NATS), and its restore brings them back with the ranks. A pod that
+// connects to those companions shares the instance's state too (a Dynamo
+// frontend keeps its own lease and registrations in the etcd, and reaches
+// the workers at the addresses they registered there, which only restored
+// processes can), so it is a companion as well. A pod that only connects
+// to the ranks is a client of the instance (a request proxy), and NVCA's
+// own pods never belong to it (nvcaPlatformPod).
 //
 // Restored processes run in a time namespace that continues their clocks
 // from the capture (CRIU restores the dumped clock offsets), so neither a
@@ -73,9 +79,10 @@ func hasGPU(p *corev1.Pod) bool { return gpuContainer(p) != "" }
 
 // discoverCompanions returns the companions of an instance: the pods of
 // its namespace without GPUs that its ranks hold TCP connections to,
-// directly or through a Service, in a stable order, and the container to
-// capture of each (companionContainer). It fails when one cannot be
-// captured, rather than capture an instance without it.
+// directly or through a Service, and the pods that connect to those, in a
+// stable order, and the container to capture of each (companionContainer).
+// It fails when one cannot be captured, rather than capture an instance
+// without it.
 func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log *logrus.Entry) ([]*corev1.Pod, map[string]string, error) {
 	ns := ranks[0].Namespace
 	peers := map[string]bool{}
@@ -84,7 +91,7 @@ func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log
 		if err != nil {
 			return nil, nil, fmt.Errorf("rank %s: %w", r.Name, err)
 		}
-		ips, err := fetchPeers(ctx, base, r.Namespace, r.Name, gpuContainer(r))
+		ips, err := fetchPeers(ctx, base, r.Namespace, r.Name, gpuContainer(r), false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("rank %s: connections: %w", r.Name, err)
 		}
@@ -103,25 +110,48 @@ func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log
 	if err != nil {
 		return nil, nil, err
 	}
-	var slices []discoveryv1.EndpointSlice
-	for _, svc := range svcs.Items {
-		if !servesAny(svc, peers) {
-			continue
-		}
-		l, err := a.kubeClient.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + svc.Name})
-		if err != nil {
-			return nil, nil, err
-		}
-		slices = append(slices, l.Items...)
+	sl, err := a.kubeClient.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, err
 	}
+	slices := sl.Items
 	found := matchCompanions(peers, pods.Items, svcs.Items, slices, ranks)
+	if len(found) > 0 {
+		reach := companionAddresses(found, svcs.Items, slices)
+		peersOf := map[string][]string{}
+		for _, p := range companionCandidates(pods.Items, ranks) {
+			if found[p.Name] != nil || p.Status.PodIP == "" || p.Spec.NodeName == "" {
+				continue
+			}
+			base, err := a.peerAgentURL(ctx, p.Spec.NodeName)
+			if err != nil {
+				return nil, nil, fmt.Errorf("pod %s: %w", p.Name, err)
+			}
+			for _, c := range p.Spec.Containers {
+				ips, err := fetchPeers(ctx, base, p.Namespace, p.Name, c.Name, false)
+				if err != nil {
+					return nil, nil, fmt.Errorf("pod %s: container %s: connections: %w", p.Name, c.Name, err)
+				}
+				peersOf[p.Name] = append(peersOf[p.Name], ips...)
+			}
+		}
+		for name, p := range clientsOf(reach, peersOf, pods.Items) {
+			found[name] = p
+		}
+	}
+	instance := companionAddresses(found, svcs.Items, slices)
+	for _, r := range ranks {
+		for _, ip := range podIPs(r) {
+			instance[ip] = true
+		}
+	}
 	out := make([]*corev1.Pod, 0, len(found))
 	containers := map[string]string{}
 	for _, p := range found {
 		if err := a.companionCapturable(ctx, p); err != nil {
 			return nil, nil, fmt.Errorf("companion %s: %w", p.Name, err)
 		}
-		c, err := a.companionContainer(ctx, p, ranks)
+		c, err := a.companionContainer(ctx, p, instance)
 		if err != nil {
 			return nil, nil, fmt.Errorf("companion %s: %w", p.Name, err)
 		}
@@ -140,21 +170,14 @@ func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log
 }
 
 // companionContainer is the container of companion p to capture: its only
-// one, or the one whose own processes hold connections to the ranks. The
-// other containers of the pod (a readiness sidecar, say) start fresh in the
-// restored pod, as a rank's sidecars do.
-func (a *Agent) companionContainer(ctx context.Context, p *corev1.Pod, ranks []*corev1.Pod) (string, error) {
+// one, or the one whose own processes hold connections, in either
+// direction, to the instance (instance: the addresses of its ranks and
+// companions and of the Services that lead to them). The other containers
+// of the pod (a readiness sidecar, say) start fresh in the restored pod, as
+// a rank's sidecars do.
+func (a *Agent) companionContainer(ctx context.Context, p *corev1.Pod, instance map[string]bool) (string, error) {
 	if len(p.Spec.Containers) == 1 {
 		return p.Spec.Containers[0].Name, nil
-	}
-	rankIPs := map[string]bool{}
-	for _, r := range ranks {
-		for _, ip := range r.Status.PodIPs {
-			rankIPs[ip.IP] = true
-		}
-		if r.Status.PodIP != "" {
-			rankIPs[r.Status.PodIP] = true
-		}
 	}
 	base, err := a.peerAgentURL(ctx, p.Spec.NodeName)
 	if err != nil {
@@ -162,11 +185,11 @@ func (a *Agent) companionContainer(ctx context.Context, p *corev1.Pod, ranks []*
 	}
 	var talking []string
 	for _, c := range p.Spec.Containers {
-		ips, err := fetchPeers(ctx, base, p.Namespace, p.Name, c.Name)
+		ips, err := fetchPeers(ctx, base, p.Namespace, p.Name, c.Name, true)
 		if err != nil {
 			return "", fmt.Errorf("container %s: connections: %w", c.Name, err)
 		}
-		if anyIn(ips, rankIPs) {
+		if anyIn(ips, instance) {
 			talking = append(talking, c.Name)
 		}
 	}
@@ -174,15 +197,15 @@ func (a *Agent) companionContainer(ctx context.Context, p *corev1.Pod, ranks []*
 }
 
 // pickCompanionContainer chooses among a companion's containers: exactly
-// one of them may hold connections to the ranks.
+// one of them may hold connections to the instance.
 func pickCompanionContainer(containers int, talking []string) (string, error) {
 	switch len(talking) {
 	case 1:
 		return talking[0], nil
 	case 0:
-		return "", fmt.Errorf("none of its %d containers holds a connection to the ranks", containers)
+		return "", fmt.Errorf("none of its %d containers holds a connection to the instance", containers)
 	default:
-		return "", fmt.Errorf("containers %s all hold connections to the ranks; a companion is captured with one", strings.Join(talking, ", "))
+		return "", fmt.Errorf("containers %s all hold connections to the instance; a companion is captured with one", strings.Join(talking, ", "))
 	}
 }
 
@@ -195,26 +218,45 @@ func anyIn(ips []string, set map[string]bool) bool {
 	return false
 }
 
-// matchCompanions maps the ranks' peer addresses to the pods without GPUs
-// of their namespace: a pod's own address, or a Service's cluster address
-// and the pods of its endpoints.
-func matchCompanions(peers map[string]bool, pods []corev1.Pod, svcs []corev1.Service, slices []discoveryv1.EndpointSlice, ranks []*corev1.Pod) map[string]*corev1.Pod {
+// companionCandidates returns the pods of the namespace that can be
+// companions: without GPUs, not a rank, not being deleted, not NVCA's.
+func companionCandidates(pods []corev1.Pod, ranks []*corev1.Pod) []*corev1.Pod {
 	rank := map[string]bool{}
 	for _, r := range ranks {
 		rank[r.Name] = true
 	}
-	byIP, byName := map[string]*corev1.Pod{}, map[string]*corev1.Pod{}
+	var out []*corev1.Pod
 	for i := range pods {
 		p := &pods[i]
-		if p.DeletionTimestamp != nil || rank[p.Name] || hasGPU(p) {
+		if p.DeletionTimestamp != nil || rank[p.Name] || hasGPU(p) || nvcaPlatformPod(p) {
 			continue
 		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// podIPs returns a pod's addresses.
+func podIPs(p *corev1.Pod) []string {
+	var out []string
+	for _, ip := range p.Status.PodIPs {
+		out = append(out, ip.IP)
+	}
+	if p.Status.PodIP != "" {
+		out = append(out, p.Status.PodIP)
+	}
+	return out
+}
+
+// matchCompanions maps the ranks' peer addresses to the companion
+// candidates of their namespace: a pod's own address, or a Service's
+// cluster address and the pods of its endpoints.
+func matchCompanions(peers map[string]bool, pods []corev1.Pod, svcs []corev1.Service, slices []discoveryv1.EndpointSlice, ranks []*corev1.Pod) map[string]*corev1.Pod {
+	byIP, byName := map[string]*corev1.Pod{}, map[string]*corev1.Pod{}
+	for _, p := range companionCandidates(pods, ranks) {
 		byName[p.Name] = p
-		for _, ip := range p.Status.PodIPs {
-			byIP[ip.IP] = p
-		}
-		if p.Status.PodIP != "" {
-			byIP[p.Status.PodIP] = p
+		for _, ip := range podIPs(p) {
+			byIP[ip] = p
 		}
 	}
 	found := map[string]*corev1.Pod{}
@@ -243,6 +285,51 @@ func matchCompanions(peers map[string]bool, pods []corev1.Pod, svcs []corev1.Ser
 		}
 	}
 	return found
+}
+
+// companionAddresses returns the addresses that lead to the companions:
+// their own and the cluster addresses of the Services whose endpoints
+// include one of them.
+func companionAddresses(companions map[string]*corev1.Pod, svcs []corev1.Service, slices []discoveryv1.EndpointSlice) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range companions {
+		for _, ip := range podIPs(p) {
+			out[ip] = true
+		}
+	}
+	leads := map[string]bool{}
+	for _, sl := range slices {
+		for _, ep := range sl.Endpoints {
+			if ep.TargetRef != nil && ep.TargetRef.Kind == "Pod" && companions[ep.TargetRef.Name] != nil {
+				leads[sl.Labels[discoveryv1.LabelServiceName]] = true
+			}
+		}
+	}
+	for _, svc := range svcs {
+		if !leads[svc.Name] {
+			continue
+		}
+		for _, ip := range append([]string{svc.Spec.ClusterIP}, svc.Spec.ClusterIPs...) {
+			if ip != "" && ip != corev1.ClusterIPNone {
+				out[ip] = true
+			}
+		}
+	}
+	return out
+}
+
+// clientsOf returns the pods of peersOf (a pod's name to the addresses it
+// opened connections to) that connect to an address of reach: the pods
+// sharing the companions' state.
+func clientsOf(reach map[string]bool, peersOf map[string][]string, pods []corev1.Pod) map[string]*corev1.Pod {
+	out := map[string]*corev1.Pod{}
+	for i := range pods {
+		p := &pods[i]
+		if ips, ok := peersOf[p.Name]; ok && anyIn(ips, reach) {
+			out[p.Name] = p
+		}
+	}
+	return out
 }
 
 // servesAny reports whether one of a Service's cluster addresses is among
@@ -321,7 +408,8 @@ func (c *criuAutoRestorer) considerCompanionPlaceholder(ctx context.Context, pod
 	c.failGroup(ctx, pod, key, false, fmt.Errorf("companion placeholder not restored after %s", companionPlaceholderWait), log)
 }
 
-// peersHandler lists a pod's established TCP peers, for the agent that
+// peersHandler lists the peers of a pod's established TCP connections that
+// it opened, or of all of them with direction=both, for the agent that
 // captures its instance.
 func (a *Agent) peersHandler(w http.ResponseWriter, r *http.Request) {
 	v := mux.Vars(r)
@@ -331,10 +419,11 @@ func (a *Agent) peersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log := a.log.WithFields(logrus.Fields{"pod": v["namespace"] + "/" + v["pod"], "container": r.URL.Query().Get("container")})
-	ips, err := tcpPeersOfContainer(int(info.PID), log)
+	both := r.URL.Query().Get("direction") == "both"
+	ips, err := tcpPeersOfContainer(int(info.PID), both, log)
 	if err != nil {
 		log.WithError(err).Warn("connections of the container unreadable; using the pod's network namespace")
-		ips, err = tcpPeersInNS(int(info.PID), log)
+		ips, err = tcpPeersInNS(int(info.PID), both, log)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -348,8 +437,11 @@ func (a *Agent) peersHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-func fetchPeers(ctx context.Context, base, ns, pod, container string) ([]string, error) {
+func fetchPeers(ctx context.Context, base, ns, pod, container string, both bool) ([]string, error) {
 	u := fmt.Sprintf("%s/v1/pods/%s/%s/peers?container=%s", base, url.PathEscape(ns), url.PathEscape(pod), url.QueryEscape(container))
+	if both {
+		u += "&direction=both"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
