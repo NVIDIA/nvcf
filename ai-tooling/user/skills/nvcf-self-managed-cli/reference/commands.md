@@ -69,7 +69,13 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 
 ## Telemetry endpoints
 
-Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelemetry collector sidecar exports a function's or task's logs, metrics, or traces to an endpoint the tenant owns. Endpoint commands require the `manage_telemetries` scope; `update-secret` requires `update_secrets`. Provider support and secret shapes are in [flags.md](flags.md).
+Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelemetry collector sidecar exports a function's or task's logs, metrics, or traces to an endpoint the tenant owns. Endpoint commands require the `manage_telemetries` scope, which the default function API key includes. `update-secret` also requires `update_secrets`, which the default function key does not include. Generate a key with both; `--scopes` replaces the defaults, so list every scope the key needs:
+
+```bash
+nvcf-cli api-key generate --for function --scopes manage_telemetries,update_secrets
+```
+
+Provider support and secret shapes are in [flags.md](flags.md).
 
 | Command | Purpose | Notes |
 |---|---|---|
@@ -77,7 +83,7 @@ Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelem
 | `telemetry list` | List endpoints in the account | Credentials are never returned |
 | `telemetry get TELEMETRY-ID` | Endpoint details | |
 | `telemetry update-secret TELEMETRY-ID --secret-file=FILE` | Replace the stored credentials | Same secret shape as `create`; cross-account updates use `admin secrets update-telemetry` |
-| `telemetry delete TELEMETRY-ID [--force]` | Delete an endpoint and its credentials | **Confirm with user**; fails while a function still references it |
+| `telemetry delete TELEMETRY-ID [--force]` | Delete an endpoint and its credentials | Confirm with user; fails while a function still references it |
 
 Attach an endpoint with `--logs-telemetry-id`, `--metrics-telemetry-id`, or `--traces-telemetry-id` on `function create` or `task create`. `function get`, `task get`, and both create commands show the attached IDs under `Telemetries` (`telemetries` in `--json`).
 

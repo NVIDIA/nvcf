@@ -99,8 +99,9 @@ a function's or task's logs, metrics, or traces and which credentials to use.
 Attach an endpoint with --logs-telemetry-id, --metrics-telemetry-id, or
 --traces-telemetry-id on "function create" or "task create".
 
-Endpoint management requires the 'manage_telemetries' scope. Updating
-credentials requires the 'update_secrets' scope.
+Endpoint management requires the 'manage_telemetries' scope, which the
+default function API key includes. Updating credentials also requires the
+'update_secrets' scope, which it does not; see "telemetry update-secret --help".
 
 Available Commands:
   create          Register a telemetry endpoint
@@ -189,8 +190,15 @@ var telemetryUpdateSecretCmd = &cobra.Command{
 authenticated account. The new secret must match the endpoint's provider.
 Running workloads pick up the new value without a redeploy.
 
-Requires the 'update_secrets' scope. Cross-account updates use
-"admin secrets update-telemetry".
+Requires the 'update_secrets' scope, plus 'manage_telemetries' to look up the
+endpoint. The default function API key does not include 'update_secrets'.
+Generate a function key that has both; --scopes replaces the default scopes,
+so list every scope the key needs:
+
+  nvcf-cli api-key generate --for function \
+    --scopes manage_telemetries,update_secrets
+
+Cross-account updates use "admin secrets update-telemetry".
 
 Examples:
   nvcf-cli telemetry update-secret 12345678-1234-1234-1234-123456789012 \

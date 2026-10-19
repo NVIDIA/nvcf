@@ -122,6 +122,7 @@ When no `--scopes` flag is provided, API keys are generated with these **default
 - `list_functions`
 - `queue_details`
 - `list_functions_details`
+- `manage_telemetries`
 
 These default scopes are sufficient for most read-only user operations (invoking functions, monitoring queues, and viewing function information). For write operations, you need to use JWT tokens (NVCF_TOKEN).
 
