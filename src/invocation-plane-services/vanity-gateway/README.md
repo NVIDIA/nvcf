@@ -599,8 +599,9 @@ or `concurrency_limit`.
 decisions, one per shadow target below 100 percent on each request. It shows
 which sampling method made the final decision, so a rollout can measure how
 much traffic is sticky and how often sampling falls back to `random`. The
-`sampling_endpoint` label is `chatCompletions`, `responses`, or `other`. The
-`method` label is `promptCacheKey`, `firstMessageHash`, `perBearerKey`, or
+`sampling_endpoint` label is `chatCompletions`, `responses`, `messages`, or
+`other`. Messages decisions were labeled `other` before Messages supported
+sticky methods. The `method` label is `promptCacheKey`, `firstMessageHash`, `perBearerKey`, or
 `random`. The `outcome` label is `admitted` or `rejected`. All label
 combinations are emitted at zero on startup. The primary request span records
 the deciding methods in the `shadow.sampling_methods` attribute. Neither
