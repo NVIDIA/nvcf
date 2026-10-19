@@ -70,7 +70,7 @@ unset to keep the NVCA built-in defaults.
 | `byoo.resources` | Requests and limits for the BYOO OTel Collector container. |
 | `byoo.fluentbit.resources` | Requests and limits for the Fluent Bit container. |
 | `byoo.logChunking` | Log chunking overrides: `maxPayloadBytes` and `dryRun`. |
-| `byoo.otelCollector` | Structured collector rendering overrides. |
+| `byoo.otelCollector` | Structured collector rendering overrides, including [platform metrics federation](#platform-metrics-federation). |
 | `byoo.additionalResourceOverhead` | Cluster capacity reserved for BYOO and related DaemonSet overhead. |
 
 Example values for the `nvca-operator` release:
@@ -99,6 +99,39 @@ byoo:
 You can also tune the collector through `agentConfig.mergeConfig`. For
 examples, refer to
 [Agent Config Merging](../compute-plane/cluster-management/configuration.md#agent-config-merging).
+
+### Platform metrics federation
+
+The collector can read platform metrics for its workload from a
+Prometheus-compatible `/federate` endpoint: worker, NVCA, cAdvisor,
+kube-state-metrics, and DCGM series. On self-managed clusters, federation is
+off unless you set `byoo.otelCollector.platformMetricsFederation`. The
+collector then exports only the telemetry that the workload sends and the
+container logs.
+
+To turn it on, set `target` to the `host:port` of a server that serves
+`/federate` over HTTP. For the VictoriaMetrics backend of the observability
+stack, use `vmsingle.<observability-namespace>.svc.cluster.local:8428`.
+
+```yaml
+byoo:
+  otelCollector:
+    platformMetricsFederation:
+      target: vmsingle.monitoring.svc.cluster.local:8428
+```
+
+In the compute-plane stack, set the same block under
+`global.nvcaOperator.byoo`. Set `enabled: false` to keep federation off
+explicitly.
+
+The federation jobs select series by the `job`, `namespace`, `pod`, and
+`container` labels of the NVIDIA-managed Prometheus, for example
+`job="kubelet"` for cAdvisor and `job="nvca"` for NVCA. Series that the target
+stores under other job names or labels are not exported.
+
+This setting needs an NVCA operator and a BYOO collector release that include
+it. Older releases ignore it and federate from the default target described in
+[Federation scrape errors in the collector log](#federation-scrape-errors-in-the-collector-log).
 
 ### Collector image access
 
@@ -269,7 +302,8 @@ The function creation API uses the same `telemetries` object.
   reads the logs of the application pods in the workload namespace that run on
   the same node as the utils pod.
 - Platform metrics, such as cAdvisor, kube-state-metrics, NVCA, and worker
-  metrics, which the collector federates from a cluster Prometheus.
+  metrics, when platform metrics federation is configured. For more
+  information, refer to [Platform metrics federation](#platform-metrics-federation).
 
 ## Security
 
@@ -300,13 +334,16 @@ A workload pod shows `ImagePullBackOff` or `ErrImagePull` for the
 
 ### Federation scrape errors in the collector log
 
-The collector federates platform metrics from the
+Releases without the platform metrics federation setting federate from the
 `nvcf-byoo-prometheus-kube-prometheus` service in the `monitoring` namespace.
 The self-managed stacks do not install that service. The collector log then
 shows scrape errors for the `nvcf-worker`, `nvca`, `kubernetes-cadvisor`, and
 `kube-state-metrics` jobs. Platform metrics are not exported, except `up`
 series with the value 0 for the failing jobs. OTLP telemetry from the workload
 and container logs are not affected.
+
+With a configured `target`, the same errors mean that the collector cannot
+reach the target. Check the target host and port, or set `enabled: false`.
 
 Read the collector log:
 

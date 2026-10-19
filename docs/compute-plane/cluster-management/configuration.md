@@ -906,6 +906,31 @@ For `hash_seed`, use `0` or a percentage of at least `0.006103515625`.
 randomness. If you configure `samplingPriority`, record values must be greater
 than `0`; zero is not supported by the pinned collector version.
 
+BYOO platform metrics federation example:
+
+```yaml
+byoo:
+  otelCollector:
+    platformMetricsFederation:
+      target: vmsingle.monitoring.svc.cluster.local:8428
+```
+
+On Kubernetes clusters, the BYOO collector reads platform metrics for its
+workload from a Prometheus-compatible `/federate` endpoint: worker, NVCA,
+cAdvisor, kube-state-metrics, and DCGM series. `target` is the `host:port`
+of that server, reached over HTTP. Set `enabled: false` to remove the
+federation scrape jobs; the collector still exports the metrics, logs, and
+traces that the workload sends.
+
+Self-managed clusters disable federation unless `enabled` or `target` is set,
+because the self-managed stacks do not deploy the Prometheus that the
+collector federates from by default. On other clusters, federation stays on
+with the default target. The `allow-egress-prometheus-nvcf-byoo` network
+policy allows only that default Prometheus. If NVCA applies network policies
+to workload namespaces and you set a different target, add a matching egress
+policy with `networkPolicy.customPolicies`. Collector images that predate this
+setting ignore it.
+
 BYOO metric subset example:
 
 ```yaml

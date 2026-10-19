@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +197,8 @@ type BYOOOTelCollectorConfig struct {
 	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
 	LogSampling    BYOOOTelLogSamplingConfig    `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
 	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
+	// PlatformMetricsFederation configures the platform metrics federation scrape on Kubernetes backends.
+	PlatformMetricsFederation BYOOOTelPlatformMetricsFederationConfig `mapstructure:"platformMetricsFederation" yaml:"platformMetricsFederation,omitempty" json:"platformMetricsFederation,omitempty"`
 }
 
 const (
@@ -209,7 +213,8 @@ func (c BYOOOTelCollectorConfig) IsZero() bool {
 		c.Batch.IsZero() &&
 		c.LogBatch.IsZero() &&
 		c.LogSampling.IsZero() &&
-		c.TraceSampling.IsZero()
+		c.TraceSampling.IsZero() &&
+		c.PlatformMetricsFederation.IsZero()
 }
 
 // EnvVars returns the BYOO collector env vars for the structured config.
@@ -230,13 +235,61 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 	}}
 }
 
-// Validate rejects BYOO OTel sampler settings that the pinned collector cannot apply safely.
+// Validate rejects BYOO OTel sampler and federation settings that the pinned collector cannot apply safely.
 func (c BYOOOTelCollectorConfig) Validate() error {
 	if err := c.LogSampling.validate(); err != nil {
 		return fmt.Errorf("log sampling: %w", err)
 	}
 	if err := c.TraceSampling.validate(); err != nil {
 		return fmt.Errorf("trace sampling: %w", err)
+	}
+	if err := c.PlatformMetricsFederation.validate(); err != nil {
+		return fmt.Errorf("platform metrics federation: %w", err)
+	}
+	return nil
+}
+
+// BYOOOTelPlatformMetricsFederationConfig configures the BYOO collector scrape
+// jobs that read platform metrics (worker, NVCA, cAdvisor, kube-state-metrics,
+// and DCGM) from a Prometheus-compatible /federate endpoint. It applies to
+// Kubernetes backends only. An unset config keeps the collector default.
+type BYOOOTelPlatformMetricsFederationConfig struct {
+	// Enabled turns the federation scrape jobs on or off. When unset, the jobs
+	// are rendered.
+	Enabled *bool `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Target is the host:port of the server that serves /federate. When empty,
+	// the collector uses its built-in target.
+	Target string `mapstructure:"target" yaml:"target,omitempty" json:"target,omitempty"`
+}
+
+// IsZero returns true when neither enabled nor target is set.
+func (c BYOOOTelPlatformMetricsFederationConfig) IsZero() bool {
+	return c.Enabled == nil && c.Target == ""
+}
+
+var byooOTelFederationHostPattern = regexp.MustCompile(
+	`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+func (c BYOOOTelPlatformMetricsFederationConfig) validate() error {
+	if c.Target == "" {
+		return nil
+	}
+	return validateBYOOOTelFederationTarget(c.Target)
+}
+
+// validateBYOOOTelFederationTarget accepts a DNS name or IP address with a
+// port, such as prometheus.monitoring.svc.cluster.local:9090.
+func validateBYOOOTelFederationTarget(target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("target %q must be host:port: %w", target, err)
+	}
+	if net.ParseIP(host) == nil && !byooOTelFederationHostPattern.MatchString(host) {
+		return fmt.Errorf("target %q must use a DNS name or IP address as its host", target)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("target %q must use a port between 1 and 65535", target)
 	}
 	return nil
 }
