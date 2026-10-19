@@ -188,15 +188,18 @@ rm deploy/stacks/self-managed/secrets/local-secrets.yaml.bak
 ## Step 4: Run the install
 
 The sample function does not require Event Ledger. Disable this optional addon
-in `deploy/stacks/self-managed/environments/local.yaml` so the local install
-does not require its chart. Merge this override into the existing environment
-values:
+so the local install does not require its chart. Create
+`deploy/stacks/self-managed/environments/local.yaml` with the following values.
+If the file already exists, merge this override into its existing values:
 
 ```yaml
 addons:
   eventLedger:
     enabled: false
 ```
+
+Helmfile loads `environments/base.yaml` first, then applies the overrides in
+`environments/local.yaml`. You do not need to copy `base.yaml`.
 
 Check local tools and Kubernetes access:
 
