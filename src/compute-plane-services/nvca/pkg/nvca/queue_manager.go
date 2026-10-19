@@ -421,9 +421,14 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		return fmt.Errorf("failed to list ICMS requests for existence detection: %w", err)
 	}
 	existingMsgIDs := sets.Set[string]{}
+	rejectedSRsByMsgID := map[string]*nvcav2beta1.ICMSRequest{}
 	for _, sr := range existingSRs {
 		existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+		if GetCreationRejectionReason(sr) != "" {
+			rejectedSRsByMsgID[sr.Labels[SQSMessageIDKey]] = sr
+		}
 	}
+	qm.deleteRedeliveredRejectedMessages(ctx, qwInputs, qwOutputs, rejectedSRsByMsgID)
 
 	// Track if there is any error at all
 	anyQueuePullError := false
@@ -721,9 +726,63 @@ func (qm *QueueManager) doCreationMessage(ctx context.Context,
 		return 0, fmt.Errorf("failed to apply creation message: %v", cerr)
 	}
 
+	if reason := GetCreationRejectionReason(icmsReq); reason != "" {
+		// The request is reported to ICMS as failed. Delete the message so it is
+		// not processed again, for example after the cluster configuration changes.
+		if err := qm.Client.DeleteMessage(ctx, queue.DeleteMessageInput{
+			QueueInfo:     qi,
+			ReceiptHandle: message.ReceiptHandle,
+		}); err != nil && !qm.Client.IsMessageNotFoundError(err) {
+			log.WithError(err).Warn("Failed to delete rejected creation message")
+		}
+		logging.NewICMSRequestFieldLogger(icmsReq, log).WithField("reason", reason).
+			Warn("Rejected creation message, reporting the request as failed")
+		return 0, nil
+	}
+
 	logging.NewICMSRequestFieldLogger(icmsReq, log).Info("Applied one creation message")
 
 	return request, nil
+}
+
+// deleteRedeliveredRejectedMessages deletes creation messages that NVCA already
+// rejected. The delete at rejection time can fail, and a redelivered message has
+// a new receipt handle, so delete it with that handle instead of only skipping it.
+// Otherwise the message could be processed again once its rejected ICMS request
+// is cleaned up.
+func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
+	qwInputs []queueWorkInput,
+	qwOutputs queueWorkOutputs,
+	rejectedSRsByMsgID map[string]*nvcav2beta1.ICMSRequest,
+) {
+	if len(rejectedSRsByMsgID) == 0 {
+		return
+	}
+	log := core.GetLogger(ctx).WithField("queueType", queue.CreationQueue)
+	for i, qwOutput := range qwOutputs {
+		if qwOutput.err != nil {
+			continue
+		}
+		for _, message := range qwOutput.messages {
+			sr, ok := rejectedSRsByMsgID[message.MessageID]
+			if !ok {
+				continue
+			}
+			msgLog := logging.NewICMSRequestFieldLogger(sr, log).WithFields(logrus.Fields{
+				"queueURL":  qwInputs[i].qi.QueueURL,
+				"messageId": message.MessageID,
+			})
+			err := qm.Client.DeleteMessage(ctx, queue.DeleteMessageInput{
+				QueueInfo:     qwInputs[i].qi,
+				ReceiptHandle: message.ReceiptHandle,
+			})
+			if err != nil && !qm.Client.IsMessageNotFoundError(err) {
+				msgLog.WithError(err).Warn("Failed to delete redelivered rejected creation message")
+				continue
+			}
+			msgLog.Info("Deleted redelivered rejected creation message")
+		}
+	}
 }
 
 func (qm *QueueManager) doTerminationMessage(ctx context.Context,
