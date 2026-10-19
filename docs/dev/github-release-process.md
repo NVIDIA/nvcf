@@ -733,12 +733,19 @@ release events failed before their bumps were recorded.
 
 1. Land any change from the hand-written commit that must stay, such as
    release metadata, through its own Pull Request.
-2. Delete the bump branch. Its bot Pull Request closes, and the next run
+2. Record the release tags the branch carries. Deleting the branch
+   drops their bumps too:
+
+   ```bash
+   git log --format=%B origin/main..origin/<bump-branch> | grep '^Opened by'
+   ```
+
+3. Delete the bump branch. Its bot Pull Request closes, and the next run
    starts the branch from `main`.
-3. Dispatch the workflow from `main` for the newest release tag of each
-   service whose bump is missing. The bump tools only move a pin
-   forward, so the newest tag also covers the older releases of that
-   service.
+4. Dispatch the workflow from `main` for the newest release tag of each
+   service from step 2, and of each service whose release event failed.
+   The bump tools only move a pin forward, so the newest tag also covers
+   the older releases of that service.
 
 A dry run on `main` shows whether a tag still moves a pin. It prints a
 `<chart>: <from> -> <to>` line for each pin that would move:
