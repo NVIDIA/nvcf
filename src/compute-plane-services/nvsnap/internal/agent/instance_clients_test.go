@@ -20,6 +20,41 @@ func withEnv(p corev1.Pod, container, env string) corev1.Pod {
 	return p
 }
 
+func annotated(p corev1.Pod, k, v string) corev1.Pod {
+	p.Annotations = map[string]string{k: v}
+	return p
+}
+
+// NVCA's pods as it deployed a function on 2026-10-19: both carry its
+// infra-object annotation; the function's own pods do not.
+func TestNvcaPlatformPod_ByNVCAsAnnotation(t *testing.T) {
+	const key = "nvca.nvcf.nvidia.io/nvca-infra-object"
+	inFn := func(p corev1.Pod) corev1.Pod { p.Namespace = "sr-2ec49615"; return p }
+	utils := annotated(inFn(cpuPod("utils", "10.1.78.79")), key, "true")
+	utils.Spec.Containers = []corev1.Container{{Name: "ess"}, {Name: "utils"}, {Name: "byoo-otel-collector"}}
+	smb := annotated(inFn(cpuPod("nvcf-smb-server", "10.1.210.248")), key, "true")
+	smb.Spec.Containers = []corev1.Container{{Name: "smb-server"}}
+	cases := []struct {
+		name string
+		pod  corev1.Pod
+		want bool
+	}{
+		{"utils", utils, true},
+		{"SMB server", smb, true},
+		{"an NVCA pod no name rule knows", annotated(inFn(cpuPod("nvca-new-sidecar", "10.1.1.1")), key, "true"), true},
+		{"a function pod", inFn(gpuPod("mini-service-kimi-k3-0", "10.1.202.86")), false},
+		{"a function pod with the annotation empty", annotated(inFn(cpuPod("frontend", "10.1.1.2")), key, ""), false},
+		{"a function pod with another NVCA annotation", annotated(inFn(cpuPod("frontend", "10.1.1.2")), "nvca.nvcf.nvidia.io/storage-sharedstorage-kns-ro-pvc-name", "nvcf-kns-data-ro"), false},
+	}
+	for _, c := range cases {
+		if got := nvcaPlatformPod(&c.pod); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Without the annotation (an NVCA that predates it), NVCA's pods are told
+// by its own definitions of them.
 func TestNvcaPlatformPod(t *testing.T) {
 	inFn := func(p corev1.Pod) corev1.Pod { p.Namespace = "sr-0123"; return p }
 	cases := []struct {
@@ -46,8 +81,9 @@ func TestNvcaPlatformPod(t *testing.T) {
 func TestMatchCompanions_LeavesOutNVCAPods(t *testing.T) {
 	inFn := func(p corev1.Pod) corev1.Pod { p.Namespace = "sr-0123"; return p }
 	worker := inFn(gpuPod("worker", "10.0.0.2"))
-	pods := []corev1.Pod{worker, inFn(cpuPod("utils", "10.0.0.9")), inFn(cpuPod("nvcf-smb-server", "10.0.0.8")), inFn(cpuPod("etcd", "10.0.0.5"))}
-	peers := map[string]bool{"10.0.0.9": true, "10.0.0.8": true, "10.0.0.5": true}
+	pods := []corev1.Pod{worker, inFn(cpuPod("utils", "10.0.0.9")), inFn(cpuPod("nvcf-smb-server", "10.0.0.8")), inFn(cpuPod("etcd", "10.0.0.5")),
+		annotated(inFn(cpuPod("nvca-agent-sidecar", "10.0.0.7")), "nvca.nvcf.nvidia.io/nvca-infra-object", "true")}
+	peers := map[string]bool{"10.0.0.9": true, "10.0.0.8": true, "10.0.0.5": true, "10.0.0.7": true}
 	found := matchCompanions(peers, pods, nil, nil, []*corev1.Pod{&worker})
 	if len(found) != 1 || found["etcd"] == nil {
 		t.Errorf("companions = %v, want only the etcd", keys(found))

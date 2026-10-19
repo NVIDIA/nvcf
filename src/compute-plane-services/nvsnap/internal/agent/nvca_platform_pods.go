@@ -13,9 +13,16 @@ import (
 // that proxies the function's requests and an SMB server for its shared
 // storage. They belong to the platform, not to the function's instance, so
 // an instance's capture never takes them, whatever connections they hold.
-// These are NVCA's own definitions of them (IsUtilsPod in
+//
+// NVCA marks each object it owns with an infra-object annotation and wipes
+// it from the user's (InfraObjectAnnotationKey and IsInfraOwnedObject in
+// nvca/pkg/types), so the annotation tells NVCA's pods from the function's
+// whatever their names. A pod from an NVCA that predates the annotation is
+// told by NVCA's own definitions of its pods (IsUtilsPod in
 // nvca/internal/util/k8sutil and SMBServerPodName in nvca/pkg/storage).
 const (
+	nvcaInfraObjectAnnotation = "nvca.nvcf.nvidia.io/nvca-infra-object"
+
 	nvcaUtilsPodName       = "utils"
 	nvcaUtilsContainerName = "utils"
 	nvcaLLMWorkerContainer = "llm-worker"
@@ -25,10 +32,13 @@ const (
 )
 
 // nvcaPlatformPod reports a pod NVCA runs for a function rather than one of
-// the function's own: its utils pod (by its name in a function namespace,
-// or by its worker container, which alone carries the instance ID) or its
-// SMB server.
+// the function's own: one it annotated as its own, or by name its utils pod
+// (named so in a function namespace, or with the worker container, which
+// alone carries the instance ID) or its SMB server.
 func nvcaPlatformPod(p *corev1.Pod) bool {
+	if p.Annotations[nvcaInfraObjectAnnotation] != "" {
+		return true
+	}
 	if p.Name == nvcaSMBServerPodName {
 		return true
 	}
