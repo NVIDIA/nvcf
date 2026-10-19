@@ -106,8 +106,8 @@ The collector can read platform metrics for its workload from a
 Prometheus-compatible `/federate` endpoint: worker, NVCA, cAdvisor,
 kube-state-metrics, and DCGM series. On self-managed clusters, federation is
 off unless you set `byoo.otelCollector.platformMetricsFederation`. The
-collector then exports only the telemetry that the workload sends and the
-container logs.
+collector then exports only the telemetry that the workload sends, plus
+container logs when `BYOOFluentBit` is on.
 
 To turn it on, set `target` to the `host:port` of a server that serves
 `/federate` over HTTP. For the VictoriaMetrics backend of the observability
@@ -302,7 +302,7 @@ The function creation API uses the same `telemetries` object.
   reads the logs of the application pods in the workload namespace that run on
   the same node as the utils pod.
 - Platform metrics, such as cAdvisor, kube-state-metrics, NVCA, and worker
-  metrics, when platform metrics federation is configured. For more
+  metrics, when platform metrics federation is enabled. For more
   information, refer to [Platform metrics federation](#platform-metrics-federation).
 
 ## Security
