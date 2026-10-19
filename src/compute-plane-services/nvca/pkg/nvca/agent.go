@@ -957,7 +957,12 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 	nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationRegister, err)
 	if err != nil {
 		log.WithError(err).WithField("req", rreq).Error("Register with ICMS")
-		return nil, fmt.Errorf("register with ICMS: %v", err)
+		if nvcaerrors.GetHTTPStatusCode(err) == http.StatusConflict {
+			if hint := a.backendk8scache.overheadRemovedInstanceTypesHint(ctx); hint != "" {
+				return nil, fmt.Errorf("register with ICMS: %w; %s", err, hint)
+			}
+		}
+		return nil, fmt.Errorf("register with ICMS: %w", err)
 	}
 
 	if err := a.backendk8scache.StoreICMSRegistrationResponse(ctx, res); err != nil {
