@@ -179,6 +179,10 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 | `nvcf-cli task delete [taskId]` | Delete a task record | **Confirm with user.** |
 | `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | |
 | `nvcf-cli task bulk --task-ids=ID1,ID2` | Fetch details for multiple tasks in one call | |
+| `nvcf-cli telemetry create --name=X --endpoint=URL --provider=P --type=T --secret-file=FILE` | Register a BYOO telemetry endpoint; prints its ID | Before attaching `--logs-telemetry-id`, `--metrics-telemetry-id`, or `--traces-telemetry-id` to `function create` or `task create` |
+| `nvcf-cli telemetry list` / `telemetry get ID` | List or inspect telemetry endpoints | Credentials are never returned |
+| `nvcf-cli telemetry update-secret ID --secret-file=FILE` | Replace an endpoint's credentials | Credential rotation |
+| `nvcf-cli telemetry delete ID` | Delete a telemetry endpoint | **Confirm with user.** Fails while a function references it |
 
 > Registry credential propagation: after `registry-credential add`/`update`/`delete`, task creation can keep using the previous credential for up to about 5 minutes (NVCT caches account credentials at `nvct.nvcf.cache-ttl`, default `PT5M`), even though `registry-credential list`/`get` show the new value immediately. Wait about 5 minutes, or `kubectl -n nvcf rollout restart deployment/nvct-api` to apply immediately. See [reference/troubleshooting.md](reference/troubleshooting.md).
 
@@ -326,6 +330,11 @@ nvcf-cli task events [taskId]                 # lifecycle events
 nvcf-cli task results [taskId]                # result artifacts
 nvcf-cli task cancel [taskId]
 nvcf-cli task delete [taskId]
+
+# Telemetry endpoints (BYOO)
+nvcf-cli telemetry create --name=X --endpoint=URL --provider=P --type=LOGS --secret-file=FILE
+nvcf-cli telemetry list
+nvcf-cli telemetry update-secret ID --secret-file=FILE
 ```
 
 ## Feedback
