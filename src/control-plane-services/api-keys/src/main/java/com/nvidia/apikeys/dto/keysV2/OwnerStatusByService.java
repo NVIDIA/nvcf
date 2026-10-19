@@ -17,30 +17,22 @@
 
 package com.nvidia.apikeys.dto.keysV2;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
-import java.util.List;
+import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * issuerServices lists only issuer services with a stored issuer-scoped status and is omitted
- * when there are none.
- */
 @Data
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
-@JsonInclude(Include.NON_NULL)
-public class AccountOwnerStatus {
+public class OwnerStatusByService {
 
-    private String ncaId;
+    private String issuerServiceId;
 
     private KeyOwnerStatus status;
 
-    @JsonInclude(Include.NON_EMPTY)
-    private List<IssuerOwnerStatus> issuerServices;
+    private Instant updatedAt;
 }

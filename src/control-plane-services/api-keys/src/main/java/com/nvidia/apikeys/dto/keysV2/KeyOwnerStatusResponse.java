@@ -39,7 +39,7 @@ public class KeyOwnerStatusResponse {
 
     private String ownerId;
 
-    private String ncaId;
+    private String accountId;
 
     private String issuerServiceId;
 

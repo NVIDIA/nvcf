@@ -54,7 +54,7 @@ class KeyOwnerStatusDtosJsonTest {
     void ownerStatusResponse_omitsIssuerForAccountScope() throws Exception {
         KeyOwnerStatusResponse response = KeyOwnerStatusResponse.builder()
                 .ownerId("user-1")
-                .ncaId("account-a")
+                .accountId("account-a")
                 .status(KeyOwnerStatus.SUSPENDED)
                 .updatedAt(Instant.parse("2026-09-01T00:00:00Z"))
                 .build();
@@ -62,7 +62,7 @@ class KeyOwnerStatusDtosJsonTest {
         JsonNode json = mapper.readTree(mapper.writeValueAsString(response));
 
         assertThat(json.get("ownerId").asString()).isEqualTo("user-1");
-        assertThat(json.get("ncaId").asString()).isEqualTo("account-a");
+        assertThat(json.get("accountId").asString()).isEqualTo("account-a");
         assertThat(json.get("status").asString()).isEqualTo("SUSPENDED");
         assertThat(json.has("issuerServiceId")).isFalse();
     }
@@ -71,7 +71,7 @@ class KeyOwnerStatusDtosJsonTest {
     void ownerStatusResponse_includesIssuerForIssuerScope() throws Exception {
         KeyOwnerStatusResponse response = KeyOwnerStatusResponse.builder()
                 .ownerId("user-1")
-                .ncaId("account-a")
+                .accountId("account-a")
                 .issuerServiceId("cloud-functions")
                 .status(KeyOwnerStatus.SUSPENDED)
                 .build();
@@ -86,17 +86,17 @@ class KeyOwnerStatusDtosJsonTest {
         KeyOwnerStatusesResponse response = KeyOwnerStatusesResponse.builder()
                 .ownerId("user-1")
                 .accounts(List.of(
-                        AccountOwnerStatus.builder()
-                                .ncaId("account-a")
+                        OwnerStatusByAccount.builder()
+                                .accountId("account-a")
                                 .status(KeyOwnerStatus.ACTIVE)
-                                .issuerServices(List.of(IssuerOwnerStatus.builder()
+                                .issuerServices(List.of(OwnerStatusByService.builder()
                                         .issuerServiceId("cloud-functions")
                                         .status(KeyOwnerStatus.SUSPENDED)
                                         .updatedAt(Instant.parse("2026-09-01T00:00:00Z"))
                                         .build()))
                                 .build(),
-                        AccountOwnerStatus.builder()
-                                .ncaId("account-b")
+                        OwnerStatusByAccount.builder()
+                                .accountId("account-b")
                                 .status(KeyOwnerStatus.SUSPENDED)
                                 .build()))
                 .limit(10)
@@ -113,8 +113,8 @@ class KeyOwnerStatusDtosJsonTest {
     void ownerStatusesResponse_omitsEmptyIssuerServicesAndCursor() throws Exception {
         KeyOwnerStatusesResponse response = KeyOwnerStatusesResponse.builder()
                 .ownerId("user-1")
-                .accounts(List.of(AccountOwnerStatus.builder()
-                        .ncaId("account-a")
+                .accounts(List.of(OwnerStatusByAccount.builder()
+                        .accountId("account-a")
                         .status(KeyOwnerStatus.ACTIVE)
                         .build()))
                 .build();
@@ -127,9 +127,9 @@ class KeyOwnerStatusDtosJsonTest {
     }
 
     @Test
-    void accountOwnerStatus_omitsIssuerServicesWhenListIsEmpty() throws Exception {
-        AccountOwnerStatus status = AccountOwnerStatus.builder()
-                .ncaId("account-a")
+    void ownerStatusByAccount_omitsIssuerServicesWhenListIsEmpty() throws Exception {
+        OwnerStatusByAccount status = OwnerStatusByAccount.builder()
+                .accountId("account-a")
                 .status(KeyOwnerStatus.ACTIVE)
                 .issuerServices(List.of())
                 .build();

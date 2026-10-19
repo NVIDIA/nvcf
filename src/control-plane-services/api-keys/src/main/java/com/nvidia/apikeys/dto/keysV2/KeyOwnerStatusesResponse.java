@@ -38,7 +38,7 @@ public class KeyOwnerStatusesResponse {
 
     private String ownerId;
 
-    private List<AccountOwnerStatus> accounts;
+    private List<OwnerStatusByAccount> accounts;
 
     private Integer limit;
 
