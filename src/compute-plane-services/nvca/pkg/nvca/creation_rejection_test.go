@@ -19,16 +19,28 @@ package nvca
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	fakebartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 	nvcainformers "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -43,46 +55,54 @@ import (
 // are off is persisted as rejected, fails sync with a terminal error, and is
 // reported to ICMS as terminated with an actionable reason.
 func TestCreationRejectedWhenBYOODisabled(t *testing.T) {
+	const (
+		functionReason = "Bring Your Own Observability (BYOO) is disabled on this cluster: " +
+			"the function requests telemetries, but these NVCA feature flags are not enabled: " +
+			"BYOObservability, UseFunctionTranslator. " +
+			"Enable them on the cluster, or deploy without telemetries."
+		taskReason = "Bring Your Own Observability (BYOO) is disabled on this cluster: " +
+			"the task requests telemetries, but these NVCA feature flags are not enabled: " +
+			"BYOObservability. " +
+			"Enable them on the cluster, or deploy without telemetries."
+	)
 	tests := []struct {
-		name         string
-		msg          func(t *testing.T) translate.CreationQueueMessageMetadataGetter
-		enabled      []*featureflag.FeatureFlag
-		wantWorkload string
-		wantFlags    string
+		name    string
+		msg     func(t *testing.T) translate.CreationQueueMessageMetadataGetter
+		enabled []*featureflag.FeatureFlag
+		want    string
 	}{
 		{
 			name: "container function with all flags disabled",
 			msg: func(t *testing.T) translate.CreationQueueMessageMetadataGetter {
 				return decodeCM(t, creationgMsgFunctionContainerLaunchSpecBYOO)
 			},
-			wantWorkload: "the function requests telemetries",
-			wantFlags:    "feature flags BYOObservability, UseFunctionTranslator are not enabled",
+			want: functionReason,
 		},
 		{
 			name: "container function without function translator",
 			msg: func(t *testing.T) translate.CreationQueueMessageMetadataGetter {
 				return decodeCM(t, creationgMsgFunctionContainerLaunchSpecBYOO)
 			},
-			enabled:      []*featureflag.FeatureFlag{featureflag.BYOObservability},
-			wantWorkload: "the function requests telemetries",
-			wantFlags:    "feature flags UseFunctionTranslator are not enabled",
+			enabled: []*featureflag.FeatureFlag{featureflag.BYOObservability},
+			want: "Bring Your Own Observability (BYOO) is disabled on this cluster: " +
+				"the function requests telemetries, but these NVCA feature flags are not enabled: " +
+				"UseFunctionTranslator. " +
+				"Enable them on the cluster, or deploy without telemetries.",
 		},
 		{
 			name: "helm function with all flags disabled",
 			msg: func(t *testing.T) translate.CreationQueueMessageMetadataGetter {
 				return decodeCM(t, creationgMsgFunctionHelmLaunchSpecBYOO)
 			},
-			wantWorkload: "the function requests telemetries",
-			wantFlags:    "feature flags BYOObservability, UseFunctionTranslator are not enabled",
+			want: functionReason,
 		},
 		{
 			name: "task with BYOO disabled",
 			msg: func(t *testing.T) translate.CreationQueueMessageMetadataGetter {
 				return decodeCMTask(t, cmsgTaskContainerBYOO)
 			},
-			enabled:      []*featureflag.FeatureFlag{featureflag.UseFunctionTranslator},
-			wantWorkload: "the task requests telemetries",
-			wantFlags:    "feature flags BYOObservability are not enabled",
+			enabled: []*featureflag.FeatureFlag{featureflag.UseFunctionTranslator},
+			want:    taskReason,
 		},
 	}
 
@@ -105,9 +125,7 @@ func TestCreationRejectedWhenBYOODisabled(t *testing.T) {
 			require.NotNil(t, sr)
 
 			reason := GetCreationRejectionReason(sr)
-			assert.Contains(t, reason, "Bring Your Own Observability (BYOO) is disabled on this cluster")
-			assert.Contains(t, reason, tt.wantWorkload)
-			assert.Contains(t, reason, tt.wantFlags)
+			assert.Equal(t, tt.want, reason)
 
 			// The rejected request is persisted so the failure can be reported.
 			persisted, err := clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).
@@ -121,6 +139,25 @@ func TestCreationRejectedWhenBYOODisabled(t *testing.T) {
 			require.Error(t, err)
 			assert.True(t, nvcaerrors.IsTerminal(err))
 			assert.Contains(t, err.Error(), reason)
+
+			// Turning the flags on restarts NVCA with new flags. The restarted
+			// agent still fails the rejected request instead of applying it,
+			// and does not apply a redelivered copy of the message.
+			restarted, _, err := NewBackendk8sCacheBuilder().
+				WithNamespaceLabels(labels.Set{"foo": "bar"}).
+				WithClients(clients).
+				WithFeatureFlagFetcher(&featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{
+					featureflag.BYOObservability,
+					featureflag.UseFunctionTranslator,
+				}}).
+				Start(ctx)
+			require.NoError(t, err)
+			err = restarted.syncICMSRequest(ctx, persisted)
+			require.Error(t, err)
+			assert.True(t, nvcaerrors.IsTerminal(err))
+			redelivered, err := restarted.CreateICMSCreationMessageRequest(ctx, tt.msg(t), "mrecpt2", "msgid", "")
+			require.NoError(t, err)
+			assert.Nil(t, redelivered)
 
 			// Each placeholder instance is reported as terminated with the reason.
 			instanceID := getPodName("0-" + persisted.Name)
@@ -203,12 +240,13 @@ func TestCreationRejectedWhenEnvOverridesFail(t *testing.T) {
 
 	sr, err := bc.CreateICMSCreationMessageRequest(ctx, msg, "mrecpt", "msgid", "")
 	require.NoError(t, err)
-	assert.Contains(t, GetCreationRejectionReason(sr), "apply task env overrides")
+	assert.Contains(t, GetCreationRejectionReason(sr), "NVCA could not apply the cluster's task environment overrides")
 }
 
-// TestDoCreationMessageDeletesRejectedMessage checks that a rejected creation
-// message is removed from the queue instead of being made visible again, so it
-// cannot start a workload later.
+// TestDoCreationMessageDeletesRejectedMessage checks that a transient failure
+// keeps the creation message for a retry, while a rejected creation message is
+// removed from the queue instead of being made visible again, so it cannot
+// start a workload later.
 func TestDoCreationMessageDeletesRejectedMessage(t *testing.T) {
 	ctx := newTestContext()
 
@@ -248,6 +286,31 @@ func TestDoCreationMessageDeletesRejectedMessage(t *testing.T) {
 	}
 	qc.AddMessage(qi.QueueURL, msg)
 
+	listRequests := func() []nvcav2beta1.ICMSRequest {
+		t.Helper()
+		reqs, err := clients.BART.NvcaV2beta1().ICMSRequests(bk8s.requestsNamespace).
+			List(ctx, metav1.ListOptions{LabelSelector: labels.Set{SQSMessageIDKey: msg.MessageID}.String()})
+		require.NoError(t, err)
+		return reqs.Items
+	}
+
+	// A transient API failure is not a rejection: the message stays for a retry.
+	failCreate := true
+	clients.BART.(*fakebartclient.Clientset).PrependReactor("create", "icmsrequests",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			if failCreate {
+				failCreate = false
+				return true, nil, errors.New("apiserver unavailable")
+			}
+			return false, nil, nil
+		})
+	_, err := qm.doCreationMessage(ctx, gpuName, 0, qi, msg)
+	require.Error(t, err)
+	assert.Empty(t, listRequests())
+	pending, err := qc.PeekMessage(ctx, queue.ReceiveMessageInput{QueueInfo: qi, MaxNumberOfMessages: 1})
+	require.NoError(t, err)
+	assert.Len(t, pending, 1)
+
 	consumed, err := qm.doCreationMessage(ctx, gpuName, 0, qi, msg)
 	require.NoError(t, err)
 	assert.Zero(t, consumed)
@@ -256,11 +319,114 @@ func TestDoCreationMessageDeletesRejectedMessage(t *testing.T) {
 	err = qc.DeleteMessage(ctx, queue.DeleteMessageInput{QueueInfo: qi, ReceiptHandle: msg.ReceiptHandle})
 	assert.True(t, qc.IsMessageNotFoundError(err))
 
-	reqs, err := clients.BART.NvcaV2beta1().ICMSRequests(bk8s.requestsNamespace).
-		List(ctx, metav1.ListOptions{LabelSelector: labels.Set{SQSMessageIDKey: msg.MessageID}.String()})
+	reqs := listRequests()
+	require.Len(t, reqs, 1)
+	assert.Contains(t, GetCreationRejectionReason(&reqs[0]), "BYOObservability")
+}
+
+// TestRejectedTaskReportedWithAckAfterPodsScheduled checks that with
+// AckTaskRequestAfterPodsScheduled enabled, a rejected task is never
+// acknowledged, but sync still fails it and its failure reaches ICMS.
+func TestRejectedTaskReportedWithAckAfterPodsScheduled(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	clients := mockKubeClients()
+	fff := &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{
+		featureflag.AckTaskRequestAfterPodsScheduled,
+	}}
+
+	srInfFactory := nvcainformers.NewSharedInformerFactoryWithOptions(clients.BART, ResyncInterval)
+	srLister := mustICMSRequestLister(t, srInfFactory)
+	srInfFactory.Start(ctx.Done())
+	srInfFactory.WaitForCacheSync(ctx.Done())
+
+	bc := &BackendK8sCache{
+		clients:              clients,
+		featureFlagFetcher:   fff,
+		icmsRequestLister:    srLister,
+		icmsRequestWQ:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		requestsNamespace:    RequestsNamespace,
+		podInstanceNamespace: RequestsNamespace,
+		k8sTimeConfig:        (&k8sutil.TimeConfig{}).Complete(),
+		eventRecorder:        record.NewFakeRecorder(100),
+		tracer:               noop.NewTracerProvider().Tracer("test"),
+	}
+	bc.icmsRequestHelper, _ = NewK8sComputeBackend(clients, bc)
+
+	icmsClient, icmsTransport := setupTestICMSClient()
+	ag := &Agent{
+		AgentOptions:    &AgentOptions{FeatureFlagFetcher: fff},
+		backendk8scache: bc,
+		icmsClient:      icmsClient,
+		queueManager:    &QueueManager{Client: &mockqueue.Client{}},
+	}
+
+	sr, err := bc.CreateICMSCreationMessageRequest(ctx,
+		decodeCMTask(t, cmsgTaskContainerBYOO), "rhdl", "msgid", "task_queue_url")
 	require.NoError(t, err)
-	require.Len(t, reqs.Items, 1)
-	assert.Contains(t, GetCreationRejectionReason(&reqs.Items[0]), "BYOObservability")
+	reason := GetCreationRejectionReason(sr)
+	require.NotEmpty(t, reason)
+
+	waitForRequestStatus := func(want nvcav2beta1.RequestStatus) *nvcav2beta1.ICMSRequest {
+		t.Helper()
+		var got *nvcav2beta1.ICMSRequest
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			req, err := srLister.ICMSRequests(sr.Namespace).Get(sr.Name)
+			if assert.NoError(ct, err) {
+				assert.Equal(ct, want, req.Status.RequestStatus)
+				got = req
+			}
+		}, 2*time.Second, 50*time.Millisecond)
+		return got
+	}
+	ackRequests := func() {
+		t.Helper()
+		require.NoError(t, ag.PutICMSRequestAcknowledgement(ctx))
+		ag.ackThreadPool.Wait()
+		ag.ackThreadPool = nil
+	}
+
+	// The new request moves to Pending without an acknowledgement.
+	waitForRequestStatus("")
+	ackRequests()
+	assert.Nil(t, icmsTransport.getRequest())
+	waitForRequestStatus(nvcav2beta1.ICMSRequestStatusPending)
+
+	// Sync fails the request and adds placeholder instances to report.
+	bc.icmsRequestWQ.Add(makeNamespacedName(sr))
+	require.True(t, bc.processICMSRequestWork(ctx))
+	failed := waitForRequestStatus(nvcav2beta1.ICMSRequestStatusFailed)
+	require.NotZero(t, sr.Spec.CreationMsgInfo.InstanceCount)
+	require.Len(t, failed.Status.Instances, int(sr.Spec.CreationMsgInfo.InstanceCount))
+
+	// A failed request is still never acknowledged.
+	ackRequests()
+	assert.Nil(t, icmsTransport.getRequest())
+
+	// The failure is posted to ICMS as terminated instances with the reason.
+	require.NoError(t, ag.PostICMSInstanceRequestStatusUpdates(ctx))
+	ag.instStatusThreadPool.Wait()
+	posted := icmsTransport.getRequest()
+	require.NotNil(t, posted)
+	assert.Equal(t, http.MethodPost, posted.Method)
+	instanceID := posted.URL.Path[strings.LastIndex(posted.URL.Path, "/")+1:]
+	assert.Contains(t, failed.Status.Instances, instanceID)
+	assert.True(t, strings.HasSuffix(posted.URL.Path, "/"+sr.Spec.RequestID+"/"+instanceID), posted.URL.Path)
+	body, err := posted.GetBody()
+	require.NoError(t, err)
+	var payload types.ICMSInstanceStatusUpdateRequest
+	require.NoError(t, json.NewDecoder(body).Decode(&payload))
+	assert.Equal(t, types.ICMSInstanceTerminated, payload.InstanceState)
+	assert.Equal(t, types.ICMSInstanceRequestClosed, payload.RequestState)
+	assert.Equal(t, types.ICMSInstanceTerminatedTerminalError, payload.TerminationCause)
+	assert.Equal(t, reason, payload.HealthInfo.ErrorLog)
+
+	// Every placeholder instance is recorded as reported.
+	acked := waitForRequestStatus(nvcav2beta1.ICMSRequestStatusFailureAcknowledged)
+	for id, st := range acked.Status.Instances {
+		assert.Equal(t, string(types.ICMSInstanceTerminated), st.LastReportedStatus, id)
+	}
 }
 
 type staticStatusGetter struct {

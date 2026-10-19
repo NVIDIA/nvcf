@@ -2370,7 +2370,7 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 				c.functionEnvOverrides,
 			)
 			if err != nil {
-				rejectReason = fmt.Sprintf("apply function env overrides: %v", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's function environment overrides: %v", err)
 			} else {
 				o.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64 = modified
 			}
@@ -2402,7 +2402,7 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 				c.taskEnvOverrides,
 			)
 			if err != nil {
-				rejectReason = fmt.Sprintf("apply task env overrides: %v", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's task environment overrides: %v", err)
 			} else {
 				o.Spec.CreationMsgInfo.TaskLaunchSpecification.EnvironmentB64 = modified
 			}
@@ -2428,10 +2428,6 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist the ICMS request on the backend, err: %v", err)
 	}
-	if rejectReason != "" {
-		log.WithField("reason", rejectReason).
-			Warnf("Rejected creation message for request %s, it will be reported as failed", msgMeta.RequestID)
-	}
 
 	log.Debugf("successfully created the ICMS request %v/%v for request %s for further action", obj.Namespace, obj.Name, msgMeta.RequestID)
 
@@ -2452,7 +2448,7 @@ func (c *BackendK8sCache) byooDisabledReason(workload string, required ...*featu
 		return ""
 	}
 	return fmt.Sprintf("Bring Your Own Observability (BYOO) is disabled on this cluster: "+
-		"the %s requests telemetries but NVCA feature flags %s are not enabled. "+
+		"the %s requests telemetries, but these NVCA feature flags are not enabled: %s. "+
 		"Enable them on the cluster, or deploy without telemetries.",
 		workload, strings.Join(disabled, ", "))
 }
