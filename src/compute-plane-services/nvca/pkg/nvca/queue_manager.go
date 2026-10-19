@@ -421,14 +421,14 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		return fmt.Errorf("failed to list ICMS requests for existence detection: %w", err)
 	}
 	existingMsgIDs := sets.Set[string]{}
-	rejectedMsgIDs := sets.Set[string]{}
+	rejectedSRsByMsgID := map[string]*nvcav2beta1.ICMSRequest{}
 	for _, sr := range existingSRs {
 		existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
 		if GetCreationRejectionReason(sr) != "" {
-			rejectedMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+			rejectedSRsByMsgID[sr.Labels[SQSMessageIDKey]] = sr
 		}
 	}
-	qm.deleteRedeliveredRejectedMessages(ctx, qwInputs, qwOutputs, rejectedMsgIDs)
+	qm.deleteRedeliveredRejectedMessages(ctx, qwInputs, qwOutputs, rejectedSRsByMsgID)
 
 	// Track if there is any error at all
 	anyQueuePullError := false
@@ -753,9 +753,9 @@ func (qm *QueueManager) doCreationMessage(ctx context.Context,
 func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
 	qwInputs []queueWorkInput,
 	qwOutputs queueWorkOutputs,
-	rejectedMsgIDs sets.Set[string],
+	rejectedSRsByMsgID map[string]*nvcav2beta1.ICMSRequest,
 ) {
-	if rejectedMsgIDs.Len() == 0 {
+	if len(rejectedSRsByMsgID) == 0 {
 		return
 	}
 	log := core.GetLogger(ctx).WithField("queueType", queue.CreationQueue)
@@ -764,10 +764,11 @@ func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
 			continue
 		}
 		for _, message := range qwOutput.messages {
-			if !rejectedMsgIDs.Has(message.MessageID) {
+			sr, ok := rejectedSRsByMsgID[message.MessageID]
+			if !ok {
 				continue
 			}
-			msgLog := log.WithFields(logrus.Fields{
+			msgLog := logging.NewICMSRequestFieldLogger(sr, log).WithFields(logrus.Fields{
 				"queueURL":  qwInputs[i].qi.QueueURL,
 				"messageId": message.MessageID,
 			})
