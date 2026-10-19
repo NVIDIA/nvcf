@@ -27,15 +27,15 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-class UserStatusDtosJsonTest {
+class KeyOwnerStatusDtosJsonTest {
 
     private final JsonMapper mapper = JsonUtils.getRequestResponseJsonMapper();
 
     @Test
     void accountRequest_deserializesStatusAndReason() throws Exception {
-        UpdateUserStatusForAccountRequest request = mapper.readValue("""
+        UpdateOwnerStatusForAccountRequest request = mapper.readValue("""
                 {"status": "SUSPENDED", "reason": "User access suspended in this account"}
-                """, UpdateUserStatusForAccountRequest.class);
+                """, UpdateOwnerStatusForAccountRequest.class);
 
         assertThat(request.getStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED);
         assertThat(request.getReason()).isEqualTo("User access suspended in this account");
@@ -43,17 +43,17 @@ class UserStatusDtosJsonTest {
 
     @Test
     void accountAndIssuerRequest_deserializesStatus() throws Exception {
-        UpdateUserStatusForAccountAndIssuerServiceRequest request = mapper.readValue(
-                "{\"status\":\"ACTIVE\"}", UpdateUserStatusForAccountAndIssuerServiceRequest.class);
+        UpdateOwnerStatusForAccountAndIssuerServiceRequest request = mapper.readValue(
+                "{\"status\":\"ACTIVE\"}", UpdateOwnerStatusForAccountAndIssuerServiceRequest.class);
 
         assertThat(request.getStatus()).isEqualTo(KeyOwnerStatus.ACTIVE);
         assertThat(request.getReason()).isNull();
     }
 
     @Test
-    void userStatusResponse_omitsIssuerForAccountScope() throws Exception {
-        UserStatusResponse response = UserStatusResponse.builder()
-                .userId("user-1")
+    void ownerStatusResponse_omitsIssuerForAccountScope() throws Exception {
+        KeyOwnerStatusResponse response = KeyOwnerStatusResponse.builder()
+                .ownerId("user-1")
                 .ncaId("account-a")
                 .status(KeyOwnerStatus.SUSPENDED)
                 .updatedAt(Instant.parse("2026-09-01T00:00:00Z"))
@@ -61,16 +61,16 @@ class UserStatusDtosJsonTest {
 
         JsonNode json = mapper.readTree(mapper.writeValueAsString(response));
 
-        assertThat(json.get("userId").asString()).isEqualTo("user-1");
+        assertThat(json.get("ownerId").asString()).isEqualTo("user-1");
         assertThat(json.get("ncaId").asString()).isEqualTo("account-a");
         assertThat(json.get("status").asString()).isEqualTo("SUSPENDED");
         assertThat(json.has("issuerServiceId")).isFalse();
     }
 
     @Test
-    void userStatusResponse_includesIssuerForIssuerScope() throws Exception {
-        UserStatusResponse response = UserStatusResponse.builder()
-                .userId("user-1")
+    void ownerStatusResponse_includesIssuerForIssuerScope() throws Exception {
+        KeyOwnerStatusResponse response = KeyOwnerStatusResponse.builder()
+                .ownerId("user-1")
                 .ncaId("account-a")
                 .issuerServiceId("cloud-functions")
                 .status(KeyOwnerStatus.SUSPENDED)
@@ -82,20 +82,20 @@ class UserStatusDtosJsonTest {
     }
 
     @Test
-    void userStatusesResponse_roundTripsNestedAccountsAndIssuers() throws Exception {
-        UserStatusesResponse response = UserStatusesResponse.builder()
-                .userId("user-1")
+    void ownerStatusesResponse_roundTripsNestedAccountsAndIssuers() throws Exception {
+        KeyOwnerStatusesResponse response = KeyOwnerStatusesResponse.builder()
+                .ownerId("user-1")
                 .accounts(List.of(
-                        AccountUserStatus.builder()
+                        AccountOwnerStatus.builder()
                                 .ncaId("account-a")
                                 .status(KeyOwnerStatus.ACTIVE)
-                                .issuerServices(List.of(IssuerUserStatus.builder()
+                                .issuerServices(List.of(IssuerOwnerStatus.builder()
                                         .issuerServiceId("cloud-functions")
                                         .status(KeyOwnerStatus.SUSPENDED)
                                         .updatedAt(Instant.parse("2026-09-01T00:00:00Z"))
                                         .build()))
                                 .build(),
-                        AccountUserStatus.builder()
+                        AccountOwnerStatus.builder()
                                 .ncaId("account-b")
                                 .status(KeyOwnerStatus.SUSPENDED)
                                 .build()))
@@ -103,17 +103,17 @@ class UserStatusDtosJsonTest {
                 .cursor("opaque-cursor")
                 .build();
 
-        UserStatusesResponse parsed = mapper.readValue(
-                mapper.writeValueAsString(response), UserStatusesResponse.class);
+        KeyOwnerStatusesResponse parsed = mapper.readValue(
+                mapper.writeValueAsString(response), KeyOwnerStatusesResponse.class);
 
         assertThat(parsed).isEqualTo(response);
     }
 
     @Test
-    void userStatusesResponse_omitsEmptyIssuerServicesAndCursor() throws Exception {
-        UserStatusesResponse response = UserStatusesResponse.builder()
-                .userId("user-1")
-                .accounts(List.of(AccountUserStatus.builder()
+    void ownerStatusesResponse_omitsEmptyIssuerServicesAndCursor() throws Exception {
+        KeyOwnerStatusesResponse response = KeyOwnerStatusesResponse.builder()
+                .ownerId("user-1")
+                .accounts(List.of(AccountOwnerStatus.builder()
                         .ncaId("account-a")
                         .status(KeyOwnerStatus.ACTIVE)
                         .build()))
@@ -127,8 +127,8 @@ class UserStatusDtosJsonTest {
     }
 
     @Test
-    void accountUserStatus_omitsIssuerServicesWhenListIsEmpty() throws Exception {
-        AccountUserStatus status = AccountUserStatus.builder()
+    void accountOwnerStatus_omitsIssuerServicesWhenListIsEmpty() throws Exception {
+        AccountOwnerStatus status = AccountOwnerStatus.builder()
                 .ncaId("account-a")
                 .status(KeyOwnerStatus.ACTIVE)
                 .issuerServices(List.of())

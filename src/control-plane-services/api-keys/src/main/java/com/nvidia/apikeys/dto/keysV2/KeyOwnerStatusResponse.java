@@ -17,21 +17,33 @@
 
 package com.nvidia.apikeys.dto.keysV2;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
-import jakarta.validation.constraints.NotNull;
+import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+/**
+ * The status record changed by a targeted PUT. issuerServiceId is set only for an issuer-scoped
+ * record.
+ */
 @Data
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
-public class UpdateUserStatusForAccountRequest {
+@JsonInclude(Include.NON_NULL)
+public class KeyOwnerStatusResponse {
 
-    @NotNull
+    private String ownerId;
+
+    private String ncaId;
+
+    private String issuerServiceId;
+
     private KeyOwnerStatus status;
 
-    private String reason;
+    private Instant updatedAt;
 }

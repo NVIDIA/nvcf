@@ -97,9 +97,9 @@ class KeyOperationDtosTest {
     void statusRequests_requireStatus() {
         assertThat(validator.validate(new UpdateKeyStatusRequest())).hasSize(1);
         assertThat(validator.validate(new UpdateAuthorizationsRequest())).hasSize(1);
-        assertThat(validator.validate(new UpdateUserStatusForAccountRequest())).hasSize(1);
+        assertThat(validator.validate(new UpdateOwnerStatusForAccountRequest())).hasSize(1);
         assertThat(validator.validate(
-                new UpdateUserStatusForAccountAndIssuerServiceRequest())).hasSize(1);
+                new UpdateOwnerStatusForAccountAndIssuerServiceRequest())).hasSize(1);
     }
 
     @Test

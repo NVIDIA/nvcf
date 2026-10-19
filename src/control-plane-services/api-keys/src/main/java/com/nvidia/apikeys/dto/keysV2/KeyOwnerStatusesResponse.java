@@ -17,21 +17,30 @@
 
 package com.nvidia.apikeys.dto.keysV2;
 
-import com.nvidia.apikeys.vo.KeyOwnerStatus;
-import jakarta.validation.constraints.NotNull;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+/**
+ * Shared response for every GET endpoint ending in /statuses. An account-scoped route returns
+ * one account and no cursor. The cursor is present only when another page is available.
+ */
 @Data
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
-public class UpdateUserStatusForAccountAndIssuerServiceRequest {
+@JsonInclude(Include.NON_NULL)
+public class KeyOwnerStatusesResponse {
 
-    @NotNull
-    private KeyOwnerStatus status;
+    private String ownerId;
 
-    private String reason;
+    private List<AccountOwnerStatus> accounts;
+
+    private Integer limit;
+
+    private String cursor;
 }

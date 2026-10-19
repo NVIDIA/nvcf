@@ -18,7 +18,7 @@
 package com.nvidia.apikeys.dto.keysV2;
 
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
-import java.time.Instant;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -28,11 +28,10 @@ import lombok.NoArgsConstructor;
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
-public class IssuerUserStatus {
+public class UpdateOwnerStatusForAccountAndIssuerServiceRequest {
 
-    private String issuerServiceId;
-
+    @NotNull
     private KeyOwnerStatus status;
 
-    private Instant updatedAt;
+    private String reason;
 }

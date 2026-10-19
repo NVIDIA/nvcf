@@ -35,12 +35,12 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @JsonInclude(Include.NON_NULL)
-public class AccountUserStatus {
+public class AccountOwnerStatus {
 
     private String ncaId;
 
     private KeyOwnerStatus status;
 
     @JsonInclude(Include.NON_EMPTY)
-    private List<IssuerUserStatus> issuerServices;
+    private List<IssuerOwnerStatus> issuerServices;
 }

@@ -47,9 +47,9 @@ public class KeyResponse {
 
     private KeyStatusV2 status;
 
-    private String userId;
+    private String ownerId;
 
-    private String ncaId;
+    private String accountId;
 
     private String issuerServiceId;
 

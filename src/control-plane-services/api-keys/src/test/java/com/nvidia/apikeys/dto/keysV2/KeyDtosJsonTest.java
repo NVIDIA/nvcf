@@ -92,8 +92,8 @@ class KeyDtosJsonTest {
                 .id("8f751f65-bbb4-4e2f-843d-a828573eddf2")
                 .value("nvcfapi-**********abc")
                 .status(KeyStatusV2.REVOKED)
-                .userId("user-1")
-                .ncaId("account-a")
+                .ownerId("user-1")
+                .accountId("account-a")
                 .issuerServiceId("cloud-functions")
                 .audienceServiceIds(Set.of("cloud-functions"))
                 .description("CLI key")
@@ -104,8 +104,8 @@ class KeyDtosJsonTest {
 
         assertThat(json.get("id").asString()).isEqualTo("8f751f65-bbb4-4e2f-843d-a828573eddf2");
         assertThat(json.get("status").asString()).isEqualTo("REVOKED");
-        assertThat(json.get("userId").asString()).isEqualTo("user-1");
-        assertThat(json.get("ncaId").asString()).isEqualTo("account-a");
+        assertThat(json.get("ownerId").asString()).isEqualTo("user-1");
+        assertThat(json.get("accountId").asString()).isEqualTo("account-a");
         assertThat(json.get("issuerServiceId").asString()).isEqualTo("cloud-functions");
         assertThat(json.has("ownerType")).isFalse();
         assertThat(json.has("owner_type")).isFalse();
