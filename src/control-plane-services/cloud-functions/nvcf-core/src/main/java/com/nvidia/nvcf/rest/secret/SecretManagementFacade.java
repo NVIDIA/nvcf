@@ -135,7 +135,8 @@ public class SecretManagementFacade {
         var telemetryEntity =
                 telemetryLookupService.lookupByAccountAndTelemetryIdOrThrow(ncaId, telemetryId);
         var provider = telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider());
-        TelemetryProviderValidator.validateSecretValue(provider, secret.value());
+        var types = telemetryMapperService.toTelemetryTypeEnums(telemetryEntity.getTypes());
+        TelemetryProviderValidator.validateSecretValue(provider, types, secret.value());
         essService.saveTelemetrySecret(ncaId, telemetryId, secret);
 
         // ### TODO: Set last updated timestamp on the account when it becomes available.

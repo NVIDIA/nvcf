@@ -825,6 +825,25 @@ class TelemetryControllerTest {
                                 .build(),
                         HttpStatus.OK
                 ),
+                //Telemetry provider KRATOS for metrics, which does not need a collector ID
+                Arguments.of(
+                        MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                        List.of(SCOPE_MANAGE_TELEMETRIES),
+                                                        100),
+                        TelemetryRequest.builder()
+                                .endpoint(TEST_TELEMETRY_ENDPOINT)
+                                .protocol(TelemetryProtocolEnum.HTTP)
+                                .provider(TelemetryProviderEnum.KRATOS)
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
+                                .secret(SecretDto.builder()
+                                        .name("telemetry-secret")
+                                        .value(jsonMapper.createObjectNode()
+                                                .put("clientCert", "client-cert")
+                                                .put("clientKey", "client-key"))
+                                        .build())
+                                .build(),
+                        HttpStatus.OK
+                ),
                 //Telemetry provider KRATOS_THANOS
                 Arguments.of(
                         MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
@@ -1028,34 +1047,41 @@ class TelemetryControllerTest {
 
     Stream<Arguments> invalidTelemetrySecretArgs() {
         return Stream.of(
-                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD,
+                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD, TelemetryTypeEnum.METRICS,
                              jsonMapper.createObjectNode().put("instanceId", "123456"),
                              "missing required fields [apiKey]"),
-                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD,
+                Arguments.of(TelemetryProviderEnum.GRAFANA_CLOUD, TelemetryTypeEnum.METRICS,
                              jsonMapper.createObjectNode()
                                      .put("username", "grafana-user")
                                      .put("password", "grafana-password"),
                              "missing required fields [instanceId, apiKey]"),
-                Arguments.of(TelemetryProviderEnum.SPLUNK,
+                Arguments.of(TelemetryProviderEnum.SPLUNK, TelemetryTypeEnum.LOGS,
                              jsonMapper.createObjectNode().put("token", "splunk-token"),
                              "must be a non-empty string"),
-                Arguments.of(TelemetryProviderEnum.PROMETHEUS,
+                Arguments.of(TelemetryProviderEnum.PROMETHEUS, TelemetryTypeEnum.METRICS,
                              jsonMapper.createObjectNode().put("clientCert", "client-cert"),
                              "'clientCert' and 'clientKey' must be set together"),
-                Arguments.of(TelemetryProviderEnum.AZURE_MONITOR,
+                Arguments.of(TelemetryProviderEnum.AZURE_MONITOR, TelemetryTypeEnum.METRICS,
                              jsonMapper.createObjectNode().put("instrumentationKey", "ikey"),
-                             "missing required fields [applicationId, liveEndpoint]"));
+                             "missing required fields [applicationId, liveEndpoint]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, TelemetryTypeEnum.LOGS,
+                             jsonMapper.createObjectNode()
+                                     .put("clientCert", "client-cert")
+                                     .put("clientKey", "client-key"),
+                             "Telemetry provider 'KRATOS' with types [LOGS]: "
+                                     + "secret is missing required fields [collectorId]"));
     }
 
     @ParameterizedTest
     @MethodSource("invalidTelemetrySecretArgs")
     void shouldRejectSecretShapeTheCollectorCannotRender(
-            TelemetryProviderEnum provider, JsonNode secretValue, String expectedMessage) {
+            TelemetryProviderEnum provider, TelemetryTypeEnum type, JsonNode secretValue,
+            String expectedMessage) {
         var telemetryRequest = TelemetryRequest.builder()
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(provider)
-                .types(Set.of(TelemetryTypeEnum.METRICS))
+                .types(Set.of(type))
                 .secret(SecretDto.builder()
                                 .name("invalid-shape-secret")
                                 .value(secretValue)

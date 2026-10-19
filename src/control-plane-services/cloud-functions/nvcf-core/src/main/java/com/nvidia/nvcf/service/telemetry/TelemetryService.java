@@ -178,6 +178,7 @@ public class TelemetryService {
         validateMaxTelemetryLimit(accountEntity);
         validateTelemetrySecretName(accountEntity.getNcaId(), request);
         TelemetryProviderValidator.validateSecretValue(request.provider(),
+                                                       request.types(),
                                                        request.secret().value());
     }
 

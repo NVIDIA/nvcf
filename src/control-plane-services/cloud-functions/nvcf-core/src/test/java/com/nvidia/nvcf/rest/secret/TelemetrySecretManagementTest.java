@@ -50,6 +50,7 @@ import com.nvidia.nvcf.util.MockEssServer;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
@@ -83,6 +84,13 @@ import tools.jackson.databind.node.StringNode;
         properties = "spring.profiles.active=test")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class TelemetrySecretManagementTest {
+    private static final UUID KRATOS_LOGS_TELEMETRY_ID =
+            UUID.fromString("0f7d6c1e-2b4a-4c8e-9a51-3d2e8b6f4a10");
+    private static final UUID KRATOS_METRICS_TELEMETRY_ID =
+            UUID.fromString("5c3a9e72-8d14-4f6b-b0e3-7a1f2c9d6e21");
+    private static final UUID KRATOS_TRACES_TELEMETRY_ID =
+            UUID.fromString("a2e4f6b8-1c3d-4e5f-8a7b-9c0d1e2f3a42");
+
     @Autowired
     private TestRestTemplate testRestTemplate;
 
@@ -130,6 +138,27 @@ class TelemetrySecretManagementTest {
                 TelemetryProvider.DATADOG,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
+        );
+        createKratosTelemetry(KRATOS_LOGS_TELEMETRY_ID, TelemetryType.LOGS);
+        createKratosTelemetry(KRATOS_METRICS_TELEMETRY_ID, TelemetryType.METRICS);
+        createKratosTelemetry(KRATOS_TRACES_TELEMETRY_ID, TelemetryType.TRACES);
+    }
+
+    private void createKratosTelemetry(UUID telemetryId, TelemetryType type) {
+        testTelemetryService.createTelemetry(
+                TEST_NCA_ID,
+                telemetryId,
+                TEST_TELEMETRY_ENDPOINT,
+                TelemetryProtocol.HTTP,
+                TelemetryProvider.KRATOS,
+                Set.of(type),
+                SecretDto.builder()
+                        .name("kratos-" + type.name().toLowerCase() + "-secret")
+                        .value(JsonMapper.builder().build().createObjectNode()
+                                       .put("collectorId", "collector-id")
+                                       .put("clientCert", "client-cert")
+                                       .put("clientKey", "client-key"))
+                        .build()
         );
     }
 
@@ -332,5 +361,38 @@ class TelemetrySecretManagementTest {
             assertThat(secretDto.name()).isEqualTo(secretKey);
             assertThat(secretDto.value().asString()).isEqualTo(secretValue);
         });
+    }
+
+    Stream<Arguments> updateKratosTelemetrySecretArgs() {
+        return Stream.of(
+                Arguments.of(KRATOS_METRICS_TELEMETRY_ID, HttpStatus.NO_CONTENT),
+                Arguments.of(KRATOS_TRACES_TELEMETRY_ID, HttpStatus.NO_CONTENT),
+                Arguments.of(KRATOS_LOGS_TELEMETRY_ID, HttpStatus.BAD_REQUEST));
+    }
+
+    @ParameterizedTest
+    @MethodSource("updateKratosTelemetrySecretArgs")
+    void shouldRequireKratosCollectorIdOnlyForLogs(UUID telemetryId, HttpStatus expectedStatus) {
+        var secret = SecretDto.builder()
+                .name("kratos-credentials")
+                .value(JsonMapper.builder().build().createObjectNode()
+                               .put("clientCert", "client-cert")
+                               .put("clientKey", "client-key"))
+                .build();
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT, List.of(SCOPE_UPDATE_SECRETS), 100);
+        var requestBody = UpdateTelemetrySecretRequest.builder().secret(secret).build();
+        var requestEntity = RequestEntity.put(URI.create("/v2/nvcf/secrets/telemetries/" + telemetryId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .body(requestBody);
+
+        var response = testRestTemplate.exchange(requestEntity, String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(expectedStatus);
+        if (expectedStatus == HttpStatus.BAD_REQUEST) {
+            assertThat(response.getBody()).contains(
+                    "Telemetry provider 'KRATOS' with types [LOGS]: "
+                            + "secret is missing required fields [collectorId]");
+        }
     }
 }
