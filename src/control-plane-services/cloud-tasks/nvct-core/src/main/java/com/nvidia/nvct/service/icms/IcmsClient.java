@@ -75,6 +75,7 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 @Service
 @RefreshScope
 public class IcmsClient {
+    private static final String PLACEHOLDER_OTLP_HOST = "dummy";
 
     private static final String MESG_NO_REQUEST_ID_FROM_ICMS =
             "Task id '%s': No request-id returned from ICMS";
@@ -106,7 +107,7 @@ public class IcmsClient {
     private final IcmsStubService icmsStubService;
     private final String selfFqdn;
     private final String globalFqdnGrpc;
-    private final URI tracingUrl;
+    private final Optional<String> workerOtlpEndpoint;
     private final AccountService accountService;
     private final String tracingAccessToken;
     private final String initContainer;
@@ -139,7 +140,7 @@ public class IcmsClient {
             @Value("${nvct.sidecars.utils-container}") String utilsContainer,
             @Value("${nvct.sidecars.ess-agent-container}") String essAgentContainer,
             @Value("${nvct.ess.base-url}") String essFqdn,
-            @Value("${nvct.sidecars.otel-collector-container}") String otelCollectorContainer,
+            @Value("${nvct.sidecars.otel-collector-container:}") String otelCollectorContainer,
             @Value("${nvct.fqdn}") String selfFqdn,
             @Value("${nvct.global-fqdn-grpc}") String globalFqdnGrpc,
             @Value("${spring.security.oauth2.client.registration.icms.client-id}") String clientId,
@@ -147,7 +148,7 @@ public class IcmsClient {
             String clientSecret,
             @Value("${spring.security.oauth2.client.registration.icms.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.icms.token-uri}") String tokenUri,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") String otlpTracingEndpoint,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String otlpTracingEndpoint,
             AccountService accountService,
             TokenService tokenService,
             TelemetryService telemetryService,
@@ -184,7 +185,7 @@ public class IcmsClient {
         var adapter = WebClientAdapter.create(webClient);
         var factory = HttpServiceProxyFactory.builderFor(adapter).build();
         this.icmsStubService = factory.createClient(IcmsStubService.class);
-        this.tracingUrl = URI.create(otlpTracingEndpoint);
+        this.workerOtlpEndpoint = toWorkerOtlpEndpoint(otlpTracingEndpoint);
         this.clustersCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -422,7 +423,7 @@ public class IcmsClient {
                 validateAndGetContainerRegistryImagePullSecrets(task);
         var helmRegistryCredentialsEncoded =
                 validateAndGetHelmRegistryImagePullSecrets(task);
-        var env = Stream.of(
+        var envStream = Stream.of(
                         Pair.of("NCA_ID", task.getNcaId()),
                         Pair.of("ACCOUNT_NAME", accountService.getAccountName(ncaId)),
                         Pair.of("NVCT_WORKER_TOKEN", nvctWorkerToken),
@@ -433,7 +434,6 @@ public class IcmsClient {
                         Pair.of("UTILS_CONTAINER", utilsContainer),
                         Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
                         Pair.of("ESS_FQDN", essFqdn),
-                        Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                         Pair.of("TASK_TAGS", getTaskTags(task)),
                         Pair.of("TASK_ID", task.getTaskId()),
                         Pair.of("TASK_NAME", task.getName()),
@@ -443,12 +443,20 @@ public class IcmsClient {
                         Pair.of("TERMINATION_GRACE_PERIOD", terminalGracePeriodDuration),
                         Pair.of("RESULTS_LOCATION", getResultsLocation(task)),
                         Pair.of("TRACING_ACCESS_TOKEN", tracingAccessToken),
-                        Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer),
                         Pair.of("TASK_SECRETS_PRESENT", taskSecretsPresent),
                         Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                         Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
                         Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
-                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded))
+                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded));
+        if (workerOtlpEndpoint.isPresent()) {
+            envStream = Stream.concat(envStream, Stream.of(
+                    Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", workerOtlpEndpoint.get())));
+        }
+        if (StringUtils.isNotBlank(otelCollectorContainer)) {
+            envStream = Stream.concat(envStream, Stream.of(
+                    Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer)));
+        }
+        var env = envStream
                 .map(pair -> pair.getFirst() + "=" + pair.getSecond())
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
@@ -526,5 +534,25 @@ public class IcmsClient {
         }
 
         return null;
+    }
+
+    // Self-managed profiles historically configured a placeholder OTLP endpoint. Workers
+    // must not receive it, otherwise the collector retries trace exports to a host that
+    // does not exist.
+    static Optional<String> toWorkerOtlpEndpoint(String endpoint) {
+        if (StringUtils.isBlank(endpoint)) {
+            return Optional.empty();
+        }
+        var trimmed = endpoint.trim();
+        try {
+            var host = URI.create(trimmed).getHost();
+            if (host == null || PLACEHOLDER_OTLP_HOST.equalsIgnoreCase(host)) {
+                return Optional.empty();
+            }
+        } catch (IllegalArgumentException e) {
+            log.warn("Ignoring invalid OTLP tracing endpoint '{}'", trimmed);
+            return Optional.empty();
+        }
+        return Optional.of(trimmed);
     }
 }

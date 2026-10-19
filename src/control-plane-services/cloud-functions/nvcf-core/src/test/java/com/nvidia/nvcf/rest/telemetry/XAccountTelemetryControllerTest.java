@@ -279,7 +279,8 @@ class XAccountTelemetryControllerTest {
 
     Stream<Arguments> createTelemetryArgs() {
         var secretJsonNodeValue = jsonMapper.createObjectNode()
-                .put("GRAFANA", "GRAFANA_PASSWORD");
+                .put("clientCert", "client-cert")
+                .put("clientKey", "client-key");
 
         var telemetryRequest = TelemetryRequest.builder()
                 .endpoint(TEST_TELEMETRY_ENDPOINT)

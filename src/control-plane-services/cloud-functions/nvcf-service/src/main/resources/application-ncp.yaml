@@ -62,7 +62,6 @@ management:
     tracing:
       export:
         otlp:
-          endpoint: https://dummy:8282
           headers:
             lightstep-access-token: unused
 
@@ -96,7 +95,7 @@ nvcf:
     otel-container: dummy
     niclls-container: dummy
     ess-agent-container: dummy
-    otel-collector-container: dummy
+    otel-collector-container: ""
     llm-credential-manager-image: dummy
     llm-router-client-image: dummy
   ess:

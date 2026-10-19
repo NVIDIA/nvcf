@@ -26,6 +26,9 @@ import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.rest.function.management.dto.SecretDto;
 import com.nvidia.nvcf.service.ess.EssService;
 import com.nvidia.nvcf.service.function.FunctionLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryLookupService;
+import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
+import com.nvidia.nvcf.service.telemetry.TelemetryProviderValidator;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +63,8 @@ public class SecretManagementFacade {
     private final EssService essService;
     private final FunctionLookupService functionLookupService;
     private final FunctionsRepository functionsRepository;
+    private final TelemetryLookupService telemetryLookupService;
+    private final TelemetryMapperService telemetryMapperService;
 
     public void updateFunctionSecrets(
             String ncaId,
@@ -127,6 +132,10 @@ public class SecretManagementFacade {
     }
 
     public void updateTelemetrySecret(String ncaId, UUID telemetryId, SecretDto secret) {
+        var telemetryEntity =
+                telemetryLookupService.lookupByAccountAndTelemetryIdOrThrow(ncaId, telemetryId);
+        var provider = telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider());
+        TelemetryProviderValidator.validateSecretValue(provider, secret.value());
         essService.saveTelemetrySecret(ncaId, telemetryId, secret);
 
         // ### TODO: Set last updated timestamp on the account when it becomes available.

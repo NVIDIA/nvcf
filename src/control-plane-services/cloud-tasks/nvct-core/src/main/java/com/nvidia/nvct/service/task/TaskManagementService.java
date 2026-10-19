@@ -55,6 +55,7 @@ import com.nvidia.nvct.service.registry.RegistryArtifactService;
 import com.nvidia.nvct.service.result.ResultService;
 import com.nvidia.nvct.service.reval.RevalClient;
 import com.nvidia.nvct.service.task.TaskService.TasksSliceContext;
+import com.nvidia.nvct.service.telemetry.TelemetryProviderValidator;
 import com.nvidia.nvct.service.telemetry.dto.TelemetryDto;
 import com.nvidia.nvct.service.telemetry.dto.TelemetryTypeEnum;
 import java.time.Duration;
@@ -622,6 +623,7 @@ public class TaskManagementService {
             log.error(mesg);
             throw new BadRequestException(mesg);
         }
+        TelemetryProviderValidator.validateProvider(telemetryId, telemetryDto.provider());
     }
 
     // Determines if the instance-type can be used to specifically launch just a

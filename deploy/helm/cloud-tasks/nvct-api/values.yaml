@@ -122,7 +122,7 @@ nvctApi:
           utils-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.4"
           otel-container: dummy
           ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.1"
-          otel-collector-container: dummy
+          otel-collector-container: ""
 
   nodeSelector: {}
   tolerations: []

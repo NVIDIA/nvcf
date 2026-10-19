@@ -177,6 +177,8 @@ public class TelemetryService {
     private void validateTelemetryRequest(AccountEntity accountEntity, TelemetryRequest request) {
         validateMaxTelemetryLimit(accountEntity);
         validateTelemetrySecretName(accountEntity.getNcaId(), request);
+        TelemetryProviderValidator.validateSecretValue(request.provider(),
+                                                       request.secret().value());
     }
 
     private void validateMaxTelemetryLimit(AccountEntity accountEntity) {

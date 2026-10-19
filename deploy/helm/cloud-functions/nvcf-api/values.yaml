@@ -263,7 +263,7 @@ api:
           otel-container: dummy
           niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.110.0
           ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.1
-          otel-collector-container: dummy
+          otel-collector-container: ""
           llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.2
           llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.15.1
         notary:

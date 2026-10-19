@@ -71,6 +71,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.test.context.ContextConfiguration;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.StringNode;
 
 @Slf4j
@@ -161,6 +162,15 @@ class TelemetrySecretManagementTest {
                                      .value(new StringNode("grafana-secret"))
                                      .build(),
                              HttpStatus.NO_CONTENT),
+                // Object secret for a provider that reads a single credential file
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                             List.of(SCOPE_UPDATE_SECRETS), 100),
+                             SecretDto.builder()
+                                     .name("datadog.credentials")
+                                     .value(JsonMapper.builder().build().createObjectNode()
+                                                    .put("apiKey", "datadog-api-key"))
+                                     .build(),
+                             HttpStatus.BAD_REQUEST),
                 // Null secret should return BAD_REQUEST
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                              List.of(SCOPE_UPDATE_SECRETS), 100),

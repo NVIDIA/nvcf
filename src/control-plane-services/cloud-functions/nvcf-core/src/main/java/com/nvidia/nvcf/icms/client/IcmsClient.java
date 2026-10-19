@@ -97,6 +97,8 @@ import tools.jackson.databind.json.JsonMapper;
 @Service
 @RefreshScope
 public class IcmsClient {
+    private static final String PLACEHOLDER_OTLP_HOST = "dummy";
+
     public static final int BATCH_SIZE = 32;
     public static final String CLIENT_REGISTRATION_ID = "icms";
 
@@ -152,7 +154,7 @@ public class IcmsClient {
     private final IcmsStubService service;
     private final String selfFqdn;
     private final String globalFqdnGrpc;
-    private final URI tracingUrl;
+    private final Optional<String> workerOtlpEndpoint;
     private final String tracingAccessToken;
     private final Optional<String> workerNKeySeed;
     private final String inferenceContainer;
@@ -203,13 +205,14 @@ public class IcmsClient {
             @Value("${nvcf.sidecars.utils-container-image.go}") String goUtilsContainer,
             @Value("${nvcf.sidecars.niclls-container}") String nicllsContainer,
             @Value("${nvcf.sidecars.ess-agent-container}") String essAgentContainer,
-            @Value("${nvcf.sidecars.otel-collector-container}") String otelCollectorContainer,
+            @Value("${nvcf.sidecars.otel-collector-container:}") String otelCollectorContainer,
             @Value("${nvcf.sidecars.llm-credential-manager-image}") String llmCredentialManagerImage,
             @Value("${nvcf.sidecars.llm-router-client-image}") String llmRouterClientImage,
             @Value("${nvcf.llm-request-router.worker-address}") String llmRequestRouterAddress,
             @Value("${nvcf.fqdn}") String selfFqdn,
             @Value("${nvcf.global-fqdn-grpc}") String globalFqdnGrpc,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") URI tracingUrl,
+            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}")
+            String otlpTracingEndpoint,
             // ESS_FQDN advertised to the LLM worker is the worker-facing ESS address,
             // which differs from EssClient's in-cluster base-url when the compute plane
             // is external. Defaults to nvcf.ess.base-url (colocated); split deployments
@@ -266,7 +269,7 @@ public class IcmsClient {
                 .builderFor(WebClientAdapter.create(webClient))
                 .build()
                 .createClient(IcmsStubService.class);
-        this.tracingUrl = tracingUrl;
+        this.workerOtlpEndpoint = toWorkerOtlpEndpoint(otlpTracingEndpoint);
         this.clusterGroupCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -455,7 +458,6 @@ public class IcmsClient {
                 Pair.of("INFERENCE_URL", function.getInferenceUrl()),
                 Pair.of("INFERENCE_PORT", inferencePort),
                 Pair.of("INFERENCE_PROTOCOL", getInferenceProtocol(function)),
-                Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                 Pair.of("TRACING_ACCESS_TOKEN", tracingAccessToken),
                 Pair.of("INIT_CONTAINER", initContainer),
                 Pair.of("OTEL_CONTAINER", otelContainer),
@@ -469,7 +471,6 @@ public class IcmsClient {
                 Pair.of("HELM_CHART_INFERENCE_SERVICE_NAME", helmChartServiceName),
                 Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
                 Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
-                Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer),
                 Pair.of("FUNCTION_SECRETS_PRESENT", functionSecretsPresent),
                 Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                 Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
@@ -488,6 +489,14 @@ public class IcmsClient {
         if (workerNKeySeed.isPresent()) { // using isPresent because envStream is a non-final var
             envStream = Stream.concat(envStream,
                                       Stream.of(Pair.of("NKEY_SEED", workerNKeySeed.get())));
+        }
+        if (workerOtlpEndpoint.isPresent()) {
+            envStream = Stream.concat(envStream, Stream.of(
+                    Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", workerOtlpEndpoint.get())));
+        }
+        if (StringUtils.isNotBlank(otelCollectorContainer)) {
+            envStream = Stream.concat(envStream, Stream.of(
+                    Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer)));
         }
 
         // ### Keep the option to send legacy properties in case we need to troubleshoot.
@@ -835,5 +844,25 @@ public class IcmsClient {
             return Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
         }
         return null;
+    }
+
+    // Self-managed profiles historically configured a placeholder OTLP endpoint. Workers
+    // must not receive it, otherwise the collector retries trace exports to a host that
+    // does not exist.
+    static Optional<String> toWorkerOtlpEndpoint(String endpoint) {
+        if (StringUtils.isBlank(endpoint)) {
+            return Optional.empty();
+        }
+        var trimmed = endpoint.trim();
+        try {
+            var host = URI.create(trimmed).getHost();
+            if (host == null || PLACEHOLDER_OTLP_HOST.equalsIgnoreCase(host)) {
+                return Optional.empty();
+            }
+        } catch (IllegalArgumentException e) {
+            log.warn("Ignoring invalid OTLP tracing endpoint '{}'", trimmed);
+            return Optional.empty();
+        }
+        return Optional.of(trimmed);
     }
 }
