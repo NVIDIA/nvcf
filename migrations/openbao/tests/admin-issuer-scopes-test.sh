@@ -14,28 +14,38 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
 # Records each call and, for writes that read from stdin, the payload too.
+# Stdin writes also replace a per-path state file, as `bao write` replaces a
+# JWT role, so a test can seed an existing role and read back the result.
 mkdir -p "$work_dir/bin"
 cat >"$work_dir/bin/bao" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$BAO_CALLS"
-if [ "${!#}" = "-" ]; then
-  cat >>"$BAO_CALLS"
-  printf '\n' >>"$BAO_CALLS"
+if [ "$1" = "write" ] && [ "${!#}" = "-" ]; then
+  payload="$(cat)"
+  printf '%s\n\n' "$payload" >>"$BAO_CALLS"
+  printf '%s\n' "$payload" >"$BAO_STATE/$(printf '%s' "$2" | tr '/' '_')"
 fi
 STUB
 chmod +x "$work_dir/bin/bao"
 export PATH="$work_dir/bin:$PATH"
 export BAO_CALLS="$work_dir/calls.log"
+export BAO_STATE="$work_dir/state"
+mkdir -p "$BAO_STATE"
 : >"$BAO_CALLS"
+role_state="$BAO_STATE/services_nvcf-api_jwt_roles_admin-issuer-proxy"
 
 fail() {
   echo "admin-issuer-scopes: $*" >&2
   exit 1
 }
 
+run_migration() {
+  ( bash -c "source '$migration'" ) >"$work_dir/out.log" 2>&1 ||
+    { cat "$work_dir/out.log" >&2; fail "the migration failed"; }
+}
+
 unset ADMIN_ISSUER_PROXY_ENABLED
-( bash -c "source '$migration'" ) >"$work_dir/out.log" 2>&1 ||
-  { cat "$work_dir/out.log" >&2; fail "the migration failed"; }
+run_migration
 
 # The payload runs from the role write up to the next bao call.
 sed -n '/^write services\/nvcf-api\/jwt\/roles\/admin-issuer-proxy -$/,/^write /p' \
@@ -55,5 +65,21 @@ for scope in \
   grep -q "\"$scope\"" "$work_dir/role.json" ||
     fail "the admin-issuer-proxy role is missing scope $scope"
 done
+
+# Upgrade: the migration job re-runs every script on each Helm upgrade. Seed the
+# role an earlier release wrote, without list_cluster_groups, then run twice.
+# The migration must rewrite the role each time rather than skip an existing one.
+cat >"$role_state" <<'OLD_ROLE'
+{"claims": {"scopes": ["register_function", "list_functions", "cluster-management"]}}
+OLD_ROLE
+for run in 1 2; do
+  : >"$BAO_CALLS"
+  run_migration
+  grep -q '^write services/nvcf-api/jwt/roles/admin-issuer-proxy -$' "$BAO_CALLS" ||
+    fail "upgrade run $run did not rewrite the existing admin-issuer-proxy role"
+done
+test "$(grep -c '"list_cluster_groups"' "$role_state")" -eq 1 ||
+  fail "after upgrade runs the role does not hold list_cluster_groups exactly once:
+$(cat "$role_state")"
 
 echo "admin-issuer-scopes: all checks passed"
