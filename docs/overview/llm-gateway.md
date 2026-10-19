@@ -300,19 +300,11 @@ value returns `200`, where the Anthropic API would return `400`.
 | Backend error bodies | Rendered in the Anthropic error envelope with `request_id`. | Message text comes from the backend. |
 
 The gateway relays a backend error body when it already uses the Anthropic
-envelope with an Anthropic error type, and sets its `request_id`. Any other
-backend error body, such as an OpenAI-style or FastAPI validation error, is
-rendered in the Anthropic envelope with the type that matches the status code
-and the backend's message. The message text is the backend's. Function owners
+envelope with a lowercase snake_case error type, as the Anthropic API does,
+and sets its `request_id`. Any other backend error body, such as an
+OpenAI-style or FastAPI validation error, is rendered in the Anthropic envelope
+with the type that matches the status code and the backend's message. The message text is the backend's. Function owners
 are responsible for what their container puts in error messages.
-
-#### Known backend differences
-
-- vLLM releases without
-  [vllm-project/vllm#47598](https://github.com/vllm-project/vllm/pull/47598)
-  report `stop_reason` `end_turn` instead of `tool_use` when `tool_choice`
-  names a tool. Clients that run tools only on `stop_reason` `tool_use` skip
-  the tool. Use a vLLM build that includes the fix.
 
 Token admission estimates system, messages, and tools and reserves
 `max_tokens` for output. `X-Input-Tokens` and `X-Token-Estimate` both describe

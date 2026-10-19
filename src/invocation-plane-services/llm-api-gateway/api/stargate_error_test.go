@@ -163,6 +163,13 @@ func TestUpstreamErrorEnvelopes(t *testing.T) {
 			nativeOpenAI: true, nativeAnthropic: true,
 		},
 		{
+			name:       "backend Anthropic conflict error",
+			status:     http.StatusConflict,
+			body:       `{"type":"error","error":{"type":"conflict_error","message":"request conflicts with current state"}}`,
+			wantStatus: http.StatusConflict, wantMessage: "request conflicts with current state",
+			nativeOpenAI: true, nativeAnthropic: true,
+		},
+		{
 			name:       "backend Anthropic-shaped error with a non-Anthropic type",
 			status:     http.StatusBadRequest,
 			body:       `{"type":"error","error":{"type":"BadRequestError","message":"stop cannot contain an empty string."}}`,

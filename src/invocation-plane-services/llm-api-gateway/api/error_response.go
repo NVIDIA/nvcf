@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	echo "github.com/labstack/echo/v4"
 
@@ -176,25 +177,16 @@ func isOpenAIErrorBody(body []byte) bool {
 		envelope.Error != nil && envelope.Error.Message != nil
 }
 
-// anthropicErrorTypes are the error types the Anthropic Messages API defines.
-// Clients and SDKs map these to error classes.
-var anthropicErrorTypes = map[string]bool{
-	"invalid_request_error": true,
-	"authentication_error":  true,
-	"billing_error":         true,
-	"permission_error":      true,
-	"not_found_error":       true,
-	"request_too_large":     true,
-	"rate_limit_error":      true,
-	"api_error":             true,
-	"timeout_error":         true,
-	"overloaded_error":      true,
-}
+// anthropicErrorTypePattern matches the lowercase snake_case error types the
+// Anthropic API uses, such as invalid_request_error. A pattern rather than a
+// fixed list keeps new Anthropic types working while still rejecting model
+// server names such as BadRequestError.
+var anthropicErrorTypePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 
 // isAnthropicErrorBody reports whether body is
-// {"type":"error","error":{"type":"...","message":"..."}} with an Anthropic
-// error type. Model servers that copy the shape with their own type names,
-// such as "BadRequestError", get the gateway envelope instead.
+// {"type":"error","error":{"type":"...","message":"..."}} with a lowercase
+// snake_case error type. Model servers that copy the shape with their own type
+// names, such as "BadRequestError", get the gateway envelope instead.
 func isAnthropicErrorBody(body []byte) bool {
 	var envelope struct {
 		Type  string `json:"type"`
@@ -205,7 +197,7 @@ func isAnthropicErrorBody(body []byte) bool {
 	}
 	return json.Unmarshal(body, &envelope) == nil && envelope.Type == "error" &&
 		envelope.Error != nil && envelope.Error.Type != nil && envelope.Error.Message != nil &&
-		anthropicErrorTypes[*envelope.Error.Type]
+		anthropicErrorTypePattern.MatchString(*envelope.Error.Type)
 }
 
 // withAnthropicRequestID sets the top-level request_id of a relayed Anthropic
