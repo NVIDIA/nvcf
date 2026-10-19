@@ -239,6 +239,28 @@ Package metadata uses SemVer without the leading `v`:
 | `deploy/helm/nvca-operator/v1.11.1-rc.1` | `1.11.1-rc.1` |
 | `nvcf-ratelimiter-v1.15.1` | `1.15.1` |
 
+## Automatic pin bumps
+
+Published releases open reviewed bot Pull Requests against `main`. They
+do not release a stack. A stack still releases only from its release
+branch.
+
+- A service release runs `.github/workflows/chart-version-bump.yml`. It
+  moves each target whose `deploys` entry in
+  `tools/ci/github-release-subprojects.json` names the service. A chart
+  target moves its image tag or declared values paths. A stack target
+  moves the paths its `values_files` declare, such as the compute-plane
+  `global.nvcaOperator.imageTag` and
+  `global.nvcaOperator.selfManaged.nvcaVersion` on an NVCA release.
+- A chart release runs `.github/workflows/stack-pin-bump.yml`. It moves
+  the `version:` of every Helmfile release under `deploy/stacks/` that
+  pins that chart, such as `helm-nvca-operator` in the compute-plane
+  stack.
+
+A compute-plane bump also needs its golden render fixtures refreshed
+with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
+merge.
+
 ## Release branches
 
 For every subproject except the three under `deploy/stacks/`, release
