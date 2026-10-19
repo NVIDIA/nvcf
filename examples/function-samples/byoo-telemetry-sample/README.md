@@ -93,6 +93,8 @@ export NVCF_API_KEY=$(nvcf-cli api-key generate --for function --description "by
 export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}')
 ```
 
+The `curl` commands below call the gateway load balancer over plain HTTP with a `Host` header, which suits a local cluster or a trusted network. With DNS and TLS on the gateway, send them to `https://api.<domain>` and `https://<function-id>.invocation.<domain>` without the `Host` header, so the bearer tokens are not sent in clear text.
+
 ### 3. Register the sink
 
 Register one telemetry endpoint for all three signals with provider `OTEL_COLLECTOR` and protocol `HTTP`. The secret value becomes the bearer token the BYOO collector sends to the sink.

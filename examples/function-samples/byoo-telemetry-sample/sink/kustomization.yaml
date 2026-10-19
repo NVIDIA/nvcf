@@ -28,9 +28,6 @@ configMapGenerator:
     files:
       - config.yaml=collector-config.yaml
 
-generatorOptions:
-  disableNameSuffixHash: true
-
 labels:
   - includeSelectors: false
     pairs:
