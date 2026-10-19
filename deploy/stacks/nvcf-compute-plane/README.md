@@ -94,6 +94,38 @@ global:
         imageRepository: nvcr.io/example/collectors/nvcf-otel-collector
 ```
 
+### BYOO Sidecar Images
+
+With `BYOObservability` on, NVCA adds a BYOO OpenTelemetry Collector sidecar
+to workloads that export telemetry. The stack pins its tag in
+`global.nvcaOperator.byooOtelCollector.imageTag`. Set `imageRepository` to pull
+it from a registry the cluster can reach:
+
+```yaml
+global:
+  nvcaOperator:
+    byooOtelCollector:
+      imageRepository: registry.example.com/nvcf/byoo-otel-collector
+```
+
+Fluent Bit log collection is off by default. Set
+`global.nvcaOperator.byooFluentBit.enabled` to turn on the `BYOOFluentBit`
+feature gate. It requires `BYOObservability`, so the render fails on the
+`disabled` and `control` profiles unless that gate is set explicitly. The
+Fluent Bit image defaults to the upstream `docker.io/fluent/fluent-bit` image.
+Override it for a private or disconnected registry:
+
+```yaml
+global:
+  nvcaOperator:
+    byooFluentBit:
+      enabled: true
+      image:
+        registry: registry.example.com
+        repository: mirror/fluent-bit
+        tag: "3.2"
+```
+
 ## Chart and Image Sources
 
 The stack pins the NVCA operator chart in
