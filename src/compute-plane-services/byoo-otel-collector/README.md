@@ -181,6 +181,44 @@ Examples:
 
 See [examples](./examples/secrets) for more details.
 
+### Supported Providers
+
+The collector renders an exporter for these provider and signal pairs. Any other pair fails to render, and the collector does not start.
+
+| Provider | Logs | Metrics | Traces |
+| --- | --- | --- | --- |
+| `AZURE_MONITOR` | Yes | Yes | Yes |
+| `DATADOG` | Yes | Yes | Yes |
+| `GRAFANA_CLOUD` | Yes | Yes | Yes |
+| `KRATOS` | Yes | No | Yes |
+| `KRATOS_THANOS` | No | Yes | No |
+| `OTEL_COLLECTOR` | Yes | Yes | Yes |
+| `PROMETHEUS` | No | Yes | No |
+| `SERVICENOW` | No | No | Yes |
+| `SPLUNK` | Yes | No | No |
+
+#### KRATOS Traces
+
+`KRATOS` traces go to the Kratos OTLP/HTTP traces gateway over mTLS. Register a separate `KRATOS` telemetry endpoint with type `TRACES`. The UI does not offer this yet, so register it through the API with `POST /v2/nvcf/telemetries`:
+
+```json
+{
+  "provider": "KRATOS",
+  "protocol": "GRPC",
+  "endpoint": "https://<kratos-traces-gateway>:4318/v1/traces",
+  "types": ["TRACES"],
+  "secret": {
+    "name": "<secret-name>",
+    "value": {"clientCert": "<pem>", "clientKey": "<pem>"}
+  }
+}
+```
+
+- `endpoint` is the full OTLP/HTTP traces URL. The collector uses it as `traces_endpoint` unchanged and sends protobuf.
+- The secret needs `clientCert` and `clientKey`, which are enough on their own. `collectorId` and `caFile` are optional. When the secret has a non-empty `collectorId`, the collector sends it as the `collector-id` header. When it has a non-empty `caFile`, the collector uses it as the CA for the gateway. A blank value is ignored. The collector checks these values when it renders its config at startup, so adding or removing one later takes effect after the collector container restarts.
+- `protocol` does not change the exporter, which always uses OTLP/HTTP. It only sets the OTLP protocol that NVCA injects into workload containers for sending spans to the collector. Use `GRPC` unless your NVCA release injects `http/protobuf` for HTTP telemetry ([#2676](https://github.com/NVIDIA/nvcf/issues/2676)). Earlier releases inject `http`, which SDKs that follow the OpenTelemetry spec, such as Dynamo, reject.
+- `KRATOS_THANOS` accepts metrics only. A `KRATOS_THANOS` telemetry with type `TRACES` fails to render.
+
 ### 🏷️ Attribute Enrichment
 
 All traces, logs, and metrics have OpenTelemetry attributes added to their metadata. See the [complete attributes list](generator/doc/README.md#opentelemetry-attributes) for detailed information.
