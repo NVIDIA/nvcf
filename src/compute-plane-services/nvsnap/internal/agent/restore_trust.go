@@ -238,6 +238,31 @@ func (c *criuAutoRestorer) groupKeyRefusal(ctx context.Context, pod *corev1.Pod,
 	return "the group record is not its configuration's in its tenant scope", nil
 }
 
+// memberRefusal returns why a pod without a configuration may not restore
+// checkpoint id as a member of group record key, "" when it may, or
+// errRestoreUnverified: the record must list id among the checkpoints of
+// its capture. The record and the capture records are the agent's, so a
+// pod can name only a checkpoint an instance was captured with, and
+// rankRefusal then holds it to its own tenant scope.
+func (c *criuAutoRestorer) memberRefusal(ctx context.Context, key, id string) (string, error) {
+	if id == "" {
+		return "a member without a configuration names no checkpoint of its instance", nil
+	}
+	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "no group record of that key", nil
+		}
+		return "", fmt.Errorf("%w: the group record: %w", errRestoreUnverified, err)
+	}
+	for k, v := range cm.Data {
+		if strings.HasPrefix(k, "checkpoint.") && v == id {
+			return "", nil
+		}
+	}
+	return "the group record does not list the checkpoint", nil
+}
+
 // rankRefusal returns why pod may not restore checkpoint id as a rank of
 // its instance, "" when it may, or errRestoreUnverified: the checkpoint's
 // capture record must be of the pod's tenant scope.
@@ -283,7 +308,14 @@ func (c *criuAutoRestorer) restoreRefusal(ctx context.Context, pod *corev1.Pod) 
 	var why string
 	var err error
 	if key != "" {
-		why, err = c.groupKeyRefusal(ctx, pod, key)
+		if pod.Annotations[cacheURIAnnotation] == "" {
+			// A member without a configuration of its own (a companion:
+			// etcd, NATS, a frontend) is tied to the instance by the
+			// record, which lists every checkpoint it captured.
+			why, err = c.memberRefusal(ctx, key, id)
+		} else {
+			why, err = c.groupKeyRefusal(ctx, pod, key)
+		}
 		if err == nil && why == "" && id != "" {
 			why, err = c.rankRefusal(ctx, pod, id)
 		}
