@@ -28,6 +28,21 @@ pub const BUCKET_COUNT: usize = 128;
 // We don't expect topology to change often, so we can cache them for a while
 const CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(180);
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FunctionVersionKey {
+    pub function_id: Uuid,
+    pub version_id: Uuid,
+}
+
+impl FunctionVersionKey {
+    pub fn new(function_id: Uuid, version_id: Uuid) -> Self {
+        Self {
+            function_id,
+            version_id,
+        }
+    }
+}
+
 /// Cached bucket assignments for the current node
 #[derive(Debug, Clone)]
 struct CachedBucketAssignment {
@@ -249,15 +264,15 @@ pub fn get_token_range_for_bucket(bucket_index: usize) -> (i64, i64) {
 }
 
 /// Match the composite UUID partition key of recently_invoked_functions.
-pub fn bucket_for_function(function_id: Uuid, version_id: Uuid) -> usize {
-    let mut key = [0u8; 38];
-    key[0..2].copy_from_slice(&16u16.to_be_bytes());
-    key[2..18].copy_from_slice(function_id.as_bytes());
-    key[18] = 0;
-    key[19..21].copy_from_slice(&16u16.to_be_bytes());
-    key[21..37].copy_from_slice(version_id.as_bytes());
-    key[37] = 0;
-    let token = Murmur3Partitioner.hash_one(&key).value();
+pub fn bucket_for_function(key: FunctionVersionKey) -> usize {
+    let mut bytes = [0u8; 38];
+    bytes[0..2].copy_from_slice(&16u16.to_be_bytes());
+    bytes[2..18].copy_from_slice(key.function_id.as_bytes());
+    bytes[18] = 0;
+    bytes[19..21].copy_from_slice(&16u16.to_be_bytes());
+    bytes[21..37].copy_from_slice(key.version_id.as_bytes());
+    bytes[37] = 0;
+    let token = Murmur3Partitioner.hash_one(&bytes).value();
     let min = i64::MIN as i128;
     let size = (i64::MAX as i128 - min) / BUCKET_COUNT as i128;
     ((token as i128 - min) / size).min(BUCKET_COUNT as i128 - 1) as usize
@@ -393,7 +408,10 @@ mod tests {
         println!("token={token}  bucket={bucket}");
         assert!(bucket < BUCKET_COUNT);
         assert_eq!(
-            bucket_for_function(Uuid::from_bytes(fid), Uuid::from_bytes(fvid)),
+            bucket_for_function(FunctionVersionKey::new(
+                Uuid::from_bytes(fid),
+                Uuid::from_bytes(fvid)
+            )),
             bucket
         );
     }
@@ -405,7 +423,7 @@ mod tests {
             let version_id = Uuid::from_u128(value as u128 * 251 + 31);
             let key = composite_key(&[function_id.as_bytes(), version_id.as_bytes()]);
             let token = cassandra_murmur3_token(&key);
-            let bucket = bucket_for_function(function_id, version_id);
+            let bucket = bucket_for_function(FunctionVersionKey::new(function_id, version_id));
             let (start, end) = get_token_range_for_bucket(bucket);
             assert!((start..=end).contains(&token));
         }

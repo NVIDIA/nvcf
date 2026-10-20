@@ -1,9 +1,8 @@
 # Local function discovery
 
 The scaling loop reads the active-function list from Cassandra by default.
-The self-managed stack defaults to per-node discovery when
-`HELMFILE_ENV=stg`. Other environments use Cassandra. To override the
-source in any self-managed stack environment, set:
+The self-managed stack also defaults to Cassandra. To enable per-node
+discovery in a specific deployment, set this in its environment values:
 
 ```yaml
 functionAutoscaler:

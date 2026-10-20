@@ -131,13 +131,18 @@ for expected in \
     fail "control profile did not render autoscaler value: $expected"
 done
 test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE // "cassandra"' "$autoscaler_values")" = "cassandra" ||
-  fail "non-stage autoscaler defaulted to local discovery"
+  fail "autoscaler defaulted to local discovery"
 
 cp "$test_stack_dir/environments/base.yaml" "$test_stack_dir/environments/stg.yaml"
 cp "$test_stack_dir/secrets/base-secrets.yaml" "$test_stack_dir/secrets/stg-secrets.yaml"
 write_stage_autoscaler_values "$work_dir/stage-autoscaler-values.yaml"
-test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE' "$work_dir/stage-autoscaler-values.yaml")" = "local_discovery" ||
-  fail "stage autoscaler did not default to local discovery"
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE // "cassandra"' "$work_dir/stage-autoscaler-values.yaml")" = "cassandra" ||
+  fail "stage-named environment unexpectedly enabled local discovery"
+yq -i '.functionAutoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE = "local_discovery"' \
+  "$test_stack_dir/environments/stg.yaml"
+write_stage_autoscaler_values "$work_dir/stage-local-autoscaler-values.yaml"
+test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE' "$work_dir/stage-local-autoscaler-values.yaml")" = "local_discovery" ||
+  fail "stage autoscaler did not honor its environment values"
 write_stage_autoscaler_values "$work_dir/stage-cassandra-autoscaler-values.yaml" \
   --state-values-set-string functionAutoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE=cassandra
 test "$(yq -r '.functionautoscaler.env.SCALING__ACTIVE_FUNCTION_SOURCE' "$work_dir/stage-cassandra-autoscaler-values.yaml")" = "cassandra" ||
