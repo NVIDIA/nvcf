@@ -45,7 +45,7 @@ RUN set -eux; \
 
 # This distroless image already provides a non-root runtime user, so do not add a USER override here unless
 # the runtime requirements change.
-FROM nvcr.io/nvidia/distroless/go:v4.1.2
+FROM nvcr.io/nvidia/distroless/go:v4.1.6@sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929
 LABEL io.k8s.display-name="NVCF Image Credential Helper"
 
 # The following build args are automatically populated by BuildKit.
