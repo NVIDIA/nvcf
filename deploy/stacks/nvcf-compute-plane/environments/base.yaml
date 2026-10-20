@@ -33,7 +33,7 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.16.12"
+    imageTag: "3.17.0"
     # Optional task pod utils and init container reservation, applied as both
     # requests and limits. NVCA subtracts it from every instance type it
     # registers. Leave unset to keep the chart default. Quote the CPU value.
@@ -99,7 +99,7 @@ global:
       # reference here alongside the repository below.
       sharedStorage:
         imageTag: "1.0.5"
-      nvcaVersion: "3.16.12"
+      nvcaVersion: "3.17.0"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
