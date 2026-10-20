@@ -77,6 +77,27 @@ to avoid collisions across installs in the same namespace). Override via
 {{- end -}}
 
 {{/*
+Effective remote-config data. Worker sidecar references are composed from
+nvctApi.remoteConfig.workerImageTags, one tag per worker, so release automation
+can move a worker pin without rewriting the whole reference. configData is
+merged over them, so an explicit configData.nvct.sidecars entry replaces a
+reference.
+*/}}
+{{- define "nvct-api.remoteConfigData" -}}
+{{- $remoteConfig := .Values.nvctApi.remoteConfig | default dict -}}
+{{- $tags := $remoteConfig.workerImageTags | default dict -}}
+{{- $prefix := "${nvct.sidecars.hostname}/${nvct.sidecars.repository}" -}}
+{{- $initTag := required "nvctApi.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
+{{- $taskTag := required "nvctApi.remoteConfig.workerImageTags.task is required" $tags.task | toString -}}
+{{- $workers := dict
+  "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $initTag)
+  "utils-container" (printf "%s/nvcf-worker-task-oss:%s" $prefix $taskTag)
+-}}
+{{- $configData := deepCopy ($remoteConfig.configData | default dict) -}}
+{{- toYaml (mergeOverwrite (dict "nvct" (dict "sidecars" $workers)) $configData) -}}
+{{- end -}}
+
+{{/*
 Stack release tooling skips "${...}" values, so resolve each sidecar image as nvcf-api.sidecarReleaseArtifacts does.
 Emits nothing unless both NVCT_SIDECARS_HOSTNAME and NVCT_SIDECARS_REPOSITORY are set.
 */}}
@@ -84,8 +105,7 @@ Emits nothing unless both NVCT_SIDECARS_HOSTNAME and NVCT_SIDECARS_REPOSITORY ar
 {{- $env := .Values.nvctApi.env | default dict -}}
 {{- $hostname := $env.NVCT_SIDECARS_HOSTNAME | default "" -}}
 {{- $repository := $env.NVCT_SIDECARS_REPOSITORY | default "" -}}
-{{- $remoteConfig := .Values.nvctApi.remoteConfig | default dict -}}
-{{- $configData := $remoteConfig.configData | default dict -}}
+{{- $configData := include "nvct-api.remoteConfigData" . | fromYaml -}}
 {{- $nvct := $configData.nvct | default dict -}}
 {{- $sidecars := $nvct.sidecars | default dict -}}
 {{- if and $hostname $repository -}}

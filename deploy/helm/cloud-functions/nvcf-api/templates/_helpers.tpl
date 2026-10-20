@@ -103,6 +103,28 @@ Remote config Role/RoleBinding name. Release-scoped via the fullname helper.
 {{- end -}}
 
 {{/*
+Effective remote-config data. Worker sidecar references are composed from
+api.remoteConfig.workerImageTags, one tag per worker, so release automation can
+move a worker pin without rewriting the whole reference. configData is merged
+over them, so an explicit configData.nvcf.sidecars entry replaces a reference.
+*/}}
+{{- define "nvcf-api.remoteConfigData" -}}
+{{- $remoteConfig := .Values.api.remoteConfig | default dict -}}
+{{- $tags := $remoteConfig.workerImageTags | default dict -}}
+{{- $prefix := "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}" -}}
+{{- $initTag := required "api.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
+{{- $utilsTag := required "api.remoteConfig.workerImageTags.utils is required" $tags.utils | toString -}}
+{{- $llmCredentialsTag := required "api.remoteConfig.workerImageTags.llmCredentials is required" $tags.llmCredentials | toString -}}
+{{- $workers := dict
+  "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $initTag)
+  "utils-container-image" (dict "go" (printf "%s/nvcf-worker-utils-oss:%s" $prefix $utilsTag))
+  "llm-credential-manager-image" (printf "%s/nvcf-worker-llm-credentials-oss:%s" $prefix $llmCredentialsTag)
+-}}
+{{- $configData := deepCopy ($remoteConfig.configData | default dict) -}}
+{{- toYaml (mergeOverwrite (dict "nvcf" (dict "sidecars" $workers)) $configData) -}}
+{{- end -}}
+
+{{/*
 Release-artifact annotations for worker sidecar images.
 
 The remote-config sidecar image references embed Spring placeholders
@@ -123,8 +145,7 @@ produced.
 {{- $env := .Values.api.env | default dict -}}
 {{- $hostname := $env.NVCF_SIDECARS_HOSTNAME | default "" -}}
 {{- $repository := $env.NVCF_SIDECARS_REPOSITORY | default "" -}}
-{{- $remoteConfig := .Values.api.remoteConfig | default dict -}}
-{{- $configData := $remoteConfig.configData | default dict -}}
+{{- $configData := include "nvcf-api.remoteConfigData" . | fromYaml -}}
 {{- $nvcf := $configData.nvcf | default dict -}}
 {{- $sidecars := $nvcf.sidecars | default dict -}}
 {{- if and $hostname $repository -}}

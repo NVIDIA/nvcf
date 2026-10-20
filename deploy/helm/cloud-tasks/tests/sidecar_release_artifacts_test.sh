@@ -25,8 +25,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fail() {
+  echo "$*" >&2
+  exit 1
+}
+
 hostname="nvcr.io"
 repository="example-org/example-team"
+prefix='${nvct.sidecars.hostname}/${nvct.sidecars.repository}'
 
 manifest="${tmp_dir}/manifest.yaml"
 manifest_without_sidecar_env="${tmp_dir}/manifest-without-sidecar-env.yaml"
@@ -41,17 +47,52 @@ render() {
     --show-only templates/configmap-remote-config.yaml
 }
 
-render \
-  --set-string "nvctApi.env.NVCT_SIDECARS_HOSTNAME=${hostname}" \
-  --set-string "nvctApi.env.NVCT_SIDECARS_REPOSITORY=${repository}" \
-  > "${manifest}"
+render_with_sidecar_env() {
+  render \
+    --set-string "nvctApi.env.NVCT_SIDECARS_HOSTNAME=${hostname}" \
+    --set-string "nvctApi.env.NVCT_SIDECARS_REPOSITORY=${repository}" \
+    "$@"
+}
+
+# Read one value out of the rendered nvct-api.yaml remote config.
+remote_config() {
+  yq -r '.data."nvct-api.yaml"' "$1" | yq -r "$2"
+}
+
+assert_remote_config() {
+  local manifest_file="$1" expression="$2" want="$3" label="$4" got
+  got="$(remote_config "${manifest_file}" "${expression}")"
+  [[ "${got}" == "${want}" ]] ||
+    fail "${label}: expected ${expression} to be ${want}, got ${got}"
+}
 
 # Expected references come from the chart defaults so a pin bump does not break
-# this test. Every sidecar carrying the ${nvct.sidecars.*} placeholder must
-# surface a concrete release-artifact-*-image annotation.
-placeholder_sidecars="$(yq -r \
-  '.nvctApi.remoteConfig.configData.nvct.sidecars | to_entries[] | select(.value | test("\$\{nvct\.sidecars\.")) | .key + " " + .value' \
-  "${chart_dir}/values.yaml")"
+# this test.
+worker_tag() {
+  local tag
+  tag="$(yq -r ".nvctApi.remoteConfig.workerImageTags.$1 // \"\"" "${chart_dir}/values.yaml")"
+  [[ -n "${tag}" ]] ||
+    fail "the chart no longer defaults nvctApi.remoteConfig.workerImageTags.$1, update this test"
+  printf '%s' "${tag}"
+}
+
+init_tag="$(worker_tag init)"
+task_tag="$(worker_tag task)"
+
+render_with_sidecar_env > "${manifest}"
+
+# Worker references are composed from nvctApi.remoteConfig.workerImageTags and
+# keep the Spring placeholders, which the service resolves at runtime.
+assert_remote_config "${manifest}" '.nvct.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:${init_tag}" "composed init reference"
+assert_remote_config "${manifest}" '.nvct.sidecars."utils-container"' \
+  "${prefix}/nvcf-worker-task-oss:${task_tag}" "composed task reference"
+
+# Every sidecar in the rendered remote config that carries the
+# ${nvct.sidecars.*} placeholder must surface a concrete
+# release-artifact-*-image annotation.
+placeholder_sidecars="$(remote_config "${manifest}" \
+  '.nvct.sidecars | to_entries[] | select((.value | type) == "!!str") | select(.value | test("\$\{nvct\.sidecars\.")) | .key + " " + .value')"
 
 if [[ -z "${placeholder_sidecars}" ]]; then
   echo "expected the chart to default at least one placeholder sidecar" >&2
@@ -105,6 +146,40 @@ if grep -E 'release-artifact-.*\$\{' "${manifest}"; then
   exit 1
 fi
 
+# A tag override moves only its own worker reference and its annotation.
+tag_override_manifest="${tmp_dir}/manifest-tag-override.yaml"
+render_with_sidecar_env \
+  --set-string nvctApi.remoteConfig.workerImageTags.task=0.0.1 \
+  > "${tag_override_manifest}"
+assert_remote_config "${tag_override_manifest}" '.nvct.sidecars."utils-container"' \
+  "${prefix}/nvcf-worker-task-oss:0.0.1" "task tag override"
+assert_remote_config "${tag_override_manifest}" '.nvct.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:${init_tag}" "task tag override leaves init"
+grep -Fq "release-artifact-utils-container-image: \"${hostname}/${repository}/nvcf-worker-task-oss:0.0.1\"" \
+  "${tag_override_manifest}" ||
+  fail "the task release-artifact annotation did not follow the tag override"
+
+# An explicit configData entry still replaces a whole worker reference.
+reference_override_manifest="${tmp_dir}/manifest-reference-override.yaml"
+render_with_sidecar_env \
+  --set-string 'nvctApi.remoteConfig.configData.nvct.sidecars.utils-container=mirror.example.test/team/task:9.9.9' \
+  > "${reference_override_manifest}"
+assert_remote_config "${reference_override_manifest}" '.nvct.sidecars."utils-container"' \
+  "mirror.example.test/team/task:9.9.9" "configData task override"
+assert_remote_config "${reference_override_manifest}" '.nvct.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:${init_tag}" "configData task override leaves init"
+if grep -Fq "release-artifact-utils-container-image" "${reference_override_manifest}"; then
+  fail "a placeholder-free utils-container override must not be reported as a release artifact"
+fi
+
+# An empty worker tag would render an invalid reference, so the render fails.
+if render --set-string nvctApi.remoteConfig.workerImageTags.task= \
+  > "${tmp_dir}/empty-tag.yaml" 2> "${tmp_dir}/empty-tag.log"; then
+  fail "an empty nvctApi.remoteConfig.workerImageTags.task was accepted"
+fi
+grep -Fq "nvctApi.remoteConfig.workerImageTags.task is required" "${tmp_dir}/empty-tag.log" ||
+  fail "an empty worker tag did not name the missing key"
+
 # Without the sidecar registry env vars the annotations must be omitted entirely
 # rather than emitting partially-resolved (invalid) references.
 render > "${manifest_without_sidecar_env}"
@@ -114,4 +189,4 @@ if grep -Fq "release-artifact-" "${manifest_without_sidecar_env}"; then
   exit 1
 fi
 
-echo "remote-config ConfigMap surfaces resolved release-artifact image references for placeholder sidecars"
+echo "remote-config ConfigMap composes worker references and surfaces resolved release-artifact image references for placeholder sidecars"

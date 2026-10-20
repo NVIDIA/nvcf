@@ -103,6 +103,16 @@ nvctApi:
     # (release-scoped, collision-safe across installs in the same namespace).
     # Override with a fixed string only when an external contract pins the name.
     configMapName: ""
+    # Worker sidecar image tags. The chart renders each one into
+    # configData.nvct.sidecars as
+    # ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/<image>:<tag>:
+    #   init  init-container   nvcf-worker-init-oss
+    #   task  utils-container  nvcf-worker-task-oss
+    # Release automation moves these keys when a worker releases. Set the
+    # matching configData.nvct.sidecars entry to replace a whole reference.
+    workerImageTags:
+      init: "1.3.1"
+      task: "1.2.2"
     # Can be used for remote configuration by adding NVCT-specific properties here.
     # Add only the keys you need to override.
     # Placeholders like ${nvct.sidecars.hostname} resolve from environment variables
@@ -111,15 +121,13 @@ nvctApi:
     #   configData:
     #     nvct:
     #       sidecars:
-    #         init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.1"
+    #         init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:<tag>"
     #       scheduled-routines:
     #         migration-job-1: # use specific migration job name here
     #           enabled: false
     configData:
       nvct:
         sidecars:
-          init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.1"
-          utils-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.4"
           otel-container: dummy
           ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.1"
           otel-collector-container: dummy
