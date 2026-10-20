@@ -363,7 +363,9 @@ lists only `anthropicMessages` aliases, each with `type`, `id`, `display_name`,
 and `created_at`, plus `has_more`, `first_id`, and `last_id`. Use `limit`
 (1 to 1000, default 20) with `after_id` or `before_id` to page.
 `GET /v1/models/{model}` returns one alias, or `404` `not_found_error` for a
-model that is not served on Messages. Requests without `anthropic-version` get
+model that is not served on Messages. An offline model returns `503`
+`api_error` with `Retry-After: 10800`, and an expired model returns `410`
+`not_found_error`. Requests without `anthropic-version` get
 the shared OpenAI-shaped list.
 
 Messages shadows support sticky sampling methods. On Messages, `promptCacheKey`
