@@ -230,3 +230,31 @@ byoo:
 EOF_VALUES
 assert_render_fails 'effective agent configuration: keys "MaxPayloadBytes" and "maxPayloadBytes" under "agent.byooLogChunking" differ only by case' \
   --values "${first_class_values}"
+
+# The chart passes platform metrics federation settings through unchanged. The
+# operator applies the self-managed default when neither key is set.
+federation_values="${tmp_dir}/federation-values.yaml"
+cat > "${federation_values}" <<'EOF_VALUES'
+byoo:
+  otelCollector:
+    platformMetricsFederation:
+      target: vmsingle.monitoring.svc.cluster.local:8428
+EOF_VALUES
+federation_manifest="${tmp_dir}/federation-manifest.yaml"
+render "${federation_manifest}" --values "${federation_values}"
+assert_equal "vmsingle.monitoring.svc.cluster.local:8428" \
+  "$(agent_config_value "${federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.target')" \
+  "byoo.otelCollector.platformMetricsFederation.target was not passed to the agent"
+assert_absent "${federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.enabled' \
+  "the chart should leave the federation default to the operator"
+
+disabled_federation_manifest="${tmp_dir}/disabled-federation-manifest.yaml"
+render "${disabled_federation_manifest}" --set byoo.otelCollector.platformMetricsFederation.enabled=false
+assert_equal "false" \
+  "$(agent_config_value "${disabled_federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.enabled | tostring')" \
+  "byoo.otelCollector.platformMetricsFederation.enabled was not passed to the agent"
+
+assert_render_fails 'platformMetricsFederation' \
+  --set-string byoo.otelCollector.platformMetricsFederation.target=http://prometheus.example.invalid:9090
+assert_render_fails 'platformMetricsFederation' \
+  --set-string byoo.otelCollector.platformMetricsFederation.targets=prometheus.example.invalid:9090

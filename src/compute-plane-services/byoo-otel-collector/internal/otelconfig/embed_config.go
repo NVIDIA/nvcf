@@ -56,6 +56,18 @@ type TemplateConfig struct {
 	CollectorTracesEnabled bool
 }
 
+// PlatformMetricsFederationEnabled reports whether the Kubernetes templates
+// render the platform metrics /federate scrape jobs.
+func (c TemplateConfig) PlatformMetricsFederationEnabled() bool {
+	return c.OTelCollector.PlatformMetricsFederation.IsEnabled()
+}
+
+// PlatformMetricsFederationTarget returns the host:port that the Kubernetes
+// templates federate platform metrics from.
+func (c TemplateConfig) PlatformMetricsFederationTarget() string {
+	return c.OTelCollector.PlatformMetricsFederation.EffectiveTarget()
+}
+
 type LogChunkingConfig struct {
 	Enabled         bool
 	MaxPayloadBytes int

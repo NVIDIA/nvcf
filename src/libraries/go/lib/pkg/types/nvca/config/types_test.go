@@ -255,6 +255,72 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	assert.Equal(t, cfg.BYOOOTelCollector, got)
 }
 
+func TestBYOOOTelCollectorConfig_PlatformMetricsFederationEnvVars(t *testing.T) {
+	disabled := false
+	tests := []struct {
+		name           string
+		federation     BYOOOTelPlatformMetricsFederationConfig
+		wantFederation string
+	}{
+		{name: "disabled", federation: BYOOOTelPlatformMetricsFederationConfig{Enabled: &disabled},
+			wantFederation: `{"enabled":false}`},
+		{name: "target", federation: BYOOOTelPlatformMetricsFederationConfig{Target: "vm.example.invalid:8428"},
+			wantFederation: `{"target":"vm.example.invalid:8428"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := BYOOOTelCollectorConfig{PlatformMetricsFederation: tt.federation}
+			require.False(t, cfg.IsZero())
+
+			envs := cfg.EnvVars()
+			require.Len(t, envs, 1)
+			assert.Equal(t, BYOOOTelCollectorConfigEnv, envs[0].Name)
+			decoded, err := base64.StdEncoding.DecodeString(envs[0].Value)
+			require.NoError(t, err)
+			var got map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(decoded, &got))
+			assert.JSONEq(t, tt.wantFederation, string(got["platformMetricsFederation"]))
+		})
+	}
+
+	assert.True(t, BYOOOTelPlatformMetricsFederationConfig{}.IsZero())
+	assert.Nil(t, BYOOOTelCollectorConfig{}.EnvVars())
+}
+
+func TestBYOOOTelCollectorConfig_ValidatePlatformMetricsFederation(t *testing.T) {
+	tests := []struct {
+		target  string
+		wantErr string
+	}{
+		{target: ""},
+		{target: "vmsingle.monitoring.svc.cluster.local:8428"},
+		{target: "Prometheus.Example.Invalid:9090"},
+		{target: "10.0.0.1:9090"},
+		{target: "[fd00::1]:9090"},
+		{target: "prometheus.example.invalid", wantErr: "must be host:port"},
+		{target: "http://prometheus.example.invalid:9090", wantErr: "must be host:port"},
+		{target: ":9090", wantErr: "DNS name or IP address"},
+		{target: "prometheus_example:9090", wantErr: "DNS name or IP address"},
+		{target: "prom\"etheus:9090", wantErr: "DNS name or IP address"},
+		{target: "prometheus.example.invalid:http", wantErr: "port between 1 and 65535"},
+		{target: "prometheus.example.invalid:0", wantErr: "port between 1 and 65535"},
+		{target: "prometheus.example.invalid:65536", wantErr: "port between 1 and 65535"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			err := BYOOOTelCollectorConfig{
+				PlatformMetricsFederation: BYOOOTelPlatformMetricsFederationConfig{Target: tt.target},
+			}.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "platform metrics federation: ")
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
 	tests := []struct {
 		name            string
