@@ -98,3 +98,22 @@ func TestEmbeddingInputPreservesTextAndTokenValues(t *testing.T) {
 		})
 	}
 }
+
+func TestEmbeddingInputRawDoesNotAliasDecoderInput(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{"image":"a"}`)
+	var input EmbeddingInputField
+	if err := input.UnmarshalJSON(data); err != nil {
+		t.Fatal(err)
+	}
+	copy(data, `{"image":"b"}`)
+
+	got, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `[{"image":"a"}]` {
+		t.Fatalf("got %s, want the bytes from decode time", got)
+	}
+}

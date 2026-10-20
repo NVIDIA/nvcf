@@ -137,7 +137,7 @@ func decodeEmbeddingInput(data json.RawMessage) EmbeddingInput {
 	if tokens, err := decodeEmbeddingTokens(data); err == nil {
 		return EmbeddingInput{Tokens: tokens}
 	}
-	return EmbeddingInput{Raw: data}
+	return EmbeddingInput{Raw: append(json.RawMessage(nil), data...)}
 }
 
 func decodeEmbeddingTokens(data []byte) ([]uint32, error) {
