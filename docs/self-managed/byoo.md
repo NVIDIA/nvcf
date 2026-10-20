@@ -239,7 +239,7 @@ file. The `secret.name` is the telemetry name.
 | `AZURE_MONITOR` | Azure Monitor ingestion endpoint | Object with `instrumentationKey`, `applicationId`, and `liveEndpoint`. |
 | `SPLUNK` | Splunk HEC URL | String. The HEC token. |
 | `PROMETHEUS` | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
-| `SERVICENOW` | OTLP gRPC endpoint | String. Sent in the `lightstep-access-token` header. |
+| `SERVICENOW` | OTLP gRPC endpoint | String. A token that starts with `otel_` is sent in the `otel-token` header. Any other token is sent in the `lightstep-access-token` header. |
 
 Use `OTEL_COLLECTOR` to send to any OTLP HTTP receiver, including your own
 OpenTelemetry Collector. The collector appends the standard OTLP signal paths,
