@@ -54,6 +54,11 @@ For every pod created, the webhook runs this before any annotation logic.
    The watcher captures the leader under the stamped hash instead of
    recomposing from the live pod, which removed the mismatch between
    admission-time and capture-time inputs (image digest, injected env).
+   The annotation is the pod author's to write, so the watcher honours it
+   only when the election Lease vouches for it: the Lease names this hash,
+   this namespace and the election id the pod carries, and the node's
+   compute capability is the one the pod is pinned to. Any other stamped
+   pod is captured under the hash composed from what it runs.
 4. Ready: a usable manifest exists and the rox PVC is Bound. Restore
    decoration, same as an explicit-hash restore today. Done.
 5. Elect. Try to create Lease `nvsnap-capture-<hash>` in nvsnap-system

@@ -158,6 +158,47 @@ func (e *LeaseElector) deadline() time.Duration {
 	return e.Deadline
 }
 
+// VerifyStamp implements the capture watcher's check of a stamped hash: nil
+// when pod is the leader of the live election for hash, on a node of the
+// compute capability nodeCC the hash was elected for. The election Lease
+// lives in the election namespace, which pod authors cannot write, and
+// names the leader by namespace and by an id minted at admission that
+// only the Lease and the leader pod carry; a pod that sets the hash, the
+// id or the pin on itself does not get past it. The compute capability
+// the hash was composed for is the one admission pinned the pod to.
+func (e *LeaseElector) VerifyStamp(ctx context.Context, pod *corev1.Pod, hash, nodeCC string) error {
+	if e.KubeClient == nil {
+		return fmt.Errorf("no kube client")
+	}
+	if pod == nil {
+		return fmt.Errorf("nil pod")
+	}
+	lease, err := e.KubeClient.CoordinationV1().Leases(e.Namespace).Get(ctx, LeaseName(hash), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("no live election for the hash")
+		}
+		return fmt.Errorf("read the election: %w", err)
+	}
+	id := pod.Annotations[ElectionIDAnnotation]
+	switch {
+	case lease.Annotations[HashAnnotation] != hash:
+		return fmt.Errorf("the election is for another hash")
+	case id == "" || lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != id || lease.Annotations[LeaderIDAnnotation] != id:
+		return fmt.Errorf("the pod is not the election's leader")
+	case lease.Annotations[LeaderNamespaceAnnotation] != pod.Namespace:
+		return fmt.Errorf("the election's leader is in another namespace")
+	}
+	pinned := PinnedComputeCapability(pod)
+	switch {
+	case pinned == "":
+		return fmt.Errorf("the pod is not pinned to a GPU architecture")
+	case nodeCC != pinned:
+		return fmt.Errorf("the node's compute capability %q is not the elected %q", nodeCC, pinned)
+	}
+	return nil
+}
+
 // Elect creates the Lease for hash with a freshly minted id as holder.
 // Created means leader; AlreadyExists means follower; anything else is an
 // error the caller fails open on.

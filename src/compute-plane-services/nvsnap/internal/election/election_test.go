@@ -110,3 +110,63 @@ func TestPodIdentity(t *testing.T) {
 		t.Error("nil pod must yield empty identity")
 	}
 }
+
+// The watcher takes a pod's stamped hash only from the elected leader on
+// the architecture it was elected for. Everything a pod can set on itself
+// (the hash, the election id, the pin) is checked against the Lease,
+// which it cannot write.
+func TestLeaseElector_VerifyStamp(t *testing.T) {
+	e := &LeaseElector{KubeClient: fake.NewSimpleClientset(), Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
+	if _, _, err := e.Elect(context.Background(), hash, pod("")); err != nil {
+		t.Fatal(err)
+	}
+	leader := func() *corev1.Pod {
+		p := pod("u1")
+		p.Annotations = map[string]string{HashAnnotation: hash, ElectionIDAnnotation: "leader-id"}
+		p.Spec.NodeSelector = ArchPin("9.0")
+		return p
+	}
+	other := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	cases := map[string]struct {
+		pod    func() *corev1.Pod
+		hash   string
+		nodeCC string
+		ok     bool
+	}{
+		"the leader on its architecture": {leader, hash, "9.0", true},
+		"another model's hash":           {leader, other, "9.0", false},
+		"a forged election id": {func() *corev1.Pod {
+			p := leader()
+			p.Annotations[ElectionIDAnnotation] = "guess"
+			return p
+		}, hash, "9.0", false},
+		"no election id": {func() *corev1.Pod {
+			p := leader()
+			delete(p.Annotations, ElectionIDAnnotation)
+			return p
+		}, hash, "9.0", false},
+		"another namespace": {func() *corev1.Pod {
+			p := leader()
+			p.Namespace = "tenant-b"
+			return p
+		}, hash, "9.0", false},
+		"not pinned": {func() *corev1.Pod {
+			p := leader()
+			p.Spec.NodeSelector = nil
+			return p
+		}, hash, "9.0", false},
+		"another architecture":      {leader, hash, "8.0", false},
+		"node architecture unknown": {leader, hash, "", false},
+	}
+	for name, c := range cases {
+		err := e.VerifyStamp(context.Background(), c.pod(), c.hash, c.nodeCC)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want ok=%v", name, err, c.ok)
+		}
+	}
+	// The election gone (released, failed or never held): nothing vouches.
+	gone := &LeaseElector{KubeClient: fake.NewSimpleClientset(), Namespace: "nvsnap-system"}
+	if err := gone.VerifyStamp(context.Background(), leader(), hash, "9.0"); err == nil {
+		t.Error("a stamp with no live election verified")
+	}
+}
