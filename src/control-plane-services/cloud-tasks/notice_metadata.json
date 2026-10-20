@@ -320,7 +320,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-registry-prometheus",
-      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
+      "url": "https://github.com/micrometer-metrics/micrometer"
     },
     "io.netty:netty-codec-native-quic:4.2.15.Final": {
       "licenses": [
