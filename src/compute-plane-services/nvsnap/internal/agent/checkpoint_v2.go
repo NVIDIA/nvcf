@@ -329,20 +329,14 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
 		_ = os.RemoveAll(imgsDir)
-		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, leaveRunning, gsOn, log); err != nil {
-			if gsOn {
-				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
-					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
-				}
-			}
-			return nil, err
+		err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, leaveRunning, gsOn, log)
+		resumeErr := settleSource(gsOn, leaveRunning, err != nil, func() error {
+			return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log)
+		})
+		if err != nil || resumeErr != nil {
+			return nil, errors.Join(err, resumeErr)
 		}
 		if gsOn {
-			if leaveRunning {
-				if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
-					return nil, fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
-				}
-			}
 			closeFabric()
 			if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
 				return nil, err
@@ -413,41 +407,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		_ = os.RemoveAll(imgsHost)
 	}
 
-	if runErr != nil && gsOn {
-		// CRIU puts a failed dump's tasks back as they were: stopped, GPU
-		// state checkpointed. Bring the workload back rather than leave it
-		// frozen; the capture still fails.
-		if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
-		}
-	}
+	var tail string
 	if runErr != nil {
-		tail := tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6)
+		tail = tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6)
 		if strings.TrimSpace(tail) == "" {
 			// Move failed or never ran: read it where CRIU wrote it.
 			tail = tailOfFile(filepath.Join(imgsHost, "dump.log"), 6)
 		}
-		// moveErr matters here too: "no dump.log" caused by a failed harvest
-		// is a different problem from a dump that never wrote one, and
-		// reporting only runErr makes the two indistinguishable.
-		if moveErr != nil {
-			// Join rather than format moveErr with %v: a caller inspecting
-			// this with errors.Is/As needs to reach both the dump failure and
-			// the harvest failure, not just the first one.
-			return nil, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
-				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
-		}
-		return nil, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
-	if moveErr != nil {
-		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
+	if err := finishDump(runErr, moveErr, out, tail, gsOn, leaveRunning, func() error {
+		return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log)
+	}); err != nil {
+		return nil, err
 	}
 	if gsOn {
-		if leaveRunning {
-			if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
-				return nil, fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
-			}
-		}
 		closeFabric()
 		if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
 			return nil, err
@@ -455,6 +428,43 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
 	return gsInfo, nil
+}
+
+// settleSource brings back a source whose GPU state a dump suspended,
+// whatever became of the dump: CRIU puts a failed dump's tasks back
+// stopped, and a leave-running dump's tree holds no GPU memory until it is
+// resumed, whether or not its images were then harvested. Only a whole
+// dump of a tree CRIU went on to kill leaves nothing to resume. A resume
+// that fails is reported as errSourceLeftSuspended, for the caller to
+// replace the workload.
+func settleSource(suspended, leaveRunning, dumpFailed bool, resume func() error) error {
+	if !suspended || (!dumpFailed && !leaveRunning) {
+		return nil
+	}
+	if err := resume(); err != nil {
+		return fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
+	}
+	return nil
+}
+
+// finishDump settles the source after an in-namespace dump and reports how
+// the dump went: CRIU's error (runErr, with its output and the tail of its
+// log), the error of harvesting its images (moveErr), and the source's
+// resume, joined so that errors.Is reaches each.
+func finishDump(runErr, moveErr error, out []byte, tail string, suspended, leaveRunning bool, resume func() error) error {
+	resumeErr := settleSource(suspended, leaveRunning, runErr != nil, resume)
+	output := strings.TrimSpace(string(out))
+	switch {
+	case runErr != nil && moveErr != nil:
+		// "no dump.log" caused by a failed harvest is a different problem
+		// from a dump that never wrote one: report both.
+		return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w", output, tail, errors.Join(runErr, moveErr, resumeErr))
+	case runErr != nil:
+		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", errors.Join(runErr, resumeErr), output, tail)
+	case moveErr != nil:
+		return errors.Join(fmt.Errorf("criu-v2: move images: %w", moveErr), resumeErr)
+	}
+	return resumeErr
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that
