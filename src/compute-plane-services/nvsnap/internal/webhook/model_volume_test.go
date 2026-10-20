@@ -1479,3 +1479,45 @@ func TestModelVolume_EngineDownload_HubCacheOverride(t *testing.T) {
 		t.Errorf("job HF_HUB_CACHE = %q, want the volume root %q (engine reads /data/hub)", jenv["HF_HUB_CACHE"], downloadMount)
 	}
 }
+
+// The init downloads into the landing volume mounted at /downloads, the
+// engine reads it at /config/models. The Job redirects that one volume and
+// mounts nothing twice (a duplicate mount path is refused by the API).
+func TestModelVolume_InitMountsLandingElsewhere_JobMountsItOnce(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutator(t, modelvolume.ModeBlock, election.RoleLeader, kc)
+	pod := ngcFunctionPod()
+	init := &pod.Spec.InitContainers[0]
+	init.Env[1].Value = "/downloads"
+	init.VolumeMounts[0].MountPath = "/downloads"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := viewMV(pod, patches)
+	uri := v.annotations[modelvolume.IdentityAnnotation]
+	if !strings.HasPrefix(uri, "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed") {
+		t.Fatalf("identity = %q", uri)
+	}
+	if vol, ok := v.volumes["ngc-models"]; !ok || vol.PersistentVolumeClaim == nil && vol.HostPath == nil {
+		t.Errorf("the engine's ngc-models volume is the one substituted: %+v", v.volumes)
+	}
+	job, err := kc.BatchV1().Jobs("sr-fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("download Job must be created: %v", err)
+	}
+	jc := job.Spec.Template.Spec.InitContainers[0]
+	seen := map[string]bool{}
+	for _, vm := range jc.VolumeMounts {
+		if seen[vm.MountPath] {
+			t.Errorf("mount path %s twice in the Job: %+v", vm.MountPath, jc.VolumeMounts)
+		}
+		seen[vm.MountPath] = true
+		if vm.MountPath == "/downloads" && vm.Name != "ngc-models" {
+			t.Errorf("/downloads must stay the landing volume: %+v", vm)
+		}
+	}
+	if !strings.Contains(jc.Args[0], "> /downloads/.nvsnap-complete") {
+		t.Errorf("the marker goes where the init sees the landing:\n%s", jc.Args[0])
+	}
+}

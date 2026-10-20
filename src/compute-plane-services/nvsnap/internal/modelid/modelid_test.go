@@ -300,3 +300,44 @@ func TestResolve_EngineNGCEnvIntoSharedClaimIsLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// The init and the engine mount the landing volume at different paths: the
+// init's destination is resolved through the volume it names, then placed
+// where the engine mounts that volume.
+func TestResolve_InitDestThroughSharedVolumeName(t *testing.T) {
+	pod := func(dest, initMount string) *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{
+				Name: "fetch", Command: []string{"/bin/sh", "-c"},
+				Args:         []string{"ngc registry model download-version --dest " + dest + " org/team/m:1"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: initMount}},
+			}},
+			Containers: []corev1.Container{{
+				Name: "engine", Args: []string{"serve /config/models/m_v1"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "ngc-models", MountPath: "/config/models"}},
+			}},
+			Volumes: []corev1.Volume{emptyDir("ngc-models")},
+		}}
+	}
+	for _, tc := range []struct{ dest, initMount, want string }{
+		{"/downloads", "/downloads", "/config/models"},
+		{"/downloads/m", "/downloads", "/config/models/m"},
+		{"/config/models", "/config/models", "/config/models"},
+	} {
+		r, ok := Resolve(pod(tc.dest, tc.initMount), 0)
+		if !ok {
+			t.Fatalf("%s: must resolve", tc.dest)
+		}
+		l := r.Landing
+		if l.Path != tc.want || l.VolumeName != "ngc-models" || l.MountPath != "/config/models" || l.Kind != VolumeEmptyDir || l.InitContainer != "fetch" {
+			t.Errorf("dest %s on %s: landing = %+v, want %s on the engine's ngc-models", tc.dest, tc.initMount, l, tc.want)
+		}
+	}
+	// A volume the engine does not mount: the destination stays the
+	// engine's own path, as before.
+	p := pod("/downloads", "/downloads")
+	p.Spec.Containers[0].VolumeMounts = nil
+	if r, _ := Resolve(p, 0); r.Landing.VolumeName != "" || r.Landing.Kind != VolumeRootfs {
+		t.Errorf("unmounted in the engine: landing = %+v", r.Landing)
+	}
+}

@@ -183,11 +183,11 @@ func fromInit(pod *corev1.Pod, init, main *corev1.Container) (Result, bool) {
 	// NVCF Helm functions: NGC CLI download with the artifact in env.
 	if name := env["NGC_MODEL_NAME"]; name != "" {
 		dest := firstNonEmpty(env["NGC_MODEL_MOUNT"], ngcDest(text), mountRoot(init))
-		return Result{Identity: Identity{Scheme: "ngc", Ref: name}, Landing: landingFor(pod, main, dest, DownloaderInit, init.Name), Source: "init env NGC_MODEL_NAME"}, true
+		return Result{Identity: Identity{Scheme: "ngc", Ref: name}, Landing: initLanding(pod, init, main, dest), Source: "init env NGC_MODEL_NAME"}, true
 	}
 	if m := ngcDownloadRe.FindStringSubmatch(text); m != nil {
 		dest := firstNonEmpty(ngcDest(text), env["NGC_MODEL_MOUNT"], mountRoot(init))
-		return Result{Identity: Identity{Scheme: "ngc", Ref: m[1]}, Landing: landingFor(pod, main, dest, DownloaderInit, init.Name), Source: "init ngc registry model download-version"}, true
+		return Result{Identity: Identity{Scheme: "ngc", Ref: m[1]}, Landing: initLanding(pod, init, main, dest), Source: "init ngc registry model download-version"}, true
 	}
 	if m := hfCLIRe.FindStringSubmatch(text); m != nil {
 		dest := firstNonEmpty(hfLocalDir(text), env["HF_HOME"], mountRoot(init))
@@ -195,15 +195,15 @@ func fromInit(pod *corev1.Pod, init, main *corev1.Container) (Result, bool) {
 		if r := revisionRe.FindStringSubmatch(text); r != nil {
 			id.Revision = r[1]
 		}
-		return Result{Identity: id, Landing: landingFor(pod, main, dest, DownloaderInit, init.Name), Source: "init huggingface-cli download"}, true
+		return Result{Identity: id, Landing: initLanding(pod, init, main, dest), Source: "init huggingface-cli download"}, true
 	}
 	if m := s3Re.FindStringSubmatch(text); m != nil && (strings.Contains(text, "s3 sync") || strings.Contains(text, "s3 cp") || strings.Contains(text, "s5cmd")) {
-		return Result{Identity: Identity{Scheme: "s3", Ref: strings.TrimSuffix(m[1], "/")}, Landing: landingFor(pod, main, mountRoot(init), DownloaderInit, init.Name), Source: "init s3"}, true
+		return Result{Identity: Identity{Scheme: "s3", Ref: strings.TrimSuffix(m[1], "/")}, Landing: initLanding(pod, init, main, mountRoot(init)), Source: "init s3"}, true
 	}
 	// KServe storage-initializer: args [storageUri, destDir].
 	if strings.Contains(init.Image, "storage-initializer") && len(init.Args) >= 2 {
 		if id, ok := parseURI(init.Args[0]); ok {
-			return Result{Identity: id, Landing: landingFor(pod, main, init.Args[1], DownloaderInit, init.Name), Source: "kserve storage-initializer"}, true
+			return Result{Identity: id, Landing: initLanding(pod, init, main, init.Args[1]), Source: "kserve storage-initializer"}, true
 		}
 		if strings.HasPrefix(init.Args[0], "pvc://") {
 			return Result{Identity: Identity{}, Landing: Landing{Path: init.Args[1], Kind: VolumePVC, Downloader: DownloaderNone}, Source: "kserve pvc"}, false
@@ -283,6 +283,46 @@ func engineCachePath(main *corev1.Container) string {
 		return v
 	}
 	return defaultHFHome
+}
+
+// initLanding is the landing of a download init writing to dest, a path
+// in the init's own filesystem. The init and the engine can mount the
+// landing volume at different paths (an emptyDir at /downloads in the
+// init and at /config/models in the engine), so dest is first resolved to
+// the volume the init mounts at or above it and the path inside that
+// volume, then placed where the main container mounts the same volume.
+// A dest on no volume of the init, or on one the main container does not
+// mount, is taken as a path of the main container, as before.
+func initLanding(pod *corev1.Pod, init, main *corev1.Container, dest string) Landing {
+	if vol, rel, ok := volumeAt(init, dest); ok {
+		for _, vm := range main.VolumeMounts {
+			if vm.Name == vol {
+				return landingFor(pod, main, path.Join(vm.MountPath, rel), DownloaderInit, init.Name)
+			}
+		}
+	}
+	return landingFor(pod, main, dest, DownloaderInit, init.Name)
+}
+
+// volumeAt returns the volume c mounts at or above p, and p's path inside
+// it ("." for the mount itself).
+func volumeAt(c *corev1.Container, p string) (vol, rel string, ok bool) {
+	p = path.Clean(p)
+	best := ""
+	for _, vm := range c.VolumeMounts {
+		mp := path.Clean(vm.MountPath)
+		if (p == mp || strings.HasPrefix(p, strings.TrimSuffix(mp, "/")+"/")) && len(mp) > len(best) {
+			best, vol = mp, vm.Name
+		}
+	}
+	if vol == "" {
+		return "", "", false
+	}
+	rel = strings.TrimPrefix(strings.TrimPrefix(p, best), "/")
+	if rel == "" {
+		rel = "."
+	}
+	return vol, rel, true
 }
 
 // landingFor finds the volume mounted at or above dest in the main
