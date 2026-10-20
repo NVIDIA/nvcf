@@ -28,8 +28,13 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
+
+// The election's Lease elector is what vouches for a leader's stamped
+// hash in the capture watcher.
+var _ rootfsonly.StampVerifier = (*election.LeaseElector)(nil)
 
 // RootfsCaptureConfig configures the optional rootfs-only capture
 // loop. The backend is always Local — gpdrox/PVC-fanout was removed
@@ -174,6 +179,11 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 		WarmupDelay: cfg.WarmupDelay,
 		Concurrency: cfg.Concurrency,
 		Log:         a.log.WithField("subsys", "rootfsonly.watcher"),
+	}
+	// A pod's stamped hash is honoured only when its election vouches
+	// for it; with the election off, none is.
+	if v, ok := a.elector.(rootfsonly.StampVerifier); ok {
+		watcher.Stamps = v
 	}
 
 	a.log.WithFields(map[string]any{

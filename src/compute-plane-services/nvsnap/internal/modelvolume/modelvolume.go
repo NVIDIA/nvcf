@@ -271,6 +271,28 @@ func (c Config) ReadOnlyPVName(uri, ns string) string {
 	return c.prefix() + Key(uri) + "-ro-" + hex.EncodeToString(sum[:4])
 }
 
+// GenerationReadOnlyClaimName is the per-namespace read-only claim of
+// generation gen of uri. Each generation is viewed through its own claim:
+// a namespace that read an older generation keeps that view for its
+// running readers, and a later pod reads the generation it is stamped
+// with, not the one an existing claim was bound to. Generation 1 keeps the
+// plain name, so views minted before generations were named stay valid.
+func (c Config) GenerationReadOnlyClaimName(uri string, gen int) string {
+	if gen <= 1 {
+		return c.ReadOnlyClaimName(uri)
+	}
+	return c.ReadOnlyClaimName(uri) + "-g" + strconv.Itoa(gen)
+}
+
+// GenerationReadOnlyPVName is the static PV behind
+// GenerationReadOnlyClaimName in ns.
+func (c Config) GenerationReadOnlyPVName(uri, ns string, gen int) string {
+	if gen <= 1 {
+		return c.ReadOnlyPVName(uri, ns)
+	}
+	return c.ReadOnlyPVName(uri, ns) + "-g" + strconv.Itoa(gen)
+}
+
 // FailureRecordName is the ConfigMap that records a given-up attempt.
 func (c Config) FailureRecordName(uri string) string { return c.prefix() + "failed-" + Key(uri) }
 

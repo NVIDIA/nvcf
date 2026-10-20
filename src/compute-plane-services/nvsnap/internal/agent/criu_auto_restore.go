@@ -81,6 +81,7 @@ type criuAutoRestorer struct {
 	a         *Agent
 	attempted sync.Map // pod UID -> struct{}
 	goneSince sync.Map // restored pod UID -> when its engine was first seen gone
+	verdicts  sync.Map // pod UID, checkpoint, group key -> why its restore is refused ("" admitted); restore_trust.go
 
 	mu        sync.Mutex
 	blocked   map[string]bool
@@ -107,10 +108,30 @@ func (a *Agent) startCRIUAutoRestore(ctx context.Context) error {
 	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    handle,
 		UpdateFunc: func(_, obj any) { handle(obj) },
+		DeleteFunc: func(obj any) {
+			if t, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = t.Obj
+			}
+			if pod, ok := obj.(*corev1.Pod); ok {
+				c.forgetPod(pod)
+			}
+		},
 	}); err != nil {
 		return fmt.Errorf("CRIU auto-restore: %w", err)
 	}
 	go factory.Start(ctx.Done())
+	go func() {
+		// Records of pods deleted while no agent ran.
+		if cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+			onNode := map[types.UID]bool{}
+			for _, obj := range informer.GetStore().List() {
+				if pod, ok := obj.(*corev1.Pod); ok {
+					onNode[pod.UID] = true
+				}
+			}
+			c.sweepRestoreRecords(onNode)
+		}
+	}()
 	a.log.WithField("node", a.config.NodeName).Info("CRIU auto-restore: watching this node's pods")
 	return nil
 }
@@ -126,6 +147,9 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerGroupCapture(ctx, pod)
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
+	if !c.admitted(ctx, pod) {
+		return
+	}
 	c.prefetch(ctx, pod)
 	if isGroupPlaceholder(pod) {
 		c.considerGroupRestore(ctx, pod)
@@ -139,6 +163,31 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	go c.restore(ctx, pod.Namespace, pod.Name, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
+}
+
+// admitted reports whether the restorer may act on pod's restore
+// annotations (restore_trust.go). A pod refused is left as it is: nothing
+// is fetched or restored for it, no checkpoint is blocked and the pod is
+// not deleted, which a controller recreating it with the same annotations
+// would only repeat.
+func (c *criuAutoRestorer) admitted(ctx context.Context, pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
+		return true // nothing to fetch or restore; considerRestored has its own check
+	}
+	why, err := c.restoreRefusal(ctx, pod)
+	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name,
+		"checkpoint": pod.Annotations[webhook.CRIURestoreAnnotation], "criuGroup": pod.Annotations[webhook.CRIUGroupAnnotation]})
+	if err != nil {
+		log.WithError(err).Warn("CRIU restore: cannot verify the pod's restore yet; trying again on its next event")
+		return false
+	}
+	if why != "" {
+		if _, logged := c.attempted.LoadOrStore("refused/"+string(pod.UID), struct{}{}); !logged {
+			log.WithField("reason", why).Warn("CRIU restore refused: the pod names a restore it may not have; leaving it as it is")
+		}
+		return false
+	}
+	return true
 }
 
 // errCheckpointUnavailable marks a restore that did not run: the
@@ -198,6 +247,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, 
 	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
+		c.recordLoneRestore(ctx, ns, pod, id, container, log)
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		record(func(d map[string]string) bool { return recordRestored(d, id) })
 		return
@@ -206,7 +256,8 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, 
 		return // the agent stops; the next one restores the pod
 	}
 	if errors.Is(err, errNotPlaceholder) {
-		// Restored already (by this agent before a restart): leave it be.
+		// Restored already (by this agent before a restart, which kept its
+		// record), or a pod that runs its own workload: leave it be.
 		log.WithError(err).Warn("CRIU auto-restore: the pod already runs its workload; not restoring, not deleting")
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
@@ -344,6 +395,18 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		return
 	}
 	log.WithFields(logrus.Fields{"hash": checkpointstore.ShortHash(hash), "checkpoint": checkpointID}).Info("CRIU capture recorded for restore")
+}
+
+// recordLoneRestore keeps the agent's record of a lone restore into pod,
+// which the restored-pod watch acts on (restore_trust.go).
+func (c *criuAutoRestorer) recordLoneRestore(ctx context.Context, ns, pod, id, container string, log *logrus.Entry) {
+	p, err := c.a.kubeClient.CoreV1().Pods(ns).Get(context.WithoutCancel(ctx), pod, metav1.GetOptions{})
+	if err == nil {
+		err = c.recordRestore(p.UID, restoreRecord{Checkpoint: id, Container: container, Namespace: ns, Pod: pod, At: time.Now().UTC()})
+	}
+	if err != nil {
+		log.WithError(err).Warn("CRIU auto-restore: cannot record the restore; its engine is not watched")
+	}
 }
 
 // markRestored annotates a restored placeholder so a restarted agent does

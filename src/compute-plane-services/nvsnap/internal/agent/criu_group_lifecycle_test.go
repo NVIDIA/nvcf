@@ -5,7 +5,12 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -18,6 +23,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -58,10 +64,15 @@ func TestParseCRIUGroup_StalledRestoresStartCold(t *testing.T) {
 
 func groupFixture(t *testing.T) (*criuAutoRestorer, *fake.Clientset, *corev1.Pod) {
 	t.Helper()
-	kc := fake.NewSimpleClientset()
+	kc := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fn"}})
 	a := &Agent{kubeClient: kc, log: logrus.New()}
 	c := a.criuRestorer()
 	ctx := context.Background()
+	// What a capture of the instance leaves behind: the checkpoints'
+	// capture records in the namespace's scope, and its configuration's
+	// record naming the instance record k1.
+	vouchCRIU(t, c, "fn", true, "c0", "c1")
+	aliasGroup(t, kc, "cache://k1", "fn", "k1")
 	record := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName("k1"), Namespace: "nvsnap-system"},
 		Data: map[string]string{"state": "complete", "size": "2", "captures": "1", "checkpoint.0": "c0", "checkpoint.1": "c1"}}
 	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(ctx, record, metav1.CreateOptions{}); err != nil {
@@ -391,5 +402,58 @@ func TestReplaceCollidingReleasesTheCompanionsSlot(t *testing.T) {
 	}
 	if got := remainingPods(t, kc); slices.Contains(got, "frontend-a") {
 		t.Errorf("pods left = %v, want frontend-a replaced", got)
+	}
+}
+
+// vouchCRIU records checkpoints ids as CRIU captures of namespace ns's
+// tenant scope, as the agent does when it captures them: their metadata
+// on this node and their capture records.
+func vouchCRIU(t *testing.T, c *criuAutoRestorer, ns string, instance bool, ids ...string) {
+	t.Helper()
+	if c.a.config.CheckpointDir == "" {
+		c.a.config.CheckpointDir = t.TempDir()
+	}
+	if c.a.captureBackend == nil {
+		local, err := checkpointstore.NewLocal(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.a.captureBackend = checkpointstore.NewConfigMapBackend(local, c.a.kubeClient, "nvsnap-system", logrus.New())
+	}
+	for _, id := range ids {
+		sum := sha256.Sum256([]byte(id))
+		hash := hex.EncodeToString(sum[:])
+		if err := os.MkdirAll(filepath.Join(c.a.config.CheckpointDir, id), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(CheckpointMetadata{ID: id, Hash: hash})
+		if err := os.WriteFile(filepath.Join(c.a.config.CheckpointDir, id, "metadata.json"), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		meta := map[string]string{"engine": "criu", "checkpoint_id": id, checkpointstore.CRIUScopeMetaKey: criuScopeOf(ns, nil)}
+		if instance {
+			meta[checkpointstore.InstanceCaptureMetaKey] = "true"
+		}
+		if err := c.a.captureBackend.(checkpointstore.ManifestRecorder).RecordManifest(context.Background(), hash,
+			checkpointstore.Manifest{Hash: hash, CaptureMethod: "criu", SourcePodMeta: meta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// aliasGroup makes configuration uri's record in namespace ns's scope name
+// the instance record key, as a capture of an instance whose ranks differ
+// in configuration does.
+func aliasGroup(t *testing.T, kc *fake.Clientset, uri, ns, key string) {
+	t.Helper()
+	own := criuGroupKey(uri, criuScopeOf(ns, nil))
+	if own == key {
+		return
+	}
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(context.Background(), &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(own), Namespace: "nvsnap-system"},
+		Data:       map[string]string{"state": criuGroupStateAlias, "alias": key},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
 	}
 }

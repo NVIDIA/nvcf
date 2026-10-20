@@ -39,16 +39,29 @@ For every pod created, the webhook runs this before any annotation logic.
    `--model-path` in args, `HF_MODEL_ID`/`MODEL_ID`/`NIM_MODEL_NAME` env,
    or a NIM image. Anything else (routers, frontends, etcd, nats) is not
    touched. An explicit `nvsnap.io/restore-from` still takes the old path.
-2. Hash once. Compose the hash from the incoming spec (image tag, model
+2. Establish the GPU architecture. Compiled kernels (Triton,
+   torch.compile, TensorRT) run only on the compute capability they were
+   built for. The webhook lists the GPU nodes the pod's node selector and
+   required node affinity admit; when they all carry the same
+   `nvidia.com/gpu.compute.major`/`.minor` labels, that compute capability
+   is the pod's, and the pod is pinned to it with those labels in its node
+   selector. When they span several architectures, lack the labels, or
+   none admits the pod, the pod stays out of the election and starts cold.
+3. Hash once. Compose the hash from the incoming spec (image tag, model
    identity, command, args, cache-relevant env, driver major, format
-   version). Stamp it as annotation `nvsnap.io/hash` (full) and label
-   `nvsnap.io/hash` (short, selectable). The watcher reads the annotation
-   instead of recomposing from the live pod, which removed the mismatch
-   between admission-time and capture-time inputs (image digest, injected
-   env).
-3. Ready: a usable manifest exists and the rox PVC is Bound. Restore
+   version) and the compute capability. Stamp it as annotation
+   `nvsnap.io/hash` (full) and label `nvsnap.io/hash` (short, selectable).
+   The watcher captures the leader under the stamped hash instead of
+   recomposing from the live pod, which removed the mismatch between
+   admission-time and capture-time inputs (image digest, injected env).
+   The annotation is the pod author's to write, so the watcher honours it
+   only when the election Lease vouches for it: the Lease names this hash,
+   this namespace and the election id the pod carries, and the node's
+   compute capability is the one the pod is pinned to. Any other stamped
+   pod is captured under the hash composed from what it runs.
+4. Ready: a usable manifest exists and the rox PVC is Bound. Restore
    decoration, same as an explicit-hash restore today. Done.
-4. Elect. Try to create Lease `nvsnap-capture-<hash>` in nvsnap-system
+5. Elect. Try to create Lease `nvsnap-capture-<hash>` in nvsnap-system
    with the pod UID as holder and a deadline. Create is atomic, so N
    simultaneous admissions produce one winner.
    - Winner (leader): capture decoration (cache env, `/opt/nvsnap`
@@ -59,7 +72,7 @@ For every pod created, the webhook runs this before any annotation logic.
      `schedulingGates: [nvsnap.io/wait-for-cache]`, label
      `nvsnap.io/gated=true`, annotation `nvsnap.io/role=follower`. Holds no
      node and no GPU.
-5. Fail open. Any error in classify, compose, or the Lease call admits the
+6. Fail open. Any error in classify, compose, or the Lease call admits the
    pod unchanged. The webhook stays an optimization.
 
 Followers need ReadOnlyMany storage (shared-volume or snapshot-clone with

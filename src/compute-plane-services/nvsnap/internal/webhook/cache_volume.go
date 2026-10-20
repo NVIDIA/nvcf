@@ -163,8 +163,10 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		if m.ViewMinter == nil {
 			return patches
 		}
-		claim := m.CacheVolume.Cfg.ReadOnlyClaimName(uri)
-		if err := m.ViewMinter.MintReadOnlyFromPVLabels(ctx, st.PrimaryPV, m.CacheVolume.Cfg.ReadOnlyPVName(uri, pod.Namespace), claim, pod.Namespace, m.CacheVolume.Cfg.ReadOnlyLabels(uri)); err != nil {
+		// The view is the served generation's own, so the pod seeds from
+		// the generation it is stamped with below.
+		claim := m.CacheVolume.Cfg.GenerationReadOnlyClaimName(uri, st.Generation)
+		if err := m.ViewMinter.MintReadOnlyFromPVLabels(ctx, st.PrimaryPV, m.CacheVolume.Cfg.GenerationReadOnlyPVName(uri, pod.Namespace, st.Generation), claim, pod.Namespace, m.CacheVolume.Cfg.ReadOnlyLabels(uri)); err != nil {
 			log.WithError(err).Warn("cache volume: mint read-only claim failed; pod compiles locally")
 			return patches
 		}
