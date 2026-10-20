@@ -322,6 +322,9 @@ type Agent struct {
 	modelMinter *checkpointstore.SharedVolumePromoter
 	// mvc is the model volume controller, which also serves ranks.
 	mvc *ModelVolumeController
+	// electionScope establishes an elected pod's GPU architecture; set
+	// with elector.
+	electionScope election.ArchScope
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path
