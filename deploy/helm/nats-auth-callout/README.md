@@ -162,8 +162,6 @@ Available health endpoints:
 - `/health` - Alias for `/healthz`.
 - `/v1/ping` - Basic connectivity test
 
-The default image supports `/readyz`. If you override `image.tag`, use version 0.8.5 or later. Older images require a matching readiness probe override.
-
 ### Tracing Configuration Validation
 
 When tracing is enabled, authentication credentials must be provided:
