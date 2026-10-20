@@ -18,9 +18,16 @@ limitations under the License.
 package agent
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 )
 
 func TestClassifyMount(t *testing.T) {
@@ -256,5 +263,25 @@ func TestOnAllowlist(t *testing.T) {
 	al := []string{"/dev/shm", "/opt/nvsnap"}
 	if !onAllowlist("/opt/nvsnap", al) || onAllowlist("/opt/nvsnap/cache", al) || onAllowlist("/var/lib/etcd", al) {
 		t.Error("onAllowlist must match allowlisted mountpoints exactly")
+	}
+}
+
+// A replay mount the dump saves itself is not copied beside it: its
+// restore recreates it, and the restored process never sees a copy.
+func TestCaptureReplayMountsSkipsWhatTheDumpSaves(t *testing.T) {
+	mi, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil || !strings.Contains(string(mi), " /dev/shm rw") {
+		t.Skip("no writable /dev/shm mount here")
+	}
+	t.Setenv("NVSNAP_REPLAY_MOUNTS", "/dev/shm")
+	dir := t.TempDir()
+	a := &Agent{}
+	ci := &containerd.ContainerInfo{PID: uint32(os.Getpid())} //nolint:gosec // a pid fits in 32 bits
+	got := a.captureReplayMounts(context.Background(), ci, dir, map[string]bool{"/dev/shm": true}, logrus.NewEntry(logrus.New()))
+	if len(got) != 0 {
+		t.Errorf("replay mounts: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mounts", "dev_shm.tar")); err == nil {
+		t.Error("/dev/shm copied although the dump saves it")
 	}
 }

@@ -704,8 +704,8 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// stopped, so they match the dumped memory (dump_snapshot.go). Per-mount
 	// failures are logged and skipped (warn-and-continue, Q6 in design).
 	var replayMounts []ReplayMount
-	snapshot := func() error {
-		replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
+	snapshot := func(criuSaves map[string]bool) error {
+		replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, criuSaves, log)
 		return nil
 	}
 
@@ -1367,8 +1367,12 @@ type CompressedFile struct {
 }
 
 // captureReplayMounts copies the container's replay mounts (classifyMount)
-// into checkpointDir/mounts, for untarIntoMntns to replay at restore.
-func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir string, log *logrus.Entry) []ReplayMount {
+// into checkpointDir/mounts, for untarIntoMntns to replay at restore, but
+// for those in criuSaves: the dump saves them and the restore recreates
+// them itself, and the restored process never sees a replayed copy (a
+// 64 GiB /dev/shm KV offload pool cost 42 s at capture and 52 s at
+// restore, dev2 2026-10-20).
+func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir string, criuSaves map[string]bool, log *logrus.Entry) []ReplayMount {
 	var replayMounts []ReplayMount
 	_, replaySpan := tracing.Tracer().Start(ctx, "checkpoint.capture_replay_mounts")
 	allowlist := ReplayMountAllowlist()
@@ -1381,6 +1385,10 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 	emptyDirMax := ReplayEmptyDirMaxBytes()
 	for _, mi := range mis {
 		if classifyMount(mi.Root, mi.MountPoint, mi.FsType, mi.Opts, allowlist) != MountClassReplay {
+			continue
+		}
+		if criuSaves[mi.MountPoint] {
+			log.WithField("mp", mi.MountPoint).Info("Replay mount not copied: the dump saves it and its restore recreates it")
 			continue
 		}
 		// The size limit is for the emptyDirs replayed as such, not for

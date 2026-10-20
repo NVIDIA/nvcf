@@ -287,8 +287,9 @@ type dumpV2Opts struct {
 	// Snapshot copies what a restore puts back beside the dump (the replay
 	// mounts). dumpV2 runs it from criu's post-dump hook, the tree stopped,
 	// so the copy matches the dumped memory (dump_snapshot.go); a dump whose
-	// snapshot was not taken fails.
-	Snapshot func() error
+	// snapshot was not taken fails. criuSaves names the mountpoints the
+	// dump saves itself, contents included (nil when it saves none).
+	Snapshot func(criuSaves map[string]bool) error
 }
 
 func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
@@ -439,7 +440,14 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		}
 		stopSnapshot := func() (bool, error) { return true, nil }
 		if snapDir != "" {
-			stopSnapshot = serveSnapshot(ctx, snapDir, o.Snapshot)
+			// The pid-namespace dump saves the tmpfs mounts it recreates
+			// (pidns_capture.go); the snapshot need not copy them too.
+			entries, external, gpu, err := pidNSMounts(procBase, targetHostPID)
+			if err != nil {
+				return nil, fmt.Errorf("dump snapshot: %w", err)
+			}
+			saved := criuSavedTmpfs(entries, external, gpu)
+			stopSnapshot = serveSnapshot(ctx, snapDir, func() error { return o.Snapshot(saved) })
 		}
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
@@ -502,7 +510,9 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			return nil, fmt.Errorf("dump action script: %w", err)
 		}
 		args = append(args, "--action-script", hookIn+"/action.sh")
-		stopSnapshot = serveSnapshot(ctx, hookHost, o.Snapshot)
+		// Dumped inside the container's mount namespace, criu saves no
+		// mount: the snapshot copies every replay mount.
+		stopSnapshot = serveSnapshot(ctx, hookHost, func() error { return o.Snapshot(nil) })
 	}
 	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)

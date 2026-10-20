@@ -353,6 +353,41 @@ func pidNSExternalMounts(entries []mountinfoEntry, podVolume func(mountpoint str
 	return external, gpu
 }
 
+// pidNSMounts reads the mounts of the container whose pid 1 is hostPID and
+// sorts them as its pid-namespace dump does (pidNSExternalMounts).
+func pidNSMounts(procBase string, hostPID int) (entries []mountinfoEntry, external, gpu []string, err error) {
+	mi, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "mountinfo"))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("read mounts: %w", err)
+	}
+	entries = parseMountinfo(string(mi))
+	external, gpu = pidNSExternalMounts(entries, func(mp string) bool {
+		return kubeletVolume(filepath.Join(procBase, strconv.Itoa(hostPID), "root", mp))
+	})
+	return entries, external, gpu, nil
+}
+
+// criuSavedTmpfs returns the tmpfs mountpoints a pid-namespace dump saves
+// and its restore recreates itself, contents included: those neither
+// external nor skipped. A restored process sees CRIU's mount there, not
+// the placeholder's, so a copy beside the dump would never be seen.
+func criuSavedTmpfs(entries []mountinfoEntry, external, gpu []string) map[string]bool {
+	not := map[string]bool{"/": true}
+	for _, mp := range external {
+		not[mp] = true
+	}
+	for _, mp := range gpu {
+		not[mp] = true
+	}
+	saved := map[string]bool{}
+	for _, e := range entries {
+		if e.FSType == "tmpfs" && !not[e.MountPoint] {
+			saved[e.MountPoint] = true
+		}
+	}
+	return saved
+}
+
 // kubeletVolume reports a directory kubelet keeps a volume in (secret,
 // configMap, projected, downwardAPI): it publishes the files through a
 // ..data symlink it swaps on every update.
@@ -575,14 +610,10 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	if err := awaitSettledZombies(procBase, hostPID, 15*time.Second); err != nil {
 		return fmt.Errorf("pid-namespace dump: %w", err)
 	}
-	mi, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "mountinfo"))
+	entries, mounts, gpuMounts, err := pidNSMounts(procBase, hostPID)
 	if err != nil {
-		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
+		return fmt.Errorf("pid-namespace dump: %w", err)
 	}
-	entries := parseMountinfo(string(mi))
-	mounts, gpuMounts := pidNSExternalMounts(entries, func(mp string) bool {
-		return kubeletVolume(filepath.Join(procBase, strconv.Itoa(hostPID), "root", mp))
-	})
 	if mp := deletedMount(entriesAt(entries, mounts)); mp != "" {
 		// Its restore cannot rebuild it; refuse rather than record a
 		// capture that will never restore.

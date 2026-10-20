@@ -306,3 +306,24 @@ func TestDumpArgsNoCUDAPluginWithoutGPUs(t *testing.T) {
 		t.Errorf("pid-namespace dump of a GPU tree without gpushare lacks the CUDA plugin: %s", gpu)
 	}
 }
+
+// A pid-namespace dump saves the tmpfs mounts it recreates, /dev/shm among
+// them; a tmpfs kubelet fills, one bound from the node and the GPU's are
+// not saved, and a copy beside the dump is what restores them.
+func TestCRIUSavedTmpfs(t *testing.T) {
+	entries := parseMountinfo(containerMountinfo)
+	podVolume := func(mp string) bool { return mp == "/run/secrets/kubernetes.io/serviceaccount" }
+	external, gpu := pidNSExternalMounts(entries, podVolume)
+	saved := criuSavedTmpfs(entries, external, gpu)
+	for _, mp := range []string{"/dev", "/dev/shm"} {
+		if !saved[mp] {
+			t.Errorf("%s: the dump saves it", mp)
+		}
+	}
+	for _, mp := range []string{"/", "/run/secrets/kubernetes.io/serviceaccount", "/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin",
+		"/run/nvidia-container-devices/GPU-7e1f1942", "/proc/driver/nvidia/params", "/dev/pts", "/data"} {
+		if saved[mp] {
+			t.Errorf("%s: not saved by the dump", mp)
+		}
+	}
+}
