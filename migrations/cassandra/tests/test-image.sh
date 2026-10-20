@@ -8,9 +8,11 @@ subtree_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
 # Exercise the shipped tools as the image's default unprivileged user.
 docker run --rm --entrypoint /bin/sh "$image" -ec '
-  test "$(id -u)" -gt 0
-  test "$(id -g)" -gt 0
-  command -v timeout envsubst python3 cqlsh migrate
+  test "$(id -u)" -eq 999
+  test "$(id -g)" -eq 999
+  for tool in timeout envsubst python3 cqlsh migrate; do
+    command -v "$tool"
+  done
   cqlsh --version
   migrate -version
   python3 -c "from urllib.parse import quote; assert quote(\"p@ss\", safe=\"\") == \"p%40ss\""
