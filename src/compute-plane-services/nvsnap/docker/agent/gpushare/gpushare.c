@@ -944,6 +944,71 @@ static CUdeviceptr lmap_va(CUmemGenericAllocationHandle h)
     return 0;
 }
 
+/* ── Verification (NVSNAP_GPUSHARE_VERIFY=1) ─────────────────────────── */
+
+/* With NVSNAP_GPUSHARE_VERIFY=1, "quiesce" and "resume" log a hash of the
+ * contents of every allocation this process shares and of every mapping of
+ * another process's allocation, as this process sees it. Across a restore
+ * the hashes must not change, and an importer must see what its exporter
+ * holds: a mismatch names the allocation a restore lost or mapped wrongly.
+ * Off by default: it reads all shared memory. */
+static int verify_on(void)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("NVSNAP_GPUSHARE_VERIFY"); on = e && *e == '1'; }
+    return on;
+}
+
+/* FNV-1a over size bytes of device memory at va (a context current). */
+static int dev_hash(CUdeviceptr va, size_t size, uint64_t *out)
+{
+    static unsigned char *buf;
+    const size_t chunk = 4u << 20;
+    if (!buf && !(buf = malloc(chunk))) return -1;
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t o = 0; o < size; o += chunk) {
+        size_t len = size - o < chunk ? size - o : chunk;
+        if (CU(cuMemcpyDtoH_v2, buf, va + o, len) != CUDA_SUCCESS) return -1;
+        for (size_t i = 0; i < len; i++) { h ^= buf[i]; h *= 1099511628211ULL; }
+    }
+    *out = h;
+    return 0;
+}
+
+static unsigned long long fh_prefix(const CUmemFabricHandle *fh)
+{
+    unsigned long long v = 0;
+    memcpy(&v, fh->data, sizeof(v));
+    return v;
+}
+
+/* Log the hashes (mu held, gates closed). */
+static void verify_log(const char *phase)
+{
+    if (!verify_on()) return;
+    int dev = push_any_ctx();
+    if (dev < 0) { logf_("verify %s: no context", phase); return; }
+    uint64_t h;
+    for (int j = 0; j < n_maps; j++) {
+        const struct map *m = &maps[j];
+        if (m->down || m->gone) continue;
+        const struct imp *im = &imps[m->imp];
+        if (dev_hash(m->va, m->size, &h) < 0) { logf_("verify %s imp va=%#llx: unreadable", phase, (unsigned long long)m->va); continue; }
+        logf_("verify %s imp peer=%d key=%llu fab=%d fh=%016llx off=%zu size=%zu hash=%016llx", phase, im->peer, im->key,
+              im->fab, im->fab ? fh_prefix(&im->fh) : 0ULL, m->offset, m->size, (unsigned long long)h);
+    }
+    for (int j = 0; j < n_lmaps; j++) {
+        const struct lmap *l = &lmaps[j];
+        unsigned long long fh = 0, id = xreg_id(l->va, l->h);
+        for (int k = 0; k < n_fexps; k++) if (fexps[k].h == l->h) fh = fh_prefix(&fexps[k].fh);
+        if (!id && !fh) continue;  /* not shared */
+        if (dev_hash(l->va, l->size, &h) < 0) { logf_("verify %s own va=%#llx: unreadable", phase, (unsigned long long)l->va); continue; }
+        logf_("verify %s own id=%llu fh=%016llx off=%zu size=%zu hash=%016llx", phase, id, fh, l->off, l->size,
+              (unsigned long long)h);
+    }
+    pop_ctx(dev);
+}
+
 /* Hold launches, drain GPU work, and check that "release" can drop every
  * shared mapping. Separate from "release" so that a busy or refusing
  * process leaves every process's mappings untouched. */
@@ -985,7 +1050,10 @@ static void do_quiesce(char *reply, size_t n)
             snprintf(reply, n, "err memory bound to a multicast object is neither held nor mapped");
     }
     if (reply[0]) gate_open();
-    else snprintf(reply, n, "ok quiesced");
+    else {
+        verify_log("quiesce");
+        snprintf(reply, n, "ok quiesced");
+    }
     pthread_mutex_unlock(&mu);
 }
 
@@ -1438,6 +1506,7 @@ static void do_resume(char *reply, size_t n)
         nm++;
     }
     if (r == CUDA_SUCCESS) {
+        verify_log("resume");
         snprintf(reply, n, "ok resumed (%d multicast bind(s), %d multicast mapping(s))", nb, nm);
         gate_open();
     }
@@ -2465,15 +2534,17 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
         CUmemGenericAllocationHandle nh = 0;
         CUmemAllocationProp p = x->prop;
+        const char *step = "cuMemCreate";
         r = REAL(r_mem_create, "cuMemCreate")(&nh, x->size, &p, 0);
         if (r == CUDA_ERROR_NOT_PERMITTED && (p.requestedHandleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
             p.requestedHandleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;  /* see "IMEX channel" */
             r = REAL(r_mem_create, "cuMemCreate")(&nh, x->size, &p, 0);
         }
         int mapped = 0;
-        if (r == CUDA_SUCCESS && (r = REAL(r_map, "cuMemMap")(x->va, x->size, 0, nh, 0)) == CUDA_SUCCESS) {
+        if (r == CUDA_SUCCESS && (step = "cuMemMap", r = REAL(r_map, "cuMemMap")(x->va, x->size, 0, nh, 0)) == CUDA_SUCCESS) {
             mapped = 1;
-            if (x->na) r = REAL(r_set_access, "cuMemSetAccess")(x->va, x->size, x->acc, x->na);
+            if (x->na) step = "cuMemSetAccess", r = REAL(r_set_access, "cuMemSetAccess")(x->va, x->size, x->acc, x->na);
+            if (r == CUDA_SUCCESS) step = "copy";
             const struct valloc *v = &x->sv;
             if (r == CUDA_SUCCESS && !v->chunks && v->save) r = CU(cuMemcpyHtoD_v2, v->va, v->save, v->size);
             for (size_t o = 0; v->chunks && r == CUDA_SUCCESS && o < v->size; o += STAGE_SIZE) {
@@ -2488,7 +2559,15 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         if (r != CUDA_SUCCESS) {
             if (mapped) REAL(r_unmap, "cuMemUnmap")(x->va, x->size);
             if (nh) REAL(r_release, "cuMemRelease")(nh);
-            snprintf(reply, n, "err load shared allocation %#llx+%zu: %s", (unsigned long long)x->va, x->size, errstr(r));
+            /* Which call failed, on which device, granting access to which
+             * locations: the error alone does not tell a refused peer
+             * access from a bad address. */
+            char accs[96] = "";
+            for (int a = 0, o = 0; a < x->na && o < (int)sizeof(accs) - 12; a++)
+                o += snprintf(accs + o, sizeof(accs) - o, "%s%d:%d/%d", a ? "," : "", (int)x->acc[a].location.type,
+                              x->acc[a].location.id, (int)x->acc[a].flags);
+            snprintf(reply, n, "err load shared allocation %#llx+%zu (%s on device %d, handle types %#x, access [%s]): %s",
+                     (unsigned long long)x->va, x->size, step, p.location.id, (unsigned)p.requestedHandleTypes, accs, errstr(r));
             break;
         }
         x->nh = nh;
