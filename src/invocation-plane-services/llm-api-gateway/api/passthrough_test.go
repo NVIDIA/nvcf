@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -82,11 +83,14 @@ func newPassthroughAPI(t *testing.T, upstreamURL string) *echo.Echo {
 	t.Helper()
 
 	cfg := config.Default()
+	cfg.ModelURIAllowlistEnabled = true
 	stargate, err := provider.NewStargateProvider(config.StargateConfig{URL: upstreamURL})
 	require.NoError(t, err)
 
 	e := echo.New()
 	e.Use(NewContextMiddleware(cfg))
+	// Models without a spec skip the allowlist; company/restricted has no allowed route.
+	e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{"company/restricted": {URIs: []string{"/v1/other"}}}))
 	RegisterRoutes(e, NewHandlers(cfg, stargate, nil, nil))
 	return e
 }

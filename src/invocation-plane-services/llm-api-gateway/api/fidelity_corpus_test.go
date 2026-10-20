@@ -157,6 +157,8 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		embeddings = "/v1/embeddings"
 		messages   = "/v1/messages"
 		model      = `"model":"fn-alpha/company/model"`
+		// newPassthroughAPI allows this model on no route.
+		restricted = `"model":"fn-alpha/company/restricted"`
 		chatInput  = `"messages":[{"role":"user","content":"hi"}]`
 		respInput  = `"input":"hi"`
 		embInput   = `"input":"hi"`
@@ -171,6 +173,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"chat model missing", chat, `{` + chatInput + `}`},
 		{"chat model not a string", chat, `{"model":7,` + chatInput + `}`},
 		{"chat model without function prefix", chat, `{"model":"model",` + chatInput + `}`},
+		{"chat model not in URI allowlist", chat, `{` + restricted + `,` + chatInput + `}`},
 		{"chat max_tokens negative", chat, `{` + model + `,` + chatInput + `,"max_tokens":-1}`},
 		{"chat max_completion_tokens not a number", chat, `{` + model + `,` + chatInput + `,"max_completion_tokens":"8"}`},
 		{"chat stream not a boolean", chat, `{` + model + `,` + chatInput + `,"stream":"yes"}`},
@@ -185,6 +188,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"responses duplicate member case", responses, `{` + model + `,` + respInput + `,"INPUT":"x"}`},
 		{"responses model missing", responses, `{` + respInput + `}`},
 		{"responses model without function prefix", responses, `{"model":"model",` + respInput + `}`},
+		{"responses model not in URI allowlist", responses, `{` + restricted + `,` + respInput + `}`},
 		{"responses max_output_tokens not a number", responses, `{` + model + `,` + respInput + `,"max_output_tokens":"8"}`},
 		{"responses stream not a boolean", responses, `{` + model + `,` + respInput + `,"stream":"yes"}`},
 		{"responses prompt_cache_key control character", responses, `{` + model + `,` + respInput + `,"prompt_cache_key":"a\u0001"}`},
@@ -195,6 +199,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"embeddings body not an object", embeddings, `[]`},
 		{"embeddings duplicate member case", embeddings, `{` + model + `,` + embInput + `,"INPUT":"x"}`},
 		{"embeddings model missing", embeddings, `{` + embInput + `}`},
+		{"embeddings model not in URI allowlist", embeddings, `{` + restricted + `,` + embInput + `}`},
 		{"embeddings input missing", embeddings, `{` + model + `}`},
 		{"embeddings input empty", embeddings, `{` + model + `,"input":[]}`},
 		{"embeddings input over 2048 elements", embeddings, `{` + model + `,"input":[` + strings.Repeat(`"a",`, 2048) + `"a"]}`},
@@ -202,6 +207,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"messages body not an object", messages, `[]`},
 		{"messages non-canonical member case", messages, `{"Model":"fn-alpha/company/model",` + msgInput + `}`},
 		{"messages model without function prefix", messages, `{"model":"model",` + msgInput + `}`},
+		{"messages model not in URI allowlist", messages, `{` + restricted + `,` + msgInput + `}`},
 		{"messages max_tokens missing", messages, `{` + model + `,"messages":[{"role":"user","content":"hi"}]}`},
 		{"messages stream not a boolean", messages, `{` + model + `,` + msgInput + `,"stream":"yes"}`},
 		{"messages messages empty", messages, `{` + model + `,"max_tokens":16,"messages":[]}`},
