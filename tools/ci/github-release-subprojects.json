@@ -45,7 +45,8 @@
             {
               "file": "environments/base.yaml",
               "paths": [
-                "global.nvcaOperator.selfManaged.otelCollector.imageTag"
+                "global.nvcaOperator.selfManaged.otelCollector.imageTag",
+                "global.nvcaOperator.byooOtelCollector.imageTag"
               ]
             }
           ]

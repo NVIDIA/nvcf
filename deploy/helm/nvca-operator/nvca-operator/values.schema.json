@@ -792,6 +792,22 @@
                         }
                     }
                 },
+                "byooFluentBit": {
+                    "type": "object",
+                    "description": "Optional BYOO Fluent Bit image. When imageRepository is set, the chart passes BYOO_FLUENTBIT_CONTAINER to function and task workloads.",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "Optional BYOO Fluent Bit image repository, including the registry. If unset, NVCA uses its built-in upstream Fluent Bit image.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "BYOO Fluent Bit image tag. Required when imageRepository is set.",
+                            "default": ""
+                        }
+                    }
+                },
                 "functionEnvOverrides": {
                     "type": "object",
                     "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",

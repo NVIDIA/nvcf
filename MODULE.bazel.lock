@@ -573,7 +573,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "Vjs2aLDiztq2JcqxCwBcmhWsa/nb80kDJ1sMT56l+0k=",
-        "usagesDigest": "TKJZK6ENvhRI6Z2lToY4lSo3Wmoe4rvG0t8bom3JGHI=",
+        "usagesDigest": "YRhNi2PJzyQ7xEAgqXNxKdqedKpzSXVI+MJ7Q0fgHNI=",
         "recordedInputs": [
           "REPO_MAPPING:aspect_bazel_lib+,bazel_tools bazel_tools",
           "REPO_MAPPING:bazel_features+,bazel_tools bazel_tools",
@@ -776,7 +776,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platform": "linux/amd64",
               "target_name": "distroless_java_linux_amd64",
               "bazel_tags": []
@@ -789,7 +789,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platform": "linux/arm64/v8",
               "target_name": "distroless_java_linux_arm64_v8",
               "bazel_tags": []
@@ -803,7 +803,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platforms": {
                 "@@platforms//cpu:x86_64": "@distroless_java_linux_amd64",
                 "@@platforms//cpu:arm64": "@distroless_java_linux_arm64_v8"
@@ -862,7 +862,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:b1deb9e97732ab5da2f1f6e0d3ac1e56bdc2df0a5bf900180662a4740f05957c",
+              "identifier": "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
               "platform": "linux/amd64",
               "target_name": "distroless_cc_linux_amd64",
               "bazel_tags": []
@@ -875,7 +875,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:b1deb9e97732ab5da2f1f6e0d3ac1e56bdc2df0a5bf900180662a4740f05957c",
+              "identifier": "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
               "platform": "linux/arm64/v8",
               "target_name": "distroless_cc_linux_arm64_v8",
               "bazel_tags": []
@@ -889,12 +889,55 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:b1deb9e97732ab5da2f1f6e0d3ac1e56bdc2df0a5bf900180662a4740f05957c",
+              "identifier": "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
               "platforms": {
                 "@@platforms//cpu:x86_64": "@distroless_cc_linux_amd64",
                 "@@platforms//cpu:arm64": "@distroless_cc_linux_arm64_v8"
               },
               "bzlmod_repository": "distroless_cc",
+              "reproducible": true
+            }
+          },
+          "nvidia_distroless_static_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/static",
+              "identifier": "sha256:d9bff7801f2963231e01e567ab73d70f443b80c62306cec77d9f973a544db776",
+              "platform": "linux/amd64",
+              "target_name": "nvidia_distroless_static_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "nvidia_distroless_static_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/static",
+              "identifier": "sha256:d9bff7801f2963231e01e567ab73d70f443b80c62306cec77d9f973a544db776",
+              "platform": "linux/arm64/v8",
+              "target_name": "nvidia_distroless_static_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "nvidia_distroless_static": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "nvidia_distroless_static",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/static",
+              "identifier": "sha256:d9bff7801f2963231e01e567ab73d70f443b80c62306cec77d9f973a544db776",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@nvidia_distroless_static_linux_amd64",
+                "@@platforms//cpu:arm64": "@nvidia_distroless_static_linux_arm64_v8"
+              },
+              "bzlmod_repository": "nvidia_distroless_static",
               "reproducible": true
             }
           },
@@ -1035,7 +1078,10 @@
             "distroless_go_linux_arm64_v8",
             "distroless_cc",
             "distroless_cc_linux_amd64",
-            "distroless_cc_linux_arm64_v8"
+            "distroless_cc_linux_arm64_v8",
+            "nvidia_distroless_static",
+            "nvidia_distroless_static_linux_amd64",
+            "nvidia_distroless_static_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",

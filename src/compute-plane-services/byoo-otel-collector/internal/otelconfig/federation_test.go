@@ -56,6 +56,8 @@ func federationExampleTemplateConfig(workloadType WorkloadType, federation Platf
 		InstanceID:        "fake-instance-id",
 		ZoneName:          "fake-zone-name",
 		OTelCollector:     OTelCollectorConfig{PlatformMetricsFederation: federation},
+		// Examples show a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT.
+		CollectorTracesEnabled: true,
 	}
 }
 
