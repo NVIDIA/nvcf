@@ -659,6 +659,21 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		time.Sleep(5 * time.Second)
 	}
 
+	// Every rank's restore is its pod's to ask for, so each is checked as
+	// the leader was (restore_trust.go).
+	for _, p := range ranks {
+		why, err := c.restoreRefusal(ctx, p)
+		if err != nil {
+			log.WithError(err).WithField("placeholder", p.Name).Warn("CRIU group restore: cannot verify a rank's restore yet; trying again on the leader's next event")
+			c.attempted.Delete("restore/" + string(leader.UID))
+			return
+		}
+		if why != "" {
+			log.WithFields(logrus.Fields{"placeholder": p.Name, "reason": why}).
+				Warn("CRIU group restore refused: a rank names a restore it may not have; leaving the instance as it is")
+			return
+		}
+	}
 	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size)}
 	for i, p := range ranks {
 		req.Members[i] = GroupRestoreMember{
@@ -675,17 +690,52 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	_, err := a.groupRestore(rctx, req, log)
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
+		uids := make([]string, 0, len(ranks))
 		for _, p := range ranks {
 			a.markRestored(context.WithoutCancel(ctx), p.Namespace, p.Name, log)
+			uids = append(uids, string(p.UID)+"/"+p.Annotations[webhook.CRIURestoreContainerAnnotation])
 		}
 		id := leader.Annotations[webhook.CRIURestoreAnnotation]
-		_ = c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool { return recordRestored(d, id) })
+		if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
+			changed := recordRestored(d, id)
+			// The pods this restore made: the restored-pod watch acts on a
+			// rank only when its group record names it.
+			if pods := strings.Join(uids, ","); d[groupRestoredPodsKey] != pods {
+				d[groupRestoredPodsKey], changed = pods, true
+			}
+			return changed
+		}); uerr != nil && !apierrors.IsNotFound(uerr) {
+			log.WithError(uerr).Warn("CRIU group restore: cannot record the restored pods; their engines are not watched")
+		}
 		return
 	}
 	if ctx.Err() != nil && !errors.As(err, new(*groupRestoreFailure)) {
 		return // the agent stops before the restore ran
 	}
 	c.failGroup(ctx, leader, key, errors.As(err, new(*groupRestoreFailure)), err, log)
+}
+
+// groupRestoredPodsKey in a group record lists the pods its last restore
+// made, as UID/container, comma-separated.
+const groupRestoredPodsKey = "restoredPods"
+
+// groupRestoredContainer returns the container the agent restored into
+// pod uid as a rank of group record key, per the record, or "" when the
+// record names no such pod.
+func (c *criuAutoRestorer) groupRestoredContainer(ctx context.Context, key string, uid types.UID) (string, error) {
+	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	for _, e := range strings.Split(cm.Data[groupRestoredPodsKey], ",") {
+		if u, container, ok := strings.Cut(e, "/"); ok && u == string(uid) && container != "" {
+			return container, nil
+		}
+	}
+	return "", nil
 }
 
 // failGroup ends a group restore that did not succeed: it deletes every
@@ -712,9 +762,21 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 	// another capture of the configuration, which this failure says
 	// nothing about.
 	leaderID := leader.Annotations[webhook.CRIURestoreAnnotation]
-	ids := map[string]bool{leaderID: true}
-	for _, p := range members {
-		ids[p.Annotations[webhook.CRIURestoreAnnotation]] = true
+	// A member's checkpoint is blocked only when it is a capture of the
+	// pods' tenant scope: the annotations are the pods' to write, and a
+	// pod naming another tenant's checkpoint must not get it blocked.
+	ids := map[string]bool{}
+	for _, p := range append([]*corev1.Pod{leader}, members...) {
+		id := p.Annotations[webhook.CRIURestoreAnnotation]
+		if id == "" || ids[id] {
+			continue
+		}
+		if why, err := c.restoreRefusal(ctx, p); err != nil || why != "" {
+			log.WithError(err).WithFields(logrus.Fields{"placeholder": p.Name, "checkpoint": id, "reason": why}).
+				Warn("CRIU group restore: not blocking a checkpoint the pod may not restore")
+			continue
+		}
+		ids[id] = true
 	}
 	if restoreFailed {
 		log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")

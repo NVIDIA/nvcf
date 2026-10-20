@@ -36,7 +36,11 @@ const (
 
 // criuCheckpointID returns the CRIU checkpoint a capture record points to,
 // or "" when the record is not a CRIU capture.
-func criuCheckpointID(man checkpointstore.Manifest) string {
+func criuCheckpointID(man checkpointstore.Manifest) string { return CRIUCheckpointID(man) }
+
+// CRIUCheckpointID returns the CRIU checkpoint a capture record points to,
+// or "" when the record is not a CRIU capture.
+func CRIUCheckpointID(man checkpointstore.Manifest) string {
 	if man.CaptureMethod != "criu" && man.SourcePodMeta["engine"] != "criu" {
 		return ""
 	}
@@ -87,13 +91,6 @@ func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash stri
 // tenant scope, recorded at capture time. A rank of an instance capture
 // restores only with its instance, through the group record.
 func (m *Mutator) criuScopeMismatch(ctx context.Context, pod *corev1.Pod, man checkpointstore.Manifest) string {
-	if man.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] == "true" {
-		return "the checkpoint is one rank of an instance capture"
-	}
-	captured := man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey]
-	if captured == "" {
-		return "the capture records no tenant scope"
-	}
 	if pod.Namespace == "" {
 		return "the pod's namespace is unknown"
 	}
@@ -103,6 +100,23 @@ func (m *Mutator) criuScopeMismatch(ctx context.Context, pod *corev1.Pod, man ch
 		if scope, err = m.CRIUScope(ctx, pod.Namespace); err != nil {
 			return fmt.Sprintf("cannot read the namespace's tenant scope: %v", err)
 		}
+	}
+	return CRIUScopeMismatch(man, scope)
+}
+
+// CRIUScopeMismatch returns why a pod of tenant scope scope may not
+// restore on its own from the CRIU capture man, or "" when it may: the
+// capture must record that same scope, and not be one rank of an instance
+// capture, which restores only with its instance. The webhook applies it
+// at admission, and the agent again before it fetches or restores, since
+// a pod's restore annotations are its author's to write.
+func CRIUScopeMismatch(man checkpointstore.Manifest, scope string) string {
+	if man.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] == "true" {
+		return "the checkpoint is one rank of an instance capture"
+	}
+	captured := man.SourcePodMeta[checkpointstore.CRIUScopeMetaKey]
+	if captured == "" {
+		return "the capture records no tenant scope"
 	}
 	if scope != captured {
 		return "the capture belongs to another tenant scope"

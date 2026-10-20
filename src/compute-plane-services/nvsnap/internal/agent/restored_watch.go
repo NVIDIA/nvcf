@@ -33,11 +33,35 @@ import (
 // and its children, or the shell loop of placeholders admitted before it.
 var placeholderComms = map[string]bool{"nvsnap-idle": true, "sh": true, "sleep": true}
 
+// restoredRef is what the agent restored into a pod, from its own records
+// (restore_trust.go), never from the pod's annotations: a lone restore's
+// checkpoint, or a group restore's record key.
+type restoredRef struct {
+	container  string
+	checkpoint string // a lone restore
+	group      string // a rank of a group restore
+}
+
+// restoredBy returns what the agent restored into pod, or false when it
+// restored nothing there, whatever the pod's annotations say.
+func (c *criuAutoRestorer) restoredBy(ctx context.Context, pod *corev1.Pod) (restoredRef, bool, error) {
+	if rec, ok := c.restoredRecordOf(pod.UID); ok {
+		return restoredRef{container: rec.Container, checkpoint: rec.Checkpoint}, true, nil
+	}
+	key := pod.Annotations[webhook.CRIUGroupAnnotation]
+	if key == "" || !isGroupPlaceholder(pod) {
+		return restoredRef{}, false, nil
+	}
+	container, err := c.groupRestoredContainer(ctx, key, pod.UID)
+	if err != nil || container == "" {
+		return restoredRef{}, false, err
+	}
+	return restoredRef{container: container, group: key}, true, nil
+}
+
 // considerRestored checks a restored pod's engine.
 func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod) {
-	id, container := pod.Annotations[webhook.CRIURestoreAnnotation], pod.Annotations[webhook.CRIURestoreContainerAnnotation]
-	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || id == "" || container == "" ||
-		pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+	if pod.Annotations[webhook.CRIURestoredAnnotation] == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
 		return
 	}
 	if _, busy := c.attempted.LoadOrStore("watch/"+string(pod.UID), struct{}{}); busy {
@@ -45,7 +69,15 @@ func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod
 	}
 	go func() {
 		defer c.attempted.Delete("watch/" + string(pod.UID))
-		reason, sure := c.restoredEngineGone(ctx, pod, container)
+		ref, ok, err := c.restoredBy(ctx, pod)
+		if err != nil {
+			c.a.log.WithError(err).WithField("pod", pod.Namespace+"/"+pod.Name).Warn("CRIU restore: cannot read the restore record; the engine is checked again on the pod's next event")
+			return
+		}
+		if !ok {
+			return // not a restore of this agent's: nothing to watch
+		}
+		reason, sure := c.restoredEngineGone(ctx, pod, ref.container)
 		if reason == "" {
 			c.goneSince.Delete(pod.UID)
 			return
@@ -59,7 +91,7 @@ func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod
 			}
 		}
 		c.goneSince.Delete(pod.UID)
-		c.failRestored(ctx, pod, fmt.Errorf("the restored engine is gone: %s", reason))
+		c.failRestored(ctx, pod, ref, fmt.Errorf("the restored engine is gone: %s", reason))
 	}()
 }
 
@@ -121,22 +153,25 @@ func onlyPlaceholderLeft(procBase string, hostPID int) bool {
 }
 
 // failRestored ends a restored pod whose engine died: a lone pod, or every
-// pod of its group.
-func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, cause error) {
+// pod of its group. What it blocks comes from the agent's record of the
+// restore (ref), not from the pod.
+func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, ref restoredRef, cause error) {
 	ctx = context.WithoutCancel(ctx)
-	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "checkpoint": pod.Annotations[webhook.CRIURestoreAnnotation]})
-	if key := pod.Annotations[webhook.CRIUGroupAnnotation]; key != "" && isGroupPlaceholder(pod) {
-		c.endGroup(ctx, pod, key, true, true, cause, log.WithField("criuGroup", key))
+	if ref.group != "" {
+		c.endGroup(ctx, pod, ref.group, true, true, cause, c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "criuGroup": ref.group}))
 		return
 	}
+	id := ref.checkpoint
+	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "checkpoint": id})
 	log.WithError(cause).Error("CRIU restore failed after it ran; blocking the checkpoint and deleting the pod so its replacement starts fresh")
-	id := pod.Annotations[webhook.CRIURestoreAnnotation]
 	if err := c.markFailed(ctx, id, cause); err != nil {
 		log.WithError(err).Error("CRIU restore: could not block the checkpoint")
 	}
 	if key := pod.Annotations[webhook.CRIUGroupAnnotation]; key != "" {
+		// Only a record of this checkpoint is touched (recordFailure).
 		_ = c.updateGroupRecord(ctx, key, func(d map[string]string) bool { return recordFailure(d, id, true, cause) })
 	}
+	c.dropRestoreRecord(pod.UID)
 	if err := c.a.kubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Error("CRIU restore: could not delete the pod")
 	}
