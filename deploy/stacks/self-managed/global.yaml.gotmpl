@@ -648,6 +648,17 @@ api:
   env:
     {{- toYaml $apiEnv | nindent 4 }}
 
+  {{- /* Pylon lives in remote config rather than a Kubernetes image field. */}}
+  {{- $apiPodAnnotations := deepCopy (dig "api" "podAnnotations" dict .Values) }}
+  {{- if $effectivePylonImage }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $apiPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $apiPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 invocation:
   {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
   {{- if not (kindIs "map" $configuredInvocationEnv) }}
@@ -725,6 +736,20 @@ nvctApi:
   remoteConfig:
     configData:
       {{- toYaml . | nindent 6 }}
+  {{- end }}
+
+  {{- /* Task sidecars are created later by NVCT and must enter the inventory. */}}
+  {{- $nvctPodAnnotations := deepCopy (dig "nvctApi" "podAnnotations" dict .Values) }}
+  {{- $nvctSidecars := dig "nvct" "sidecars" dict $configuredNvctApiRemoteConfigData }}
+  {{- range $key := list "init-container" "utils-container" "ess-agent-container" }}
+  {{- with index $nvctSidecars $key }}
+  {{- $image := . | replace "${nvct.sidecars.hostname}" $sidecarsHost | replace "${nvct.sidecars.repository}" $sidecarsRepo }}
+  {{- $_ := set $nvctPodAnnotations (printf "release-artifact-%s-image" $key) $image }}
+  {{- end }}
+  {{- end }}
+  {{- with $nvctPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
   env:

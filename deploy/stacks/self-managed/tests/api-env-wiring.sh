@@ -136,6 +136,9 @@ assert_env_absent "$explicit_values" NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE \
 assert_yaml_value "$explicit_manifest" "$manifest_pylon_expression" \
   mirror.example.test/team/pylon:9.9.9 "rendered API remote ConfigMap"
 assert_yaml_value "$explicit_manifest" \
+  'select(.kind == "Deployment") | .spec.template.metadata.annotations."release-artifact-llm-router-client-image"' \
+  mirror.example.test/team/pylon:9.9.9 "Pylon release inventory annotation"
+assert_yaml_value "$explicit_manifest" \
   'select(.kind == "ConfigMap" and .data."nvcf-api.yaml" != null) | .data."nvcf-api.yaml" | from_yaml | .nvcf.sidecars.retained-setting' \
   keep-inside-sidecars "rendered nested sidecar remote config"
 
@@ -161,6 +164,8 @@ default_values="$work_dir/default-values.yaml"
 render_api_values "$default_values" >/dev/null
 assert_yaml_value "$default_values" "$remote_pylon_expression" \
   registry.example.test/team/sidecars/pylon:9.8.7 "computed Pylon default"
+assert_yaml_value "$default_values" '.api.podAnnotations."release-artifact-llm-router-client-image"' \
+  "$(yq -r "$remote_pylon_expression" "$default_values")" "computed Pylon inventory"
 
 # Local BDD fixtures rely on the same computed default after their registry
 # paths are configured. They must not carry unresolved fixture placeholders
