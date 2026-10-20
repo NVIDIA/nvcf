@@ -19,6 +19,8 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -213,5 +215,19 @@ func TestAmbiguousMemberPathForEmbeddingRequest(t *testing.T) {
 	got := AmbiguousMemberPath([]byte(`{"model":"m","input":"long","INPUT":"hi"}`), CreateEmbeddingRequest{})
 	if got != "input" {
 		t.Fatalf("AmbiguousMemberPath() = %q, want input", got)
+	}
+}
+
+func TestDecodeMembersCheckedErrorNamesRequestField(t *testing.T) {
+	t.Parallel()
+
+	var request ChatCompletionRequest
+	err := json.Unmarshal([]byte(`{"model":"m","messages":[],"max_tokens":-1}`), &request)
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) {
+		t.Fatalf("Unmarshal() error = %v, want *json.UnmarshalTypeError", err)
+	}
+	if !strings.Contains(err.Error(), "ChatCompletionRequest.max_tokens") {
+		t.Fatalf("Unmarshal() error = %q, want it to name ChatCompletionRequest.max_tokens", err)
 	}
 }

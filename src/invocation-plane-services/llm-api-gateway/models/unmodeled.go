@@ -115,6 +115,7 @@ func DecodeMembers(data []byte, target any, checked ...string) (failed map[strin
 			if slices.Contains(checked, name) {
 				var typeErr *json.UnmarshalTypeError
 				if errors.As(err, &typeErr) {
+					typeErr.Struct = value.Type().Name()
 					typeErr.Field = strings.TrimSuffix(name+"."+typeErr.Field, ".")
 				}
 				// Not wrapped: echo builds its 400 message from *json.UnmarshalTypeError by type assertion.
