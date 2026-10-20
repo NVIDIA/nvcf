@@ -150,6 +150,29 @@ type ChatFunctionSpec struct {
 	Description *string         `json:"description,omitempty"`
 	Parameters  *map[string]any `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	// Raw holds a function that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatFunctionSpec) DecodesMembers() {}
+
+func (f *ChatFunctionSpec) UnmarshalJSON(data []byte) error {
+	type alias ChatFunctionSpec
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*f = ChatFunctionSpec{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*f = ChatFunctionSpec(decoded)
+	return nil
+}
+
+func (f ChatFunctionSpec) MarshalJSON() ([]byte, error) {
+	if f.Raw != nil {
+		return f.Raw, nil
+	}
+	type alias ChatFunctionSpec
+	return json.Marshal(alias(f))
 }
 
 type ChatTool struct {
@@ -163,6 +186,29 @@ type ChatTool struct {
 	AllowedTools    []string          `json:"allowed_tools,omitempty"`
 	RequireApproval any               `json:"require_approval,omitempty"`
 	Authorization   string            `json:"-"`
+	// Raw holds a tool that fails to decode. It is forwarded as is.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (*ChatTool) DecodesMembers() {}
+
+func (t *ChatTool) UnmarshalJSON(data []byte) error {
+	type alias ChatTool
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		*t = ChatTool{Raw: append(json.RawMessage(nil), data...)}
+		return nil
+	}
+	*t = ChatTool(decoded)
+	return nil
+}
+
+func (t ChatTool) MarshalJSON() ([]byte, error) {
+	if t.Raw != nil {
+		return t.Raw, nil
+	}
+	type alias ChatTool
+	return json.Marshal(alias(t))
 }
 
 type ChatFunctionChoice struct {

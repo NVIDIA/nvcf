@@ -1,0 +1,136 @@
+{
+  "description": "A chat tool or function that fails to decode is forwarded unchanged and counted by raw size, and the other tools keep their typed estimate.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Weather?"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather"
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": 7
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "lookup"
+      },
+      {
+        "name": "f",
+        "parameters": "x"
+      }
+    ]
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Weather?"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather"
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": 7
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "lookup"
+      },
+      {
+        "name": "f",
+        "parameters": "x"
+      }
+    ],
+    "stream": true,
+    "service_tier": "auto",
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "upstream_input_tokens": "54",
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "json": {
+      "id": "chatcmpl-fidelity",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "fn-alpha/company/model",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "OK"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+        "total_tokens": 9
+      }
+    }
+  }
+}
