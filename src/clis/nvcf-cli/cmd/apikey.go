@@ -84,7 +84,7 @@ By default, generates both a function key (NVCF) and a task key (NVCT) in one
 command. Use --for to generate only one.
 
 Function key default scopes: invoke_function, list_functions, queue_details,
-list_functions_details.
+list_functions_details, manage_telemetries.
 
 Task key default scopes: launch_task, list_tasks, task_details, cancel_task,
 delete_task, list_events, list_results, update_secrets.

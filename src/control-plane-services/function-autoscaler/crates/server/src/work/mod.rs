@@ -592,6 +592,7 @@ async fn gather_scaling_inputs(
     env: &str,
     ignore_env: bool,
     scaling_settings: &ScalingSettings,
+    utilization_lookback: StdDuration,
     routing_cache: &MetricRoutingCache,
 ) -> Result<Option<GatheredScalingInputs>> {
     let key = (*function_id, *function_version_id);
@@ -699,6 +700,7 @@ async fn gather_scaling_inputs(
         return Ok(None);
     };
 
+    let utilization_end_time = control_plane_query_end_time.unwrap_or_else(Utc::now);
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
         function_id,
@@ -706,8 +708,8 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        control_plane_query_end_time.unwrap_or_else(Utc::now),
-        scaling_settings.lookback,
+        utilization_end_time,
+        utilization_lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
@@ -743,6 +745,7 @@ async fn gather_scaling_inputs(
             metric_source,
             current_instances,
             utilization_samples,
+            window_end: utilization_end_time.timestamp(),
             recently_invoked,
         },
         gateway_target,
@@ -894,6 +897,14 @@ async fn make_scaling_requests(
                         .and_then(|c| c.last_predicted_desired_instance_count)
                         .unwrap_or(0) as usize;
 
+                    // Resolved before gathering so stickiness windows longer than the
+                    // default lookback still get a full window of samples.
+                    let policy = scaling_settings
+                        .get_policy_for_function(&function.function_version_id)
+                        .await;
+                    let utilization_lookback =
+                        policy.utilization_lookback(scaling_settings.lookback);
+
                     // Acquire all metrics into one sanitized struct, then run the single
                     // decision path that is shared by every metric source. NaN handling,
                     // metric-source selection, and scale-to-zero all live behind these calls.
@@ -905,6 +916,7 @@ async fn make_scaling_requests(
                         &env,
                         ignore_env,
                         &scaling_settings,
+                        utilization_lookback,
                         &metric_routing_cache,
                     )
                     .await
@@ -946,14 +958,11 @@ async fn make_scaling_requests(
                         inputs.recently_invoked,
                     );
 
-                    let policy = scaling_settings
-                        .get_policy_for_function(&function.function_version_id)
-                        .await;
-
                     let Some(decision) = decide_scaling(
                         &inputs,
                         &policy,
                         scaling_settings.decay_factor,
+                        scaling_settings.lookback,
                         last_predicted_instance_count,
                     ) else {
                         tracing::info!(
@@ -1243,6 +1252,7 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
+            ScalingSettings::default().lookback,
             &routing_cache,
         )
         .await
@@ -1360,6 +1370,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_utilization_query_covers_stickiness_window_longer_than_default() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let end_time = DateTime::from_timestamp(1_700_000_000, 0).expect("end time");
+        let policy = crate::scaling::ResolvedScalingPolicy {
+            thresholds: Default::default(),
+            factors: Default::default(),
+            scale_up_stickiness: Some(crate::scaling::Stickiness {
+                window_minutes: 30,
+                required_minutes: 15,
+            }),
+            scale_down_stickiness: None,
+        };
+        let lookback = policy.utilization_lookback(ScalingSettings::default().lookback);
+
+        let mut server = mockito::Server::new_async().await;
+        let utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded(
+                    "start".to_string(),
+                    (1_700_000_000 - 30 * 60).to_string(),
+                ),
+                mockito::Matcher::UrlEncoded("end".to_string(), "1700000000".to_string()),
+            ]))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        get_function_utilization_history(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "stg",
+            MetricSource::ControlPlane,
+            true,
+            end_time,
+            lookback,
+            60,
+        )
+        .await
+        .expect("utilization history");
+
+        utilization.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_control_plane_utilization_query_uses_aws_environment_labels() {
         let fid = Uuid::new_v4();
         let fvid = Uuid::new_v4();
@@ -1474,7 +1533,10 @@ mod tests {
             Some(MetricSource::LlmGateway)
         );
         assert_eq!(gathered.inputs.current_instances, 2);
-        assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
+        assert_eq!(
+            gathered.inputs.utilization_samples,
+            vec![(1_700_000_000, 25.0)]
+        );
         assert!(gathered.inputs.recently_invoked);
         let target = gathered.gateway_target.expect("gateway target");
         assert_eq!(target.function_version_id, active_version);
@@ -1780,6 +1842,7 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
+            ScalingSettings::default().lookback,
             &new_metric_routing_cache(),
         )
         .await
@@ -1820,6 +1883,7 @@ mod tests {
             "stg",
             true,
             &settings,
+            settings.lookback,
             &routing_cache,
         )
         .await
@@ -1833,7 +1897,7 @@ mod tests {
 
         assert_eq!(inputs.current_instances, 5);
         assert_eq!(inputs.metric_source, MetricSource::WorkerThreads);
-        assert_eq!(inputs.utilization_samples, vec![5.0]);
+        assert_eq!(inputs.utilization_samples, vec![(1_700_000_000, 5.0)]);
         assert!(inputs.recently_invoked);
     }
 

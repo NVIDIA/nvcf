@@ -22,6 +22,7 @@ package worker
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -139,6 +140,62 @@ func TestNewNVCTWorker_OTELScheme(t *testing.T) {
 	w, err := build(t, func(c *configs.Config) { c.OTELExporterOTLPEndpoint = "https://collector.example:4317" })
 	require.NoError(t, err)
 	require.NotNil(t, w)
+}
+
+func TestNewNVCTWorker_WithoutOTELEndpoint(t *testing.T) {
+	for name, endpoint := range map[string]string{"unset": "", "whitespace": "  "} {
+		t.Run(name, func(t *testing.T) {
+			w, err := build(t, func(c *configs.Config) { c.OTELExporterOTLPEndpoint = endpoint })
+			require.NoError(t, err)
+			require.NotNil(t, w)
+		})
+	}
+}
+
+// TestNVCTWorkerSetupWithoutOTELEndpoint checks that the health server, which
+// sets up the tracer, starts with tracing disabled when the endpoint is unset.
+func TestNVCTWorkerSetupWithoutOTELEndpoint(t *testing.T) {
+	// Setup registers admin routes on http.DefaultServeMux.
+	previousMux := http.DefaultServeMux
+	http.DefaultServeMux = http.NewServeMux()
+	t.Cleanup(func() { http.DefaultServeMux = previousMux })
+
+	w, err := build(t, func(c *configs.Config) {
+		c.OTELExporterOTLPEndpoint = ""
+		c.ResultsDir = t.TempDir()
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Setup(true))
+}
+
+func TestOtlpTraceTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		endpoint     string
+		wantHost     string
+		wantInsecure bool
+		wantErr      bool
+	}{
+		{name: "unset disables tracing", endpoint: ""},
+		{name: "whitespace disables tracing", endpoint: "  "},
+		{name: "http endpoint is insecure", endpoint: "http://otel-collector:4317", wantHost: "otel-collector:4317", wantInsecure: true},
+		{name: "https endpoint uses TLS", endpoint: "https://collector.example.invalid:8282", wantHost: "collector.example.invalid:8282"},
+		{name: "surrounding whitespace is trimmed", endpoint: " http://otel-collector:4317 ", wantHost: "otel-collector:4317", wantInsecure: true},
+		{name: "endpoint without a scheme has no host", endpoint: "otel-collector:4317", wantErr: true},
+		{name: "unparseable endpoint", endpoint: "://bad", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, insecure, err := otlpTraceTarget(tt.endpoint)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantHost, host)
+			require.Equal(t, tt.wantInsecure, insecure)
+		})
+	}
 }
 
 func TestNewNVCTWorker_ResultsDirRequiredForUpload(t *testing.T) {

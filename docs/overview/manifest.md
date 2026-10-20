@@ -242,6 +242,7 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
 | `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
+| `fluent-bit` | `3.2` | `compute-plane` | Optional | Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar. | `docker.io/fluent/fluent-bit:3.2` | [Upstream](https://github.com/fluent/fluent-bit) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
 | `grove-install-crds` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Installs Grove custom resource definitions. | `ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
 | `grove-operator` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Reconciles Grove topology-aware scheduling resources. | `ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |

@@ -25,29 +25,38 @@ Without `OTEL_EXPORTER_OTLP_*_ENDPOINT` set, signals are emitted to the console.
 
 ## Launch on self-hosted NVCF
 
-Resolve the cluster gateway and generate an invocation API key via `nvcf-cli`:
+The tasks API checks that the task image exists in its registry before it accepts a task, so push the image to a registry as described above. An image loaded only into the cluster nodes (for example with `k3d image import` or `kind load`) is rejected with `Artifact '...' presence validation failed`.
+
+Resolve the cluster gateway and generate a task API key via `nvcf-cli`. Launching a task needs a key generated for the task service (`--for task`), which carries the `launch_task` scope. A function key does not carry it.
 
 ```bash
 export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}')
-export NVCF_API_KEY=$(nvcf-cli api-key generate --description "task-byoo-sample" --json | jq -r .apiKey)
+export NVCF_NVCT_API_KEY=$(nvcf-cli api-key generate --for task --description "task-byoo-sample" --json | jq -r '.keys[] | select(.service=="task") | .apiKey')
 export ORG_ID=<your-org-id>
 ```
 
-Submit the task through the NVCT API. NVCF populates the `OTEL_EXPORTER_OTLP_*` environment variables for deployments that register a BYOO telemetry endpoint.
+Register a telemetry endpoint for each signal first. [byoo-telemetry-sample](../../function-samples/byoo-telemetry-sample/README.md) includes a reference sink and the `POST /v2/nvcf/telemetries` registration; reuse the returned `telemetryId` values here. On self-managed clusters NVCA removes NetworkPolicies from workload namespaces, so an in-cluster sink needs no extra policy.
+
+Submit the task through the NVCT API. The `telemetries` object selects the registered endpoints, and NVCF populates the `OTEL_EXPORTER_OTLP_*` environment variables for the task container. Set `gpuSpecification` to a GPU, instance type, and backend that your cluster advertises; `nvcf-cli cluster list` shows them.
 
 ```bash
 curl --request POST \
   --url "http://${GATEWAY_ADDR}/v2/orgs/${ORG_ID}/nvct/tasks" \
   --header "Host: api.${GATEWAY_ADDR}" \
-  --header "Authorization: Bearer ${NVCF_API_KEY}" \
+  --header "Authorization: Bearer ${NVCF_NVCT_API_KEY}" \
   --header "Content-Type: application/json" \
   --data '{
     "name": "task-byoo-sample",
     "containerImage": "<your-registry>/<namespace>/task-byoo-sample:<tag>",
     "gpuSpecification": {
-      "gpu": "T10",
-      "instanceType": "g6.full",
-      "backend": "GFN"
+      "gpu": "<gpu-name>",
+      "instanceType": "<instance-type>",
+      "backend": "<backend>"
+    },
+    "telemetries": {
+      "logsTelemetryId": "<logs-telemetry-id>",
+      "metricsTelemetryId": "<metrics-telemetry-id>",
+      "tracesTelemetryId": "<traces-telemetry-id>"
     },
     "maxRuntimeDuration": "PT1H",
     "maxQueuedDuration": "PT2H",
@@ -55,6 +64,8 @@ curl --request POST \
     "resultHandlingStrategy": "NONE"
   }'
 ```
+
+The same request is available as `nvcf-cli task create` with `--logs-telemetry-id`, `--metrics-telemetry-id`, and `--traces-telemetry-id`.
 
 See [byoo-documentation.md](byoo-documentation.md) for the telemetry registration flow and `otlp` collector requirements.
 

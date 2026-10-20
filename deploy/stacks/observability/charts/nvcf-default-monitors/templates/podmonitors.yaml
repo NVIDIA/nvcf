@@ -48,6 +48,12 @@ spec:
     - interval: {{ $values.interval | quote }}
       path: {{ $values.path | quote }}
       port: {{ $values.port | quote }}
+      {{- with $values.jobName }}
+      relabelings:
+        - action: replace
+          targetLabel: job
+          replacement: {{ . | quote }}
+      {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

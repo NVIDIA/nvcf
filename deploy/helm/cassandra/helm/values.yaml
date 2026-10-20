@@ -226,7 +226,7 @@ cassandra:
       # repository: must be supplied in additional values
       registry: ""
       repository: ""
-      tag: 0.17.6
+      tag: 0.18.0
       pullPolicy: Always
 
   dbUser:

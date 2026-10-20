@@ -867,6 +867,12 @@ manifest:
       requirement: optional
       description: Provides messaging for the optional NVIDIA Dynamo operator.
       upstream_url: https://github.com/nats-io/nats-server
+    - artifact_id: fluent-bit
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar.
+      upstream_url: https://github.com/fluent/fluent-bit
     - artifact_id: ess-agent
       plane: compute
       kind: service-image
@@ -1668,6 +1674,14 @@ supplemental_artifacts:
     type: image
     registry: public-images
     version: v1.2.10
+  - name: fluent-bit
+    type: image
+    registry: public-images
+    upstream_repository: docker.io/fluent/fluent-bit
+    version: "3.2"
+    stacks:
+      - compute-plane
+    requirement: optional
 outputs:
   - path: docs/overview/compatibility-matrix.md
     blocks:
