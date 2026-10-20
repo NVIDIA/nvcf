@@ -131,6 +131,23 @@ func TestElectionRelease_ReconcileLeaderLiveness(t *testing.T) {
 	}
 }
 
+// A promote recorded failed evicts the followers on reconcile even while
+// the leader lives and the Lease has time left: the failure notification
+// may never have run.
+func TestElectionRelease_ReconcileEvictsOnRecordedFailure(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	kc := fake.NewSimpleClientset(gatedFollower("f", true), electionLease("L", now.Add(time.Hour)))
+	if _, err := kc.CoreV1().Pods("fn").Create(context.Background(), leaderPod(corev1.PodRunning), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog(), now: func() time.Time { return now },
+		promoteState: func(string) (string, error) { return "failed", nil }}
+	r.reconcile(context.Background())
+	if _, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("follower of a failed promote must be evicted, err=%v", err)
+	}
+}
+
 // A capture already promoted ready releases its followers on reconcile,
 // even when the Lease it left behind is past its deadline and the leader
 // is gone: the promote handler persists ready before it releases, and a

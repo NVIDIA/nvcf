@@ -120,3 +120,14 @@ func equalSlice(a, b []string) bool {
 	}
 	return true
 }
+
+func TestIsHash(t *testing.T) {
+	if h := ComputeHash(HashInput{ImageDigest: "sha256:img"}); !IsHash(h) {
+		t.Errorf("ComputeHash output %q is not a hash", h)
+	}
+	for _, h := range []string{"", "short", strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 64), strings.Repeat("g", 64)} {
+		if IsHash(h) {
+			t.Errorf("IsHash(%q) = true", h)
+		}
+	}
+}

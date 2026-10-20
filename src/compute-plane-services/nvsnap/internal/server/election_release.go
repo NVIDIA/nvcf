@@ -254,9 +254,10 @@ func (r *electionReleaser) onPromoteState(ctx context.Context, hash, state strin
 	}
 }
 
-// reconcile checks every live election: a leader pod that is gone or has
-// terminated without a promote, or a Lease past its deadline, means the
-// followers will never be released; evict them so a new election runs.
+// reconcile checks every live election: a promote recorded failed, a
+// leader pod that is gone or has terminated without a promote, or a Lease
+// past its deadline, means the followers will never be released; evict
+// them so a new election runs.
 func (r *electionReleaser) reconcile(ctx context.Context) {
 	if r == nil || r.kube == nil {
 		return
@@ -292,6 +293,14 @@ func (r *electionReleaser) reconcile(ctx context.Context) {
 			}
 			if state == "ready" {
 				r.onPromoteState(ctx, hash, state)
+				continue
+			}
+			// A failed promote was persisted before its notification,
+			// which may not have run (the process exited) or may not have
+			// finished: evict now, as the notification does, rather than
+			// wait out a live leader's deadline.
+			if state == "failed" {
+				r.evictLogged(ctx, hash, "promote failed", l)
 				continue
 			}
 		}
