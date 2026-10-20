@@ -1562,3 +1562,78 @@ func TestModelVolume_InitMountsLandingElsewhere_JobMountsItOnce(t *testing.T) {
 		t.Errorf("the marker goes where the init sees the landing:\n%s", jc.Args[0])
 	}
 }
+
+// A refreshed set is read through a view of its own generation: a pod
+// admitted after the refresh seeds from generation 2, the one it is
+// stamped with, while the view a namespace minted of generation 1 stays
+// for the readers that mount it.
+func TestCacheVolume_RefreshedGenerationGetsItsOwnView(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	completeModelPV(t, kc, ngcFunctionKey)
+	m := cacheMutator(t, kc)
+	probe := ngcFunctionPod()
+	probe.Name = "mini-service-kimi-k3-0"
+	curi, ok := m.cacheURI(probe)
+	if !ok {
+		t.Fatal("cache uri")
+	}
+	setPV := func(name, gen string) {
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name,
+			Labels:      map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"},
+			Annotations: map[string]string{modelvolume.GenerationAnnotation: gen}},
+			Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+				PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:generation-" + gen}}}}
+		if _, err := kc.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admit := func(name string) (claim, gen string) {
+		pod := ngcFunctionPod()
+		pod.Name = name
+		patches, err := m.Mutate(ctx, pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := viewMV(pod, patches)
+		vol, ok := v.volumes[cacheSeedVolumeName]
+		if !ok || vol.PersistentVolumeClaim == nil {
+			t.Fatalf("%s: no cache seed volume", name)
+		}
+		return vol.PersistentVolumeClaim.ClaimName, v.annotations[modelvolume.CacheSeedGenerationAnnotation]
+	}
+	source := func(claim string) string {
+		for _, pv := range mustList(t, kc) {
+			if pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.Name == claim {
+				return pv.Labels[modelvolume.SourcePVLabel]
+			}
+		}
+		return ""
+	}
+	setPV("cache-g1", "1")
+	c1, g1 := admit("mini-service-kimi-k3-0")
+	setPV("cache-g2", "2")
+	c2, g2 := admit("mini-service-kimi-k3-1")
+	if g1 != "1" || g2 != "2" {
+		t.Errorf("stamped generations %q then %q, want 1 then 2", g1, g2)
+	}
+	if c1 == c2 {
+		t.Fatalf("both generations read through claim %s", c1)
+	}
+	if s := source(c1); s != "cache-g1" {
+		t.Errorf("generation 1's view reads %q, want cache-g1", s)
+	}
+	if s := source(c2); s != "cache-g2" {
+		t.Errorf("generation 2's view reads %q, want cache-g2", s)
+	}
+}
+
+func mustList(t *testing.T, kc *fake.Clientset) []corev1.PersistentVolume {
+	t.Helper()
+	pvs, err := kc.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pvs.Items
+}
