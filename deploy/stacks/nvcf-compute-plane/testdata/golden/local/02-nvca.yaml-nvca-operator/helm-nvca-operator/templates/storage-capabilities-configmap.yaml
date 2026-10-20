@@ -20,7 +20,7 @@ metadata:
   name: nvcf-storage-capabilities
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.32.13
+    helm.sh/chart: helm-nvca-operator-1.36.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.16.1"
