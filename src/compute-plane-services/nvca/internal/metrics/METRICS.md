@@ -1052,6 +1052,41 @@ sum by (failure_category) (rate(nvca_workload_result_total{workload_status="fail
 
 ---
 
+## BYOO Metrics
+
+### `nvca_byoo_platform_metrics_federation_state`
+
+Type: Gauge
+
+Description: Latest result of the NVCA check of the configured BYOO platform metrics federation target (`byooOtelCollector.platformMetricsFederation.target`). The series whose `state` label matches the result is 1, and every other `state` series is 0 (one-hot encoding). NVCA checks the target at startup and every 5 minutes when `BYOObservability` is on and a target is set. An unreachable target does not block workload deployments; NVCA also reports it as a warn-level `byoo-platform-metrics-federation` component in `/healthz` and logs a warning.
+
+Labels:
+
+- `state` - Check result. One of:
+  - `not_checked` - NVCA does not check a target: `BYOObservability` is off, federation is disabled, or no target is set
+  - `reachable` - the target answered `/federate`
+  - `unreachable` - the request failed or returned a non-2xx status
+- `nvca_nca_id` - NVCA instance identifier
+- `nvca_cluster_name` - Kubernetes cluster name
+- `nvca_cluster_group` - Cluster group identifier
+- `nvca_version` - NVCA version
+
+Cardinality: 3 series per NVCA instance (one per state).
+
+Zero-initialized: Yes. All three `state` series are initialized on startup, with `not_checked` set to 1.
+
+Usage:
+
+```promql
+# Clusters whose BYOO collectors cannot read platform metrics
+nvca_byoo_platform_metrics_federation_state{state="unreachable"} == 1
+
+# Current check result per cluster
+nvca_byoo_platform_metrics_federation_state == 1
+```
+
+---
+
 ## Scheduler Workload Metrics
 
 ### `nvca_scheduler_workload_count`

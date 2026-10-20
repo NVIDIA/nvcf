@@ -68,6 +68,32 @@ func TestGenerateConfig(t *testing.T) {
 	assert.Contains(t, string(content), "kratos-thanos-sandbox")
 }
 
+func TestGenerateConfigKratosLogsMetricsTraces(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("NVCF_BACKEND_TYPE", "non-gfn")
+	t.Setenv("NVCF_INSTANCE_ID", "fake-instance-id")
+	t.Setenv("NVCF_NAMESPACE", "sr-fake-namespace")
+	t.Setenv("NVCF_WORKLOAD_TYPE", "function")
+	t.Setenv("NVCF_FUNCTION_ID", "fake-function-id")
+	t.Setenv("NVCF_FUNCTION_VERSION_ID", "fake-function-version-id")
+	t.Setenv("ESS_SECRETS_PATH", "../../examples/secrets")
+
+	telemetriesJSON, err := os.ReadFile(filepath.Join("../../testdata", "kratos_traces_stg.json"))
+	require.NoError(t, err)
+	require.NoError(t, GenerateConfig(outputFile, base64.StdEncoding.EncodeToString(telemetriesJSON)))
+
+	content, err := os.ReadFile(outputFile)
+	require.NoError(t, err)
+	rendered := string(content)
+	assert.Contains(t, rendered, "otlp_http/KRATOS-kratos-logs-stage-logs")
+	assert.Contains(t, rendered, "prometheus_remote_write/KRATOS_THANOS-kratos-thanos-sandbox-metrics")
+	assert.Contains(t, rendered, "otlp_http/KRATOS-kratos-traces-stage-traces")
+	assert.Contains(t, rendered, "traces_endpoint: https://kratos-traces-ingest.example.invalid:4318/v1/traces")
+	assert.Contains(t, rendered, "kratos-traces-stage-clientCert")
+	assert.Contains(t, rendered, "kratos-logs-stage-collectorId")
+	assert.NotContains(t, rendered, "kratos-traces-stage-collectorId", "the traces secret has no collectorId")
+}
+
 func TestGetTemplateConfig(t *testing.T) {
 	tests := []struct {
 		name      string

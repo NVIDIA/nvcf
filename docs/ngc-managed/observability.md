@@ -763,7 +763,7 @@ Refer to the following table for the available environment variables that you ca
 | OTEL_EXPORTER_OTLP_LOGS_ENDPOINT | OpenTelemetry Protocol (OTLP) endpoint for exporting log data | http://127.0.0.1:14358/v1/logs |
 | OTEL_EXPORTER_OTLP_TRACES_ENDPOINT | OpenTelemetry Protocol (OTLP) endpoint for exporting trace data | http://127.0.0.1:14358/v1/traces |
 | OTEL_EXPORTER_OTLP_METRICS_ENDPOINT | OpenTelemetry Protocol (OTLP) endpoint for exporting metrics data | http://127.0.0.1:14358/v1/metrics |
-| OTEL_EXPORTER_OTLP_LOGS_PROTOCOL | Protocol used for exporting logs to OTLP endpoints | http |
-| OTEL_EXPORTER_OTLP_TRACES_PROTOCOL | Protocol used for exporting traces to OTLP endpoints | http |
-| OTEL_EXPORTER_OTLP_METRICS_PROTOCOL | Protocol used for exporting metrics to OTLP endpoints | http |
+| OTEL_EXPORTER_OTLP_LOGS_PROTOCOL | Protocol used for exporting logs to OTLP endpoints: `grpc` or `http/protobuf` | http/protobuf |
+| OTEL_EXPORTER_OTLP_TRACES_PROTOCOL | Protocol used for exporting traces to OTLP endpoints: `grpc` or `http/protobuf` | http/protobuf |
+| OTEL_EXPORTER_OTLP_METRICS_PROTOCOL | Protocol used for exporting metrics to OTLP endpoints: `grpc` or `http/protobuf` | http/protobuf |
 | OTEL_HEALTH_CHECK_ENDPOINT | Health check endpoint for OpenTelemetry collector | http://127.0.0.1:13133/health |
