@@ -162,12 +162,14 @@ The compute-plane stack sets both sidecar images and passes them to the
 
 | Sidecar | Stack value | Default image |
 |---|---|---|
-| BYOO OTel Collector | `global.nvcaOperator.byooOtelCollector` | `nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector`, with the tag in `imageTag` |
+| BYOO OTel Collector | `global.nvcaOperator.byooOtelCollector` | `${global.image.registry}/${global.image.repository}/byoo-otel-collector`, with the tag in `imageTag` |
 | Fluent Bit | `global.nvcaOperator.byooFluentBit.image` | `docker.io/fluent/fluent-bit`, with the tag in `tag` |
 
-The collector image does not follow `global.image`. To pull the sidecars from a
-private registry or mirror, copy both images with the tags that the stack pins.
-Then set the repositories in the compute-plane environment file:
+The collector follows `global.image`, so mirror it with the other stack images.
+Fluent Bit does not follow `global.image`. To pull it from a private registry or
+mirror, copy the image with the tag that the stack pins. Then set its repository
+in the compute-plane environment file. Set `byooOtelCollector.imageRepository`
+only when the collector is published outside the `global.image` path:
 
 ```yaml
 global:
