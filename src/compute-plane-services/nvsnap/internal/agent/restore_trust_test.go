@@ -202,6 +202,11 @@ func TestRestoreRefusal_Group(t *testing.T) {
 	ctx := context.Background()
 	victimKey := criuGroupKey("cache://cfg", criuScopeOf("victim", nil))
 	aliasGroup(t, kc, "cache://other-rank", "victim", victimKey)
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(victimKey), Namespace: "nvsnap-system"},
+		Data:       map[string]string{"state": "complete", "checkpoint.0": "r0"}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	rank := func(ns, uri, key, id string) *corev1.Pod {
 		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: ns + uri + id, Namespace: ns, UID: types.UID(ns + uri + id),
 			Annotations: map[string]string{cacheURIAnnotation: uri, webhook.CRIUGroupAnnotation: key, webhook.CRIURestoreAnnotation: id}}}
@@ -215,7 +220,12 @@ func TestRestoreRefusal_Group(t *testing.T) {
 		{"a rank whose configuration names the instance record", rank("victim", "cache://other-rank", victimKey, "r0"), true},
 		{"another scope's record", rank("tenant", "cache://cfg", victimKey, "t0"), false},
 		{"own record, another tenant's checkpoint", rank("tenant", "cache://cfg", criuGroupKey("cache://cfg", criuScopeOf("tenant", nil)), "r0"), false},
-		{"no configuration", rank("victim", "", victimKey, "r0"), false},
+		// A companion carries no configuration: the record must list its
+		// checkpoint, which must be a capture of its scope.
+		{"member without a configuration", rank("victim", "", victimKey, "r0"), true},
+		{"member naming a checkpoint the record does not list", rank("victim", "", victimKey, "v0"), false},
+		{"member of another scope's record", rank("tenant", "", victimKey, "r0"), false},
+		{"member naming no checkpoint", rank("victim", "", victimKey, ""), false},
 	} {
 		why, err := c.restoreRefusal(ctx, tc.pod)
 		if err != nil {
