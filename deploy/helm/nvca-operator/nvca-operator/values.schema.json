@@ -313,7 +313,25 @@
                 },
                 "otelCollector": {
                     "type": "object",
-                    "description": "Structured BYOO OTel collector rendering overrides."
+                    "description": "Structured BYOO OTel collector rendering overrides.",
+                    "properties": {
+                        "platformMetricsFederation": {
+                            "type": "object",
+                            "description": "Platform metrics federation scrape. Self-managed clusters disable it unless enabled or target is set.",
+                            "additionalProperties": false,
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "description": "Render the federation scrape jobs. Unset keeps the cluster default."
+                                },
+                                "target": {
+                                    "type": "string",
+                                    "description": "host:port of a Prometheus-compatible server that serves /federate.",
+                                    "pattern": "^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*|\\[[0-9A-Fa-f:.]+\\]):[0-9]{1,5}$"
+                                }
+                            }
+                        }
+                    }
                 },
                 "additionalResourceOverhead": {
                     "type": "object",

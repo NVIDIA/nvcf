@@ -108,6 +108,8 @@ printf '%s\n' \
   '      otelCollector:' \
   '        exporterHelper:' \
   '          timeout: 30s' \
+  '        platformMetricsFederation:' \
+  '          target: vmsingle.monitoring.svc.cluster.local:8428' \
   '      additionalResourceOverhead:' \
   '        cpu: "1"' \
   '      fluentbit:' \
@@ -126,6 +128,9 @@ test "$(yq -r '.byoo.logChunking.dryRun' "${byoo_values}")" = "true" ||
   fail "global.nvcaOperator.byoo.logChunking.dryRun was not forwarded to the chart"
 test "$(yq -r '.byoo.otelCollector.exporterHelper.timeout' "${byoo_values}")" = "30s" ||
   fail "global.nvcaOperator.byoo.otelCollector was not forwarded to the chart"
+test "$(yq -r '.byoo.otelCollector.platformMetricsFederation.target' "${byoo_values}")" = \
+  "vmsingle.monitoring.svc.cluster.local:8428" ||
+  fail "global.nvcaOperator.byoo.otelCollector.platformMetricsFederation was not forwarded to the chart"
 test "$(yq -r '.byoo.additionalResourceOverhead.cpu | tag + " " + .' "${byoo_values}")" = '!!str 1' ||
   fail "global.nvcaOperator.byoo.additionalResourceOverhead.cpu was not forwarded to the chart as a string"
 test "$(yq -r '.byoo.fluentbit.resources.limits.memory' "${byoo_values}")" = "256Mi" ||

@@ -80,7 +80,23 @@ func TestRenderOtelConfig(t *testing.T) {
 			backendType:  VM,
 			expectError:  false,
 		},
+		{
+			name:         "Valid Input Kratos Traces",
+			inputData:    []byte(`{"telemetries": {"tracesTelemetry": {"protocol": "GRPC", "provider": "KRATOS", "endpoint": "https://kratos-traces.example.invalid:4318/v1/traces", "name": "example-kratos-traces"}}}`),
+			workloadType: Helm,
+			backendType:  K8s,
+			expectError:  false,
+		},
+		{
+			name:         "Kratos Thanos Traces",
+			inputData:    []byte(`{"telemetries": {"tracesTelemetry": {"protocol": "HTTP", "provider": "KRATOS_THANOS", "endpoint": "https://kratos-traces.example.invalid:4318/v1/traces", "name": "example-kratos-traces"}}}`),
+			workloadType: Helm,
+			backendType:  K8s,
+			expectError:  true,
+		},
 	}
+	// KRATOS traces render only when the client cert pair is on disk.
+	writeClientCertPair(t, "example-kratos-traces")
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1398,5 +1414,227 @@ func TestResourceProcessorInsertsInstanceID(t *testing.T) {
 				assert.True(t, insertsInstanceID, "resource processor must insert instance_id so target_info is unique")
 			})
 		}
+	}
+}
+
+// KRATOS traces go to the Kratos OTLP/HTTP traces gateway over mTLS. The client
+// cert pair is enough. The collector-id header and ca_file are optional and are
+// rendered only when the secret has a non-empty value, because a blank CA file
+// stops the collector from starting.
+func Test_exporterTraces_Kratos(t *testing.T) {
+	const telemetryName = "example-traces"
+	const endpoint = "https://kratos-traces.example.invalid:4318/v1/traces"
+	tests := []struct {
+		name          string
+		secrets       map[string]string
+		wantHeaderKey bool
+		wantCA        bool
+		wantErr       string
+	}{
+		{
+			name:    "client cert pair only",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key"},
+		},
+		{
+			name:    "empty caFile is dropped",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": ""},
+		},
+		{
+			name:    "whitespace-only caFile is dropped",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": " \n"},
+		},
+		{
+			name:    "caFile adds ca_file",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": "fake-ca"},
+			wantCA:  true,
+		},
+		{
+			name:    "empty collectorId is dropped",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "collectorId": " \n"},
+		},
+		{
+			name:          "collectorId sends the collector-id header",
+			secrets:       map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "collectorId": "fake-collector-id"},
+			wantHeaderKey: true,
+		},
+		{
+			name:    "missing clientKey",
+			secrets: map[string]string{"clientCert": "fake-cert", "collectorId": "fake-collector-id"},
+			wantErr: "missing or empty: clientKey",
+		},
+		{
+			name:    "missing clientCert",
+			secrets: map[string]string{"clientKey": "fake-key", "caFile": "fake-ca"},
+			wantErr: "missing or empty: clientCert",
+		},
+		{
+			name:    "blank client cert pair",
+			secrets: map[string]string{"clientCert": "", "clientKey": " \n"},
+			wantErr: "missing or empty: clientCert, clientKey",
+		},
+		{
+			name:    "no secret files",
+			secrets: map[string]string{},
+			wantErr: "KRATOS secret needs clientCert and clientKey",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeTLSSecretFiles(t, telemetryName, tt.secrets)
+			cfg := TelemetryConfig{
+				Telemetries: Telemetries{
+					Traces: &Telemetry{
+						Name:     telemetryName,
+						Protocol: ProtocolGRPC,
+						Provider: ProviderKratosLogs,
+						Endpoint: endpoint,
+					},
+				},
+			}
+			otelConfig := &OpenTelemetryConfig{}
+			initializeConfigMaps(otelConfig)
+
+			err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"})
+			const exporterId = "otlp_http/KRATOS-example-traces-traces"
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, telemetryName, "error must name the telemetry")
+				assert.NotContains(t, otelConfig.Exporters, exporterId)
+				assert.Empty(t, otelConfig.Service.Pipelines["traces"].Exporters)
+				return
+			}
+			if err != nil {
+				t.Fatalf("generateExportersAndService() unexpected error = %v", err)
+			}
+
+			want := map[string]interface{}{
+				"traces_endpoint": endpoint,
+				"tls": map[string]interface{}{
+					"cert_file": filepath.Join(dir, telemetryName+"-clientCert"),
+					"key_file":  filepath.Join(dir, telemetryName+"-clientKey"),
+				},
+			}
+			if tt.wantCA {
+				want["tls"].(map[string]interface{})["ca_file"] = filepath.Join(dir, telemetryName+"-caFile")
+			}
+			if tt.wantHeaderKey {
+				want["headers"] = map[string]interface{}{
+					"collector-id": fmt.Sprintf("${file:%s}", filepath.Join(dir, telemetryName+"-collectorId")),
+				}
+			}
+			assert.Equal(t, want, otelConfig.Exporters[exporterId], "exporter must use the protobuf default, with no encoding override")
+
+			pipeline := otelConfig.Service.Pipelines["traces"]
+			assert.Equal(t, []string{"otlp"}, pipeline.Receivers)
+			assert.Equal(t, []string{exporterId}, pipeline.Exporters)
+			assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch"}, pipeline.Processors)
+
+			rendered, err := yaml.Marshal(otelConfig)
+			if err != nil {
+				t.Fatalf("failed to marshal otelConfig: %v", err)
+			}
+			if !tt.wantHeaderKey {
+				assert.NotContains(t, string(rendered), telemetryName+"-collectorId", "config must not reference a collectorId file the secret does not have")
+			}
+			if !tt.wantCA {
+				assert.NotContains(t, string(rendered), "ca_file", "config must not reference a missing or blank CA file")
+			}
+		})
+	}
+}
+
+// A function can send logs, metrics, and traces to Kratos at once. Logs and
+// traces share the KRATOS provider, so their exporter IDs must stay distinct
+// even when the telemetries share a name.
+func TestGenerateExportersAndServiceKratosLogsMetricsTraces(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"kratos", "kratos-thanos"} {
+		for key, value := range map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key"} {
+			if err := os.WriteFile(filepath.Join(dir, name+"-"+key), []byte(value), 0o600); err != nil {
+				t.Fatalf("failed to write secret file: %v", err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kratos-collectorId"), []byte("fake-collector-id"), 0o600); err != nil {
+		t.Fatalf("failed to write secret file: %v", err)
+	}
+	t.Setenv("ESS_SECRETS_PATH", dir)
+
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "kratos",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderKratosLogs,
+				Endpoint: "https://kratos-logs.example.invalid/v1/logs",
+			},
+			Metrics: &Telemetry{
+				Name:     "kratos-thanos",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderThanos,
+				Endpoint: "https://kratos-metrics.example.invalid/api/v1/receive",
+			},
+			Traces: &Telemetry{
+				Name:     "kratos",
+				Protocol: ProtocolGRPC,
+				Provider: ProviderKratosLogs,
+				Endpoint: "https://kratos-traces.example.invalid:4318/v1/traces",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	if err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"}); err != nil {
+		t.Fatalf("generateExportersAndService() unexpected error = %v", err)
+	}
+
+	const (
+		logsExporter    = "otlp_http/KRATOS-kratos-logs"
+		metricsExporter = "prometheus_remote_write/KRATOS_THANOS-kratos-thanos-metrics"
+		tracesExporter  = "otlp_http/KRATOS-kratos-traces"
+	)
+	assert.Equal(t, []string{logsExporter}, otelConfig.Service.Pipelines["logs"].Exporters)
+	assert.Equal(t, []string{metricsExporter}, otelConfig.Service.Pipelines["metrics"].Exporters)
+	assert.Equal(t, []string{tracesExporter}, otelConfig.Service.Pipelines["traces"].Exporters)
+
+	logs := otelConfig.Exporters[logsExporter]
+	assert.Equal(t, "https://kratos-logs.example.invalid/v1/logs", logs["logs_endpoint"])
+	assert.Equal(t, "json", logs["encoding"])
+	assert.NotContains(t, logs, "traces_endpoint")
+
+	assert.Equal(t, "https://kratos-metrics.example.invalid/api/v1/receive", otelConfig.Exporters[metricsExporter]["endpoint"])
+
+	traces := otelConfig.Exporters[tracesExporter]
+	assert.Equal(t, "https://kratos-traces.example.invalid:4318/v1/traces", traces["traces_endpoint"])
+	assert.NotContains(t, traces, "encoding")
+	assert.NotContains(t, traces, "logs_endpoint")
+	assert.Equal(t, logs["tls"], traces["tls"], "logs and traces read the same client cert pair")
+}
+
+// Providers without a traces exporter, including KRATOS_THANOS, which accepts
+// metrics only, must fail rendering with an error that names the provider.
+func Test_exporterTraces_UnsupportedProviders(t *testing.T) {
+	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus, ProviderSplunk} {
+		t.Run(string(provider), func(t *testing.T) {
+			writeClientCertPair(t, "example-traces")
+			cfg := TelemetryConfig{
+				Telemetries: Telemetries{
+					Traces: &Telemetry{
+						Name:     "example-traces",
+						Protocol: ProtocolHTTP,
+						Provider: provider,
+						Endpoint: "https://traces.example.invalid/v1/traces",
+					},
+				},
+			}
+			otelConfig := &OpenTelemetryConfig{}
+			initializeConfigMaps(otelConfig)
+
+			err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"})
+			assert.ErrorContains(t, err, fmt.Sprintf("invalid traces provider: %s", provider))
+			assert.Empty(t, otelConfig.Service.Pipelines["traces"].Exporters)
+		})
 	}
 }

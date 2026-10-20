@@ -47,6 +47,16 @@ global:
     # additionalResourceOverhead. The collector and Fluent Bit sidecars run in
     # every BYOO workload. Leave unset to keep the agent defaults. Quote
     # plain-number quantities.
+    #
+    # Platform metrics federation is off on self-managed clusters unless
+    # otelCollector.platformMetricsFederation sets enabled or target. Set
+    # target to the host:port of a Prometheus-compatible server that serves
+    # /federate. With the observability stack compute or all profile, the
+    # VictoriaMetrics target below exports worker, NVCA, and NVCA-labeled DCGM
+    # metrics for each workload: the stack monitors store them under the
+    # nvcf-worker, nvca, and nvidia-dcgm-exporter jobs that federation
+    # selects. That stack does not scrape cAdvisor or kube-state-metrics. For
+    # the job names those series need, refer to docs/self-managed/byoo.md.
     # byoo:
     #   resources:
     #     requests:
@@ -60,6 +70,9 @@ global:
     #       requests:
     #         cpu: 50m
     #         memory: 64Mi
+    #   otelCollector:
+    #     platformMetricsFederation:
+    #       target: vmsingle.monitoring.svc.cluster.local:8428
     selfManaged:
       # The chart ships no tag for this image, only the stack knows which samba
       # build pairs with the operator it is pinning, so supply the whole
