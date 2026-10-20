@@ -69,6 +69,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/byoofederation"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/hostisolation"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
@@ -1247,6 +1248,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(&featureflag.HelmSharedStorage.FeatureFlag) {
 		statusUpdaters = append(statusUpdaters, nvcastorage.NewSMBCSIDriverHealthCheck(k8sclients.K8s.StorageV1().CSIDrivers()))
 	}
+	if checker := a.newBYOOFederationChecker(); checker != nil {
+		statusUpdaters = append(statusUpdaters, checker)
+		go checker.Run(ctx)
+	}
 	a.backendHealthCache = health.NewBackendStatusCache(a.MinHealthcheckRefreshWait, statusUpdaters...)
 
 	// Pause until NVCA is initially healthy
@@ -1537,6 +1542,20 @@ func (a *Agent) apply(ctx context.Context, ev *core.Event) {
 		// increment the counter for error totals per event kind
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(ev.Kind)...).Inc()
 	}
+}
+
+// newBYOOFederationChecker returns a checker for the configured BYOO platform
+// metrics federation target, or nil when there is nothing to check: BYOO is
+// off, federation is disabled, or the collector uses its default target.
+func (a *Agent) newBYOOFederationChecker() *byoofederation.Checker {
+	if !a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.BYOObservability) {
+		return nil
+	}
+	target := byoofederation.Target(a.Config.Agent.BYOOOTelCollector.PlatformMetricsFederation)
+	if target == "" {
+		return nil
+	}
+	return byoofederation.NewChecker(target, a.metrics)
 }
 
 func (a *Agent) PutNVCAStatusUpdate(ctx context.Context) error {
