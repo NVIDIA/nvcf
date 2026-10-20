@@ -91,7 +91,11 @@ helm template nats-auth-callout-service \
   fail "NATS auth-callout chart did not render"
 
 actual_image="$(yq -r '.spec.template.spec.containers[0].image // ""' "$manifest_file")"
-expected_image="$expected_repository:$(yq -r '.appVersion' "$stack_dir/../../helm/nats-auth-callout/Chart.yaml")"
+expected_tag="$(yq -r '.natsAuthCalloutService.image.tag // ""' "$stack_dir/environments/base.yaml")"
+if test -z "$expected_tag"; then
+  expected_tag="$(yq -r '.appVersion' "$stack_dir/../../helm/nats-auth-callout/Chart.yaml")"
+fi
+expected_image="$expected_repository:$expected_tag"
 test "$actual_image" = "$expected_image" ||
   fail "rendered image is $actual_image, expected $expected_image"
 

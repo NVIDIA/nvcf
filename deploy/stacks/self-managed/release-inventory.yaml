@@ -9,12 +9,14 @@ states:
     path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl
     fullOverrides:
       - addons.llm.enabled=true
+      - addons.lls.enabled=true
   - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
     fullOverrides:
       - addons.llm.enabled=true
       - addons.vanityGateway.enabled=true
       - addons.nvcfUi.enabled=true
+      - addons.lls.enabled=true
   - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl
     fullOverrides:
@@ -26,6 +28,24 @@ states:
 # its immutable public GitHub release tag, then report the public self-managed
 # catalog destination.
 sourceCharts:
+  helm-nvcf-api:
+    tagPrefix: deploy/helm/cloud-functions/v
+    path: deploy/helm/cloud-functions/nvcf-api
+  helm-nvcf-api-keys:
+    tagPrefix: deploy/helm/api-keys-colocated/v
+    path: deploy/helm/api-keys-colocated/api-keys
+  helm-nvcf-openbao-server:
+    tagPrefix: deploy/helm/openbao/v
+    path: deploy/helm/openbao/helm
+  helm-nvcf-sis:
+    tagPrefix: deploy/helm/icms/v
+    path: deploy/helm/icms/icms-api
+  helm-nvcf-llm-request-router:
+    tagPrefix: deploy/helm/llm-request-router/v
+    path: deploy/helm/llm-request-router/llm-request-router
+  helm-nvcf-ui:
+    tagPrefix: src/uis/nvcf-ui/helm/v
+    path: src/uis/nvcf-ui/helm
   helm-nvcf-invocation-service:
     tagPrefix: deploy/helm/http-invocation/v
     path: deploy/helm/http-invocation/nvcf-invocation-service

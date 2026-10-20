@@ -60,20 +60,20 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.8.0
+    version: 1.8.1
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 2.4.0
+    version: 2.4.1
     namespace: sis
     inherit:
       - template: service
     condition: icms.enabled
 
   - name: api
-    version: 1.27.1
+    version: 1.27.2
     namespace: nvcf
     inherit:
       - template: service
@@ -235,7 +235,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.14.1
+    version: 1.14.2
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -271,7 +271,7 @@ releases:
 
   - name: nvcf-ui
     chart: nvcf/helm-nvcf-ui
-    version: 1.1.2
+    version: 1.1.3
     namespace: nvcf-ui
     condition: addons.nvcfUi.enabled
     values:
