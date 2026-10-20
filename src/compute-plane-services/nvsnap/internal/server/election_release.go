@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -81,10 +82,6 @@ func (r *electionReleaser) release(ctx context.Context, hash string) (released i
 	if err != nil {
 		return 0, err
 	}
-	patch, _ := json.Marshal(map[string]any{
-		"metadata": map[string]any{"labels": map[string]string{election.GatedLabel: "false"}},
-		"spec":     map[string]any{"schedulingGates": []any{}},
-	})
 	var claimless []*corev1.Pod
 	for i := range pods {
 		p := &pods[i]
@@ -98,7 +95,7 @@ func (r *electionReleaser) release(ctx context.Context, hash string) (released i
 			claimless = append(claimless, p)
 			continue
 		}
-		if _, err := r.kube.CoreV1().Pods(p.Namespace).Patch(ctx, p.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if err := r.ungate(ctx, p); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -119,6 +116,52 @@ func (r *electionReleaser) release(ctx context.Context, hash string) (released i
 		log.Info("election: follower's restore claim is missing; deleted so admission restores it with the claim")
 	}
 	return released, nil
+}
+
+// ungateAttempts bounds the re-reads of a follower whose scheduling gates
+// changed under the patch (another controller removed one of its own).
+const ungateAttempts = 5
+
+// ungate removes nvsnap's scheduling gate from a follower and marks it
+// released. Admission appended that gate to any the pod already had, and
+// other controllers may still be holding the pod with theirs, so only
+// nvsnap's entry is removed: by index, after a test that the entry at
+// that index is still nvsnap's. A pod whose gates moved under the patch
+// fails the test and is re-read; one that no longer carries the gate is
+// only marked.
+func (r *electionReleaser) ungate(ctx context.Context, p *corev1.Pod) error {
+	pods := r.kube.CoreV1().Pods(p.Namespace)
+	var err error
+	for attempt := 0; attempt < ungateAttempts; attempt++ {
+		if attempt > 0 {
+			if p, err = pods.Get(ctx, p.Name, metav1.GetOptions{}); err != nil {
+				return err
+			}
+		}
+		var ops []map[string]any
+		for i, g := range p.Spec.SchedulingGates {
+			if g.Name == election.GateName {
+				path := fmt.Sprintf("/spec/schedulingGates/%d", i)
+				ops = append(ops,
+					map[string]any{"op": "test", "path": path + "/name", "value": election.GateName},
+					map[string]any{"op": "remove", "path": path})
+				break
+			}
+		}
+		if p.Labels == nil {
+			ops = append(ops, map[string]any{"op": "add", "path": "/metadata/labels", "value": map[string]string{election.GatedLabel: "false"}})
+		} else {
+			ops = append(ops, map[string]any{"op": "add", "path": "/metadata/labels/" + strings.ReplaceAll(election.GatedLabel, "/", "~1"), "value": "false"})
+		}
+		patch, merr := json.Marshal(ops)
+		if merr != nil {
+			return merr
+		}
+		if _, err = pods.Patch(ctx, p.Name, types.JSONPatchType, patch, metav1.PatchOptions{}); err == nil || apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return err
 }
 
 // restoreClaimPresent reports whether the restore claim of hash that pod
