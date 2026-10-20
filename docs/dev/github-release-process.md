@@ -239,6 +239,28 @@ Package metadata uses SemVer without the leading `v`:
 | `deploy/helm/nvca-operator/v1.11.1-rc.1` | `1.11.1-rc.1` |
 | `nvcf-ratelimiter-v1.15.1` | `1.15.1` |
 
+## Automatic pin bumps
+
+Published releases open reviewed bot Pull Requests against `main`. They
+do not release a stack. A stack still releases only from its release
+branch.
+
+- A service release runs `.github/workflows/chart-version-bump.yml`. It
+  moves each target whose `deploys` entry in
+  `tools/ci/github-release-subprojects.json` names the service. A chart
+  target moves its image tag or declared values paths. A stack target
+  moves the paths its `values_files` declare, such as the compute-plane
+  `global.nvcaOperator.imageTag` and
+  `global.nvcaOperator.selfManaged.nvcaVersion` on an NVCA release.
+- A chart release runs `.github/workflows/stack-pin-bump.yml`. It moves
+  the `version:` of every Helmfile release under `deploy/stacks/` that
+  pins that chart, such as `helm-nvca-operator` in the compute-plane
+  stack.
+
+A compute-plane bump also needs its golden render fixtures refreshed
+with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
+merge.
+
 ## Release branches
 
 For every subproject except the three under `deploy/stacks/`, release
@@ -704,3 +726,53 @@ above. A tag pushed with the `NV_GITHUB_TOKEN` secret, or another
 workflow-capable token, starts the tag workflow, but it stays inert
 if either variable is unset, falling back to dry-run. Tags pushed
 with the default `GITHUB_TOKEN` do not trigger the follow-up workflow.
+
+## Shared bump branches
+
+The chart version bump and stack pin bump workflows add one commit per
+release to `chore/chart-version-bumps` and `chore/stack-pin-bumps`.
+Before a run applies its own bump, `tools/ci/prepare-stack-pin-branch`
+replays the branch onto `main`, oldest commit first:
+
+- A commit that still applies is kept.
+- A commit that is already on `main` is dropped.
+- A bump commit that conflicts with `main` is regenerated. A conflict
+  means `main` moved the same pin, for example through a manual bump.
+  The helper runs the workflow's bump tool again for the release tag
+  that the commit message records. A release older than the current
+  pin moves nothing and drops out.
+- Any other commit that conflicts stops the run, and nothing is pushed.
+  A person wrote it, so a person decides how it applies.
+
+A `release` event runs the workflow file from the released commit. A tag
+cut from a branch that predates a workflow change runs the older
+workflow. A run dispatched from `main` uses the current one.
+
+### Recover a stopped bump branch
+
+Use these steps when a run stops on a hand-written commit, or when
+release events failed before their bumps were recorded.
+
+1. Land any change from the hand-written commit that must stay, such as
+   release metadata, through its own Pull Request.
+2. Record the release tags the branch carries. Deleting the branch
+   drops their bumps too:
+
+   ```bash
+   git log --format=%B origin/main..origin/<bump-branch> | grep '^Opened by'
+   ```
+
+3. Delete the bump branch. Its bot Pull Request closes, and the next run
+   starts the branch from `main`.
+4. Dispatch the workflow from `main` for the newest release tag of each
+   service from step 2, and of each service whose release event failed.
+   The bump tools only move a pin forward, so the newest tag also covers
+   the older releases of that service.
+
+A dry run on `main` shows whether a tag still moves a pin. It prints a
+`<chart>: <from> -> <to>` line for each pin that would move:
+
+```bash
+tools/ci/chart-version-bumper --tag <service-path>/v<version>
+gh workflow run chart-version-bump.yml --ref main -f tag=<service-path>/v<version>
+```

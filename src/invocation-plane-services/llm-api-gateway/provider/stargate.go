@@ -698,8 +698,10 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 			response.CreatedAt = chunk.CreatedAt
 			response.Model = chunk.Model
 			response.SystemFingerprint = chunk.SystemFingerprint
-			response.ServiceTier = chunk.ServiceTier
 			seenChunk = true
+		}
+		if response.ServiceTier == "" {
+			response.ServiceTier = chunk.ServiceTier
 		}
 		if chunk.Usage != nil {
 			response.Usage = *chunk.Usage
