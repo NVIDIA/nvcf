@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,7 +42,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
@@ -278,7 +278,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -294,7 +294,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -534,7 +534,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 					CreatedAt:         123,
 					Model:             "choice-model",
 					SystemFingerprint: ptr.To(fingerprint),
-					ServiceTier:       servicetier.Auto,
+					ServiceTier:       "auto",
 					Choices: []models.ChatCompletionChunkChoice{
 						{
 							Index: 1,
@@ -585,7 +585,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 	require.Equal(t, int64(123), response.CreatedAt)
 	require.Equal(t, "choice-model", response.Model)
 	require.Equal(t, fingerprint, ptr.Deref(response.SystemFingerprint))
-	require.Equal(t, servicetier.Auto, response.ServiceTier)
+	require.Equal(t, "auto", response.ServiceTier)
 	require.Len(t, response.Choices, 2)
 	require.Equal(t, uint32(0), response.Choices[0].Index)
 	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
@@ -643,6 +643,22 @@ func TestStargateProviderCompletePropagatesStreamingHTTPError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, response)
 	require.Contains(t, err.Error(), "stream denied")
+}
+
+func TestCheckHTTPErrorKeepsStargateErrorCodeForLogs(t *testing.T) {
+	t.Parallel()
+
+	err := checkHTTPError(&http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{headerStargateErrorCode: []string{"no_eligible_candidates"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":"no eligible candidates","code":"no_eligible_candidates"}`)),
+	})
+
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	require.Equal(t, http.StatusNotFound, httpErr.Code)
+	require.Equal(t, "no eligible candidates", httpErr.Message)
+	require.EqualError(t, httpErr.Internal, "stargate error code no_eligible_candidates")
 }
 
 func TestStargateProviderCompletePropagatesMalformedStreamChunk(t *testing.T) {
@@ -863,7 +879,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -879,7 +895,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -1413,4 +1429,19 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.URL = &url.URL{}
 	}
 	return f(req)
+}
+
+func TestStargateMessagesCredentialsStopBeforeWorker(t *testing.T) {
+	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.Empty(t, r.Header.Get("Authorization"))
+		require.Empty(t, r.Header.Get("X-API-Key"))
+		require.Empty(t, r.Header.Get("Proxy-Authorization"))
+		require.Equal(t, "fn-messages", r.Header.Get(headerRoutingKey))
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`)), Request: r}, nil
+	})}
+	resp, err := p.Proxy(context.Background(), &requestctx.RequestContext{BearerToken: "caller-secret", RoutingKey: "fn-messages"}, &ProxyRequest{Method: "POST", Path: "/v1/messages", Header: http.Header{"Authorization": {"Bearer injected"}, "X-Api-Key": {"secret"}, "Proxy-Authorization": {"secret"}}, Body: io.NopCloser(strings.NewReader(`{}`))})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 }

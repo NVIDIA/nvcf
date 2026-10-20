@@ -30,6 +30,12 @@ gateway image and the rate-limit sync worker image through
 `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
 present in this public snapshot.
 
+## LLM routing BDD
+
+The `@llm-function-type` scenarios in the single- and multi-cluster Helmfile
+features cover LLM routing and request handling. See `tests/bdd/README.md`
+to run them.
+
 ## Local Gotchas
 
 - `github.com/olric-data/olric` is replaced by

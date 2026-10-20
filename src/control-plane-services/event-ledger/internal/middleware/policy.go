@@ -43,6 +43,7 @@ const (
 	policyActorTypeContextKey contextKey = "policy_actor_type"
 	policyRolesContextKey     contextKey = "policy_roles"
 	policyClaimsContextKey    contextKey = "policy_claims"
+	policyScopesContextKey    contextKey = "policy_scopes"
 
 	defaultAuthSubjectField = "subject"
 	defaultAuthAPIKeyField  = "apiKey"
@@ -58,6 +59,9 @@ type PolicyAuthzResponse struct {
 	OrgName    string   `json:"orgName"`
 	ActorType  string   `json:"actorType"`
 	Roles      []string `json:"roles,omitempty"`
+	// Policy is the matching api-keys policy for the key's audience. Only its
+	// scopes are read, and only by the self-managed route scope check.
+	Policy json.RawMessage `json:"policy,omitempty"`
 }
 
 // UnmarshalJSON handles string or int for status code
@@ -90,6 +94,28 @@ func (u *PolicyAuthzResponse) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// policyScopes returns the scopes of an api-keys policy, or nil when the policy
+// is absent or has no readable scopes list.
+func policyScopes(policy json.RawMessage) []string {
+	if len(policy) == 0 {
+		return nil
+	}
+	var parsed struct {
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.Unmarshal(policy, &parsed); err != nil {
+		return nil
+	}
+	return parsed.Scopes
+}
+
+// apiKeyScopesFromContext returns the scopes granted to an api-keys
+// authorized request, or nil when none were granted.
+func apiKeyScopesFromContext(ctx context.Context) []string {
+	scopes, _ := ctx.Value(policyScopesContextKey).([]string)
+	return scopes
 }
 
 // ContextError for error details
@@ -325,6 +351,7 @@ func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			logger.InfoContext(traceCtx, "policy: authorization successful")
 
 			var requestCtx = markPDPAuthorized(r.Context())
+			requestCtx = context.WithValue(requestCtx, policyScopesContextKey, policyScopes(authResponse.Policy))
 			// Create enriched context
 			if authResponse.ActorID != "" {
 				requestCtx = context.WithValue(requestCtx, policyActorIDContextKey, authResponse.ActorID)
@@ -373,29 +400,19 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimPrefix(authHeader, "Bearer ")
 }
 
-func chainMiddleware(first, second mux.MiddlewareFunc) mux.MiddlewareFunc {
-	return func(next http.Handler) http.Handler {
-		return first(second(next))
-	}
-}
-
 // NewAuthMiddleware dispatches each request to one of two authorization paths
 // based on whether the bearer token is JWT-shaped.
 //
-// A JWT is always verified locally against jwtOpts first. In self-managed
-// deployments that is the entire check: the caller's per-route scope
-// requirement then decides access, and the token never reaches policyClient.
-// In managed deployments, the verified JWT is additionally sent to
-// policyClient for an allow/deny decision.
+// A JWT is verified locally against jwtOpts and then authorized by the
+// caller's per-route scope requirement.
 //
 // Anything else is treated as an opaque API key and sent to policyClient
-// directly. policyClient's evaluation contract only accepts an API key, which
-// is why a JWT cannot be routed through it in self-managed deployments.
+// directly.
 //
 // When introspector is non-nil, a JWT-shaped token that fails local OpenBao
 // verification is retried against SIS's NVCA introspection endpoint before
 // being rejected, following the same ordered chain ReVal uses for NVCA's PSAT.
-func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, selfManaged bool, introspector nvca.Introspector, logger *otelzap.Logger) mux.MiddlewareFunc {
+func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, introspector nvca.Introspector, logger *otelzap.Logger) mux.MiddlewareFunc {
 	apiKeyAuth := newPolicyMiddleware(policyClient, serviceName, logger)
 
 	var jwtVerify mux.MiddlewareFunc
@@ -411,13 +428,8 @@ func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOp
 		return apiKeyAuth
 	}
 
-	jwtAuth := jwtVerify
-	if !selfManaged {
-		jwtAuth = chainMiddleware(jwtVerify, apiKeyAuth)
-	}
-
 	return func(next http.Handler) http.Handler {
-		jwtChain := jwtAuth(next)
+		jwtChain := jwtVerify(next)
 		apiKeyChain := apiKeyAuth(next)
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

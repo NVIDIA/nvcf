@@ -47,6 +47,10 @@ type Config struct {
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	// ExposeRouterErrorCodes puts the request router's rejection reason, such
+	// as no_eligible_candidates, in error.code of OpenAI-format error
+	// responses. When false, the reason is only logged.
+	ExposeRouterErrorCodes bool
 }
 
 type ServerConfig struct {
@@ -77,6 +81,20 @@ type StargateConfig struct {
 	URL            string
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	LastCluster    LastClusterConfig
+}
+
+// LastClusterConfig controls the per-session last-cluster hint sent to
+// Stargate as x-stargate-last-cluster-id. The store is the shared Olric DMap
+// when Olric is enabled, otherwise an in-process LRU capped at LocalMaxEntries.
+type LastClusterConfig struct {
+	Enabled bool
+	// TTL is the entry lifetime. Every write resets it.
+	TTL time.Duration
+	// LookupTimeout bounds the store lookup on the request path. A slower
+	// lookup is abandoned and the request proceeds without the hint.
+	LookupTimeout   time.Duration
+	LocalMaxEntries int
 }
 
 type NVCFConfig struct {
@@ -210,6 +228,12 @@ func Default() *Config {
 			URL:            "http://127.0.0.1:8000",
 			ConnectTimeout: 2 * time.Second,
 			RequestTimeout: 0,
+			LastCluster: LastClusterConfig{
+				Enabled:         false,
+				TTL:             10 * time.Minute,
+				LookupTimeout:   20 * time.Millisecond,
+				LocalMaxEntries: 100000,
+			},
 		},
 		NVCF: NVCFConfig{
 			GRPCAddr:    "",
@@ -251,6 +275,7 @@ func LoadFromEnv() (*Config, error) {
 
 	applyServerTelemetryEnv(cfg, &errs)
 	applyStargateNVCFEnv(cfg, &errs)
+	applyStargateLastClusterEnv(cfg, &errs)
 	applyOlricNetworkEnv(cfg, &errs)
 	applyOlricRuntimeEnv(cfg, &errs)
 	applyRateLimitEnv(cfg, &errs)
@@ -258,6 +283,9 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("MODEL_URI_ALLOWLIST_ENABLED"); ok {
 		cfg.ModelURIAllowlistEnabled = v
+	}
+	if v, ok := errs.boolean("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES"); ok {
+		cfg.ExposeRouterErrorCodes = v
 	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.
@@ -360,6 +388,36 @@ func applyStargateNVCFEnv(cfg *Config, errs *envErrs) {
 		cfg.NVCF.GRPCTimeout = timeout
 	}
 
+}
+
+func applyStargateLastClusterEnv(cfg *Config, errs *envErrs) {
+	if v, ok := errs.boolean("STARGATE_LAST_CLUSTER_ENABLED"); ok {
+		cfg.Stargate.LastCluster.Enabled = v
+	}
+
+	if ttl, ok := errs.duration("STARGATE_LAST_CLUSTER_TTL"); ok {
+		if ttl <= 0 {
+			errs.add("STARGATE_LAST_CLUSTER_TTL", ttl.String(), errors.New("must be > 0"))
+		} else {
+			cfg.Stargate.LastCluster.TTL = ttl
+		}
+	}
+
+	if timeout, ok := errs.duration("STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT"); ok {
+		if timeout <= 0 {
+			errs.add("STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", timeout.String(), errors.New("must be > 0"))
+		} else {
+			cfg.Stargate.LastCluster.LookupTimeout = timeout
+		}
+	}
+
+	if maxEntries, ok := errs.integer("STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES"); ok {
+		if maxEntries <= 0 {
+			errs.add("STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", strconv.Itoa(maxEntries), errors.New("must be > 0"))
+		} else {
+			cfg.Stargate.LastCluster.LocalMaxEntries = maxEntries
+		}
+	}
 }
 
 func applyOlricNetworkEnv(cfg *Config, errs *envErrs) {

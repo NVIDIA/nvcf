@@ -19,8 +19,13 @@ package gateway
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	config "ai-api-gateway-service/gateway_config"
+
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -92,6 +97,131 @@ func collectShadowDroppedCounts(t *testing.T, reader *sdkmetric.ManualReader) ma
 				counts[shadowDropMetricLabels{
 					model:  model.AsString(),
 					reason: reason.AsString(),
+				}] = point.Value
+			}
+		}
+	}
+	return counts
+}
+
+func TestShadowSamplingDecisionsMetricInitializesAndCountsDecidingMethod(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+
+	counter, err := newShadowSamplingDecisionsCounter(provider.Meter(shadowMetricsScope))
+	require.NoError(t, err)
+	previousCounter := shadowSamplingDecisionsCounter
+	shadowSamplingDecisionsCounter = counter
+	t.Cleanup(func() {
+		shadowSamplingDecisionsCounter = previousCounter
+	})
+
+	initializeShadowSamplingMetrics()
+	initial := collectShadowSamplingDecisionCounts(t, reader)
+	// random and perBearerKey on four endpoint labels, plus the two
+	// request-body methods on chatCompletions, responses, and messages, each
+	// admitted and rejected.
+	require.Len(t, initial, (2*4+2*3)*2)
+	for labels, count := range initial {
+		assert.Zero(t, count, "unexpected initial count for %+v", labels)
+	}
+
+	methods := testShadowSamplingMethods(
+		config.ShadowSamplingMethodPromptCacheKey,
+		config.ShadowSamplingMethodFirstMessageHash,
+	)
+	shadows := []shadowConfig{
+		{modelName: "shadow-a", percentage: 96, samplingMethods: methods},
+		{modelName: "shadow-b", percentage: 10, samplingMethods: methods},
+		{modelName: "shadow-always", percentage: 100, samplingMethods: methods},
+	}
+
+	// The prompt cache key hashes to bucket 95, so it decides both targets.
+	keyed := newShadowRequestSampler(
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		[]byte(`{"prompt_cache_key":"session-123"}`),
+		shadowSamplingEndpointChatCompletions,
+		nil,
+		fixedRandomBucket(0),
+	)
+	assert.Equal(t, []string{"shadow-a", "shadow-always"}, shadowModelNames(admittedShadowsWithSampler(shadows, keyed)))
+	assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodPromptCacheKey}, keyed.decidedMethods)
+
+	// With no key and no first user message, sampling falls back to random.
+	unkeyed := newShadowRequestSampler(
+		httptest.NewRequest(http.MethodPost, "/v1/responses", nil),
+		[]byte(`{}`),
+		shadowSamplingEndpointResponses,
+		nil,
+		fixedRandomBucket(5),
+	)
+	assert.Equal(t, []string{"shadow-a", "shadow-b", "shadow-always"}, shadowModelNames(admittedShadowsWithSampler(shadows, unkeyed)))
+	assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodRandom}, unkeyed.decidedMethods)
+
+	// A Messages session header decides on the messages endpoint label.
+	messagesReq := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	messagesReq.Header.Set(config.ClaudeCodeSessionIDHeader, "session-123")
+	messages := newShadowRequestSampler(
+		messagesReq,
+		[]byte(`{}`),
+		shadowSamplingEndpointMessages,
+		config.ModelFunctionDetails{}.EffectivePromptCacheKeyHeadersForSection("anthropicMessages"),
+		fixedRandomBucket(0),
+	)
+	assert.Equal(t, []string{"shadow-a", "shadow-always"}, shadowModelNames(admittedShadowsWithSampler(shadows, messages)))
+
+	counts := collectShadowSamplingDecisionCounts(t, reader)
+	require.Len(t, counts, len(initial), "decisions must not add label combinations")
+	nonzero := map[shadowSamplingDecisionLabels]int64{}
+	for labels, count := range counts {
+		if count != 0 {
+			nonzero[labels] = count
+		}
+	}
+	assert.Equal(t, map[shadowSamplingDecisionLabels]int64{
+		{endpoint: "chatCompletions", method: "promptCacheKey", outcome: "admitted"}: 1,
+		{endpoint: "chatCompletions", method: "promptCacheKey", outcome: "rejected"}: 1,
+		{endpoint: "responses", method: "random", outcome: "admitted"}:               2,
+		{endpoint: "messages", method: "promptCacheKey", outcome: "admitted"}:        1,
+		{endpoint: "messages", method: "promptCacheKey", outcome: "rejected"}:        1,
+	}, nonzero)
+}
+
+type shadowSamplingDecisionLabels struct {
+	endpoint string
+	method   string
+	outcome  string
+}
+
+func collectShadowSamplingDecisionCounts(t *testing.T, reader *sdkmetric.ManualReader) map[shadowSamplingDecisionLabels]int64 {
+	t.Helper()
+
+	var resourceMetrics metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &resourceMetrics))
+
+	counts := make(map[shadowSamplingDecisionLabels]int64)
+	for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+		for _, metric := range scopeMetrics.Metrics {
+			if metric.Name != shadowSamplingDecisionsMetricName {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			require.True(t, ok)
+			for _, point := range sum.DataPoints {
+				require.Equal(t, 3, point.Attributes.Len(), "only endpoint, method, and outcome may be labels")
+				endpoint, ok := point.Attributes.Value(shadowSamplingEndpointLabel)
+				require.True(t, ok)
+				method, ok := point.Attributes.Value(shadowSamplingMethodLabel)
+				require.True(t, ok)
+				outcome, ok := point.Attributes.Value(shadowSamplingOutcomeLabel)
+				require.True(t, ok)
+				counts[shadowSamplingDecisionLabels{
+					endpoint: endpoint.AsString(),
+					method:   method.AsString(),
+					outcome:  outcome.AsString(),
 				}] = point.Value
 			}
 		}

@@ -116,7 +116,7 @@ The streaming application needs to be packaged inside a container and should be 
 4. Containerization guidelines:
 
    1. The container should make sure that the `CONTROL_SERVER_PORT`, `STREAMING_SERVER_PORT` and `STREAMING_PORT_BINDING_RANGE` are exposed by the container and accessible from outside the container.
-   2. If multiple sessions one after another needs to be supported with a fresh start of container, then exit the container after a streaming session ends.
+   2. If multiple sessions one after another needs to be supported with a fresh start of container, then exit the container after a streaming session ends. Exit with code 0: Kubernetes restarts the container in place, and NVCA does not count a clean exit after the instance was ready toward its container restart loop limit. Non-zero exits still count.
 
 ## Creating the LLS Streaming Function
 

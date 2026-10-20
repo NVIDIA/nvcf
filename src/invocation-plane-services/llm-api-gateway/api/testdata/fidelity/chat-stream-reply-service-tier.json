@@ -1,0 +1,107 @@
+{
+  "description": "A streamed reply relays a backend service_tier outside the gateway tier list.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "stream": true
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "stream": true,
+    "service_tier": "auto"
+  },
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "service_tier": "priority",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "service_tier": "priority",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "service_tier": "priority",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "OK"
+              },
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "service_tier": "priority",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 2,
+            "total_tokens": 9
+          }
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  }
+}

@@ -91,6 +91,7 @@ fn request_with_priority<'a>(
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     }
 }
 
@@ -183,6 +184,7 @@ fn candidate(id: &str, kv_cache_free_tokens: u64) -> RoutedClusterSnapshot {
         cluster_id: id.to_string(),
         stats: ModelStats {
             last_mean_input_tps: 100.0,
+            max_input_tps: Some(100.0),
             max_output_tps: 100.0,
             kv_cache_capacity_tokens: 1024,
             kv_cache_used_tokens: 1024 - kv_cache_free_tokens,
@@ -196,7 +198,7 @@ fn candidate(id: &str, kv_cache_free_tokens: u64) -> RoutedClusterSnapshot {
     }
 }
 
-fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
+pub(super) fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
     ids.iter().map(|id| candidate(id, 1024)).collect()
 }
 
@@ -241,6 +243,7 @@ fn work_candidate_with_kv(
         .with_rtt_ms(rtt_ms)
         .with_stats(|stats| {
             stats.last_mean_input_tps = input_tps;
+            stats.max_input_tps = Some(input_tps);
             stats.queued_input_size = queued_input;
         })
 }
@@ -679,6 +682,60 @@ fn input_work_seconds_for_pulsar_excludes_low_free_kv_when_considered() {
 }
 
 #[test]
+fn max_rendezvous_weight_keeps_mean_input_work_capacity() {
+    let config = seeded_pulsar_algorithm_config("seed-1");
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(100));
+    let mut backend = work_candidate("backend", 5, 50.0, 50);
+    backend.stats.max_input_tps = Some(500.0);
+
+    assert_eq!(
+        input_work_seconds_for_request(&config, &request, &[backend]),
+        Some(3.0)
+    );
+}
+
+#[test]
+fn pulsar_input_work_capacity_excludes_backends_missing_the_selected_maximum() {
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(100));
+    let ready = work_candidate("ready", 5, 50.0, 50);
+    let mut legacy_backend = work_candidate("legacy", 5, 10_000.0, 0);
+    legacy_backend.stats.max_input_tps = None;
+    for algorithm in [
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        let mut config = LoadBalancerAlgorithmConfig::from(algorithm);
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                &[ready.clone(), legacy_backend.clone()]
+            ),
+            Some(3.0)
+        );
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                std::slice::from_ref(&legacy_backend)
+            ),
+            None
+        );
+        config.rendezvous_weight = PulsarRendezvousWeight::LastMeanInputTps;
+        assert_eq!(
+            input_work_seconds_for_request(
+                &config,
+                &request,
+                &[ready.clone(), legacy_backend.clone()]
+            ),
+            Some(150.0 / 10_050.0)
+        );
+    }
+}
+
+#[test]
 fn invalid_algorithm_name_fails_during_parse() {
     assert_json_rejected::<LoadBalancerConfig>(r#"{"default":"not-a-real-lb"}"#, "not-a-real-lb");
 }
@@ -723,6 +780,10 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             r#"{"algorithm":"wait-and-widen","consider_kv_free_tokens":true}"#,
             "consider_kv_free_tokens",
         ),
+        (
+            r#"{"algorithm":"round-robin","rendezvous_weight":"max-input-tps"}"#,
+            "rendezvous_weight",
+        ),
         (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
         (
             r#"{"algorithm":"random","comparator":"ttft"}"#,
@@ -730,6 +791,42 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
         ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
+    }
+}
+
+#[test]
+fn last_cluster_affinity_is_rejected_for_other_algorithms() {
+    for algorithm in ["power-of-n", "round-robin", "random", "pulsar"] {
+        let raw = format!(r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#);
+        let error = serde_json::from_str::<LoadBalancerAlgorithmConfig>(&raw)
+            .expect_err("last_cluster_affinity should be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("last_cluster_affinity") && message.contains(algorithm),
+            "error should name the field and {algorithm}: {message}"
+        );
+    }
+    for raw in [
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"pulsar","last_cluster_affinity":true}}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"random":{"algorithm":"random","last_cluster_affinity":true}}}"#,
+    ] {
+        assert_json_rejected::<LoadBalancerConfig>(raw, "last_cluster_affinity");
+    }
+}
+
+#[test]
+fn last_cluster_affinity_parses_for_wait_and_widen_algorithms() {
+    for algorithm in ["wait-and-widen", "pulsar-wait-and-widen"] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#
+        ));
+        assert_eq!(
+            config
+                .wait_and_widen_settings()
+                .and_then(|settings| settings.last_cluster_affinity),
+            Some(true)
+        );
+        create_load_balancer_with_config(&config).expect("factory should accept the flag");
     }
 }
 
@@ -947,6 +1044,42 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
 }
 
 #[test]
+fn pulsar_rendezvous_weight_parses_for_both_pulsar_variants() {
+    for algorithm in ["pulsar", "pulsar-wait-and-widen"] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","rendezvous_weight":"max-input-tps"}}"#
+        ));
+        assert_eq!(
+            config.rendezvous_weight,
+            PulsarRendezvousWeight::MaxInputTps
+        );
+        let default: LoadBalancerAlgorithmConfig =
+            parse_json(&format!(r#"{{"algorithm":"{algorithm}"}}"#));
+        assert_eq!(
+            default.rendezvous_weight,
+            PulsarRendezvousWeight::MaxInputTps
+        );
+        let legacy: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","rendezvous_weight":"last-mean-input-tps"}}"#
+        ));
+        assert_eq!(
+            legacy.rendezvous_weight,
+            PulsarRendezvousWeight::LastMeanInputTps
+        );
+    }
+
+    for algorithm in [
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).rendezvous_weight,
+            PulsarRendezvousWeight::MaxInputTps
+        );
+    }
+}
+
+#[test]
 fn unknown_load_balancer_config_fields_are_rejected() {
     assert_json_rejected::<LoadBalancerConfig>(
         r#"{"default":"power-of-n","unused_top_level_field":true,"models":{"model-a":{"algorithm":"pulsar","unused_model_field":123}}}"#,
@@ -1157,9 +1290,6 @@ fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
             );
         }
         for scale in [0.0, 1.0] {
-            if algorithm == LoadBalancerAlgorithm::PulsarWaitAndWiden && scale != 1.0 {
-                continue;
-            }
             let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
                 r#"{{"algorithm":"{algorithm}","cache_affinity_input_tokens_scale":{scale}}}"#
             ));
@@ -1186,23 +1316,22 @@ fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
 }
 
 #[test]
-fn pulsar_wait_and_widen_rejects_unsupported_affinity_settings() {
-    for (field, value) in [
-        ("cache_affinity_input_tokens_scale", "0.0"),
-        ("cache_affinity_input_tokens_scale", "0.1"),
-        ("cache_affinity_wait_ms", "1"),
-    ] {
-        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
-            r#"{{"algorithm":"pulsar-wait-and-widen","{field}":{value}}}"#
-        ));
+fn pulsar_only_settings_are_rejected_for_wait_and_widen() {
+    for field in ["band_widen_interval_ms", "fallback_max_queued"] {
+        let config: LoadBalancerAlgorithmConfig =
+            parse_json(&format!(r#"{{"algorithm":"wait-and-widen","{field}":0}}"#));
         let error = create_load_balancer_with_config(&config)
             .err()
-            .expect("unsupported affinity settings must fail");
+            .expect("wait-and-widen must reject Pulsar-only settings");
         assert!(error.to_string().contains(field));
     }
+}
+
+#[test]
+fn pulsar_wait_and_widen_accepts_affinity_settings() {
     for raw in [
         r#"{"algorithm":"pulsar-wait-and-widen"}"#,
-        r#"{"algorithm":"pulsar-wait-and-widen","cache_affinity_input_tokens_scale":1.0,"cache_affinity_wait_ms":0}"#,
+        r#"{"algorithm":"pulsar-wait-and-widen","cache_affinity_input_tokens_scale":0.1,"cache_affinity_wait_ms":300,"cache_affinity_backend_selection_count":2,"band_widen_interval_ms":100,"fallback_max_queued":0}"#,
     ] {
         let config: LoadBalancerAlgorithmConfig = parse_json(raw);
         assert!(create_load_balancer_with_config(&config).is_ok());
@@ -1344,6 +1473,7 @@ fn wait_and_widen_config_resolves_internal_defaults() {
     assert_eq!(config.max_queued, 0);
     assert!(config.ignore_queue_time);
     assert!(config.ignore_input_processing_time);
+    assert!(!config.last_cluster_affinity);
 
     let target = target();
     let request = request(&target, None, Some(0));
@@ -2887,7 +3017,12 @@ fn pulsar_ranking_returns_candidate_slice_indices() {
         work_candidate("fast", 5, 10.0, 0),
     ];
 
-    let ranking = pulsar_ranked_indices(config.seed(), &request, &candidates);
+    let ranking = pulsar_ranked_indices(
+        config.seed(),
+        PulsarRendezvousWeight::default(),
+        &request,
+        &candidates,
+    );
 
     assert_eq!(ranking.len(), 2);
     assert_eq!(
@@ -3014,32 +3149,125 @@ fn pulsar_returns_none_when_all_candidates_are_excluded() {
 }
 
 #[test]
-fn pulsar_ranking_cache_invalidates_when_capacity_weight_changes() {
+fn pulsar_ranking_cache_invalidates_when_the_selected_weight_changes() {
+    for rendezvous_weight in [
+        PulsarRendezvousWeight::MaxInputTps,
+        PulsarRendezvousWeight::LastMeanInputTps,
+    ] {
+        let mut config = seeded_pulsar_algorithm_config("seed-1");
+        config.rendezvous_weight = rendezvous_weight;
+        let pulsar = PulsarLoadBalancer::new(config);
+        let target = target();
+        // Only the selected weight field swaps between the two snapshots.
+        let with_weights = |a: f64, b: f64| {
+            let mut candidates = vec![
+                work_candidate("inst-a", 5, 100.0, 0),
+                work_candidate("inst-b", 5, 100.0, 0),
+            ];
+            for (candidate, weight) in candidates.iter_mut().zip([a, b]) {
+                match rendezvous_weight {
+                    PulsarRendezvousWeight::MaxInputTps => {
+                        candidate.stats.max_input_tps = Some(weight);
+                    }
+                    PulsarRendezvousWeight::LastMeanInputTps => {
+                        candidate.stats.last_mean_input_tps = weight;
+                    }
+                }
+            }
+            candidates
+        };
+        let initial = with_weights(10_000.0, 1.0);
+        let changed = with_weights(1.0, 10_000.0);
+
+        let changed_key = (0..1024).find_map(|idx| {
+            let key = format!("affinity-{idx}");
+            let request = request(&target, Some(&key), Some(128));
+            let first = choose(&pulsar, &request, &initial).candidate.cluster_id;
+            let second = choose(&pulsar, &request, &changed).candidate.cluster_id;
+            (first != second).then_some((first, second))
+        });
+        assert_eq!(
+            changed_key,
+            Some(("inst-a".to_string(), "inst-b".to_string())),
+            "{rendezvous_weight:?}: some key's ranking follows the selected weight"
+        );
+    }
+}
+
+#[test]
+fn pulsar_max_ranking_cache_tracks_only_the_selected_weight() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let target = target();
+    let first_key = "max-cache-a";
+    let second_key = "max-cache-b";
+    let mut snapshots = candidates(&["inst-a", "inst-b"]);
+    snapshots[0].stats.max_input_tps = Some(100.0);
+    snapshots[1].stats.max_input_tps = Some(200.0);
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    choose(
+        &pulsar,
+        &request(&target, Some(second_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(
+        pulsar.cached_affinity_key_bytes(),
+        first_key.len() + second_key.len()
+    );
 
-    for idx in 0..1024 {
-        let key = format!("affinity-{idx}");
-        let request = request(&target, Some(&key), Some(128));
+    snapshots[0].stats.last_mean_input_tps = 1.0;
+    snapshots[1].stats.last_mean_input_tps = 10_000.0;
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(
+        pulsar.cached_affinity_key_bytes(),
+        first_key.len() + second_key.len()
+    );
+
+    snapshots[0].stats.max_input_tps = Some(300.0);
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(pulsar.cached_affinity_key_bytes(), first_key.len());
+}
+
+#[test]
+fn both_pulsar_defaults_ignore_mean_changes_and_reject_missing_maxima() {
+    let target = target();
+    for algorithm in [
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        let config = LoadBalancerAlgorithmConfig::from(algorithm);
+        let balancer = create_load_balancer_with_config(&config).unwrap();
         let initial = vec![
-            work_candidate("inst-a", 5, 10_000.0, 0),
-            work_candidate("inst-b", 5, 1.0, 0),
+            work_candidate("a", 5, 100.0, 0),
+            work_candidate("b", 5, 200.0, 0),
         ];
-        let changed = vec![
-            work_candidate("inst-a", 5, 1.0, 0),
-            work_candidate("inst-b", 5, 10_000.0, 0),
-        ];
-
-        let first = choose(&pulsar, &request, &initial).candidate.cluster_id;
-        let second = choose(&pulsar, &request, &changed).candidate.cluster_id;
-        if first != second {
-            assert_eq!(first, "inst-a");
-            assert_eq!(second, "inst-b");
-            return;
+        let mut changed = initial.clone();
+        changed[0].stats.last_mean_input_tps = 100_000.0;
+        changed[1].stats.last_mean_input_tps = 1.0;
+        let mut missing = changed.clone();
+        for candidate in &mut missing {
+            candidate.stats.max_input_tps = None;
+        }
+        for index in 0..64 {
+            let key = format!("mean-change-{index}");
+            let request = request(&target, Some(&key), Some(128));
+            let before = balancer.choose_candidate(&request, &initial).unwrap();
+            let after = balancer.choose_candidate(&request, &changed).unwrap();
+            assert_eq!(before.candidate_index, after.candidate_index);
+            assert!(balancer.choose_candidate(&request, &missing).is_none());
         }
     }
-
-    panic!("expected to find an affinity key whose ranking changes after capacity changes");
 }
 
 #[test]
@@ -3071,7 +3299,9 @@ fn pulsar_hash_is_pinned_to_a_fixed_algorithm_and_version() {
 
 #[test]
 fn pulsar_uses_last_mean_input_tps_as_weight() {
-    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
+    let pulsar = PulsarLoadBalancer::new(parse_json(
+        r#"{"algorithm":"pulsar","rendezvous_weight":"last-mean-input-tps"}"#,
+    ));
 
     let candidate = work_candidate("inst-a", 5, 123.0, 0);
 
@@ -3079,11 +3309,28 @@ fn pulsar_uses_last_mean_input_tps_as_weight() {
 }
 
 #[test]
-fn pulsar_excludes_candidate_with_invalid_last_mean_input_tps() {
+fn pulsar_uses_generation_max_input_tps_as_weight_by_default() {
+    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
+    let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
+    candidate.stats.max_input_tps = Some(456.0);
+
+    assert_eq!(pulsar.weight(&candidate), Some(456.0));
+
+    candidate.stats.last_mean_input_tps = 0.0;
+    assert_eq!(pulsar.weight(&candidate), Some(456.0));
+
+    candidate.stats.last_mean_input_tps = 123.0;
+    candidate.stats.max_input_tps = None;
+    assert_eq!(pulsar.weight(&candidate), None, "no fallback to the mean");
+}
+
+#[test]
+fn pulsar_excludes_candidate_with_invalid_max_input_tps() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
 
     let target = target();
-    let invalid = work_candidate("inst-a", 5, 0.0, 0);
+    let mut invalid = work_candidate("inst-a", 5, 100.0, 0);
+    invalid.stats.max_input_tps = Some(0.0);
     let valid = candidate("inst-b", 1024);
 
     let choice = choose(
@@ -3095,12 +3342,15 @@ fn pulsar_excludes_candidate_with_invalid_last_mean_input_tps() {
 }
 
 #[test]
-fn pulsar_returns_none_when_all_candidates_lack_valid_last_mean_input_tps() {
+fn pulsar_returns_none_when_all_candidates_lack_valid_max_input_tps() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
 
     let target = target();
-    let invalid_a = work_candidate("inst-a", 5, 0.0, 0);
-    let invalid_b = work_candidate("inst-b", 5, f64::NAN, 0);
+    // Valid means do not make up for invalid maxima.
+    let mut invalid_a = work_candidate("inst-a", 5, 100.0, 0);
+    invalid_a.stats.max_input_tps = Some(0.0);
+    let mut invalid_b = work_candidate("inst-b", 5, 100.0, 0);
+    invalid_b.stats.max_input_tps = Some(f64::NAN);
 
     let choice = pulsar.choose_for_test(
         &request(&target, Some("prefix-1"), Some(128)),
@@ -3261,6 +3511,22 @@ fn wait_and_widen_without_affinity_is_unavailable_when_no_bucket_has_capacity() 
 }
 
 #[test]
+fn wait_and_widen_max_queued_at_u64_max_admits_full_candidates() {
+    let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
+        &wait_and_widen_algorithm_config(|settings| settings.max_queued = Some(u64::MAX)),
+    ));
+    let target = target();
+    let request = request(&target, None, Some(4_000));
+    let candidates = [saturation_candidate("full", 20_000.0, 4)];
+
+    assert!(
+        lb.decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .is_some()
+    );
+}
+
+#[test]
 fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
     let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
         &wait_and_widen_algorithm_config(|_| {}),
@@ -3282,5 +3548,49 @@ fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
             candidates[choice.candidate_index].cluster_id,
             "fast-available"
         );
+    }
+}
+
+#[test]
+fn routing_method_override_without_flag_ignores_last_cluster() {
+    let router = router_from_json(
+        r#"{
+            "default": "power-of-n",
+            "models": {
+                "model-a": {
+                    "algorithm": "wait-and-widen",
+                    "cache_affinity_backend_selection_count": 1,
+                    "last_cluster_affinity": true,
+                    "request_algorithms": {
+                        "pulsar-wait-and-widen": {"algorithm": "pulsar-wait-and-widen"}
+                    }
+                }
+            }
+        }"#,
+    );
+    let target = target();
+    let candidates = candidates(&["a", "b", "c"]);
+    let without_flag = "pulsar-wait-and-widen"
+        .parse::<LoadBalancerAlgorithmOverride>()
+        .unwrap();
+    for (algorithm_override, expected) in [
+        (Some(&without_flag), None),
+        (None, Some(SessionState::Returning)),
+    ] {
+        let resolution = router
+            .resolve_algorithm_override("model-a", algorithm_override)
+            .unwrap();
+        let hint = LastClusterHint::new(Some("b".to_string()));
+        let request = LoadBalancerRequest {
+            last_cluster: Some(&hint),
+            ..request(&target, Some("session-prefix"), Some(100))
+        };
+        let _ = router.decide_with_algorithm_resolution(
+            &LoadBalancerTargetState::default(),
+            &request,
+            &candidates,
+            &resolution,
+        );
+        assert_eq!(hint.classification().map(|c| c.state), expected);
     }
 }

@@ -60,6 +60,11 @@ test "${default_quic_present}" = "false" ||
 default_region="$(backend_config "${default_manifest}" | yq -r '.region')"
 test "${default_region}" = "us-west-1" ||
   fail "chart default self-managed region is ${default_region:-missing}, expected us-west-1"
+# The operator owns the colocated Event Ledger default, so the chart must not
+# render an empty fndService block that would shadow it.
+default_fnd_service_present="$(backend_config "${default_manifest}" | yq -r 'has("fndService")')"
+test "${default_fnd_service_present}" = "false" ||
+  fail "chart renders fndService without selfManaged.eventLedgerServiceURL"
 
 override_values="${work_dir}/override.yaml"
 printf '%s\n' \
@@ -71,7 +76,8 @@ printf '%s\n' \
   '    workload:' \
   '      stargateQUICInsecure: true' \
   'selfManaged:' \
-  '  region: explicit-region' >"${override_values}"
+  '  region: explicit-region' \
+  '  eventLedgerServiceURL: https://events.example.invalid' >"${override_values}"
 
 override_manifest="${work_dir}/override.yaml.rendered"
 render "${override_manifest}" --values "${override_values}"
@@ -85,5 +91,8 @@ test "${override_quic}" = "true" ||
 override_region="$(backend_config "${override_manifest}" | yq -r '.region')"
 test "${override_region}" = "explicit-region" ||
   fail "explicit selfManaged.region override was not preserved"
+override_event_ledger_url="$(backend_config "${override_manifest}" | yq -r '.fndService.serviceURL')"
+test "${override_event_ledger_url}" = "https://events.example.invalid" ||
+  fail "explicit selfManaged.eventLedgerServiceURL was not rendered as fndService.serviceURL"
 
 echo "default-ownership: all checks passed"

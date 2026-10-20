@@ -45,6 +45,7 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         selected_inst.id = field::Empty,
         selected_inst.output_tps = field::Empty,
         selected_inst.last_mean_input_tps = field::Empty,
+        selected_inst.max_input_tps = field::Empty,
         selected_inst.max_output_tps = field::Empty,
         selected_inst.queue_size = field::Empty,
         selected_inst.queued_input_size = field::Empty,
@@ -63,6 +64,7 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         routing.comparator = field::Empty,
         routing.rank_depth = field::Empty,
         routing.selected_after_kv_free_tokens_skip = field::Empty,
+        routing.session_state = field::Empty,
         routing.retry_attempts = field::Empty,
         routing.admission_rejection_reason = field::Empty,
         proxy.upstream_status = field::Empty,
@@ -126,6 +128,7 @@ pub(super) fn record_routing_to_span(span: &Span, routing: RoutingTraceFields<'_
         "selected_inst.id" = routing.chosen.inference_server_id.as_str(),
         "selected_inst.output_tps" = stats.output_tps,
         "selected_inst.last_mean_input_tps" = stats.last_mean_input_tps,
+        "selected_inst.max_input_tps" = stats.max_input_tps,
         "selected_inst.max_output_tps" = stats.max_output_tps,
         "selected_inst.queue_size" = stats.queue_size,
         "selected_inst.queued_input_size" = stats.queued_input_size,
@@ -186,5 +189,73 @@ mod tests {
         assert!(fields.field("routing.sample_count_configured").is_some());
         assert!(fields.field("routing.sample_count_effective").is_some());
         assert!(fields.field("routing.comparator").is_some());
+        assert!(fields.field("routing.session_state").is_some());
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn session_state_records_span_field_and_debug_event() {
+        use crate::load_balancer::{
+            LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
+            SessionClassification, SessionState, record_session_selection, record_session_state,
+        };
+        use crate::routing_state::RoutingTargetKey;
+
+        let logs = CapturedLogs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || writer.clone())
+            .finish();
+        let hint = LastClusterHint::classified(
+            Some("cluster-b"),
+            SessionClassification {
+                state: SessionState::Returning,
+                promoted: true,
+            },
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = proxy_openai_request_span(&HeaderMap::new());
+            let _entered = span.enter();
+            record_session_state(&hint);
+            record_session_selection(
+                &crate::metrics::StargateMetrics::new().unwrap(),
+                &LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden),
+                "pulsar-wait-and-widen",
+                "req-42",
+                &RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a"),
+                &hint,
+                "cluster-b",
+                1,
+            );
+        });
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        for field in [
+            "DEBUG",
+            "routing.session_state=\"returning\"",
+            "request_id=req-42",
+            "model_id=model-a",
+            "routing_key=Some(\"tenant-a\")",
+            " session_state=\"returning\"",
+            "last_cluster_promoted=true",
+        ] {
+            assert!(output.contains(field), "missing {field} in {output}");
+        }
     }
 }

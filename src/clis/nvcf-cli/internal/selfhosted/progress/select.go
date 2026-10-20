@@ -105,6 +105,9 @@ type RenderOpts struct {
 	// (7-phase teardown) and ModeUninstall (3-5 phase per-plane teardown).
 	// Zero leaves the renderer's default in place.
 	TotalPhases int
+
+	// OnQuit is passed to the TTY renderer; see ModelOpts.OnQuit.
+	OnQuit func()
 }
 
 // SelectRenderer picks an EventSink based on opts and ambient state. The
@@ -170,21 +173,20 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 		size = detectTerminalSize(stderr)
 	}
 	if size != nil && (size.Cols < compactThresholdCols || size.Rows < compactThresholdRows) {
-		return NewTTYRenderer(stderr, ModelOpts{
-			Output:              stderr,
-			Mode:                opts.Mode,
-			TotalPhases:         opts.TotalPhases,
-			Cluster:             opts.Cluster,
-			Target:              opts.Target,
-			Stack:               opts.Stack,
-			ControlPlaneContext: opts.ControlPlaneContext,
-			ComputePlaneContext: opts.ComputePlaneContext,
-			NowFunc:             func() time.Time { return time.Now().UTC() },
-		}), RendererTTYCompact, nil
+		return newTTYRenderer(stderr, ttyModelOpts(stderr, opts)), RendererTTYCompact, nil
 	}
 
 	// Row 9: default — full bubbletea.
-	return NewTTYRenderer(stderr, ModelOpts{
+	return newTTYRenderer(stderr, ttyModelOpts(stderr, opts)), RendererTTYFull, nil
+}
+
+// newTTYRenderer is a test seam over NewTTYRenderer.
+var newTTYRenderer = NewTTYRenderer
+
+// ttyModelOpts is the bubbletea model configuration both TTY layouts use. It
+// carries OnQuit: in raw mode a quit key is the only Ctrl-C the run sees.
+func ttyModelOpts(stderr io.Writer, opts RenderOpts) ModelOpts {
+	return ModelOpts{
 		Output:              stderr,
 		Mode:                opts.Mode,
 		TotalPhases:         opts.TotalPhases,
@@ -194,7 +196,8 @@ func SelectRenderer(stderr io.Writer, opts RenderOpts) (EventSink, RendererKind,
 		ControlPlaneContext: opts.ControlPlaneContext,
 		ComputePlaneContext: opts.ComputePlaneContext,
 		NowFunc:             func() time.Time { return time.Now().UTC() },
-	}), RendererTTYFull, nil
+		OnQuit:              opts.OnQuit,
+	}
 }
 
 // isWriterTTY returns true iff w is an *os.File whose file descriptor is
@@ -226,10 +229,19 @@ func detectTerminalSize(w io.Writer) *Size {
 // Aligns with how GitHub Actions, GitLab CI, CircleCI, etc. set CI=true.
 // Falsy values (false, 0, no, empty) leave the matrix free to fall through.
 func isTruthy(v string) bool {
+	on, _ := ParseToggle(v)
+	return on
+}
+
+// ParseToggle reads a boolean environment value, in any case and with
+// surrounding space: true, 1, yes, y and on are on; false, 0, no, n and off
+// are off. ok is false for any other value, the empty one included.
+func ParseToggle(v string) (on, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "true", "1", "yes", "y", "on":
-		return true
-	default:
-		return false
+		return true, true
+	case "false", "0", "no", "n", "off":
+		return false, true
 	}
+	return false, false
 }

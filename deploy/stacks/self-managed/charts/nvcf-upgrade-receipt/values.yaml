@@ -7,8 +7,8 @@
 stackVersion: ""
 
 image:
-  registry: ""
-  repository: alpine-k8s
+  registry: docker.io
+  repository: alpine/k8s
   tag: "1.33.1"
   pullPolicy: IfNotPresent
 

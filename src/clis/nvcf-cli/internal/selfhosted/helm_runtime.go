@@ -71,7 +71,7 @@ func checkHelmRuntimeCompatibility(ctx context.Context, helmfileSpec, helmSpec B
 	r := CheckResult{
 		ID:       "local-host-tools-helm-runtime",
 		Category: "local-host-tools",
-		Severity: "error",
+		Severity: SeverityError,
 		HintURL:  "https://github.com/helmfile/helmfile#installation",
 	}
 	_, helmfileVersion, err := probeBinarySpecVersion(ctx, helmfileSpec)
@@ -93,7 +93,7 @@ func checkHelmRuntimeCompatibility(ctx context.Context, helmfileSpec, helmSpec B
 		return r
 	}
 	r.Passed = true
-	r.Severity = "info"
+	r.Severity = SeverityInfo
 	r.Detail = string(mode)
 	r.Message = fmt.Sprintf("Helm %s with helmfile %s uses %s mode", helmVersion, helmfileVersion, mode)
 	return r

@@ -28,6 +28,8 @@ fn explains_profile_without_starting_server() {
     assert!(stdout.contains("deterministic gaussian distribution over 128..=8192"));
     assert!(stdout.contains("per active request: 164.0 tokens/s average"));
     assert!(stdout.contains("1,000 input tokens: about 162.9 ms average"));
+    assert!(stdout.contains("Default engine model: batched"));
+    assert!(stdout.contains("Pylon --max-engine-concurrency: num_gpu_workers x 25"));
 }
 
 #[test]

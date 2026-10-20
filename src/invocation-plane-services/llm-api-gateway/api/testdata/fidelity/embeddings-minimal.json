@@ -1,0 +1,70 @@
+{
+  "description": "Minimal embeddings input only rewrites model; precise vector values and response extensions survive.",
+  "path": "/v1/embeddings",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": "hello"
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": "hello"
+  },
+  "upstream_response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.12345678901234567890123456789,
+            -0.25,
+            0
+          ],
+          "vendor_embedding": false
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": [
+            0.12345678901234567890123456789,
+            -0.25,
+            0
+          ],
+          "vendor_embedding": false
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  }
+}

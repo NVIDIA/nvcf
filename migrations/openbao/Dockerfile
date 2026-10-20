@@ -1,16 +1,16 @@
 ARG ALPINE_VERSION=3.23
-ARG GO_IMAGE=golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395
-ARG KUBECTL_GO_IMAGE=golang:1.26.6-alpine3.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406
+ARG GO_IMAGE=golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+ARG KUBECTL_GO_IMAGE=golang:1.26.9-alpine3.23@sha256:6750308561953d451210ed1a8086d36c8c8bdcbf672d38d9d0d424b8a7a0216c
 ARG BAO_VERSION=2.6.3
 ARG BAO_RUNTIME_SHA256=sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
 ARG BAO_SOURCE_COMMIT=63a65e6b907589dbb952c371a70260a065bf8bd7
 ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69
-ARG KUBECTL_VERSION=v1.36.4
-ARG KUBECTL_GO_VERSION=go1.26.6
-ARG KUBECTL_SOURCE_COMMIT=bb826b1d48562f110659e64e8ec444327433db95
-ARG KUBECTL_SOURCE_SHA256=3c28f11492472df48e658551bf268fd92938b127b0f9dcef7090ac800318c821
-ARG KUBECTL_BUILD_DATE=2026-08-20T03:09:25Z
-ARG KUBECTL_SOURCE_DATE_EPOCH=1787195365
+ARG KUBECTL_VERSION=v1.36.5
+ARG KUBECTL_GO_VERSION=go1.26.9
+ARG KUBECTL_SOURCE_COMMIT=ad950d1cc78b0183c476bd4d3f1934c104229727
+ARG KUBECTL_SOURCE_SHA256=168162db6254cf3c453798de09a3a65f3d11673e0d3e1705fe061d960b05d137
+ARG KUBECTL_BUILD_DATE=2026-09-23T17:07:00Z
+ARG KUBECTL_SOURCE_DATE_EPOCH=1790183220
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS bao-builder
 
@@ -20,7 +20,7 @@ ARG BAO_SOURCE_SHA256
 ARG TARGETARCH
 
 RUN apk add --no-cache curl xz
-COPY scripts/build-openbao.sh scripts/verify-openbao.sh /usr/local/bin/
+COPY scripts/build-openbao.sh scripts/verify-openbao.sh scripts/verify-go-security.sh /usr/local/bin/
 RUN BAO_VERSION="${BAO_VERSION}" \
     BAO_SOURCE_COMMIT="${BAO_SOURCE_COMMIT}" \
     BAO_SOURCE_SHA256="${BAO_SOURCE_SHA256}" \
@@ -29,6 +29,8 @@ RUN BAO_VERSION="${BAO_VERSION}" \
     /usr/local/bin/build-openbao.sh
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS jwker-builder
+
+COPY scripts/verify-go-security.sh /usr/local/bin/
 
 ARG TARGETARCH
 ARG JWKER_VERSION=v0.2.2
@@ -48,7 +50,8 @@ RUN apk add --no-cache curl tar && \
     CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" GOTOOLCHAIN=local \
         go build -mod=readonly -trimpath -buildvcs=false \
         -ldflags="-s -w -buildid= -X main.version=${JWKER_BUILD_VERSION} -X main.commit=${JWKER_COMMIT} -X main.date=${JWKER_BUILD_DATE}" \
-        -o /out/jwker ./cmd/jwker
+        -o /out/jwker ./cmd/jwker && \
+    /usr/local/bin/verify-go-security.sh /out/jwker
 
 FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-builder
 
@@ -63,7 +66,7 @@ ARG KUBECTL_SOURCE_DATE_EPOCH
 # Rebuild the 1.36 client with the patched toolchain while preserving coverage
 # across the repository's latest-and-N-2 Kubernetes support window.
 RUN apk add --no-cache curl
-COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh /usr/local/bin/
+COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
 RUN KUBECTL_VERSION="${KUBECTL_VERSION}" \
     KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
     KUBECTL_SOURCE_COMMIT="${KUBECTL_SOURCE_COMMIT}" \
@@ -92,19 +95,23 @@ COPY --from=kubectl-builder /out/kubectl /out/kubectl
 RUN KUBECTL_METADATA="$(/out/kubectl version --client -o json)" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"gitVersion\": \"${KUBECTL_VERSION}\"" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"gitCommit\": \"${KUBECTL_SOURCE_COMMIT}\"" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq '"gitTreeState": "clean"' && \
+    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq '"gitTreeState": "dirty"' && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"buildDate\": \"${KUBECTL_BUILD_DATE}\"" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"goVersion\": \"${KUBECTL_GO_VERSION}\"" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"platform\": \"linux/${TARGETARCH}\""
 
 FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
 ARG TARGETARCH
+ARG GIT_SHA
+RUN test -n "${GIT_SHA}"
+LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
+      org.opencontainers.image.revision="${GIT_SHA}"
 
 # Upgrade inherited packages before installing runtime dependencies so the
 # image receives fixes published after the upstream OpenBao release.
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache openssl uuidgen helm curl bash jq
+    apk add --no-cache openssl uuidgen curl bash jq
 
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
@@ -116,6 +123,9 @@ COPY --chmod=775 migrations/ /app/migrations/
 COPY --chmod=775 addons/ /app/addons/
 COPY --chmod=775 entrypoint.sh /app/
 
-USER openbao
+# The hook scripts do not use Helm. Check the final runtime on both platforms.
+RUN ! command -v helm && ! apk info --exists helm
+
+USER 100:1000
 
 CMD ["/app/entrypoint.sh"]

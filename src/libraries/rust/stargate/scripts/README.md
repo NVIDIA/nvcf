@@ -55,3 +55,17 @@ Run the support-script tests after changing repository tooling:
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
+
+## Last-Cluster End-to-End Check
+
+`scripts/e2e-last-cluster.sh` runs the LLM API gateway, Stargate, two Pylons,
+and two mock-dynamo backends on loopback and checks that
+`last_cluster_affinity` keeps a returning session on its last cluster after
+overflow.
+
+```bash
+scripts/e2e-last-cluster.sh
+```
+
+Run `scripts/e2e-last-cluster.sh --help` for the scenario, options, and
+environment variables.

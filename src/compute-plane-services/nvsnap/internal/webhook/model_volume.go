@@ -368,7 +368,7 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 		Image: main.Image,
 		Command: helperWrite(path.Join(downloadMount, modelvolume.MarkerFile), path.Join(downloadMount, modelvolume.FailedMarkerFile),
 			downloadMount, hfDownloaders, hfDownloadArgs(id)),
-		Env:          downloadEnv(main),
+		Env:          downloadEnv(main, land),
 		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: downloadMount}, helperMount()},
 	}
 	return step, true
@@ -387,8 +387,57 @@ const downloadMount = "/nvsnap-model"
 // both its cache and its home, so nothing it reads or writes lies under a
 // directory the download user may not own, and copies the token and hub
 // settings the engine was given.
-func downloadEnv(main *corev1.Container) []corev1.EnvVar {
-	return append([]corev1.EnvVar{{Name: "HF_HOME", Value: downloadMount}, {Name: "HOME", Value: downloadMount}}, tokenEnv(main)...)
+//
+// The landing volume is mounted at downloadMount here but at its own
+// mount in the engine, so the engine's cache paths are translated
+// relative to that mount: an engine reading HF_HUB_CACHE=/data/hub from a
+// volume mounted at /data/hub finds the files at the volume root, and one
+// with HF_HOME=/models/hf on a volume at /models finds them under hf/hub.
+// A path outside the landing volume falls back to the volume root.
+func downloadEnv(main *corev1.Container, land modelid.Landing) []corev1.EnvVar {
+	env := map[string]string{}
+	for _, e := range main.Env {
+		if e.ValueFrom == nil {
+			env[e.Name] = e.Value
+		}
+	}
+	root := landingMount(land)
+	engineHome := env["HF_HOME"]
+	if engineHome == "" {
+		engineHome = modelid.DefaultHFHome
+	}
+	engineHub := env["HF_HUB_CACHE"]
+	if engineHub == "" {
+		engineHub = path.Join(engineHome, "hub")
+	}
+	home := downloadMount
+	if rel, ok := relativeTo(root, engineHome); ok {
+		home = path.Join(downloadMount, rel)
+	}
+	hub := path.Join(home, "hub")
+	if rel, ok := relativeTo(root, engineHub); ok {
+		hub = path.Join(downloadMount, rel)
+	}
+	return append([]corev1.EnvVar{
+		{Name: "HF_HOME", Value: home},
+		{Name: "HF_HUB_CACHE", Value: hub},
+		{Name: "HOME", Value: downloadMount},
+	}, tokenEnv(main)...)
+}
+
+// relativeTo returns p relative to root when p is root or lies under it.
+func relativeTo(root, p string) (string, bool) {
+	if root == "" || p == "" {
+		return "", false
+	}
+	root, p = path.Clean(root), path.Clean(p)
+	if p == root {
+		return "", true
+	}
+	if rel, ok := strings.CutPrefix(p, strings.TrimSuffix(root, "/")+"/"); ok {
+		return rel, true
+	}
+	return "", false
 }
 
 func landVolumeName(land modelid.Landing) string {
@@ -563,7 +612,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		Name:    injectedDownloadInit,
 		Image:   main.Image,
 		Command: argv,
-		Env:     downloadEnv(main),
+		Env:     downloadEnv(main, land),
 	}
 	// The init mostly waits; the fallback download is the one case that
 	// needs real resources, and policy needs limits either way.

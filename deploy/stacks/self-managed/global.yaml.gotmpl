@@ -114,6 +114,29 @@ merge:
 {{- if gt $servers 1 }}{{ min $servers 3 }}{{ end -}}
 {{- end -}}
 
+{{/* OpenBao service PKI role allowed_domains: addons.llm.pki.allowedDomains plus
+     the worker callback proxy's frontend and grpc-proxy pod domains when they
+     are not already covered. Only called with the proxy enabled, so the LLM
+     value renders unchanged otherwise. Keep in sync with
+     openbao-migrations-env.yaml.gotmpl. */}}
+{{- define "nvcf.servicePki.allowedDomains" -}}
+{{- $domains := dig "addons" "llm" "pki" "allowedDomains" "" . | toString | trim -}}
+{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" -}}
+{{- range $need := $required -}}
+{{- $covered := false -}}
+{{- range $allowed := splitList "," $domains -}}
+{{- $allowed = trim $allowed | lower -}}
+{{- if and $allowed (or (eq $need $allowed) (hasSuffix (printf ".%s" $allowed) $need)) -}}
+{{- $covered = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and $need (not $covered) -}}
+{{- $domains = ternary $need (printf "%s,%s" $domains $need) (eq $domains "") -}}
+{{- end -}}
+{{- end -}}
+{{- $domains -}}
+{{- end -}}
+
 {{/* Hostname anti-affinity body: hard under enforced, soft under preferred. */}}
 {{- define "nvcf.ha._generatedPodAntiAffinity" -}}
 {{- if eq .haMode "enforced" -}}
@@ -223,6 +246,14 @@ topologySpreadConstraints:
 {{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
 {{- end }}
 {{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
+{{- $natsWorkerAuth := dig "nats" "workerAuth" "nkey" .Values | toString }}
+{{- if not (has $natsWorkerAuth (list "nkey" "token")) }}
+{{- fail (printf "nats.workerAuth must be nkey or token, got %q" $natsWorkerAuth) }}
+{{- end }}
+{{- $natsWorkerWebhookUrl := dig "nats" "authCallout" "workerTokenAuth" "webhookUrl" "" .Values | default "" | toString }}
+{{- if and (eq $natsWorkerAuth "token") (not $natsWorkerWebhookUrl) }}
+{{- fail "nats.authCallout.workerTokenAuth.webhookUrl is required when nats.workerAuth is token" }}
+{{- end }}
 {{- range $key := list "affinity" "topologySpreadConstraints" }}
 {{- $byClass := dig "global" $key dict $.Values }}
 {{- if not (kindIs "map" $byClass) }}
@@ -359,17 +390,12 @@ openbao:
       tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
       {{- end }}
 
-    env:
-      {{- with dig "openbao" "migrations" "env" (list) .Values }}
-      {{- toYaml . | nindent 6 }}
-      {{- end }}
-      - name: ADDONS_LLM_ENABLED
-        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
-      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
-        value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}
+    # No env here. openbao-migrations-env.yaml.gotmpl is applied after this file
+    # and Helm replaces lists rather than merging them, so anything set here is
+    # discarded. Every migrations.env entry belongs in that overlay.
 
-    # merge the rest of the user-supplied migrations block, but drop
-    # image and env sub-blocks so we don't clobber the defaults above.
+    # Copy the rest of the user-supplied migrations block, except image, which
+    # is built above from global.image, and env, which belongs to the overlay.
     {{- with .Values.openbao.migrations }}
     {{- range $key, $value := . }}
     {{- if and (ne $key "image") (ne $key "env") }}
@@ -468,6 +494,11 @@ nats:
         {{- end }}
   {{- end }}
   container:
+    {{- with dig "nats" "container" "merge" "securityContext" dict .Values }}
+    merge:
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
@@ -475,8 +506,15 @@ nats:
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
-  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
+  {{- $natsReloaderSecurityContext := dig "nats" "reloader" "merge" "securityContext" dict .Values }}
+  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag $natsReloaderSecurityContext }}
   reloader:
+    {{- with $natsReloaderSecurityContext }}
+    merge:
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
     image:
       {{- with $natsReloaderRegistry }}
       registry: {{ . }}
@@ -487,6 +525,7 @@ nats:
       {{- with $natsReloaderTag }}
       tag: {{ . | quote }}
       {{- end }}
+    {{- end }}
   {{- end }}
   natsBox:
     container:
@@ -498,16 +537,23 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if eq $natsWorkerAuth "token" }}
+  authCallout:
+    workerTokenAuth:
+      enabled: true
+      webhookUrl: {{ $natsWorkerWebhookUrl | quote }}
+  {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- /* nats-box shares the release's instance label; select server Pods only. */}}
   {{- $natsServers := dict "app.kubernetes.io/component" "nats" -}}
   {{- $natsAffinity := include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
-  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) -}}
-  {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
+  {{- $natsTopoSpread := include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane" "matchLabels" $natsServers) }}
   podTemplate:
     merge:
       spec:
+        securityContext:
+          {{- dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values | toYaml | nindent 10 }}
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}
@@ -522,7 +568,6 @@ nats:
         topologySpreadConstraints:
           {{- . | nindent 10 }}
         {{- end }}
-  {{- end }}
 
   # One merged config: block -- a second config: key under nats: would be
   # silently collapsed. Surfaces server TLS for split-plane workers that reach
@@ -803,7 +848,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.18.0" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.25.0" $sidecarsHost $sidecarsRepo }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -865,6 +910,10 @@ api:
   remoteConfig:
     configData:
       {{- toYaml $apiRemoteConfigData | nindent 6 }}
+  {{- end }}
+  {{- if eq $natsWorkerAuth "token" }}
+  workerNkeySeed:
+    enabled: false
   {{- end }}
   {{- $accountBootstrapRegistry := dig "api" "accountBootstrap" "image" "registry" "" .Values }}
   {{- $accountBootstrapRepository := dig "api" "accountBootstrap" "image" "repository" "" .Values }}
@@ -1099,6 +1148,15 @@ nvctApi:
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
 
+eventLedger:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}
+
 grpcproxy:
   fullnameOverride: grpc-proxy
   {{- if $haEnabled }}
@@ -1151,6 +1209,9 @@ grpcproxy:
     {{- if .Values.rateLimiter.enabled }}
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    {{- end }}
+    {{- if dig "addons" "eventLedger" "enabled" false .Values }}
+    EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
     {{- end }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
@@ -1249,6 +1310,13 @@ ess:
   {{- end }}
 
 notary:
+  {{- /* Operator-supplied notary env, merged over the computed keys below, so a
+         deployment can set or override any notary environment variable from its
+         environment file. Same shape as api, apikeys and invocation. */}}
+  {{- $configuredNotaryEnv := dig "notary" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredNotaryEnv) }}
+  {{- fail "notary.env must be a map" }}
+  {{- end }}
   fullnameOverride: notary-service
   {{- if $haEnabled }}
   replicaCount: {{ max 2 (dig "notary" "replicaCount" 1 .Values | int) }}
@@ -1283,12 +1351,14 @@ notary:
   {{- . | nindent 2 }}
   {{- end }}
 
+  {{- /* Observability */}}
+  {{- $notaryEnv := dict "MANAGEMENT_TRACING_ENABLED" (.Values.global.observability.tracing.enabled | toString) }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $notaryEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- $notaryEnv = mergeOverwrite $notaryEnv $configuredNotaryEnv }}
   env:
-    # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
-    {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
-    {{- end }}
+    {{- toYaml $notaryEnv | nindent 4 }}
 
 sis:
   fullnameOverride: spot-instance-service
@@ -1347,6 +1417,15 @@ sis:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+    {{- if dig "addons" "eventLedger" "enabled" false .Values }}
+    # Send function deployment stage events to the event-ledger addon.
+    # Connection details (base URL, static Vault-signed token) are baseline
+    # config in application-ncp.yaml; only the enable flags are conditional
+    # here, since they're the only part that's unsafe when event-ledger isn't
+    # deployed.
+    ICMS_FNDS_MESSAGES_ENABLED: "true"
+    ICMS_FNDS_MESSAGES_V3_ENABLED: "true"
+    {{- end }}
     {{- with include "nvcf.natsStreamReplicas" .Values }}
     ICMS_NATS_REPLICAS: {{ . | quote }}
     {{- end }}
@@ -1383,7 +1462,7 @@ adminIssuerProxy:
   {{- . | nindent 2 }}
   {{- end }}
   gateway:
-    enabled: true
+    enabled: {{ dig "adminIssuerProxy" "gateway" "enabled" true .Values }}
     namespace: {{ .Values.ingress.gatewayApi.gateways.shared.namespace }}
     gatewayRef:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
@@ -1846,6 +1925,11 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* This hook rewrites the same OpenBao role as the stack migration, so
+       it must keep the worker callback proxy domains too. */ -}}
+  {{- if eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" }}
+  {{- $allowedDomains = include "nvcf.servicePki.allowedDomains" .Values }}
+  {{- end }}
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
@@ -2061,10 +2145,12 @@ nvcfUi:
         namespace: {{ $apiKeysBackend.namespace }}
         endpoints:
           - {{ printf "%s.%s.svc.cluster.local:%v/health" $apiKeysBackend.name $apiKeysBackend.namespace $apiKeysBackend.port }}
+      {{- if dig "adminIssuerProxy" "enabled" true .Values }}
       - name: admin-issuer-proxy
         namespace: api-keys
         endpoints:
           - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+      {{- end }}
       - name: nats-auth-callout-service
         namespace: nats-system
         endpoints:

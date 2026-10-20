@@ -52,6 +52,8 @@ func TestGenerateConfig(t *testing.T) {
 		os.Unsetenv("NVCT_TASK_ID")
 	}()
 
+	t.Setenv("ESS_SECRETS_PATH", "../../examples/secrets")
+
 	secretsFile := filepath.Join("../../testdata", "telemetry_endpoint_kratos_thanos_stg.json")
 	secretsJSON, err := os.ReadFile(secretsFile)
 	assert.NoError(t, err)

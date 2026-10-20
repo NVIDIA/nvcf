@@ -75,6 +75,9 @@ pub struct StargateRuntimeConfig {
     pub registration_update_idle_timeout: Duration,
     /// Registration idle-time hard cap and fallback without heartbeat hints; zero disables enforcement.
     pub registration_update_max_idle_timeout: Duration,
+    /// Lower and upper bounds for backend RTT-based routing reservation expiry.
+    pub routing_reservation_ttl_min: Duration,
+    pub routing_reservation_ttl_max: Duration,
     /// QUIC, TLS, tunnel-protocol, and retry configuration for backend request forwarding.
     pub proxy_transport: ProxyTransportConfig,
     /// Optional JSON load-balancer config path.
@@ -256,6 +259,10 @@ impl StargateRuntime {
     }
 
     pub async fn start(self) -> Result<StargateHandle> {
+        ensure!(
+            self.config.routing_reservation_ttl_min <= self.config.routing_reservation_ttl_max,
+            "routing reservation TTL minimum must not exceed maximum"
+        );
         if let Some(grpc_pylon_dial_addr) = self
             .config
             .grpc_pylon_dial_addr
@@ -365,7 +372,25 @@ impl StargateRuntime {
             (ReadinessState::warming_up(token.clone()), Some(token))
         };
 
+        let dynamic_config = Arc::new(
+            crate::load_balancer::dynamic_config::DynamicConfigCache::new(
+                service.state(),
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
+            ),
+        );
+        dynamic_config
+            .register_entry_gauge(&metrics)
+            .context("failed to register routing expression cache metrics")?;
+        tasks
+            .task_tracker()
+            .spawn(Arc::clone(&dynamic_config).run_maintenance(
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAINTENANCE_INTERVAL,
+                tasks.shutdown_signal(),
+            ));
+
         let proxy_router = make_router(ProxyAppState {
+            dynamic_config,
             state: service.state(),
             traffic: ProxyTrafficState {
                 shutdown: tasks.shutdown_signal(),
@@ -374,6 +399,8 @@ impl StargateRuntime {
             quic_proxy,
             lb_router,
             metrics: metrics.clone(),
+            routing_reservation_ttl_min: self.config.routing_reservation_ttl_min,
+            routing_reservation_ttl_max: self.config.routing_reservation_ttl_max,
             retry: self.config.proxy_transport.retry.clone(),
             debug_config: DebugConfig {
                 stargate_id: self.config.stargate_id.clone(),
@@ -395,13 +422,7 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
             });
         }
 
@@ -622,6 +643,8 @@ mod tests {
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
             registration_update_max_idle_timeout:
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+            routing_reservation_ttl_min: Duration::from_millis(1),
+            routing_reservation_ttl_max: Duration::from_millis(1000),
             proxy_transport: ProxyTransportConfig {
                 quic: crate::tunnel::QuicTunnelConfig {
                     connect_timeout: Duration::from_secs(5),
@@ -824,6 +847,41 @@ mod tests {
             error
                 .to_string()
                 .contains("Pylon gRPC dial address must be an explicit http:// or https:// URI"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_routing_reservation_ttl_minimum_above_maximum() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let mut config = test_runtime_config("test-invalid-reservation-ttl");
+        config.routing_reservation_ttl_min = Duration::from_millis(20);
+        config.routing_reservation_ttl_max = Duration::from_millis(10);
+        let listeners =
+            BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
+        let runtime = StargateRuntime::new(
+            config,
+            Box::new(BlockingDiscovery {
+                active_calls: Arc::new(AtomicUsize::new(0)),
+                self_info: StargateInfo::default(),
+            }),
+            listeners,
+            None,
+        );
+
+        let error = match runtime.start().await {
+            Ok(handle) => {
+                handle.begin_shutdown();
+                let _ = handle.wait_for_shutdown(Duration::from_secs(2)).await;
+                panic!("reservation TTL minimum above maximum should fail startup")
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("routing reservation TTL minimum must not exceed maximum"),
             "unexpected error: {error}"
         );
     }

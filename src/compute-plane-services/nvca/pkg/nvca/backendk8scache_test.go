@@ -1673,8 +1673,11 @@ func TestCreateICMSRequestLaunchSpec(t *testing.T) {
 	// Container function.
 	containerFuncMsgBYOO := decodeCM(t, creationgMsgFunctionContainerLaunchSpecBYOO)
 
-	_, err = bc.CreateICMSCreationMessageRequest(ctx, containerFuncMsgBYOO, "mrecpt", "msg", "")
-	require.EqualError(t, err, "telemetries is set but required features are disabled: BYOObservability, UseFunctionTranslator")
+	rejectedSR, err := bc.CreateICMSCreationMessageRequest(ctx, containerFuncMsgBYOO, "mrecpt", "msg", "")
+	require.NoError(t, err)
+	assert.Contains(t, GetCreationRejectionReason(rejectedSR), "BYOObservability, UseFunctionTranslator")
+	err = clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, rejectedSR.Name, metav1.DeleteOptions{})
+	require.NoError(t, err)
 
 	fff.EnabledFFs = append(fff.EnabledFFs,
 		featureflag.BYOObservability,
@@ -1691,8 +1694,11 @@ func TestCreateICMSRequestLaunchSpec(t *testing.T) {
 	fff.EnabledFFs = nil
 	helmFuncMsgBYOO := decodeCM(t, creationgMsgFunctionHelmLaunchSpecBYOO)
 
-	_, err = bc.CreateICMSCreationMessageRequest(ctx, helmFuncMsgBYOO, "mrecpt", "msg", "")
-	require.EqualError(t, err, "telemetries is set but required features are disabled: BYOObservability, UseFunctionTranslator")
+	rejectedSR, err = bc.CreateICMSCreationMessageRequest(ctx, helmFuncMsgBYOO, "mrecpt", "msg", "")
+	require.NoError(t, err)
+	assert.Contains(t, GetCreationRejectionReason(rejectedSR), "BYOObservability, UseFunctionTranslator")
+	err = clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, rejectedSR.Name, metav1.DeleteOptions{})
+	require.NoError(t, err)
 
 	fff.EnabledFFs = append(fff.EnabledFFs,
 		featureflag.BYOObservability,
