@@ -29,6 +29,13 @@ import (
 // DB wraps a sql.DB connection to the SQLite checkpoint catalog.
 type DB struct {
 	db *sql.DB
+	// w is the one connection every write goes through. SQLite takes one
+	// writer at a time; the process's writers queue for this connection
+	// rather than contend for the file's lock, where a writer that waited
+	// past the busy timeout failed with SQLITE_BUSY (an instance's agents
+	// recording their captures at once, under load). Reads keep the pool:
+	// in WAL mode they do not wait for the writer.
+	w *sql.DB
 }
 
 // Open opens (or creates) a SQLite database at path.
@@ -49,24 +56,34 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
+	writer := sqlDB
 	if path == ":memory:" {
 		sqlDB.SetMaxOpenConns(1)
-	}
-	if err := sqlDB.Ping(); err != nil {
+	} else if writer, err = sql.Open("sqlite", dsn); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-
-	d := &DB{db: sqlDB}
+	writer.SetMaxOpenConns(1)
+	d := &DB{db: sqlDB, w: writer}
+	if err := sqlDB.Ping(); err != nil {
+		_ = d.Close()
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
 	if err := d.runMigrations(); err != nil {
-		_ = sqlDB.Close()
+		_ = d.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	return d, nil
 }
 
-// Close closes the database connection.
+// Close closes the database connections.
 func (d *DB) Close() error {
-	return d.db.Close()
+	err := d.db.Close()
+	if d.w != d.db {
+		if werr := d.w.Close(); err == nil {
+			err = werr
+		}
+	}
+	return err
 }

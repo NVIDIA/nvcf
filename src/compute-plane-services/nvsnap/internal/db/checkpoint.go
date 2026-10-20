@@ -71,7 +71,7 @@ func (d *DB) CreateCheckpoint(c *Checkpoint) error {
 		startedAt = &s
 	}
 
-	_, err := d.db.Exec(`INSERT INTO checkpoints
+	_, err := d.w.Exec(`INSERT INTO checkpoints
 		(id, checkpoint_id, namespace, pod_name, container_name, container_image,
 		 node_name, checkpoint_path, checkpoint_size, status, message,
 		 has_gpu, model_name, workload_type, created_at, started_at, duration_secs)
@@ -181,7 +181,7 @@ func (d *DB) UpsertCheckpoint(c *Checkpoint) error {
 	// have inserted this hash between adoptIDByHash and the Exec. Re-adopt
 	// the now-existing id and replay as an update.
 	for attempt := 0; ; attempt++ {
-		_, err := d.db.Exec(upsertSQL,
+		_, err := d.w.Exec(upsertSQL,
 			c.ID, c.CheckpointID, c.Namespace, c.PodName, c.ContainerName, c.ContainerImage,
 			c.NodeName, c.CheckpointPath, c.CheckpointSize, c.Status, c.Message,
 			boolToInt(c.HasGPU), c.ModelName, c.WorkloadType, now, startedAt,
@@ -222,7 +222,7 @@ func (d *DB) UpsertCheckpoint(c *Checkpoint) error {
 // is preserved (UPDATE only touches the column when a non-empty value
 // is supplied, matching the COALESCE semantics nvsnap#61 introduced).
 func (d *DB) UpdatePVCPromoteStateByHash(hash, state, pvcName string) (int64, error) {
-	res, err := d.db.Exec(`UPDATE checkpoints
+	res, err := d.w.Exec(`UPDATE checkpoints
 		SET pvc_promote_state = ?,
 		    pvc_name          = COALESCE(NULLIF(?, ''), pvc_name)
 		WHERE hash = ?`,
@@ -351,7 +351,7 @@ func (d *DB) UpdateCheckpointStatus(id, status, message, checkpointPath, hash st
 			"SELECT id FROM checkpoints WHERE hash = ? AND id <> ? LIMIT 1", hash, id,
 		).Scan(&otherID); {
 		case err == nil:
-			if _, uerr := d.db.Exec(`UPDATE checkpoints
+			if _, uerr := d.w.Exec(`UPDATE checkpoints
 				SET status          = ?,
 				    message         = ?,
 				    checkpoint_path = COALESCE(NULLIF(?, ''), checkpoint_path),
@@ -363,7 +363,7 @@ func (d *DB) UpdateCheckpointStatus(id, status, message, checkpointPath, hash st
 			); uerr != nil {
 				return uerr
 			}
-			_, derr := d.db.Exec("DELETE FROM checkpoints WHERE id = ?", id)
+			_, derr := d.w.Exec("DELETE FROM checkpoints WHERE id = ?", id)
 			return derr
 		case errors.Is(err, sql.ErrNoRows):
 			// no canonical row for this hash — fall through to normal update
@@ -371,7 +371,7 @@ func (d *DB) UpdateCheckpointStatus(id, status, message, checkpointPath, hash st
 			return err
 		}
 	}
-	_, err := d.db.Exec(`UPDATE checkpoints
+	_, err := d.w.Exec(`UPDATE checkpoints
 		SET status          = ?,
 		    message         = ?,
 		    checkpoint_path = ?,
@@ -634,7 +634,7 @@ func buildCheckpointConditions(f CheckpointFilter) (conditions []string, args []
 
 // DeleteCheckpoint removes a checkpoint record by ID.
 func (d *DB) DeleteCheckpoint(id string) error {
-	_, err := d.db.Exec("DELETE FROM checkpoints WHERE id = ?", id)
+	_, err := d.w.Exec("DELETE FROM checkpoints WHERE id = ?", id)
 	return err
 }
 
@@ -688,7 +688,7 @@ func (d *DB) DeleteByHash(hash string) (int64, error) {
 	// only match deletes 0 rows and the catalog row lingers forever (the
 	// row never disappears from the UI). The id is the content hash for
 	// those rows, so "hash = ? OR id = ?" also catches them.
-	res, err := d.db.Exec("DELETE FROM checkpoints WHERE hash = ? OR id = ?", hash, hash)
+	res, err := d.w.Exec("DELETE FROM checkpoints WHERE hash = ? OR id = ?", hash, hash)
 	if err != nil {
 		return 0, err
 	}
