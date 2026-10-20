@@ -149,6 +149,8 @@ jobs:
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
+          make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
+          make -C deploy/helm/nvca-operator test-render-values
           make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests

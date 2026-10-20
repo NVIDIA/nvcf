@@ -20,7 +20,11 @@ metadata:
   {{- $releaseArtifactNvcaImageRepository := .Values.nvcaImage.repositoryOverride }}
   {{- $releaseArtifactImageCredentialHelperRepository := (.Values.selfManaged.imageCredHelper | default dict).imageRepository }}
   {{- $releaseArtifactSambaRepository := (.Values.selfManaged.sharedStorage | default dict).imageRepository }}
-  {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository }}
+  {{- $releaseArtifactByooOtelCollectorImage := "" }}
+  {{- if (((.Values.agent).byooOtelCollector) | default dict).imageRepository }}
+  {{- $releaseArtifactByooOtelCollectorImage = include "nvcaop.byooOtelCollectorImage" . }}
+  {{- end }}
+  {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository $releaseArtifactByooOtelCollectorImage }}
   annotations:
     {{- if $releaseArtifactNvcaImageRepository }}
     release-artifact-nvca-image: {{ printf "%s:%s" .Values.nvcaImage.repositoryOverride .Values.selfManaged.nvcaVersion | quote }}
@@ -30,6 +34,9 @@ metadata:
     {{- end }}
     {{- if $releaseArtifactSambaRepository }}
     release-artifact-samba-image: {{ printf "%s:%s" .Values.selfManaged.sharedStorage.imageRepository .Values.selfManaged.sharedStorage.imageTag | quote }}
+    {{- end }}
+    {{- with $releaseArtifactByooOtelCollectorImage }}
+    release-artifact-byoo-otel-collector-image: {{ . | quote }}
     {{- end }}
   {{- end }}
   labels:
