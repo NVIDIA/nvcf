@@ -147,6 +147,12 @@ func RenderOtelConfigFromBytes(inputData []byte, tmplConfig TemplateConfig) ([]b
 }
 
 func RenderOtelConfig(telemetryConfig TelemetryConfig, tmplConfig TemplateConfig) ([]byte, error) {
+	// The templates render collector settings such as the federation target,
+	// so reject invalid settings before executing them.
+	if err := tmplConfig.OTelCollector.Validate(); err != nil {
+		return nil, fmt.Errorf("validate BYOO OTel collector config: %w", err)
+	}
+
 	configData := &bytes.Buffer{}
 	if err := ExecuteTemplate(configData, tmplConfig); err != nil {
 		return nil, fmt.Errorf("execute config template: %v", err)
