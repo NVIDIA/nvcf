@@ -258,3 +258,15 @@ assert_render_fails 'platformMetricsFederation' \
   --set-string byoo.otelCollector.platformMetricsFederation.target=http://prometheus.example.invalid:9090
 assert_render_fails 'platformMetricsFederation' \
   --set-string byoo.otelCollector.platformMetricsFederation.targets=prometheus.example.invalid:9090
+
+# The schema accepts the ports that the NVCA and collector validators accept.
+for port in 0 00000 65536 70000 99999; do
+  assert_render_fails 'platformMetricsFederation' \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=prometheus.example.invalid:${port}"
+done
+assert_render_fails 'platformMetricsFederation' \
+  --set-string 'byoo.otelCollector.platformMetricsFederation.target=[::1]:65536'
+for target in prometheus.example.invalid:1 prometheus.example.invalid:65535 '[::1]:9090'; do
+  render "${tmp_dir}/federation-port-manifest.yaml" \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done
