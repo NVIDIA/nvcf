@@ -749,11 +749,10 @@ func runDeleteAPIKey(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// The key ID alone does not reveal which issuer minted it, so try the
-	// function (NVCF) issuer first and fall back to the task (NVCT) issuer only
-	// when the key was not found there. Any other error (auth, 5xx, network) is
-	// surfaced directly rather than triggering a spurious second call (NVBug
-	// 6417533).
+	// The key ID alone does not reveal which issuer minted it, so try each
+	// issuer in turn and fall back to the next only on a not-found. Any other
+	// error (auth, 5xx, network) is surfaced directly rather than triggering a
+	// spurious next call.
 	functionErr := apikeys.NewClient(nvcfAPIKeysConfig(config, "")).DeleteAPIKey(ctx, keyID)
 	if functionErr != nil {
 		if !errors.Is(functionErr, apikeys.ErrKeyNotFound) {
@@ -761,8 +760,15 @@ func runDeleteAPIKey(cmd *cobra.Command, args []string) error {
 		}
 		taskErr := apikeys.NewClient(nvctAPIKeysConfig(config, "")).DeleteAPIKey(ctx, keyID)
 		if taskErr != nil {
-			return fmt.Errorf("failed to delete API key '%s' under function or task issuer: [function] %v; [task] %v",
-				keyID, functionErr, taskErr)
+			if !errors.Is(taskErr, apikeys.ErrKeyNotFound) {
+				return fmt.Errorf("failed to delete API key '%s' under function or task issuer: [function] %v; [task] %v",
+					keyID, functionErr, taskErr)
+			}
+			eventLedgerErr := apikeys.NewClient(eventLedgerAPIKeysConfig(config, "")).DeleteAPIKey(ctx, keyID)
+			if eventLedgerErr != nil {
+				return fmt.Errorf("failed to delete API key '%s' under function, task or event-ledger issuer: [function] %v; [task] %v; [event-ledger] %v",
+					keyID, functionErr, taskErr, eventLedgerErr)
+			}
 		}
 	}
 	if IsJSONOutput() {
@@ -965,7 +971,7 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Optional explicit owner override (applies to both issuers when given).
+	// Optional explicit owner override (applies to all issuers when given).
 	ownerOverride := ""
 	if len(args) > 0 && args[0] != "" {
 		ownerOverride = args[0]
@@ -973,15 +979,14 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// Function (NVCF) and task (NVCT) keys live under separate issuers; clear
-	// both so task keys (which count against the actor cap) are removed too
-	// (NVBug 6417533).
 	nvcfCfg := nvcfAPIKeysConfig(config, ownerOverride)
 	nvctCfg := nvctAPIKeysConfig(config, ownerOverride)
+	eventLedgerCfg := eventLedgerAPIKeysConfig(config, ownerOverride)
 	nvcfClient := apikeys.NewClient(nvcfCfg)
 	nvctClient := apikeys.NewClient(nvctCfg)
+	eventLedgerClient := apikeys.NewClient(eventLedgerCfg)
 
-	logging.Info("Fetching all API keys (function and task)...")
+	logging.Info("Fetching all API keys (function, task and event-ledger)...")
 
 	functionKeys, err := nvcfClient.ListAPIKeys(ctx)
 	if err != nil {
@@ -991,9 +996,13 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to list task API keys: %w", err)
 	}
+	eventLedgerKeys, err := eventLedgerClient.ListAPIKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list Event Ledger API keys: %w", err)
+	}
 
 	// Distinct owner IDs whose keys were actually found (an owner appears only
-	// if it had keys; deduped when an override makes both issuers the same owner).
+	// if it had keys; deduped when an override makes multiple issuers the same owner).
 	ownerIds := []string{}
 	seenOwner := map[string]bool{}
 	addOwner := func(hasKeys bool, owner string) {
@@ -1004,8 +1013,9 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	}
 	addOwner(len(functionKeys) > 0, nvcfCfg.OwnerID)
 	addOwner(len(taskKeys) > 0, nvctCfg.OwnerID)
+	addOwner(len(eventLedgerKeys) > 0, eventLedgerCfg.OwnerID)
 
-	total := len(functionKeys) + len(taskKeys)
+	total := len(functionKeys) + len(taskKeys) + len(eventLedgerKeys)
 	if total == 0 {
 		if IsJSONOutput() {
 			return OutputJSON(map[string]interface{}{
@@ -1018,7 +1028,8 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	logging.Info("Found %d API key(s) to delete (%d function, %d task)", total, len(functionKeys), len(taskKeys))
+	logging.Info("Found %d API key(s) to delete (%d function, %d task, %d event-ledger)",
+		total, len(functionKeys), len(taskKeys), len(eventLedgerKeys))
 
 	// Interactive confirmation prompt unless --force is used
 	if !clearForce {
@@ -1031,6 +1042,9 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 		for _, key := range taskKeys {
 			logging.Plain("  - %s (task) %s", key.ID, key.Description)
 		}
+		for _, key := range eventLedgerKeys {
+			logging.Plain("  - %s (event-ledger) %s", key.ID, key.Description)
+		}
 
 		if !promptForConfirmation("Do you want to proceed?") {
 			logging.Info("Bulk deletion cancelled by user")
@@ -1041,6 +1055,7 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	// Delete each key through the client whose issuer matches its origin.
 	deletedCount := deleteAllKeys(ctx, nvcfClient, functionKeys, "function")
 	deletedCount += deleteAllKeys(ctx, nvctClient, taskKeys, "task")
+	deletedCount += deleteAllKeys(ctx, eventLedgerClient, eventLedgerKeys, "event-ledger")
 
 	// Clear the local API key from state only when clearing the current actor's
 	// keys (no explicit owner override) and something was actually deleted.

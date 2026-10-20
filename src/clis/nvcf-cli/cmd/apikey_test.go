@@ -362,6 +362,19 @@ func TestApikeyClearAll_DeletesFunctionAndTaskKeys(t *testing.T) {
 	assert.ElementsMatch(t, []string{"fn-1", "task-1", "task-2"}, rec.deletedIDs)
 }
 
+func TestApikeyClearAll_DeletesEventLedgerKeys(t *testing.T) {
+	srv, rec := fakeAPIKeysListServer(t, nil, nil, []string{"el-1"})
+	configureApikeyTest(t, srv.URL)
+
+	clearForce = true
+	t.Cleanup(func() { clearForce = false })
+
+	require.NoError(t, runClearAllAPIKeys(nil, nil))
+
+	assert.Contains(t, rec.listServiceIDs, "event-ledger-test-service-id", "clear-all should list the Event Ledger key")
+	assert.Equal(t, []string{"el-1"}, rec.deletedIDs)
+}
+
 func TestApikeyDelete_FallsBackToTaskIssuer(t *testing.T) {
 	// The id belongs to the task issuer only, so delete must fall back to it
 	// after the function-issuer attempt 404s.
@@ -375,6 +388,20 @@ func TestApikeyDelete_FallsBackToTaskIssuer(t *testing.T) {
 
 	assert.Equal(t, []string{"task-1"}, rec.deletedIDs, "task key should be deleted via the task issuer")
 	assert.Equal(t, []string{"nvct-api"}, rec.deleteIssuers)
+}
+
+func TestApikeyDelete_FallsBackToEventLedgerIssuer(t *testing.T) {
+	// The id belongs to the Event Ledger key only, so delete must fall back to
+	// it after both the function- and task-issuer attempts 404.
+	srv, rec := fakeAPIKeysListServer(t, nil, nil, []string{"el-1"})
+	configureApikeyTest(t, srv.URL)
+
+	deleteForce = true
+	t.Cleanup(func() { deleteForce = false })
+
+	require.NoError(t, runDeleteAPIKey(nil, []string{"el-1"}))
+
+	assert.Equal(t, []string{"el-1"}, rec.deletedIDs, "event-ledger key should be deleted via the Event Ledger issuer")
 }
 
 // A non-404 error from the function issuer (e.g. 5xx/auth) must surface directly
