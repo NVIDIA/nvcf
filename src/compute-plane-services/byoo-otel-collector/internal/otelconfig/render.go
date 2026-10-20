@@ -441,10 +441,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
-			"tls": map[string]interface{}{
-				"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", config.Telemetries.Logs.Name)),
-				"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", config.Telemetries.Logs.Name)),
-			},
+			"tls": kratosClientTLS(credentialPath, config.Telemetries.Logs.Name),
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -482,6 +479,16 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	}
 	otelConfig.Exporters[exporterId]["sending_queue"] = logExporterSendingQueue()
 	return exporterId, nil
+}
+
+// kratosClientTLS returns the mTLS block for a KRATOS exporter. The secrets
+// extractor writes the clientCert and clientKey keys of the telemetry secret to
+// <name>-clientCert and <name>-clientKey.
+func kratosClientTLS(credentialPath, telemetryName string) map[string]interface{} {
+	return map[string]interface{}{
+		"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", telemetryName)),
+		"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", telemetryName)),
+	}
 }
 
 func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -878,6 +885,59 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 			"spaneventsenabled": true,
 		}
+	case ProviderKratosLogs:
+		exporterType = "otlp_http"
+		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
+		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
+
+		// The secrets extractor runs before render, so a missing or blank client
+		// cert or key fails here with a named error instead of an otelcol TLS
+		// load error at startup.
+		var missing []string
+		for _, key := range []string{"clientCert", "clientKey"} {
+			hasContent, err := secretFileHasContent(filepath.Join(credentialPath, fmt.Sprintf("%s-%s", config.Telemetries.Traces.Name, key)))
+			if err != nil {
+				return "", err
+			}
+			if !hasContent {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("traces telemetry %q: KRATOS secret needs clientCert and clientKey, missing or empty: %s",
+				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
+		}
+
+		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
+		// The client cert pair is enough for the Kratos traces gateway, which uses
+		// public CA roots. caFile is optional, and a blank CA file stops the
+		// collector from starting, so it is used only when the file has content.
+		caFile := filepath.Join(credentialPath, fmt.Sprintf("%s-caFile", config.Telemetries.Traces.Name))
+		hasCA, err := secretFileHasContent(caFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCA {
+			tls["ca_file"] = caFile
+		}
+		exporter := map[string]interface{}{
+			"traces_endpoint": config.Telemetries.Traces.Endpoint,
+			"tls":             tls,
+		}
+		// The gateway authenticates with the client certificate alone, so
+		// collectorId is optional. Send the header only when the secret has one,
+		// so the config never references a missing file.
+		collectorIdFile := filepath.Join(credentialPath, fmt.Sprintf("%s-collectorId", config.Telemetries.Traces.Name))
+		hasCollectorId, err := secretFileHasContent(collectorIdFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCollectorId {
+			exporter["headers"] = map[string]interface{}{
+				"collector-id": fmt.Sprintf("${file:%s}", collectorIdFile),
+			}
+		}
+		otelConfig.Exporters[exporterId] = exporter
 	case ProviderOtelCollector:
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
