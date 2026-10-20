@@ -36,8 +36,12 @@ RUN cd otelcol && \
 
 ####
 ### Stage 2: Create distroless image for nvcf-otel-collector
+###
+### The collector is built with CGO_ENABLED=0, so the static base is
+### enough: it has no libc6 or zlib1g, and keeps the nvs user, CA
+### certificates, and tzdata.
 ####
-FROM nvcr.io/nvidia/distroless/go:v4.1.6 AS nvcf-otel-collector
+FROM nvcr.io/nvidia/distroless/static:v4.1.4 AS nvcf-otel-collector
 
 LABEL description="NVCF OpenTelemetry Collector - Custom build with curated components for NVCF services"
 LABEL version="0.160.0"

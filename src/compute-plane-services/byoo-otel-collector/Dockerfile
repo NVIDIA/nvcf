@@ -53,8 +53,12 @@ RUN cd otelcol && \
 
 ####
 ### Stage 3: Create the final Distroless image for byoo-otel-collector
+###
+### Both binaries are built with CGO_ENABLED=0, so the static base is
+### enough: it has no libc6 or zlib1g, and keeps the nvs user, CA
+### certificates, and tzdata.
 ####
-FROM nvcr.io/nvidia/distroless/go:v4.1.6 AS byoo-otel-collector
+FROM nvcr.io/nvidia/distroless/static:v4.1.4 AS byoo-otel-collector
 
 WORKDIR /app
 
