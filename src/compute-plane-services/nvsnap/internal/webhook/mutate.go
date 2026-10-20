@@ -254,6 +254,9 @@ type Mutator struct {
 	// scheduling until the promote binds. nil keeps the label-driven
 	// capture and explicit-hash restore paths only. See election.go.
 	Elector election.Elector
+	// ArchScope establishes the GPU architecture an elected pod will run
+	// on; the election needs it, and is off without it.
+	ArchScope election.ArchScope
 
 	// L2WaitImage is the nvsnap-l2-wait init-container image ref
 	// (nvsnap#147). When non-empty, tryL2Mount prepends a

@@ -41,11 +41,12 @@ rules:
   # Node IP lookup for cross-node peer-fetch. When the admission
   # webhook on agent A resolves a capture that was committed on agent B,
   # EnsureCaptureLocal reads Manifest.CapturedOnNodes and dereferences
-  # each entry to its InternalIP via the Node API. Get is enough — we
-  # don't list/watch (the manifest CM provides the discovery surface).
+  # each entry to its InternalIP via the Node API. List: the admission
+  # election establishes the GPU architecture of the nodes a model pod
+  # may run on.
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

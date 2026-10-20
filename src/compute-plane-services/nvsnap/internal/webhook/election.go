@@ -26,23 +26,41 @@ import (
 //     decoration against the claim the promote will bind, plus a
 //     scheduling gate nvsnap-server removes on ready.
 //
+// The hash includes the GPU compute capability the pod will run on, which
+// must be established at admission (election.ArchScope), and every pod
+// the election decorates is pinned to it: a compile cache built for one
+// architecture is never shared with another.
+//
 // Returns (nil, nil) when the pod is not a model workload, the election is
-// off, or the pod is better left to the existing paths. Every returned
-// patch set starts with the hash stamp, so the watcher captures under the
-// same hash the followers were decorated against.
+// off, its architecture is not established, or the pod is better left to
+// the existing paths. Every returned patch set starts with the hash stamp,
+// so the watcher captures under the same hash the followers were
+// decorated against.
 func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
-	if m.Elector == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
+	if m.Elector == nil || m.ArchScope == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
 		return nil, nil
 	}
 	modelID, ok := rootfsonly.IsModelWorkload(pod, m.MainContainer)
 	if !ok {
 		return nil, nil
 	}
-	hash := checkpointstore.ComputeHash(m.Composer.Compose(pod, m.MainContainer))
+	cc, ok, err := m.ArchScope.ComputeCapability(ctx, pod)
+	if err != nil {
+		return nil, fmt.Errorf("establish the GPU architecture: %w", err)
+	}
+	if !ok {
+		m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": modelID}).
+			Info("election: the GPU nodes the pod may run on do not share one labelled compute capability; cold path")
+		return nil, nil
+	}
+	in := m.Composer.Compose(pod, m.MainContainer)
+	in.GPUComputeCapability = cc
+	hash := checkpointstore.ComputeHash(in)
 	log := m.logger().WithFields(logrus.Fields{
-		"pod":   election.PodIdentity(pod),
-		"hash":  checkpointstore.ShortHash(hash),
-		"model": modelID,
+		"pod":    election.PodIdentity(pod),
+		"hash":   checkpointstore.ShortHash(hash),
+		"model":  modelID,
+		"gpu_cc": cc,
 	})
 
 	mp := newMetaPatcher(pod)
@@ -56,7 +74,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		patches, err := m.tryL2CacheDir(ctx, pod, hash, manifest)
 		if err == nil && patches != nil {
 			log.Info("election: promoted capture exists; restoring")
-			return append(mp.stamp(hash, election.RoleRestore), patches...), nil
+			return append(mp.stamp(hash, election.RoleRestore, cc), patches...), nil
 		}
 		if err != nil && !errors.Is(err, checkpointstore.ErrNotFound) {
 			return nil, fmt.Errorf("restore from existing capture: %w", err)
@@ -76,7 +94,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 	}
 	switch role {
 	case election.RoleLeader:
-		patches := mp.stamp(hash, election.RoleLeader)
+		patches := mp.stamp(hash, election.RoleLeader, cc)
 		patches = append(patches, mp.annotation(election.ElectionIDAnnotation, id)...)
 		patches = append(patches, mp.label(CaptureLabel, "true")...)
 		patches = append(patches, m.cacheDirCapturePatchesFor(pod, true)...)
@@ -93,7 +111,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 			log.Info("election: follower but storage is per-pod clone; cold start")
 			return nil, nil
 		}
-		patches := mp.stamp(hash, election.RoleFollower)
+		patches := mp.stamp(hash, election.RoleFollower, cc)
 		patches = append(patches, mp.label(election.GatedLabel, "true")...)
 		restore, err := m.cacheDirRestorePatches(pod, pm.Volume, m.cacheEnvVars(m.CacheDir))
 		if err != nil {
@@ -148,11 +166,18 @@ func (mp *metaPatcher) annotation(key, value string) []PatchOp {
 }
 
 // stamp records the composed hash (annotation full, label short) and the
-// role on the pod.
-func (mp *metaPatcher) stamp(hash string, role election.Role) []PatchOp {
+// role on the pod, and pins it to the compute capability cc the hash was
+// composed for.
+func (mp *metaPatcher) stamp(hash string, role election.Role, cc string) []PatchOp {
 	patches := mp.annotation(election.HashAnnotation, hash)
 	patches = append(patches, mp.annotation(election.RoleAnnotation, string(role))...)
 	patches = append(patches, mp.label(election.HashLabel, checkpointstore.ShortHash(hash))...)
+	pin := election.ArchPin(cc)
+	for _, k := range []string{election.ComputeMajorLabel, election.ComputeMinorLabel} {
+		if v, ok := pin[k]; ok {
+			patches = append(patches, mp.set("/spec/nodeSelector", mp.pod.Spec.NodeSelector, k, v)...)
+		}
+	}
 	return patches
 }
 

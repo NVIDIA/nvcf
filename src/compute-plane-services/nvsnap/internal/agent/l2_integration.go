@@ -194,6 +194,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	a.l2Profile = profile
 	if a.config.Election.Enabled {
 		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
+		a.electionScope = &election.NodeArchScope{KubeClient: kc}
 		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
 	}
 	if err != nil {

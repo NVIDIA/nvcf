@@ -155,6 +155,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// One-downloader election for chart pods; nil when off or L2 is
 		// off (docs/proposals/helm-chart-cache-election.md).
 		Elector: a.elector,
+		// The election shares a cache only within one GPU architecture,
+		// established from the nodes a pod may run on.
+		ArchScope: a.electionScope,
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 		},

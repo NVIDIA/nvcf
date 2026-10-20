@@ -294,6 +294,9 @@ type Agent struct {
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
+	// electionScope establishes an elected pod's GPU architecture; set
+	// with elector.
+	electionScope election.ArchScope
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path

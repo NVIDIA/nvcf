@@ -32,6 +32,8 @@ metadata:
 # configmaps: ConfigMap-backed manifest registry — globally readable
 #   manifests are what makes admission requests resolvable from any agent.
 # nodes/get: cross-node peer-fetch resolves the captured-on node's IP.
+# nodes/list: the admission election establishes the GPU architecture of
+#   the nodes a model pod may run on.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -54,7 +56,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
   # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
   # reader PVC after every successful CRIU dump. Lease is the
