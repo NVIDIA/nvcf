@@ -19,6 +19,7 @@ package byoofederation
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -172,6 +173,68 @@ func TestCheckerProbeConnectionRefused(t *testing.T) {
 	require.Len(t, component.Errors, 1)
 	assert.Contains(t, component.Errors[0], target+" is unreachable")
 	assert.Equal(t, nvcametrics.BYOOPlatformMetricsFederationUnreachable, recorder.last())
+}
+
+// A /federate response that fails after HTTP 200 headers must fail the probe.
+func TestCheckerProbeResponseBodyErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		handler func(w http.ResponseWriter, r *http.Request, release <-chan struct{})
+		wantErr error
+	}{
+		{
+			name: "body shorter than Content-Length",
+			handler: func(w http.ResponseWriter, _ *http.Request, _ <-chan struct{}) {
+				w.Header().Set("Content-Length", "100")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "partial")
+			},
+			wantErr: io.ErrUnexpectedEOF,
+		},
+		{
+			name:    "body stalls until the probe timeout",
+			timeout: 200 * time.Millisecond,
+			handler: func(w http.ResponseWriter, r *http.Request, release <-chan struct{}) {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			},
+			wantErr: context.DeadlineExceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			release := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tt.handler(w, r, release)
+			}))
+			// Cleanups run in reverse order: release a stalled handler first.
+			t.Cleanup(server.Close)
+			t.Cleanup(func() { close(release) })
+
+			recorder := &fakeRecorder{}
+			checker := NewChecker(serverTarget(t, server), recorder)
+			if tt.timeout > 0 {
+				checker.timeout = tt.timeout
+			}
+
+			start := time.Now()
+			err := checker.Probe(context.Background())
+			require.ErrorContains(t, err, "read /federate response")
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Less(t, time.Since(start), 5*time.Second)
+
+			component := componentHealth(t, checker)
+			assert.Equal(t, nvcatypes.HealthStatusUnhealthy, component.Status)
+			require.Len(t, component.Errors, 1)
+			assert.Contains(t, component.Errors[0], "read /federate response")
+			assert.Equal(t, nvcametrics.BYOOPlatformMetricsFederationUnreachable, recorder.last())
+		})
+	}
 }
 
 func TestCheckerRecovers(t *testing.T) {

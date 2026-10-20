@@ -44,8 +44,9 @@ const (
 	// DefaultInterval is how often Run probes the target after the first probe.
 	DefaultInterval = 5 * time.Minute
 
-	// probeTimeout bounds one probe, so a target that drops packets fails
-	// the check instead of holding it.
+	// probeTimeout bounds one probe, including reading the response, so a
+	// target that drops packets or stalls mid-response fails the check
+	// instead of holding it.
 	probeTimeout = 10 * time.Second
 
 	// probeSelector matches no series, so the probe exercises /federate
@@ -78,6 +79,7 @@ type Checker struct {
 	probeURL string
 	client   *http.Client
 	interval time.Duration
+	timeout  time.Duration
 	recorder StateRecorder
 
 	mu      sync.RWMutex
@@ -121,6 +123,7 @@ func NewChecker(target string, recorder StateRecorder, opts ...Option) *Checker 
 		probeURL: probeURL.String(),
 		client:   &http.Client{Timeout: probeTimeout, Transport: transport},
 		interval: DefaultInterval,
+		timeout:  probeTimeout,
 		recorder: recorder,
 	}
 	for _, opt := range opts {
@@ -188,7 +191,7 @@ func (c *Checker) Probe(ctx context.Context) error {
 }
 
 func (c *Checker) probe(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.probeURL, nil)
@@ -200,10 +203,13 @@ func (c *Checker) probe(ctx context.Context) error {
 		return fmt.Errorf("GET /federate: %w", err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
+	_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("GET /federate returned HTTP %d", resp.StatusCode)
+	}
+	if readErr != nil {
+		return fmt.Errorf("read /federate response: %w", readErr)
 	}
 	return nil
 }
