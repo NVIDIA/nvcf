@@ -30,7 +30,6 @@ go_library(
     ],
     embedsrcs = [
         "manifests/fluent-bit.conf.tmpl",
-        "manifests/parsers.conf",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
     visibility = ["//visibility:public"],

@@ -563,7 +563,7 @@ func podReadinessSeverity(pod *corev1.Pod) (string, podReadinessSeverityLevel) {
 	}
 
 	for _, cs := range allContainers {
-		if cs.RestartCount < podReadinessRestartThreshold {
+		if cs.RestartCount < podReadinessRestartThreshold || exitedCleanlyAfterPodReady(pod.Status, cs) {
 			continue
 		}
 		if t := cs.LastTerminationState.Terminated; t != nil {
@@ -575,6 +575,25 @@ func podReadinessSeverity(pod *corev1.Pod) (string, podReadinessSeverityLevel) {
 	}
 
 	return fmt.Sprintf("pod condition Ready=%s", podReadyConditionStatus(pod.Status)), podSeverityWarning
+}
+
+// exitedCleanlyAfterPodReady mirrors NVCA's restart-loop exemption (IsContainerInRestartLoop in
+// internal/util/k8sutil/pod.go): a container whose latest run exited with code 0 after the Pod became ready
+// ended on purpose, for example a streaming app between sessions, so its restart count is not a crash loop.
+func exitedCleanlyAfterPodReady(status corev1.PodStatus, cs corev1.ContainerStatus) bool {
+	last := cs.State.Terminated
+	if last == nil {
+		last = cs.LastTerminationState.Terminated
+	}
+	if last == nil || last.ExitCode != 0 || last.StartedAt.IsZero() {
+		return false
+	}
+	for _, c := range status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue || c.LastTransitionTime.After(last.StartedAt.Time)
+		}
+	}
+	return false
 }
 
 func isPodReadyConditionTrue(status corev1.PodStatus) bool {
