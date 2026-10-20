@@ -650,7 +650,7 @@ api:
 
   {{- /* Pylon lives in remote config rather than a Kubernetes image field. */}}
   {{- $apiPodAnnotations := deepCopy (dig "api" "podAnnotations" dict .Values) }}
-  {{- if $effectivePylonImage }}
+  {{- if and $effectivePylonImage (not $llmEnabled) }}
   {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
   {{- $_ := set $apiPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
   {{- end }}
@@ -1163,6 +1163,16 @@ llmApiGateway:
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
+  {{- /* The router's optional release owns its dynamically created Pylon image. */}}
+  {{- $routerPodAnnotations := deepCopy (dig "addons" "llm" "requestRouter" "podAnnotations" dict .Values) }}
+  {{- if and $llmEnabled $effectivePylonImage }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $routerPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $routerPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- $requestRouterValues := dig "addons" "llm" "requestRouter" dict .Values }}
   {{- if hasKey $requestRouterValues "replicaCount" }}
   replicaCount: {{ index $requestRouterValues "replicaCount" }}
