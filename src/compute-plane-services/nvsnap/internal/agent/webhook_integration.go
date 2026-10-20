@@ -175,6 +175,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		ModelWaitDeadline: a.config.ModelVolume.WaitDeadline,
 		ModelHostRoot:     a.modelHostRoot(),
 		ViewMinter:        a.modelViewMinter(),
+		// The election shares a cache only within one GPU architecture,
+		// established from the nodes a pod may run on.
+		ArchScope: a.electionScope,
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 			Salt:            a.config.Webhook.CacheSalt,

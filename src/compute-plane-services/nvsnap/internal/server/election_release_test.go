@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -402,5 +403,58 @@ func TestElectionRelease_ClaimCheckErrorLeavesFollowerGated(t *testing.T) {
 	}
 	if p.Labels[election.GatedLabel] != "true" {
 		t.Errorf("follower ungated without a confirmed claim: labels %v", p.Labels)
+	}
+}
+
+// Release removes only nvsnap's gate: a follower another controller still
+// holds keeps that controller's gates, in order.
+func TestElectionRelease_ReadyKeepsOtherGates(t *testing.T) {
+	f := gatedFollower("f", true)
+	f.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: "example.com/queue"}, {Name: election.GateName}, {Name: "example.com/provisioning"}}
+	kc := fake.NewSimpleClientset(f, electionLease("L", time.Now().Add(time.Hour)))
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+	r.onPromoteState(context.Background(), electTestHash, "ready")
+	p, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []corev1.PodSchedulingGate{{Name: "example.com/queue"}, {Name: "example.com/provisioning"}}
+	if !reflect.DeepEqual(p.Spec.SchedulingGates, want) || p.Labels[election.GatedLabel] != "false" {
+		t.Errorf("gates %v gated=%q, want %v and released", p.Spec.SchedulingGates, p.Labels[election.GatedLabel], want)
+	}
+}
+
+// Another controller removing its own gate while the release patches the
+// pod moves nvsnap's gate; the release re-reads the pod and removes the
+// right entry rather than the other controller's.
+func TestElectionRelease_UngateSurvivesConcurrentGateRemoval(t *testing.T) {
+	f := gatedFollower("f", true)
+	f.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: "example.com/queue"}, {Name: election.GateName}, {Name: "example.com/provisioning"}}
+	kc := fake.NewSimpleClientset(f, electionLease("L", time.Now().Add(time.Hour)))
+	raced := false
+	kc.PrependReactor("patch", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !raced {
+			raced = true
+			cur, err := kc.Tracker().Get(corev1.SchemeGroupVersion.WithResource("pods"), "fn", "f")
+			if err != nil {
+				return true, nil, err
+			}
+			p := cur.(*corev1.Pod).DeepCopy()
+			p.Spec.SchedulingGates = p.Spec.SchedulingGates[1:] // the queue controller lets go first
+			if err := kc.Tracker().Update(corev1.SchemeGroupVersion.WithResource("pods"), p, "fn"); err != nil {
+				return true, nil, err
+			}
+		}
+		return false, nil, nil
+	})
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+	r.onPromoteState(context.Background(), electTestHash, "ready")
+	p, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []corev1.PodSchedulingGate{{Name: "example.com/provisioning"}}
+	if !raced || !reflect.DeepEqual(p.Spec.SchedulingGates, want) || p.Labels[election.GatedLabel] != "false" {
+		t.Errorf("raced=%v gates %v gated=%q, want %v and released", raced, p.Spec.SchedulingGates, p.Labels[election.GatedLabel], want)
 	}
 }

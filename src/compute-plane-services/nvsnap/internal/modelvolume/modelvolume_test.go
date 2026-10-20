@@ -418,6 +418,12 @@ func TestLookup_ServesNewestGeneration(t *testing.T) {
 	if cc.GenerationClaimName(uri, 1) != cc.ClaimName(uri) || cc.GenerationClaimName(uri, 2) != cc.ClaimName(uri)+"-g2" {
 		t.Error("generation 1 keeps the plain claim name; later ones carry a suffix")
 	}
+	if cc.GenerationReadOnlyClaimName(uri, 1) != cc.ReadOnlyClaimName(uri) || cc.GenerationReadOnlyPVName(uri, "ns", 0) != cc.ReadOnlyPVName(uri, "ns") {
+		t.Error("generation 1's view keeps the plain names, so views minted before stay valid")
+	}
+	if cc.GenerationReadOnlyClaimName(uri, 2) == cc.ReadOnlyClaimName(uri) || cc.GenerationReadOnlyPVName(uri, "ns", 2) == cc.GenerationReadOnlyPVName(uri, "ns", 3) {
+		t.Error("each later generation has a view of its own")
+	}
 }
 
 // A claim whose Create succeeds only because the previous winner just

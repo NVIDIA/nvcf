@@ -35,6 +35,27 @@ func (f *fakeElector) Elect(_ context.Context, hash string, _ *corev1.Pod) (elec
 	return f.role, "", f.err
 }
 
+// fixedArch establishes every pod's architecture as cc, or none.
+type fixedArch struct {
+	cc  string
+	ok  bool
+	err error
+}
+
+func (f fixedArch) ComputeCapability(context.Context, *corev1.Pod) (cc string, ok bool, err error) {
+	return f.cc, f.ok, f.err
+}
+
+// testCC is the compute capability electionMutator establishes.
+const testCC = "9.0"
+
+// electionHash is the hash the election composes for pod on testCC.
+func electionHash(pod *corev1.Pod) string {
+	in := (&rootfsonly.HashInputComposer{CUDADriverMajor: 580}).Compose(pod, 0)
+	in.GPUComputeCapability = testCC
+	return checkpointstore.ComputeHash(in)
+}
+
 // pendingStub is an L2 backend that can (or cannot) name the claim ahead
 // of the promote, on top of the shared stub's Mount behaviour.
 type pendingStub struct {
@@ -76,6 +97,7 @@ func electionMutator(t *testing.T, el election.Elector, l2 checkpointstore.Backe
 		CacheDir:        "/opt/nvsnap",
 		Composer:        &rootfsonly.HashInputComposer{CUDADriverMajor: 580},
 		Elector:         el,
+		ArchScope:       fixedArch{cc: testCC, ok: true},
 		L2WaitImage:     "nvsnap-l2-wait:test",
 		NvSnapServerURL: "http://nvsnap-server:8080",
 	}
@@ -240,8 +262,7 @@ func TestElection_ErrorAdmitsUnchanged(t *testing.T) {
 func TestElection_PromotedCaptureRestoresWithoutElecting(t *testing.T) {
 	el := &fakeElector{role: election.RoleLeader}
 	pod := dynamoWorker()
-	composer := &rootfsonly.HashInputComposer{CUDADriverMajor: 580}
-	hash := checkpointstore.ComputeHash(composer.Compose(pod, 0))
+	hash := electionHash(pod)
 	l2 := &pendingStub{pendingOK: true}
 	l2.mountResult = checkpointstore.PodMount{
 		Volume: corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{
@@ -269,8 +290,7 @@ func TestElection_PromotedCaptureRestoresWithoutElecting(t *testing.T) {
 func TestElection_CaptureWithoutBoundClaimIsLeftAlone(t *testing.T) {
 	el := &fakeElector{role: election.RoleLeader}
 	pod := dynamoWorker()
-	composer := &rootfsonly.HashInputComposer{CUDADriverMajor: 580}
-	hash := checkpointstore.ComputeHash(composer.Compose(pod, 0))
+	hash := electionHash(pod)
 	l2 := &pendingStub{pendingOK: true}
 	l2.mountErr = checkpointstore.ErrNotFound
 	m := electionMutator(t, el, l2)
@@ -311,5 +331,112 @@ func TestElection_MetadataMapsBootstrappedOnce(t *testing.T) {
 	}
 	if creates["/metadata/labels"] != 1 || creates["/metadata/annotations"] != 1 {
 		t.Errorf("map bootstraps = %v, want exactly one each", creates)
+	}
+}
+
+// nodeSelector collects the node selector entries patches add.
+func nodeSelector(patches []PatchOp) map[string]string {
+	out := map[string]string{}
+	for _, p := range patches {
+		if k, ok := strings.CutPrefix(p.Path, "/spec/nodeSelector/"); ok {
+			out[strings.ReplaceAll(k, "~1", "/")] = p.Value.(string)
+		}
+	}
+	return out
+}
+
+// Every pod the election decorates, leader, follower or restore, is pinned
+// to the compute capability its hash was composed for, so a cache never
+// reaches a GPU it was not built for.
+func TestElection_EveryRolePinnedToTheArchitecture(t *testing.T) {
+	want := map[string]string{election.ComputeMajorLabel: "9", election.ComputeMinorLabel: "0"}
+	for _, role := range []election.Role{election.RoleLeader, election.RoleFollower} {
+		m := electionMutator(t, &fakeElector{role: role}, &pendingStub{pendingOK: true})
+		patches, err := m.Mutate(context.Background(), dynamoWorker())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := nodeSelector(patches); got[election.ComputeMajorLabel] != "9" || got[election.ComputeMinorLabel] != "0" {
+			t.Errorf("%s: node selector %v, want %v", role, got, want)
+		}
+		creates := 0
+		for _, p := range patches {
+			if p.Path == "/spec/nodeSelector" {
+				creates++
+			}
+		}
+		if creates != 1 {
+			t.Errorf("%s: a pod without a node selector gets it created once, got %d", role, creates)
+		}
+	}
+	pod := dynamoWorker()
+	pod.Spec.NodeSelector = map[string]string{"pool": "gpu"}
+	hash := electionHash(pod)
+	l2 := &pendingStub{pendingOK: true}
+	l2.mountResult = checkpointstore.PodMount{
+		Volume: corev1.Volume{Name: "x", VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-" + checkpointstore.ShortHash(hash)}}},
+		VolumeMount: corev1.VolumeMount{Name: "x", MountPath: "/opt/nvsnap"},
+	}
+	m := electionMutator(t, &fakeElector{role: election.RoleLeader}, l2)
+	manifest := checkpointstore.Manifest{CaptureMethod: "cachedir", Volumes: []checkpointstore.VolumeMeta{{Name: "v", MountPath: "/cache", Type: "emptyDir", FileCount: 1, SizeBytes: 1}}}
+	if _, err := m.Backend.Put(context.Background(), hash, []checkpointstore.CaptureSource{{SrcPath: srcForManifest(t, manifest)}}, manifest); err != nil {
+		t.Fatal(err)
+	}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nodeSelector(patches); got[election.ComputeMajorLabel] != "9" || got[election.ComputeMinorLabel] != "0" {
+		t.Errorf("restore: node selector %v, want %v", got, want)
+	}
+	for _, p := range patches {
+		if p.Path == "/spec/nodeSelector" {
+			t.Error("an existing node selector is extended, not replaced")
+		}
+	}
+}
+
+// A pod whose GPU architecture cannot be established stays out of the
+// election and starts cold, as before the election.
+func TestElection_UnestablishedArchitectureStaysOut(t *testing.T) {
+	for name, scope := range map[string]fixedArch{
+		"not established": {},
+		"lookup failed":   {err: errors.New("nodes unreadable")},
+	} {
+		el := &fakeElector{role: election.RoleLeader}
+		m := electionMutator(t, el, &pendingStub{pendingOK: true})
+		m.ArchScope = scope
+		patches, err := m.Mutate(context.Background(), dynamoWorker())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if el.called != 0 || viewPatches(patches).annotations[election.HashAnnotation] != "" {
+			t.Errorf("%s: elected=%d stamped=%q, want no election", name, el.called, viewPatches(patches).annotations[election.HashAnnotation])
+		}
+	}
+	el := &fakeElector{role: election.RoleLeader}
+	m := electionMutator(t, el, &pendingStub{pendingOK: true})
+	m.ArchScope = nil
+	if _, err := m.Mutate(context.Background(), dynamoWorker()); err != nil || el.called != 0 {
+		t.Errorf("no architecture scope: elected=%d err=%v, want no election", el.called, err)
+	}
+}
+
+// The same model, image and arguments on two architectures are two
+// elections, with two caches.
+func TestElection_ArchitectureSeparatesElections(t *testing.T) {
+	hashes := map[string]string{}
+	for _, cc := range []string{"9.0", "8.0"} {
+		el := &fakeElector{role: election.RoleLeader}
+		m := electionMutator(t, el, &pendingStub{pendingOK: true})
+		m.ArchScope = fixedArch{cc: cc, ok: true}
+		if _, err := m.Mutate(context.Background(), dynamoWorker()); err != nil {
+			t.Fatal(err)
+		}
+		hashes[cc] = el.hash
+	}
+	if hashes["9.0"] == "" || hashes["9.0"] == hashes["8.0"] {
+		t.Errorf("hashes %v: each architecture must elect under its own hash", hashes)
 	}
 }
