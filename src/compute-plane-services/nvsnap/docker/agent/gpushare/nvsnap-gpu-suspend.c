@@ -209,6 +209,7 @@ static int do_checkpoint(int pid)
 static __typeof__(cuDeviceGetCount) *fn_dev_count;
 static __typeof__(cuDeviceGet) *fn_dev_get;
 static CUresult (*fn_dev_uuid)(CUuuid *, CUdevice);
+static __typeof__(cuDeviceGetAttribute) *fn_dev_attr;
 
 static void uuid_str(const CUuuid *u, char out[41])
 {
@@ -240,6 +241,7 @@ static int visible_gpus(CUuuid *out, int max)
     void *h = dlopen("libcuda.so.1", RTLD_LAZY);
     fn_dev_count = dlsym(h, "cuDeviceGetCount");
     fn_dev_get = dlsym(h, "cuDeviceGet");
+    fn_dev_attr = dlsym(h, "cuDeviceGetAttribute");
     fn_dev_uuid = dlsym(h, "cuDeviceGetUuid_v2");
     if (!fn_dev_uuid) fn_dev_uuid = dlsym(h, "cuDeviceGetUuid");
     int n = 0;
@@ -643,9 +645,45 @@ static int ctl_all_par(const int *pids, int n, const char *cmd)
  * until all devices have rejoined. "resume" reopens the launch gate. */
 static int fabric_exchange(const int *pids, int n, char *remap, size_t len);
 
+/* Tell every process the host NUMA node of each GPU it now has, by the
+ * GPU's UUID and, with --gpu-map, by the UUID of the GPU it replaces:
+ * inside a process restored onto other GPUs the driver still describes
+ * the GPUs captured (see "numa" in gpushare.c). Best effort: a library
+ * without "numa" (an older capture) answers "err unknown command" and
+ * loads as before. */
+static void send_numa(const int *pids, int n)
+{
+    CUuuid now[MAX_GPUS], old[MAX_GPUS];
+    int n_now = visible_gpus(now, MAX_GPUS), n_old = 0;
+    if (n_now <= 0 || !fn_dev_attr) return;
+#if CUDA_VERSION >= 13000
+    FILE *fp = gpu_map_file ? fopen(gpu_map_file, "r") : NULL;
+    char line[128];
+    while (fp && n_old < n_now && fgets(line, sizeof(line), fp))
+        if (parse_uuid(line, &old[n_old]) == 0) n_old++;
+    if (fp) fclose(fp);
+#endif
+    for (int i = 0; i < n_now; i++) {
+        CUdevice d;
+        int node = -1;
+        if (fn_dev_get(&d, i) != CUDA_SUCCESS ||
+            fn_dev_attr(&node, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, d) != CUDA_SUCCESS || node < 0)
+            continue;
+        for (int k = 0; k < (i < n_old ? 2 : 1); k++) {
+            const unsigned char *b = (const unsigned char *)(k ? old[i] : now[i]).bytes;
+            char cmd[64];
+            int o = snprintf(cmd, sizeof(cmd), "numa ");
+            for (int j = 0; j < 16; j++) o += snprintf(cmd + o, sizeof(cmd) - o, "%02x", b[j]);
+            snprintf(cmd + o, sizeof(cmd) - o, " %d", node);
+            for (int p = 0; p < n; p++) ctl(pids[p], cmd);
+        }
+    }
+}
+
 static int remap_all(const int *pids, int n)
 {
     char load[512] = "load", remap[600] = "remap";
+    send_numa(pids, n);
     if (cache_dir) snprintf(load, sizeof(load), "load %s", cache_dir);
     if (fabric_dir) {  /* a previous cycle's lists */
         char p[512];

@@ -780,14 +780,48 @@ static int push_dev_ctx(CUdevice dev)
     return -1;
 }
 
+/* Host NUMA node by GPU UUID, from nvsnap-gpu-suspend ("numa"): after a
+ * restore onto other GPUs the driver still describes a device as the one
+ * captured, so only a process started fresh can tell the node of the GPU
+ * each device now is. Both the captured GPU's UUID and the new one's map
+ * to the new node. */
+struct gnuma { CUuuid u; int numa; };
+static struct gnuma gnumas[4 * MAX_DEV];
+static int n_gnumas;
+
+/* "numa <uuid hex> <node>". */
+static void do_numa(char *reply, size_t n, const char *arg)
+{
+    struct gnuma g;
+    if (strlen(arg) < 2 * sizeof(g.u.bytes) + 2 || hex_decode(arg, (unsigned char *)g.u.bytes, sizeof(g.u.bytes)) ||
+        sscanf(arg + 2 * sizeof(g.u.bytes), " %d", &g.numa) != 1) {
+        snprintf(reply, n, "err usage: numa <uuid hex> <node>");
+        return;
+    }
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    int i = 0;
+    while (i < n_gnumas && memcmp(gnumas[i].u.bytes, g.u.bytes, sizeof(g.u.bytes))) i++;
+    if (i == n_gnumas && n_gnumas == (int)(sizeof(gnumas) / sizeof(gnumas[0]))) {
+        snprintf(reply, n, "err numa: table full");
+    } else {
+        gnumas[i] = g;
+        if (i == n_gnumas) n_gnumas++;
+        snprintf(reply, n, "ok");
+    }
+    pthread_mutex_unlock(&mu);
+}
+
 /* The host NUMA node of GPU ordinal dev, or -1 when unknown. */
 static int dev_numa(int dev)
 {
     CUdevice d;
+    CUuuid u;
     int numa = -1;
-    if (dev < 0 || CU(cuDeviceGet, &d, dev) != CUDA_SUCCESS ||
-        CU(cuDeviceGetAttribute, &numa, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, d) != CUDA_SUCCESS)
-        return -1;
+    if (dev < 0 || CU(cuDeviceGet, &d, dev) != CUDA_SUCCESS) return -1;
+    if (CU(cuDeviceGetUuid, &u, d) == CUDA_SUCCESS)
+        for (int i = 0; i < n_gnumas; i++)
+            if (!memcmp(gnumas[i].u.bytes, u.bytes, sizeof(u.bytes))) return gnumas[i].numa;
+    if (CU(cuDeviceGetAttribute, &numa, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, d) != CUDA_SUCCESS) return -1;
     return numa;
 }
 
@@ -1665,6 +1699,7 @@ static void serve(int s)
     if (!strcmp(buf, "quiesce")) { do_quiesce(rep, sizeof(rep)); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "release")) { do_release(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "release ", 8)) { do_release(rep, sizeof(rep), buf + 8); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "numa ", 5)) { do_numa(rep, sizeof(rep), buf + 5); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "load")) { do_load(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "load ", 5)) { do_load(rep, sizeof(rep), buf + 5); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
@@ -2447,7 +2482,14 @@ static CUresult xdrop_save_all(int *nx, size_t *nb)
                 x.acc[x.na++] = (CUmemAccessDesc){ x.prop.location, (CUmemAccess_flags)f };
             if (x.sv.dev < 0) continue;
         }
-        x.numa = host && dev_numa(x.sv.dev) == x.prop.location.id ? x.prop.location.id : -1;
+        if (host) {
+            int dn = dev_numa(x.sv.dev);
+            x.numa = dn == x.prop.location.id ? dn : -1;
+            logf_("shared host allocation %#llx+%zu: NUMA node %d, GPU %d's node %d%s", (unsigned long long)l->va,
+                  l->size, x.prop.location.id, x.sv.dev, dn, x.numa >= 0 ? " (follows its GPU)" : "");
+        } else {
+            x.numa = -1;
+        }
         x.sv.va = l->va;
         x.sv.size = l->size;
         /* Drop the app's reference (its handle then stands for the new
@@ -2477,6 +2519,9 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         int dev = push_dev_ctx(x->sv.dev);
         if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
         int numa = x->numa >= 0 ? dev_numa(x->sv.dev) : -1;
+        if (x->numa >= 0 && numa < 0)
+            logf_("shared host allocation %#llx+%zu: GPU %d's NUMA node unknown; keeping node %d",
+                  (unsigned long long)x->va, x->size, x->sv.dev, x->numa);
         if (numa >= 0 && numa != x->numa) {
             /* Host memory the app put on its GPU's NUMA node (NCCL's SHM
              * buffers do) goes on the node of the GPU it has now. A restore
