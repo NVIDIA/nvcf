@@ -22,6 +22,7 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/google/uuid"
 
+	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/worker"
 )
 
@@ -31,6 +32,13 @@ const (
 
 	eventTypeAttachmentEstablished = "GrpcProxy.Attachment.Established"
 )
+
+// Pre-initialized so the series exist at zero before the first publish.
+func init() {
+	for _, result := range []string{"sent", "failed", "dropped"} {
+		metrics.EventLedgerPublishCounter.WithLabelValues(eventTypeAttachmentEstablished, result)
+	}
+}
 
 type attachmentEstablishedData struct {
 	SchemaVersion  int    `json:"schema_version"`
