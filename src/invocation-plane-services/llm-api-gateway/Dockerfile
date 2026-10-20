@@ -37,6 +37,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -o /out/$TARGETARCH/llm-api-gateway-rate-limit-sync-worker ./cmd/llm-api-gateway-rate-limit-sync-worker
 
 FROM nvcr.io/nvidia/distroless/go:v4.1.6@sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929
+USER 1000:1000
 
 ARG TARGETARCH
 
