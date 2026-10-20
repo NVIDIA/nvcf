@@ -41,6 +41,7 @@ go_oci_image(
     env = {"ULIMIT_FLAG": "1"},
     tags = ["nvcf-ai-api-gateway-service"],
     visibility = ["//visibility:public"],
+    user = "1000:1000",
 )
 
 # Regression guard for the rules_pkg default-0644 startup-failure pattern: if
@@ -117,4 +118,14 @@ go_test(
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
     ],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )
