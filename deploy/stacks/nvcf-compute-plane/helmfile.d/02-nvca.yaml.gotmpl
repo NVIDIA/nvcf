@@ -122,7 +122,8 @@ helmDefaults:
 {{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 
 {{- $byooOtelCollector := dig "byooOtelCollector" dict $nvcaOp }}
-{{- $byooOtelCollectorImageRepository := dig "imageRepository" "" $byooOtelCollector }}
+{{- $defaultByooOtelCollectorImageRepository := printf "%s/%s/byoo-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $byooOtelCollectorImageRepository := dig "imageRepository" "" $byooOtelCollector | default $defaultByooOtelCollectorImageRepository }}
 {{- $byooOtelCollectorImageTag := dig "imageTag" "" $byooOtelCollector }}
 {{- $byooFluentBit := dig "byooFluentBit" dict $nvcaOp }}
 {{- $byooFluentBitEnabled := dig "enabled" false $byooFluentBit }}
@@ -347,17 +348,12 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
-        {{- if or $agentTolerations $workloadTolerations $byooOtelCollectorImageRepository $byooOtelCollectorImageTag $byooFluentBitImageRepository }}
         agent:
-          {{- if or $byooOtelCollectorImageRepository $byooOtelCollectorImageTag }}
           byooOtelCollector:
-            {{- with $byooOtelCollectorImageRepository }}
-            imageRepository: {{ . | quote }}
-            {{- end }}
+            imageRepository: {{ $byooOtelCollectorImageRepository | quote }}
             {{- with $byooOtelCollectorImageTag }}
             imageTag: {{ . | quote }}
             {{- end }}
-          {{- end }}
           {{- if $byooFluentBitImageRepository }}
           byooFluentBit:
             imageRepository: {{ $byooFluentBitImageRepository | quote }}
@@ -372,7 +368,6 @@ releases:
             tolerations:
 {{ toYaml . | nindent 14 }}
           {{- end }}
-        {{- end }}
     labels:
       release-group: workers
     wait: true

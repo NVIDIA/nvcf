@@ -171,6 +171,10 @@ publications:
     type: image
     version: 3.10.0
     registry: public-images
+  - name: byoo-otel-collector
+    type: image
+    version: 0.160.0-nv-0.4.3
+    registry: public-images
   - name: llm-api-gateway
     type: image
     version: 0.14.2
@@ -873,6 +877,12 @@ manifest:
       requirement: optional
       description: Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar.
       upstream_url: https://github.com/fluent/fluent-bit
+    - artifact_id: byoo-otel-collector
+      plane: compute
+      kind: service-image
+      requirement: required
+      description: Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector
     - artifact_id: ess-agent
       plane: compute
       kind: service-image
@@ -1682,6 +1692,13 @@ supplemental_artifacts:
     stacks:
       - compute-plane
     requirement: optional
+  - name: byoo-otel-collector
+    type: image
+    registry: public-images
+    version: 0.160.0-nv-0.4.3
+    stacks:
+      - compute-plane
+    requirement: required
 outputs:
   - path: docs/overview/compatibility-matrix.md
     blocks:
