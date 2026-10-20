@@ -33,6 +33,8 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // DefaultCaptureLabel is the pod-label key the agent watches for capture
@@ -295,9 +297,17 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 
+	// A stamped hash names the capture its followers wait for, so one
+	// that is not a hash cannot be replaced by the composed one: the
+	// pod is not captured.
+	stamped := pod.Annotations[stampedHashAnnotation]
+	if stamped != "" && !checkpointstore.IsHash(stamped) {
+		log.WithField("stamped", stamped).Warn("watcher: the pod's stamped hash is not a hash; not capturing it")
+		return
+	}
 	hashInput := w.Composer.Compose(pod, 0)
 	req := CaptureRequest{
-		Hash:            pod.Annotations[stampedHashAnnotation],
+		Hash:            stamped,
 		PodUID:          string(pod.UID),
 		Namespace:       pod.Namespace,
 		Name:            pod.Name,
@@ -326,7 +336,7 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	log.WithFields(logrus.Fields{
-		"hash":     m.Hash[:12],
+		"hash":     checkpointstore.ShortHash(m.Hash),
 		"size_mib": m.TotalSizeBytes / 1024 / 1024,
 		"files":    m.FileCount,
 	}).Info("capture committed for pod")

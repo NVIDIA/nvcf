@@ -534,3 +534,32 @@ func TestWatcher_CapturesUnderStampedHash(t *testing.T) {
 		t.Error("watcher must not recompose the hash when one is stamped")
 	}
 }
+
+// A stamped hash that is not a hash (a hand-set annotation) is refused
+// before any capture, and the watcher survives it.
+func TestWatcher_MalformedStampedHashNotCaptured(t *testing.T) {
+	env := newWatcherEnv(t)
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+	count := &countingBackend{Backend: env.backend}
+	capturer := env.capturer()
+	capturer.Backend = count
+	w := env.watcher()
+	w.Capturer = capturer
+	w.sem = make(chan struct{}, w.concurrency())
+
+	pod := fakePod(types.UID(env.podUID), "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	pod.Annotations = map[string]string{stampedHashAnnotation: "short"}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	w.HandlePodEvent(ctx, pod)
+	if waitFor(t, time.Second, func() bool {
+		_, err := count.Stat(ctx, checkpointstore.ComputeHash(w.Composer.Compose(pod, 0)))
+		return err == nil
+	}) {
+		t.Error("a pod with a malformed stamped hash was captured under the composed hash")
+	}
+	if _, err := count.Stat(ctx, "short"); err == nil {
+		t.Error("a pod was captured under a malformed stamped hash")
+	}
+}
