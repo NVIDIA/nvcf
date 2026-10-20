@@ -79,7 +79,7 @@ global:
     # cluster can reach; leave it unset to keep the chart default repository.
     byooOtelCollector:
       # imageRepository: <registry>/<repository>/byoo-otel-collector
-      imageTag: "0.160.0-nv-0.2.5"
+      imageTag: "0.160.0-nv-0.2.6"
     # BYOO Fluent Bit log collector. enabled turns on the BYOOFluentBit NVCA
     # feature gate, which adds a Fluent Bit sidecar to BYOO workloads that
     # export logs. It needs BYOObservability, which observability.profile
@@ -104,7 +104,7 @@ global:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
         enabled: false
-        imageTag: "0.160.0-nv-0.2.5"
+        imageTag: "0.160.0-nv-0.2.6"
       # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""
