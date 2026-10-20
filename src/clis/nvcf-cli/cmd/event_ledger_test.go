@@ -26,8 +26,6 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"nvcf-cli/internal/client"
 )
 
 const testFunctionVersionID = "11111111-2222-3333-4444-555555555555"
@@ -40,6 +38,7 @@ func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 	t.Setenv("NVCF_API_KEY", "")
 	viper.Reset()
 	viper.Set("api_key", "nvapi-test")
+	viper.Set("event_ledger_api_key", "nvapi-test")
 	viper.Set("event_ledger_url", server.URL)
 	t.Cleanup(viper.Reset)
 
@@ -130,9 +129,16 @@ func TestResolveEventLedgerURL(t *testing.T) {
 	assert.Equal(t, "https://configured.example.com", resolveEventLedgerURL("https://api.example.com"))
 }
 
-func TestEventLedgerAPIKeyPrefersDedicatedKey(t *testing.T) {
-	assert.Equal(t, "nvapi-el", eventLedgerAPIKey(&client.Config{APIKey: "nvapi-fn", EventLedgerAPIKey: "nvapi-el"}))
-	assert.Equal(t, "nvapi-fn", eventLedgerAPIKey(&client.Config{APIKey: "nvapi-fn"}))
+func TestEventLedgerCommandsRequireDedicatedKey(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request expected without a dedicated Event Ledger key")
+	})
+	viper.Set("event_ledger_api_key", "")
+
+	err := statsGetCmd.RunE(statsGetCmd, nil)
+	require.ErrorContains(t, err, "api-key generate --for event-ledger")
+	err = stagesEventsListCmd.RunE(stagesEventsListCmd, nil)
+	require.ErrorContains(t, err, "api-key generate --for event-ledger")
 }
 
 func TestStagesEventsListSendsResourceIDAndAttributeFilter(t *testing.T) {

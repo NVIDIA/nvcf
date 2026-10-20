@@ -195,10 +195,13 @@ func newEventLedgerClient() (*eventledger.Client, string, time.Duration, error) 
 	if !functionVersionIDPattern.MatchString(namespace) {
 		return nil, "", 0, fmt.Errorf("invalid function version ID %q: must be a UUID", namespace)
 	}
+	if config.EventLedgerAPIKey == "" {
+		return nil, "", 0, fmt.Errorf("no Event Ledger API key configured, run 'nvcf-cli api-key generate --for event-ledger'")
+	}
 	c, err := eventledger.NewClient(eventledger.Config{
 		ServiceURL: resolveEventLedgerURL(config.BaseHTTPURL),
 		HostHeader: viper.GetString("event_ledger_host"),
-		APIKey:     eventLedgerAPIKey(config),
+		APIKey:     config.EventLedgerAPIKey,
 		Timeout:    config.DefaultTimeout,
 	})
 	if err != nil {
@@ -217,15 +220,6 @@ func resolveEventLedgerURL(baseHTTPURL string) string {
 		return derived
 	}
 	return ""
-}
-
-// eventLedgerAPIKey prefers the dedicated Event Ledger key and falls back to the
-// general API key.
-func eventLedgerAPIKey(config *client.Config) string {
-	if config.EventLedgerAPIKey != "" {
-		return config.EventLedgerAPIKey
-	}
-	return config.APIKey
 }
 
 func renderStats(w io.Writer, stats *eventledger.StatsResponse) {
