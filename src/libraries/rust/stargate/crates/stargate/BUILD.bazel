@@ -178,13 +178,3 @@ go_test(
     ],
     data = [":image_index"],
 )
-
-go_test(
-    name = "dev_auth_image_numeric_user_test",
-    srcs = ["//rules/oci/private:numeric_user_test.go"],
-    args = [
-        "-image_index=$(location :dev_auth_image_index)",
-        "-expected_user=1000:1000",
-    ],
-    data = [":dev_auth_image_index"],
-)

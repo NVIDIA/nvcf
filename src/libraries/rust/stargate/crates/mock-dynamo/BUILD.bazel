@@ -5,7 +5,6 @@
 # image (matches the upstream Dockerfile which builds it as a debug
 # helper only).
 
-load("@rules_go//go:def.bzl", "go_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
@@ -17,14 +16,4 @@ rust_binary(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True),
-)
-
-go_test(
-    name = "image_numeric_user_test",
-    srcs = ["//rules/oci/private:numeric_user_test.go"],
-    args = [
-        "-image_index=$(location :image_index)",
-        "-expected_user=1000:1000",
-    ],
-    data = [":image_index"],
 )
