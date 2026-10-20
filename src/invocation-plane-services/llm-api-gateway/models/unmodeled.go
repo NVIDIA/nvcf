@@ -83,7 +83,7 @@ func MergeJSONMembers(encoded []byte, extra map[string]json.RawMessage) ([]byte,
 }
 
 // MemberDecoder marks a struct whose UnmarshalJSON decodes its declared
-// members with DecodeMembers, so AmbiguousMemberPath still inspects them.
+// members by name like encoding/json, so AmbiguousMemberPath still inspects them.
 type MemberDecoder interface {
 	DecodesMembers()
 }
@@ -117,6 +117,7 @@ func DecodeMembers(data []byte, target any, checked ...string) (failed map[strin
 				if errors.As(err, &typeErr) {
 					typeErr.Field = strings.TrimSuffix(name+"."+typeErr.Field, ".")
 				}
+				// Not wrapped: echo builds its 400 message from *json.UnmarshalTypeError by type assertion.
 				return nil, err
 			}
 			if failed == nil {
