@@ -34,6 +34,10 @@ router instance that issued the tunnel target.
 */}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int }}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
+{{- $authSecretName := .Values.llmRequestRouter.auth.existingSecret.name }}
+{{- if and $authSecretName (not .Values.llmRequestRouter.vault.noVaultAnnotations) }}
+{{- fail "llmRequestRouter.vault.noVaultAnnotations must be true when auth.existingSecret.name is set" }}
+{{- end }}
 {{- $configuredDisableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
 {{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) }}
 {{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $directDeployment }}
@@ -171,7 +175,10 @@ spec:
             {{- end }}
             {{- with .Values.llmRequestRouter.auth.workerAuthEndpoint }}
             - --worker-auth-endpoint={{ . }}
-            {{- if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
+            {{- if $authSecretName }}
+            - --secrets-path=/var/run/secrets/stargate-auth/service-token.json
+            - --secrets-json-path=nvcfApiToken
+            {{- else if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
             - --secrets-path=/vault/secrets/secrets.json
             - --secrets-json-path=nvcfApiToken
             {{- end }}
@@ -228,9 +235,15 @@ spec:
           securityContext:
             {{- toYaml .Values.llmRequestRouter.securityContext | nindent 12 }}
           volumeMounts:
+            {{- if $authSecretName }}
+            - name: worker-auth
+              mountPath: /var/run/secrets/stargate-auth
+              readOnly: true
+            {{- else }}
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
+            {{- end }}
             {{- if .Values.llmRequestRouter.loadBalancer.config }}
             - name: lb-config
               mountPath: /etc/llm-request-router
@@ -244,6 +257,14 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if $authSecretName }}
+        - name: worker-auth
+          secret:
+            secretName: {{ $authSecretName | quote }}
+            items:
+              - key: service-token.json
+                path: service-token.json
+        {{- else }}
         - name: vault-token
           projected:
             sources:
@@ -257,6 +278,7 @@ spec:
             items:
               - key: secrets.json.tmpl
                 path: secrets.json.tmpl
+        {{- end }}
         {{- if .Values.llmRequestRouter.loadBalancer.config }}
         - name: lb-config
           configMap:

@@ -248,6 +248,9 @@ releases:
           {{- with dig "natsHostOverride" "" $selfManaged }}
           natsHostOverride: {{ . | quote }}
           {{- end }}
+          {{- with dig "eventLedgerServiceURL" "" $selfManaged }}
+          eventLedgerServiceURL: {{ . | quote }}
+          {{- end }}
           featureGateValues:
           {{- include "nvca-operator.featureGateValues" (dict
                 "values" $featureGateValues
@@ -278,6 +281,15 @@ releases:
         # this stack and a direct nvca-operator install produce the same objects.
         nameOverride: nvca-operator
         fullnameOverride: nvca-operator
+        {{- with dig "byoo" dict $nvcaOp }}
+        byoo:
+{{ toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with dig "utils" "resources" dict $nvcaOp }}
+        utils:
+          resources:
+{{ toYaml . | nindent 12 }}
+        {{- end }}
         {{- if $agentMergeConfig }}
         agentConfig:
           mergeConfig: |

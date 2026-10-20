@@ -1445,6 +1445,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         backend.set_stats(CurrentModelStats {
             output_tps: 0.0,
             last_mean_input_tps: *last_mean_input_tps,
+            max_input_tps: Some(*last_mean_input_tps),
             max_output_tps: 1000.0,
             queue_size: 0,
             queued_input_size: 0,
@@ -1542,9 +1543,13 @@ async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
         routing_key: None,
         model_id: model.to_string(),
     };
+    // Wait on the backend's own report, not the cluster snapshot. The cluster
+    // snapshot still counts the reservation from the wait_for_routing probe,
+    // and a registration update built before set_stats can settle that
+    // reservation after this loop, leaving a free slot for the next request.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let candidates = state.cluster_candidates_for_target(&target).await;
+        let candidates = state.candidates_for_target(&target).await;
         if candidates.len() == 1
             && candidates[0].stats.max_engine_concurrency == 1
             && candidates[0].stats.num_running_queries >= 1
@@ -1585,4 +1590,151 @@ async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
 
     stop_backends(&mut backends);
     stargate.shutdown().await;
+}
+
+fn engine_stats(num_running_queries: u64, max_engine_concurrency: u64) -> CurrentModelStats {
+    CurrentModelStats {
+        last_mean_input_tps: 100.0,
+        max_input_tps: Some(100.0),
+        max_output_tps: 1000.0,
+        num_running_queries,
+        max_engine_concurrency: Some(max_engine_concurrency),
+        ..CurrentModelStats::default()
+    }
+}
+
+async fn wait_for_engine_capacity(
+    state: &StargateState,
+    model_id: &str,
+    cluster_ids: &[String],
+    max_engine_concurrency: u64,
+) {
+    let target = RoutingTargetKey {
+        routing_key: None,
+        model_id: model_id.to_string(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let clusters = state.cluster_candidates_for_target(&target).await;
+        if cluster_ids.iter().all(|cluster_id| {
+            clusters.iter().any(|cluster| {
+                cluster.cluster_id == *cluster_id
+                    && cluster.stats.max_engine_concurrency == max_engine_concurrency
+            })
+        }) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{cluster_ids:?} did not reach max_engine_concurrency={max_engine_concurrency}: {clusters:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn send_session_request(
+    chat: &ChatRequests,
+    request_id: &str,
+    last_cluster: Option<&str>,
+) -> String {
+    let mut request = chat.with_affinity(request_id, "thrash-session");
+    if let Some(last_cluster) = last_cluster {
+        request = request.header("x-stargate-last-cluster-id", last_cluster);
+    }
+    let response = request.send().await.expect("request failed");
+    assert_eq!(response.status(), 200, "request {request_id} failed");
+    let cluster_id = response_header(&response, "x-stargate-cluster-id").to_string();
+    let _ = response.bytes().await;
+    cluster_id
+}
+
+/// A session overflows from its full rank-1 cluster to rank 2. Once rank 1
+/// drains, 10 follow-ups that name rank 2 as their last cluster stay on rank 2
+/// with `last_cluster_affinity`, and go back to rank 1 without it.
+async fn assert_cache_thrash(algorithm: &str, last_cluster_affinity: bool) {
+    let model = format!("{algorithm}-thrash-{last_cluster_affinity}");
+    let config = format!(
+        r#"{{
+            "default": "power-of-n",
+            "models": {{
+                "{model}": {{
+                    "algorithm": "{algorithm}",
+                    "seed": "test-seed",
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 300,
+                    "cache_affinity_input_tokens_scale": 0.1,
+                    "last_cluster_affinity": {last_cluster_affinity}
+                }}
+            }}
+        }}"#
+    );
+    let stargate = RunningStargate::start(&format!("test-sg-{model}"), Some(&config)).await;
+    let cluster_ids = [format!("{model}-x"), format!("{model}-y")];
+    let mut backends = Vec::new();
+    for cluster_id in &cluster_ids {
+        let backend =
+            RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, &model, cluster_id)
+                .await;
+        backend.set_stats(engine_stats(0, 100));
+        backends.push(backend);
+    }
+    let state = stargate.handle.state();
+    wait_for_engine_capacity(&state, &model, &cluster_ids, 100).await;
+    wait_for_routing_with_cache_affinity(
+        stargate.http_addr,
+        &model,
+        "warmup-session",
+        Duration::from_secs(5),
+    )
+    .await;
+    let chat = ChatRequests::new(stargate.http_addr, &model);
+
+    let rank_one = send_session_request(&chat, "thrash-probe", None).await;
+    let rank_one_index = usize::from(rank_one == cluster_ids[1]);
+    let rank_two = cluster_ids[1 - rank_one_index].as_str();
+
+    backends[rank_one_index].set_stats(engine_stats(1, 1));
+    wait_for_engine_capacity(&state, &model, std::slice::from_ref(&rank_one), 1).await;
+    let overflow = send_session_request(&chat, "thrash-first", None).await;
+    assert_eq!(overflow, rank_two, "a full rank 1 must overflow to rank 2");
+
+    backends[rank_one_index].set_stats(engine_stats(0, 100));
+    wait_for_engine_capacity(&state, &model, std::slice::from_ref(&rank_one), 100).await;
+    let expected = if last_cluster_affinity {
+        rank_two
+    } else {
+        rank_one.as_str()
+    };
+    for attempt in 0..10 {
+        let chosen = send_session_request(
+            &chat,
+            &format!("thrash-follow-up-{attempt}"),
+            Some(rank_two),
+        )
+        .await;
+        assert_eq!(chosen, expected, "{model} follow-up {attempt}");
+    }
+
+    stop_backends(&mut backends);
+    stargate.shutdown().await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_last_cluster_affinity_prevents_cache_thrash() {
+    assert_cache_thrash("wait-and-widen", true).await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_without_last_cluster_affinity_returns_to_rank_one() {
+    assert_cache_thrash("wait-and-widen", false).await;
+}
+
+#[tokio::test]
+async fn pulsar_wait_and_widen_last_cluster_affinity_prevents_cache_thrash() {
+    assert_cache_thrash("pulsar-wait-and-widen", true).await;
+}
+
+#[tokio::test]
+async fn pulsar_wait_and_widen_without_last_cluster_affinity_returns_to_rank_one() {
+    assert_cache_thrash("pulsar-wait-and-widen", false).await;
 }

@@ -140,11 +140,14 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			job.Spec.Template.Annotations = map[string]string{}
 		}
 		job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] = string(current.UID)
+		// The identity decision and the elevation live in pkg/storage so the
+		// Helm shared-filesystem path applies the same rule.
+		nvcastorage.ApplySharedClaimWriterIdentity(job, selection.WriterIdentity)
 		if _, err := jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
 			return fail(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("create writer job %s: %w", job.Name, err))
 		}
-		log.Infof("shared cache claim %s created on %s, writer job %s started", current.Name,
-			selection.StorageClassName, initJob.Name)
+		log.Infof("shared cache claim %s created on %s, writer job %s started with writer identity %q", current.Name,
+			selection.StorageClassName, initJob.Name, selection.WriterIdentity)
 		// The claim exists from here on, so every in-progress result names it:
 		// the request records it as its cache reference and the reference
 		// sweep can see the claim is in use while the writer runs.

@@ -62,6 +62,7 @@ type PersistedModelCacheStorageSelection struct {
 	Provider             string                              `json:"provider,omitempty"`
 	Provisioner          string                              `json:"provisioner,omitempty"`
 	Transition           string                              `json:"transition,omitempty"`
+	WriterIdentity       string                              `json:"writerIdentity,omitempty"`
 	RequiredAccessModes  []corev1.PersistentVolumeAccessMode `json:"requiredAccessModes,omitempty"`
 	RequiredMountOptions []string                            `json:"requiredMountOptions,omitempty"`
 	EncryptionRequired   bool                                `json:"encryptionRequired,omitempty"`
@@ -91,6 +92,7 @@ func NewPersistedModelCacheStorageSelection(
 		selection.Provider = resolved.Provider
 		selection.Provisioner = resolved.Provisioner
 		selection.Transition = resolved.Transition
+		selection.WriterIdentity = resolved.WriterIdentity
 		selection.RequiredAccessModes = append(
 			[]corev1.PersistentVolumeAccessMode(nil), resolved.RequiredAccessModes...)
 		selection.RequiredMountOptions = append([]string(nil), resolved.RequiredMountOptions...)
@@ -191,6 +193,16 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 		strings.TrimSpace(s.ProfileDigest) == "" || strings.TrimSpace(s.Provider) == "" ||
 		strings.TrimSpace(s.Provisioner) == "" || strings.TrimSpace(s.Transition) == "" {
 		return fmt.Errorf("model cache selection has incomplete resolved storage")
+	}
+
+	if s.WriterIdentity != "" && s.Transition != ModelCacheTransitionRWXReadOnly {
+		return fmt.Errorf("model cache transition %q has no shared-claim writer and cannot record writerIdentity %q",
+			s.Transition, s.WriterIdentity)
+	}
+	switch s.WriterIdentity {
+	case "", ModelCacheWriterIdentityFSGroup, ModelCacheWriterIdentityRoot:
+	default:
+		return fmt.Errorf("model cache selection has invalid writerIdentity %q", s.WriterIdentity)
 	}
 
 	switch s.Mode {

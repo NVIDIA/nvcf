@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
@@ -46,6 +47,52 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	}
 	if cfg.Server.InferenceWriteTimeout <= 0 {
 		t.Fatalf("inference write timeout = %s, want a positive stall bound", cfg.Server.InferenceWriteTimeout)
+	}
+	want := LastClusterConfig{
+		Enabled:         false,
+		TTL:             10 * time.Minute,
+		LookupTimeout:   20 * time.Millisecond,
+		LocalMaxEntries: 100000,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvReadsLastCluster(t *testing.T) {
+	t.Setenv("STARGATE_LAST_CLUSTER_ENABLED", "true")
+	t.Setenv("STARGATE_LAST_CLUSTER_TTL", "90s")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", "5ms")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", "42")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	want := LastClusterConfig{
+		Enabled:         true,
+		TTL:             90 * time.Second,
+		LookupTimeout:   5 * time.Millisecond,
+		LocalMaxEntries: 42,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidLastCluster(t *testing.T) {
+	for key, value := range map[string]string{
+		"STARGATE_LAST_CLUSTER_TTL":               "0s",
+		"STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT":    "-1ms",
+		"STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES": "0",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("LoadFromEnv() error = %v, want one naming %s", err, key)
+			}
+		})
 	}
 }
 
@@ -310,5 +357,24 @@ func TestLoadFromEnvRejectsInvalidMaxRequestBodyBytes(t *testing.T) {
 				t.Fatalf("error %q does not mention NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES", err.Error())
 			}
 		})
+	}
+}
+
+func TestLoadFromEnvReadsExposeRouterErrorCodes(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.ExposeRouterErrorCodes {
+		t.Fatal("router error codes are exposed by default")
+	}
+
+	t.Setenv("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES", "true")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.ExposeRouterErrorCodes {
+		t.Fatal("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES=true was not applied")
 	}
 }

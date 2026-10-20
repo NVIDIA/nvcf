@@ -7,8 +7,8 @@ healthy.
 This quickstart uses a single k3d cluster named `ncp-local`, fake GPUs, and
 local route hostnames. It is for local development and validation only. For a
 remote deployment, or for separate control-plane and GPU clusters, use
-[Helmfile Installation](/nvcf/self-managed/helmfile-installation) and
-[Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
+[Helmfile Installation](../self-managed/helmfile-installation.md) and
+[Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
 
 Run the commands from the NVCF repository root unless a step says otherwise.
 The `nvcf-cli self-hosted up` command runs on your workstation. It does not run
@@ -31,7 +31,7 @@ Before you start, install and prepare:
 - `helm` >= 3.14
 - `helmfile` >= 1.0. Use `helmfile` >= 1.5.0 with Helm 4.
 - `helm-diff` plugin
-- `nvcf-cli` on your `PATH`. See [Installation](/nvcf/overview/cli#installation) to
+- `nvcf-cli` on your `PATH`. See [Installation](cli.md#installation) to
   build it from the repository or download it from NGC.
 - An NGC API key with access to the NVCF chart and image registry
 - The NGC organization and team slugs for that registry access
@@ -101,7 +101,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 nvcf-cli version
 ```
 
-For the packaged CLI release, see [Installation](/nvcf/overview/cli#download-from-ngc).
+For the packaged CLI release, see [Installation](cli.md#download-from-ngc).
 </Accordion>
 
 `self-hosted up` defaults to `--env local` and supports only the single local
@@ -187,6 +187,20 @@ rm deploy/stacks/self-managed/secrets/local-secrets.yaml.bak
 
 ## Step 4: Run the install
 
+The sample function does not require Event Ledger. Disable this optional addon
+so the local install does not require its chart. Create
+`deploy/stacks/self-managed/environments/local.yaml` with the following values.
+If the file already exists, merge this override into its existing values:
+
+```yaml
+addons:
+  eventLedger:
+    enabled: false
+```
+
+Helmfile loads `environments/base.yaml` first, then applies the overrides in
+`environments/local.yaml`. You do not need to copy `base.yaml`.
+
 Check local tools and Kubernetes access:
 
 ```bash
@@ -252,12 +266,13 @@ nvcf-cli --config "${NVCF_CLI_CONFIG}" function create \
   --health-timeout PT30S
 ```
 
-Deploy the function to the local fake GPU backend:
+Deploy the function to the local fake GPU backend. The default topology
+provides two fake H100 GPUs per GPU node, so use `NCP.GPU.H100_2x`:
 
 ```bash
 nvcf-cli --config "${NVCF_CLI_CONFIG}" function deploy create \
   --gpu H100 \
-  --instance-type NCP.GPU.H100_8x \
+  --instance-type NCP.GPU.H100_2x \
   --backend ncp-local \
   --regions us-west-1 \
   --min-instances 1 \
@@ -269,6 +284,7 @@ Generate an API key for invocation:
 
 ```bash
 nvcf-cli --config "${NVCF_CLI_CONFIG}" api-key generate \
+  --for function \
   --description quickstart-load-tester-supreme \
   --scopes invoke_function,list_functions,queue_details,list_functions_details
 ```
@@ -284,8 +300,16 @@ nvcf-cli --config "${NVCF_CLI_CONFIG}" function invoke \
 
 Expected result: the invocation response contains `quickstart-echo`.
 
-For other local fake GPU configurations, choose a `--gpu` and
-`--instance-type` that match the discovered node labels and GPU count.
+For other local fake GPU configurations, inspect the GPU and instance types
+advertised by the backend:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" cluster list
+```
+
+This query requires a token with the `list_cluster_groups` scope. If it returns
+`403 Forbidden`, check the token's permissions before retrying. Choose a
+`--gpu` and `--instance-type` from the backend's advertised configuration.
 
 ## Clean up
 
@@ -321,7 +345,7 @@ make -C tools/ncp-local-cluster destroy
 
 ## Troubleshooting
 
-If the quickstart fails, start with [Troubleshooting](/nvcf/self-managed/troubleshooting).
+If the quickstart fails, start with [Troubleshooting](../self-managed/troubleshooting.md).
 
 Common local k3d issues:
 
@@ -343,11 +367,11 @@ Common local k3d issues:
   ```
 
   For non-local clusters, see
-  [Node inotify limits](/nvcf/compute-plane/self-managed-clusters#node-inotify-limits).
+  [Node inotify limits](../compute-plane/cluster-management/self-managed.md#node-inotify-limits).
 
 ## See Also
 
 - [Local Development](../dev/local-development.md) for local k3d variants and cleanup commands.
-- [Helmfile Installation](/nvcf/self-managed/helmfile-installation) for remote or manual control-plane installs.
-- [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters) for registering GPU clusters outside the local quickstart.
+- [Helmfile Installation](../self-managed/helmfile-installation.md) for remote or manual control-plane installs.
+- [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md) for registering GPU clusters outside the local quickstart.
 - `src/clis/nvcf-cli/examples/` in this repository for sample CLI input files.

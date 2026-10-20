@@ -80,25 +80,22 @@ impl DiscoveryShard {
 
 #[derive(Clone, Copy, Debug)]
 enum InvocationMetricSource {
-    InvocationService,
-    GrpcProxy,
+    Invocation,
     LlmGateway,
 }
 
 impl InvocationMetricSource {
     fn name(self) -> &'static str {
         match self {
-            Self::InvocationService => "invocation_service",
-            Self::GrpcProxy => "grpc_proxy",
+            Self::Invocation => "invocation",
             Self::LlmGateway => "llm_gateway",
         }
     }
 
     fn order(self) -> u8 {
         match self {
-            Self::InvocationService => 0,
-            Self::GrpcProxy => 1,
-            Self::LlmGateway => 2,
+            Self::Invocation => 0,
+            Self::LlmGateway => 1,
         }
     }
 }
@@ -109,17 +106,7 @@ struct RecentInvocationQuery {
     query: String,
 }
 
-const QUERY_INVOCATION_SERVICE: &str = r#"(
-    sum by (function_id, function_version_id, nca_id) (function_request{env_filter} > 0)
-    and
-    sum by (function_id, function_version_id, nca_id) (function_request{env_filter} unless function_request{env_filter} offset {lookback_seconds}s)
-    )
-    or
-    (
-    sum by (function_id, function_version_id, nca_id) (increase(function_request{env_filter}[{lookback_seconds}s]) > 0)
-)"#;
-
-const QUERY_GRPC_PROXY: &str = r#"(
+const QUERY_FUNCTION_REQUEST: &str = r#"(
     sum by (function_id, function_version_id, nca_id) (function_request_total{env_filter} > 0)
     and
     sum by (function_id, function_version_id, nca_id) (function_request_total{env_filter} unless function_request_total{env_filter} offset {lookback_seconds}s)
@@ -227,25 +214,13 @@ fn recent_invocation_queries(
         DiscoveryShard::ALL.into_iter().map(Some).collect()
     };
 
-    let mut queries = Vec::with_capacity(shards.len() * 3);
+    let mut queries = Vec::with_capacity(shards.len() * 2);
     for shard in shards {
         queries.push(RecentInvocationQuery {
-            source: InvocationMetricSource::InvocationService,
+            source: InvocationMetricSource::Invocation,
             shard,
             query: get_timeseries_db_query(
-                QUERY_INVOCATION_SERVICE,
-                env,
-                ignore_env,
-                function_version_filter,
-                shard,
-                lookback,
-            ),
-        });
-        queries.push(RecentInvocationQuery {
-            source: InvocationMetricSource::GrpcProxy,
-            shard,
-            query: get_timeseries_db_query(
-                QUERY_GRPC_PROXY,
+                QUERY_FUNCTION_REQUEST,
                 env,
                 ignore_env,
                 function_version_filter,
@@ -292,14 +267,13 @@ async fn fetch_function_state(
         .get_active_functions_with_token_range(&range, page_size)
         .await?;
 
-    let timeseries_db_active_functions =
-        fetch_timeseries_db_active_functions(
-            timeseries_db_client,
-            env,
-            timeseries_db_ignore_env,
-            recently_invoked_lookback,
-        )
-        .await?;
+    let timeseries_db_active_functions = fetch_timeseries_db_active_functions(
+        timeseries_db_client,
+        env,
+        timeseries_db_ignore_env,
+        recently_invoked_lookback,
+    )
+    .await?;
 
     let state = FunctionState {
         db_recently_invoked: db_recently_invoked
@@ -583,9 +557,9 @@ async fn get_recently_invoked_functions_with_semaphore(
         "Executing PromQL queries for recently invoked functions"
     );
 
-    // Discovery runs twelve queries (three sources across four shards) through
-    // one shared concurrency bound. Per-version invocation checks remain two
-    // unsharded queries. Every query is polled even when another source or
+    // Discovery runs eight queries (two sources across four shards) through
+    // one shared concurrency bound. Per-version invocation checks use one
+    // unsharded query. Every query is polled even when another source or
     // shard fails.
     let mut query_results = stream::iter(queries.into_iter().map(|query_spec| {
         let query_semaphore = query_semaphore.clone();
@@ -698,8 +672,8 @@ async fn get_recently_invoked_functions_with_semaphore(
     }
 
     // Discovery can safely consume partial shards because it only inserts
-    // positive observations. Per-function scaling remains fail-closed: both
-    // invocation sources must succeed before an empty result can mean idle.
+    // positive observations. Per-function scaling remains fail-closed: the
+    // invocation query must succeed before an empty result can mean idle.
     if successful_queries == 0 || (function_version_id_filter.is_some() && failed_queries > 0) {
         return Err(anyhow!(
             "recently invoked TimeseriesDb queries failed: {successful_queries} succeeded, {failed_queries} failed"
@@ -1006,13 +980,9 @@ mod tests {
 
     #[test]
     fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
-        let queries = recent_invocation_queries(
-            "prod",
-            false,
-            None,
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
-        );
-        assert_eq!(queries.len(), 12);
+        let queries =
+            recent_invocation_queries("prod", false, None, DISCOVERY_RECENTLY_INVOKED_LOOKBACK);
+        assert_eq!(queries.len(), 8);
 
         for shard in DiscoveryShard::ALL {
             let matcher = format!(r#"function_id=~"{}""#, shard.function_id_regex());
@@ -1020,7 +990,7 @@ mod tests {
                 .iter()
                 .filter(|query| query.shard == Some(shard))
                 .collect();
-            assert_eq!(shard_queries.len(), 3);
+            assert_eq!(shard_queries.len(), 2);
 
             for query in shard_queries {
                 if matches!(query.source, InvocationMetricSource::LlmGateway) {
@@ -1029,6 +999,9 @@ mod tests {
                     assert!(query.query.contains("llm_api_gateway_http_requests_total"));
                     assert!(query.query.contains("* on(function_id) group_right()"));
                 } else {
+                    assert_eq!(query.source.name(), "invocation");
+                    assert!(query.query.contains("function_request_total"));
+                    assert!(!query.query.contains("function_request{"));
                     assert_eq!(query.query.matches(&matcher).count(), 4);
                     assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
                 }
@@ -1038,12 +1011,8 @@ mod tests {
 
     #[test]
     fn gateway_discovery_omits_environment_when_configured() {
-        let queries = recent_invocation_queries(
-            "stg",
-            true,
-            None,
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
-        );
+        let queries =
+            recent_invocation_queries("stg", true, None, DISCOVERY_RECENTLY_INVOKED_LOOKBACK);
         for query in queries
             .iter()
             .filter(|query| matches!(query.source, InvocationMetricSource::LlmGateway))
@@ -1062,7 +1031,7 @@ mod tests {
             StdDuration::from_secs(90),
         );
 
-        assert_eq!(queries.len(), 2);
+        assert_eq!(queries.len(), 1);
         for query in queries {
             assert!(query.shard.is_none());
             assert!(!query.query.contains("function_id=~"));
@@ -1108,78 +1077,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invocation_failure_does_not_suppress_grpc_discovery_shards() {
-        let function_id = Uuid::new_v4();
+    async fn per_function_invocation_failure_fails_closed() {
         let function_version_id = Uuid::new_v4();
         let mut server = mockito::Server::new_async().await;
         let invocation = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex(
-                r"function_request(?:%7B|\{)".to_string(),
-            ))
-            .with_status(500)
-            .with_body("boom")
-            .expect_at_least(4)
-            .create_async()
-            .await;
-        let grpc = server
             .mock("GET", "/api/v1/query_range")
             .match_query(mockito::Matcher::Regex(
                 "function_request_total".to_string(),
-            ))
-            .with_status(200)
-            .with_body(vm_series(
-                "function_request_total",
-                function_id,
-                function_version_id,
-            ))
-            .expect(4)
-            .create_async()
-            .await;
-
-        let functions = get_recently_invoked_functions(
-            &ts_client(server.url()),
-            None,
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
-            "stg",
-            true,
-        )
-        .await
-        .expect("gRPC shard results should survive invocation failures");
-
-        assert_eq!(functions.len(), 1);
-        assert_eq!(functions[0].function_id, function_id);
-        invocation.assert_async().await;
-        grpc.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn per_function_invocation_failure_still_queries_grpc_but_fails_closed() {
-        let function_id = Uuid::new_v4();
-        let function_version_id = Uuid::new_v4();
-        let mut server = mockito::Server::new_async().await;
-        let invocation = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex(
-                r"function_request(?:%7B|\{)".to_string(),
             ))
             .with_status(500)
             .with_body("boom")
             .expect_at_least(1)
-            .create_async()
-            .await;
-        let grpc = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex(
-                "function_request_total".to_string(),
-            ))
-            .with_status(200)
-            .with_body(vm_series(
-                "function_request_total",
-                function_id,
-                function_version_id,
-            ))
-            .expect(1)
             .create_async()
             .await;
 
@@ -1192,12 +1100,11 @@ mod tests {
         )
         .await;
 
-        let error = result.expect_err("a partial per-function result must fail closed");
+        let error = result.expect_err("a failed per-function query must fail closed");
         let message = format!("{error:#}");
-        assert!(message.contains("1 succeeded, 1 failed"));
+        assert!(message.contains("0 succeeded, 1 failed"));
         assert!(!message.contains("boom"));
         invocation.assert_async().await;
-        grpc.assert_async().await;
     }
 
     #[tokio::test]
@@ -1207,10 +1114,12 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let recent = server
             .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex("function_request".to_string()))
+            .match_query(mockito::Matcher::Regex(
+                "function_request_total".to_string(),
+            ))
             .with_status(500)
             .with_body("boom")
-            .expect_at_least(8)
+            .expect_at_least(4)
             .create_async()
             .await;
         let workers = server

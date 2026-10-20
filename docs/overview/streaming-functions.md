@@ -58,13 +58,13 @@ done
 
 If the NIC NSG rule is missing, WebRTC clients receive
 `NVST_R_GENERIC_ERROR` while the function remains ACTIVE. See
-[streaming-troubleshooting](/nvcf/self-managed/troubleshooting#webrtc-streaming-fails-after-function-shows-active)
+[streaming-troubleshooting](../self-managed/troubleshooting.md#webrtc-streaming-fails-after-function-shows-active)
 for diagnosis steps.
 
 ### AWS (EKS)
 
 For LLS streaming on EKS, security group and NLB configuration is covered
-in [LLS Installation](/nvcf/self-managed/lls-installation#security-group).
+in [LLS Installation](../self-managed/lls-installation.md#security-group).
 
 ## Building the Streaming Server Application
 
@@ -116,7 +116,7 @@ The streaming application needs to be packaged inside a container and should be 
 4. Containerization guidelines:
 
    1. The container should make sure that the `CONTROL_SERVER_PORT`, `STREAMING_SERVER_PORT` and `STREAMING_PORT_BINDING_RANGE` are exposed by the container and accessible from outside the container.
-   2. If multiple sessions one after another needs to be supported with a fresh start of container, then exit the container after a streaming session ends.
+   2. If multiple sessions one after another needs to be supported with a fresh start of container, then exit the container after a streaming session ends. Exit with code 0: Kubernetes restarts the container in place, and NVCA does not count a clean exit after the instance was ready toward its container restart loop limit. Non-zero exits still count.
 
 ## Creating the LLS Streaming Function
 
@@ -205,7 +205,7 @@ This example focuses on NVCF integration. In production, you should also impleme
 
 For certain applications, TLS/SSL support is required. The proxy can be configured to use self-signed certificates for development and testing purposes by setting `PROXY_SSL_INSECURE=true`.
 
-Update `NVCF_SERVER` to point to your gateway address. See [gateway-routing](/nvcf/self-managed/gateway-routing) for details.
+Update `NVCF_SERVER` to point to your gateway address. See [gateway-routing](../self-managed/gateway-routing.md) for details.
 
 </Note>
 

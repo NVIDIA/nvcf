@@ -59,7 +59,7 @@ func TestMakeOTelEnvSet(t *testing.T) {
 			expEnvs: []corev1.EnvVar{
 				{
 					Name:  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-					Value: "http",
+					Value: "http/protobuf",
 				},
 				{
 					Name:  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
@@ -67,7 +67,7 @@ func TestMakeOTelEnvSet(t *testing.T) {
 				},
 				{
 					Name:  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-					Value: "http",
+					Value: "http/protobuf",
 				},
 				{
 					Name:  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
@@ -75,7 +75,7 @@ func TestMakeOTelEnvSet(t *testing.T) {
 				},
 				{
 					Name:  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-					Value: "http",
+					Value: "http/protobuf",
 				},
 				{
 					Name:  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -133,6 +133,59 @@ func TestMakeOTelEnvSet(t *testing.T) {
 				{
 					Name:  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
 					Value: "http://123-svcname:14357",
+				},
+				{
+					Name:  "OTEL_HEALTH_CHECK_ENDPOINT",
+					Value: "http://123-svcname:13133/health",
+				},
+			},
+		},
+		{
+			name: "mixed uppercase",
+			telLS: newTelemetryLaunchSpec(
+				&Telemetry{
+					Protocol: "HTTP",
+					Endpoint: "remotename:1234/otlp",
+					Provider: "GRAFANA_CLOUD",
+					Name:     "telemetry-foo",
+				},
+				&Telemetry{
+					Protocol: "GRPC",
+					Endpoint: "remotename:1234/otlp",
+					Provider: "GRAFANA_CLOUD",
+					Name:     "telemetry-baz",
+				},
+				&Telemetry{
+					Protocol: "HTTP",
+					Endpoint: "remotename:1234/otlp",
+					Provider: "GRAFANA_CLOUD",
+					Name:     "telemetry-bar",
+				},
+			),
+			expEnvs: []corev1.EnvVar{
+				{
+					Name:  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+					Value: "http/protobuf",
+				},
+				{
+					Name:  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+					Value: "http://123-svcname:14358/v1/logs",
+				},
+				{
+					Name:  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+					Value: "grpc",
+				},
+				{
+					Name:  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+					Value: "http://123-svcname:14357",
+				},
+				{
+					Name:  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+					Value: "http/protobuf",
+				},
+				{
+					Name:  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+					Value: "http://123-svcname:14358/v1/traces",
 				},
 				{
 					Name:  "OTEL_HEALTH_CHECK_ENDPOINT",

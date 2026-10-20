@@ -158,6 +158,10 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 			fmt.Fprintf(out, "%s: already %s\n", r.Name, version)
 			continue
 		}
+		if BumpLevel(version, r.Version) != "" {
+			fmt.Fprintf(out, "%s: skipped older release %s; keeping %s\n", r.Name, version, r.Version)
+			continue
+		}
 		fmt.Fprintf(out, "%s: %s -> %s\n", r.Name, r.Version, version)
 		level = HigherLevel(level, BumpLevel(r.Version, version))
 		changed++

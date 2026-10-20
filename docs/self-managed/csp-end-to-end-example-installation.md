@@ -15,7 +15,7 @@ names. Substitute the equivalents for GKE, AKS, or on-prem.
 
 For a deeper reference on each release and on values, see
 [Helmfile Installation](./helmfile-installation.md). For pulling and mirroring
-the bundles and images, see [Image Mirroring](/nvcf/overview/image-mirroring).
+the bundles and images, see [Image Mirroring](../overview/image-mirroring.md).
 
 <Info>
 This guide assumes you have already downloaded and extracted the control-plane
@@ -74,13 +74,13 @@ them. Each cluster needs:
 - A default-capable `StorageClass` with dynamic provisioning. On EKS this is
   `gp3`, backed by the EBS CSI driver. Substitute your provider's class name.
 - The compute (GPU) cluster needs a GPU operator (real or the fake GPU operator
-  for non-GPU validation). See [Fake GPU Operator](/nvcf/compute-plane/fake-gpu-operator).
+  for non-GPU validation). See [Fake GPU Operator](../dev/fake-gpu-operator.md).
 - The compute cluster needs the
   [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb)
   (`smb.csi.k8s.io`). NVCA uses it for shared model cache storage that function
   worker pods mount. Install and verify the driver before registering the GPU
   cluster. See the
-  [Self-Managed Clusters prerequisites](/nvcf/compute-plane/self-managed-clusters#prerequisites)
+  [Self-Managed Clusters prerequisites](../compute-plane/cluster-management/self-managed.md#prerequisites)
   for the installation command.
 
 Both clusters must be reachable through `kubectl` contexts:
@@ -496,6 +496,13 @@ global:
       natsURL: "nats://${GATEWAY_ADDR}:4222"
       natsHostOverride: "nats.${GATEWAY_ADDR}"
 ```
+
+<Note>
+Both subsections below run `nvcf-cli init`, which mints its token through Admin Issuer Proxy. On a
+stack where that component is disabled the command fails with `API error 404`: skip it, and export
+`NVCF_TOKEN` with a token from your own identity provider before registering. See
+[Disabling Admin Issuer Proxy](./control-plane-operations.md).
+</Note>
 
 Then follow the matching subsection below.
 

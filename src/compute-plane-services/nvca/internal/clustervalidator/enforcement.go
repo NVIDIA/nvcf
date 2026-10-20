@@ -20,7 +20,6 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -30,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -38,11 +38,17 @@ const (
 	enforcementDefaultImg  = "busybox:1.36"
 	enforcementConnTimeout = 5
 	enforcementPodTimeout  = 90 * time.Second
-	enforcementPropDelay   = 3 * time.Second
 	enforcementServerPod   = "netpol-server"
 	enforcementIngressPol  = "netpol-test-ingress"
 	enforcementEgressPol   = "netpol-test-egress"
+	// enforcementDeleteTimeout bounds each cleanup delete, on a context of its
+	// own so a cancelled run still cleans up.
+	enforcementDeleteTimeout = 20 * time.Second
 )
+
+// enforcementPropDelay is how long a policy change gets to reach the data
+// plane before it is probed. A var so tests need not wait it out.
+var enforcementPropDelay = 3 * time.Second
 
 func enforcementResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
@@ -88,6 +94,16 @@ func (e *enforcementEnv) probeWithDelay(role string, delay int) (bool, error) {
 	)
 }
 
+// enforcementProbeNamespaces are the enforcement test namespaces. Every
+// validator version has stamped both labels of the selector on them, and
+// app=netpol-test on the server and probe pods inside.
+var enforcementProbeNamespaces = probeNamespaceKind{
+	name:        "netpol-validation-*",
+	selector:    "app=netpol-validation,purpose=enforcement-test",
+	prefix:      "netpol-validation-",
+	podSelector: "app=netpol-test",
+}
+
 // orphanNamespaceTTL is the age beyond which a netpol-validation-* namespace
 // is considered orphaned (deferred cleanup in a previous run didn't fire
 // because the pod was SIGKILLed / OOMed / force-deleted) and is eligible for
@@ -122,8 +138,19 @@ func checkNetworkPolicyEnforcement(
 		podTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
 
-	ns := fmt.Sprintf("netpol-validation-%d", time.Now().UnixNano()%100000)
+	instance := rand.String(6)
+	ns := "netpol-validation-" + instance
+	log.Info("Phase 1: Setting up test environment")
+	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
+	if err := createTestNamespace(ctx, client, ns, instance); err != nil {
+		enforcementNotRun(log, state, fmt.Sprintf("could not create the test namespace %s: %v", ns, err))
+		return
+	}
+	// Registered only once the create succeeded or adopted a namespace with
+	// this run's label: a namespace this run did not create belongs to another
+	// run, whose test this would otherwise delete.
 	defer cleanupTestNamespace(log, client, ns)
+	printSuccess(log, "Namespace created")
 
 	env, ok := setupEnforcementEnv(ctx, client, state, ns, image, podTimeout)
 	if !ok {
@@ -134,31 +161,64 @@ func checkNetworkPolicyEnforcement(
 		return
 	}
 
-	denyAllOK := runDenyAllIngressPhase(env, state)
-	selectiveOK := runSelectiveAllowPhase(env, state)
+	denyAll := runDenyAllIngressPhase(env, state)
+	selective := runSelectiveAllowPhase(env, state)
 	egressOK := runEgressPhase(env)
 
-	allOK := denyAllOK && selectiveOK
-	state.EnforcementOK = &allOK
-
 	log.Info("")
-	if allOK && egressOK {
-		printSuccess(log, "Network Policy Enforcement: FULLY VERIFIED")
-	} else if allOK {
-		printSuccess(log, "Network Policy Enforcement: Ingress verified")
-		if !egressOK {
-			printWarning(log, "Network Policy Enforcement: Egress not fully verified (non-critical)")
-			state.Warnings = append(state.Warnings,
-				"Network Policy Enforcement: Egress enforcement not verified (non-critical)")
-		}
-	} else {
+	switch {
+	case denyAll == phaseFailed || selective == phaseFailed:
+		// An observed failure decides the check whatever else did not run.
+		ok := false
+		state.EnforcementOK = &ok
 		printError(log, "Network Policy Enforcement: VALIDATION FAILED")
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: CNI does not enforce NetworkPolicies")
 		state.Recommendations = append(state.Recommendations,
 			"Verify your CNI plugin supports and enforces NetworkPolicies "+
 				"(Calico, Cilium). Flannel does NOT support NetworkPolicies.")
+	case denyAll == phaseNotRun || selective == phaseNotRun:
+		// Leave the result unknown: the warnings name the call that failed.
+		printWarning(log, "Network Policy Enforcement: not verified, because a phase could not run")
+	case egressOK:
+		ok := true
+		state.EnforcementOK = &ok
+		printSuccess(log, "Network Policy Enforcement: FULLY VERIFIED")
+	default:
+		ok := true
+		state.EnforcementOK = &ok
+		printSuccess(log, "Network Policy Enforcement: Ingress verified")
+		printWarning(log, "Network Policy Enforcement: Egress not fully verified (non-critical)")
+		state.Warnings = append(state.Warnings,
+			"Network Policy Enforcement: Egress enforcement not verified (non-critical)")
 	}
+}
+
+// phaseResult is what an enforcement phase established. Only probes that ran
+// decide a phase: a policy or probe that could not be created, or a probe pod
+// that never ran, says nothing about the CNI.
+type phaseResult int
+
+const (
+	phaseNotRun phaseResult = iota
+	phasePassed
+	phaseFailed
+)
+
+// enforcementNotRun reports a step that could not run, naming it and the
+// cause, and returns phaseNotRun.
+func enforcementNotRun(log *logrus.Entry, state *ValidationState, msg string) phaseResult {
+	printWarning(log, msg)
+	state.Warnings = append(state.Warnings, "Network Policy Enforcement: status unknown ("+msg+")")
+	return phaseNotRun
+}
+
+// observed maps a phase's outcome to its result.
+func observed(ok bool) phaseResult {
+	if ok {
+		return phasePassed
+	}
+	return phaseFailed
 }
 
 func setupEnforcementEnv(
@@ -166,35 +226,23 @@ func setupEnforcementEnv(
 	state *ValidationState, ns, image string, podTimeout time.Duration,
 ) (*enforcementEnv, bool) {
 	log := state.Log
-	log.Info("Phase 1: Setting up test environment")
-	printInfo(log, fmt.Sprintf("Creating namespace %s", ns))
-
-	if err := createTestNamespace(ctx, client, ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to create test namespace: %v", err))
-		state.Warnings = append(state.Warnings, "Network Policy Enforcement: setup failed")
-		return nil, false
-	}
-	printSuccess(log, "Namespace created")
-
 	printInfo(log, "Deploying server pod...")
 	if err := createServerPod(ctx, client, ns, image); err != nil {
-		printError(log, fmt.Sprintf("Failed to create server pod: %v", err))
-		state.Warnings = append(state.Warnings, "Network Policy Enforcement: setup failed")
+		enforcementNotRun(log, state, fmt.Sprintf("could not create the server pod in %s: %v", ns, err))
 		return nil, false
 	}
 
-	if err := waitForPodReady(ctx, client, ns, enforcementServerPod, podTimeout); err != nil {
-		printError(log, fmt.Sprintf("Server pod not ready: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: server pod failed to start")
-		return nil, false
-	}
-
-	serverIP, err := getPodIP(ctx, client, ns, enforcementServerPod)
+	// The IP comes from the read that saw the pod Ready. A second read only
+	// adds a request that a transient error can fail.
+	server, err := waitForPodReady(ctx, client, ns, enforcementServerPod, podTimeout)
 	if err != nil {
-		printError(log, fmt.Sprintf("Could not get server IP: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: server pod has no IP")
+		enforcementNotRun(log, state, fmt.Sprintf("the server pod did not become Ready: %v", err))
+		return nil, false
+	}
+	serverIP := server.Status.PodIP
+	if serverIP == "" {
+		enforcementNotRun(log, state, fmt.Sprintf("the server pod %s/%s is Ready but has no IP",
+			ns, enforcementServerPod))
 		return nil, false
 	}
 	printSuccess(log, fmt.Sprintf("Server pod ready at %s:%d", serverIP, enforcementTestPort))
@@ -213,9 +261,7 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 
 	clientOK, err := env.probe("client")
 	if err != nil {
-		printError(log, fmt.Sprintf("Baseline probe error: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: baseline probe failed")
+		enforcementNotRun(log, state, fmt.Sprintf("the baseline client probe did not run: %v", err))
 		return false
 	}
 	if !clientOK {
@@ -229,7 +275,11 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 
 	printBlue(log, "Testing: allowed-client → server (expect: allowed)")
 	allowedOK, err := env.probe("allowed")
-	if err != nil || !allowedOK {
+	if err != nil {
+		enforcementNotRun(log, state, fmt.Sprintf("the baseline allowed-client probe did not run: %v", err))
+		return false
+	}
+	if !allowedOK {
 		printError(log, "Baseline: allowed-client cannot reach server — aborting")
 		state.Warnings = append(state.Warnings,
 			"Network Policy Enforcement: baseline connectivity broken")
@@ -240,26 +290,33 @@ func runBaselinePhase(env *enforcementEnv, state *ValidationState) bool {
 	return true
 }
 
-func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) bool {
+func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) phaseResult {
 	log := env.log
 	log.Info("")
 	log.Info("Phase 3: Deny-all ingress enforcement")
 	printInfo(log, "Applying deny-all ingress policy on server pod...")
-	if err := applyDenyAllIngressPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply deny-all policy: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: could not apply policy")
-		return false
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applyDenyAllIngressPolicy(c, env.client, env.ns)
+	}); err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("could not create the deny-all ingress policy: %v", err))
 	}
 	printSuccess(log, "Deny-all ingress policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy to propagate to data plane...",
 		enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return enforcementNotRun(log, state, "the run ended before the deny-all probes")
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked)")
-	clientReached, _ := env.probe("client")
+	clientReached, err := env.probe("client")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the deny-all client probe did not run: %v", err))
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: blocked)")
-	allowedReached, _ := env.probe("allowed")
+	allowedReached, err := env.probe("allowed")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the deny-all allowed-client probe did not run: %v", err))
+	}
 
 	ok := !clientReached && !allowedReached
 	if ok {
@@ -274,29 +331,37 @@ func runDenyAllIngressPhase(env *enforcementEnv, state *ValidationState) bool {
 		printError(log, "NetworkPolicy enforcement is NOT working")
 		printError(log, "Your CNI plugin accepts NetworkPolicy objects but does not enforce them")
 	}
-	return ok
+	return observed(ok)
 }
 
-func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) bool {
+func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) phaseResult {
 	log := env.log
 	log.Info("")
 	log.Info("Phase 4: Selective allow rule validation")
 	printInfo(log, "Applying selective allow policy (role=allowed only)...")
-	if err := applySelectiveAllowPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply selective allow policy: %v", err))
-		state.Warnings = append(state.Warnings,
-			"Network Policy Enforcement: could not apply selective policy")
-		return false
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applySelectiveAllowPolicy(c, env.client, env.ns)
+	}); err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("could not apply the selective allow policy: %v", err))
 	}
 	printSuccess(log, "Selective allow policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy update to propagate...",
 		enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return enforcementNotRun(log, state, "the run ended before the selective allow probes")
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked)")
-	clientReached, _ := env.probe("client")
+	clientReached, err := env.probe("client")
+	if err != nil {
+		return enforcementNotRun(log, state, fmt.Sprintf("the selective allow client probe did not run: %v", err))
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: allowed)")
-	allowedReached, _ := env.probe("allowed")
+	allowedReached, err := env.probe("allowed")
+	if err != nil {
+		return enforcementNotRun(log, state,
+			fmt.Sprintf("the selective allow allowed-client probe did not run: %v", err))
+	}
 
 	ok := !clientReached && allowedReached
 	if ok {
@@ -310,7 +375,7 @@ func runSelectiveAllowPhase(env *enforcementEnv, state *ValidationState) bool {
 			printError(log, "The CNI may not correctly evaluate podSelector in ingress rules")
 		}
 	}
-	return ok
+	return observed(ok)
 }
 
 // egressSettleDelay gives the CNI time to program eBPF/iptables rules on a
@@ -323,13 +388,21 @@ func runEgressPhase(env *enforcementEnv) bool {
 	log.Info("Phase 5: Egress policy enforcement")
 
 	printInfo(log, "Removing ingress policy for clean egress test...")
-	if err := deleteNetworkPolicy(env.ctx, env.client, env.ns, enforcementIngressPol); err != nil {
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return deleteNetworkPolicy(c, env.client, env.ns, enforcementIngressPol)
+	}); err != nil {
 		printWarning(log, fmt.Sprintf("Could not remove ingress policy: %v", err))
 	}
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return false
+	}
 
 	printInfo(log, "Verifying connectivity restored (clean slate)...")
-	cleanSlate, _ := env.probe("client")
+	cleanSlate, err := env.probe("client")
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Skipping egress test: the clean-slate probe did not run: %v", err))
+		return false
+	}
 	if !cleanSlate {
 		printWarning(log, "Client still cannot reach server after policy removal — stale state")
 		printWarning(log, "Skipping egress test")
@@ -338,18 +411,30 @@ func runEgressPhase(env *enforcementEnv) bool {
 	printSuccess(log, "Connectivity restored after policy removal")
 
 	printInfo(log, "Applying deny-all egress policy on client pod...")
-	if err := applyDenyAllEgressPolicy(env.ctx, env.client, env.ns); err != nil {
-		printError(log, fmt.Sprintf("Failed to apply egress policy: %v", err))
+	if err := observeErr(env.ctx, func(c context.Context) error {
+		return applyDenyAllEgressPolicy(c, env.client, env.ns)
+	}); err != nil {
+		printWarning(log, fmt.Sprintf("Could not create the deny-all egress policy: %v", err))
 		return false
 	}
 	printSuccess(log, "Deny-all egress policy applied")
 	printInfo(log, fmt.Sprintf("Waiting %v for policy to propagate...", enforcementPropDelay))
-	time.Sleep(enforcementPropDelay)
+	if !sleepCtx(env.ctx, enforcementPropDelay) {
+		return false
+	}
 
 	printBlue(log, "Testing: client → server (expect: blocked by egress)")
-	clientReached, _ := env.probeWithDelay("client", egressSettleDelay)
+	clientReached, err := env.probeWithDelay("client", egressSettleDelay)
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Egress not verified: the client probe did not run: %v", err))
+		return false
+	}
 	printBlue(log, "Testing: allowed-client → server (expect: allowed, unaffected)")
-	allowedReached, _ := env.probeWithDelay("allowed", egressSettleDelay)
+	allowedReached, err := env.probeWithDelay("allowed", egressSettleDelay)
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Egress not verified: the allowed-client probe did not run: %v", err))
+		return false
+	}
 
 	ok := !clientReached && allowedReached
 	if ok {
@@ -370,72 +455,46 @@ func runEgressPhase(env *enforcementEnv) bool {
 // Namespace helpers
 // ---------------------------------------------------------------------------
 
-func createTestNamespace(ctx context.Context, client kubernetes.Interface, ns string) error {
-	_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+// createTestNamespace creates the run's test namespace, labelled with the
+// run's instance so a retried create can adopt it.
+func createTestNamespace(ctx context.Context, client kubernetes.Interface, ns, instance string) error {
+	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   ns,
-			Labels: map[string]string{"app": "netpol-validation", "purpose": "enforcement-test"},
+			Name: ns,
+			Labels: map[string]string{
+				"app": "netpol-validation", "purpose": "enforcement-test", managedByLabel: validatorManager,
+				instanceLabel: instance,
+			},
 		},
-	}, metav1.CreateOptions{})
+	}
+	_, err := createOrAdopt(ctx, instance, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Create(c, namespace, metav1.CreateOptions{})
+	}, func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, ns, metav1.GetOptions{})
+	})
 	return err
 }
 
 func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), enforcementDeleteTimeout)
 	defer cancel()
 	printInfo(log, fmt.Sprintf("Cleaning up test namespace %s", ns))
 	err := client.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		log.Warnf("Failed to clean up namespace %s: %v", ns, err)
+		log.Warn(probeCleanupFailure(ns, orphanNamespaceTTL, err))
 	}
 }
 
-// sweepOrphanTestNamespaces lists all netpol-validation-* namespaces and
-// deletes any whose age exceeds ttl. Used to reclaim leaks from prior runs
-// that died before their deferred cleanup could fire (SIGKILL, OOM,
-// force-delete, node failure). Namespaces younger than ttl are left alone
-// in case they belong to a concurrent run.
+// sweepOrphanTestNamespaces deletes the netpol-validation-* namespaces older
+// than ttl that carry both enforcementProbeNamespaces labels. One with the
+// prefix and only one of the labels is not a validator's and is never
+// deleted. Used to reclaim leaks from prior runs that died before their
+// deferred cleanup could fire (SIGKILL, OOM, force-delete, node failure) or
+// lost their RBAC first.
 func sweepOrphanTestNamespaces(
 	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
-) {
-	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{
-		LabelSelector: "app=netpol-validation",
-	})
-	if err != nil {
-		log.Warnf("Orphan sweep: failed to list namespaces: %v", err)
-		return
-	}
-	if len(nsList.Items) == 0 {
-		return
-	}
-
-	cutoff := time.Now().Add(-ttl)
-	deleted := 0
-	for i := range nsList.Items {
-		ns := &nsList.Items[i]
-		if !strings.HasPrefix(ns.Name, "netpol-validation-") {
-			continue
-		}
-		if ns.CreationTimestamp.After(cutoff) {
-			continue // still within TTL — might be a concurrent run
-		}
-		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
-		err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
-		delCancel()
-		if err != nil && !apierrors.IsNotFound(err) {
-			log.Warnf("Orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
-			continue
-		}
-		deleted++
-	}
-	if deleted > 0 {
-		printInfo(log, fmt.Sprintf(
-			"Orphan sweep: deleted %d stale netpol-validation-* namespace(s) older than %s",
-			deleted, ttl))
-	}
+) (more bool, err error) {
+	return sweepProbeNamespaces(ctx, log, client, enforcementProbeNamespaces, ttl)
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +502,7 @@ func sweepOrphanTestNamespaces(
 // ---------------------------------------------------------------------------
 
 func buildServerPod(ns, image string) *corev1.Pod {
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      enforcementServerPod,
 			Namespace: ns,
@@ -461,16 +520,27 @@ func buildServerPod(ns, image string) *corev1.Pod {
 					ContainerPort: int32(enforcementTestPort),
 					Protocol:      corev1.ProtocolTCP,
 				}},
-				Resources: enforcementResources(),
+				Resources:       enforcementResources(),
+				SecurityContext: nodeToNodeSecurityContext(),
 			}},
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+	hardenProbePodSpec(&pod.Spec)
+	return pod
 }
 
 func createServerPod(ctx context.Context, client kubernetes.Interface, ns, image string) error {
-	_, err := client.CoreV1().Pods(ns).Create(ctx, buildServerPod(ns, image), metav1.CreateOptions{})
-	return err
+	pod := buildServerPod(ns, image)
+	return observeErr(ctx, func(c context.Context) error {
+		_, err := client.CoreV1().Pods(ns).Create(c, pod, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			// The test namespace is this run's own, so an earlier attempt
+			// that timed out created it.
+			return nil
+		}
+		return err
+	})
 }
 
 // buildProbePod constructs a short-lived pod that runs wget to test
@@ -483,7 +553,7 @@ func buildProbePod(ns, name, image, role, serverIP string, settleDelay int) *cor
 	if settleDelay > 0 {
 		cmd = fmt.Sprintf("sleep %d && %s", settleDelay, wgetCmd)
 	}
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
@@ -491,14 +561,17 @@ func buildProbePod(ns, name, image, role, serverIP string, settleDelay int) *cor
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
-				Name:      "probe",
-				Image:     image,
-				Command:   []string{"sh", "-c", cmd},
-				Resources: enforcementResources(),
+				Name:            "probe",
+				Image:           image,
+				Command:         []string{"sh", "-c", cmd},
+				Resources:       enforcementResources(),
+				SecurityContext: nodeToNodeSecurityContext(),
 			}},
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+	hardenProbePodSpec(&pod.Spec)
+	return pod
 }
 
 // probeConnectivity creates a short-lived pod that attempts to reach the
@@ -520,70 +593,183 @@ func probeConnectivityWithDelay(
 	timeout time.Duration, settleDelay int,
 ) (bool, error) {
 	pod := buildProbePod(ns, name, image, role, serverIP, settleDelay)
-	if _, err := client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-		return false, fmt.Errorf("creating probe pod %s: %w", name, err)
+	if err := observeErr(ctx, func(c context.Context) error {
+		_, err := client.CoreV1().Pods(ns).Create(c, pod, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			// An earlier attempt that timed out went through: the name is this
+			// probe's own.
+			return nil
+		}
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("could not create the probe pod %s: %w", name, err)
 	}
 	defer func() {
-		_ = client.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+		delCtx, cancel := context.WithTimeout(context.Background(), enforcementDeleteTimeout)
+		defer cancel()
+		_ = client.CoreV1().Pods(ns).Delete(delCtx, name, metav1.DeleteOptions{})
 	}()
 
-	return waitForPodDone(ctx, client, ns, name, timeout)
+	succeeded, done, err := waitForPodDone(ctx, client, ns, name, timeout)
+	if err != nil {
+		return false, err
+	}
+	// Failed reads as blocked only when the probe ran: a pod the kubelet
+	// refused, or one whose container never started, sent no traffic.
+	if !succeeded && !containerTerminated(done) {
+		return false, fmt.Errorf("probe pod %s/%s ended %s without running (%s)",
+			ns, name, done.Status.Phase, done.Status.Reason)
+	}
+	return succeeded, nil
 }
 
-// waitForPodReady polls until the named pod has the Ready condition.
-func waitForPodReady(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) error {
+// containerTerminated reports whether any of pod's containers ran to an exit.
+func containerTerminated(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForPodReady polls until the named pod has the Ready condition, and
+// returns the pod as that read saw it.
+func waitForPodReady(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+) (*corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
+		if !time.Now().Before(deadline) {
+			if lastErr != nil {
+				return nil, fmt.Errorf("pod %s/%s did not become ready within %v (last error: %w)",
+					ns, name, timeout, lastErr)
+			}
+			return nil, fmt.Errorf("pod %s/%s did not become ready within %v", ns, name, timeout)
 		}
 
-		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-			}
-		} else {
+		getCtx, cancel := attemptContext(ctx, deadline)
+		pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
+		switch {
+		case err == nil:
+			lastErr = nil
+		case apierrors.IsNotFound(err):
+			// Not created yet. The API answered, so an earlier transient
+			// error no longer explains a timeout.
+			lastErr = nil
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
+			return nil, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
+		default:
+			// A slow or throttled Get is not the pod's answer. The per-attempt
+			// cap turned an APF-queued Get into a hard failure of the whole
+			// enforcement check, so retry it inside the deadline, as
+			// waitForPodDone does.
+			lastErr = err
+		}
+		if err == nil {
 			if isPodReady(pod) {
-				return nil
+				return pod, nil
 			}
 			if pod.Status.Phase == corev1.PodFailed {
-				return fmt.Errorf("pod %s/%s entered Failed phase", ns, name)
+				return nil, fmt.Errorf("pod %s/%s entered Failed phase", ns, name)
 			}
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
+// pollAttemptTimeout caps one API call inside a poll loop. The loops check
+// their deadline only between attempts and the client sets no request timeout,
+// so a single hung call could otherwise outlive the whole budget.
+const pollAttemptTimeout = 10 * time.Second
+
+// attemptContext bounds one poll attempt by pollAttemptTimeout and by the
+// time left before deadline. An attempt that times out is an ordinary
+// transient error to the caller's retry loop.
+//
+// The one-second floor is deliberate. waitForProbePods checks its deadline
+// after each attempt, so its last attempt usually starts just past it (the
+// deadline expires during the sleep). Without the floor that attempt is
+// cancelled at once, and the probe reports the pods unobserved instead of
+// classifying them, turning a real CNI fault into UNKNOWN. The loops that
+// check the deadline first can overrun it by at most the floor.
+func attemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, max(min(pollAttemptTimeout, time.Until(deadline)), time.Second))
+}
+
 // waitForPodDone polls until the named pod reaches Succeeded or Failed.
-// Returns true for Succeeded, false for Failed.
-func waitForPodDone(ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration) (bool, error) {
+// Returns true for Succeeded, false for Failed, and the terminal pod, so a
+// caller that needs its exit code does not fetch it again and risk losing the
+// result to a transient error.
+func waitForPodDone(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+) (bool, *corev1.Pod, error) {
+	return waitForPodDoneOr(ctx, client, ns, name, timeout, nil)
+}
+
+// podStuckError reports a pod that cannot finish, for the reason stuck named.
+type podStuckError struct {
+	pod, reason string
+}
+
+func (e *podStuckError) Error() string {
+	return fmt.Sprintf("pod %s cannot finish: %s", e.pod, e.reason)
+}
+
+// waitForPodDoneOr is waitForPodDone that also gives up, with a
+// *podStuckError and the pod as read, as soon as stuck names a reason the pod
+// cannot finish, rather than waiting out the timeout.
+func waitForPodDoneOr(
+	ctx context.Context, client kubernetes.Interface, ns, name string, timeout time.Duration,
+	stuck func(*corev1.Pod) string,
+) (bool, *corev1.Pod, error) {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for {
-		if time.Now().After(deadline) {
-			return false, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
+		if !time.Now().Before(deadline) {
+			if lastErr != nil {
+				return false, nil, fmt.Errorf("pod %s/%s did not complete within %v (last error: %w)",
+					ns, name, timeout, lastErr)
+			}
+			return false, nil, fmt.Errorf("pod %s/%s did not complete within %v", ns, name, timeout)
 		}
 
-		pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return false, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-		}
-
-		switch pod.Status.Phase {
-		case corev1.PodSucceeded:
-			return true, nil
-		case corev1.PodFailed:
-			return false, nil
+		getCtx, cancel := attemptContext(ctx, deadline)
+		pod, err := client.CoreV1().Pods(ns).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
+		switch {
+		case err == nil:
+			lastErr = nil
+			switch pod.Status.Phase {
+			case corev1.PodSucceeded:
+				return true, pod, nil
+			case corev1.PodFailed:
+				return false, pod, nil
+			}
+			if stuck != nil {
+				if why := stuck(pod); why != "" {
+					return false, pod, &podStuckError{pod: ns + "/" + name, reason: why}
+				}
+			}
+		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err):
+			// Answers that cannot change inside the deadline.
+			return false, nil, fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
+		default:
+			// A 429 or apiserver blip is not the pod's result, so retry it
+			// rather than spend one Get on the whole verdict.
+			lastErr = err
 		}
 
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return false, nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -596,17 +782,6 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-func getPodIP(ctx context.Context, client kubernetes.Interface, ns, name string) (string, error) {
-	pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("getting pod %s/%s: %w", ns, name, err)
-	}
-	if pod.Status.PodIP == "" {
-		return "", fmt.Errorf("pod %s/%s has no IP assigned", ns, name)
-	}
-	return pod.Status.PodIP, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +807,11 @@ func buildDenyAllIngressPolicy(ns string) *networkingv1.NetworkPolicy {
 func applyDenyAllIngressPolicy(ctx context.Context, client kubernetes.Interface, ns string) error {
 	_, err := client.NetworkingV1().NetworkPolicies(ns).Create(
 		ctx, buildDenyAllIngressPolicy(ns), metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		// The test namespace is this run's own, so an earlier attempt that
+		// timed out created it.
+		return nil
+	}
 	return err
 }
 
@@ -691,6 +871,9 @@ func buildDenyAllEgressPolicy(ns string) *networkingv1.NetworkPolicy {
 func applyDenyAllEgressPolicy(ctx context.Context, client kubernetes.Interface, ns string) error {
 	_, err := client.NetworkingV1().NetworkPolicies(ns).Create(
 		ctx, buildDenyAllEgressPolicy(ns), metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
 	return err
 }
 

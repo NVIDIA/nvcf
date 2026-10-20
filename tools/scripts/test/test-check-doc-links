@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/source/tools/ci" "$workdir/source/docs" "$workdir/source/fern/changelog"
+cp "$repo_root/tools/ci/check-doc-links" "$workdir/source/tools/ci/"
+cat > "$workdir/source/tools/ci/run-lychee" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$CAPTURE"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --output ]; then
+    printf 'Mock link report\n' > "$2"
+    break
+  fi
+  shift
+done
+exit "${LYCHEE_TEST_EXIT:-0}"
+MOCK
+chmod +x "$workdir/source/tools/ci/run-lychee"
+cd "$workdir/source"
+git init -q
+git config user.name 'Docs link test'
+git config user.email 'docs-link-test@example.com'
+printf '# Unchanged\n' > docs/unchanged.md
+printf '# Deleted\n' > docs/deleted.md
+printf '# Modified\n' > docs/modified.md
+printf '# Renamed\n' > docs/renamed.md
+printf '# Other\n' > README.md
+git add .
+git commit -qm 'test: create base'
+base="$(git rev-parse HEAD)"
+export CAPTURE="$workdir/arguments"
+report="$workdir/report.md"
+./tools/ci/check-doc-links "$base" "$report"
+grep -q 'No added or modified' "$report"
+[ ! -f "$CAPTURE" ]
+printf '\nChanged\n' >> docs/modified.md
+printf '# Added\n' > 'docs/added page.md'
+printf '# Release\n' > fern/changelog/release.mdx
+printf 'not markdown\n' > docs/config.yaml
+printf '\nOther change\n' >> README.md
+git rm -q docs/deleted.md
+git mv docs/renamed.md 'docs/renamed page.md'
+git add .
+./tools/ci/check-doc-links "$base" "$report"
+for expected in 'docs/modified.md' 'docs/added page.md' 'docs/renamed page.md' 'fern/changelog/release.mdx'; do
+  grep -Fxq "$expected" "$CAPTURE"
+done
+for omitted in 'docs/unchanged.md' 'docs/deleted.md' 'docs/renamed.md' 'docs/config.yaml' 'README.md'; do
+  if grep -Fxq "$omitted" "$CAPTURE"; then
+    echo "Unexpected link check input: $omitted" >&2
+    exit 1
+  fi
+done
+grep -Fxq 'tools/ci/docs-links.toml' "$CAPTURE"
+grep -Fxq -- '--no-ignore' "$CAPTURE"
+grep -Fxq 'Mock link report' "$report"
+code=0
+LYCHEE_TEST_EXIT=2 ./tools/ci/check-doc-links "$base" "$report" || code=$?
+[ "$code" -eq 2 ] || { echo 'Link failure was hidden' >&2; exit 1; }
+if ./tools/ci/check-doc-links missing-base "$report" > /dev/null 2>&1; then
+  echo 'Missing base must fail' >&2
+  exit 1
+fi
+git commit -qm 'test: commit changed docs'
+rm "$CAPTURE" "$report"
+./tools/ci/check-doc-links 0000000000000000000000000000000000000000 "$report"
+[ -f "$CAPTURE" ]
+grep -Fxq 'fern/changelog/release.mdx' "$CAPTURE"
+grep -Fxq 'Mock link report' "$report"
+echo 'test-check-doc-links: PASS'

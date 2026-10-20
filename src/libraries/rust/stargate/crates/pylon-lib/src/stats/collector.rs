@@ -807,6 +807,8 @@ mod tests {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: false,
+                cached_input_tokens: None,
+                input_usage_expected: false,
                 output_calibration,
                 upstream_duration: None,
             },
@@ -1353,6 +1355,224 @@ mod tests {
     }
 
     #[test]
+    fn non_terminal_usage_resolves_a_slot_whose_terminal_is_lost() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        let a = prefill_interval(start, Duration::ZERO, seconds(1));
+        let b = prefill_interval(start, milliseconds(100), seconds(1));
+        for (request_id, interval) in [("a", a), ("b", b)] {
+            let observation = input_usage_observation(
+                request_id,
+                1_000,
+                RequestObservationState::OutputGeneration,
+            );
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                &observation,
+                interval,
+                TestInputUsage::Absent,
+                true,
+            );
+            assert_eq!(stats.last_mean_input_tps, 0.0, "{request_id} is pending");
+        }
+        // A's usage arrives on a non-terminal event and its terminal event is lost.
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("a", 1_000, RequestObservationState::OutputGeneration),
+            a,
+            TestInputUsage::Cached(600),
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 400.0, "usage resolves A");
+
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("b", 1_000, RequestObservationState::Complete),
+            b,
+            TestInputUsage::Cached(200),
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 1_200.0 / 1.1, "A and B");
+    }
+
+    /// Prompt usage carried by one fallback chat observation.
+    #[derive(Clone, Copy, Debug)]
+    enum TestInputUsage {
+        /// No usage payload; the request-side prompt estimate is used.
+        Absent,
+        /// Usage reports prompt tokens without a cached-token breakdown.
+        TotalOnly,
+        /// Usage reports this many cached prompt tokens.
+        Cached(u64),
+    }
+
+    fn input_usage_observation(
+        request_id: &str,
+        input_tokens: u64,
+        state: RequestObservationState,
+    ) -> RequestObservation {
+        RequestObservation {
+            state,
+            ..identified(
+                completed_observation(input_tokens, 1, 10, seconds(1), seconds(2)),
+                request_id,
+            )
+        }
+    }
+
+    fn prefill_interval(
+        start: std::time::Instant,
+        submitted_after: Duration,
+        prefill: Duration,
+    ) -> crate::runtime_state::RequestInputInterval {
+        let submitted_at = start + submitted_after;
+        crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + prefill,
+        }
+    }
+
+    fn apply_input_usage_observation(
+        aggregator: &mut StatsAggregator,
+        observation: &RequestObservation,
+        interval: crate::runtime_state::RequestInputInterval,
+        usage: TestInputUsage,
+        input_usage_expected: bool,
+    ) -> CurrentModelStats {
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation.clone());
+        event.input_interval = Some(interval);
+        event.input_usage_expected = input_usage_expected;
+        (event.input_tokens_explicit, event.cached_input_tokens) = match usage {
+            TestInputUsage::Absent => (false, None),
+            TestInputUsage::TotalOnly => (true, None),
+            TestInputUsage::Cached(cached) => (true, Some(cached)),
+        };
+        aggregator.apply_fallback_observation(&event);
+        aggregator.snapshot("model-a")
+    }
+
+    #[test]
+    fn chat_usage_without_details_is_a_miss_after_the_first_details_report() {
+        use RequestObservationEndpoint::{ChatCompletions as Chat, Responses};
+        use TestInputUsage::{Absent, Cached, TotalOnly};
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        // One-entry window with disjoint one-second prefills: each mean is the
+        // request's own uncached token count.
+        for (index, (endpoint, input_tokens, usage, maximum, context)) in [
+            (Chat, 1_000, TotalOnly, None, "miss before details"),
+            (Responses, 1_500, Cached(0), Some(1_500.0), "responses"),
+            (Chat, 1_800, TotalOnly, Some(1_500.0), "after responses"),
+            (Chat, 2_000, Cached(400), Some(1_600.0), "chat details"),
+            (Chat, 3_000, TotalOnly, Some(3_000.0), "miss after chat"),
+            (Chat, 5_000, Cached(6_000), Some(3_000.0), "over total"),
+            (Chat, 7_000, Absent, Some(3_000.0), "request estimate"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let observation = RequestObservation {
+                endpoint,
+                ..input_usage_observation(
+                    &format!("details-{index}"),
+                    input_tokens,
+                    RequestObservationState::Complete,
+                )
+            };
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                &observation,
+                prefill_interval(start, seconds(2 * index as u64), seconds(1)),
+                usage,
+                true,
+            );
+            let uncached = match usage {
+                Cached(cached) => input_tokens.checked_sub(cached).unwrap_or(input_tokens),
+                _ => input_tokens,
+            };
+            assert_tps_near(stats.last_mean_input_tps, uncached as f64, context);
+            assert_eq!(stats.max_input_tps, maximum, "{context}");
+        }
+    }
+
+    #[track_caller]
+    fn assert_tps_near(actual: f64, expected: f64, context: &str) {
+        assert!(
+            (actual - expected).abs() <= expected.abs().max(1.0) * 1e-9,
+            "{context}: expected {expected} TPS, got {actual} TPS"
+        );
+    }
+
+    #[test]
+    fn fallback_max_input_tps_waits_for_total_token_entries_to_leave_the_window() {
+        use TestInputUsage::{Absent, Cached};
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        // Disjoint one-second prefills make each window mean the average of
+        // the retained entries' token counts.
+        for (index, (input_tokens, usage, mean, maximum, context)) in [
+            (400, Cached(0), 400.0, 400.0, "sets max"),
+            (100, Absent, 250.0, 400.0, "estimate lowers mean"),
+            (900, Cached(0), 500.0, 400.0, "max waits for estimate"),
+            (700, Cached(0), 800.0, 800.0, "estimate left window"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                &input_usage_observation(
+                    &format!("mixed-window-{index}"),
+                    input_tokens,
+                    RequestObservationState::Complete,
+                ),
+                prefill_interval(start, seconds(3 * index as u64), seconds(1)),
+                usage,
+                false,
+            );
+            assert_tps_near(stats.last_mean_input_tps, mean, context);
+            assert_eq!(stats.max_input_tps, Some(maximum), "{context}");
+        }
+    }
+
+    #[test]
+    fn calibration_windows_raise_max_input_tps_without_cached_details() {
+        // Stream mode routes calibration observations through the fallback window.
+        for stream in [false, true] {
+            let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+            let generation = aggregator
+                .current_generation("model-a")
+                .cloned()
+                .expect("test model generation should exist");
+            let request_id =
+                next_generated_request_id(GeneratedRequestKind::Calibration, &generation);
+            let mut event =
+                aggregator
+                    .runtime_state
+                    .transition_request_observation(input_usage_observation(
+                        &request_id,
+                        100,
+                        RequestObservationState::Complete,
+                    ));
+            event.input_interval = Some(prefill_interval(
+                std::time::Instant::now(),
+                Duration::ZERO,
+                seconds(1),
+            ));
+            if stream {
+                aggregator.apply_stream_observation(&event);
+            } else {
+                aggregator.apply_fallback_observation(&event);
+            }
+            let stats = aggregator.snapshot("model-a");
+            assert_tps_near(stats.last_mean_input_tps, 100.0, "calibration mean");
+            assert_eq!(stats.max_input_tps, Some(100.0), "stream: {stream}");
+        }
+    }
+
+    #[test]
     fn chat_observation_without_backend_interval_does_not_record_throughput() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let event = aggregator
@@ -1510,12 +1730,38 @@ mod tests {
             StatsCollectorConfig::default(),
             ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
         );
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
+        let bootstrapped = aggregator.snapshot("model-a");
+        assert_eq!(bootstrapped.last_mean_input_tps, 100.0);
+        assert_eq!(bootstrapped.max_input_tps, Some(100.0));
         aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
 
         let stats = published_stats(aggregator.stream("req-a", (20, 0), false, milliseconds(100)));
 
         assert!((stats.last_mean_input_tps - (700.0 / 6.0)).abs() < f64::EPSILON);
+        assert_eq!(stats.max_input_tps, Some(stats.last_mean_input_tps));
+    }
+
+    #[test]
+    fn engine_max_input_tps_follows_the_mean_and_persists_for_the_generation() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
+        // Four 100 TPS ticks, one 1,100 TPS outlier, then three 100 TPS ticks.
+        let mut tokens = 0;
+        for (tick, delta) in [10, 10, 10, 10, 110, 10, 10, 10].into_iter().enumerate() {
+            tokens += delta;
+            aggregator.stream(
+                "req-a",
+                (tokens, 0),
+                false,
+                milliseconds(100 * (tick as u64 + 1)),
+            );
+        }
+
+        let stats = aggregator.snapshot("model-a");
+        assert_eq!(stats.last_mean_input_tps, 225.0);
+        assert_eq!(stats.max_input_tps, Some(300.0));
+        aggregator.sweep(seconds(24 * 60 * 60));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(300.0));
     }
 
     #[test]
@@ -2336,6 +2582,32 @@ mod tests {
     }
 
     #[test]
+    fn fallback_max_input_tps_retains_the_peak_when_the_window_mean_falls() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        for (index, (input_tokens, maximum)) in [(200, 200.0), (50, 200.0), (300, 300.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                &input_usage_observation(
+                    &format!("max-input-{index}"),
+                    input_tokens,
+                    RequestObservationState::OutputGeneration,
+                ),
+                prefill_interval(start, seconds(index as u64 * 3), seconds(1)),
+                TestInputUsage::Cached(0),
+                false,
+            );
+            assert_eq!(stats.last_mean_input_tps, input_tokens as f64);
+            assert_eq!(stats.max_input_tps, Some(maximum));
+        }
+        aggregator.sweep(seconds(600));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(300.0));
+    }
+
+    #[test]
     fn reused_request_id_retains_distinct_submission_intervals() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let start = std::time::Instant::now();
@@ -2404,10 +2676,15 @@ mod tests {
             .metrics
             .request_input_intervals
             .observe(
-                &later_cumulative.request_id,
-                interval,
-                later_cumulative.input_tokens,
-                false,
+                super::super::aggregator::InputIntervalSample {
+                    request_id: &later_cumulative.request_id,
+                    interval,
+                    prompt_tokens: later_cumulative.input_tokens,
+                    input_tokens: later_cumulative.input_tokens,
+                    input_tokens_explicit: false,
+                    max_input_tps_eligible: false,
+                    pending: false,
+                },
                 &config,
             );
 
@@ -2649,6 +2926,7 @@ mod tests {
             )
         };
         apply_fallback_observation_with_interval(&mut aggregator, &estimated, old_interval, false);
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         let mut late_exact =
             aggregator
                 .runtime_state
@@ -2682,6 +2960,7 @@ mod tests {
                 .begin_generation(replacement, ModelStatsInitialization::Empty)
                 .is_some()
         );
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -2713,6 +2992,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -3773,7 +4053,13 @@ mod tests {
             )
             .expect("test model stats should initialize");
         let observation = completed_observation(20, 2, 10, seconds(2), seconds(4));
-        let updated_stats = apply_fallback_observation(&mut aggregator, &observation);
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        event = event_with_test_metadata(event);
+        event.input_tokens_explicit = true;
+        event.cached_input_tokens = Some(0);
+        let updated_stats = aggregator.apply_fallback_observation(&event);
         for (model_id, stats) in updated_stats {
             publish_model_stats_update(&runtime_state, model_id, stats);
         }
@@ -3782,6 +4068,7 @@ mod tests {
             r#"pylon_requests_total{model="model-a",routing_key="rk-1",status="complete"} 1"#
         ));
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
+        assert!(body.contains(r#"pylon_model_max_input_tps{model="model-a"} 10"#));
         assert!(body.contains(r#"pylon_model_output_tps{model="model-a"} 5"#));
     }
 

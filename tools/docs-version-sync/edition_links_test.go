@@ -66,6 +66,28 @@ navigation:
 	}
 }
 
+func TestEditionLinksRejectSymlinkNavigation(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "fern", "docs.yml"), "redirects: []\n")
+	writeFile(t, filepath.Join(root, "fern", "navigation.yml"), `tabs:
+  overview:
+    slug: overview
+navigation:
+  - tab: overview
+    layout:
+      - page: Shared
+        slug: shared
+        path: ../docs/shared.md
+`)
+	writeFile(t, filepath.Join(root, "docs", "page.md"), "# Shared\n")
+	if err := os.Symlink("page.md", filepath.Join(root, "docs", "shared.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stageEditionLinks(root, "navigation.yml"); err == nil || !strings.Contains(err.Error(), "real source path") {
+		t.Fatalf("symlink navigation accepted: %v", err)
+	}
+}
+
 func TestEditionArchivesKeepHistoricalRoutes(t *testing.T) {
 	config := map[string]any{"products": []any{map[string]any{
 		"display-name": "Self-Managed", "slug": "self-managed", "versions": []any{

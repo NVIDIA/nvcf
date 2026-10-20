@@ -19,11 +19,11 @@ See the
 [NVIDIA GPU DRA ComputeDomain guide](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html),
 [KAI topology guide](https://github.com/kai-scheduler/KAI-Scheduler/blob/main/docs/topology/README.md),
 [Grove topology guide](https://github.com/NVIDIA/grove/blob/main/docs/user-guide/topology-aware-scheduling.md),
-and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.4.1/kubernetes-deployment/scale/topology-aware-scheduling)
+and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.4.1/knowledge-base/kubernetes/multinode/topology-aware-scheduling)
 for component-level details.
 
 Helm functions can also use the legacy
-[`dra.nvcf.nvidia.io` partition annotation](/nvcf/overview/helm-functions#legacy-nvca-nvlink-partition-annotation).
+[`dra.nvcf.nvidia.io` partition annotation](../../overview/helm-functions.md#legacy-nvca-nvlink-partition-annotation).
 That path uses Kubernetes Pod affinity and is best-effort without KAI Scheduler
 or Grove topology-aware scheduling. Use the KAI or Grove mechanisms on this
 page when clique placement must be coordinated for the complete workload.
@@ -226,7 +226,7 @@ spec:
 In general Dynamo creates Grove resources from a `DynamoGraphDeployment`, which Grove
 and KAI place. Before adding
 topology constraints to a `DynamoGraphDeployment`, see the
-[topology-aware scheduling guide for Dynamo 1.4.1](https://docs.nvidia.com/dynamo/v1.4.1/kubernetes-deployment/scale/topology-aware-scheduling)
+[topology-aware scheduling guide for Dynamo 1.4.1](https://docs.nvidia.com/dynamo/v1.4.1/knowledge-base/kubernetes/multinode/topology-aware-scheduling)
 to check the workload fields and topology resources expected by the compute
 plane stack's pinned operator.
 

@@ -11,7 +11,7 @@ In NVCF, **third-party registries** refer to container registries used for hosti
 
 When a function is created or deployed, these credentials are used by different components:
 
-1. **NVCF API** - Stores and manages registry credentials, validates that images exist during function creation. See [self-hosted-api](/nvcf/overview/api) for the full API specification.
+1. **NVCF API** - Stores and manages registry credentials, validates that images exist during function creation. See [self-hosted-api](../overview/api.md) for the full API specification.
 2. **NVCA (Cluster Agent)** - Renders Helm charts or pod specs for container functions and handles deployment lifecycle. Generates image pull credentials based on the registry type.
 3. **Worker init container** - Responsible for pulling the function container images during deployment.
 
@@ -40,7 +40,11 @@ The specific username and password values depend on your registry type. See the 
 
 ### Understanding Initial Bootstrap
 
-When you first deploy the NVCF control plane, registry credentials are configured in the `secrets/<environment>-secrets.yaml` file under `api.accountBootstrap.registryCredentials`. Example using ECR:
+When you first deploy the NVCF control plane, registry credentials are configured in the `secrets/<environment>-secrets.yaml` file under `api.accountBootstrap.registryCredentials`.
+
+Self-managed bootstrap supports the `CONTAINER` and `HELM` artifact types only, and account provisioning accepts at most one credential per artifact type. Credentials loaded at bootstrap are marked `SYSTEM` and cannot be deleted later. Any additional registry that would duplicate an artifact type (for example, a second `CONTAINER` registry such as ECR) must be added after deployment using the NVCF API or CLI. See [Managing Credentials After Deployment](#managing-credentials-after-deployment).
+
+Example using NGC:
 
 ```yaml
 api:
@@ -52,15 +56,15 @@ api:
           value: <BASE64_ENCODED_CREDENTIAL>
         artifactTypes: ["CONTAINER"]
         description: "NGC Container registry"
-      - registryHostname: <account-id>.dkr.ecr.<region>.amazonaws.com
+      - registryHostname: helm.ngc.nvidia.com
         secret:
-          name: ecr-containers
+          name: nvcr-containers
           value: <BASE64_ENCODED_CREDENTIAL>
-        artifactTypes: ["CONTAINER"]
-        description: "ECR Container registry"
+        artifactTypes: ["HELM"]
+        description: "NGC Helm registry"
 ```
 
-Example using Volcano Engine Container Registry:
+A single entry may claim both artifact types when the same credential covers each one. Example using Volcano Engine Container Registry:
 
 ```yaml
 api:
@@ -75,6 +79,17 @@ api:
 ```
 
 These bootstrap credentials are loaded during the initial `helmfile sync` deployment and stored in the NVCF backend.
+
+<Warning>
+Listing two entries with the same artifact type at bootstrap (for example `nvcr.io` and an ECR hostname both with `artifactTypes: ["CONTAINER"]`) causes the account-bootstrap Job to fail with:
+
+```text
+Invalid request: Multiple registry credential(s) with same artifact type(s) '[CONTAINER]' not allowed during account provisioning
+```
+
+Pick one credential per artifact type for the bootstrap list, then add any additional registries that share an artifact type after deployment with [`nvcf-cli registry-credential add`](#adding-aws-ecr-registry-credentials) or the NVCF API.
+
+</Warning>
 
 <Info>
 The `registryHostname` must be the **registry base URL only** (e.g., `779846807323.dkr.ecr.us-west-2.amazonaws.com`), not including repository paths.

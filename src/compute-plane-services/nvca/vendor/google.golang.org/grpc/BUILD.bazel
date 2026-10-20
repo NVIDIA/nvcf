@@ -8,6 +8,14 @@ go_library(
         "call.go",
         "clientconn.go",
         "codec.go",
+    ] + select({
+        "@rules_go//go/platform:plan9": [
+            "clientconn_disconnect_reason_plan9.go",
+        ],
+        "//conditions:default": [
+            "clientconn_disconnect_reason_noplan9.go",
+        ],
+    }) + [
         "dialoptions.go",
         "doc.go",
         "interceptor.go",

@@ -65,7 +65,7 @@
 
   <rect class="bg" x="0" y="0" width="1400" height="900" />
   <text class="title" x="48" y="48">LLM Multi-Cluster Invocation</text>
-  <text class="small" x="48" y="78">LLM traffic uses the OpenAI-compatible gateway path and worker gateway tunnels to regional model services.</text>
+  <text class="small" x="48" y="78">Native OpenAI and Anthropic Messages traffic use gateway tunnels to regional model services.</text>
 
   <rect class="optional" x="480" y="105" width="440" height="78" rx="10" />
   <text class="heading" x="700" y="137" text-anchor="middle">Global DNS / Optional Custom Front Door</text>

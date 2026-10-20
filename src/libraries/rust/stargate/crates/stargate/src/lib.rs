@@ -27,10 +27,7 @@ pub(crate) mod queue_estimate {
     use stargate_proto::pb::ModelStats;
     use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 
-    pub(crate) fn queue_time_estimate_ms_for_priority(
-        stats: &ModelStats,
-        priority: u32,
-    ) -> Option<u64> {
+    pub fn queue_time_estimate_ms_for_priority(stats: &ModelStats, priority: u32) -> Option<u64> {
         // Keep raw work estimates intact so reservations can fill the last slot
         // without losing the backlog needed by subsequent routing decisions.
         if has_available_engine_slot(stats.num_running_queries, stats.max_engine_concurrency) {
@@ -94,8 +91,9 @@ pub mod registration {
 }
 
 pub mod routing {
+    pub use crate::queue_estimate::queue_time_estimate_ms_for_priority;
     pub use crate::routing_state::{
-        RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey,
+        RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey, apply_reservation,
     };
 }
 

@@ -26,6 +26,9 @@ import (
 )
 
 func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
+	e.HTTPErrorHandler = newHTTPErrorHandler(
+		handlers.config != nil && handlers.config.ExposeRouterErrorCodes,
+	)
 	e.GET("/healthz", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
@@ -54,6 +57,7 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 	)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
-	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future
+	// Native proxy endpoints preserve the backend wire protocol.
 	handlers.AsOpenAIProxyHandlers().RegisterRoutes(group)
+	handlers.AsMessagesHandlers().RegisterRoutes(group)
 }

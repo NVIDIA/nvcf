@@ -556,6 +556,7 @@ fn registration_config_from_plan(
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
+        stats_update_coalesce: Duration::from_millis(args.stats_update_coalesce_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
         grpc_tls_ca_cert_pem,

@@ -136,7 +136,11 @@ pub(super) fn has_capacity(candidate: &RoutedClusterSnapshot, max_queued: u64) -
     if candidate.stats.max_engine_concurrency == 0 {
         return true;
     }
-    candidate.stats.num_running_queries < candidate.stats.max_engine_concurrency + max_queued
+    candidate.stats.num_running_queries
+        < candidate
+            .stats
+            .max_engine_concurrency
+            .saturating_add(max_queued)
 }
 
 fn within_queue_slo(ttft: &Ttft, max_queue_time_ms: Option<f64>) -> bool {

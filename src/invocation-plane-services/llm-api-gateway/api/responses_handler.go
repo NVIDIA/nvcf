@@ -82,6 +82,8 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 		return err
 	}
 
+	h.handlers.setResponsesLastClusterKeys(c.RequestContext(), &request, body)
+
 	clientWantsStream := ptr.Deref(request.Stream)
 	normalized, outboundBody, err := h.prepareNativeResponsesRequest(c, &request, body)
 	if err != nil {
@@ -98,6 +100,14 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 	}
 	if resp == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		copyProxyHeaders(c.Response().Header(), resp.Header)
+		setMultiTurnSessionResponseHeader(c)
+		if err := proxyUpstreamError(resp); err != nil {
+			h.finalizeNativeResponsesUsage(c, normalized, nil, clientWantsStream)
+			return err
+		}
 	}
 
 	if clientWantsStream {
@@ -136,6 +146,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		countRequest.Model,
 		countRequest,
 	)
+	estimatedInputTokens += estimatedTokenCountForText(customToolFormatText(request.Tools))
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(countRequest)
 	checkRequest := ratelimit.ResourceRequest{
@@ -230,6 +241,7 @@ func (h *ResponsesHandlers) dispatchNativeResponsesRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
 			InputTokens:   request.InputTokens,
 			TokenEstimate: request.InputTokens + request.MaxOutputTokens,
 		},

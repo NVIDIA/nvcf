@@ -65,6 +65,10 @@ data:
       {{- with .Values.selfManaged.revalServiceHostHeaderOverride }}
       helmReValServiceHostHeaderOverride: {{ . | quote }}
       {{- end }}
+    {{- with .Values.selfManaged.eventLedgerServiceURL }}
+    fndService:
+      serviceURL: {{ . | quote }}
+    {{- end }}
     {{- with .Values.selfManaged.imageCredHelper }}
     imageCredentialHelper:
       imageConfig:

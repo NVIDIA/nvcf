@@ -548,6 +548,8 @@ pub fn base_config(
             stargate::registration::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
         registration_update_max_idle_timeout:
             stargate::registration::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+        routing_reservation_ttl_min: Duration::from_millis(1),
+        routing_reservation_ttl_max: Duration::from_millis(1000),
         proxy_transport: ProxyTransportConfig {
             quic: QuicTunnelConfig {
                 connect_timeout: Duration::from_secs(5),
@@ -1394,6 +1396,7 @@ fn test_registration_config(
             ..Default::default()
         },
         min_update_interval: Duration::from_millis(100),
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,

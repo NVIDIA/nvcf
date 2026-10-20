@@ -227,6 +227,26 @@ func TestBumpMovesOnlyTheMatchingRelease(t *testing.T) {
 	}
 }
 
+func TestOlderChartReleaseKeepsNewerStackPins(t *testing.T) {
+	for _, current := range []string{"2.0.0", "1.15.0", "1.14.11"} {
+		t.Run(current, func(t *testing.T) {
+			file := "releases:\n  - name: alpha\n    version: " + current + "\n"
+			f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": file})
+			f.fileAt(t, "deploy/stacks/compute/helmfile.d", "00-stack.yaml.gotmpl", "releases:\n  - name: alpha\n    version: 1.14.9\n")
+			code, out, errOut := f.bump(t, "deploy/helm/alpha/v1.14.10", true)
+			if code != 0 || !strings.Contains(out, "skipped older release") {
+				t.Fatalf("older release must be skipped: code=%d\n%s%s", code, out, errOut)
+			}
+			if got := f.read(t, "00-stack.yaml.gotmpl"); got != file {
+				t.Fatalf("older release changed newer stack pin:\n%s", got)
+			}
+			if got := f.readAt(t, "deploy/stacks/compute/helmfile.d", "00-stack.yaml.gotmpl"); !strings.Contains(got, "version: 1.14.10") {
+				t.Fatalf("another stack on an older patch must still advance:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestBumpLeavesEveryOtherLineByteIdentical(t *testing.T) {
 	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": stackFile})
 	f.bump(t, "deploy/helm/alpha/v2.0.0", true)
@@ -329,6 +349,69 @@ func TestRealStackResolvesCompletely(t *testing.T) {
 		t.Fatal("no releases found; the helmfile path or glob is wrong")
 	}
 	t.Logf("%d releases resolved", len(releases))
+}
+
+func TestBumpWorkflowStagesEveryStackPin(t *testing.T) {
+	// On a helm-nvca-operator release the resolver rewrote the compute-plane
+	// pin, but the workflow checked and staged only the self-managed stack,
+	// so the edit was dropped and the run reported the stack as already
+	// pinned. Every file the resolver can write has to sit under the paths the
+	// workflow both checks and stages.
+	root := repoRoot(t)
+	commands := bumpWorkflowPathspecs(t, filepath.Join(root, ".github", "workflows", "stack-pin-bump.yml"))
+	releases, err := LoadStack(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) == 0 {
+		t.Fatal("no releases found; the helmfile path or glob is wrong")
+	}
+	for command, specs := range commands {
+		for _, r := range releases {
+			if !coveredByPathspecs(r.File, specs) {
+				t.Errorf("%q in stack-pin-bump.yml does not cover %s (%s)", command, r.File, r.Name)
+			}
+		}
+	}
+}
+
+// bumpWorkflowPathspecs returns the pathspecs of the three commands a bump
+// workflow uses to decide whether anything moved, to show it, and to stage it.
+func bumpWorkflowPathspecs(t *testing.T, workflow string) map[string][]string {
+	t.Helper()
+	b, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"if git diff --quiet --", "git --no-pager diff --stat --", "git add"}
+	found := map[string][]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range prefixes {
+			if !strings.HasPrefix(line, prefix+" ") {
+				continue
+			}
+			rest := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, prefix)), "; then")
+			found[prefix] = append(found[prefix], strings.Fields(rest)...)
+		}
+	}
+	for _, prefix := range prefixes {
+		if len(found[prefix]) == 0 {
+			t.Fatalf("%s has no %q line; update this test to follow how the workflow stages a bump", workflow, prefix)
+		}
+	}
+	return found
+}
+
+func coveredByPathspecs(path string, specs []string) bool {
+	path = filepath.ToSlash(path)
+	for _, spec := range specs {
+		spec = strings.TrimSuffix(spec, "/")
+		if path == spec || strings.HasPrefix(path, spec+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func repoRoot(t *testing.T) string {

@@ -4,6 +4,11 @@ kind: ConfigMap
 metadata:
   name: {{ include "nvct-api.remoteConfigName" . }}
   namespace: {{ include "nvct-api.namespace" . }}
+  {{- $sidecarReleaseArtifacts := include "nvct-api.sidecarReleaseArtifacts" . | trim }}
+  {{- if $sidecarReleaseArtifacts }}
+  annotations:
+    {{- $sidecarReleaseArtifacts | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "nvct-api.labels" . | nindent 4 }}
 data:

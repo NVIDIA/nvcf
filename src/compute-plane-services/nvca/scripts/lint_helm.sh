@@ -271,6 +271,10 @@ assert_distroless_operator_commands() {
 }
 
 assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
+
+# The cluster-validator wiring and RBAC checks live with the chart, where CI
+# runs them; run them here too so make lint covers them.
+bash "${repo_root}/../../../deploy/helm/nvca-operator/tests/cluster_validator_test.sh"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
 run_lint nvca-operator

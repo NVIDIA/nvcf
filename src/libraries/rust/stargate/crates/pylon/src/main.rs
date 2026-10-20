@@ -107,7 +107,7 @@ struct Args {
     /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
-    /// Treat canary responses that generate this many tokens as runaway generation
+    /// Canary `max_tokens`. Generating more tokens than this is runaway generation; exact usage overrides the output estimate
     #[arg(long, default_value_t = 237, value_name = "TOKENS")]
     canary_max_generation_threshold: u32,
     /// Initial calibration request count; doubles after each completed load step
@@ -137,9 +137,12 @@ struct Args {
     /// Fallback maximum engine concurrency for every model until the engine reports a limit
     #[arg(long, value_name = "N")]
     max_engine_concurrency: Option<NonZeroU64>,
-    /// Minimum interval between registration/stat updates to stargate
+    /// Heartbeat interval: the longest gap between registration updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
+    /// Minimum interval between stat updates triggered by request state changes
+    #[arg(long, default_value_t = 10, value_name = "MS")]
+    stats_update_coalesce_ms: u64,
     /// Static auth token for registration and reverse tunnel handshake
     #[arg(long, env = "STARGATE_AUTH_TOKEN", value_name = "TOKEN")]
     auth_token: Option<String>,

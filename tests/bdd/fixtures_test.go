@@ -186,7 +186,6 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 
 func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testing.T) {
 	want := []string{
-		"-InfraResourceOverhead",
 		"-EnforceContainerFunctionResourceLimits",
 		"-EnforceContainerTaskResourceLimits",
 	}
@@ -222,6 +221,28 @@ func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testin
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Helm resource enforcement keeps NVCA's per-instance infra overhead on, so
+// the local fixtures shrink the utils reservation to keep NCP.GPU.H100_1x
+// registrable on hosts with about 8 CPUs.
+func TestComputePlaneLocalBDDFixturesReserveSmallUtilsContainer(t *testing.T) {
+	want := map[string]string{"cpu": "1", "memory": "2Gi"}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixture := loadYAMLMap(t, fixturePath)
+			for name, quantity := range want {
+				got, exists := nestedYAMLValue(fixture, "global", "nvcaOperator", "utils", "resources", name)
+				if !exists || got != quantity {
+					t.Errorf("global.nvcaOperator.utils.resources.%s = %#v (exists %t), want string %q", name, got, exists, quantity)
+				}
 			}
 		})
 	}
@@ -286,6 +307,15 @@ func TestNCPRegistrationFixtureDefersNVCAChartAndStackDefaults(t *testing.T) {
 	}
 	if fixture.SelfManaged.ICMSServiceURL == "" {
 		t.Fatal("registration fixture must retain its topology-specific ICMS endpoint")
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureWiresHTTPWorkerCallback(t *testing.T) {
+	fixture := loadYAMLMap(t, "fixtures/self-managed-local-bdd-multi.yaml")
+	got, exists := nestedYAMLValue(fixture, "global", "workerEndpoints", "invocationServiceURL")
+	const want = "http://invocation.nvcf.svc.cluster.local:8080"
+	if !exists || got != want {
+		t.Fatalf("global.workerEndpoints.invocationServiceURL = %v (exists %t), want %q", got, exists, want)
 	}
 }
 
@@ -493,7 +523,12 @@ func TestSelfManagedLocalBDDFixturesDeferRequestRouterDefaults(t *testing.T) {
 			if len(fixture.Addons.LLM.PKI) != 0 {
 				t.Fatalf("%s repeats the stack's managed PKI defaults: %#v", fixturePath, fixture.Addons.LLM.PKI)
 			}
-			for _, key := range []string{"essServiceURL", "invocationServiceURL"} {
+			defaultEndpoints := []string{"essServiceURL"}
+			// Multi-cluster HTTP callbacks need an explicit compute-reachable alias.
+			if !strings.HasSuffix(fixturePath, "-multi.yaml") {
+				defaultEndpoints = append(defaultEndpoints, "invocationServiceURL")
+			}
+			for _, key := range defaultEndpoints {
 				if _, exists := fixture.Global.WorkerEndpoints[key]; exists {
 					t.Fatalf("%s repeats the stack default for global.workerEndpoints.%s", fixturePath, key)
 				}

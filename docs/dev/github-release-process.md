@@ -7,6 +7,15 @@ the sole tag and release authority, publishing is live, and a merge to
 except the three under `deploy/stacks/`, which release from a
 maintenance branch instead.
 
+## Umbrella product releases
+
+An umbrella product release packages exact independently released stacks. It
+uses the explicit `Publish Umbrella Release` workflow and `nvcf/X.Y.Z` tag
+namespace. Component release triggers remain unchanged. Documentation
+corrections can advance an approved docs revision under the same umbrella
+version without creating another release. Follow the
+[qualification, activation, and rollback procedure](umbrella-releases.md).
+
 ## Publish gate
 
 The workflow reads these repository variables:
@@ -39,12 +48,12 @@ GitHub is the sole tag and release authority. The active release path
 is:
 
 ```text
-NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image release pipeline
+NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image or chart release pipeline
 ```
 
-After a GitHub tag and release appear in the mirror, the scheduled
-internal release dispatcher detects eligible releases and starts the
-image release pipeline.
+The scheduled internal release dispatcher polls GitHub releases. Once a
+release's tag has reached the mirror, it starts the image or chart
+release pipeline.
 
 ## Service auto-tags
 
@@ -208,15 +217,15 @@ release metadata still declares `legacy_tag_prefix`:
 
 Invalid tags are skipped without creating a GitHub release.
 
-## Image publishing bridge
+## Image and chart publishing bridge
 
-GitHub does not need image-publishing credentials. Tag pushes only run
-the GitHub release-note workflow. Image publishing starts after the tag
-and release appear in the mirror.
+Tag pushes do not publish images or Helm charts. They only run the
+GitHub release-note workflow. Image and chart publishing starts after
+the GitHub release is published and its tag reaches the mirror.
 
-After a GitHub tag and release are mirrored, the scheduled release
-dispatcher detects eligible releases and starts the corresponding image
-release pipeline. The pipeline uses the mirrored source ref and release
+The scheduled release dispatcher polls GitHub releases. For each
+eligible release whose tag has reached the mirror, it starts the
+corresponding image or chart release pipeline. The pipeline uses the mirrored source ref and release
 metadata to build, promote, and publish artifacts. The mirror tag
 pipeline does not publish artifacts.
 
@@ -229,6 +238,28 @@ Package metadata uses SemVer without the leading `v`:
 | `src/compute-plane-services/nvca/v3.0.0` | `3.0.0` |
 | `deploy/helm/nvca-operator/v1.11.1-rc.1` | `1.11.1-rc.1` |
 | `nvcf-ratelimiter-v1.15.1` | `1.15.1` |
+
+## Automatic pin bumps
+
+Published releases open reviewed bot Pull Requests against `main`. They
+do not release a stack. A stack still releases only from its release
+branch.
+
+- A service release runs `.github/workflows/chart-version-bump.yml`. It
+  moves each target whose `deploys` entry in
+  `tools/ci/github-release-subprojects.json` names the service. A chart
+  target moves its image tag or declared values paths. A stack target
+  moves the paths its `values_files` declare, such as the compute-plane
+  `global.nvcaOperator.imageTag` and
+  `global.nvcaOperator.selfManaged.nvcaVersion` on an NVCA release.
+- A chart release runs `.github/workflows/stack-pin-bump.yml`. It moves
+  the `version:` of every Helmfile release under `deploy/stacks/` that
+  pins that chart, such as `helm-nvca-operator` in the compute-plane
+  stack.
+
+A compute-plane bump also needs its golden render fixtures refreshed
+with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
+merge.
 
 ## Release branches
 
@@ -257,6 +288,38 @@ Examples:
 | `nvcf-ratelimiter-v1.15.1` | `release-nvcf-ratelimiter-v1.15` |
 
 Slashes remain branch namespace separators.
+
+### Patch an existing component minor
+
+Start from the latest stable patch in the required major/minor line, rather
+than the older patch currently selected by a stack. Reuse that release if it
+already contains the required fix and its published artifacts pass validation.
+Otherwise backport the missing fix and release the next ordinary patch version.
+
+Use `main` when it still belongs to the required minor and its unreleased changes
+are compatible with the patch. When development has moved to a later minor,
+create `release-<component-path>/vX.Y` from the latest release in the selected
+line. Preserve the released tree and comply with the release branch's linear
+history rules. Review the backport through a Pull Request targeting that branch.
+The `branch-cut` command is restricted to version-file registrations; it does
+not create ordinary service or chart maintenance branches.
+
+A service or chart maintenance merge does not create a tag automatically. After
+review and validation, publish the unused tag rendered from the registration's
+`tag_format`, or `<component-path>/vX.Y.Z` when no override exists, from the
+reviewed maintenance commit. Tag publication creates the GitHub Release and
+starts the existing downstream artifact delivery. Confirm the tag and workflow
+behavior in historical source before creating a branch or publishing a tag.
+
+Automatic chart and stack pin updates skip releases with a lower major, minor,
+or patch than the selected pin. A patch for an older minor must not downgrade
+the default branch. Update maintenance stack pins through their own reviewed
+Pull Requests after the component artifacts are verified.
+
+Qualify the complete stack combination before merging its release branch.
+Stack merges can publish automatically. For an umbrella release, assemble and
+qualify the final bundle from those exact component stack releases as described
+in [the umbrella release workflow](umbrella-releases.md).
 
 ## The version-file model
 
@@ -349,9 +412,8 @@ For example, to ship self-managed stack `1.0.2` after `1.0.1`:
    `1.0.1`. The branch's `VERSION` can remain `1.0.0`; its patch field
    does not select the next patch once stable tags exist.
 3. The tag workflow prepares the GitHub Release and its inventory.
-   The workflow publishes any configured Helm chart before it creates
-   the GitHub Release. Image publishing follows the bridge described
-   above, after the tag and release are mirrored.
+   Image and chart publishing follows the bridge described above,
+   once the release is published and its tag reaches the mirror.
 
 Re-running `auto` at an already-tagged commit creates no additional
 patch. Merging the default-branch `VERSION` bump pull request also
@@ -418,16 +480,19 @@ a tag from `main` did before the version-file model.
   `docs/version-catalog/main.yaml`. A stack change that alters
   cross-stack compatibility updates that block in the same change.
 
-### Per-stack documentation
+### Docs editions
 
-Each stack is a Fern product with its own version list. After QA approves a
-release, freeze that stack's exact version alone:
+Documentation has one SemVer docs edition for the qualified combination of all
+three stacks. Stack artifacts keep their independent releases. A stack release
+does not qualify or publish a docs edition automatically.
 
-```bash
-./tools/scripts/cut-docs-version.sh --stack observability --version 1.1.0
-```
+Use `edition prepare` with a reviewed source commit and all three exact versions.
+After qualification, protect and register the full-version `docs/releases/X.Y.Z`
+branch. Do not create docs tags or per-stack snapshot folders. Corrections use a
+new patch edition; existing docs release branches remain unchanged.
 
-The other two stacks' documentation is untouched by that cut.
+See [the docs edition workflow](./docs-editions.md) for release and rollback
+commands.
 
 ## NVCA's cutover onto semantic-release
 
@@ -661,3 +726,53 @@ above. A tag pushed with the `NV_GITHUB_TOKEN` secret, or another
 workflow-capable token, starts the tag workflow, but it stays inert
 if either variable is unset, falling back to dry-run. Tags pushed
 with the default `GITHUB_TOKEN` do not trigger the follow-up workflow.
+
+## Shared bump branches
+
+The chart version bump and stack pin bump workflows add one commit per
+release to `chore/chart-version-bumps` and `chore/stack-pin-bumps`.
+Before a run applies its own bump, `tools/ci/prepare-stack-pin-branch`
+replays the branch onto `main`, oldest commit first:
+
+- A commit that still applies is kept.
+- A commit that is already on `main` is dropped.
+- A bump commit that conflicts with `main` is regenerated. A conflict
+  means `main` moved the same pin, for example through a manual bump.
+  The helper runs the workflow's bump tool again for the release tag
+  that the commit message records. A release older than the current
+  pin moves nothing and drops out.
+- Any other commit that conflicts stops the run, and nothing is pushed.
+  A person wrote it, so a person decides how it applies.
+
+A `release` event runs the workflow file from the released commit. A tag
+cut from a branch that predates a workflow change runs the older
+workflow. A run dispatched from `main` uses the current one.
+
+### Recover a stopped bump branch
+
+Use these steps when a run stops on a hand-written commit, or when
+release events failed before their bumps were recorded.
+
+1. Land any change from the hand-written commit that must stay, such as
+   release metadata, through its own Pull Request.
+2. Record the release tags the branch carries. Deleting the branch
+   drops their bumps too:
+
+   ```bash
+   git log --format=%B origin/main..origin/<bump-branch> | grep '^Opened by'
+   ```
+
+3. Delete the bump branch. Its bot Pull Request closes, and the next run
+   starts the branch from `main`.
+4. Dispatch the workflow from `main` for the newest release tag of each
+   service from step 2, and of each service whose release event failed.
+   The bump tools only move a pin forward, so the newest tag also covers
+   the older releases of that service.
+
+A dry run on `main` shows whether a tag still moves a pin. It prints a
+`<chart>: <from> -> <to>` line for each pin that would move:
+
+```bash
+tools/ci/chart-version-bumper --tag <service-path>/v<version>
+gh workflow run chart-version-bump.yml --ref main -f tag=<service-path>/v<version>
+```

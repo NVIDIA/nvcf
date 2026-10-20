@@ -79,22 +79,42 @@ const (
 	ModelCacheWorkflowHelm    ModelCacheWorkflow = "helmModelCache"
 )
 
+// The shared-claim writer Job is emitted non-root and relies on the pod
+// fsGroup to make the claim writable. Kubernetes applies fsGroup only where
+// the CSI driver's fsGroupPolicy allows it, so NVCA records how the writer
+// must run when it selects storage. Root is the exception, taken only when the
+// live CSIDriver says fsGroup will not be applied or the catalog says so.
+const (
+	// ModelCacheWriterIdentityFSGroup keeps the translator's non-root writer.
+	ModelCacheWriterIdentityFSGroup = "fsGroup"
+	// ModelCacheWriterIdentityRoot runs the containers that write the claim as
+	// uid 0, for drivers that leave a fresh claim's root owned by root.
+	ModelCacheWriterIdentityRoot = "root"
+)
+
+// CSIDriverLookup fetches the CSIDriver object registered for a provisioner.
+// It returns nil, nil when none is registered.
+type CSIDriverLookup func(provisioner string) (*storagev1.CSIDriver, error)
+
 // ModelCacheStorageSelection is the durable-storage decision derived from the
 // live nvcf-sc object and the public capability catalog. It deliberately does
 // not infer behavior from a provider name or access mode.
 type ModelCacheStorageSelection struct {
 	// CatalogBuiltin is set when the ConfigMap was absent and the selection was
 	// resolved against the catalog compiled into NVCA.
-	CatalogBuiltin       bool
-	EncryptionSupported  bool
-	StorageClassName     string
-	StorageClassUID      types.UID
-	StorageClassDigest   string
-	ProfileDigest        string
-	CatalogRevision      string
-	Provider             string
-	Provisioner          string
-	Transition           string
+	CatalogBuiltin      bool
+	EncryptionSupported bool
+	StorageClassName    string
+	StorageClassUID     types.UID
+	StorageClassDigest  string
+	ProfileDigest       string
+	CatalogRevision     string
+	Provider            string
+	Provisioner         string
+	Transition          string
+	// WriterIdentity is set for the shared-claim transition only and says how
+	// the writer Job runs. Empty means the writer keeps its emitted identity.
+	WriterIdentity       string
 	RequiredAccessModes  []corev1.PersistentVolumeAccessMode
 	RequiredMountOptions []string
 }
@@ -125,6 +145,11 @@ type storageDriverSpec struct {
 	// ModelCacheEncryption feature flag decides whether to encrypt, and only a
 	// driver that lists support can be encrypted.
 	EncryptionSupported bool `json:"encryptionSupported,omitempty"`
+	// WriterIdentity overrides how the shared-claim writer runs on this
+	// driver: "fsGroup" or "root". Absent means NVCA decides from the live
+	// CSIDriver's fsGroupPolicy. It is only meaningful with ReadWriteMany
+	// qualified, since no other shape has a shared-claim writer.
+	WriterIdentity string `json:"writerIdentity,omitempty"`
 }
 
 // storageCapabilityCatalogWire is the on-disk shape: drivers are a list of
@@ -310,7 +335,17 @@ func ResolveModelCacheStorage(
 	if err != nil {
 		return nil, err
 	}
-	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+	lookup := func(provisioner string) (*storagev1.CSIDriver, error) {
+		csiDriver := &storagev1.CSIDriver{}
+		if err := c.Get(ctx, client.ObjectKey{Name: provisioner}, csiDriver); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return csiDriver, nil
+	}
+	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +396,17 @@ func ResolveModelCacheStorageWithClientset(
 	if err != nil {
 		return nil, err
 	}
-	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+	lookup := func(provisioner string) (*storagev1.CSIDriver, error) {
+		csiDriver, err := k8sClient.StorageV1().CSIDrivers().Get(ctx, provisioner, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return csiDriver, nil
+	}
+	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -369,11 +414,16 @@ func ResolveModelCacheStorageWithClientset(
 	return selection, nil
 }
 
+// selectModelCacheStorageFromObjects makes the decision from the objects
+// already fetched. lookup is consulted only for the shared-claim transition,
+// where the writer identity depends on the live CSIDriver; it may be nil, which
+// reads as no CSIDriver registered.
 func selectModelCacheStorageFromObjects(
 	sc *storagev1.StorageClass,
 	catalog *storageCapabilityCatalog,
 	catalogDigest string,
 	workflow ModelCacheWorkflow,
+	lookup CSIDriverLookup,
 ) (*ModelCacheStorageSelection, error) {
 	if sc.ReclaimPolicy == nil || *sc.ReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		return nil, fmt.Errorf("model cache StorageClass %q must use reclaimPolicy Retain",
@@ -400,6 +450,18 @@ func selectModelCacheStorageFromObjects(
 	if transition == ModelCacheTransitionROXReadOnly {
 		requiredMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
 	}
+	writerIdentity := ""
+	if transition == ModelCacheTransitionRWXReadOnly {
+		var csiDriver *storagev1.CSIDriver
+		if lookup != nil && driver.WriterIdentity == "" {
+			var err error
+			if csiDriver, err = lookup(sc.Provisioner); err != nil {
+				return nil, fmt.Errorf("get CSIDriver %q for model cache StorageClass %q: %w",
+					sc.Provisioner, DefaultModelCacheStorageClassName, err)
+			}
+		}
+		writerIdentity = sharedClaimWriterIdentity(driver, csiDriver)
+	}
 
 	return &ModelCacheStorageSelection{
 		StorageClassName:     sc.Name,
@@ -411,9 +473,37 @@ func selectModelCacheStorageFromObjects(
 		EncryptionSupported:  driver.EncryptionSupported,
 		Provisioner:          sc.Provisioner,
 		Transition:           transition,
+		WriterIdentity:       writerIdentity,
 		RequiredAccessModes:  requiredAccessModesForTransition(transition),
 		RequiredMountOptions: requiredMountOptions,
 	}, nil
+}
+
+// sharedClaimWriterIdentity decides how the writer runs on a shared claim.
+// The catalog entry wins when it says. Otherwise the live CSIDriver decides:
+// Kubernetes applies the pod fsGroup to a ReadWriteMany claim only under the
+// File policy, so that is the one case where the non-root writer can populate
+// a fresh claim. ReadWriteOnceWithFSType, which is also what the API defaults
+// an unset field to, and None leave the claim root owned by root, so the
+// writer runs as root. No registered CSIDriver keeps the non-root writer:
+// nothing has shown root is needed, and a catalog writerIdentity of root is
+// the explicit way to say it is.
+func sharedClaimWriterIdentity(driver storageDriverSpec, csiDriver *storagev1.CSIDriver) string {
+	if driver.WriterIdentity != "" {
+		return driver.WriterIdentity
+	}
+	if csiDriver == nil {
+		return ModelCacheWriterIdentityFSGroup
+	}
+	if csiDriver.Spec.FSGroupPolicy == nil {
+		return ModelCacheWriterIdentityRoot
+	}
+	switch *csiDriver.Spec.FSGroupPolicy {
+	case storagev1.FileFSGroupPolicy:
+		return ModelCacheWriterIdentityFSGroup
+	default:
+		return ModelCacheWriterIdentityRoot
+	}
 }
 
 func requiredAccessModesForTransition(transition string) []corev1.PersistentVolumeAccessMode {
@@ -489,6 +579,9 @@ type canonicalDriverProfile struct {
 	// EncryptionSupported is part of the profile: flipping it changes what a
 	// new cache on this driver is allowed to do.
 	EncryptionSupported bool `json:"encryptionSupported"`
+	// WriterIdentity is the catalog override, not the live decision, so an
+	// unchanged catalog keeps its digest whatever the cluster's CSIDriver says.
+	WriterIdentity string `json:"writerIdentity,omitempty"`
 }
 
 // digestDriverProfile hashes the qualified profile behind a decision. Two
@@ -507,6 +600,7 @@ func digestDriverProfile(
 		Workflow:            string(workflow),
 		Transition:          transition,
 		EncryptionSupported: driver.EncryptionSupported,
+		WriterIdentity:      driver.WriterIdentity,
 	}
 	if driver.AccessModes != nil {
 		profile.AccessModes = append([]string(nil), (*driver.AccessModes)...)
@@ -723,6 +817,17 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 				return fmt.Errorf("driver %q has duplicate accessMode %q", provisioner, mode)
 			}
 			accessModes[mode] = true
+		}
+		switch driver.WriterIdentity {
+		case "", ModelCacheWriterIdentityFSGroup, ModelCacheWriterIdentityRoot:
+		default:
+			return fmt.Errorf("driver %q has invalid writerIdentity %q, want %q or %q",
+				provisioner, driver.WriterIdentity, ModelCacheWriterIdentityFSGroup, ModelCacheWriterIdentityRoot)
+		}
+		if driver.WriterIdentity != "" && !accessModes[string(corev1.ReadWriteMany)] {
+			return fmt.Errorf(
+				"driver %q sets writerIdentity but does not qualify ReadWriteMany, the only shape with a shared-claim writer",
+				provisioner)
 		}
 
 		// ReadOnlyMany describes readers. Without a writer mode alongside it

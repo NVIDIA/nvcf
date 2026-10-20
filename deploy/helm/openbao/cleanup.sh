@@ -39,10 +39,14 @@ cleanup_cluster() {
     fi
     log_success "Cleaned up OpenBao PVCs in namespace: $namespace"
 
-    # Delete the unseal key and root token secret
+    # Delete the unseal key, recovery keys, and root token secret
     log_info "Deleting secrets in namespace: $namespace"
     if ! kubectl delete secret $statefulset-unseal -n $namespace --ignore-not-found=true > /dev/null 2>&1; then
         log_error "Failed to delete unseal secret (exit code: $?): $?"
+        exit 1
+    fi
+    if ! kubectl delete secret $statefulset-recovery-keys -n $namespace --ignore-not-found=true > /dev/null 2>&1; then
+        log_error "Failed to delete recovery-keys secret (exit code: $?): $?"
         exit 1
     fi
     if ! kubectl delete secret $statefulset-root-token -n $namespace --ignore-not-found=true > /dev/null 2>&1; then

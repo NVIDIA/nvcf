@@ -295,6 +295,7 @@ func runService(cfg config.Config) error {
 				opts.Issuer = cfg.Auth.Issuer
 				opts.Audience = cfg.Auth.Audience
 				opts.TenantClaim = cfg.Auth.TenantClaim
+				opts.RequireExpiration = true
 				jwtOpts = &opts
 			}
 
@@ -322,7 +323,6 @@ func runService(cfg config.Config) error {
 				"nv-cloud-functions",
 				jwtOpts,
 				jwkCache,
-				cfg.SelfManaged,
 				introspector,
 				logger,
 			))

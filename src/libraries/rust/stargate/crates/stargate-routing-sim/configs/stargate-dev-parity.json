@@ -1,0 +1,174 @@
+{
+  "name": "stargate-dev parity: five regions, one H100 batched worker per backend, fixed 6,661-token sessions",
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "topology": {
+    "regions": [
+      {
+        "name": "usw2",
+        "stargates": 3,
+        "backends": 4,
+        "traffic_weight": 1.0
+      },
+      {
+        "name": "ue1",
+        "stargates": 3,
+        "backends": 4,
+        "traffic_weight": 0.0
+      },
+      {
+        "name": "ew1",
+        "stargates": 3,
+        "backends": 4,
+        "traffic_weight": 0.0
+      },
+      {
+        "name": "an1",
+        "stargates": 3,
+        "backends": 4,
+        "traffic_weight": 0.0
+      },
+      {
+        "name": "as2",
+        "stargates": 3,
+        "backends": 4,
+        "traffic_weight": 0.0
+      }
+    ],
+    "rtt_ms": [
+      [
+        0,
+        65,
+        125,
+        100,
+        140
+      ],
+      [
+        65,
+        0,
+        70,
+        150,
+        200
+      ],
+      [
+        125,
+        70,
+        0,
+        210,
+        255
+      ],
+      [
+        100,
+        150,
+        210,
+        0,
+        105
+      ],
+      [
+        140,
+        200,
+        255,
+        105,
+        0
+      ]
+    ],
+    "intra_region_rtt_ms": 1.0,
+    "stats_relay_delay_ms": 0.0
+  },
+  "engine": {
+    "num_gpu_workers": 1,
+    "max_num_seqs": 25,
+    "max_batched_tokens": 2048,
+    "step_fixed_ms": 4.0,
+    "step_decode_ms_per_seq": 0.085,
+    "step_prefill_ms_per_token": 0.05,
+    "kv_cache_capacity_tokens": 400000
+  },
+  "pylon": {
+    "heartbeat_ms": 1000.0,
+    "input_tps": {
+      "model": "fallback-window",
+      "initial": 20000.0,
+      "window": 8,
+      "duration_floor_ms": 10.0
+    },
+    "queue_mismatch": {
+      "enabled": true,
+      "min_delta_ms": 10000,
+      "tolerance_factor": 4.0
+    },
+    "stats_update_coalesce_ms": 10.0
+  },
+  "stargate": {
+    "max_request_retries": 2,
+    "routing_key": "stargate-dev",
+    "model_id": "stargate-dev-model"
+  },
+  "client": {
+    "request_slo_ms": 10000,
+    "max_wait_ms": 10000,
+    "timeout_ms": 30000,
+    "ttft_slo_ms": 10000
+  },
+  "workload": {
+    "rates_rps": [
+      80.0,
+      160.0,
+      240.0,
+      320.0
+    ],
+    "warmup_s": 60.0,
+    "measure_s": 180.0,
+    "fixed": {
+      "sessions": 768,
+      "input_tokens_min": 6661,
+      "input_tokens_max": 6661,
+      "output_tokens": 256,
+      "session_zipf_s": 0.0
+    }
+  },
+  "policies": [
+    {
+      "name": "waw-deployed",
+      "load_balancer": {
+        "algorithm": "wait-and-widen",
+        "cache_affinity_backend_selection_count": 1,
+        "cache_affinity_input_tokens_scale": 0.1,
+        "cache_affinity_virtual_nodes": 150,
+        "cache_affinity_wait_ms": 300,
+        "comparator": "utilization",
+        "max_queued": 4,
+        "n": 2,
+        "next_bucket_unlock_factor": 0.25,
+        "require_cache_affinity_key": true,
+        "require_input_tokens": true,
+        "ttft_bucket_size_ms": 20
+      }
+    },
+    {
+      "name": "pulsar-waw-deployed",
+      "load_balancer": {
+        "algorithm": "pulsar-wait-and-widen",
+        "max_queue_time_floor_ms": 4000,
+        "max_queue_time_ceil_ms": 4000,
+        "max_queued": 4,
+        "n": 2,
+        "next_bucket_unlock_factor": 0.25,
+        "require_cache_affinity_key": true,
+        "require_input_tokens": true,
+        "ttft_bucket_size_ms": 20
+      }
+    },
+    {
+      "name": "power-of-2-baseline",
+      "load_balancer": {
+        "algorithm": "power-of-n",
+        "sample_count": 2,
+        "comparator": "ttft"
+      }
+    }
+  ]
+}
