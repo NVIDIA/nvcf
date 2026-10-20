@@ -492,7 +492,8 @@ class TelemetryBasedFunctionCreationTest {
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(responseEntity.getBody())
-                .contains("Telemetry provider 'TIMESTREAM' is not supported");
+                .contains("Telemetry '" + telemetryId + "' for METRICS: "
+                                  + "provider 'TIMESTREAM' is not supported");
     }
 
     @Test

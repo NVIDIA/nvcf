@@ -25,6 +25,7 @@ import com.nvidia.nvcf.rest.telemetry.dto.TelemetryProviderEnum;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetryTypeEnum;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +39,8 @@ import tools.jackson.databind.node.StringNode;
 class TelemetryProviderValidatorTest {
 
     private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
+    private static final UUID TELEMETRY_ID = UUID.fromString(
+            "4df8cb5b-94e0-4fcc-ac12-ddb8da2f25aa");
     private static final Set<TelemetryTypeEnum> ALL_TYPES = EnumSet.allOf(TelemetryTypeEnum.class);
     private static final Set<TelemetryTypeEnum> LOGS = Set.of(TelemetryTypeEnum.LOGS);
     private static final Set<TelemetryTypeEnum> METRICS = Set.of(TelemetryTypeEnum.METRICS);
@@ -71,6 +74,22 @@ class TelemetryProviderValidatorTest {
     void shouldAcceptProvidersTheCollectorCanRender(TelemetryProviderEnum provider) {
         assertThatCode(() -> TelemetryProviderValidator.validateProvider(provider))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> TelemetryProviderValidator.validateProvider(
+                TELEMETRY_ID, TelemetryTypeEnum.LOGS, provider))
+                .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = TelemetryProviderEnum.class, names = {"TIMESTREAM", "VICTORIAMETRICS"})
+    void shouldNameTheReferencedTelemetryAndSignalForAnUnsupportedProvider(
+            TelemetryProviderEnum provider) {
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateProvider(
+                TELEMETRY_ID, TelemetryTypeEnum.METRICS, provider))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Telemetry '" + TELEMETRY_ID + "' for METRICS: provider '"
+                                              + provider + "' is not supported. "
+                                              + "Supported providers: "
+                                              + TelemetryProviderValidator.supportedProviders());
     }
 
     static Stream<Arguments> validSecrets() {

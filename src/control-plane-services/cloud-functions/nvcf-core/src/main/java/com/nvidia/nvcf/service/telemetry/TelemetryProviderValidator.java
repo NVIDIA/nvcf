@@ -24,6 +24,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import tools.jackson.databind.JsonNode;
@@ -93,6 +94,8 @@ public final class TelemetryProviderValidator {
 
     private static final String MESG_UNSUPPORTED_PROVIDER =
             "Telemetry provider '%s' is not supported. Supported providers: %s";
+    private static final String MESG_UNSUPPORTED_REFERENCED_PROVIDER =
+            "Telemetry '%s' for %s: provider '%s' is not supported. Supported providers: %s";
     private static final String MESG_SECRET_NOT_EXTRACTABLE =
             "Telemetry provider '%s': secret value must be a string or a JSON object";
     private static final String MESG_SECRET_FIELD_NOT_STRING =
@@ -124,6 +127,15 @@ public final class TelemetryProviderValidator {
         if (!SUPPORTED_PROVIDERS.contains(provider)) {
             throw new BadRequestException(
                     MESG_UNSUPPORTED_PROVIDER.formatted(provider, supportedProviders()));
+        }
+    }
+
+    public static void validateProvider(UUID telemetryId,
+                                        TelemetryTypeEnum type,
+                                        TelemetryProviderEnum provider) {
+        if (!SUPPORTED_PROVIDERS.contains(provider)) {
+            throw new BadRequestException(MESG_UNSUPPORTED_REFERENCED_PROVIDER.formatted(
+                    telemetryId, type, provider, supportedProviders()));
         }
     }
 
