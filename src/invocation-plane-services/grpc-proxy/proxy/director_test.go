@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1875,5 +1876,27 @@ func TestConnectResultsArePreInitialised(t *testing.T) {
 		if !slices.Contains(emitted, r) {
 			t.Errorf("metrics.ConnectResults contains %q which is never emitted", r)
 		}
+	}
+}
+
+func TestRegisterWorkerRejectsDuringShutdown(t *testing.T) {
+	proxyResponse := &invocation.Result{RequestId: uuid.New(), WorkerAuthorizationToken: "123abc"}
+	director := NewStreamDirector((*mockInvoker)(proxyResponse))
+	if err := director.Close(); err != nil {
+		t.Fatalf("failed to close director %s", err)
+	}
+
+	workerLink, workerEnd := net.Pipe()
+	err := director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, workerLink)
+	if !errors.Is(err, errShuttingDown) {
+		t.Fatalf("expected errShuttingDown, got %v", err)
+	}
+	if n := director.workers.Len(); n != 0 {
+		t.Fatalf("expected no worker connections after shutdown, got %d", n)
+	}
+	// The tunnel is closed, so the worker sees its connection end.
+	_ = workerEnd.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := workerEnd.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected the worker's connection to be closed, got %v", err)
 	}
 }
