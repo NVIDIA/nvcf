@@ -1,0 +1,37 @@
+{
+   "telemetries": {
+      "logsTelemetry": {
+         "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+         "name": "kratos-logs-stage",
+         "endpoint": "https://kratos-logs-ingest.example.invalid:8443/v1/mtls/logs",
+         "protocol": "HTTP",
+         "provider": "KRATOS",
+         "types": [
+            "LOGS"
+         ],
+         "createdAt": "2025-04-16T17:41:34.013Z"
+      },
+      "metricsTelemetry": {
+         "telemetryId": "0d7a1c5e-3f4b-4c2a-9e8d-6b5f4a3c2d1e",
+         "name": "kratos-thanos-sandbox",
+         "endpoint": "https://sandbox-receivers.thanos.example.com/api/v1/receive",
+         "protocol": "HTTP",
+         "provider": "KRATOS_THANOS",
+         "types": [
+            "METRICS"
+         ],
+         "createdAt": "2025-04-16T17:41:34.013Z"
+      },
+      "tracesTelemetry": {
+         "telemetryId": "7c9e2b4a-5d1f-4e6a-8b3c-2f1e0d9c8b7a",
+         "name": "kratos-traces-stage",
+         "endpoint": "https://kratos-traces-ingest.example.invalid:4318/v1/traces",
+         "protocol": "GRPC",
+         "provider": "KRATOS",
+         "types": [
+            "TRACES"
+         ],
+         "createdAt": "2026-10-19T00:00:00.000Z"
+      }
+   }
+}

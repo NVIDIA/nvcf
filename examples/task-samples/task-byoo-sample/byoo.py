@@ -44,17 +44,21 @@ def otel_trace_exporter_configured():
     value = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
     return True if value else False
 
+# OTLP exporter package for each OTEL_EXPORTER_OTLP_*_PROTOCOL value. NVCF sets
+# grpc or http/protobuf. Plain http is accepted for older NVCF releases.
+OTLP_EXPORTER_PACKAGES = {"grpc": "grpc", "http/protobuf": "http", "http": "http"}
+
+
 def is_valid_protocol(protocol):
-    if not protocol:
-        return False
-    return protocol in ["http", "grpc"]
+    return protocol in OTLP_EXPORTER_PACKAGES
 
 
 def get_otlp_exporter(protocol, exporter_type, exporter_class):
     if not is_valid_protocol(protocol):
         raise ValueError(f"Invalid OTLP protocol '{protocol}'")
 
-    module_name = f"opentelemetry.exporter.otlp.proto.{protocol}.{exporter_type}"
+    package = OTLP_EXPORTER_PACKAGES[protocol]
+    module_name = f"opentelemetry.exporter.otlp.proto.{package}.{exporter_type}"
     module = importlib.import_module(module_name)
     exporter = getattr(module, exporter_class)
 

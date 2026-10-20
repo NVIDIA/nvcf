@@ -214,22 +214,26 @@ final. An explicit `random` must be last. Empty lists and entries, duplicates,
 unknown methods, and methods after `random` are rejected. A `100` percent target
 is admitted without parsing sampling material or drawing a random bucket.
 
-`promptCacheKey` and `firstMessageHash` are limited to `chatCompletions` and
-`responses`. `promptCacheKey` first uses a nonempty string
+`promptCacheKey` and `firstMessageHash` are limited to `chatCompletions`,
+`responses`, and `anthropicMessages`. `promptCacheKey` first uses a nonempty string
 `prompt_cache_key` from the JSON body, then checks `promptCacheKeyHeaders` in
 order. The body value is trimmed like header values, and a whitespace-only value
 is unavailable. This route-level header list applies to both shadow forms. It
 defaults to `x-multi-turn-session-id`; set it to `[]` to disable header lookup.
+Messages has no `prompt_cache_key` body field, so it reads only the header list,
+which defaults to `x-multi-turn-session-id`, then `x-claude-code-session-id`.
 A header is usable only when it has exactly one nonempty value after trimming.
 Only the value is hashed, so equal values receive equal buckets across body and
-header sources and across both endpoints. `Authorization` and `Proxy-Authorization`
+header sources and across endpoints. `Authorization` and `Proxy-Authorization`
 are rejected case-insensitively so credentials cannot be used as prompt cache
 keys.
 
 `firstMessageHash` uses a versioned, endpoint-specific canonical JSON envelope.
 For Chat Completions it hashes leading `system` and `developer` messages and the
 first `user` message. For Responses it hashes nonempty `instructions` and the
-first user input; a string `input` is user content. Object-key order is
+first user input; a string `input` is user content. For Messages it hashes a
+nonempty top-level `system` and the first `user` message, without
+`cache_control` keys. Object-key order is
 normalized, while array and content-part order is preserved. Later turns are
 ignored. Sampling is stateless and does not recover input through conversations,
 `previous_response_id`, or streamed deltas. A Responses request that continues

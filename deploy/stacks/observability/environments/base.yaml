@@ -180,14 +180,17 @@ defaultMonitors:
         labels: {}
     dcgm:
       enabled: true
-    namespaceSelector:
-      any: true
-    selector:
-      matchLabels:
-        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+      namespaceSelector:
+        any: true
+      selector:
+        matchLabels:
+          nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
       interval: 30s
       path: /metrics
       port: dcgm-metrics
+      # Keep aligned with the job names that BYOO platform metrics federation
+      # selects.
+      jobName: nvidia-dcgm-exporter
       labels: {}
     worker:
       enabled: true
@@ -201,6 +204,9 @@ defaultMonitors:
       interval: 30s
       path: /metrics
       port: worker-metrics
+      # Keep aligned with the job names that BYOO platform metrics federation
+      # selects.
+      jobName: nvcf-worker
       # Keep aligned with the worker defaults in nvcf-default-monitors.
       podTargetLabels:
         - function-id

@@ -80,6 +80,7 @@ const (
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
 	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
 	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
+	setObservedTimeProcessorID           = "transform/set_observed_time"
 	defaultMetricSubsetPort              = 19091
 )
 
@@ -146,6 +147,12 @@ func RenderOtelConfigFromBytes(inputData []byte, tmplConfig TemplateConfig) ([]b
 }
 
 func RenderOtelConfig(telemetryConfig TelemetryConfig, tmplConfig TemplateConfig) ([]byte, error) {
+	// The templates render collector settings such as the federation target,
+	// so reject invalid settings before executing them.
+	if err := tmplConfig.OTelCollector.Validate(); err != nil {
+		return nil, fmt.Errorf("validate BYOO OTel collector config: %w", err)
+	}
+
 	configData := &bytes.Buffer{}
 	if err := ExecuteTemplate(configData, tmplConfig); err != nil {
 		return nil, fmt.Errorf("execute config template: %v", err)
@@ -440,10 +447,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
-			"tls": map[string]interface{}{
-				"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", config.Telemetries.Logs.Name)),
-				"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", config.Telemetries.Logs.Name)),
-			},
+			"tls": kratosClientTLS(credentialPath, config.Telemetries.Logs.Name),
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -481,6 +485,16 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	}
 	otelConfig.Exporters[exporterId]["sending_queue"] = logExporterSendingQueue()
 	return exporterId, nil
+}
+
+// kratosClientTLS returns the mTLS block for a KRATOS exporter. The secrets
+// extractor writes the clientCert and clientKey keys of the telemetry secret to
+// <name>-clientCert and <name>-clientKey.
+func kratosClientTLS(credentialPath, telemetryName string) map[string]interface{} {
+	return map[string]interface{}{
+		"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", telemetryName)),
+		"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", telemetryName)),
+	}
 }
 
 func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -639,6 +653,30 @@ func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
 		"metric_statements": blocks,
 	}
 	return dropEmptyLabelsProcessorID
+}
+
+// addSetObservedTimeProcessor sets the observed time of log records that
+// arrive without one to the time the collector processes them.
+//
+// The OpenTelemetry log data model requires the collection system to set
+// ObservedTimestamp. OpenTelemetry SDKs set it when they emit a record, but the
+// Fluent Bit opentelemetry output that forwards container stdout and stderr to
+// the same OTLP receiver leaves it at zero, so those records reached the
+// backend observed at the Unix epoch. The where clause keeps any observed time
+// a sender already set.
+func addSetObservedTimeProcessor(otelConfig *OpenTelemetryConfig) string {
+	otelConfig.Processors[setObservedTimeProcessorID] = map[string]interface{}{
+		"error_mode": "ignore",
+		"log_statements": []map[string]interface{}{
+			{
+				"context": "log",
+				"statements": []string{
+					"set(log.observed_time, Now()) where log.observed_time_unix_nano == 0",
+				},
+			},
+		},
+	}
+	return setObservedTimeProcessorID
 }
 
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
@@ -853,6 +891,59 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 			"spaneventsenabled": true,
 		}
+	case ProviderKratosLogs:
+		exporterType = "otlp_http"
+		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
+		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
+
+		// The secrets extractor runs before render, so a missing or blank client
+		// cert or key fails here with a named error instead of an otelcol TLS
+		// load error at startup.
+		var missing []string
+		for _, key := range []string{"clientCert", "clientKey"} {
+			hasContent, err := secretFileHasContent(filepath.Join(credentialPath, fmt.Sprintf("%s-%s", config.Telemetries.Traces.Name, key)))
+			if err != nil {
+				return "", err
+			}
+			if !hasContent {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("traces telemetry %q: KRATOS secret needs clientCert and clientKey, missing or empty: %s",
+				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
+		}
+
+		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
+		// The client cert pair is enough for the Kratos traces gateway, which uses
+		// public CA roots. caFile is optional, and a blank CA file stops the
+		// collector from starting, so it is used only when the file has content.
+		caFile := filepath.Join(credentialPath, fmt.Sprintf("%s-caFile", config.Telemetries.Traces.Name))
+		hasCA, err := secretFileHasContent(caFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCA {
+			tls["ca_file"] = caFile
+		}
+		exporter := map[string]interface{}{
+			"traces_endpoint": config.Telemetries.Traces.Endpoint,
+			"tls":             tls,
+		}
+		// The gateway authenticates with the client certificate alone, so
+		// collectorId is optional. Send the header only when the secret has one,
+		// so the config never references a missing file.
+		collectorIdFile := filepath.Join(credentialPath, fmt.Sprintf("%s-collectorId", config.Telemetries.Traces.Name))
+		hasCollectorId, err := secretFileHasContent(collectorIdFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCollectorId {
+			exporter["headers"] = map[string]interface{}{
+				"collector-id": fmt.Sprintf("${file:%s}", collectorIdFile),
+			}
+		}
+		otelConfig.Exporters[exporterId] = exporter
 	case ProviderOtelCollector:
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
@@ -969,7 +1060,11 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		logPipeline := otelConfig.Service.Pipelines["logs"]
 		logPipeline.Receivers = []string{"otlp"}
 		logPipeline.Exporters = []string{exporterId}
-		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata"}
+		logPipeline.Processors = []string{
+			"memory_limiter",
+			addSetObservedTimeProcessor(otelConfig),
+			"attributes/add-metadata",
+		}
 		if logChunking.Enabled {
 			otelConfig.Processors["logchunk/byoo"] = map[string]interface{}{
 				"max_payload_bytes": logChunking.MaxPayloadBytes,
