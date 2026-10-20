@@ -18,9 +18,12 @@ package com.nvidia.icms.outbound.cassandra.instance;
 
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.springframework.data.cassandra.repository.CassandraRepository;
+import org.springframework.data.cassandra.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -39,6 +42,13 @@ public interface InstanceV2Repo extends
 
     Stream<InstanceV2Entity> findAllByDeploymentIdAndGpuSpecificationId(
             UUID deploymentId, UUID gpuSpecificationId);
+
+    @Query("UPDATE instances USING TIMESTAMP :writeTimestamp "
+            + "SET creation_bucket = :creationBucket WHERE instance_id = :instanceId")
+    void updateCreationBucket(
+            @Param("instanceId") String instanceId,
+            @Param("creationBucket") Instant creationBucket,
+            @Param("writeTimestamp") long writeTimestamp);
 
     /* This index presents in DB, but before use it chat with BradV
     Stream<InstanceV2Entity> findAllByZone(String zone); */

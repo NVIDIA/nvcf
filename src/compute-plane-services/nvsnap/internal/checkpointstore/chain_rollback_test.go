@@ -22,6 +22,7 @@ type flakyBackend struct {
 	putErr         error
 	deleteFailures int
 	deletes        int
+	deleteErr      error // returned by every Delete once the failures are used up
 }
 
 func (b *flakyBackend) Put(_ context.Context, _ string, _ []CaptureSource, m Manifest) (Manifest, error) {
@@ -37,7 +38,7 @@ func (b *flakyBackend) Delete(context.Context, string) error {
 	if b.deletes <= b.deleteFailures {
 		return errors.New("transient")
 	}
-	return nil
+	return b.deleteErr
 }
 
 func TestChainRollbackRetriesFailedDeletes(t *testing.T) {
@@ -80,5 +81,26 @@ func TestConfigMapBackendDeleteReturnsManifestDeleteFailure(t *testing.T) {
 	ok := NewConfigMapBackend(&flakyBackend{}, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
 	if err := ok.Delete(context.Background(), "h"); err != nil {
 		t.Fatalf("delete of a hash with no manifest: %v", err)
+	}
+}
+
+func TestConfigMapBackendDeleteManifestFailureWithInnerNotFound(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("delete", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	b := NewConfigMapBackend(&flakyBackend{deleteErr: ErrNotFound}, client, "nvsnap-system", logrus.New())
+	err := b.Delete(context.Background(), "h")
+	if err == nil {
+		t.Fatal("a failed manifest delete was reported as success")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("a failed manifest delete read as ErrNotFound, so callers would stop retrying: %v", err)
+	}
+
+	// Without a manifest failure, the inner ErrNotFound is passed through.
+	ok := NewConfigMapBackend(&flakyBackend{deleteErr: ErrNotFound}, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
+	if err := ok.Delete(context.Background(), "h"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete with no manifest and no data = %v, want ErrNotFound", err)
 	}
 }

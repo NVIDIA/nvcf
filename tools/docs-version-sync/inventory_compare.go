@@ -13,6 +13,7 @@ import (
 	"strings"
 )
 
+// comparableArtifact records one exact artifact and its installation requirements.
 type comparableArtifact struct {
 	Type        string
 	Name        string
@@ -49,6 +50,7 @@ func loadComparableInventorySet(directory string) (comparableInventorySet, error
 	}
 	sort.Strings(paths)
 	set := comparableInventorySet{Artifacts: map[string]comparableArtifact{}}
+	identities := map[string][]comparableArtifact{}
 	seenSources := map[string]struct{}{}
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
@@ -80,11 +82,15 @@ func loadComparableInventorySet(directory string) (comparableInventorySet, error
 			if err != nil {
 				return comparableInventorySet{}, fmt.Errorf("%s: %w", path, err)
 			}
-			key := artifact.Type + "\x00" + artifact.Name
-			if existing, exists := set.Artifacts[key]; exists {
-				if existing.Reference != candidate.Reference {
-					return comparableInventorySet{}, fmt.Errorf("artifact conflict for %s %s: %s and %s", artifact.Type, artifact.Name, existing.Reference, candidate.Reference)
+			identity := artifact.Type + "\x00" + artifact.Name
+			for _, previous := range identities[identity] {
+				if previous.Reference != candidate.Reference && !distinctOwnedHelperVersions(previous, candidate) {
+					return comparableInventorySet{}, fmt.Errorf("artifact conflict for %s %s: %s and %s", artifact.Type, artifact.Name, previous.Reference, candidate.Reference)
 				}
+			}
+			identities[identity] = append(identities[identity], candidate)
+			key := artifact.Type + "\x00" + artifact.Reference
+			if existing, exists := set.Artifacts[key]; exists {
 				candidate.Stacks = mergeSortedStrings(existing.Stacks, candidate.Stacks)
 				if existing.Requirement == ManifestRequired {
 					candidate.Requirement = ManifestRequired
@@ -138,6 +144,7 @@ func mergeSortedStrings(left, right []string) []string {
 }
 
 func renderInventorySetComparison(from, to comparableInventorySet) string {
+	from.Artifacts, to.Artifacts = comparisonArtifactKeys(from.Artifacts, to.Artifacts), comparisonArtifactKeys(to.Artifacts, from.Artifacts)
 	var added, removed, changed []string
 	keys := map[string]struct{}{}
 	for key := range from.Artifacts {
@@ -223,4 +230,39 @@ func valueOrNone(value string) string {
 		return "none"
 	}
 	return value
+}
+
+// distinctOwnedHelperVersions permits separate helper tags within one owning
+// stack without weakening repository, digest, or cross-stack conflict checks.
+func distinctOwnedHelperVersions(left, right comparableArtifact) bool {
+	if left.Type != "container-image" || right.Type != "container-image" ||
+		len(left.Stacks) != 1 || len(right.Stacks) != 1 || left.Stacks[0] != right.Stacks[0] {
+		return false
+	}
+	leftImage, leftErr := parseResolvedImageReference(left.Reference)
+	rightImage, rightErr := parseResolvedImageReference(right.Reference)
+	return leftErr == nil && rightErr == nil && leftImage.Repository == rightImage.Repository &&
+		leftImage.Version != "" && rightImage.Version != "" && leftImage.Version != rightImage.Version
+}
+
+// comparisonArtifactKeys compares single-version dependencies by name so a pin
+// bump remains a change. When either set has multiple versions, compare exact
+// references so adding or removing one helper cannot hide another.
+func comparisonArtifactKeys(artifacts, peers map[string]comparableArtifact) map[string]comparableArtifact {
+	counts, peerCounts := map[string]int{}, map[string]int{}
+	for _, artifact := range artifacts {
+		counts[artifact.Type+"\x00"+artifact.Name]++
+	}
+	for _, artifact := range peers {
+		peerCounts[artifact.Type+"\x00"+artifact.Name]++
+	}
+	keyed := make(map[string]comparableArtifact, len(artifacts))
+	for _, artifact := range artifacts {
+		key := artifact.Type + "\x00" + artifact.Name
+		if counts[key] > 1 || peerCounts[key] > 1 {
+			key += "\x00" + artifact.Reference
+		}
+		keyed[key] = artifact
+	}
+	return keyed
 }

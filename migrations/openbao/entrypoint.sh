@@ -147,20 +147,22 @@ else
   log_info "LLS addon disabled (ADDONS_LLS_ENABLED != true), skipping..."
 fi
 
-if [ "${ADDONS_LLM_ENABLED:-false}" = "true" ]; then
-  log_section "LLM addon enabled, running setup..."
-  if [ -f "/app/addons/llm/setup_llm.sh" ]; then
-    if ! bash -c "source /app/addons/llm/setup_llm.sh"; then
-      log_error "LLM addon setup failed"
-      FAILED_MIGRATIONS+=("addons/llm/setup_llm.sh")
+# ADDONS_LLM_ENABLED is the original gate for this PKI and is still set by
+# the llm-request-router chart, so either variable enables it.
+if [ "${NVCF_SERVICE_PKI_ENABLED:-false}" = "true" ] || [ "${ADDONS_LLM_ENABLED:-false}" = "true" ]; then
+  log_section "Service PKI enabled, running setup..."
+  if [ -f "/app/addons/service-pki/setup_service_pki.sh" ]; then
+    if ! bash -c "source /app/addons/service-pki/setup_service_pki.sh"; then
+      log_error "Service PKI setup failed"
+      FAILED_MIGRATIONS+=("addons/service-pki/setup_service_pki.sh")
     else
-      log_success "LLM addon setup completed successfully"
+      log_success "Service PKI setup completed successfully"
     fi
   else
-    log_warn "LLM addon script not found at /app/addons/llm/setup_llm.sh"
+    log_warn "Service PKI script not found at /app/addons/service-pki/setup_service_pki.sh"
   fi
 else
-  log_info "LLM addon disabled (ADDONS_LLM_ENABLED != true), skipping..."
+  log_info "Service PKI disabled (NVCF_SERVICE_PKI_ENABLED and ADDONS_LLM_ENABLED != true), skipping..."
 fi
 
 if [ "${ADDONS_NVCF_UI_ENABLED:-false}" = "true" ]; then

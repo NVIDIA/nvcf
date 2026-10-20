@@ -6,15 +6,26 @@ This section covers cache components for self-hosted NVCF deployments. Caches im
 
 Self-hosted NVCF supports several cache components:
 
-- **Derived Data Cache Service (DDCS)** - Caches derived content to reduce scene load time and improve rendering performance
-- **USD Content Cache (UCC)** - Caches USD content from object storage to accelerate scene loading
+- Omniverse Derived Cache (OVDC) - Caches derived content to reduce scene load time and improve rendering performance.
+- Omniverse Content Cache (OVCC) - Caches USD content from object storage to accelerate scene loading.
 
 ## When to Use Caches
 
 See the individual cache component guides for detailed information on when to use each cache:
 
-- [Derived Data Cache Service](https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/) - Derived Data Cache Service
-- [USD Content Cache](https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/) - USD Content Cache
+- [Omniverse Derived Cache](https://docs.omniverse.nvidia.com/ovcaches/ovderivedcache/latest/index.html)
+- [Omniverse Content Cache](https://docs.omniverse.nvidia.com/ovcaches/ovcontentcache/latest/index.html)
+
+| Component | Helm chart | Container |
+| --- | --- | --- |
+| OVDC | `ovderivedcache:6.0.1` | `ovderivedcache:6.0.1` |
+| OVCC | `ovcontentcache:4.0.4` | `usd-content-cache:3.0.2` |
+
+For installation and tuning, follow the
+[OVDC deployment guide](https://docs.omniverse.nvidia.com/ovcaches/ovderivedcache/latest/deploy.html)
+and [OVCC deployment guide](https://docs.omniverse.nvidia.com/ovcaches/ovcontentcache/latest/deploy.html#updating-the-container-image).
+OVCC chart 4.0.4 defaults to image 3.0.1; retain `image.tag: "3.0.2"` in the
+Helm values used for installs and upgrades.
 
 ## Documentation
 

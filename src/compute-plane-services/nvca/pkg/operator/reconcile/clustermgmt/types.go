@@ -212,6 +212,10 @@ type clusterDTO struct {
 		HelmReValServiceURL                string `json:"helmReValServiceURL"`
 		HelmReValServiceHostHeaderOverride string `json:"helmReValServiceHostHeaderOverride,omitempty"`
 	} `json:"miniService,omitempty"`
+	// FNDService configures the Event Ledger (FnDS) endpoint the OTel collector exports to.
+	FNDService *struct {
+		ServiceURL string `json:"serviceURL"`
+	} `json:"fndService,omitempty"`
 	// Agent configures NVCA agent-specific settings sourced from cluster DTO.
 	Agent *agentDTO `json:"agent,omitempty"`
 }

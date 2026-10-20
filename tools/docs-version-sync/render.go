@@ -259,6 +259,18 @@ func (catalog *Catalog) findArtifacts(name string) []Artifact {
 }
 
 func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
+	if catalog.UmbrellaManifestSHA256 != "" {
+		m, data, err := loadUmbrellaManifest(filepath.Join(repoRoot, "docs", "umbrella-manifest.json"))
+		if err != nil {
+			return err
+		}
+		if umbrellaDigest(data) != catalog.UmbrellaManifestSHA256 {
+			return fmt.Errorf("umbrella docs manifest digest mismatch")
+		}
+		if err := validateUmbrellaDocsCatalogIdentity(m, catalog); err != nil {
+			return err
+		}
+	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return err
 	}

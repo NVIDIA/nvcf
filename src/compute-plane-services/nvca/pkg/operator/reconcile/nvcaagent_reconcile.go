@@ -102,6 +102,8 @@ const (
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
 	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
 
+	agentContainerName = "agent"
+
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
 
@@ -163,8 +165,6 @@ const (
 	//nolint:gosec
 	NGCServiceAPIKeySecretDataKey = NGCServiceAPIKeySecretName
 	//nolint:gosec
-	NGCServiceAPIKeyFileEnvVar = "NGC_SERVICE_API_KEY_FILE"
-	//nolint:gosec
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
@@ -205,6 +205,7 @@ const (
 	NVCAOTelCollectorOAuthClientSecretFileEnvVar = "NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE"
 	NVCAOTelCollectorOAuthTokenURLEnvVar         = "NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL"
 	NVCAOTelCollectorAuthenticatorEnvVar         = "NVCA_OTEL_COLLECTOR_AUTHENTICATOR"
+	NVCAOTelCollectorBearerTokenFileEnvVar       = "NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE"
 
 	// NVCA OTel collector memory limiter default percentages
 	NVCAOTelCollectorMemoryLimitPercentage = 85
@@ -573,6 +574,20 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
+	// RBAC must be set up before the agent config ConfigMap is written. The
+	// ConfigMap is the source of truth for rollout change-detection
+	// (newAgentConfigChangedCheck), which compares it against the live
+	// cluster object rather than NVCFBackend status. If the ConfigMap were
+	// written first and a later step such as RBAC then failed, the
+	// ConfigMap would already match the desired state, so subsequent
+	// periodic syncs would see "no change" and never retry RBAC or the
+	// agent Deployment rollout.
+	err = bc.setupNVCARBAC(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
+			nb.Namespace, nb.Name, err)
+	}
+
 	if err := bc.setupAgentConfigConfigMap(ctx, desiredAgentConfigCM); err != nil {
 		return fmt.Errorf("failed to setup agent config ConfigMap: %w", err)
 	}
@@ -644,12 +659,6 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 	err = bc.setupVaultConfigmap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", NVCAVaultConfigmapName,
-			nb.Namespace, nb.Name, err)
-	}
-
-	err = bc.setupNVCARBAC(ctx, nb)
-	if err != nil {
-		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
 
@@ -1431,7 +1440,16 @@ func requestsNamespaceSetupError(requestsNamespace string, err error) error {
 
 // validateMergedAgentConfig rejects agent-config-merge values that would make a
 // new agent fail at startup, so the operator keeps the running agent instead
-// of rolling out a configuration it knows is broken.
+// of rolling out a configuration it knows is broken. SyncNVCFBackendHealth
+// also calls this directly to keep reporting Unhealthy for a running agent
+// kept alive only because its replacement configuration was rejected.
+//
+// Checks that DecodeConfig's own cfg.Validate() already covers (such as a
+// negative worker.timeouts interval) do not need a second
+// check here: both callers reach mergeCfg through getRawAgentConfigToMerge,
+// which classifies that failure before a value this invalid can reach here.
+// This function covers validation that depends on data outside Config, such
+// as the NVCFBackend's GPU discovery mode.
 func validateMergedAgentConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
 	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
 		return err
@@ -1570,6 +1588,11 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
 	}
 	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
+		// mergeCfg already passed cfg.Validate() once inside
+		// getRawAgentConfigToMerge's DecodeConfig call above, so the only way
+		// this second validateAgentConfigToMerge call can still fail is the
+		// operator-config TransportTLS overlay a few lines up introducing a
+		// new TLS misconfiguration. That stays fatal.
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
 	}
@@ -1626,6 +1649,29 @@ func isResourceQuantityDecodeError(err error) bool {
 	return strings.Contains(err.Error(), "decode resource ")
 }
 
+// isAgentTimeConfigError reports whether DecodeConfig's cfg.Validate() stage
+// failed specifically on AgentTimeConfig.Validate()'s negative-duration check,
+// or while decoding an agent timeout interval that time.ParseDuration rejects
+// (for example a value that overflows time.Duration). Both are identified by
+// typed errors.
+// A negative worker.timeouts interval is a recoverable agent-config-merge
+// content problem, like a malformed resource.Quantity, not evidence of a
+// corrupt ConfigMap or an operator bug. This intentionally does not match
+// every cfg.Validate() failure: some, such as
+// workload.stargateQUICInsecure=true with transportTLS.trustMode=bundle, are
+// structural misconfigurations that TestGetAgentConfigToMerge_Rejects*AsFatal
+// requires stay fatal.
+func isAgentTimeConfigError(err error) bool {
+	var negative *nvcaconfig.NegativeDurationError
+	var decode *nvcaconfig.AgentTimeDecodeError
+	return errors.As(err, &negative) || errors.As(err, &decode)
+}
+
+func isKeyConflictError(err error) bool {
+	var target *nvcaconfig.KeyConflictError
+	return errors.As(err, &target)
+}
+
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
@@ -1644,8 +1690,16 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
 	if err != nil {
 		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
-		if isResourceQuantityDecodeError(err) {
+		if isResourceQuantityDecodeError(err) || isKeyConflictError(err) {
 			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
+		}
+		if isAgentTimeConfigError(err) {
+			// Not fatal and not invalidAgentConfigError: the running agent is
+			// unaffected by a rejected value (the new config was never
+			// applied), so agent health stays independent of config issues
+			// and AgentStatus is left alone. The field name and value are in
+			// this error, logged by the caller.
+			return nvcaconfig.Config{}, false, wrappedErr
 		}
 		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)
 	}
@@ -2104,7 +2158,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(
 	}
 
 	nvcaContainer := corev1.Container{
-		Name:            "agent",
+		Name:            agentContainerName,
 		Image:           bc.getNVCAImagePathFromConfig(nb),
 		ImagePullPolicy: getImagePullPolicyFromConfig(nb.Spec.NVCAImageConfig),
 		Args:            []string{"/usr/bin/nvca", "--config", agentConfigFilePath},
@@ -2179,6 +2233,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(
 	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
 		Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
 		Value: bc.operatorNamespace,
+	})
+	// Only where the validator runs does the agent publish its metrics
+	// baseline; elsewhere a last_run of 0 would read as a validator that
+	// never ran, forever. Always set, so the agent can tell a disabled
+	// validator from an operator that predates the setting.
+	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
+		Name:  clustervalidator.EnabledEnv,
+		Value: strconv.FormatBool(bc.clusterValidatorEnabled),
 	})
 
 	// Add OAuth authentication environment variables.
@@ -2898,13 +2960,13 @@ func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(
 		fmt.Sprintf("--config=%s/config.yaml", NVCAOTelCollectorConfigMountPath),
 	}
 
-	fndsEndpoint := getFNDSEndpoint(nb.Spec.ClusterConfig.FNDService, bc.envType)
+	fndsEndpoint := getOTelCollectorFNDSEndpoint(nb, bc.envType)
 	authCfg := bc.getOTelCollectorAuthConfig(nb)
 
 	env := []corev1.EnvVar{
 		{
-			Name:  NGCServiceAPIKeyFileEnvVar,
-			Value: fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey),
+			Name:  NVCAOTelCollectorBearerTokenFileEnvVar,
+			Value: authCfg.bearerTokenFile,
 		},
 		{
 			Name:  NVCAOTelCollectorRequestsNamespaceEnvVar,
@@ -2951,19 +3013,24 @@ func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(
 }
 
 // getOTelCollectorVolumeMounts returns volume mounts for the OTel collector container.
-func (bc *BackendK8sCache) getOTelCollectorVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+// In PSAT mode the token mount is added by applyPSATIdentity instead of the NGC
+// service API key.
+func (bc *BackendK8sCache) getOTelCollectorVolumeMounts(nb *nvidiaiov1.NVCFBackend) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
 		{
 			Name:      NVCAOTelCollectorConfigMapName,
 			MountPath: NVCAOTelCollectorConfigMountPath,
 			ReadOnly:  true,
 		},
-		{
+	}
+	if !useOTelCollectorPSAT(nb) {
+		mounts = append(mounts, corev1.VolumeMount{
 			Name:      NGCServiceAPIKeySecretName,
 			MountPath: fmt.Sprintf("/var/run/secrets/%s", NGCServiceAPIKeySecretName),
 			ReadOnly:  true,
-		},
+		})
 	}
+	return mounts
 }
 
 // getOTelCollectorContainer returns the OTel collector as a restartable init container.
@@ -2997,7 +3064,7 @@ func (bc *BackendK8sCache) getOTelCollectorContainer(nb *nvidiaiov1.NVCFBackend,
 					Protocol:      corev1.ProtocolTCP,
 				},
 			},
-			VolumeMounts: bc.getOTelCollectorVolumeMounts(),
+			VolumeMounts: bc.getOTelCollectorVolumeMounts(nb),
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
 					HTTPGet: &corev1.HTTPGetAction{

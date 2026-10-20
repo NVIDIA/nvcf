@@ -47,6 +47,10 @@ func renderEditionSummary(catalog *Catalog, stackName string) (string, error) {
 		return "", nil
 	}
 	edition := catalog.DocsEdition
+	label := "Docs edition"
+	if catalog.UmbrellaManifestSHA256 != "" {
+		label = "NVCF release"
+	}
 	status := "Development candidate"
 	if edition.Status == ReleaseSetQualified {
 		status = "Qualified combination"
@@ -56,20 +60,27 @@ func renderEditionSummary(catalog *Catalog, stackName string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Docs edition `%s` | %s `%s` | %s.\n", edition.Version, documentationStackDisplayName(stackName), stack.Version, status), nil
+		return fmt.Sprintf("%s `%s` | %s `%s` | %s.\n", label, edition.Version, documentationStackDisplayName(stackName), stack.Version, status), nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Docs edition `%s`. %s.\n\n", edition.Version, status)
+	fmt.Fprintf(&b, "%s `%s`. %s.\n\n", label, edition.Version, status)
 	b.WriteString("| Stack | Artifact version |\n| --- | --- |\n")
 	for _, name := range releaseSetStackNames {
 		stack, _ := catalog.ReleaseSet.Stacks.byName(name)
 		fmt.Fprintf(&b, "| %s | `%s` |\n", documentationStackDisplayName(name), stack.Version)
 	}
-	b.WriteString("\nThe docs edition versions this documented combination. Each stack keeps its own artifact version.\n")
+	if catalog.UmbrellaManifestSHA256 == "" {
+		b.WriteString("\nThe docs edition versions this documented combination. Each stack keeps its own artifact version.\n")
+	} else {
+		fmt.Fprintf(&b, "\nEach stack keeps its own artifact version. Docs corrections keep this NVCF release version. [Download the release bundle](https://github.com/NVIDIA/nvcf/releases/download/%s/%s).\n", umbrellaTag(edition.Version), umbrellaBundleName(edition.Version))
+	}
 	return b.String(), nil
 }
 
 func validateDocsEdition(catalog *Catalog) error {
+	if catalog.UmbrellaManifestSHA256 != "" && (catalog.DocsEdition == nil || !lowercaseSHA256DigestRe.MatchString(catalog.UmbrellaManifestSHA256)) {
+		return fmt.Errorf("umbrella docs require a product edition and manifest digest")
+	}
 	edition := catalog.DocsEdition
 	if edition == nil {
 		return nil

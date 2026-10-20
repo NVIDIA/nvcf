@@ -145,6 +145,8 @@ grpcproxy:
     # actually deployed and reachable from the proxy.
     # Example: "http://otel.tracing-system.svc.cluster.local:8282"
     OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    # Event ledger base URL. Events are not published when empty.
+    # EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
 
   # Service configuration
   service:

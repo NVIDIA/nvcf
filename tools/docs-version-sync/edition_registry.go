@@ -23,9 +23,11 @@ type editionRegistry struct {
 
 // editionRelease is the source identity of one published docs edition.
 type editionRelease struct {
-	Version string `yaml:"version"`
-	Ref     string `yaml:"ref"`
-	Commit  string `yaml:"commit"`
+	Version  string               `yaml:"version"`
+	Ref      string               `yaml:"ref"`
+	Commit   string               `yaml:"commit"`
+	Mode     string               `yaml:"mode,omitempty"`
+	Umbrella *umbrellaDocsBinding `yaml:"umbrella,omitempty"`
 }
 
 func readEditionRegistry(root string) (*editionRegistry, error) {
@@ -47,8 +49,8 @@ func readEditionRegistry(root string) (*editionRegistry, error) {
 	}
 	seen := map[string]bool{}
 	for _, release := range registry.Editions {
-		if !validStableStackVersion(release.Version) || release.Ref != "docs/releases/"+release.Version || !fullLowercaseCommitSHARe.MatchString(release.Commit) {
-			return nil, fmt.Errorf("invalid edition registry identity: %+v", release)
+		if err := validateDocsRegistryIdentity(release); err != nil {
+			return nil, err
 		}
 		if seen[release.Version] {
 			return nil, fmt.Errorf("duplicate docs edition %s", release.Version)
@@ -83,6 +85,9 @@ func catalogAtCommit(root, commit string) (*Catalog, error) {
 }
 
 func verifyEditionRef(root string, release editionRelease, remote bool) (*Catalog, error) {
+	if release.Mode == "umbrella" {
+		return verifyUmbrellaDocsRef(root, release, remote)
+	}
 	if remote {
 		data, err := gitOutput(root, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+release.Ref)
 		if err != nil {
@@ -108,6 +113,9 @@ func verifyEditionRef(root string, release editionRelease, remote bool) (*Catalo
 	catalog, err := catalogAtCommit(root, release.Commit)
 	if err != nil {
 		return nil, err
+	}
+	if catalog.UmbrellaManifestSHA256 != "" {
+		return nil, fmt.Errorf("legacy edition cannot use an umbrella catalog")
 	}
 	if catalog.DocsEdition == nil || catalog.DocsEdition.Version != release.Version || catalog.DocsEdition.Status != ReleaseSetQualified {
 		return nil, fmt.Errorf("edition %s: branch must contain its matching qualified catalog", release.Version)
@@ -208,6 +216,9 @@ func validateEditionRegistry(root string, remote bool) error {
 		catalogs[release.Version] = catalog
 	}
 	for _, catalog := range catalogs {
+		if catalog.UmbrellaManifestSHA256 != "" {
+			continue
+		}
 		var previous *Catalog
 		if version := catalog.DocsEdition.PreviousVersion; version != "" {
 			previous = catalogs[version]

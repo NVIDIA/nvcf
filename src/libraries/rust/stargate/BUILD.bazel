@@ -8,10 +8,23 @@ exports_files([
     "Cargo.toml",
 ])
 
+# The routing method manifest: every algorithm name, alias, and
+# routing-expression parameter. The stargate drift tests compile it in, and the
+# nvcf-core tests read it to check the function API's routingMethod format
+# check. It lives in this package, which has no load statements, so the
+# nvcf-core tests do not load the Rust toolchain or crates. The cloud-functions
+# row in .github/workflows/bazel.yml also runs when it changes.
+exports_files(
+    ["routing_methods.json"],
+    visibility = [
+        "//src/control-plane-services/cloud-functions/nvcf-core:__pkg__",
+        "//src/libraries/rust/stargate/crates/stargate:__pkg__",
+    ],
+)
+
 # Bundled load-balancer benchmark configs. Staged as `data` for the
-# stargate crate's tests (the bundled_benchmark_lb_configs_parse suite
-# reads them; it is skipped under Bazel today, but the filegroup keeps
-# the label resolvable for when it is re-enabled via the runfiles crate).
+# stargate-bench tests and for the stargate tests, which parse them and
+# check their algorithm names.
 filegroup(
     name = "benches",
     srcs = glob(["benches/**"]),

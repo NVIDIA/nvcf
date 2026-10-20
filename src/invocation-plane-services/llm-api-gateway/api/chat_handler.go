@@ -84,6 +84,7 @@ func (h *OpenAIChatHandlers) handleChatCompletionRequest(
 	if err := applyChatSessionAffinity(c, request); err != nil {
 		return err
 	}
+	h.handlers.setChatLastClusterKeys(c.RequestContext(), rawBody)
 	normalized, err := h.handlers.normalizeChatRequest(c, request, rawBody)
 	if err != nil {
 		return err

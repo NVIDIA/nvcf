@@ -62,6 +62,74 @@ test "$(yq -r '.agentConfig // "omitted"' "${default_values}")" = "omitted" ||
   fail "stack shadowed the chart agentConfig defaults without an explicit merge"
 test "$(yq -r '.nodeSelector // "omitted"' "${default_values}")" = "omitted" ||
   fail "stack emitted a node selector while the singular global default is disabled"
+test "$(yq -r '.selfManaged.eventLedgerServiceURL // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack emitted an empty Event Ledger URL that would shadow the operator default"
+
+event_ledger_values="${work_dir}/event-ledger-values.yaml"
+render_values "${event_ledger_values}" \
+  --state-values-set-string global.nvcaOperator.selfManaged.eventLedgerServiceURL=https://events.example.invalid
+test "$(yq -r '.selfManaged.eventLedgerServiceURL' "${event_ledger_values}")" = "https://events.example.invalid" ||
+  fail "global.nvcaOperator.selfManaged.eventLedgerServiceURL was not forwarded to the chart"
+
+test "$(yq -r '.utils // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack shadowed the chart utils reservation default without an explicit value"
+utils_values="${work_dir}/utils-values.yaml"
+render_values "${utils_values}" \
+  --state-values-set-string global.nvcaOperator.utils.resources.cpu=1 \
+  --state-values-set-string global.nvcaOperator.utils.resources.memory=2Gi
+test "$(yq -r '.utils.resources.cpu | tag + " " + .' "${utils_values}")" = '!!str 1' ||
+  fail "global.nvcaOperator.utils.resources.cpu was not forwarded to the chart as a string"
+test "$(yq -r '.utils.resources.memory' "${utils_values}")" = "2Gi" ||
+  fail "global.nvcaOperator.utils.resources.memory was not forwarded to the chart"
+
+test "$(yq -r '.byoo // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack shadowed the chart byoo defaults without an explicit value"
+empty_byoo_state="${work_dir}/empty-byoo-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byoo: {}' >"${empty_byoo_state}"
+empty_byoo_values="${work_dir}/empty-byoo-values.yaml"
+render_values "${empty_byoo_values}" --state-values-file "${empty_byoo_state}"
+test "$(yq -r '.byoo // "omitted"' "${empty_byoo_values}")" = "omitted" ||
+  fail "stack emitted an empty byoo block"
+byoo_state="${work_dir}/byoo-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byoo:' \
+  '      resources:' \
+  '        requests:' \
+  '          cpu: 250m' \
+  '          memory: 1Gi' \
+  '      logChunking:' \
+  '        maxPayloadBytes: 131072' \
+  '        dryRun: true' \
+  '      otelCollector:' \
+  '        exporterHelper:' \
+  '          timeout: 30s' \
+  '      additionalResourceOverhead:' \
+  '        cpu: "1"' \
+  '      fluentbit:' \
+  '        resources:' \
+  '          limits:' \
+  '            memory: 256Mi' >"${byoo_state}"
+byoo_values="${work_dir}/byoo-values.yaml"
+render_values "${byoo_values}" --state-values-file "${byoo_state}"
+test "$(yq -r '.byoo.resources.requests.cpu' "${byoo_values}")" = "250m" ||
+  fail "global.nvcaOperator.byoo.resources was not forwarded to the chart"
+test "$(yq -r '.byoo.resources.requests.memory' "${byoo_values}")" = "1Gi" ||
+  fail "global.nvcaOperator.byoo.resources.requests.memory was not forwarded to the chart"
+test "$(yq -r '.byoo.logChunking.maxPayloadBytes' "${byoo_values}")" = "131072" ||
+  fail "global.nvcaOperator.byoo.logChunking.maxPayloadBytes was not forwarded to the chart"
+test "$(yq -r '.byoo.logChunking.dryRun' "${byoo_values}")" = "true" ||
+  fail "global.nvcaOperator.byoo.logChunking.dryRun was not forwarded to the chart"
+test "$(yq -r '.byoo.otelCollector.exporterHelper.timeout' "${byoo_values}")" = "30s" ||
+  fail "global.nvcaOperator.byoo.otelCollector was not forwarded to the chart"
+test "$(yq -r '.byoo.additionalResourceOverhead.cpu | tag + " " + .' "${byoo_values}")" = '!!str 1' ||
+  fail "global.nvcaOperator.byoo.additionalResourceOverhead.cpu was not forwarded to the chart as a string"
+test "$(yq -r '.byoo.fluentbit.resources.limits.memory' "${byoo_values}")" = "256Mi" ||
+  fail "global.nvcaOperator.byoo.fluentbit.resources was not forwarded to the chart"
 
 write_registration '    workload:
       defaultOwnershipProbe: true'

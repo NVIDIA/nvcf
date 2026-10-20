@@ -1,0 +1,539 @@
+{
+  "description": "Tools, JSON schema and sampling fields survive with complete streaming tool calls, usage, logprobs and extensions.",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather",
+          "description": "Read the weather.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "zone": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "function": {
+        "name": "weather"
+      }
+    },
+    "parallel_tool_calls": true,
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "city",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "logprobs": true,
+    "top_logprobs": 2,
+    "n": 2,
+    "seed": 9007199254740993,
+    "stop": [
+      "END",
+      "\n\n"
+    ],
+    "max_completion_tokens": 256,
+    "reasoning_effort": "high",
+    "temperature": 0.12345678901234567890123456789,
+    "store": true,
+    "metadata": {
+      "session": "fixture-session"
+    },
+    "chat_template_kwargs": {
+      "enable_thinking": true
+    },
+    "ignore_eos": true,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true,
+      "continuous_usage_stats": false
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply OK."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "weather",
+          "description": "Read the weather.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "zone": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "function": {
+        "name": "weather"
+      }
+    },
+    "parallel_tool_calls": true,
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "city",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "logprobs": true,
+    "top_logprobs": 2,
+    "n": 2,
+    "seed": 9007199254740993,
+    "stop": [
+      "END",
+      "\n\n"
+    ],
+    "max_completion_tokens": 256,
+    "reasoning_effort": "high",
+    "temperature": 0.12345678901234567890123456789,
+    "store": true,
+    "metadata": {
+      "session": "fixture-session"
+    },
+    "chat_template_kwargs": {
+      "enable_thinking": true
+    },
+    "ignore_eos": true,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true,
+      "continuous_usage_stats": false
+    },
+    "service_tier": "auto"
+  },
+  "upstream_response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "id": "call_weather",
+                    "type": "function",
+                    "function": {
+                      "name": "weather",
+                      "arguments": "{\"city\":\""
+                    }
+                  },
+                  {
+                    "index": 1,
+                    "id": "call_time",
+                    "type": "function",
+                    "function": {
+                      "name": "time",
+                      "arguments": "{\"zone\":\""
+                    }
+                  }
+                ]
+              },
+              "finish_reason": null
+            },
+            {
+              "index": 1,
+              "delta": {
+                "role": "assistant",
+                "content": "O",
+                "reasoning_content": "Let me ",
+                "vendor_delta": {
+                  "active": false,
+                  "limit": 0,
+                  "empty": null
+                }
+              },
+              "logprobs": {
+                "content": [
+                  {
+                    "token": "O",
+                    "logprob": -0.1234567890123456,
+                    "bytes": [
+                      79
+                    ],
+                    "top_logprobs": [
+                      {
+                        "token": "O",
+                        "logprob": -0.1
+                      }
+                    ],
+                    "vendor_rank": 0
+                  }
+                ],
+                "vendor_score": 0
+              },
+              "finish_reason": null
+            }
+          ],
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto",
+          "vendor_response": {
+            "revision": 9007199254740993,
+            "optional": null
+          }
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "function": {
+                      "arguments": "Paris\"}"
+                    }
+                  },
+                  {
+                    "index": 1,
+                    "function": {
+                      "arguments": "UTC\"}"
+                    }
+                  }
+                ]
+              },
+              "finish_reason": "tool_calls",
+              "stop_reason": null
+            },
+            {
+              "index": 1,
+              "delta": {
+                "content": "K",
+                "reasoning_content": "think"
+              },
+              "logprobs": {
+                "content": [
+                  {
+                    "token": "K",
+                    "logprob": -0.2,
+                    "bytes": [
+                      75
+                    ],
+                    "top_logprobs": [],
+                    "vendor_rank": 1
+                  }
+                ]
+              },
+              "finish_reason": "stop",
+              "vendor_choice": {
+                "rank": 0
+              }
+            }
+          ],
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto"
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 17,
+            "completion_tokens": 8,
+            "total_tokens": 25,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 3,
+              "vendor_cache": {
+                "hit": false
+              }
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 4,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 1
+            },
+            "vendor_usage": {
+              "sequence": 9007199254740993,
+              "unavailable": null
+            }
+          },
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto"
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  },
+  "response": {
+    "sse": [
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "id": "call_weather",
+                    "type": "function",
+                    "function": {
+                      "name": "weather",
+                      "arguments": "{\"city\":\""
+                    }
+                  },
+                  {
+                    "index": 1,
+                    "id": "call_time",
+                    "type": "function",
+                    "function": {
+                      "name": "time",
+                      "arguments": "{\"zone\":\""
+                    }
+                  }
+                ]
+              },
+              "finish_reason": null
+            },
+            {
+              "index": 1,
+              "delta": {
+                "role": "assistant",
+                "content": "O",
+                "reasoning_content": "Let me ",
+                "vendor_delta": {
+                  "active": false,
+                  "limit": 0,
+                  "empty": null
+                }
+              },
+              "logprobs": {
+                "content": [
+                  {
+                    "token": "O",
+                    "logprob": -0.1234567890123456,
+                    "bytes": [
+                      79
+                    ],
+                    "top_logprobs": [
+                      {
+                        "token": "O",
+                        "logprob": -0.1
+                      }
+                    ],
+                    "vendor_rank": 0
+                  }
+                ],
+                "vendor_score": 0
+              },
+              "finish_reason": null
+            }
+          ],
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto",
+          "vendor_response": {
+            "revision": 9007199254740993,
+            "optional": null
+          }
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "function": {
+                      "arguments": "Paris\"}"
+                    }
+                  },
+                  {
+                    "index": 1,
+                    "function": {
+                      "arguments": "UTC\"}"
+                    }
+                  }
+                ]
+              },
+              "finish_reason": "tool_calls",
+              "stop_reason": null
+            },
+            {
+              "index": 1,
+              "delta": {
+                "content": "K",
+                "reasoning_content": "think"
+              },
+              "logprobs": {
+                "content": [
+                  {
+                    "token": "K",
+                    "logprob": -0.2,
+                    "bytes": [
+                      75
+                    ],
+                    "top_logprobs": [],
+                    "vendor_rank": 1
+                  }
+                ]
+              },
+              "finish_reason": "stop",
+              "vendor_choice": {
+                "rank": 0
+              }
+            }
+          ],
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto"
+        }
+      },
+      {
+        "data": {
+          "id": "chatcmpl-fidelity",
+          "object": "chat.completion.chunk",
+          "created": 1700000000,
+          "model": "fn-alpha/company/model",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 17,
+            "completion_tokens": 8,
+            "total_tokens": 25,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 3,
+              "vendor_cache": {
+                "hit": false
+              }
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 4,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 1
+            },
+            "vendor_usage": {
+              "sequence": 9007199254740993,
+              "unavailable": null
+            }
+          },
+          "system_fingerprint": "fp-fidelity",
+          "service_tier": "auto"
+        }
+      },
+      {
+        "data": "[DONE]"
+      }
+    ]
+  }
+}

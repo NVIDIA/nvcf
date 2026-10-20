@@ -156,8 +156,8 @@ func (r *PlainRenderer) Emit(_ context.Context, e Event) error {
 				ts, ev.ClusterID, ev.Duration, ev.DroppedProgressEvents)
 		}
 		if ev.Verdict != "" {
-			return r.writef("%s final  verdict=%s totalChecks=%d passed=%d failed=%d\n",
-				ts, ev.Verdict, ev.TotalChecks, ev.PassedCount, ev.FailedCount)
+			return r.writef("%s final  verdict=%s totalChecks=%d passed=%d failed=%d warnings=%d\n",
+				ts, ev.Verdict, ev.TotalChecks, ev.PassedCount, ev.FailedCount, ev.WarningCount)
 		}
 		return r.writef("%s final: success=%v cluster=%s backend=%s duration=%s dropped=%d\n",
 			ts, ev.Success, ev.ClusterID, ev.NVCFBackendHealth, ev.Duration, ev.DroppedProgressEvents)
@@ -216,14 +216,22 @@ func (r *PlainRenderer) Emit(_ context.Context, e Event) error {
 	case CheckStarted:
 		return r.writef("%s [pre] check_started        %s/%s\n", ts, ev.Category, ev.ID)
 	case CheckCompleted:
-		// Build category/ID column, pad to 43 chars per §6.6.2 mock.
+		// Build the category/ID column, padded to 43 chars as in the 6.6.2
+		// mock. The space after it keeps a longer ID apart from passed=.
 		catID := fmt.Sprintf("%s/%s", ev.Category, ev.ID)
 		padded := fmt.Sprintf("%-43s", catID)
-		if err := r.writef("%s [pre] check_completed      %spassed=%v", ts, padded, ev.Passed); err != nil {
+		if err := r.writef("%s [pre] check_completed      %s passed=%v", ts, padded, ev.Passed); err != nil {
 			return err
 		}
 		if !ev.Passed {
-			if err := r.writef(` severity=%s message="%s"`, ev.Severity, ev.Message); err != nil {
+			if err := r.writef(` severity=%s`, ev.Severity); err != nil {
+				return err
+			}
+		}
+		// Every row's message, so a skipped or unverified pass reads apart
+		// from a verified one.
+		if ev.Message != "" {
+			if err := r.writef(` message="%s"`, ev.Message); err != nil {
 				return err
 			}
 		}
@@ -239,8 +247,8 @@ func (r *PlainRenderer) Emit(_ context.Context, e Event) error {
 		}
 		return r.writef("\n")
 	case CategoryCompleted:
-		return r.writef("%s [pre] category_completed   %-25spassed=%d failed=%d duration=%gs\n",
-			ts, ev.Category, ev.PassedCount, ev.FailedCount, ev.DurationSec)
+		return r.writef("%s [pre] category_completed   %-25spassed=%d failed=%d warnings=%d duration=%gs\n",
+			ts, ev.Category, ev.PassedCount, ev.FailedCount, ev.WarningCount, ev.DurationSec)
 	case DrainProgress:
 		return r.writef("%s [%02d/%d] drain-active: %s → %s\n",
 			ts, ev.Num, r.effectiveTotalPhases(), ev.Deployment, ev.State)

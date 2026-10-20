@@ -16,11 +16,14 @@
 use axum::http::{HeaderMap, StatusCode};
 use stargate_protocol::tunnel_contract::{
     HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_ROUTING_KEY,
+    HEADER_STARGATE_LAST_CLUSTER_ID,
 };
 use tracing::{Span, warn};
 
+use super::ProxyRequestError;
+use crate::load_balancer::expression::RejectionError;
 use crate::load_balancer::{
-    LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride, LoadBalancerRoutingAlgorithmError,
+    LastClusterHint, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
 };
 use crate::routing_state::RoutingTargetKey;
 
@@ -30,6 +33,7 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProxyRequestInputs {
+    pub(super) request_id: String,
     pub(super) target: RoutingTargetKey,
     pub(super) input_tokens: u64,
     pub(super) priority: u32,
@@ -37,12 +41,22 @@ pub(super) struct ProxyRequestInputs {
     pub(super) request_slo_ms: Option<u64>,
     pub(super) cache_affinity_key: Option<String>,
     pub(super) routing_algorithm_override: Option<LoadBalancerAlgorithmOverride>,
+    pub(super) routing_expression: Option<String>,
+    /// Consumed here; `x-stargate-*` headers are never forwarded upstream.
+    pub(super) last_cluster: LastClusterHint,
 }
 
 pub(super) fn parse_proxy_request_inputs(
     headers: &HeaderMap,
-) -> Result<ProxyRequestInputs, StatusCode> {
-    get_optional_header(headers, HEADER_REQUEST_ID).ok_or(StatusCode::BAD_REQUEST)?;
+) -> Result<ProxyRequestInputs, ProxyRequestError> {
+    if let Some(value) = headers.get(HEADER_ROUTING_METHOD) {
+        Span::current().record(
+            "routing.requested_algorithm",
+            value.to_str().unwrap_or("<invalid-utf8>"),
+        );
+    }
+    let request_id =
+        get_optional_header(headers, HEADER_REQUEST_ID).ok_or(StatusCode::BAD_REQUEST)?;
     let input_tokens = parse_optional_numeric_header(headers, HEADER_INPUT_TOKENS)?
         .ok_or(StatusCode::BAD_REQUEST)?;
     let target = RoutingTargetKey::new(
@@ -51,6 +65,7 @@ pub(super) fn parse_proxy_request_inputs(
     );
     let routing_algorithm_override = parse_routing_algorithm_override(headers, &target)?;
     Ok(ProxyRequestInputs {
+        request_id,
         target,
         input_tokens,
         priority: parse_optional_numeric_header(headers, HEADER_PRIORITY)?.unwrap_or(0),
@@ -58,27 +73,45 @@ pub(super) fn parse_proxy_request_inputs(
         request_slo_ms: parse_optional_numeric_header(headers, HEADER_REQUEST_SLO_MS)?,
         cache_affinity_key: get_optional_header(headers, HEADER_CACHE_AFFINITY_KEY),
         routing_algorithm_override,
+        routing_expression: headers
+            .get(HEADER_ROUTING_METHOD)
+            .and_then(|value| value.to_str().ok())
+            .filter(|raw| raw.contains(';'))
+            .map(ToOwned::to_owned),
+        // Blank or non-UTF-8 values read as absent, so a bad hint never fails
+        // the request.
+        last_cluster: LastClusterHint::new(get_optional_header(
+            headers,
+            HEADER_STARGATE_LAST_CLUSTER_ID,
+        )),
     })
 }
 
 fn parse_routing_algorithm_override(
     headers: &HeaderMap,
     target: &RoutingTargetKey,
-) -> Result<Option<LoadBalancerAlgorithmOverride>, StatusCode> {
+) -> Result<Option<LoadBalancerAlgorithmOverride>, ProxyRequestError> {
     let Some(value) = headers.get(HEADER_ROUTING_METHOD) else {
         return Ok(None);
     };
     let raw = value.to_str().map_err(|_| {
         reject_invalid_routing_algorithm(
             target,
-            &LoadBalancerRoutingAlgorithmError::Unknown {
-                raw: "<invalid-utf8>".to_string(),
-            },
+            &RejectionError::new(
+                "unknown_method",
+                "routing method header is not valid text",
+                "<invalid-utf8>",
+            ),
         )
     })?;
+    if raw.contains(';') {
+        return Ok(None);
+    }
     raw.parse::<LoadBalancerAlgorithmOverride>()
         .map(Some)
-        .map_err(|error| reject_invalid_routing_algorithm(target, &error))
+        .map_err(|error| {
+            reject_invalid_routing_algorithm(target, &RejectionError::algorithm(error, raw))
+        })
 }
 
 pub(super) fn validate_load_balancer_request_requirements(
@@ -100,19 +133,20 @@ pub(super) fn validate_load_balancer_request_requirements(
 
 pub(super) fn reject_invalid_routing_algorithm(
     target: &RoutingTargetKey,
-    error: &LoadBalancerRoutingAlgorithmError,
-) -> StatusCode {
-    let requested_algorithm = error.requested_algorithm();
+    error: &RejectionError,
+) -> ProxyRequestError {
+    let requested_algorithm = error.requested.as_str();
     Span::current().record("routing.requested_algorithm", requested_algorithm);
     Span::current().record("routing.invalid_requested_algorithm", requested_algorithm);
     warn!(
         routing_key = ?target.routing_key,
         model_id = %target.model_id,
         requested_algorithm = %requested_algorithm,
-        rejection_reason = %error.reason(),
+        rejection_reason = error.class,
+        error = %error.message,
         "invalid routing algorithm header"
     );
-    StatusCode::BAD_REQUEST
+    ProxyRequestError::Routing(error.clone())
 }
 
 fn get_optional_header(headers: &HeaderMap, name: &'static str) -> Option<String> {
@@ -176,6 +210,26 @@ mod tests {
             HeaderName::from_static(name),
             HeaderValue::from_static(value),
         );
+    }
+
+    #[test]
+    fn last_cluster_header_is_trimmed_and_unusable_values_read_as_absent() {
+        for (value, expected) in [
+            (HeaderValue::from_static("  cluster-b  "), Some("cluster-b")),
+            (HeaderValue::from_static(""), None),
+            (HeaderValue::from_static("   "), None),
+            (HeaderValue::from_bytes(b"\xff\xfe").unwrap(), None),
+        ] {
+            let mut headers = proxy_headers();
+            headers.insert(
+                HeaderName::from_static(HEADER_STARGATE_LAST_CLUSTER_ID),
+                value,
+            );
+
+            let inputs = parse_proxy_request_inputs(&headers)
+                .expect("an unusable hint must not fail the request");
+            assert_eq!(inputs.last_cluster.last_cluster_id(), expected);
+        }
     }
 
     #[test]
@@ -309,10 +363,15 @@ mod tests {
         let mut headers = proxy_headers();
         set_header(&mut headers, HEADER_ROUTING_METHOD, "sticky");
 
-        assert_eq!(
-            parse_proxy_request_inputs(&headers),
-            Err(StatusCode::BAD_REQUEST)
-        );
+        let error = parse_proxy_request_inputs(&headers).unwrap_err();
+        assert!(matches!(
+            error,
+            ProxyRequestError::Routing(RejectionError {
+                class: "unknown_method",
+                ref message,
+                ..
+            }) if message == "unknown routing method 'sticky'"
+        ));
     }
 
     #[test]
@@ -320,10 +379,14 @@ mod tests {
         let mut headers = proxy_headers();
         set_header(&mut headers, HEADER_ROUTING_METHOD, "   ");
 
-        assert_eq!(
-            parse_proxy_request_inputs(&headers),
-            Err(StatusCode::BAD_REQUEST)
-        );
+        let error = parse_proxy_request_inputs(&headers).unwrap_err();
+        assert!(matches!(
+            error,
+            ProxyRequestError::Routing(RejectionError {
+                class: "unknown_method",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -340,11 +403,12 @@ mod tests {
             )
             .expect_err("unconfigured routing method should fail");
 
-        assert_eq!(
-            reject_invalid_routing_algorithm(&inputs.target, &error),
-            StatusCode::BAD_REQUEST
-        );
         assert_eq!(error.reason(), "unavailable");
+        let rejection = RejectionError::algorithm(error, "round-robin");
+        assert_eq!(
+            reject_invalid_routing_algorithm(&inputs.target, &rejection),
+            ProxyRequestError::Routing(rejection)
+        );
     }
 
     #[test]
@@ -355,7 +419,7 @@ mod tests {
 
             assert_eq!(
                 parse_proxy_request_inputs(&headers),
-                Err(StatusCode::BAD_REQUEST),
+                Err(ProxyRequestError::Status(StatusCode::BAD_REQUEST)),
                 "missing {missing_header} should be rejected"
             );
         }

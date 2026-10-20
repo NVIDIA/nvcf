@@ -131,6 +131,38 @@ func TestElectionRelease_ReconcileLeaderLiveness(t *testing.T) {
 	}
 }
 
+// A capture already promoted ready releases its followers on reconcile,
+// even when the Lease it left behind is past its deadline and the leader
+// is gone: the promote handler persists ready before it releases, and a
+// release that failed is retried here rather than taken for a failure.
+func TestElectionRelease_ReconcileReleasesReadyBeforeFailureChecks(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	cases := map[string]struct {
+		state       string
+		err         error
+		wantPresent bool
+		wantGated   bool
+	}{
+		"ready releases":                 {state: "ready", wantPresent: true, wantGated: false},
+		"unreadable state leaves gated":  {err: fmt.Errorf("catalog down"), wantPresent: true, wantGated: true},
+		"in progress keeps the failures": {state: "writing", wantPresent: false},
+	}
+	for name, tc := range cases {
+		kc := fake.NewSimpleClientset(gatedFollower("f", true), electionLease("L", now.Add(-time.Minute)))
+		r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog(), now: func() time.Time { return now },
+			promoteState: func(string) (string, error) { return tc.state, tc.err }}
+		r.reconcile(context.Background())
+		p, err := kc.CoreV1().Pods("fn").Get(context.Background(), "f", metav1.GetOptions{})
+		if present := err == nil; present != tc.wantPresent {
+			t.Errorf("%s: follower present=%v, want %v", name, present, tc.wantPresent)
+			continue
+		}
+		if err == nil && (p.Labels[election.GatedLabel] == "true") != tc.wantGated {
+			t.Errorf("%s: follower gated=%q, want gated=%v", name, p.Labels[election.GatedLabel], tc.wantGated)
+		}
+	}
+}
+
 func TestElectionRelease_NilClientIsNoop(t *testing.T) {
 	var r *electionReleaser
 	r.onPromoteState(context.Background(), electTestHash, "ready")
@@ -281,5 +313,77 @@ func TestElectionRelease_ReconcileOrphansByPromoteState(t *testing.T) {
 		if got != want {
 			t.Errorf("promote state %q: follower %s, want %s", state, got, want)
 		}
+	}
+}
+
+// withRestoreClaim makes the follower mount rox-<hash>, as admission does.
+func withRestoreClaim(p *corev1.Pod, ns string) *corev1.Pod {
+	p.Namespace = ns
+	p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "nvsnap-checkpoint", VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rox-" + checkpointstore.ShortHash(electTestHash), ReadOnly: true},
+	}})
+	return p
+}
+
+func roxClaim(ns string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "rox-" + checkpointstore.ShortHash(electTestHash), Namespace: ns}}
+}
+
+// A follower first admitted in a namespace while the promote was minting
+// claims has no claim there. Ungating it would leave it Pending for good;
+// it is recreated instead so admission mints the claim. A follower whose
+// claim exists is released as usual, and one without a controller stays
+// gated.
+func TestElectionRelease_ReadyRecreatesFollowerWithoutRestoreClaim(t *testing.T) {
+	kc := fake.NewSimpleClientset(
+		withRestoreClaim(gatedFollower("with-claim", true), "fn"), roxClaim("fn"),
+		withRestoreClaim(gatedFollower("late", true), "other"),
+		withRestoreClaim(gatedFollower("bare", false), "other"),
+		electionLease("L", time.Now().Add(time.Hour)),
+	)
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+	ctx := context.Background()
+	r.onPromoteState(ctx, electTestHash, "ready")
+
+	p, err := kc.CoreV1().Pods("fn").Get(ctx, "with-claim", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Labels[election.GatedLabel] != "false" || len(p.Spec.SchedulingGates) != 0 {
+		t.Errorf("follower with its claim still gated: labels %v gates %v", p.Labels, p.Spec.SchedulingGates)
+	}
+	if _, gerr := kc.CoreV1().Pods("other").Get(ctx, "late", metav1.GetOptions{}); !apierrors.IsNotFound(gerr) {
+		t.Errorf("follower without its claim was not recreated: get err %v", gerr)
+	}
+	bare, err := kc.CoreV1().Pods("other").Get(ctx, "bare", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("a follower without a controller must not be deleted: %v", err)
+	}
+	if bare.Labels[election.GatedLabel] != "true" || len(bare.Spec.SchedulingGates) == 0 {
+		t.Errorf("follower without its claim was ungated: labels %v gates %v", bare.Labels, bare.Spec.SchedulingGates)
+	}
+	if _, lerr := kc.CoordinationV1().Leases("nvsnap-system").Get(ctx, election.LeaseName(electTestHash), metav1.GetOptions{}); !apierrors.IsNotFound(lerr) {
+		t.Errorf("election lease not deleted: %v", lerr)
+	}
+}
+
+// A claim lookup that fails leaves the follower gated, so the orphan
+// sweep retries it from the promote state on the next tick.
+func TestElectionRelease_ClaimCheckErrorLeavesFollowerGated(t *testing.T) {
+	kc := fake.NewSimpleClientset(withRestoreClaim(gatedFollower("f", true), "fn"))
+	kc.PrependReactor("get", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("apiserver unavailable")
+	})
+	r := &electionReleaser{kube: kc, leaseNS: "nvsnap-system", log: quietLog()}
+	ctx := context.Background()
+	if _, err := r.release(ctx, electTestHash); err != nil {
+		t.Fatal(err)
+	}
+	p, err := kc.CoreV1().Pods("fn").Get(ctx, "f", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("follower deleted on a transient claim error: %v", err)
+	}
+	if p.Labels[election.GatedLabel] != "true" {
+		t.Errorf("follower ungated without a confirmed claim: labels %v", p.Labels)
 	}
 }

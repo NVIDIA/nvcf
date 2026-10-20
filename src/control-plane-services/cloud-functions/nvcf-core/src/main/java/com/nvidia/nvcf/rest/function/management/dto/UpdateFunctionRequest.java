@@ -73,6 +73,9 @@ public record UpdateFunctionRequest(
 
     private static final String MESG_MODEL_CONFIG_UPDATE_REQUIRED =
             "Invalid request: at least one of 'tokenRateLimit' or 'routingMethod' must be specified";
+    private static final String MESG_MODEL_CONFIG_IMMUTABLE_FIELDS =
+            "Invalid request: 'llmConfig.uris' and 'llmConfig.tokenizer' cannot be changed "
+                    + "after creation";
     private static final String MESG_DUPLICATE_MODEL_UPDATES =
             "Invalid request: duplicate model names are not allowed in 'modelUpdates'";
     private static final String MESG_FUNCTION_UPDATE_REQUIRED =
@@ -102,9 +105,20 @@ public record UpdateFunctionRequest(
             String tokenRateLimit,
 
             @Nullable
-            @Schema(description = "Updated routing method for the model. " +
+            @Schema(description = "Updated routing method for the model, in the same format " +
+                    "as llmConfig.routingMethod on create. " +
                     "When omitted, the existing value is preserved.")
-            String routingMethod) {
+            String routingMethod,
+
+            @Nullable
+            @Schema(description = "Cannot be changed after creation. A request that sets it is "
+                    + "rejected with 400.")
+            List<String> uris,
+
+            @Nullable
+            @Schema(description = "Cannot be changed after creation. A request that sets it is "
+                    + "rejected with 400.")
+            String tokenizer) {
     }
 
     @Constraint(validatedBy = ValidUpdateFunctionRequestValidator.class)
@@ -147,6 +161,9 @@ public record UpdateFunctionRequest(
 
             for (var modelUpdate : modelUpdates) {
                 var llmConfig = modelUpdate.llmConfig();
+                if (llmConfig != null && (llmConfig.uris() != null || llmConfig.tokenizer() != null)) {
+                    return violation(context, MESG_MODEL_CONFIG_IMMUTABLE_FIELDS);
+                }
                 if (llmConfig == null
                         || (llmConfig.tokenRateLimit() == null && llmConfig.routingMethod() == null)) {
                     return violation(context, MESG_MODEL_CONFIG_UPDATE_REQUIRED);

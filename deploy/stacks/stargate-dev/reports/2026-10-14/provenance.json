@@ -1,0 +1,33 @@
+{
+  "baseline": "a8abe14f361fccf485f457929dffdd51f8a44f6d",
+  "candidate": "eb04cd97744315b4c20990f6c1217501d37406b3",
+  "controllerSha256": "d6b7b93c48920b9da58705fde915830b53701a9f3e10f1ebdad9138494d3d596",
+  "suiteSha256": "958a7de2f319faa778c2cf80dc2a2d318288dbbf552320b94f3347ed9dd80e2c",
+  "policySha256": "d420e72fce5381163d8513789d710984f98690b3ddde06b14c52656c2578ba47",
+  "revisionOrders": [
+    [
+      "baseline",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate"
+    ]
+  ],
+  "topology": "six single-node k3d clusters, two backends per MockDC",
+  "capacity": "5760 requests at 48 RPS; fixed count drains all admissions",
+  "affinity": "128 sessions, 12 turns each, 24 RPS",
+  "harness": "candidate deployment and controller frozen for both revisions; baseline auth command/probe adapter",
+  "imageOptimization": "Bazel opt for both revisions",
+  "sourceArchiveSha256": {
+    "baseline": "62635afbdfb255395e9bf0eb352cdbc17aaf33db5a0882332444092b9c0787a7",
+    "candidate": "9c0b6a725a04fd40d79199b80d62a3f3a9b3efdbdac767074f393ec19721922b"
+  },
+  "sparkImageDigest": "sha256:81e865ee1dba3442ad1801a8d17117c9e3bed6cb77d2f2af649d3fc6cd638d8d",
+  "sparkVersion": "0.3.8",
+  "authProbeSha256": "39ac33e5763e792d6174f226a1e301d6197ff52088b554961047273611d58f19"
+}

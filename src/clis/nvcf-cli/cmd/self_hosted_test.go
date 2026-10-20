@@ -58,6 +58,7 @@ func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {
 }
 
 func TestSelfHostedFlags_SameContextErrors(t *testing.T) {
+	resetCheckFlags(t)
 	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane-context=cp", "--compute-plane-context=cp"})
 	t.Cleanup(func() {
 		selfHostedControlPlaneContext = ""

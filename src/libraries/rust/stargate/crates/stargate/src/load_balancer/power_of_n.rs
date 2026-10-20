@@ -21,7 +21,7 @@ use tracing::{Span, debug};
 use super::tests::LoadBalancerTestChoiceExt;
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerRequest, MAX_POWER_OF_N_SAMPLE_COUNT,
+    LoadBalancerRequest, MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
@@ -44,6 +44,14 @@ impl PowerOfNLoadBalancer {
             sample_count,
             comparator: settings.comparator,
         })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> PowerOfNAlgorithmConfig {
+        PowerOfNAlgorithmConfig {
+            sample_count: self.sample_count,
+            comparator: self.comparator,
+        }
     }
 
     fn choose_candidate_with_rng<R: Rng + ?Sized>(
@@ -240,6 +248,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: Some(excluded_cluster_ids),
+            last_cluster: None,
         };
         PowerOfNLoadBalancer {
             sample_count,
@@ -264,6 +273,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids,
+            last_cluster: None,
         };
         sample_candidates(&request, candidates, sample_count, rng)
             .as_slice()
@@ -434,6 +444,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: None,
+            last_cluster: None,
         };
         let load_balancer = PowerOfNLoadBalancer {
             sample_count: 3,
