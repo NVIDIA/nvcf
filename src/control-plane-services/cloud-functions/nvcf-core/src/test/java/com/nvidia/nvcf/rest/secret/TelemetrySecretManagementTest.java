@@ -365,14 +365,20 @@ class TelemetrySecretManagementTest {
 
     Stream<Arguments> updateKratosTelemetrySecretArgs() {
         return Stream.of(
-                Arguments.of(KRATOS_METRICS_TELEMETRY_ID, HttpStatus.NO_CONTENT),
-                Arguments.of(KRATOS_TRACES_TELEMETRY_ID, HttpStatus.NO_CONTENT),
-                Arguments.of(KRATOS_LOGS_TELEMETRY_ID, HttpStatus.BAD_REQUEST));
+                Arguments.of(KRATOS_TRACES_TELEMETRY_ID, HttpStatus.NO_CONTENT, null),
+                Arguments.of(KRATOS_LOGS_TELEMETRY_ID, HttpStatus.BAD_REQUEST,
+                             "Telemetry provider 'KRATOS' with types [LOGS]: "
+                                     + "secret is missing required fields [collectorId]"),
+                Arguments.of(KRATOS_METRICS_TELEMETRY_ID, HttpStatus.BAD_REQUEST,
+                             "Telemetry provider 'KRATOS' does not support types [METRICS]. "
+                                     + "Supported types: [LOGS, TRACES]"));
     }
 
     @ParameterizedTest
     @MethodSource("updateKratosTelemetrySecretArgs")
-    void shouldRequireKratosCollectorIdOnlyForLogs(UUID telemetryId, HttpStatus expectedStatus) {
+    void shouldValidateKratosSecretUpdateAgainstStoredTypes(UUID telemetryId,
+                                                            HttpStatus expectedStatus,
+                                                            String expectedMessage) {
         var secret = SecretDto.builder()
                 .name("kratos-credentials")
                 .value(JsonMapper.builder().build().createObjectNode()
@@ -389,10 +395,8 @@ class TelemetrySecretManagementTest {
         var response = testRestTemplate.exchange(requestEntity, String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(expectedStatus);
-        if (expectedStatus == HttpStatus.BAD_REQUEST) {
-            assertThat(response.getBody()).contains(
-                    "Telemetry provider 'KRATOS' with types [LOGS]: "
-                            + "secret is missing required fields [collectorId]");
+        if (expectedMessage != null) {
+            assertThat(response.getBody()).contains(expectedMessage);
         }
     }
 }

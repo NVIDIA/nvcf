@@ -138,7 +138,7 @@ class TelemetryBasedFunctionCreationTest {
                 TEST_TELEMETRY_LOGS_ID,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.SPLUNK,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
         );
@@ -156,7 +156,7 @@ class TelemetryBasedFunctionCreationTest {
                 TEST_TELEMETRY_TRACES_ID,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.SERVICENOW,
                 Set.of(TelemetryType.TRACES),
                 TEST_TELEMETRY_TRACES_SECRETS
         );
@@ -497,6 +497,47 @@ class TelemetryBasedFunctionCreationTest {
     }
 
     @Test
+    void createFunctionWithTelemetryForTypeItsProviderDoesNotSupport() {
+        var telemetryId = UUID.randomUUID();
+        testTelemetryService.createTelemetry(
+                TEST_NCA_ID,
+                telemetryId,
+                TEST_TELEMETRY_ENDPOINT,
+                TelemetryProtocol.HTTP,
+                TelemetryProvider.SPLUNK,
+                Set.of(TelemetryType.LOGS, TelemetryType.METRICS),
+                TEST_TELEMETRY_METRICS_SECRETS
+        );
+        var requestBody = CreateFunctionRequest.builder()
+                .name(TEST_FUNCTION_NAME)
+                .apiBodyFormat(PREDICT_V2)
+                .containerArgs(TEST_CONTAINER_ARGS)
+                .containerImage(TEST_NGC_CONTAINER_IMAGE)
+                .inferenceUrl(TEST_INFERENCE_URL)
+                .inferencePort(TEST_INFERENCE_PORT)
+                .models(TEST_MODEL_DTOS)
+                .tags(TEST_TAGS)
+                .description(TEST_DESCRIPTION)
+                .health(TEST_HEALTH_DTO)
+                .telemetries(new TelemetriesDto(null, telemetryId, null))
+                .build();
+
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                    List.of(SCOPE_REGISTER_FUNCTION, SCOPE_LIST_FUNCTIONS),
+                                                    100);
+        var requestEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .body(requestBody);
+
+        var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
+        assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(responseEntity.getBody())
+                .contains("Telemetry '" + telemetryId + "': provider 'SPLUNK' does not support "
+                                  + "METRICS. Supported types: [LOGS]");
+    }
+
+    @Test
     void createFunctionWithNonExistantTelemetry() {
 
         var telemetryId = UUID.randomUUID();
@@ -505,7 +546,7 @@ class TelemetryBasedFunctionCreationTest {
                 telemetryId,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.SPLUNK,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
         );

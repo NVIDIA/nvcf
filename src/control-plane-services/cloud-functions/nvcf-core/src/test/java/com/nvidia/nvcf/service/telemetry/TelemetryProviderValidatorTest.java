@@ -23,7 +23,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetryProviderEnum;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetryTypeEnum;
+import java.util.Arrays;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -47,6 +49,20 @@ class TelemetryProviderValidatorTest {
     private static final Set<TelemetryTypeEnum> TRACES = Set.of(TelemetryTypeEnum.TRACES);
     private static final Set<TelemetryTypeEnum> LOGS_AND_TRACES =
             Set.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.TRACES);
+
+    // Signals each provider's exporter renders in byoo-otel-collector render.go.
+    private static final Map<TelemetryProviderEnum, Set<TelemetryTypeEnum>> COLLECTOR_TYPES =
+            Map.of(
+                    TelemetryProviderEnum.AZURE_MONITOR, ALL_TYPES,
+                    TelemetryProviderEnum.DATADOG, ALL_TYPES,
+                    TelemetryProviderEnum.GRAFANA_CLOUD, ALL_TYPES,
+                    TelemetryProviderEnum.KRATOS,
+                    EnumSet.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.TRACES),
+                    TelemetryProviderEnum.KRATOS_THANOS, EnumSet.of(TelemetryTypeEnum.METRICS),
+                    TelemetryProviderEnum.OTEL_COLLECTOR, ALL_TYPES,
+                    TelemetryProviderEnum.PROMETHEUS, EnumSet.of(TelemetryTypeEnum.METRICS),
+                    TelemetryProviderEnum.SERVICENOW, EnumSet.of(TelemetryTypeEnum.TRACES),
+                    TelemetryProviderEnum.SPLUNK, EnumSet.of(TelemetryTypeEnum.LOGS));
 
     @Test
     void supportedProvidersMatchCollectorRenderedProviders() {
@@ -74,22 +90,63 @@ class TelemetryProviderValidatorTest {
     void shouldAcceptProvidersTheCollectorCanRender(TelemetryProviderEnum provider) {
         assertThatCode(() -> TelemetryProviderValidator.validateProvider(provider))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> TelemetryProviderValidator.validateProvider(
-                TELEMETRY_ID, TelemetryTypeEnum.LOGS, provider))
-                .doesNotThrowAnyException();
     }
 
     @ParameterizedTest
     @EnumSource(value = TelemetryProviderEnum.class, names = {"TIMESTREAM", "VICTORIAMETRICS"})
     void shouldNameTheReferencedTelemetryAndSignalForAnUnsupportedProvider(
             TelemetryProviderEnum provider) {
-        assertThatThrownBy(() -> TelemetryProviderValidator.validateProvider(
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateReference(
                 TELEMETRY_ID, TelemetryTypeEnum.METRICS, provider))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Telemetry '" + TELEMETRY_ID + "' for METRICS: provider '"
                                               + provider + "' is not supported. "
                                               + "Supported providers: "
                                               + TelemetryProviderValidator.supportedProviders());
+    }
+
+    static Stream<Arguments> providerTypes() {
+        return COLLECTOR_TYPES.keySet().stream()
+                .flatMap(provider -> Arrays.stream(TelemetryTypeEnum.values())
+                        .map(type -> Arguments.of(provider, type)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("providerTypes")
+    void shouldAcceptOnlyTypesTheCollectorExportsForTheProvider(
+            TelemetryProviderEnum provider, TelemetryTypeEnum type) {
+        var supportedTypes = COLLECTOR_TYPES.get(provider);
+        var secret = validSecretFor(provider);
+        if (supportedTypes.contains(type)) {
+            assertThatCode(() -> TelemetryProviderValidator.validateSecretValue(
+                    provider, Set.of(type), secret))
+                    .doesNotThrowAnyException();
+            assertThatCode(() -> TelemetryProviderValidator.validateReference(
+                    TELEMETRY_ID, type, provider))
+                    .doesNotThrowAnyException();
+        } else {
+            assertThatThrownBy(() -> TelemetryProviderValidator.validateSecretValue(
+                    provider, Set.of(type), secret))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Telemetry provider '" + provider
+                                                  + "' does not support types [" + type
+                                                  + "]. Supported types: " + supportedTypes);
+            assertThatThrownBy(() -> TelemetryProviderValidator.validateReference(
+                    TELEMETRY_ID, type, provider))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Telemetry '" + TELEMETRY_ID + "': provider '"
+                                                  + provider + "' does not support " + type
+                                                  + ". Supported types: " + supportedTypes);
+        }
+    }
+
+    @Test
+    void shouldNameEveryUnsupportedTypeAtRegistration() {
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateSecretValue(
+                TelemetryProviderEnum.SPLUNK, ALL_TYPES, new StringNode("token")))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Telemetry provider 'SPLUNK' does not support types "
+                                              + "[METRICS, TRACES]. Supported types: [LOGS]");
     }
 
     static Stream<Arguments> validSecrets() {
@@ -111,23 +168,15 @@ class TelemetryProviderValidatorTest {
                 Arguments.of(TelemetryProviderEnum.PROMETHEUS, METRICS, object("caFile", "ca")),
                 Arguments.of(TelemetryProviderEnum.KRATOS_THANOS, METRICS, object(
                         "clientCert", "cert", "clientKey", "key", "caFile", "ca")),
-                // KRATOS needs collectorId only for logs, and nothing for metrics.
-                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS, object(
-                        "clientCert", "cert", "clientKey", "key")),
-                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS, object("token", "value")),
+                // KRATOS needs collectorId only for logs. Traces also read caFile and
+                // collectorId when they are set.
                 Arguments.of(TelemetryProviderEnum.KRATOS, TRACES, object(
                         "clientCert", "cert", "clientKey", "key")),
+                Arguments.of(TelemetryProviderEnum.KRATOS, TRACES, object(
+                        "clientCert", "cert", "clientKey", "key", "caFile", "ca",
+                        "collectorId", "id")),
                 Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES, object(
-                        "collectorId", "id", "clientCert", "cert", "clientKey", "key")),
-                Arguments.of(TelemetryProviderEnum.KRATOS, Set.of(TelemetryTypeEnum.METRICS,
-                                                                  TelemetryTypeEnum.TRACES),
-                             object("clientCert", "cert", "clientKey", "key", "caFile", "ca")),
-                // Other rules that only one signal's exporter reads.
-                Arguments.of(TelemetryProviderEnum.SPLUNK, METRICS, object("token", "value")),
-                Arguments.of(TelemetryProviderEnum.SERVICENOW, LOGS, object("token", "value")),
-                Arguments.of(TelemetryProviderEnum.PROMETHEUS, LOGS, new StringNode("token")),
-                Arguments.of(TelemetryProviderEnum.KRATOS_THANOS, TRACES,
-                             object("clientCert", "cert")));
+                        "collectorId", "id", "clientCert", "cert", "clientKey", "key")));
     }
 
     @ParameterizedTest
@@ -167,10 +216,6 @@ class TelemetryProviderValidatorTest {
                              object("clientCert", "cert", "clientKey", "key"),
                              "Telemetry provider 'KRATOS' with types [LOGS]: "
                                      + "secret is missing required fields [collectorId]"),
-                Arguments.of(TelemetryProviderEnum.KRATOS, ALL_TYPES,
-                             object("clientCert", "cert", "clientKey", "key"),
-                             "Telemetry provider 'KRATOS' with types [LOGS]: "
-                                     + "secret is missing required fields [collectorId]"),
                 Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES,
                              object("clientCert", "cert", "clientKey", "key"),
                              "Telemetry provider 'KRATOS' with types [LOGS]: "
@@ -185,7 +230,8 @@ class TelemetryProviderValidatorTest {
                 Arguments.of(TelemetryProviderEnum.KRATOS, TRACES, object("collectorId", "id"),
                              "with types [TRACES]: "
                                      + "secret is missing required fields [clientCert, clientKey]"),
-                Arguments.of(TelemetryProviderEnum.KRATOS, ALL_TYPES, object("clientCert", "cert"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES,
+                             object("clientCert", "cert"),
                              "with types [LOGS, TRACES]: secret is missing required fields "
                                      + "[collectorId, clientKey]"),
                 Arguments.of(TelemetryProviderEnum.AZURE_MONITOR, LOGS,
@@ -201,12 +247,12 @@ class TelemetryProviderValidatorTest {
                              "needs 'clientCert' and 'clientKey', 'caFile', or both"),
                 Arguments.of(TelemetryProviderEnum.PROMETHEUS, METRICS, new StringNode("token"),
                              "with types [METRICS]: secret value must be a JSON object"),
-                // Every secret must be extractable by the collector, whatever its types.
-                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS,
+                // Every secret must be extractable by the collector.
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS,
                              JSON_MAPPER.createObjectNode().put("clientCert", "cert")
                                      .set("nested", object("key", "value")),
                              "secret field 'nested' must be a string"),
-                Arguments.of(TelemetryProviderEnum.SPLUNK, METRICS,
+                Arguments.of(TelemetryProviderEnum.SPLUNK, LOGS,
                              JSON_MAPPER.createArrayNode().add("token"),
                              "must be a string or a JSON object"));
     }
@@ -221,6 +267,17 @@ class TelemetryProviderValidatorTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Telemetry provider '" + provider + "'")
                 .hasMessageContaining(expectedMessage);
+    }
+
+    private static JsonNode validSecretFor(TelemetryProviderEnum provider) {
+        return switch (provider) {
+            case AZURE_MONITOR -> object("instrumentationKey", "ikey", "applicationId", "app",
+                                         "liveEndpoint", "https://live.example.com");
+            case GRAFANA_CLOUD -> object("instanceId", "123", "apiKey", "key");
+            case KRATOS -> object("collectorId", "id", "clientCert", "cert", "clientKey", "key");
+            case KRATOS_THANOS, PROMETHEUS -> object("clientCert", "cert", "clientKey", "key");
+            default -> new StringNode("token");
+        };
     }
 
     private static JsonNode object(String... keyValues) {

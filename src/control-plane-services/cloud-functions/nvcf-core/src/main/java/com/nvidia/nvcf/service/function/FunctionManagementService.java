@@ -521,7 +521,7 @@ public class FunctionManagementService {
             log.error(MESG_TELEMETRY_INVALID_TYPE);
             throw new BadRequestException(MESG_TELEMETRY_INVALID_TYPE);
         }
-        TelemetryProviderValidator.validateProvider(
+        TelemetryProviderValidator.validateReference(
                 telemetryId,
                 telemetryMapperService.toTelemetryTypeEnum(expectedType),
                 telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider()));

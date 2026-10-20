@@ -623,7 +623,8 @@ public class TaskManagementService {
             log.error(mesg);
             throw new BadRequestException(mesg);
         }
-        TelemetryProviderValidator.validateProvider(telemetryId, telemetryDto.provider());
+        TelemetryProviderValidator.validateReference(telemetryId, expectedType,
+                                                     telemetryDto.provider());
     }
 
     // Determines if the instance-type can be used to specifically launch just a

@@ -30,12 +30,11 @@ import org.apache.commons.lang3.StringUtils;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Validates telemetry providers and secret values against what the BYOO OpenTelemetry
- * collector can render. The collector writes a string secret to a single credential file
- * and flattens an object of string fields into one credential file per key, so every secret
- * must have one of those shapes. Beyond that, a provider's secret rule applies only when the
- * telemetry's types include a signal whose exporter reads the secret, because the control
- * plane also registers endpoints for signals the collector does not export for that provider.
+ * Validates telemetry providers, types, and secret values against what the BYOO OpenTelemetry
+ * collector can render (byoo-otel-collector/internal/otelconfig/render.go). The collector
+ * renders an exporter only for the provider and signal pairs in {@link #SUPPORTED_TYPES}. It
+ * writes a string secret to a single credential file and flattens an object of string fields
+ * into one credential file per key, so every secret must have one of those shapes.
  */
 public final class TelemetryProviderValidator {
 
@@ -43,19 +42,8 @@ public final class TelemetryProviderValidator {
     private static final String CLIENT_KEY = "clientKey";
     private static final String CA_FILE = "caFile";
 
-    static final Set<TelemetryProviderEnum> SUPPORTED_PROVIDERS = EnumSet.of(
-            TelemetryProviderEnum.AZURE_MONITOR,
-            TelemetryProviderEnum.DATADOG,
-            TelemetryProviderEnum.GRAFANA_CLOUD,
-            TelemetryProviderEnum.KRATOS,
-            TelemetryProviderEnum.KRATOS_THANOS,
-            TelemetryProviderEnum.OTEL_COLLECTOR,
-            TelemetryProviderEnum.PROMETHEUS,
-            TelemetryProviderEnum.SERVICENOW,
-            TelemetryProviderEnum.SPLUNK);
-
-    // Signals whose collector exporter reads the provider's secret.
-    private static final Map<TelemetryProviderEnum, Set<TelemetryTypeEnum>> SECRET_READ_BY_TYPES =
+    // Signals the collector exports for each provider.
+    static final Map<TelemetryProviderEnum, Set<TelemetryTypeEnum>> SUPPORTED_TYPES =
             Map.of(
                     TelemetryProviderEnum.AZURE_MONITOR, EnumSet.allOf(TelemetryTypeEnum.class),
                     TelemetryProviderEnum.DATADOG, EnumSet.allOf(TelemetryTypeEnum.class),
@@ -68,14 +56,17 @@ public final class TelemetryProviderValidator {
                     TelemetryProviderEnum.SERVICENOW, EnumSet.of(TelemetryTypeEnum.TRACES),
                     TelemetryProviderEnum.SPLUNK, EnumSet.of(TelemetryTypeEnum.LOGS));
 
+    static final Set<TelemetryProviderEnum> SUPPORTED_PROVIDERS =
+            EnumSet.copyOf(SUPPORTED_TYPES.keySet());
+
     private static final Set<TelemetryProviderEnum> STRING_SECRET_PROVIDERS = EnumSet.of(
             TelemetryProviderEnum.DATADOG,
             TelemetryProviderEnum.OTEL_COLLECTOR,
             TelemetryProviderEnum.SERVICENOW,
             TelemetryProviderEnum.SPLUNK);
 
-    // Object fields each signal's exporter reads. KRATOS sends the collector ID header only
-    // for logs; its traces exporter authenticates with the client certificate pair alone.
+    // Object fields each signal's exporter requires. The KRATOS traces exporter authenticates
+    // with the client certificate pair alone and also reads caFile and collectorId when set.
     private static final Map<TelemetryProviderEnum, Map<TelemetryTypeEnum, List<String>>>
             REQUIRED_SECRET_KEYS = Map.of(
                     TelemetryProviderEnum.AZURE_MONITOR,
@@ -96,6 +87,10 @@ public final class TelemetryProviderValidator {
             "Telemetry provider '%s' is not supported. Supported providers: %s";
     private static final String MESG_UNSUPPORTED_REFERENCED_PROVIDER =
             "Telemetry '%s' for %s: provider '%s' is not supported. Supported providers: %s";
+    private static final String MESG_UNSUPPORTED_TYPES =
+            "Telemetry provider '%s' does not support types %s. Supported types: %s";
+    private static final String MESG_UNSUPPORTED_REFERENCED_TYPE =
+            "Telemetry '%s': provider '%s' does not support %s. Supported types: %s";
     private static final String MESG_SECRET_NOT_EXTRACTABLE =
             "Telemetry provider '%s': secret value must be a string or a JSON object";
     private static final String MESG_SECRET_FIELD_NOT_STRING =
@@ -130,12 +125,20 @@ public final class TelemetryProviderValidator {
         }
     }
 
-    public static void validateProvider(UUID telemetryId,
-                                        TelemetryTypeEnum type,
-                                        TelemetryProviderEnum provider) {
+    /**
+     * Validates a telemetry that a function or task references for one signal type.
+     */
+    public static void validateReference(UUID telemetryId,
+                                         TelemetryTypeEnum type,
+                                         TelemetryProviderEnum provider) {
         if (!SUPPORTED_PROVIDERS.contains(provider)) {
             throw new BadRequestException(MESG_UNSUPPORTED_REFERENCED_PROVIDER.formatted(
                     telemetryId, type, provider, supportedProviders()));
+        }
+        var supportedTypes = SUPPORTED_TYPES.get(provider);
+        if (!supportedTypes.contains(type)) {
+            throw new BadRequestException(MESG_UNSUPPORTED_REFERENCED_TYPE.formatted(
+                    telemetryId, provider, type, supportedTypes));
         }
     }
 
@@ -143,39 +146,38 @@ public final class TelemetryProviderValidator {
                                            Set<TelemetryTypeEnum> types,
                                            JsonNode value) {
         validateProvider(provider);
-        validateExtractable(provider, value);
-
-        var readByTypes = EnumSet.noneOf(TelemetryTypeEnum.class);
+        var requestedTypes = EnumSet.noneOf(TelemetryTypeEnum.class);
         if (types != null) {
-            readByTypes.addAll(types);
+            requestedTypes.addAll(types);
         }
-        readByTypes.retainAll(SECRET_READ_BY_TYPES.get(provider));
-        if (readByTypes.isEmpty()) {
+        validateTypes(provider, requestedTypes);
+        validateExtractable(provider, value);
+        if (requestedTypes.isEmpty()) {
             return;
         }
 
         if (STRING_SECRET_PROVIDERS.contains(provider)) {
             if (!value.isString() || StringUtils.isBlank(value.asString())) {
                 throw new BadRequestException(
-                        MESG_SECRET_MUST_BE_STRING.formatted(provider, readByTypes));
+                        MESG_SECRET_MUST_BE_STRING.formatted(provider, requestedTypes));
             }
             return;
         }
 
         if (!value.isObject()) {
             throw new BadRequestException(
-                    MESG_SECRET_MUST_BE_OBJECT.formatted(provider, readByTypes));
+                    MESG_SECRET_MUST_BE_OBJECT.formatted(provider, requestedTypes));
         }
 
         if (REMOTE_WRITE_TLS_PROVIDERS.contains(provider)) {
-            validateRemoteWriteTls(provider, readByTypes, value);
+            validateRemoteWriteTls(provider, requestedTypes, value);
             return;
         }
 
         var missing = new LinkedHashSet<String>();
         var typesNeedingMissing = EnumSet.noneOf(TelemetryTypeEnum.class);
         var keysByType = REQUIRED_SECRET_KEYS.get(provider);
-        for (var type : readByTypes) {
+        for (var type : requestedTypes) {
             for (var key : keysByType.getOrDefault(type, List.of())) {
                 if (!hasContent(value, key)) {
                     missing.add(key);
@@ -186,6 +188,18 @@ public final class TelemetryProviderValidator {
         if (!missing.isEmpty()) {
             throw new BadRequestException(MESG_SECRET_MISSING_FIELDS.formatted(
                     provider, typesNeedingMissing, List.copyOf(missing)));
+        }
+    }
+
+    private static void validateTypes(TelemetryProviderEnum provider,
+                                      Set<TelemetryTypeEnum> types) {
+        var supportedTypes = SUPPORTED_TYPES.get(provider);
+        var unsupportedTypes = EnumSet.noneOf(TelemetryTypeEnum.class);
+        unsupportedTypes.addAll(types);
+        unsupportedTypes.removeAll(supportedTypes);
+        if (!unsupportedTypes.isEmpty()) {
+            throw new BadRequestException(MESG_UNSUPPORTED_TYPES.formatted(
+                    provider, unsupportedTypes, supportedTypes));
         }
     }
 
@@ -210,16 +224,16 @@ public final class TelemetryProviderValidator {
     }
 
     private static void validateRemoteWriteTls(TelemetryProviderEnum provider,
-                                               Set<TelemetryTypeEnum> readByTypes,
+                                               Set<TelemetryTypeEnum> requestedTypes,
                                                JsonNode value) {
         var hasCert = hasContent(value, CLIENT_CERT);
         var hasKey = hasContent(value, CLIENT_KEY);
         if (hasCert != hasKey) {
-            throw new BadRequestException(MESG_SECRET_TLS_PAIR.formatted(provider, readByTypes));
+            throw new BadRequestException(MESG_SECRET_TLS_PAIR.formatted(provider, requestedTypes));
         }
         if (!hasCert && !hasContent(value, CA_FILE)) {
             throw new BadRequestException(
-                    MESG_SECRET_TLS_MISSING.formatted(provider, readByTypes));
+                    MESG_SECRET_TLS_MISSING.formatted(provider, requestedTypes));
         }
     }
 
