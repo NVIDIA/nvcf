@@ -40,8 +40,6 @@ backends:
       decode_jitter_ms: 3
       prefill_tokens_per_s: 5000
       decode_tokens_per_s: 100
-    registration:
-      last_mean_input_tps: 140
 
 traffic_pattern:
   kind: uniform

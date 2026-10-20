@@ -2433,7 +2433,8 @@ func hasLabel(m *promdto.Metric, key string) bool {
 // per-run series churn.
 func TestClusterValidatorMetrics_BaselineThenUpdateInPlace(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg),
+		WithClusterValidatorEnabled(true))
 	m := FromContext(ctx)
 	require.NotNil(t, m)
 	t.Cleanup(func() { m.Destroy() })
@@ -2469,6 +2470,29 @@ func TestClusterValidatorMetrics_BaselineThenUpdateInPlace(t *testing.T) {
 	assert.Equal(t, float64(1781175999), lrt[0].GetGauge().GetValue())
 }
 
+// Where the validator does not run, no baseline is published: last_run at 0
+// would read as a validator that never ran, and a "never ran" alert would
+// fire forever. A summary still publishes the series, enabled or not.
+func TestClusterValidatorMetrics_NoBaselineUnlessEnabled(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	for _, name := range []string{ClusterValidatorReadyMetricName, ClusterValidatorLastRunTimestampMetricName,
+		ClusterValidatorCheckStatusMetricName} {
+		assert.Empty(t, gatherClusterValidatorSeries(t, reg, name), name)
+	}
+
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 1781175999, VerdictReady: true, Checks: map[string]bool{"control_plane": true},
+	})
+	lrt := gatherClusterValidatorSeries(t, reg, ClusterValidatorLastRunTimestampMetricName)
+	require.Len(t, lrt, 1)
+	assert.Equal(t, float64(1781175999), lrt[0].GetGauge().GetValue())
+}
+
 // TestClusterValidatorMetrics_RunUpdatesInPlaceAndPrunes confirms a new run
 // overwrites the fixed gauges in place (no accumulation) and prunes
 // config-driven series the new run no longer reports.
@@ -2499,31 +2523,74 @@ func TestClusterValidatorMetrics_RunUpdatesInPlaceAndPrunes(t *testing.T) {
 		"an endpoint removed from config must be pruned")
 }
 
-// TestClusterValidatorMetrics_ResetRestoresBaseline confirms the explicit
-// reset returns the gauges to the init-to-zero baseline.
-func TestClusterValidatorMetrics_ResetRestoresBaseline(t *testing.T) {
+// A reset always drops every series the last summary published, and restores
+// the init-to-zero baseline only where the validator is enabled. Elsewhere a
+// baseline last_run of 0 would fire the "never ran" alert forever.
+func TestClusterValidatorMetrics_Reset(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			reg := prometheus.NewRegistry()
+			ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg),
+				WithClusterValidatorEnabled(enabled))
+			m := FromContext(ctx)
+			require.NotNil(t, m)
+			t.Cleanup(func() { m.Destroy() })
+
+			m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+				RanAtUnixSec: 1, VerdictReady: true,
+				Checks:    map[string]bool{"control_plane": true},
+				Endpoints: map[string]ClusterValidatorEndpoint{"NGC API": {Reachable: true, Critical: true}},
+			})
+			m.ResetClusterValidatorMetrics()
+
+			assert.Empty(t, gatherClusterValidatorSeries(t, reg, ClusterValidatorEndpointReachableMetricName))
+			ready := gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
+			lastRun := gatherClusterValidatorSeries(t, reg, ClusterValidatorLastRunTimestampMetricName)
+			checks := gatherClusterValidatorSeries(t, reg, ClusterValidatorCheckStatusMetricName)
+			if !enabled {
+				assert.Empty(t, ready)
+				assert.Empty(t, lastRun)
+				assert.Empty(t, checks)
+				return
+			}
+			require.Len(t, ready, 1, "reset must restore a single baseline series")
+			assert.Equal(t, 0.0, ready[0].GetGauge().GetValue())
+			require.Len(t, lastRun, 1)
+			assert.Equal(t, 0.0, lastRun[0].GetGauge().GetValue())
+			assert.Len(t, checks, len(clusterValidatorCheckKeys()))
+			for _, c := range checks {
+				assert.Equal(t, 0.0, c.GetGauge().GetValue())
+			}
+		})
+	}
+}
+
+// Without the validator a reset leaves nothing behind, so a second reset is a
+// no-op and a later summary publishes only its own checks.
+func TestClusterValidatorMetrics_SummaryAfterResetWithoutBaseline(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
 	m := FromContext(ctx)
 	require.NotNil(t, m)
 	t.Cleanup(func() { m.Destroy() })
 
-	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
-		RanAtUnixSec: 1, VerdictReady: true,
-		Checks: map[string]bool{"control_plane": true},
-	})
 	m.ResetClusterValidatorMetrics()
+	m.ResetClusterValidatorMetrics()
+	assert.Empty(t, gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName))
 
-	ready := gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
-	require.Len(t, ready, 1, "reset must restore a single baseline series")
-	assert.Equal(t, 0.0, ready[0].GetGauge().GetValue())
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 2, VerdictReady: true, Checks: map[string]bool{"control_plane": true},
+	})
+	checks := gatherClusterValidatorSeries(t, reg, ClusterValidatorCheckStatusMetricName)
+	require.Len(t, checks, 1)
+	assert.Equal(t, 1.0, checks[0].GetGauge().GetValue())
 }
 
 // TestClusterValidatorCheckKeysSync guards the two hand-maintained check-key
 // lists against drift: the init-to-zero baseline in metrics
 // (clusterValidatorCheckKeys) must expose exactly the same checks the validator
 // emits (clustervalidator.AllCheckKeys). If they diverge, the baseline would
-// initialize a different set than real runs produce — a silent metric gap.
+// initialize a different set than real runs produce, a silent metric gap.
 func TestClusterValidatorCheckKeysSync(t *testing.T) {
 	assert.ElementsMatch(t, clustervalidator.AllCheckKeys, clusterValidatorCheckKeys(),
 		"clusterValidatorCheckKeys() must match clustervalidator.AllCheckKeys; "+

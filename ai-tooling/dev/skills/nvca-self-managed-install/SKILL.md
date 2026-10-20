@@ -31,7 +31,7 @@ chart.
 - Cluster prerequisites: use the public `nvcf-self-managed-prerequisite` skill
 - Full stack install and teardown: use the public `nvcf-self-managed-installation` skill
 
-## Preferred Workflow
+## Instructions
 
 Run from `deploy/helm/nvca-operator`:
 
@@ -41,7 +41,17 @@ make render-values-from-stack \
   stack_repo=../../../deploy/stacks/self-managed
 ```
 
-Inspect the generated file under `bin/`, then install or upgrade:
+Inspect the generated file under `bin/`, then install or upgrade. The render
+also sets the values the control-plane validator role needs from the stack:
+`clusterValidator.gatewayNames` from the wired `ingress.gatewayApi.gateways`,
+`clusterValidator.storageClass` from `global.storageClass`, and
+`clusterValidator.externalComponents` from the quorum components the stack
+disables. It rewrites them on every render, empty included, so an upgrade does
+not keep a stale value from the release. On a registry other than NGC
+(`nvcr.io` or a subdomain) it also sets `clusterValidator.nodeToNodeProbeImage`
+to `busybox:1.36` under the stack's repository, so mirror that image there. It
+keeps a probe image the release already sets, and sets none when
+`networkChecks.enforcement.testImage` is set:
 
 ```bash
 make install-from-stack \
@@ -55,6 +65,8 @@ make install-from-stack \
 - `NCA_ID=<value>` to set the primary account ID explicitly
 - `CLUSTER_NAME=<value>` and `CLUSTER_ID=<value>` to preserve or pin cluster identity
 - `IMAGE_PULL_SECRET_NAME=<secret>` to attach a pre-created image pull secret
+- `NODE_TO_NODE_PROBE_IMAGE=<image>` to pick the node-to-node probe image; it
+  must be pullable without an image pull secret
 
 ## Existing Release Reuse
 
@@ -66,6 +78,6 @@ and operator settings during upgrades.
 ## Safety
 
 Before creating, deleting, or reusing local k3d clusters, read the local-dev
-safety guidance in `.cursor/skills/nvcf-self-hosted-local-dev/SKILL.md` from
+safety guidance in `docs/dev/local-development.md` from
 the repo root. Do not delete clusters or Helm releases without explicit user
 approval.

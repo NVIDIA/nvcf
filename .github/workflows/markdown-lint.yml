@@ -21,7 +21,7 @@ name: Markdown Lint
 
 on:
   push:
-    branches: [main, 'release-**', 'docs/**']
+    branches: [main, 'release-**', 'release/**', 'docs/**']
     paths:
       - '**/*.md'
       - '**/*.mdx'
@@ -29,7 +29,7 @@ on:
       - '.markdownlintignore'
       - '.github/workflows/markdown-lint.yml'
   pull_request:
-    branches: [main, 'release-**', 'docs/**']
+    branches: [main, 'release-**', 'release/**', 'docs/**']
     paths:
       - '**/*.md'
       - '**/*.mdx'

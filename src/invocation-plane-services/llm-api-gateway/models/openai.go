@@ -178,11 +178,12 @@ type ChatToolChoice struct {
 type ContentPartType string
 
 const (
-	ContentPartTypeText     ContentPartType = "text"
-	ContentPartTypeImageURL ContentPartType = "image_url"
-	ContentPartTypeAudioURL ContentPartType = "audio_url"
-	ContentPartTypeVideoURL ContentPartType = "video_url"
-	ContentPartTypeDocument ContentPartType = "document"
+	ContentPartTypeText       ContentPartType = "text"
+	ContentPartTypeImageURL   ContentPartType = "image_url"
+	ContentPartTypeAudioURL   ContentPartType = "audio_url"
+	ContentPartTypeInputAudio ContentPartType = "input_audio"
+	ContentPartTypeVideoURL   ContentPartType = "video_url"
+	ContentPartTypeDocument   ContentPartType = "document"
 )
 
 func (t ContentPartType) String() string {
@@ -193,6 +194,7 @@ var SupportedContentType = []ContentPartType{
 	ContentPartTypeText,
 	ContentPartTypeImageURL,
 	ContentPartTypeAudioURL,
+	ContentPartTypeInputAudio,
 	ContentPartTypeVideoURL,
 	ContentPartTypeDocument,
 }
@@ -229,6 +231,15 @@ type ContentPartAudioURL struct {
 
 func (cp ContentPartAudioURL) ContentType() ContentPartType {
 	return ContentPartTypeAudioURL
+}
+
+type ContentPartInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+func (cp ContentPartInputAudio) ContentType() ContentPartType {
+	return ContentPartTypeInputAudio
 }
 
 type ContentPartVideoURL struct {
@@ -505,7 +516,8 @@ type ChatCompletionResponse struct {
 	Choices           []ChatCompletionChoice `json:"choices"`
 	Usage             ChatCompletionUsage    `json:"usage"`
 	SystemFingerprint *string                `json:"system_fingerprint,omitempty"`
-	ServiceTier       servicetier.Tier       `json:"service_tier,omitempty"`
+	// ServiceTier is a plain string, not servicetier.Tier: backends can return tiers outside the gateway list.
+	ServiceTier string `json:"service_tier,omitempty"`
 	// Extensions holds upstream members this struct does not declare.
 	Extensions map[string]json.RawMessage `json:"-"`
 }
@@ -539,7 +551,8 @@ type ChatCompletionChunk struct {
 	SystemFingerprint *string                     `json:"system_fingerprint,omitempty"`
 	Choices           []ChatCompletionChunkChoice `json:"choices"`
 	Usage             *ChatCompletionUsage        `json:"usage,omitempty"`
-	ServiceTier       servicetier.Tier            `json:"service_tier,omitempty"`
+	// ServiceTier is a plain string, not servicetier.Tier: backends can return tiers outside the gateway list.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 func (sf *ChatCompletionStopField) UnmarshalJSON(data []byte) error {
@@ -564,12 +577,13 @@ func (sf *ChatCompletionStopField) UnmarshalJSON(data []byte) error {
 }
 
 type outboundContentPart struct {
-	Type     ContentPartType      `json:"type"`
-	Text     string               `json:"text,omitempty"`
-	ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
-	AudioURL *ContentPartAudioURL `json:"audio_url,omitempty"`
-	VideoURL *ContentPartVideoURL `json:"video_url,omitempty"`
-	Document *ContentPartDocument `json:"document,omitempty"`
+	Type       ContentPartType        `json:"type"`
+	Text       string                 `json:"text,omitempty"`
+	ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
+	AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
+	InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
+	VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
+	Document   *ContentPartDocument   `json:"document,omitempty"`
 }
 
 // Decoding always yields a part slice, so rebuild the union on the way out.
@@ -602,6 +616,13 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: typed})
 		case ContentPartAudioURL:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeAudioURL, AudioURL: &typed})
+		case *ContentPartInputAudio:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil input_audio content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeInputAudio, InputAudio: typed})
+		case ContentPartInputAudio:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeInputAudio, InputAudio: &typed})
 		case *ContentPartVideoURL:
 			if typed == nil {
 				return nil, errors.New("marshal content: nil video_url content part")
@@ -654,12 +675,13 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 		}
 
 		type union struct {
-			Type     ContentPartType      `json:"type"`
-			Text     string               `json:"text,omitempty"`
-			ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
-			AudioURL *ContentPartAudioURL `json:"audio_url,omitempty"`
-			VideoURL *ContentPartVideoURL `json:"video_url,omitempty"`
-			Document *ContentPartDocument `json:"document,omitempty"`
+			Type       ContentPartType        `json:"type"`
+			Text       string                 `json:"text,omitempty"`
+			ImageURL   *ContentPartImageURL   `json:"image_url,omitempty"`
+			AudioURL   *ContentPartAudioURL   `json:"audio_url,omitempty"`
+			InputAudio *ContentPartInputAudio `json:"input_audio,omitempty"`
+			VideoURL   *ContentPartVideoURL   `json:"video_url,omitempty"`
+			Document   *ContentPartDocument   `json:"document,omitempty"`
 		}
 
 		var raw []union
@@ -683,6 +705,9 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 					if rawPart.AudioURL != nil || rawPart.VideoURL != nil {
 						return &UnmarshalError{Field: "content", Msg: "audio_url and video_url not supported with content type = text"}
 					}
+					if rawPart.InputAudio != nil {
+						return &UnmarshalError{Field: "content", Msg: "input_audio not supported with content type = text"}
+					}
 					result = append(result, ContentPartText(rawPart.Text))
 				case ContentPartTypeImageURL:
 					if rawPart.ImageURL == nil || rawPart.ImageURL.URL == "" {
@@ -697,6 +722,11 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 						return &UnmarshalError{Field: "audio_url.url", Msg: "no audio_url supplied in content of type audio_url"}
 					}
 					result = append(result, rawPart.AudioURL)
+				case ContentPartTypeInputAudio:
+					if rawPart.InputAudio == nil || rawPart.InputAudio.Data == "" || rawPart.InputAudio.Format == "" {
+						return &UnmarshalError{Field: "input_audio", Msg: "data and format are required for content type input_audio"}
+					}
+					result = append(result, rawPart.InputAudio)
 				case ContentPartTypeVideoURL:
 					if rawPart.VideoURL == nil || rawPart.VideoURL.URL == "" {
 						return &UnmarshalError{Field: "video_url.url", Msg: "no video_url supplied in content of type video_url"}

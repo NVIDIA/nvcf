@@ -27,9 +27,9 @@ name: bazel
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -194,8 +194,10 @@ jobs:
           # subtrees plus the shared Bazel scaffold). Java and stargate no longer
           # ride the root row: discovered Java components and stargate have
           # their own scoped rows, so src/libraries/ is narrowed to
-          # src/libraries/go/.
-          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
+          # src/libraries/go/. The two stacks are the data of //:nvcf-cli-stacks,
+          # which the nvcf-cli tests that pin the CLI to the stacks read, so a
+          # change to a stack runs those tests.
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ deploy/stacks/self-managed/ deploy/stacks/nvcf-compute-plane/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -255,7 +257,7 @@ jobs:
           # subtrees a change actually touches (path prefix), plus the
           # reverse-dependency edges below (shared Java config -> every Java row;
           # a Java framework -> every Java service) and ROOT_GLOBS -> root row. A
-          # docs-only or helm-only change touches no subtree and runs nothing.
+          # docs-only or chart-only change touches no subtree and runs nothing.
           # The full-matrix fallbacks stay in the case above (workflow_dispatch,
           # an unreadable or rewritten diff, a new branch) so an untrustworthy
           # changeset is never under-tested.
@@ -416,7 +418,7 @@ jobs:
               hit=true
             elif [ "$path" = "." ]; then
               # Root is glob-gated on PRs and merges alike: it runs only when a
-              # ROOT_GLOB file changed (a docs- or helm-only change never triggers
+              # ROOT_GLOB file changed (a docs- or chart-only change never triggers
               # it). When it does run on a main push it uploads (CACHE_UPLOAD),
               # warming the cache; the rings do not evict, so a later root PR reads
               # that warm closure.
@@ -443,6 +445,20 @@ jobs:
             # schedule every Java row, not merely the root row.
             if [ "$hit" != "true" ] && [ "$java_shared_changed" = "true" ]; then
               case "$component_kind" in java-*) hit=true ;; esac
+            fi
+            # Stargate's routing-method drift test compiles in these NVCF docs
+            # (//:stargate-routing-method-docs), so a docs-only change to them
+            # still runs the stargate row.
+            if [ "$hit" != "true" ] && [ "$id" = "stargate" ]; then
+              for doc in docs/overview/llm-gateway.md docs/self-managed/llm-request-router-load-balancing.md; do
+                if grep -qxF "$doc" <<<"$changed"; then hit=true; break; fi
+              done
+            fi
+            # The nvcf-core tests read Stargate's routing method manifest
+            # (//src/libraries/rust/stargate:routing_methods.json), so a
+            # manifest change also runs the cloud-functions row.
+            if [ "$hit" != "true" ] && [ "$id" = "cloud-functions" ]; then
+              if grep -qxF src/libraries/rust/stargate/routing_methods.json <<<"$changed"; then hit=true; fi
             fi
             if [ "$hit" = "true" ]; then
               entry=$(jq -cn --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" --arg ck "$component_kind" --arg cl "$ci_lane" '{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm, component_kind:$ck, ci_lane:$cl}')

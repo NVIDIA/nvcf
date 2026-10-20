@@ -17,8 +17,10 @@ Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
-- `src/libraries/rust/stargate/AGENTS.md` for Stargate deployment invariants,
-  including router transport assumptions to use during implementation and review
+- `tests/bdd/AGENTS.md` for behavior-driven development (BDD) scenarios and
+  suite rules
+- `src/libraries/rust/stargate/AGENTS.md` for mandatory Stargate mock and performance
+  validation, including related chart, deployment, benchmark, and CI changes
 - `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
 - `.cursor/skills/` for root dev-skill symlink fanout
@@ -249,6 +251,10 @@ belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
 
 Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
 
+Sign off every commit with `git commit -s` (Developer Certificate of Origin,
+see `CONTRIBUTING.md`). The DCO check rejects pull requests with unsigned
+commits, including commits made by agents.
+
 Format:
 
 ```text
@@ -357,6 +363,30 @@ in the Pull Request description (for example: pure documentation, CI-only
 change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
+
+### BDD scenarios
+
+When changing self-managed installation, CLI workflows, or function/task
+lifecycle behavior, add or update the relevant Gherkin scenarios in
+`tests/bdd/features/`. Read `tests/bdd/AGENTS.md` and the step catalog in
+`tests/bdd/PLAN.md` first. Reuse existing steps to express operator actions
+and observable results.
+
+Run the non-live checks from the BDD module:
+
+```sh
+cd tests/bdd
+go test -short ./...
+golangci-lint run --config .golangci.yml ./...
+```
+
+Before pushing changes to behavior covered by BDD, run the relevant live
+suites. Use `tests/bdd/README.md` to select suites and prerequisites, and
+follow the local QA safety rules before running them. If a required run fails
+or is blocked, stop before pushing and report the failure or blocker and
+unvalidated behavior. Anchor live test names with `^...$` to exclude similarly
+named wiring tests. Report fake-runner wiring checks separately from live
+results; wiring checks do not validate a deployment.
 
 ### Version-pin assertions
 

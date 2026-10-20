@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 # NOTE: this file is used by the tool defined in
 # ./cmd/urfave-cli-genflags/main.go which uses the
 # `Spec` type that maps to this file structure.

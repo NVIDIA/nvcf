@@ -178,7 +178,7 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.18.0.
+# global.sidecars (or global.image) at version 0.25.0.
 api:
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
@@ -211,6 +211,15 @@ nvctApi:
 #       repository: <your-repository>/alpine-k8s
 #       tag: "1.37.0"
 
+# The bundled upgrade receipt uses its chart's public upstream helper image.
+# Global NVCF image settings do not select this third-party image. To use a
+# mirror, set upgradeReceipt.image.registry and repository together. A tag
+# override is optional and must be qualified for the cluster's Kubernetes version.
+#   upgradeReceipt:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+
 accounts:
   limits:
     maxFunctions: 10
@@ -221,6 +230,22 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # How workers authenticate to NATS.
+  #   nkey: the NVCF API gives every worker the control plane's shared NATS
+  #     NKey as NKEY_SEED. The default.
+  #   token: each worker authenticates with its own worker token, into APP. The
+  #     NATS auth callout passes it to the NVCF API, which returns that function
+  #     version's permissions, and the API stops sending NKEY_SEED. Needs an NVCF
+  #     API and worker-utils that support NVCF_NATS_ACCOUNT. Use it when workers
+  #     run outside the control-plane cluster.
+  # Switching an existing install: see "Worker NATS Authentication" in
+  # docs/self-managed/control-plane-operations.md.
+  workerAuth: nkey
+  authCallout:
+    workerTokenAuth:
+      # token mode: the NVCF API endpoint the NATS auth callout sends worker
+      # tokens to. Changing it restarts the auth callout.
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
@@ -308,7 +333,8 @@ cassandra:
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
   # the self-managed PKI stack. Enabling addons.llm.pki with the managed
-  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # issuer, or workerCallbackProxy, provisions the OpenBao service PKI and
+  # creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
   # and has no namespace. The nvcf-pki Helm release that creates it and the
   # cert-manager ServiceAccount it authenticates as both live in the
   # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
@@ -493,6 +519,11 @@ addons:
       #   repository: ""
       #   tag: ""
 
+  # Event Ledger addon: records deployment stage events from NVCA and SIS.
+  # When enabled, deploys the event-ledger service backed by Cassandra.
+  eventLedger:
+    enabled: true
+
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
   # Gateway API HTTPRoute without changing the default invocation or LLM routes.
@@ -589,6 +620,26 @@ invocation:
     maxUnavailable: 1
 
 adminIssuerProxy:
+  # Mints admin JWTs for `nvcf-cli init` without authenticating the caller.
+  # Defaults to true so existing installs are unchanged.
+  #
+  # false drops the release, its Gateway route, its NVCF UI health entry, and
+  # the OpenBao role that lets it sign admin-scoped tokens. `nvcf-cli init` and
+  # `nvcf-cli refresh` both call POST /v1/admin/keys, so both stop working
+  # against this stack; obtain the admin token from your own identity provider
+  # and set NVCF_TOKEN instead.
+  #
+  # On a stack where it is already installed this uninstalls nothing: the
+  # release and the OpenBao role both already exist and stay. Until the role is
+  # removed, any pod running as the admin-issuer-proxy service account in the
+  # api-keys namespace can still sign those tokens. For the removal steps see
+  # "Disabling Admin Issuer Proxy" in docs/self-managed/control-plane-operations.md.
+  enabled: true
+  # The api-keys.<domain>/v1/admin/keys route; false keeps it in-cluster only.
+  # Only meaningful with enabled: true -- disabling the release removes the
+  # route with it.
+  gateway:
+    enabled: true
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

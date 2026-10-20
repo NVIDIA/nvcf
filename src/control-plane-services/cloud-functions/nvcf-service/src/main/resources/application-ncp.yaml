@@ -162,6 +162,9 @@ nvcf:
     worker-url: nats://nats.nats-system.svc.cluster.local:4222
     oauth2-properties:
       enabled: false
+    # Workers join the services and NVCA in APP: they're told it at launch, and the
+    # worker webhook accepts only it.
+    auth-callout-worker-account: APP
   account:
     max-functions-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted
     max-tasks-allowed: 2147483647 # Integer.MAX_VALUE — no cap for self-hosted

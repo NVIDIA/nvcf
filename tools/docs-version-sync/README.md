@@ -204,6 +204,158 @@ is intentionally excluded from public documentation, and give it a public-safe
 reason. Do not use a private registry as a placeholder for an unpublished
 artifact.
 
+## Prepare an umbrella product manifest
+
+The opt-in `umbrella` commands prepare a product manifest independently of docs
+editions. Existing `edition` commands, catalogs, registries, and publication
+defaults keep their current behavior.
+
+Review the exact three-stack catalog at a full source commit. Download the
+inventory asset from each selected stack release into one directory, and fetch
+the corresponding immutable source tags. The command validates those local tags
+and inventory bytes; it does not discover latest versions or publish anything.
+
+```bash
+git fetch origin --tags
+go run -C tools/docs-version-sync . umbrella prepare \
+  --source <full-reviewed-catalog-commit> \
+  --version <umbrella-version> --change initial \
+  --helm-version <exact-3.x-version> --helmfile-version <exact-1.1.x-version> \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-manifest.json
+
+go run -C tools/docs-version-sync . umbrella check \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories
+```
+
+The default status is `development`. Supply `--qualification` with the public
+review URL only after the complete combination is qualified. This records the
+reviewer's declaration; an approval URL is not proof that runtime tests passed.
+
+For a subsequent product version, supply `--previous` with its qualified
+predecessor manifest and use `--change patch`, `minor`, or `major`. Pass the same
+predecessor to `umbrella check`. Component downgrades and changes to an existing
+component version's source or inventory are rejected. A component major requires
+an umbrella major; a component minor requires at least an umbrella minor.
+
+Manifest schema version 1 uses these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version`, `previous_version`, `change` | Product version and deployment-contract transition |
+| `status`, `qualification` | Development candidate or qualified combination with public review |
+| `source_commit` | Reviewed catalog commit used to select the combination |
+| `toolchain.helm`, `toolchain.helmfile` | Exact supported render tool versions |
+| `stacks` | Exactly `control-plane`, `compute-plane`, and `observability` |
+| `stacks.<name>.version` | Independent component stack version |
+| `source_tag`, `source_commit` within each stack | Immutable component source identity |
+| `inventory_asset`, `inventory_sha256` within each stack | Canonical released inventory filename and digest of its exact bytes |
+| `compatible_with` within each stack | Reviewed requirements for the other two component stacks |
+
+`control-plane` identifies the Self-Managed stack and retains the catalog's
+existing key. The three component versions do not have to match.
+
+Product manifests use `deploy/releases/X.Y.Z/manifest.json` and the reserved tag
+format `nvcf/X.Y.Z`. That tag format avoids the existing component publisher's
+`*-v*` and `**/v*` triggers. Preparation creates neither the tag nor a GitHub
+release. If the product tag is present locally, validation requires the exact
+manifest bytes recorded at that tag. Fetch release tags before validation.
+
+Repeated preparation with identical inputs verifies the existing output. A
+different output is rejected. Bundle and manifest checksums belong in a separate
+release asset index, so the manifest never needs to contain its own hash or the
+hash of an archive that embeds it.
+
+Documentation corrections do not change this product manifest or its version.
+This preparation command does not change the current immutable-docs-edition
+policy; maintained umbrella documentation requires the separate docs workflow.
+
+Run the command-level integration test and existing regressions with:
+
+```bash
+go test -C tools/docs-version-sync ./...
+./tools/ci/check-doc-version-sync
+tools/ci/preview-docs --check
+```
+
+The integration test builds the real command, prepares and checks independent
+fixture releases, rejects changed source identities and released manifests, and
+exercises the legacy edition commands through the same binary.
+
+## Assemble an umbrella bundle
+
+Build a distribution from the prepared manifest and the same inventory inputs:
+
+```bash
+go run -C tools/docs-version-sync . umbrella bundle \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-release-assets
+```
+
+For the first assembly, `--out` must not already exist. Do not pre-create an
+empty output directory.
+An existing directory is accepted only when it contains the exact complete
+asset set from an earlier identical assembly.
+
+Supply `--previous` for a non-initial release, as with manifest validation.
+Assembly reads each stack from its selected Git commit, never the working tree
+or another stack's incidental checkout. It retains the sibling layout:
+
+```text
+manifest.json
+inventory.json
+bundle-files.json
+inventories/
+deploy/stacks/self-managed/
+deploy/stacks/nvcf-compute-plane/
+deploy/stacks/observability/
+```
+
+The archive also includes the reviewed root LICENSE and NOTICE, operator
+instructions, and VERSION files. Each stack's VERSION is stamped with its own
+artifact version. Where available, `Makefile.dist` becomes the distribution
+Makefile. Base environments, local charts, Helmfile states, values, scripts, and
+secret templates are included. Tests, local environment overrides, dotfiles,
+and customer secret files are excluded. Source symlinks are rejected.
+
+`release-assets.json` sits outside the archive. It records SHA-256 digests for
+the archive, manifest, combined inventory, and three constituent inventories.
+The archive's `bundle-files.json` records each payload file's digest and mode.
+Identical inputs produce identical archives. Repeating assembly verifies
+existing output; it does not overwrite different assets.
+
+Verify a downloaded archive against the manifest and the archive digest from a
+trusted release asset index:
+
+```bash
+go run -C tools/docs-version-sync . umbrella verify-bundle \
+  --manifest /tmp/umbrella-release-assets/manifest.json \
+  --bundle /tmp/umbrella-release-assets/nvcf-<version>.tar.gz \
+  --sha256 sha256:<archive-digest>
+```
+
+Verification checks the archive digest, embedded manifest, file index, stack
+versions, and inventories. It rejects links, path traversal, duplicate paths,
+and oversized archives. It does not install or extract into an existing cluster.
+Use the bundle's README for extraction-layout and per-plane render commands.
+Chart/image payloads and the CLI binary remain separate downloads.
+
+The command E2E builds twice from different working-tree states, verifies
+downloaded assets, extracts the archive, and renders control-plane, compute-plane,
+and enabled/disabled observability fixtures with real Helm and Helmfile:
+
+```bash
+NVCF_UMBRELLA_RENDER_E2E=1 go test -C tools/docs-version-sync \
+  -run TestUmbrella -count=1 -v
+```
+
+The dedicated umbrella validation workflow installs checksum-pinned render tools
+and requires this test. The ordinary Go suite skips rendering only when the
+tools are absent; setting the variable makes missing tools a failure. These
+isolated fixture renders do not qualify a production stack combination.
+
 ## Compare release sets
 
 Store each release set's inventory JSON files in a directory, then run:
@@ -356,3 +508,161 @@ Native release notes live in `fern/changelog/`. Dated MDX files use `##` heading
 for cards and frontmatter tags for filters. Keep links relative and record the
 edition and exact artifact versions in release entries. Qualification remains a
 reviewed declaration; a development entry is not release approval.
+
+See [the end-to-end umbrella release and docs procedure](../../docs/dev/umbrella-releases.md)
+for qualification, same-version corrections, backports, and rollback.
+
+### Opt-in umbrella publication
+
+The `Publish Umbrella Release` workflow runs only on explicit dispatch from
+`main`. Its default mode validates and assembles without remote writes. `draft`
+uploads a candidate; `promote` requires a qualified manifest and exposes it only
+after every asset passes readback. Neither component releases nor docs edits
+start this workflow. It never edits the docs registry or the repository's
+latest-release pointer.
+
+Release owners allocate an unused version, review the complete combination,
+and commit `deploy/releases/X.Y.Z/manifest.json` and customer `notes.md` beside
+it. Qualification must link to public evidence of whole-combination runtime
+and upgrade testing. Artifact existence alone is not qualification. Never reuse
+a published or reserved docs version for a different combination.
+
+The workflow downloads the exact public component inventories, reassembles the
+bundle, and checks the committed manifest, predecessor, source tags, inventory
+hashes, compatibility, and notes. Publication independently checks anonymous
+access to the stable component releases and their inventories. The reviewed
+manifest records source and toolchain provenance; `release-assets.json` records
+the resulting immutable bytes.
+
+```bash
+go run -C tools/docs-version-sync . umbrella publish \
+  --repo /path/to/nvcf --target FULL_REVIEWED_COMMIT \
+  --assets /tmp/umbrella-assets
+```
+
+The command above performs local validation only. Add `--write` to upload a
+draft and `--promote` to expose a qualified release. Writes require
+`GITHUB_TOKEN`. The GitHub release API is the archive distribution contract;
+this workflow does not introduce an OCI package or change existing OCI stack
+publication.
+
+Dispatch with `target` set to the full reviewed commit SHA containing the
+manifest and notes. The workflow verifies that it belongs to `main` and checks
+out that exact commit. Reuse this target for validation, draft retries, and
+promotion even after `main` advances.
+
+An interrupted upload leaves a draft. Retry with the same commit and bytes.
+Existing assets are downloaded and compared, never overwritten. If an asset is
+incomplete or differs, stop and inspect the draft; this tool deliberately does
+not delete assets. A published release cannot be repaired in place. Restore
+missing infrastructure or allocate another product version after review.
+
+Docs activation is a separate reviewed registry change. Supply that PR with
+the released manifest and its digest; subsequent prose corrections require no
+product publication. Keep the current docs publisher and default until its
+mixed-version preview and rollback gates pass.
+
+Run `go test -C tools/docs-version-sync -run TestUmbrellaPublisher -v` for the
+isolated API rehearsal. It assembles a real fixture bundle, interrupts upload,
+retries, reads every asset back, checks immutable reruns and corruption, and
+verifies trigger isolation. This test does not publish to GitHub.
+
+### Same-version umbrella docs revisions
+
+Legacy `docs/releases/X.Y.Z` entries remain immutable. New registry entries
+can use `mode: umbrella` and a maintained `docs/versions/X.Y.Z` source. The
+entry's product commit and manifest digest never change. Its docs `commit`
+selects an approved revision; `umbrella.revisions` retains previous approvals
+for rollback. Advancing the source branch does not approve its new HEAD.
+
+Prepare from a reviewed prose source and the qualified product identity:
+
+```bash
+go run -C tools/docs-version-sync . umbrella docs-prepare \
+  --repo /path/to/nvcf --version X.Y.Z \
+  --product-commit FULL_PRODUCT_TAG_COMMIT \
+  --manifest-sha256 sha256:PRODUCT_MANIFEST_DIGEST \
+  --commit REVIEWED_DOCS_SOURCE_COMMIT --out /tmp/nvcf-product-docs
+```
+
+The prepared catalog comes from the product's locked source catalog. It never
+selects latest stack releases. Review the prepared prose for this product,
+commit it on `docs/versions/X.Y.Z`, and push that branch. Then prepare a
+canonical registry change:
+
+```bash
+go run -C tools/docs-version-sync . umbrella docs-revise \
+  --repo /path/to/nvcf --version X.Y.Z \
+  --product-commit FULL_PRODUCT_TAG_COMMIT \
+  --manifest-sha256 sha256:PRODUCT_MANIFEST_DIGEST \
+  --commit REVIEWED_DOCS_REVISION_COMMIT
+```
+
+Review and merge the registry diff on main. This command does not change the
+selector, default, product tag, release assets, or production site. First-time
+activation and canonical publishing use a separate reviewed change. For a
+correction, edit the existing maintained branch and approve another commit
+with the same command. For rollback, select a previous approved commit.
+
+Registry validation checks that the selected commit remains reachable from the
+maintained source branch. It validates only that approved content, including
+its generated blocks, navigation, product manifest, and immutable catalog
+inputs. Catalog output locations and descriptive manifest text may change;
+artifact versions, distribution locations, compatibility, and product inputs
+may not. Carry applicable fixes into Development and other supported versions
+through separate reviewed changes; do not copy unrelated next-release prose.
+
+Run `go test -C tools/docs-version-sync -run TestUmbrellaDocsRevisionE2E -v`.
+The test uses the real binary and temporary Git remotes for a mixed registry,
+same-version correction, unapproved branch advancement, rollback, product-pin
+rejection, stale generated content, and unchanged legacy immutability checks.
+
+### Canonical publishing with maintained docs
+
+`tools/ci/publish-docs --check` validates the production inputs without
+publishing. `--publish` validates and generates the canonical site. A
+legacy-only registry follows the existing `check-docs` and Fern generation
+path. An opt-in umbrella entry enables isolated staging for all registered
+versions, including legacy editions. Development, site settings, selectors,
+redirects, and hidden historical routes remain in the canonical configuration.
+
+Mixed builds verify the public stable product release and its assets, fetch
+approved docs commits, and replace remote version refs with local navigation
+paths in a temporary build tree. Validation and generation use that same tree.
+A source branch advancing between those steps cannot change the output.
+The canonical publisher requires clean `docs/` and `fern/` trees, including
+untracked and ignored files, so the receipt identifies the published inputs.
+Commit reviewed inputs first. Use `preview-docs` for working-tree edits.
+Missing artifacts, moved product tags, unavailable approved commits, and
+invalid navigation stop the build before generation.
+
+`umbrella docs-stage --repo /path/to/nvcf --out /tmp/nvcf-docs-build` exposes
+this staging operation for investigation. `--local-refs` is restricted to
+fixtures and local rehearsals; it skips public asset verification and must not
+be used by the production publisher. `docs-build-receipt.json` records the
+canonical SHA, registry/configuration digests, approved source commits,
+product identities, and Fern pin. The publishing workflow retains that receipt
+and reports Fern's output URL in its job summary.
+
+Maintained docs branch pushes validate and can be used for isolated hosted
+previews. They never publish production. Production still runs only from main;
+its existing concurrency group serializes publication. Roll back with a
+reviewed canonical registry change selecting an earlier approved docs commit,
+or revert the canonical activation PR. Do not mutate product releases or old
+immutable docs branches.
+
+Run these integration checks before enabling an umbrella selector:
+
+```bash
+go test -C tools/docs-version-sync -run 'TestUmbrellaCanonicalDocs|TestCanonicalDocsStage' -v
+bash tools/scripts/test/test-publish-docs
+bash tools/scripts/test/test-preview-docs
+tools/ci/publish-docs --check
+DOCS_PREVIEW_CONFIG=fern/docs.yml tools/ci/preview-docs --check
+```
+
+The fixture tests cover approved staging, a branch advance between validation
+and generation, unchanged legacy configuration, rollback, and fail-before-
+publish behavior. Hosted Development-first and canonical previews still need
+navigation, search, anchor, download, and redirect readback before the first
+production activation. Local checks do not substitute for hosted validation.

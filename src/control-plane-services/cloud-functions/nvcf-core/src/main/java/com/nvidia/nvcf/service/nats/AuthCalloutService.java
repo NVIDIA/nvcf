@@ -17,6 +17,7 @@
 package com.nvidia.nvcf.service.nats;
 
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.nvcf.configuration.nats.NatsConfiguration.NatsProperties;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken.TokenType;
 import io.nats.jwt.Permission;
@@ -24,6 +25,7 @@ import io.nats.jwt.ResponsePermission;
 import io.nats.jwt.UserClaim;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -40,10 +42,12 @@ public class AuthCalloutService {
     public static final String API_USER_ACCOUNT = "Worker";
 
     private final GrpcTokenService grpcTokenService;
+    private final NatsProperties natsProperties;
 
     /**
      * Validates a webhook plugin token and returns the user claim and user ID.
-     * Only supports webhook plugin and the NATS Worker account.
+     * Only supports the webhook plugin and the configured worker account, which workers are
+     * told at launch. The result carries that same account back to the auth callout.
      */
     public WebhookValidationResult validateWebhookPlugin(
             String account, String pluginName, String payload) {
@@ -51,8 +55,10 @@ public class AuthCalloutService {
             throw new ForbiddenException("Only webhook plugin is supported");
         }
 
-        if (!API_USER_ACCOUNT.equals(account)) {
-            throw new ForbiddenException("Webhook plugin can only be used with Worker account");
+        var workerAccount = natsProperties.getAuthCalloutWorkerAccount();
+        if (!Objects.equals(workerAccount, account)) {
+            throw new ForbiddenException(
+                    "Webhook plugin can only be used with the %s account".formatted(workerAccount));
         }
 
         // Validate as worker token and create UserClaim - reuse existing logic
@@ -64,7 +70,7 @@ public class AuthCalloutService {
 
         return new WebhookValidationResult(
                 "worker-" + nvcfIssuedToken.functionVersionId(),
-                account,
+                workerAccount,
                 userClaim
         );
     }

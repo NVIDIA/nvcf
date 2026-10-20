@@ -17,13 +17,17 @@ limitations under the License.
 
 package gateway
 
-import "go.opentelemetry.io/otel/attribute"
+import (
+	"ai-api-gateway-service/middleware"
+
+	"go.opentelemetry.io/otel/attribute"
+)
 
 const (
 	traceAttrEndpointType              attribute.Key = "endpoint.type"
 	traceAttrFunctionID                attribute.Key = "function.id"
 	traceAttrFunctionVersionID         attribute.Key = "function.version_id"
-	traceAttrGatewayProxyOutcome       attribute.Key = "gateway.proxy.outcome"
+	traceAttrGatewayProxyOutcome       attribute.Key = middleware.GatewayProxyOutcomeSpanAttribute
 	traceAttrHTTPResponseStatusCode    attribute.Key = "http.response.status_code"
 	traceAttrIsShadow                  attribute.Key = "is_shadow"
 	traceAttrModelName                 attribute.Key = "model.name"
@@ -34,9 +38,11 @@ const (
 	traceAttrShadowDroppedCount        attribute.Key = "shadow.dropped_count"
 	traceAttrShadowDroppedReasons      attribute.Key = "shadow.dropped_reasons"
 	traceAttrShadowDroppedTargetModels attribute.Key = "shadow.dropped_target_models"
+	traceAttrShadowSamplingMethods     attribute.Key = "shadow.sampling_methods"
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
 
+	traceAttrValueEndpointAnthropic  = "anthropic"
 	traceAttrValueEndpointOpenAI     = "openai"
 	traceAttrValueEndpointLLMGateway = "llm_gateway"
 

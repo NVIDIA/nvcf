@@ -970,12 +970,26 @@ func TestBrowserSearchTool_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid web_search tool",
+			tool: &BrowserSearchTool{
+				ToolBase: ToolBase{Type: "web_search"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid dated web_search tool",
+			tool: &BrowserSearchTool{
+				ToolBase: ToolBase{Type: "web_search_2025_08_26"},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid type",
 			tool: &BrowserSearchTool{
 				ToolBase: ToolBase{Type: "function"},
 			},
 			wantErr: true,
-			errMsg:  "must be 'browser_search' or 'web_search_preview*'",
+			errMsg:  "must be 'browser_search' or 'web_search*'",
 		},
 	}
 
@@ -1112,4 +1126,372 @@ func TestRoundTripMarshaling(t *testing.T) {
 	codeTool, ok := unmarshaledTools[2].(*CodeInterpreterTool)
 	require.True(t, ok)
 	require.Equal(t, "test_container", codeTool.Container)
+}
+
+const namespaceToolJSON = `{
+	"type": "namespace",
+	"name": "diagnostics",
+	"description": "Compatibility test tools.",
+	"tools": [{
+		"type": "function",
+		"name": "echo",
+		"description": "Return the supplied value.",
+		"parameters": {
+			"type": "object",
+			"properties": {"value": {"type": "string"}},
+			"required": ["value"],
+			"additionalProperties": false
+		}
+	}]
+}`
+
+func TestUnmarshalTool_Namespace(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(namespaceToolJSON))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	ns, ok := tool.(*NamespaceTool)
+	require.True(t, ok)
+	require.Equal(t, ToolTypeNamespace, ns.GetType())
+	require.Equal(t, "diagnostics", ns.Name)
+	require.Equal(t, "Compatibility test tools.", ns.Description)
+	require.Len(t, ns.Tools, 1)
+	fn, ok := ns.Tools[0].(*FunctionTool)
+	require.True(t, ok)
+	require.Equal(t, "echo", fn.Name)
+	require.Equal(t, "object", fn.Parameters["type"])
+}
+
+func TestNamespaceTool_SameNameInDifferentNamespaces(t *testing.T) {
+	var tools ToolSlice
+	require.NoError(t, json.Unmarshal([]byte(`[
+		{"type":"namespace","name":"a","description":"A","tools":[{"type":"function","name":"run"}]},
+		{"type":"namespace","name":"b","description":"B","tools":[{"type":"function","name":"run"}]}
+	]`), &tools))
+	require.Len(t, tools, 2)
+	require.Equal(t, "a", tools[0].(*NamespaceTool).Name)
+	require.Equal(t, "b", tools[1].(*NamespaceTool).Name)
+}
+
+func TestNamespaceTool_Validate(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{"missing name", `{"type":"namespace","description":"d","tools":[{"type":"function","name":"f"}]}`, "name"},
+		{"missing description", `{"type":"namespace","name":"n","tools":[{"type":"function","name":"f"}]}`, "description"},
+		{"no tools", `{"type":"namespace","name":"n","description":"d","tools":[]}`, "at least one tool"},
+		{"nested function missing name", `{"type":"namespace","name":"n","description":"d","tools":[{"type":"function"}]}`, "tools[0]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, err := UnmarshalTool([]byte(tt.json))
+			require.NoError(t, err)
+			err = tool.Validate()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestNamespaceTool_UnsupportedNestedType(t *testing.T) {
+	_, err := UnmarshalTool([]byte(
+		`{"type":"namespace","name":"n","description":"d","tools":[{"type":"mcp","server_label":"x"}]}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported namespace tool type: mcp")
+}
+
+func TestNamespaceTool_RoundTrip(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(namespaceToolJSON))
+	require.NoError(t, err)
+
+	out, err := json.Marshal(tool)
+	require.NoError(t, err)
+	require.JSONEq(t, namespaceToolJSON, normalizeNamespaceJSON(t, out))
+}
+
+// normalizeNamespaceJSON drops the null optional fields FunctionTool marshals
+// so the round trip can be compared to the request as the client sent it.
+func normalizeNamespaceJSON(t *testing.T, data []byte) string {
+	t.Helper()
+	var ns map[string]any
+	require.NoError(t, json.Unmarshal(data, &ns))
+	for _, nested := range ns["tools"].([]any) {
+		fn := nested.(map[string]any)
+		for k, v := range fn {
+			if v == nil {
+				delete(fn, k)
+			}
+		}
+	}
+	out, err := json.Marshal(ns)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestFunctionToolCall_Namespace(t *testing.T) {
+	var call FunctionToolCall
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"type":"function_call","namespace":"diagnostics","name":"echo","call_id":"c1","arguments":"{}"}`), &call))
+	require.NotNil(t, call.Namespace)
+	require.Equal(t, "diagnostics", *call.Namespace)
+
+	item := OutputItem{Type: ItemTypeFunctionCall, ToolCallData: call}
+	out, err := json.Marshal(&item)
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"namespace":"diagnostics"`)
+
+	item = OutputItem{Type: ItemTypeFunctionCall, ToolCallData: FunctionToolCall{CallID: "c2", Name: "echo"}}
+	out, err = json.Marshal(&item)
+	require.NoError(t, err)
+	require.NotContains(t, string(out), "namespace")
+}
+
+func TestFunctionCallOutput_Output(t *testing.T) {
+	t.Run("string", func(t *testing.T) {
+		var out FunctionCallOutput
+		require.NoError(t, json.Unmarshal([]byte(
+			`{"type":"function_call_output","call_id":"c1","output":"done"}`), &out))
+		require.False(t, out.Output.IsContent)
+		require.Equal(t, "done", out.Output.Text)
+
+		data, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"output":"done"`)
+	})
+
+	t.Run("content array", func(t *testing.T) {
+		var out FunctionCallOutput
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"type":"function_call_output","call_id":"c1",
+			"output":[
+				{"type":"input_text","text":"question"},
+				{"type":"input_image","image_url":"https://example.com/a.png","detail":"auto"},
+				{"type":"input_file","file_id":"file-1"}
+			]}`), &out))
+		require.True(t, out.Output.IsContent)
+		require.Len(t, out.Output.Content, 3)
+		text, ok := out.Output.Content[0].GetTextContent()
+		require.True(t, ok)
+		require.Equal(t, "question", text.Text)
+
+		data, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"output":[{"type":"input_text"`)
+	})
+
+	t.Run("empty array", func(t *testing.T) {
+		var out FunctionCallOutput
+		require.NoError(t, json.Unmarshal([]byte(
+			`{"type":"function_call_output","call_id":"c1","output":[]}`), &out))
+		require.True(t, out.Output.IsContent)
+
+		data, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"output":[]`)
+	})
+
+	for name, output := range map[string]string{
+		"number":          `42`,
+		"object":          `{"type":"input_text","text":"x"}`,
+		"unsupported":     `[{"type":"input_audio","input_audio":{"format":"wav","data":"AAAA"}}]`,
+		"missing type":    `[{"text":"x"}]`,
+		"array of string": `["x"]`,
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			var out FunctionCallOutput
+			err := json.Unmarshal([]byte(
+				`{"type":"function_call_output","call_id":"c1","output":`+output+`}`), &out)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestCreateRequest_CodexNamespaceCycle(t *testing.T) {
+	var req CreateRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"model": "m",
+		"tool_choice": "auto",
+		"tools": [`+namespaceToolJSON+`],
+		"input": [
+			{"role":"user","content":[{"type":"input_text","text":"call echo"}]},
+			{"type":"function_call","namespace":"diagnostics","name":"echo","call_id":"c1","arguments":"{\"value\":\"NAMESPACE_OK\"}"},
+			{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"NAMESPACE_OK"}]}
+		]}`), &req))
+	require.NoError(t, req.Validate())
+}
+
+func TestUnmarshalTool_Custom(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type": "custom",
+		"name": "apply_patch",
+		"description": "Apply a patch.",
+		"format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"}
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	custom, ok := tool.(*CustomTool)
+	require.True(t, ok)
+	require.Equal(t, "apply_patch", custom.Name)
+	require.Equal(t, "Apply a patch.", *custom.Description)
+	require.JSONEq(t, `{"type":"grammar","syntax":"lark","definition":"start: /.+/"}`, string(custom.Format))
+
+	out, err := json.Marshal(custom)
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"format":{"type":"grammar"`)
+}
+
+func TestCustomTool_Validate(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{"type":"custom"}`))
+	require.NoError(t, err)
+	err = tool.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "name")
+}
+
+func TestNamespaceTool_NestedCustomTool(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type":"namespace","name":"editor","description":"Editing tools.",
+		"tools":[
+			{"type":"function","name":"open"},
+			{"type":"custom","name":"apply_patch","format":{"type":"text"}}]}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	ns := tool.(*NamespaceTool)
+	require.Len(t, ns.Tools, 2)
+	require.IsType(t, &FunctionTool{}, ns.Tools[0])
+	require.IsType(t, &CustomTool{}, ns.Tools[1])
+
+	bad, err := UnmarshalTool([]byte(
+		`{"type":"namespace","name":"n","description":"d","tools":[{"type":"custom"}]}`))
+	require.NoError(t, err)
+	require.Error(t, bad.Validate())
+}
+
+func TestCreateRequest_BadToolOutputReportsOutputError(t *testing.T) {
+	for name, item := range map[string]string{
+		"function number": `{"type":"function_call_output","call_id":"c1","output":42}`,
+		"function audio": `{"type":"function_call_output","call_id":"c1",` +
+			`"output":[{"type":"input_audio","input_audio":{"format":"wav","data":"AAAA"}}]}`,
+		"custom object": `{"type":"custom_tool_call_output","call_id":"c1","output":{"text":"x"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var req CreateRequest
+			err := json.Unmarshal([]byte(`{"model":"m","input":[`+item+`]}`), &req)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "output")
+			require.NotContains(t, err.Error(), "must be string or array of input items")
+		})
+	}
+
+	var req CreateRequest
+	err := json.Unmarshal([]byte(`{"model":"m","input":42}`), &req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be string or array of input items")
+}
+
+func TestCustomToolCall_InputItems(t *testing.T) {
+	var req CreateRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"model": "m",
+		"tools": [{"type":"custom","name":"apply_patch"}],
+		"input": [
+			{"role":"user","content":[{"type":"input_text","text":"patch it"}]},
+			{"type":"custom_tool_call","call_id":"c1","namespace":"editor","name":"apply_patch","input":"*** Begin Patch"},
+			{"type":"custom_tool_call_output","call_id":"c1","output":[{"type":"input_text","text":"applied"}]},
+			{"type":"custom_tool_call","call_id":"c2","name":"apply_patch","input":"x"},
+			{"type":"custom_tool_call_output","call_id":"c2","output":"ok"}
+		]}`), &req))
+	require.NoError(t, req.Validate())
+
+	call, ok := req.Input.Items[1].ToolCallData.(CustomToolCall)
+	require.True(t, ok)
+	require.Equal(t, "c1", call.CallID)
+	require.Equal(t, "editor", *call.Namespace)
+	require.Equal(t, "*** Begin Patch", call.Input)
+
+	out, ok := req.Input.Items[2].ToolCallData.(CustomToolCallOutput)
+	require.True(t, ok)
+	require.True(t, out.Output.IsContent)
+
+	out, ok = req.Input.Items[4].ToolCallData.(CustomToolCallOutput)
+	require.True(t, ok)
+	require.Equal(t, "ok", out.Output.Text)
+}
+
+func TestCustomToolCall_OutputItemMarshal(t *testing.T) {
+	item := OutputItem{
+		Type: ItemTypeCustomToolCall,
+		ID:   "ctc_1",
+		ToolCallData: CustomToolCall{
+			Type: ItemTypeCustomToolCall, ID: "ctc_1", CallID: "c1",
+			Namespace: ptr.To("editor"), Name: "apply_patch", Input: "x",
+		},
+	}
+	out, err := json.Marshal(&item)
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"call_id":"c1"`)
+	require.Contains(t, string(out), `"namespace":"editor"`)
+}
+
+func TestUnmarshalTool_WebSearch(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type": "web_search",
+		"external_web_access": false,
+		"filters": {"allowed_domains": ["example.com"]},
+		"user_location": {"type": "approximate", "country": "US"},
+		"search_context_size": "low"
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	browserTool, ok := tool.(*BrowserSearchTool)
+	require.True(t, ok)
+	require.Equal(t, "web_search", browserTool.Type)
+	require.Equal(t, "low", ptr.Deref(browserTool.SearchContextSize))
+}
+
+func TestCreateRequest_CodexToolSet(t *testing.T) {
+	var req CreateRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"model": "m",
+		"instructions": "x",
+		"tool_choice": "auto",
+		"parallel_tool_calls": false,
+		"reasoning": null,
+		"store": false,
+		"stream": true,
+		"include": [],
+		"prompt_cache_key": "k",
+		"client_metadata": {"x-codex-installation-id": "i"},
+		"tools": [
+			{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}},
+			`+namespaceToolJSON+`,
+			{"type":"custom","name":"apply_patch","format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}},
+			{"type":"web_search","external_web_access":false},
+			{"type":"tool_search","execution":"client","description":"Find tools.","parameters":{"type":"object"}}
+		],
+		"input": [{"role":"user","content":[{"type":"input_text","text":"hi"}]}]
+	}`), &req))
+	require.NoError(t, req.Validate())
+	require.Len(t, req.Tools, 5)
+}
+
+func TestUnmarshalTool_ToolSearch(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type": "tool_search",
+		"execution": "client",
+		"description": "Search for tools.",
+		"parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	search, ok := tool.(*ToolSearchTool)
+	require.True(t, ok)
+	require.Equal(t, "client", search.Execution)
+	require.Equal(t, "Search for tools.", ptr.Deref(search.Description))
 }

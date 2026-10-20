@@ -107,7 +107,7 @@ struct Args {
     /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
-    /// Treat canary responses that generate this many tokens as runaway generation
+    /// Canary `max_tokens`. Generating more tokens than this is runaway generation; exact usage overrides the output estimate
     #[arg(long, default_value_t = 237, value_name = "TOKENS")]
     canary_max_generation_threshold: u32,
     /// Initial calibration request count; doubles after each completed load step

@@ -60,6 +60,15 @@ fn parse_function_status(status: &str) -> Option<FunctionStatus> {
     }
 }
 
+/// The gRPC status code an AutoscaleFunction call completed with, before any interpretation of
+/// the response body.
+fn rpc_outcome_code<T>(result: &Result<T, tonic::Status>) -> tonic::Code {
+    match result {
+        Ok(_) => tonic::Code::Ok,
+        Err(status) => status.code(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NvcfApiSettings {
     /// Base URL for the OAuth2 client API used for authentication
@@ -510,7 +519,10 @@ impl NvcfApiService {
             required_number_of_instances: deployment_info.required_number_of_instances,
         });
 
-        let response = match client.autoscale_function(request).await {
+        let rpc_result = client.autoscale_function(request).await;
+        metrics::record_nvcf_api_rpc("scale_function", rpc_outcome_code(&rpc_result));
+
+        let response = match rpc_result {
             Ok(response) => response.into_inner(),
             Err(status) => {
                 let duration = start_time.elapsed().as_secs_f64() * 1000.0;
@@ -538,10 +550,9 @@ impl NvcfApiService {
             Some(status) => status,
             None => {
                 let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                let error = NvcfApiError::UnknownError;
                 metrics::record_nvcf_api_request(
                     "scale_function",
-                    &error.to_short_string(),
+                    "unrecognized_function_status",
                     duration,
                 );
                 tracing::error!(
@@ -550,7 +561,7 @@ impl NvcfApiService {
                     deployment_info.function_version_id,
                     response.function_status
                 );
-                return Err(error);
+                return Err(NvcfApiError::UnknownError);
             }
         };
 
@@ -709,6 +720,32 @@ mod tests {
         assert_eq!(parse_function_status(""), None);
         assert_eq!(parse_function_status("SOME_NEW_STATUS"), None);
         assert_eq!(parse_function_status("active"), None);
+    }
+
+    #[test]
+    fn rpc_outcome_code_reports_ok_regardless_of_function_status() {
+        for function_status in ["ACTIVE", "DEGRADING", "DEPLOYING", ""] {
+            let result: Result<_, tonic::Status> = Ok(nvcf_proto::AutoscalerResponse {
+                function_status: function_status.to_string(),
+                ..Default::default()
+            });
+            assert_eq!(rpc_outcome_code(&result), tonic::Code::Ok);
+        }
+    }
+
+    #[test]
+    fn rpc_outcome_code_preserves_failed_status_code() {
+        for code in [
+            tonic::Code::NotFound,
+            tonic::Code::InvalidArgument,
+            tonic::Code::Unauthenticated,
+            tonic::Code::Unavailable,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Unknown,
+        ] {
+            let result: Result<(), _> = Err(tonic::Status::new(code, "failed"));
+            assert_eq!(rpc_outcome_code(&result), code);
+        }
     }
 
     #[test]

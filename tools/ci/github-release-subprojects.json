@@ -49,6 +49,18 @@
               ]
             }
           ]
+        },
+        {
+          "service": "nvca",
+          "values_files": [
+            {
+              "file": "environments/base.yaml",
+              "paths": [
+                "global.nvcaOperator.imageTag",
+                "global.nvcaOperator.selfManaged.nvcaVersion"
+              ]
+            }
+          ]
         }
       ]
     },
@@ -477,7 +489,13 @@
       "service_name": "helm-nvcf-api",
       "initial_version": "1.23.11",
       "deploys": [
-        "cloud-functions"
+        {
+          "service": "cloud-functions",
+          "values_paths": [
+            "api.image.tag"
+          ],
+          "app_version": true
+        }
       ]
     },
     {
@@ -495,6 +513,12 @@
       "id": "nvcf-ui",
       "path": "src/uis/nvcf-ui",
       "service_name": "nvcf-ui"
+    },
+    {
+      "id": "openai-compatible-sample",
+      "path": "examples/function-samples/openai-compatible-sample",
+      "service_name": "nvcf-openai-compatible-sample",
+      "initial_version": "5.0.0"
     }
   ]
 }

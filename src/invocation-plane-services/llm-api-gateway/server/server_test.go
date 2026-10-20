@@ -326,7 +326,7 @@ func TestNewWrapsEchoWithFinalWriteDeadline(t *testing.T) {
 	}
 	// e.Start would reset the handler to e and drop the final write
 	// deadline; main serves through Start, which keeps it.
-	if e.Server.Handler == http.Handler(e) {
+	if e.Server.Handler == http.Handler(e.Echo) {
 		t.Fatal("server handler is the bare Echo instance")
 	}
 }

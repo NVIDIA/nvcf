@@ -40,6 +40,7 @@ macro_rules! define_stargate_metrics {
         /// Per-process metrics with a private [`Registry`] that isolates parallel runtimes.
         #[derive(Debug)]
         pub struct StargateMetrics {
+            prefix: String,
             registry: Arc<Registry>,
             tls_identity: Arc<stargate_tls::TlsIdentityStatus>,
             $($counter: IntCounterVec,)*
@@ -82,6 +83,7 @@ macro_rules! define_stargate_metrics {
                     )?;
                 )*
                 Ok(Self {
+                    prefix: prefix.to_owned(),
                     registry,
                     tls_identity: stargate_tls::TlsIdentityStatus::new(),
                     $($counter,)*
@@ -100,20 +102,24 @@ define_stargate_metrics! {
         proxy_retries_total("proxy_retries_total", "Total number of proxy retries", ["routing_key", "model", "reason"]);
         routing_selections_total("routing_selections_total", "Total number of primary and ranked fallback cluster choices used for upstream attempts", ["routing_key", "model", "algorithm", "selection"]);
         routing_kv_free_token_fallback_selections_total("routing_kv_free_token_fallback_selections_total", "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility", ["routing_key", "model", "algorithm"]);
+        routing_session_selections_total("routing_session_selections_total", "Total number of cluster choices for session-classified requests by session state and whether the session's primary target was chosen", ["routing_key", "model", "algorithm", "session_state", "selection"]);
         proxy_retry_exhausted_total("proxy_retry_exhausted_total", "Total number of proxy requests that exhausted retry options", ["routing_key", "model", "reason"]);
         proxy_ambiguous_delivery_total("proxy_ambiguous_delivery_total", "Total number of proxy requests stopped because delivery may have occurred", []);
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
         tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        routing_expressions_total("routing_expressions_total", "Accepted routing expressions by algorithm and cache result", ["algorithm", "cache"]);
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
         proxy_duration_seconds("proxy_duration_seconds", "Time to first byte from upstream", ["routing_key", "model", "inference_server_id"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
         routing_duration_seconds("routing_duration_seconds", "Time spent selecting an inference server", ["routing_key", "model"], [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
+        routing_reservation_ttl_seconds("routing_reservation_ttl_seconds", "Soft TTL assigned to each routing reservation at dispatch; once that long has passed after the request is sent, a registration update from its backend ends it", ["routing_key", "model"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]);
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
+        routing_reservations_active("routing_reservations_active", "Routing reservations not yet released or pruned; a reservation counts until its backend reports at or after the soft TTL, or until the backend is removed", ["routing_key", "model"]);
         tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
 }
@@ -152,6 +158,13 @@ impl StargateMetrics {
                 .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()])
                 .inc_by(0);
         }
+        for algorithm in crate::load_balancer::LoadBalancerAlgorithm::ALL {
+            for cache in crate::load_balancer::dynamic_config::Outcome::ALL {
+                metrics
+                    .routing_expressions_total(&algorithm.to_string(), cache.as_str())
+                    .inc_by(0);
+            }
+        }
         Ok(metrics)
     }
 
@@ -183,6 +196,11 @@ impl StargateMetrics {
         self.registry.clone()
     }
 
+    /// Metric name prefix, for collectors registered after construction.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     // One row is one public accessor signature and its ordered Prometheus labels.
     #[rustfmt::skip]
     metric_accessors! {
@@ -191,15 +209,30 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, proxy_retries_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, routing_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, selection];
         GenericCounter<AtomicU64>, routing_kv_free_token_fallback_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str) => [routing_key.unwrap_or(""), model, algorithm];
+        GenericCounter<AtomicU64>, routing_session_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, session_state: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, session_state, selection];
         GenericCounter<AtomicU64>, proxy_retry_exhausted_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, proxy_ambiguous_delivery_total() => [];
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
         GenericCounter<AtomicU64>, tls_reloads_total(outcome: stargate_tls::TlsReloadOutcome) => [stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()];
+        GenericCounter<AtomicU64>, routing_expressions_total(algorithm: &str, cache: &str) => [algorithm, cache];
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
+        Histogram, routing_reservation_ttl_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
+    }
+
+    pub(crate) fn inc_routing_reservations_active(&self, routing_key: Option<&str>, model: &str) {
+        self.routing_reservations_active
+            .with_label_values(&[routing_key.unwrap_or(""), model])
+            .inc();
+    }
+
+    pub(crate) fn dec_routing_reservations_active(&self, routing_key: Option<&str>, model: &str) {
+        self.routing_reservations_active
+            .with_label_values(&[routing_key.unwrap_or(""), model])
+            .dec();
     }
 
     #[inline]
@@ -259,6 +292,7 @@ pub async fn start_metrics_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::load_balancer::routing_methods::{UPDATE_HINT, routing_methods};
 
     impl StargateMetrics {
         fn gather_text(&self) -> anyhow::Result<String> {
@@ -323,6 +357,21 @@ mod tests {
     }
 
     #[test]
+    fn routing_reservation_metrics_use_routing_target_labels() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        metrics.inc_routing_reservations_active(Some("routing-a"), "model-a");
+        metrics
+            .routing_reservation_ttl_seconds(Some("routing-a"), "model-a")
+            .observe(0.06);
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        assert!(body.contains(
+            "stargate_routing_reservations_active{model=\"model-a\",routing_key=\"routing-a\"} 1"
+        ));
+        assert!(body.contains("stargate_routing_reservation_ttl_seconds_count{model=\"model-a\",routing_key=\"routing-a\"} 1"));
+    }
+
+    #[test]
     fn default_metrics_prefix_keeps_stargate_metric_names() {
         let metrics = StargateMetrics::new().expect("metrics should initialize");
         let initial = metrics.gather_text().expect("metrics should encode");
@@ -337,6 +386,38 @@ mod tests {
             body.contains("stargate_requests_total"),
             "default stargate requests counter missing:\n{body}"
         );
+    }
+
+    #[test]
+    fn routing_expression_series_start_at_zero() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let mut series = metrics
+            .registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                assert_eq!(metric.get_counter().value(), 0.0);
+                metric
+                    .get_label()
+                    .iter()
+                    .map(|label| label.value().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+
+        // Every routing method gets a series, so the label list cannot drift.
+        let mut expected = Vec::new();
+        for algorithm in routing_methods().names() {
+            for cache in ["hit", "build", "rebuild"] {
+                expected.push(format!("{algorithm}|{cache}"));
+            }
+        }
+        expected.sort();
+        assert_eq!(series, expected, "{UPDATE_HINT}");
     }
 
     #[test]

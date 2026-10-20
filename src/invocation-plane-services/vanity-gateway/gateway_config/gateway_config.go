@@ -33,15 +33,48 @@ type SessionTimeoutSeconds int
 type ShadowSamplingMethod string
 
 const (
-	ShadowSamplingMethodRandom       ShadowSamplingMethod = "random"
-	ShadowSamplingMethodPerBearerKey ShadowSamplingMethod = "perBearerKey"
+	ShadowSamplingMethodRandom           ShadowSamplingMethod = "random"
+	ShadowSamplingMethodPerBearerKey     ShadowSamplingMethod = "perBearerKey"
+	ShadowSamplingMethodPromptCacheKey   ShadowSamplingMethod = "promptCacheKey"
+	ShadowSamplingMethodFirstMessageHash ShadowSamplingMethod = "firstMessageHash"
+	DefaultPromptCacheKeyHeader                               = "x-multi-turn-session-id"
+	ClaudeCodeSessionIDHeader                                 = "x-claude-code-session-id"
 )
 
+type ShadowSamplingMethods []ShadowSamplingMethod
+
+func (m *ShadowSamplingMethods) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "null" {
+		*m = nil
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var methods []ShadowSamplingMethod
+		if err := json.Unmarshal(data, &methods); err != nil {
+			return fmt.Errorf("must be a string or list of strings: %w", err)
+		}
+		*m = methods
+		return nil
+	}
+
+	var method ShadowSamplingMethod
+	if err := json.Unmarshal(data, &method); err != nil {
+		return fmt.Errorf("must be a string or list of strings: %w", err)
+	}
+	if method == "" {
+		*m = nil
+		return nil
+	}
+	*m = ShadowSamplingMethods{method}
+	return nil
+}
+
 type ShadowConfig struct {
-	ModelName                string               `json:"modelName" yaml:"modelName"`
-	Percentage               *int                 `json:"percentage,omitempty" yaml:"percentage,omitempty"`
-	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
-	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
+	ModelName                string                `json:"modelName" yaml:"modelName"`
+	Percentage               *int                  `json:"percentage,omitempty" yaml:"percentage,omitempty"`
+	SamplingMethod           ShadowSamplingMethods `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
+	CancelOnClientDisconnect bool                  `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
 }
 
 // decodeShadowConfig rejects unknown and null keys, which encoding/json would
@@ -131,8 +164,9 @@ type ModelFunctionDetails struct {
 	ShadowModelName                string                `json:"shadowModelName,omitempty" yaml:"shadowModelName,omitempty"`
 	ShadowModelNames               []string              `json:"shadowModelNames,omitempty" yaml:"shadowModelNames,omitempty"`
 	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty" yaml:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
-	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty" yaml:"shadowSamplingMethod,omitempty"`
+	ShadowSamplingMethod           ShadowSamplingMethods `json:"shadowSamplingMethod,omitempty" yaml:"shadowSamplingMethod,omitempty"`
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
+	PromptCacheKeyHeaders          []string              `json:"promptCacheKeyHeaders,omitempty" yaml:"promptCacheKeyHeaders,omitempty"`
 	FunctionType                   FunctionType          `json:"functionType,omitempty"`
 	shadowsPresent                 bool
 	shadowsNotList                 bool
@@ -169,6 +203,10 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 			strings.EqualFold(field, "shadowSamplingMethod"),
 			strings.EqualFold(field, "shadowCancelOnClientDisconnect"):
 			legacyShadowFieldsPresent = true
+		case strings.EqualFold(field, "promptCacheKeyHeaders"):
+			if isJSONNull(raw) {
+				return fmt.Errorf("decode model %q: promptCacheKeyHeaders must not be null", modelName)
+			}
 		}
 	}
 
@@ -255,7 +293,7 @@ func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
 		shadows = append(shadows, ShadowConfig{
 			ModelName:                modelName,
 			Percentage:               cloneInt(m.ShadowPercentage),
-			SamplingMethod:           m.ShadowSamplingMethod,
+			SamplingMethod:           slices.Clone(m.ShadowSamplingMethod),
 			CancelOnClientDisconnect: m.ShadowCancelOnClientDisconnect,
 		})
 	}
@@ -264,7 +302,27 @@ func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
 
 func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
 	shadow.Percentage = cloneInt(shadow.Percentage)
+	shadow.SamplingMethod = slices.Clone(shadow.SamplingMethod)
 	return shadow
+}
+
+// EffectivePromptCacheKeyHeadersForSection returns the configured headers, or
+// the default for the section when none are set. Anthropic Messages has no
+// prompt_cache_key body field, so its default also reads the Claude Code
+// session header, in the same order the LLM Gateway uses for Messages
+// affinity.
+func (m ModelFunctionDetails) EffectivePromptCacheKeyHeadersForSection(sectionName string) []string {
+	if m.PromptCacheKeyHeaders == nil && sectionName == anthropicMessagesSection {
+		return []string{DefaultPromptCacheKeyHeader, ClaudeCodeSessionIDHeader}
+	}
+	return m.EffectivePromptCacheKeyHeaders()
+}
+
+func (m ModelFunctionDetails) EffectivePromptCacheKeyHeaders() []string {
+	if m.PromptCacheKeyHeaders != nil {
+		return slices.Clone(m.PromptCacheKeyHeaders)
+	}
+	return []string{DefaultPromptCacheKeyHeader}
 }
 
 func cloneInt(value *int) *int {
@@ -279,7 +337,7 @@ func (m ModelFunctionDetails) hasLegacyShadowConfig() bool {
 	return m.ShadowModelName != "" ||
 		len(m.ShadowModelNames) > 0 ||
 		m.ShadowPercentage != nil ||
-		m.ShadowSamplingMethod != "" ||
+		m.ShadowSamplingMethod != nil ||
 		m.ShadowCancelOnClientDisconnect
 }
 
@@ -344,8 +402,8 @@ const (
 	FunctionTypeLLM     FunctionType = "LLM"
 )
 
-// llmGatewaySections are the OpenAI-compatible sections the LLM Gateway serves.
-var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings"}
+// llmGatewaySections are the native protocol sections the LLM Gateway serves.
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "anthropicMessages"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -358,7 +416,8 @@ type V2Config struct {
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
 	} `json:"openai"`
-	Vanity map[string]VanityEntry `json:"vanity"`
+	AnthropicMessages map[string]ModelFunctionDetails `json:"anthropicMessages"`
+	Vanity            map[string]VanityEntry          `json:"vanity"`
 }
 
 // sharedNotifications is a package-level channel shared across all config instances.
@@ -430,12 +489,12 @@ func shadowTargetLocation(location string, index int, perTarget bool) string {
 	return fmt.Sprintf("%s.shadows[%d]", location, index)
 }
 
-func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+func validateOpenAIShadowConfig(location string, sectionName string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
 	if err := validateShadowFormShape(location, entry); err != nil {
 		return nil, err
 	}
 	if entry.hasShadowsField() {
-		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
+		if err := validatePerTargetShadowConfigs(location, sectionName, entry.Shadows); err != nil {
 			return nil, err
 		}
 		return entry.EffectiveShadows(), nil
@@ -446,7 +505,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
 
-	if err := validateShadowSamplingMethod(location, entry.ShadowSamplingMethod); err != nil {
+	if err := validateSamplingMethods(location, "shadowSamplingMethod", sectionName, entry.ShadowSamplingMethod); err != nil {
 		return nil, err
 	}
 
@@ -461,7 +520,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		if entry.ShadowPercentage != nil {
 			return nil, fmt.Errorf("%s: shadowPercentage requires at least one shadow target", location)
 		}
-		if entry.ShadowSamplingMethod != "" {
+		if entry.ShadowSamplingMethod != nil {
 			return nil, fmt.Errorf("%s: shadowSamplingMethod requires at least one shadow target", location)
 		}
 		if entry.ShadowCancelOnClientDisconnect {
@@ -472,7 +531,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 	return entry.EffectiveShadows(), nil
 }
 
-func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) error {
+func validatePerTargetShadowConfigs(location string, sectionName string, shadows []ShadowConfig) error {
 	seen := make(map[string]struct{}, len(shadows))
 	for i, shadow := range shadows {
 		shadowLocation := shadowTargetLocation(location, i, true)
@@ -490,32 +549,53 @@ func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) err
 				return fmt.Errorf("%s: percentage must be between 1 and 100", shadowLocation)
 			}
 		}
-		if err := validateSamplingMethod(shadowLocation, "samplingMethod", shadow.SamplingMethod); err != nil {
+		if err := validateSamplingMethods(shadowLocation, "samplingMethod", sectionName, shadow.SamplingMethod); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateShadowSamplingMethod(location string, method ShadowSamplingMethod) error {
-	return validateSamplingMethod(location, "shadowSamplingMethod", method)
+func validateSamplingMethods(location string, fieldName string, sectionName string, methods ShadowSamplingMethods) error {
+	if methods == nil {
+		return nil
+	}
+	if len(methods) == 0 {
+		return fmt.Errorf("%s: %s must not be an empty list", location, fieldName)
+	}
+
+	seen := make(map[ShadowSamplingMethod]struct{}, len(methods))
+	for i, method := range methods {
+		switch method {
+		case ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
+		case ShadowSamplingMethodPromptCacheKey, ShadowSamplingMethodFirstMessageHash:
+			if !supportsRequestBodySampling(sectionName) {
+				return fmt.Errorf("%s: %s method %q is unsupported for %s", location, fieldName, method, sectionName)
+			}
+		default:
+			return fmt.Errorf("%s: %s contains unknown method %q", location, fieldName, method)
+		}
+		if _, ok := seen[method]; ok {
+			return fmt.Errorf("%s: %s contains duplicate method %q", location, fieldName, method)
+		}
+		seen[method] = struct{}{}
+		if method == ShadowSamplingMethodRandom && i != len(methods)-1 {
+			return fmt.Errorf("%s: %s method %q must be last", location, fieldName, method)
+		}
+	}
+	return nil
 }
 
-func validateSamplingMethod(location string, fieldName string, method ShadowSamplingMethod) error {
-	switch method {
-	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
-		return nil
-	default:
-		return fmt.Errorf(
-			"%s: %s must be %q or %q",
-			location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey,
-		)
-	}
+const anthropicMessagesSection = "anthropicMessages"
+
+func supportsRequestBodySampling(sectionName string) bool {
+	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses" ||
+		sectionName == anthropicMessagesSection
 }
 
 func (c *GatewayConfig) Validate() error {
-	for sectionName, entries := range c.openAISections() {
-		if err := validateOpenAISection(sectionName, entries); err != nil {
+	for sectionName, entries := range c.modelSections() {
+		if err := validateModelSection(sectionName, entries); err != nil {
 			return err
 		}
 	}
@@ -523,48 +603,59 @@ func (c *GatewayConfig) Validate() error {
 	return c.validateVanityConfig()
 }
 
-func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDetails {
+func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetails {
 	return map[string]map[string]ModelFunctionDetails{
-		"chatCompletions":  c.OpenAI.ChatCompletions,
-		"completions":      c.OpenAI.Completions,
-		"embeddings":       c.OpenAI.Embeddings,
-		"responses":        c.OpenAI.Responses,
-		"imageGenerations": c.OpenAI.ImageGenerations,
-		"imageEdits":       c.OpenAI.ImageEdits,
-		"imageVariations":  c.OpenAI.ImageVariations,
+		"openai.chatCompletions":  c.OpenAI.ChatCompletions,
+		"openai.completions":      c.OpenAI.Completions,
+		"openai.embeddings":       c.OpenAI.Embeddings,
+		"openai.responses":        c.OpenAI.Responses,
+		anthropicMessagesSection:  c.AnthropicMessages,
+		"openai.imageGenerations": c.OpenAI.ImageGenerations,
+		"openai.imageEdits":       c.OpenAI.ImageEdits,
+		"openai.imageVariations":  c.OpenAI.ImageVariations,
 	}
 }
 
-func validateOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
-	modelNames, err := collectOpenAIModelNames(sectionName, entries)
+func sectionEndpoint(sectionName string) string {
+	if _, endpoint, ok := strings.Cut(sectionName, "."); ok {
+		return endpoint
+	}
+	return sectionName
+}
+
+func validateModelSection(sectionName string, entries map[string]ModelFunctionDetails) error {
+	modelNames, err := collectModelNames(sectionName, entries)
 	if err != nil {
 		return err
 	}
 
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
+		location := sectionName + "." + modelKey
 		if entry.SessionTimeout < 0 {
 			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
 		}
 		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
 			return err
 		}
-		if err := validateFunctionType(location, sectionName, entry); err != nil {
+		if err := validateFunctionType(location, sectionEndpoint(sectionName), entry); err != nil {
+			return err
+		}
+		if err := validatePromptCacheKeyHeaders(location, sectionName, entry.PromptCacheKeyHeaders); err != nil {
 			return err
 		}
 	}
 
-	if isMultipartOpenAISection(sectionName) {
+	if isMultipartOpenAISection(sectionEndpoint(sectionName)) {
 		return validateMultipartOpenAISection(sectionName, entries)
 	}
-	return validateOpenAIShadowTargets(sectionName, entries, modelNames)
+	return validateModelShadowTargets(sectionName, entries, modelNames)
 }
 
-func collectOpenAIModelNames(sectionName string, entries map[string]ModelFunctionDetails) (map[string]struct{}, error) {
+func collectModelNames(sectionName string, entries map[string]ModelFunctionDetails) (map[string]struct{}, error) {
 	modelNames := make(map[string]struct{}, len(entries))
 	for entryKey, entry := range entries {
 		if entry.ModelName == "" {
-			return nil, fmt.Errorf("openai.%s.%s: modelName is required", sectionName, entryKey)
+			return nil, fmt.Errorf("%s.%s: modelName is required", sectionName, entryKey)
 		}
 		modelNames[entry.ModelName] = struct{}{}
 	}
@@ -578,7 +669,7 @@ func isMultipartOpenAISection(sectionName string) bool {
 
 func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
+		location := sectionName + "." + modelKey
 		if err := validateShadowFormShape(location, entry); err != nil {
 			return err
 		}
@@ -589,10 +680,10 @@ func validateMultipartOpenAISection(sectionName string, entries map[string]Model
 	return nil
 }
 
-func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
+func validateModelShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
 	for modelKey, entry := range entries {
-		location := "openai." + sectionName + "." + modelKey
-		shadowTargets, err := validateOpenAIShadowConfig(location, entry)
+		location := sectionName + "." + modelKey
+		shadowTargets, err := validateOpenAIShadowConfig(location, sectionName, entry)
 		if err != nil {
 			return err
 		}
@@ -619,7 +710,7 @@ func validateShadowTargetNames(
 			return fmt.Errorf("%s: shadow target cannot reference the same model", shadowLocation)
 		}
 		if _, ok := modelNames[shadow.ModelName]; !ok {
-			return fmt.Errorf("%s: shadow target must reference another model in openai.%s", shadowLocation, sectionName)
+			return fmt.Errorf("%s: shadow target must reference another model in %s", shadowLocation, sectionName)
 		}
 	}
 	return nil
@@ -649,6 +740,34 @@ var reservedCustomHeaderNames = map[string]struct{}{
 // rather than value, so a configured value would fail every request.
 var llmGatewayReservedCustomHeaderNames = map[string]struct{}{
 	"x-priority": {},
+}
+
+func validatePromptCacheKeyHeaders(location string, sectionName string, headers []string) error {
+	if headers == nil {
+		return nil
+	}
+	if !supportsRequestBodySampling(sectionName) {
+		return fmt.Errorf("%s: promptCacheKeyHeaders is unsupported for %s", location, sectionName)
+	}
+
+	seenNames := make(map[string]string, len(headers))
+	for _, name := range headers {
+		if name == "" {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain empty header names", location)
+		}
+		if !isHTTPFieldName(name) {
+			return fmt.Errorf("%s: promptCacheKeyHeaders header %q has invalid HTTP field name", location, name)
+		}
+		lowerName := strings.ToLower(name)
+		if lowerName == "authorization" || lowerName == "proxy-authorization" {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain authentication header %q", location, name)
+		}
+		if existingName, ok := seenNames[lowerName]; ok {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain duplicate header names %q and %q", location, existingName, name)
+		}
+		seenNames[lowerName] = name
+	}
+	return nil
 }
 
 func validateCustomHeaders(location string, headers CustomHeaders) error {
@@ -771,7 +890,7 @@ func validateFunctionType(location string, sectionName string, entry ModelFuncti
 
 // HasLLMGatewayRoute reports whether any model is routed to the LLM Gateway.
 func (c *GatewayConfig) HasLLMGatewayRoute() bool {
-	for _, entries := range c.openAISections() {
+	for _, entries := range c.modelSections() {
 		for _, entry := range entries {
 			if entry.TargetsLLMGateway() {
 				return true

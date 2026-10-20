@@ -82,7 +82,7 @@ accounts: # Default NVCF account configuration
   limits:
     maxFunctions: 10
     maxTasks: 10 # Note: Tasks (NVCT) are not currently supported for EA
-    maxTelemetries: 10 # Note: BYOO is not currently supported for EA
+    maxTelemetries: 10
     maxRegistryCreds: 10
 
 # These static global values are processed in the values template

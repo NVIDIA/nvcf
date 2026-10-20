@@ -261,6 +261,16 @@ After configuring the CLI, verify connectivity:
 # [SUCCESS] Admin token generated and saved
 ```
 
+<Note>
+`nvcf-cli init` and `nvcf-cli refresh` both mint their token through Admin Issuer Proxy, which a
+self-hosted deployment can turn off. Where it is disabled, both commands fail with
+`API error 404` and there is no flag to supply a token you already hold. Export `NVCF_TOKEN`, or set
+`token` in your config file, with a token from your own identity provider instead — the CLI reads
+both ahead of the state file `init` writes. See
+[Disabling Admin Issuer Proxy](../self-managed/control-plane-operations.md).
+
+</Note>
+
 If you see a 404 error, verify:
 
 1. The `api_keys_host` value matches your HTTPRoute hostname
@@ -749,7 +759,7 @@ All `function create` flags:
 | `--secrets` | Secrets in `name=value` format (repeatable) |
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
-| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=METHOD[;PARAM=VALUE...],tokenRateLimit=LIMIT` format (repeatable). The CLI forwards `routingMethod` unchanged; the API checks it. Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
 | `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
 | `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format. Repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
@@ -799,7 +809,7 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name, optionally followed by tuning parameters, such as `pulsar;seed=stable-a`. The CLI forwards the value unchanged and prints the API error for a malformed value. For algorithms, parameters, and errors, see [LLM Request Router Load Balancing](../self-managed/llm-request-router-load-balancing.md#tune-a-model-with-a-routing-expression).
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
 
