@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
 # gazelle:prefix github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
@@ -26,6 +27,7 @@ go_oci_image(
     base = "@distroless_go",
     binary = "//src/invocation-plane-services/llm-api-gateway/cmd/llm-api-gateway:llm-api-gateway",
     entrypoint = ["/llm-api-gateway"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
 )
 
@@ -34,5 +36,26 @@ go_oci_image(
     base = "@distroless_go",
     binary = "//src/invocation-plane-services/llm-api-gateway/cmd/llm-api-gateway-rate-limit-sync-worker:llm-api-gateway-rate-limit-sync-worker",
     entrypoint = ["/llm-api-gateway-rate-limit-sync-worker"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
+)
+
+go_test(
+    name = "rate_limit_sync_worker_image_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :rate_limit_sync_worker_image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":rate_limit_sync_worker_image_index"],
 )
