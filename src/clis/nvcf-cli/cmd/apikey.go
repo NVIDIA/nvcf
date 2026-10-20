@@ -292,9 +292,12 @@ func runAPIKeyGenerate(cmd *cobra.Command, args []string) error {
 				logging.Info("Validating %s API key...", g.Service)
 			}
 			var verr error
-			if g.Service == "task" {
+			switch g.Service {
+			case "task":
 				verr = validateNVCTAPIKey(config, g.Key)
-			} else {
+			case "event-ledger":
+				verr = validateEventLedgerAPIKey(config, g.Key)
+			default:
 				verr = validateAPIKey(config, g.Key)
 			}
 			if verr != nil {
@@ -467,6 +470,30 @@ func validateNVCTAPIKey(config *client.Config, apiKey string) error {
 		ServiceID:     getConfigValueWithDefault("api_keys_nvct_service_id", "nvidia-cloud-tasks-ncp-service-id-nvcttasks"),
 		IssuerService: getConfigValueWithDefault("api_keys_nvct_issuer_service", "nvct-api"),
 		OwnerID:       getConfigValueWithDefault("api_keys_nvct_owner_id", "svc@nvct-api.local"),
+		JWTToken:      config.Token,
+		HostHeader:    getConfigValueWithDefault("api_keys_host", ""),
+		Debug:         config.Debug,
+	}
+	apiKeysClient := apikeys.NewClient(apiKeysConfig)
+	valid, err := apiKeysClient.ValidateAPIKey(ctx, apiKey)
+	if err != nil {
+		return fmt.Errorf("API key validation failed: %w", err)
+	}
+	if !valid {
+		return fmt.Errorf("API key validation returned not allowed")
+	}
+	return nil
+}
+
+// validateEventLedgerAPIKey validates an Event Ledger key against the Event
+// Ledger audience.
+func validateEventLedgerAPIKey(config *client.Config, apiKey string) error {
+	ctx := context.Background()
+	apiKeysConfig := &apikeys.Config{
+		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
+		ServiceID:     getConfigValueWithDefault("api_keys_event_ledger_service_id", "nvidia-event-ledger-ncp-service-id-ckozoh6f"),
+		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
+		OwnerID:       getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local"),
 		JWTToken:      config.Token,
 		HostHeader:    getConfigValueWithDefault("api_keys_host", ""),
 		Debug:         config.Debug,

@@ -143,6 +143,7 @@ func configureApikeyTest(t *testing.T, srvURL string) {
 	t.Setenv("api_keys_service_url", srvURL)
 	t.Setenv("API_KEYS_SERVICE_ID", "nvcf-test-service-id")
 	t.Setenv("api_keys_nvct_service_id", "nvct-test-service-id")
+	t.Setenv("api_keys_event_ledger_service_id", "event-ledger-test-service-id")
 	t.Setenv("API_KEYS_ISSUER_SERVICE", "nvcf-api")
 	t.Setenv("api_keys_nvct_issuer_service", "nvct-api")
 }
@@ -236,7 +237,7 @@ func TestApikeyGenerate_EventLedgerUsesEventLedgerAudience(t *testing.T) {
 	require.NoError(t, runAPIKeyGenerate(nil, nil))
 
 	require.Len(t, *keyIssuerIDs, 1, "expected exactly one key generation call")
-	assert.Equal(t, "nvidia-event-ledger-ncp-service-id-ckozoh6f", (*keyIssuerIDs)[0],
+	assert.Equal(t, "event-ledger-test-service-id", (*keyIssuerIDs)[0],
 		"Event Ledger key must be minted with the Event Ledger service ID, not the NVCF function-key ID")
 }
 
@@ -478,6 +479,26 @@ func TestApikeyGenerate_ValidateFunctionKeyUsesNVCFAudience(t *testing.T) {
 		"function key validation must use NVCF audience")
 }
 
+// The Event Ledger key must be validated against Event Ledger's own audience,
+// not the general NVCF function-key audience, or the real service rejects
+// the introspect call with "audience_service_id invalid" even though the key
+// works.
+func TestApikeyGenerate_ValidateEventLedgerKeyUsesEventLedgerAudience(t *testing.T) {
+	resetApikeyFlags(t)
+	srv, _, audiences := fakeAPIKeysServer(t)
+	configureApikeyTest(t, srv.URL)
+
+	apikeyFor = "event-ledger"
+	apikeyValidate = true
+	apikeyExpiresIn = "1h"
+
+	require.NoError(t, runAPIKeyGenerate(nil, nil))
+
+	require.Len(t, *audiences, 1, "expected one introspect call")
+	assert.Equal(t, "event-ledger-test-service-id", (*audiences)[0],
+		"Event Ledger key validation must use the Event Ledger audience, not NVCF")
+}
+
 func TestApikeyGenerate_ValidateBothKeysUsesCorrectAudiences(t *testing.T) {
 	resetApikeyFlags(t)
 	srv, _, audiences := fakeAPIKeysServer(t)
@@ -492,6 +513,7 @@ func TestApikeyGenerate_ValidateBothKeysUsesCorrectAudiences(t *testing.T) {
 	require.Len(t, *audiences, 3, "expected three introspect calls (function + task + event-ledger)")
 	assert.Contains(t, *audiences, "nvcf-test-service-id", "function key must use NVCF audience")
 	assert.Contains(t, *audiences, "nvct-test-service-id", "task key must use NVCT audience")
+	assert.Contains(t, *audiences, "event-ledger-test-service-id", "event-ledger key must use the Event Ledger audience")
 }
 
 func TestApikeyGenerate_FunctionKeyPersistedWhenTaskKeyFails(t *testing.T) {
