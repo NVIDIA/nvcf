@@ -99,7 +99,7 @@ ddcsIPAllowList: ""
 ## @section BYOO Configuration
 ## @param byoo.resources Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.
 ## @param byoo.logChunking BYOO log chunking overrides: `maxPayloadBytes` (maximum log chunk payload size in bytes) and `dryRun` (record chunking metrics without modifying log payloads). Leave unset to keep the agent's built-in defaults.
-## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
+## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides. `platformMetricsFederation.target` (host:port serving Prometheus `/federate`) and `platformMetricsFederation.enabled` configure the platform metrics federation scrape. Self-managed clusters disable federation unless either key is set.
 ## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.
 ## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.
 byoo:
@@ -111,6 +111,14 @@ byoo:
   #   maxPayloadBytes: 262144
   #   dryRun: false
   otelCollector: {}
+  # Example:
+  #
+  # otelCollector:
+  #   # Federate platform metrics (worker, NVCA, cAdvisor, kube-state-metrics,
+  #   # and DCGM) for each workload from this Prometheus-compatible server.
+  #   # Set enabled: false instead to export only workload signals.
+  #   platformMetricsFederation:
+  #     target: vmsingle.monitoring.svc.cluster.local:8428
   additionalResourceOverhead: {}
   fluentbit:
     resources: {}
@@ -300,8 +308,14 @@ agent:
   byooOtelCollector:
     imageRepository: ""
     imageTag: "0.160.0-nv-0.2.5"
+  ## @param agent.byooFluentBit.imageRepository Optional BYOO Fluent Bit image repository, including the registry. If unset, NVCA uses its built-in upstream Fluent Bit image.
+  ## @param agent.byooFluentBit.imageTag BYOO Fluent Bit image tag. Required when agent.byooFluentBit.imageRepository is set.
+  byooFluentBit:
+    imageRepository: ""
+    imageTag: ""
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
+  ##                 BYOO_FLUENTBIT_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
   ## Example:
   ##   functionEnvOverrides:
@@ -311,6 +325,7 @@ agent:
   functionEnvOverrides: {}
   ## Environment variable overrides for task workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
+  ##                 BYOO_FLUENTBIT_CONTAINER,
   ##                 ESS_AGENT_CONTAINER, TASK_CONTAINER
   ## Example:
   ##   taskEnvOverrides:

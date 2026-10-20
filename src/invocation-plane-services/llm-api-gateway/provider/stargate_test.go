@@ -42,7 +42,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
@@ -279,7 +278,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -295,7 +294,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -535,7 +534,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 					CreatedAt:         123,
 					Model:             "choice-model",
 					SystemFingerprint: ptr.To(fingerprint),
-					ServiceTier:       servicetier.Auto,
+					ServiceTier:       "auto",
 					Choices: []models.ChatCompletionChunkChoice{
 						{
 							Index: 1,
@@ -586,7 +585,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 	require.Equal(t, int64(123), response.CreatedAt)
 	require.Equal(t, "choice-model", response.Model)
 	require.Equal(t, fingerprint, ptr.Deref(response.SystemFingerprint))
-	require.Equal(t, servicetier.Auto, response.ServiceTier)
+	require.Equal(t, "auto", response.ServiceTier)
 	require.Len(t, response.Choices, 2)
 	require.Equal(t, uint32(0), response.Choices[0].Index)
 	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
@@ -880,7 +879,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -896,7 +895,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,

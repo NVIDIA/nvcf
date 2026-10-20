@@ -38,6 +38,7 @@ const (
 	ShadowSamplingMethodPromptCacheKey   ShadowSamplingMethod = "promptCacheKey"
 	ShadowSamplingMethodFirstMessageHash ShadowSamplingMethod = "firstMessageHash"
 	DefaultPromptCacheKeyHeader                               = "x-multi-turn-session-id"
+	ClaudeCodeSessionIDHeader                                 = "x-claude-code-session-id"
 )
 
 type ShadowSamplingMethods []ShadowSamplingMethod
@@ -303,6 +304,18 @@ func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
 	shadow.Percentage = cloneInt(shadow.Percentage)
 	shadow.SamplingMethod = slices.Clone(shadow.SamplingMethod)
 	return shadow
+}
+
+// EffectivePromptCacheKeyHeadersForSection returns the configured headers, or
+// the default for the section when none are set. Anthropic Messages has no
+// prompt_cache_key body field, so its default also reads the Claude Code
+// session header, in the same order the LLM Gateway uses for Messages
+// affinity.
+func (m ModelFunctionDetails) EffectivePromptCacheKeyHeadersForSection(sectionName string) []string {
+	if m.PromptCacheKeyHeaders == nil && sectionName == anthropicMessagesSection {
+		return []string{DefaultPromptCacheKeyHeader, ClaudeCodeSessionIDHeader}
+	}
+	return m.EffectivePromptCacheKeyHeaders()
 }
 
 func (m ModelFunctionDetails) EffectivePromptCacheKeyHeaders() []string {
@@ -573,8 +586,11 @@ func validateSamplingMethods(location string, fieldName string, sectionName stri
 	return nil
 }
 
+const anthropicMessagesSection = "anthropicMessages"
+
 func supportsRequestBodySampling(sectionName string) bool {
-	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses"
+	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses" ||
+		sectionName == anthropicMessagesSection
 }
 
 func (c *GatewayConfig) Validate() error {
@@ -593,7 +609,7 @@ func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetai
 		"openai.completions":      c.OpenAI.Completions,
 		"openai.embeddings":       c.OpenAI.Embeddings,
 		"openai.responses":        c.OpenAI.Responses,
-		"anthropicMessages":       c.AnthropicMessages,
+		anthropicMessagesSection:  c.AnthropicMessages,
 		"openai.imageGenerations": c.OpenAI.ImageGenerations,
 		"openai.imageEdits":       c.OpenAI.ImageEdits,
 		"openai.imageVariations":  c.OpenAI.ImageVariations,

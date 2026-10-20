@@ -121,10 +121,10 @@ func TestShadowSamplingDecisionsMetricInitializesAndCountsDecidingMethod(t *test
 
 	initializeShadowSamplingMetrics()
 	initial := collectShadowSamplingDecisionCounts(t, reader)
-	// random and perBearerKey on three endpoint labels, plus the two
-	// request-body methods on chatCompletions and responses, each admitted and
-	// rejected.
-	require.Len(t, initial, (2*3+2*2)*2)
+	// random and perBearerKey on four endpoint labels, plus the two
+	// request-body methods on chatCompletions, responses, and messages, each
+	// admitted and rejected.
+	require.Len(t, initial, (2*4+2*3)*2)
 	for labels, count := range initial {
 		assert.Zero(t, count, "unexpected initial count for %+v", labels)
 	}
@@ -161,6 +161,18 @@ func TestShadowSamplingDecisionsMetricInitializesAndCountsDecidingMethod(t *test
 	assert.Equal(t, []string{"shadow-a", "shadow-b", "shadow-always"}, shadowModelNames(admittedShadowsWithSampler(shadows, unkeyed)))
 	assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodRandom}, unkeyed.decidedMethods)
 
+	// A Messages session header decides on the messages endpoint label.
+	messagesReq := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	messagesReq.Header.Set(config.ClaudeCodeSessionIDHeader, "session-123")
+	messages := newShadowRequestSampler(
+		messagesReq,
+		[]byte(`{}`),
+		shadowSamplingEndpointMessages,
+		config.ModelFunctionDetails{}.EffectivePromptCacheKeyHeadersForSection("anthropicMessages"),
+		fixedRandomBucket(0),
+	)
+	assert.Equal(t, []string{"shadow-a", "shadow-always"}, shadowModelNames(admittedShadowsWithSampler(shadows, messages)))
+
 	counts := collectShadowSamplingDecisionCounts(t, reader)
 	require.Len(t, counts, len(initial), "decisions must not add label combinations")
 	nonzero := map[shadowSamplingDecisionLabels]int64{}
@@ -173,6 +185,8 @@ func TestShadowSamplingDecisionsMetricInitializesAndCountsDecidingMethod(t *test
 		{endpoint: "chatCompletions", method: "promptCacheKey", outcome: "admitted"}: 1,
 		{endpoint: "chatCompletions", method: "promptCacheKey", outcome: "rejected"}: 1,
 		{endpoint: "responses", method: "random", outcome: "admitted"}:               2,
+		{endpoint: "messages", method: "promptCacheKey", outcome: "admitted"}:        1,
+		{endpoint: "messages", method: "promptCacheKey", outcome: "rejected"}:        1,
 	}, nonzero)
 }
 

@@ -21,6 +21,13 @@
       "name": "LZ4 Java Compression",
       "url": "https://github.com/yawkat/lz4-java"
     },
+    "at.yawk.lz4:lz4-java:1.11.4": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "LZ4 Java Compression",
+      "url": "https://github.com/yawkat/lz4-java"
+    },
     "ch.qos.logback:logback-classic:1.5.34": {
       "licenses": [
         "EPL-2.0",
@@ -97,6 +104,13 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "com.fasterxml.jackson.core:jackson-core:2.21.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "com.fasterxml.jackson.core:jackson-databind:2.21.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -105,6 +119,13 @@
       "url": "https://github.com/FasterXML/jackson"
     },
     "com.fasterxml.jackson.core:jackson-databind:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "com.fasterxml.jackson.core:jackson-databind:2.21.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -125,6 +146,13 @@
       "name": "Jackson-dataformat-YAML",
       "url": "https://github.com/FasterXML/jackson-dataformats-text"
     },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-dataformat-YAML",
+      "url": "https://github.com/FasterXML/jackson-dataformats-text"
+    },
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -133,6 +161,13 @@
       "url": "https://github.com/FasterXML/jackson-modules-java8"
     },
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson datatype: JSR310",
+      "url": "https://github.com/FasterXML/jackson-modules-java8"
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -2709,6 +2744,13 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "tools.jackson.core:jackson-core:3.1.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "tools.jackson.core:jackson-databind:3.1.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -2723,6 +2765,13 @@
       "name": "jackson-databind",
       "url": "https://github.com/FasterXML/jackson"
     },
+    "tools.jackson.core:jackson-databind:3.1.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
     "tools.jackson.module:jackson-module-blackbird:3.1.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -2731,6 +2780,13 @@
       "url": "https://github.com/FasterXML/jackson-modules-base"
     },
     "tools.jackson.module:jackson-module-blackbird:3.1.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson module: Blackbird",
+      "url": "https://github.com/FasterXML/jackson-modules-base"
+    },
+    "tools.jackson.module:jackson-module-blackbird:3.1.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],

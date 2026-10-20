@@ -9,6 +9,7 @@ receivers:
   prometheus:
     config:
       scrape_configs:
+{{- if .PlatformMetricsFederationEnabled }}
         - job_name: "nvcf-worker"
           scrape_interval: 30s
           scrape_timeout: 25s
@@ -16,7 +17,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvcf-worker", namespace=~"{{ .Namespace }}", __name__=~"(nvcf_worker_service_request_total|nvcf_worker_service_response_total|nvcf_worker_service_stream_streaming_app_ready|nvcf_worker_service_stream_streaming_app_ready_timestamp|nvcf_worker_service_stream_session_duration_seconds_bucket|nvcf_worker_service_stream_session_duration_seconds_count|nvcf_worker_service_stream_session_duration_seconds_sum|nvcf_worker_service_inference_request_time_seconds_total|nvcf_worker_service_inference_uploads_total|nvcf_worker_service_inference_bytes_total|nvcf_worker_service_inference_failure_total|nvcf_worker_service_worker_thread_count_total|nvcf_worker_service_worker_thread_busy_seconds_total|nvcf_worker_service_bytes_total|nvcf_worker_service_request_latency_seconds_bucket|nvcf_worker_service_request_latency_seconds_sum|nvcf_worker_service_request_latency_seconds_count|nvcf_worker_service_stream_latency_seconds_bucket|nvcf_worker_service_stream_latency_seconds_sum|nvcf_worker_service_stream_latency_seconds_count|nvct_worker_service_result_total|nvcf_worker_service_stream_active)"}'
@@ -30,7 +31,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               - '{job=~"nvca", namespace="nvca-system", pod=~"nvca.*", container="agent", __name__=~"(nvca_instance_type_allocatable|nvca_instance_type_capacity)"}'
@@ -45,7 +46,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
@@ -75,7 +76,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # kube-state-metrics (relabel rules aligned with byoo-prometheus servicemonitor_kube-state-metrics.yaml)
@@ -120,7 +121,7 @@ receivers:
           metrics_path: "/federate"
           static_configs:
             - targets:
-              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+              - "{{ .PlatformMetricsFederationTarget }}"
           params:
             "match[]":
               # nvidia-dcgm-exporter (relabel rules aligned with byoo-prometheus servicemonitor_dcgm-exporter.yaml)
@@ -131,6 +132,7 @@ receivers:
               replacement: $1
             - action: labelkeep
               regex: "(__name__|container|DCGM_FI_DRIVER_VERSION|device|job|modelName|pci_bus_id|pod)"
+{{- end }}
         - job_name: opentelemetry-collector
           scrape_interval: 30s
           scrape_timeout: 25s

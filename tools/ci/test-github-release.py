@@ -872,6 +872,29 @@ class GithubReleaseTest(unittest.TestCase):
             f"src/compute-plane-services/byoo-otel-collector/v{upstream_version}-nv-0.1.0",
         )
 
+    def test_byoo_release_bumps_the_compute_plane_stack_collector_pins(self):
+        # The stack pins the NVCA collector and the BYOO sidecar collector
+        # separately. Both are built from byoo-otel-collector, so a release
+        # bumps both pins and they must carry the same tag.
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        stack = next(s for s in metadata["services"] if s["id"] == "nvcf-compute-plane-stack")
+        deploy = next(d for d in stack["deploys"] if d["service"] == "byoo-otel-collector")
+        values_file = next(f for f in deploy["values_files"] if f["file"] == "environments/base.yaml")
+        self.assertIn("global.nvcaOperator.selfManaged.otelCollector.imageTag", values_file["paths"])
+        self.assertIn("global.nvcaOperator.byooOtelCollector.imageTag", values_file["paths"])
+
+        base_values = root / stack["path"] / values_file["file"]
+        tags = {}
+        for path in values_file["paths"]:
+            tags[path] = subprocess.run(
+                ["yq", "-er", "." + path, str(base_values)],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        self.assertEqual(len(set(tags.values())), 1, tags)
+
     def test_cloud_tasks_chart_continues_its_published_lineage(self):
         # This chart migrated in from its own colocated-deploy repo with 11
         # versions already published as helm-nvcf-nvct-api, the newest 1.4.4.

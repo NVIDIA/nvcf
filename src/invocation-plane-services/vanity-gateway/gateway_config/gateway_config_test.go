@@ -1651,17 +1651,17 @@ func TestGatewayConfigValidateRejectsInvalidOrderedShadowSamplingMethods(t *test
 
 func TestGatewayConfigValidateScopesRequestBodyShadowSampling(t *testing.T) {
 	methods := samplingMethods(ShadowSamplingMethodPromptCacheKey, ShadowSamplingMethodFirstMessageHash)
-	for _, section := range []string{"chatCompletions", "responses"} {
+	for _, section := range []string{"chatCompletions", "responses", "anthropicMessages"} {
 		t.Run("accepts "+section, func(t *testing.T) {
 			require.NoError(t, gatewayConfigWithShadow(section, methods, nil, true).Validate())
 			require.NoError(t, gatewayConfigWithShadow(section, methods, nil, false).Validate())
+			require.NoError(t, gatewayConfigWithShadow(section, methods, []string{"X-Session-ID"}, true).Validate())
 		})
 	}
 	for section, location := range map[string]string{
-		"completions":       "openai.completions",
-		"embeddings":        "openai.embeddings",
-		"imageGenerations":  "openai.imageGenerations",
-		"anthropicMessages": "anthropicMessages",
+		"completions":      "openai.completions",
+		"embeddings":       "openai.embeddings",
+		"imageGenerations": "openai.imageGenerations",
 	} {
 		for _, perTarget := range []bool{false, true} {
 			form := "legacy"
@@ -1680,6 +1680,28 @@ func TestGatewayConfigValidateScopesRequestBodyShadowSampling(t *testing.T) {
 			assert.ErrorContains(t, err, "promptCacheKeyHeaders is unsupported for "+location)
 		})
 	}
+}
+
+func TestEffectivePromptCacheKeyHeadersDefaultsBySection(t *testing.T) {
+	tests := []struct {
+		name    string
+		section string
+		headers []string
+		want    []string
+	}{
+		{name: "chat default", section: "openai.chatCompletions", want: []string{DefaultPromptCacheKeyHeader}},
+		{name: "responses default", section: "openai.responses", want: []string{DefaultPromptCacheKeyHeader}},
+		{name: "messages default adds Claude Code session", section: "anthropicMessages", want: []string{DefaultPromptCacheKeyHeader, ClaudeCodeSessionIDHeader}},
+		{name: "messages explicit list", section: "anthropicMessages", headers: []string{"X-Session-ID"}, want: []string{"X-Session-ID"}},
+		{name: "messages empty list disables lookup", section: "anthropicMessages", headers: []string{}, want: []string{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ModelFunctionDetails{PromptCacheKeyHeaders: tc.headers}.EffectivePromptCacheKeyHeadersForSection(tc.section)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	assert.Equal(t, "x-claude-code-session-id", ClaudeCodeSessionIDHeader)
 }
 
 func TestGatewayConfigValidatePromptCacheKeyHeaders(t *testing.T) {
