@@ -95,6 +95,8 @@ func TestRenderOtelConfig(t *testing.T) {
 			expectError:  true,
 		},
 	}
+	// KRATOS traces render only when the client cert pair is on disk.
+	writeClientCertPair(t, "example-kratos-traces")
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1427,6 +1429,7 @@ func Test_exporterTraces_Kratos(t *testing.T) {
 		secrets       map[string]string
 		wantHeaderKey bool
 		wantCA        bool
+		wantErr       string
 	}{
 		{
 			name:    "client cert pair only",
@@ -1454,6 +1457,26 @@ func Test_exporterTraces_Kratos(t *testing.T) {
 			secrets:       map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "collectorId": "fake-collector-id"},
 			wantHeaderKey: true,
 		},
+		{
+			name:    "missing clientKey",
+			secrets: map[string]string{"clientCert": "fake-cert", "collectorId": "fake-collector-id"},
+			wantErr: "missing or empty: clientKey",
+		},
+		{
+			name:    "missing clientCert",
+			secrets: map[string]string{"clientKey": "fake-key", "caFile": "fake-ca"},
+			wantErr: "missing or empty: clientCert",
+		},
+		{
+			name:    "blank client cert pair",
+			secrets: map[string]string{"clientCert": "", "clientKey": " \n"},
+			wantErr: "missing or empty: clientCert, clientKey",
+		},
+		{
+			name:    "no secret files",
+			secrets: map[string]string{},
+			wantErr: "KRATOS secret needs clientCert and clientKey",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1472,11 +1495,19 @@ func Test_exporterTraces_Kratos(t *testing.T) {
 			otelConfig := &OpenTelemetryConfig{}
 			initializeConfigMaps(otelConfig)
 
-			if err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"}); err != nil {
+			err := generateExportersAndService(cfg, otelConfig, TemplateConfig{Namespace: "test-namespace"})
+			const exporterId = "otlp_http/KRATOS-example-traces-traces"
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, telemetryName, "error must name the telemetry")
+				assert.NotContains(t, otelConfig.Exporters, exporterId)
+				assert.Empty(t, otelConfig.Service.Pipelines["traces"].Exporters)
+				return
+			}
+			if err != nil {
 				t.Fatalf("generateExportersAndService() unexpected error = %v", err)
 			}
 
-			const exporterId = "otlp_http/KRATOS-example-traces-traces"
 			want := map[string]interface{}{
 				"traces_endpoint": endpoint,
 				"tls": map[string]interface{}{

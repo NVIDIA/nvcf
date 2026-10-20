@@ -890,6 +890,24 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
+		// The secrets extractor runs before render, so a missing or blank client
+		// cert or key fails here with a named error instead of an otelcol TLS
+		// load error at startup.
+		var missing []string
+		for _, key := range []string{"clientCert", "clientKey"} {
+			hasContent, err := secretFileHasContent(filepath.Join(credentialPath, fmt.Sprintf("%s-%s", config.Telemetries.Traces.Name, key)))
+			if err != nil {
+				return "", err
+			}
+			if !hasContent {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("traces telemetry %q: KRATOS secret needs clientCert and clientKey, missing or empty: %s",
+				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
+		}
+
 		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
 		// The client cert pair is enough for the Kratos traces gateway, which uses
 		// public CA roots. caFile is optional, and a blank CA file stops the
