@@ -270,3 +270,13 @@ for target in prometheus.example.invalid:1 prometheus.example.invalid:65535 '[::
   render "${tmp_dir}/federation-port-manifest.yaml" \
     --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
 done
+
+# Bracketed hosts must be IPv6 addresses that net.ParseIP accepts.
+for target in '[.]:9090' '[:]:9090' '[1::2::3]:9090' '[12345::1]:9090' '[1:2:3:4:5:6:7:8:9]:9090' '[::ffff:256.0.0.1]:9090'; do
+  assert_render_fails 'platformMetricsFederation' \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done
+for target in '[::]:9090' '[2001:db8::1]:9090' '[2001:DB8:0:0:0:0:0:1]:9090' '[::ffff:192.0.2.1]:9090' '[fe80::1:2:3:4]:65535'; do
+  render "${tmp_dir}/federation-ipv6-manifest.yaml" \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done
