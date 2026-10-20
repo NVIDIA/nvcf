@@ -63,6 +63,7 @@ func TestTranslateCreatesPVCAndInitJob(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "writer-job-task-id", job.Name)
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", job.Spec.Template.Spec.Containers[0].Image)
+	assert.Equal(t, corev1.TerminationMessageFallbackToLogsOnError, job.Spec.Template.Spec.Containers[0].TerminationMessagePolicy)
 	assert.Equal(t, "pull-secret", job.Spec.Template.Spec.ImagePullSecrets[0].Name)
 	assert.NotContains(t, envNames(job.Spec.Template.Spec.Containers[0].Env), common.SecretsAssertionTokenEnv)
 }
@@ -87,4 +88,28 @@ func envNames(envs []corev1.EnvVar) []string {
 
 func metav1ObjectMeta(name string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{Name: name}
+}
+
+func TestCacheVolumeSize(t *testing.T) {
+	const gi = int64(1 << 30)
+	tests := []struct {
+		name          string
+		artifactBytes int64
+		want          int64
+	}{
+		{name: "unreported size keeps the 1Gi minimum", artifactBytes: 0, want: gi},
+		{name: "tiny artifacts fit the 1Gi minimum", artifactBytes: 1, want: gi},
+		// Two 484Mi checkpoints: 0.90GiB of data plus the 128Mi floor on
+		// headroom does not fit a 1Gi XFS volume and rounds up to 2Gi.
+		{name: "artifacts just under 1Gi get a 2Gi claim", artifactBytes: 967_235_286, want: 2 * gi},
+		{name: "exactly 1Gi of artifacts gets a 2Gi claim", artifactBytes: gi, want: 2 * gi},
+		// 10 percent headroom takes over above 1.25Gi: 5Gi + 512Mi rounds to 6Gi.
+		{name: "large artifacts get ten percent headroom", artifactBytes: 5 * gi, want: 6 * gi},
+		{name: "headroom that lands on a boundary is not rounded further", artifactBytes: 10 * gi, want: 11 * gi},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, cacheVolumeSize(tt.artifactBytes))
+		})
+	}
 }

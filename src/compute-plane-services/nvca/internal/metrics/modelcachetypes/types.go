@@ -28,11 +28,14 @@ const (
 	ReasonCacheSpecInvalid = "cache_spec_invalid"
 	// ReasonCatalogMissing: the storage capability catalog ConfigMap is absent,
 	// so the request was created without a durable cache.
-	ReasonCatalogMissing     = "catalog_missing"
-	ReasonPVCSetupFailed     = "pvc_setup_failed"
-	ReasonPVCBindFailed      = "pvc_bind_failed"
-	ReasonRWPVCBindFailed    = "rw_pvc_bind_failed"
-	ReasonJobNotFound        = "job_not_found"
+	ReasonCatalogMissing  = "catalog_missing"
+	ReasonPVCSetupFailed  = "pvc_setup_failed"
+	ReasonPVCBindFailed   = "pvc_bind_failed"
+	ReasonRWPVCBindFailed = "rw_pvc_bind_failed"
+	ReasonJobNotFound     = "job_not_found"
+	// ReasonCacheVolumeFull: the writer job ran out of space on the cache
+	// volume, reported through the writer pod's termination message.
+	ReasonCacheVolumeFull    = "cache_volume_full"
 	ReasonJobBackoffExceeded = "job_backoff_exceeded"
 	ReasonJobTimeout         = "job_timeout"
 	ReasonImagePull          = "image_pull"
@@ -57,6 +60,7 @@ var AllFailureReasons = []string{
 	ReasonPVCBindFailed,
 	ReasonRWPVCBindFailed,
 	ReasonJobNotFound,
+	ReasonCacheVolumeFull,
 	ReasonJobBackoffExceeded,
 	ReasonJobTimeout,
 	ReasonImagePull,

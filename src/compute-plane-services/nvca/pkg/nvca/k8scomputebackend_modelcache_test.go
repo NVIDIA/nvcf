@@ -241,6 +241,7 @@ func TestGetInitCacheJobFailureReason(t *testing.T) {
 		name           string
 		job            *batchv1.Job
 		expectedReason string
+		pods           []runtime.Object
 	}{
 		{
 			name: "job exceeded default backoff limit (6)",
@@ -338,6 +339,37 @@ func TestGetInitCacheJobFailureReason(t *testing.T) {
 			},
 			expectedReason: "job_timeout",
 		},
+		{
+			name: "writer pod terminated with ENOSPC - returns cache_volume_full",
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "writer-job-enospc",
+					Namespace: RequestsNamespace,
+				},
+				Spec: batchv1.JobSpec{
+					BackoffLimit: ptr.To(int32(3)),
+				},
+				Status: batchv1.JobStatus{
+					Failed: 4,
+				},
+			},
+			pods: []runtime.Object{&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "writer-job-enospc-abcde",
+					Namespace: RequestsNamespace,
+					Labels:    map[string]string{"job-name": "writer-job-enospc"},
+				},
+				Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "init",
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 2,
+						Message: "Error: internal error: failed to download Complex_base_ckpt.pt of artifact rfdiffusion: " +
+							"write /config/models/rfdiffusion/Complex_base_ckpt.pt.tmp: no space left on device\n",
+					}},
+				}}},
+			}},
+			expectedReason: "cache_volume_full",
+		},
 	}
 
 	for _, tt := range tests {
@@ -345,7 +377,7 @@ func TestGetInitCacheJobFailureReason(t *testing.T) {
 			ctx, cancel := context.WithCancel(newTestContext())
 			t.Cleanup(cancel)
 
-			objs := []runtime.Object{tt.job}
+			objs := append([]runtime.Object{tt.job}, tt.pods...)
 			clients := mockKubeClients(objs...)
 			bc, _, err := NewBackendk8sCacheBuilder().
 				WithClients(clients).

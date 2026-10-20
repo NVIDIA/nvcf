@@ -210,13 +210,15 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			// this is an irrecoverable error on InitCacheJob, NVCA will switch to
 			// No Caching Workflow
 			// Caller will need to use the PodSpec without ROPVC VolumeMount
+			// Classify before cleanup: cleanup deletes the Job and its pods, after
+			// which the only reason left to report is job_not_found.
+			reason := c.getInitCacheJobFailureReason(ctx, initJob)
 			err = c.CleanupModelCachingResources(ctx, rwPVC, initJob.Name)
 			if err != nil {
 				log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 			}
 			c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", nil, initJob.Name)
-			reason := c.getInitCacheJobFailureReason(ctx, initJob)
+				string(types.EventCategoryModelCaching), "%v failed (%s), resort to non-caching", nil, initJob.Name, reason)
 			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, string(types.HelmCacheBackendNVMesh))
 			return ModelCachingFailed, ""
 		case InitCacheJobCompleted:
@@ -830,10 +832,42 @@ func (c K8sComputeBackend) getInitCacheJobFailureReason(ctx context.Context, job
 	if jS.Spec.BackoffLimit != nil {
 		backoffLimit = *jS.Spec.BackoffLimit
 	}
+	if c.initCacheJobPodsReportNoSpace(ctx, jS.Name) {
+		return modelcachetypes.ReasonCacheVolumeFull
+	}
 	if jS.Status.Failed > backoffLimit {
 		return modelcachetypes.ReasonJobBackoffExceeded
 	}
 	return modelcachetypes.ReasonJobTimeout
+}
+
+// noSpaceLeftMarker is the kernel ENOSPC text the writer surfaces in its
+// termination message when the cache volume is too small for the artifacts.
+const noSpaceLeftMarker = "no space left on device"
+
+// initCacheJobPodsReportNoSpace reports whether any pod of the named writer
+// job terminated with ENOSPC. The writer container uses the
+// FallbackToLogsOnError termination message policy, so its final log lines
+// are available on the container status without reading pod logs.
+func (c K8sComputeBackend) initCacheJobPodsReportNoSpace(ctx context.Context, jobName string) bool {
+	log := core.GetLogger(ctx)
+	pods, err := c.clients.K8s.CoreV1().Pods(c.bk8s.podInstanceNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "job-name=" + jobName,
+	})
+	if err != nil {
+		log.WithError(err).Warnf("failed to list pods of init cache job %s", jobName)
+		return false
+	}
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			for _, term := range []*v1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
+				if term != nil && strings.Contains(strings.ToLower(term.Message), noSpaceLeftMarker) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (c K8sComputeBackend) SetupInitCacheJobBlockDevice(ctx context.Context,
