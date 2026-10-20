@@ -186,9 +186,16 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true}}}})
 		// The pod's own rank directory of the set lands in its cachedir
 		// (reader_steps.go): the engine then finds its compile caches at
-		// the same path, writable.
+		// the same path, writable. A set that kept the engine's owners
+		// and modes is seeded with them, as root, so the files are as a
+		// restored engine left them at its capture; an older set, whose
+		// copies were made root's, is opened to the engine's user instead.
+		posture := inheritPosture
+		if st.OwnersKept {
+			posture = rootPosture
+		}
 		seed := seedStep(cacheSeedInitName, main, volumeAt{Volume: cacheSeedVolumeName, Path: cacheSeedMount}, strconv.Itoa(ordinal),
-			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), inheritPosture)
+			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), posture, st.OwnersKept)
 		patches = m.withHelperVolume(pod, appendInits(pod, patches, seed))
 		log.WithField("claim", claim).Info("cache volume: complete; seeding the cachedir from the read-only claim")
 		return patches

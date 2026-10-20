@@ -445,7 +445,7 @@ func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, 
 	// volume (70B A/B in docs/BENCHMARK.md): the storage profile decides, and
 	// the pod's own NVSNAP_PREWARM=0/1 wins.
 	rox := volumeAt{Volume: cacheDirVolumeName, Path: cacheSeedSrcPath}
-	inits := []corev1.Container{seedStep("nvsnap-seed-cache", &main, rox, "cache", volumeAt{Volume: cacheRWVolumeName, Path: cacheSeedDstPath}, "", "restore cache", rootPosture)}
+	inits := []corev1.Container{seedStep("nvsnap-seed-cache", &main, rox, "cache", volumeAt{Volume: cacheRWVolumeName, Path: cacheSeedDstPath}, "", "restore cache", rootPosture, false)}
 	if sweep, ok := m.sweepStep("nvsnap-prewarm", &main, rox, rootPosture); ok {
 		inits = append(inits, sweep)
 	}

@@ -133,12 +133,14 @@ func (m *Mutator) sweepStep(name string, main *corev1.Container, src volumeAt, p
 	return c, true
 }
 
-// seedStep copies src.Path/srcSubdir into dst.Path/dstSubdir and opens the copy to any
-// user the engine runs as: the copy is a per-pod scratch, not the shared
-// volume. A missing or failed source leaves the cache empty and the engine
-// compiles as it would have anyway; the step always exits 0 and logs how
-// many files it placed.
-func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir string, dst volumeAt, dstSubdir string, label string, posture readerPosture) corev1.Container {
+// seedStep copies src.Path/srcSubdir into dst.Path/dstSubdir. With
+// keepOwners every entry keeps its owner and full mode, as the engine that
+// wrote it left it, which needs rootPosture; otherwise the copy is opened
+// to any user the engine runs as: the copy is a per-pod scratch, not the
+// shared volume. A missing or failed source leaves the cache empty and
+// the engine compiles as it would have anyway; the step always exits 0
+// and logs how many files it placed.
+func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir string, dst volumeAt, dstSubdir, label string, posture readerPosture, keepOwners bool) corev1.Container {
 	from, to := src.Path, dst.Path
 	if srcSubdir != "" {
 		from = src.Path + "/" + srcSubdir
@@ -157,6 +159,9 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 			{Name: dst.Volume, MountPath: dst.Path},
 			helperMount(),
 		},
+	}
+	if keepOwners {
+		c.Command = append(c.Command, "--keep-owners")
 	}
 	harden(&c, copyResources, posture, main)
 	return c

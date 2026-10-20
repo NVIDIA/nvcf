@@ -181,8 +181,14 @@ func (c *Copier) Copy(ctx context.Context, src, dst string) (bytesCopied, entrie
 		return 0, 0, fmt.Errorf("src is not a directory: %s", src)
 	}
 	// Apply src's mode to the dst root (best effort; ignore if dst
-	// already exists with different perms).
+	// already exists with different perms), and in faithful mode its
+	// owner and full mode as for every other entry.
 	_ = os.Chmod(dst, srcInfo.Mode().Perm())
+	if c.faithful {
+		if err := keepOwnerAndMode(dst, srcInfo); err != nil {
+			return 0, 0, fmt.Errorf("keep owner and mode of dst: %w", err)
+		}
+	}
 
 	// Worker pool. Cancellable via a sub-context: any worker error
 	// cancels the rest so we don't keep streaming GB of files after

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -104,6 +105,42 @@ func TestSeed(t *testing.T) {
 	seedCmd([]string{"--from", "/nonexistent", "--to", empty})
 	if fi, err := os.Stat(empty); err != nil || !fi.IsDir() {
 		t.Error("missing source must still create the cache directory")
+	}
+}
+
+// With --keep-owners the cachedir and every entry get the mode they have
+// in the set, past the umask, and nothing is opened to every user: a
+// restored engine reopens these files, and CRIU refuses one whose mode
+// differs from the dump (a seeded 0666 Triton launcher of a 0644 one,
+// dev2 2026-10-20).
+func TestSeed_KeepOwners(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "cache")
+	_ = os.MkdirAll(dst, 0o777) // the emptyDir subPath, as the kubelet makes it
+	_ = os.Chmod(dst, 0o777)
+	_ = os.MkdirAll(filepath.Join(src, "triton", "k"), 0o755)
+	files := map[string]uint32{"triton/k/launcher.so": 0o644, "triton/k/rw.json": 0o666, "triton/k/x": 0o755, "key": 0o600}
+	for rel := range files {
+		_ = os.WriteFile(filepath.Join(src, rel), []byte(rel), 0o600)
+	}
+	modes := map[string]uint32{".": 0o2755, "triton": 0o750, "triton/k": 0o775}
+	for rel, m := range files {
+		modes[rel] = m
+	}
+	for rel, m := range modes {
+		if err := syscall.Chmod(filepath.Join(src, rel), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedCmd([]string{"--from", src, "--to", dst, "--index", ".nvsnap-seed-index", "--keep-owners"})
+	for rel, want := range modes {
+		var st syscall.Stat_t
+		if err := syscall.Stat(filepath.Join(dst, rel), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode&0o7777 != want {
+			t.Errorf("%s: mode %o, want %o", rel, st.Mode&0o7777, want)
+		}
 	}
 }
 

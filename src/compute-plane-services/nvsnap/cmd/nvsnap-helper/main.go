@@ -231,24 +231,31 @@ func treeBytes(dir string) int64 {
 	return n
 }
 
-// seedCmd copies a cache set into the pod's cachedir and opens it to any
-// user (it is the pod's scratch, not the shared volume), then lists what
-// it placed. It never fails the pod: a missing or broken source leaves
-// the cache empty and the engine compiles as it would have anyway.
+// seedCmd copies a cache set into the pod's cachedir, then lists what it
+// placed. With --keep-owners every entry, the cachedir included, gets the
+// owner and full mode it has in the set, as the engine left it: a
+// restored engine reopens these files, and CRIU refuses any whose mode
+// differs from the dump. Without, for a set whose copies were made
+// root's, the copy is opened to any user (it is the pod's scratch, not the
+// shared volume). It never fails the pod: a missing or broken source
+// leaves the cache empty and the engine compiles as it would have anyway.
 func seedCmd(args []string) {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
 	from := fs.String("from", "", "source directory")
 	to := fs.String("to", "", "destination directory")
 	label := fs.String("label", "", "what is seeded, for the log")
 	index := fs.String("index", "", "file under --to listing the seeded paths")
+	keepOwners := fs.Bool("keep-owners", false, "give every entry its owner and full mode in --from instead of opening the copy to any user")
 	_ = fs.Parse(args)
 	if fi, err := os.Stat(*from); err == nil && fi.IsDir() {
-		if err := copyTree(*from, *to); err != nil {
+		if err := copyTree(*from, *to, *keepOwners); err != nil {
 			fmt.Fprintln(os.Stderr, "nvsnap: seed:", err)
 		}
 	}
 	_ = os.MkdirAll(*to, 0o777)
-	openToAll(*to)
+	if !*keepOwners {
+		openToAll(*to)
+	}
 	files := listFiles(*to, *index)
 	if *index != "" {
 		_ = os.WriteFile(filepath.Join(*to, *index), []byte(strings.Join(files, "\n")+"\n"), 0o666)
@@ -257,10 +264,21 @@ func seedCmd(args []string) {
 }
 
 // copyTree copies src's contents into dst, keeping modes, times and
-// symlinks; existing directories are merged into.
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+// symlinks; existing directories are merged into. With exact, dst and
+// every entry get their source's owner and full mode, past the umask, and
+// a failure to give them is reported.
+func copyTree(src, dst string, exact bool) error {
+	var first error
+	keep := func(out string, info fs.FileInfo) {
+		if err := keepOwnerMode(out, info, exact); err != nil && first == nil {
+			first = err
+		}
+	}
+	_ = filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if exact && first == nil {
+				first = err
+			}
 			return nil // best effort: skip what cannot be read
 		}
 		rel, _ := filepath.Rel(src, p)
@@ -272,29 +290,46 @@ func copyTree(src, dst string) error {
 		switch {
 		case d.IsDir():
 			_ = os.MkdirAll(out, info.Mode().Perm()|0o700)
-			keepOwner(out, info)
+			keep(out, info)
 		case info.Mode()&fs.ModeSymlink != 0:
 			if t, err := os.Readlink(p); err == nil {
 				_ = os.Remove(out)
 				_ = os.Symlink(t, out)
-				keepOwner(out, info)
+				keep(out, info)
 			}
 		case info.Mode().IsRegular():
 			if err := copyFile(p, out, info); err != nil {
 				fmt.Fprintln(os.Stderr, "nvsnap: seed:", err)
+				if exact && first == nil {
+					first = err
+				}
+				return nil
 			}
-			keepOwner(out, info)
+			keep(out, info)
 		}
 		return nil
 	})
+	return first
 }
 
-// keepOwner gives the copy its source's owner, as cp -a does; only root
-// can.
-func keepOwner(p string, info fs.FileInfo) {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && os.Geteuid() == 0 {
-		_ = os.Lchown(p, int(st.Uid), int(st.Gid))
+// keepOwnerMode gives the copy its source's owner, as cp -a does; only
+// root can. With exact it also gives the full mode, setuid, setgid and
+// sticky included, and reports what it could not give.
+func keepOwnerMode(p string, info fs.FileInfo, exact bool) error {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
 	}
+	if os.Geteuid() == 0 {
+		if err := os.Lchown(p, int(st.Uid), int(st.Gid)); err != nil && exact {
+			return err
+		}
+	}
+	if !exact || info.Mode()&fs.ModeSymlink != 0 {
+		return nil
+	}
+	// After the chown, which clears setuid and setgid.
+	return syscall.Chmod(p, st.Mode&0o7777)
 }
 
 func copyFile(src, dst string, info fs.FileInfo) error {

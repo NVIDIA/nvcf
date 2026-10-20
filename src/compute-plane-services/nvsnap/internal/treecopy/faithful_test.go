@@ -105,3 +105,24 @@ func TestDefaultCopySkipsSpecialFiles(t *testing.T) {
 		t.Errorf("default copy made a fifo: %v", err)
 	}
 }
+
+// In faithful mode the destination root takes the source root's full
+// mode too, as every entry beneath it does.
+func TestFaithfulCopyKeepsRootMode(t *testing.T) {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	if err := syscall.Chmod(src, 0o2751); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCopier(nil, nil)
+	c.SetFaithful(true)
+	if _, _, err := c.Copy(context.Background(), src, dst); err != nil {
+		t.Fatal(err)
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(dst, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode&0o7777 != 0o2751 {
+		t.Errorf("root mode %o, want 2751", st.Mode&0o7777)
+	}
+}

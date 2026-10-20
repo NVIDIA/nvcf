@@ -651,6 +651,7 @@ type setCopier struct {
 	mu       sync.Mutex
 	local    map[string]string // dst -> src
 	excludes []string          // of the last copy
+	faithful bool              // of the last copy
 }
 
 func (r *setCopier) Copy(_ context.Context, destRoot string, sources []checkpointstore.CaptureSource) (int64, int64, error) {
@@ -661,6 +662,7 @@ func (r *setCopier) Copy(_ context.Context, destRoot string, sources []checkpoin
 	}
 	r.local[destRoot] = sources[0].SrcPath
 	r.excludes = sources[0].Excludes
+	r.faithful = sources[0].Faithful
 	return 1, 1, nil
 }
 
@@ -721,9 +723,20 @@ func TestModelVolumeController_SingleRankGroupCollectedFromReadyPod(t *testing.T
 	if atomic.LoadInt32(&released) != 1 {
 		t.Error("the volume is released before completion so it detaches")
 	}
+	// A restored engine reopens its cache files at the modes it gave them;
+	// the set keeps them, and says so for the seed.
+	if !cp.faithful {
+		t.Error("a rank is copied keeping owners and modes")
+	}
 	pv, _ := kc.CoreV1().PersistentVolumes().Get(ctx, "pvc-staged", metav1.GetOptions{})
 	if pv.Labels[modelvolume.CacheLabel] != modelvolume.Key("cache://abc123") || pv.Labels[modelvolume.IdentityLabel] != "" {
 		t.Errorf("set PV labelled under the cache label only: %v", pv.Labels)
+	}
+	if pv.Annotations[modelvolume.CacheOwnersAnnotation] != modelvolume.CacheOwnersKept {
+		t.Errorf("set PV records that it kept owners: %v", pv.Annotations)
+	}
+	if st, _ := cache.Lookup(ctx, "cache://abc123"); !st.OwnersKept {
+		t.Errorf("Lookup reports the kept owners: %+v", st)
 	}
 	if size := pv.Spec.Capacity[corev1.ResourceStorage]; size.String() != "1Gi" {
 		t.Errorf("31 MiB set rounds up to the 1Gi floor, got %s", size.String())

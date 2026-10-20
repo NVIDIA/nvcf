@@ -237,3 +237,97 @@ func TestExtractFresh_PublishesOnlyCompleteTrees(t *testing.T) {
 		t.Errorf("no staging left after publishing: %v", left)
 	}
 }
+
+// Without worldWritable every entry, the root included, keeps the full
+// mode it had, past the extracting process's umask: a restored engine
+// reopens these files, and CRIU refuses one whose mode differs.
+func TestExtract_KeepsFullModes(t *testing.T) {
+	src := t.TempDir()
+	modes := map[string]os.FileMode{
+		".":            0o751,
+		"triton":       0o2775 | os.ModeDir | os.ModeSetgid,
+		"triton/k.so":  0o644,
+		"triton/rw":    0o666,
+		"triton/x":     0o755,
+		"triton/owner": 0o600,
+	}
+	must(t, os.MkdirAll(filepath.Join(src, "triton"), 0o755))
+	for _, f := range []string{"k.so", "rw", "x", "owner"} {
+		must(t, os.WriteFile(filepath.Join(src, "triton", f), []byte(f), 0o600))
+	}
+	for rel, m := range modes {
+		mustChmod(t, filepath.Join(src, rel), m)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "0")
+	if _, _, err := ExtractFresh(&buf, dst, false); err != nil {
+		t.Fatal(err)
+	}
+	for rel, m := range modes {
+		fi, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := fi.Mode()&(os.ModePerm|os.ModeSetgid|os.ModeSetuid|os.ModeSticky), m&(os.ModePerm|os.ModeSetgid|os.ModeSetuid|os.ModeSticky); got != want {
+			t.Errorf("%s: mode %v, want %v", rel, got, want)
+		}
+	}
+}
+
+func mustChmod(t *testing.T, p string, m os.FileMode) {
+	t.Helper()
+	must(t, os.Chmod(p, m))
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stream cut anywhere before its end mark fails, though Go's reader
+// takes a stream cut at an entry boundary for a complete one.
+func TestExtract_StreamCutAtAnyBlockFails(t *testing.T) {
+	src := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(src, "a"), 0o755))
+	must(t, os.WriteFile(filepath.Join(src, "a", "k.so"), bytes.Repeat([]byte("k"), 3000), 0o644))
+	must(t, os.WriteFile(filepath.Join(src, "b"), []byte("b"), 0o644))
+	var buf bytes.Buffer
+	if err := Write(&buf, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	full := buf.Bytes()
+	// The end mark is a PAX header and its records, two blocks, before
+	// the two-block trailer.
+	for cut := 512; cut < len(full)-4*512; cut += 512 {
+		if _, _, err := Extract(bytes.NewReader(full[:cut]), t.TempDir(), false); err == nil {
+			t.Errorf("a stream cut at %d of %d bytes extracted", cut, len(full))
+		}
+	}
+	if _, _, err := Extract(bytes.NewReader(full), t.TempDir(), false); err != nil {
+		t.Errorf("the whole stream: %v", err)
+	}
+}
+
+// A stream from a writer without the marks (an agent from before them)
+// still extracts.
+func TestExtract_UnmarkedStream(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	must(t, tw.WriteHeader(&tar.Header{Name: "k.so", Mode: 0o644, Size: 2, Typeflag: tar.TypeReg}))
+	if _, err := tw.Write([]byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, tw.Close())
+	dst := t.TempDir()
+	if n, _, err := Extract(&buf, dst, false); err != nil || n != 1 {
+		t.Fatalf("unmarked stream: %d files, %v", n, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "k.so")); string(b) != "ok" {
+		t.Errorf("content %q", b)
+	}
+}

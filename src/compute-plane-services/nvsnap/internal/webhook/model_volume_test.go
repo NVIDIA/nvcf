@@ -869,6 +869,58 @@ func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
 	}
 }
 
+// A set that kept the engine's owners and modes is seeded with them, as
+// root with only the capabilities that takes: a restored engine reopens
+// those files, and CRIU refuses one whose mode differs from the dump. A
+// set from before, whose copies are root's, is opened to the engine's
+// user as it always was.
+func TestCacheVolume_SeedKeepsOwnersOfSetsThatKeptThem(t *testing.T) {
+	for _, kept := range []bool{true, false} {
+		kc := fake.NewSimpleClientset()
+		completeModelPV(t, kc, "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed")
+		m := cacheMutator(t, kc)
+		pod := ngcFunctionPod()
+		pod.Name = "mini-service-kimi-k3-0"
+		curi, _ := m.cacheURI(pod)
+		cpv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-cache",
+			Labels: map[string]string{modelvolume.CacheLabel: modelvolume.Key(curi), modelvolume.CompleteLabel: "true"}},
+			Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+				PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "c:csi-c:v"}}}}
+		if kept {
+			cpv.Annotations = map[string]string{modelvolume.CacheOwnersAnnotation: modelvolume.CacheOwnersKept}
+		}
+		if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), cpv, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seed *corev1.Container
+		v := viewMV(pod, patches)
+		for i := range v.newInits {
+			if v.newInits[i].Name == cacheSeedInitName {
+				seed = &v.newInits[i]
+			}
+		}
+		if seed == nil {
+			t.Fatalf("kept=%v: seed init missing", kept)
+		}
+		cmd := strings.Join(seed.Command, " ")
+		root := seed.SecurityContext != nil && seed.SecurityContext.RunAsUser != nil && *seed.SecurityContext.RunAsUser == 0
+		if kept != strings.HasSuffix(cmd, " --keep-owners") || kept != root {
+			t.Errorf("kept=%v: seed %q as root=%v", kept, cmd, root)
+		}
+		if kept {
+			caps := seed.SecurityContext.Capabilities
+			if caps == nil || len(caps.Drop) != 1 || caps.Drop[0] != "ALL" || !reflect.DeepEqual(caps.Add, []corev1.Capability{"CHOWN", "FOWNER", "DAC_OVERRIDE", "DAC_READ_SEARCH"}) {
+				t.Errorf("the root seed adds back only what keeping owners takes: %+v", caps)
+			}
+		}
+	}
+}
+
 // Cache volume complete: the read-only claim is minted at admission and a
 // seed init copies it into the pod's cachedir before the engine starts.
 func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {

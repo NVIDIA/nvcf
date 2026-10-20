@@ -1105,7 +1105,7 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 	for _, r := range ranks {
 		rankDst := filepath.Join(dst, strconv.Itoa(r.ordinal))
 		if r.pod.Spec.NodeName == c.NodeName {
-			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src, Excludes: cacheSetExcludes()}}); err != nil {
+			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src, Excludes: cacheSetExcludes(), Faithful: true}}); err != nil {
 				return fmt.Errorf("copy rank %d: %w", r.ordinal, err)
 			}
 			continue
@@ -1118,7 +1118,12 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 		return fmt.Errorf("release collect holder: %w", err)
 	}
 	released = true
-	if err := c.Cache.MarkCompleteClaim(ctx, uri, sysNS, claim, meta); err != nil {
+	// Both copies above keep the engine's owners and modes.
+	stamp := map[string]string{modelvolume.CacheOwnersAnnotation: modelvolume.CacheOwnersKept}
+	for k, v := range meta {
+		stamp[k] = v
+	}
+	if err := c.Cache.MarkCompleteClaim(ctx, uri, sysNS, claim, stamp); err != nil {
 		return err
 	}
 	return c.Cache.ClearFailure(ctx, uri)

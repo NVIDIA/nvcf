@@ -405,7 +405,7 @@ func TestLookup_ServesNewestGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.Complete || st.PrimaryPV != "g3" || st.Generation != 3 || st.DeltaFingerprint != "fp-3" || st.RefreshStable {
+	if !st.Complete || st.PrimaryPV != "g3" || st.Generation != 3 || st.DeltaFingerprint != "fp-3" || st.RefreshStable || st.OwnersKept {
 		t.Errorf("newest generation served: %+v", st)
 	}
 	if err := p.MarkRefreshStable(ctx, "g3"); err != nil {

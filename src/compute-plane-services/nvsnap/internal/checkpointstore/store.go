@@ -114,6 +114,10 @@ type CaptureSource struct {
 	// for rootfs captures (mountinfo bind-mount paths). Paths are
 	// absolute as they appear inside SrcPath (e.g. "/etc/hostname").
 	Excludes []string `json:"excludes,omitempty"`
+
+	// Faithful copies keep every entry's owner and full mode (treecopy's
+	// faithful mode), for a tree a process reopens after a restore.
+	Faithful bool `json:"faithful,omitempty"`
 }
 
 // Store is the abstract content-addressed capture store.

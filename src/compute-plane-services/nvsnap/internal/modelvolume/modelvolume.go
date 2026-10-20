@@ -148,6 +148,13 @@ const (
 	DeltaFingerprintAnnotation = "nvsnap.io/cache-delta-fingerprint"
 	// RefreshStableAnnotation stops further refreshes of a set.
 	RefreshStableAnnotation = "nvsnap.io/cache-refresh-stable"
+	// CacheOwnersAnnotation on a complete set primary says its files
+	// keep the owners and modes the engine gave them (CacheOwnersKept).
+	// A restored engine reopens its cache files and CRIU refuses any
+	// whose mode differs from the dump, so a set without it, whose
+	// copies were made root's, is seeded opened to every user instead.
+	CacheOwnersAnnotation = "nvsnap.io/cache-owners"
+	CacheOwnersKept       = "kept"
 	// SourcePVLabel on a read-only view names the primary it was minted
 	// from, so liveness and retirement work per generation.
 	SourcePVLabel = "nvsnap.io/source-pv"
@@ -378,6 +385,9 @@ type State struct {
 	// for a cold capture; RefreshStable says no further refresh runs.
 	DeltaFingerprint string
 	RefreshStable    bool
+	// OwnersKept: the set's files keep their owners and modes
+	// (CacheOwnersAnnotation).
+	OwnersKept bool
 }
 
 // Generation reads a primary's generation annotation; absent means 1.
@@ -556,6 +566,7 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
 		st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
 		st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
+		st.OwnersKept = best.Annotations[CacheOwnersAnnotation] == CacheOwnersKept
 		return st, nil
 	}
 	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri)})

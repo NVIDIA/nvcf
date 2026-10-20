@@ -95,7 +95,7 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 		t.Errorf("inherit posture follows the engine and is hardened: %+v", sc)
 	}
 
-	seed := seedStep("seed", main, src, "3", volumeAt{Volume: "rw", Path: "/rw"}, "cache", "rank 3", rootPosture)
+	seed := seedStep("seed", main, src, "3", volumeAt{Volume: "rw", Path: "/rw"}, "cache", "rank 3", rootPosture, false)
 	// Copy, open to every user, index for the refresh delta scan, never
 	// fail: the helper's tests cover each.
 	if !reflect.DeepEqual(seed.Command, []string{HelperBin, "seed", "--from", "/ro/3", "--to", "/rw/cache", "--label", "rank 3", "--index", SeedIndexFile}) || len(seed.Args) != 0 {
@@ -116,6 +116,11 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 	}
 	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
 		t.Errorf("no privilege escalation in either posture: %+v", sc)
+	}
+
+	exact := seedStep("seed", main, src, "3", volumeAt{Volume: "rw", Path: "/rw"}, "cache", "rank 3", rootPosture, true)
+	if !reflect.DeepEqual(exact.Command, append(append([]string{}, seed.Command...), "--keep-owners")) {
+		t.Errorf("a seed that keeps owners says so: %v", exact.Command)
 	}
 
 	main.Env = []corev1.EnvVar{{Name: "NVSNAP_PREWARM", Value: "0"}}
