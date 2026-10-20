@@ -202,6 +202,9 @@ navigation:
     - page: High Availability
       path: ../docs/self-managed/high-availability.md
       slug: high-availability
+    - page: Worker Callback Proxy
+      path: ../docs/self-managed/worker-callback-proxy.md
+      slug: worker-callback-proxy
     - page: LLM Function Enablement
       path: ../docs/self-managed/llm-function-enablement.md
       slug: llm-function-enablement

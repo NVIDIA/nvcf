@@ -267,9 +267,10 @@ for comp in nvctApi notary sis apikeys reval ess; do
     fail "$comp: expected rollout strategy when highAvailability.mode=preferred"
 done
 
-# invocation-service + grpc-proxy stay single-replica until Envoy and get no PDB
-# (minAvailable 1 on a singleton blocks drains). Placement may still render but
-# is a no-op at one replica.
+# Without workerCallbackProxy, invocation-service + grpc-proxy stay
+# single-replica and get no PDB (minAvailable 1 on a singleton blocks drains).
+# Placement may still render but is a no-op at one replica.
+# worker-callback-proxy-wiring.sh covers the enabled case.
 render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" ||
   fail "render invocation-service (preferred)"
 if awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then

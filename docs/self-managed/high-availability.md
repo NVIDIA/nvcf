@@ -32,8 +32,10 @@ For the replicated services, `preferred` guarantees continuity after a single
 **pod** failure but provides only best-effort node/zone separation — under
 capacity pressure, replicas can still end up co-located. `enforced` guarantees
 continuity after a single pod **or node** failure when the prerequisites below
-are met. `invocation-service` and `grpc-proxy` are still single-replica in both
-modes, so they are briefly unavailable while their Pod is rescheduled. Neither mode alone
+are met. `invocation-service` and `grpc-proxy` stay single-replica in both
+modes unless the [worker callback proxy](./worker-callback-proxy.md) is
+enabled, so without it they are briefly unavailable while their Pod is
+rescheduled. Neither mode alone
 claims arbitrary availability-zone or site-loss tolerance; see
 [Zone spread for the quorum services](#zone-spread-for-the-quorum-services)
 and [Recovery objectives](#recovery-objectives-and-failure-behavior) for what
@@ -172,14 +174,15 @@ addon is enabled), and the control-plane services `nvctApi`, `notary`, `sis`,
 its scheduled crypto jobs only in a separate worker that is not part of this
 stack, so the in-stack ESS API scales safely.)
 
-> **Note — `invocation-service` and `grpc-proxy` are deferred.** These two are
-> stateless too, but their multi-replica scaling is intentionally **held at a
-> single replica for now**, pending Envoy support in the self-hosted stack.
-> Worker callbacks are host-bound to the specific pod that accepted the request
-> (per-pod pod-IP / DNS addressing), which is safe in a single cluster; the
-> Envoy dependency is for the cross-cluster case. Until then they keep hostname
-> anti-affinity and zone spread (no-ops at one replica) and get **no HA PDB**
-> (a `minAvailable: 1` PDB on a singleton would block node drains).
+> **Note — `invocation-service` and `grpc-proxy` need the worker callback
+> proxy.** A worker calls back to the specific pod that accepted the request,
+> so these two scale only with the
+> [worker callback proxy](./worker-callback-proxy.md)
+> (`workerCallbackProxy.enabled: true`). With it, they follow the convention
+> below: 2 replicas and a PDB. Without it they stay at **a single replica**,
+> keep hostname anti-affinity and zone spread (no-ops at one replica), and get
+> **no HA PDB** (a `minAvailable: 1` PDB on a singleton would block node
+> drains).
 
 Under HA each of these gets:
 
@@ -379,7 +382,7 @@ Confirm the replica-safe Deployments scaled and spread:
 kubectl -n nvcf get deploy nvcf-api -o wide
 kubectl -n nvcf get pods -o wide -l 'app.kubernetes.io/instance=api,!app.kubernetes.io/component'
 kubectl -n api-keys get deploy admin-token-issuer-proxy -o wide
-# invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
+# invocation-service and grpc-proxy: 2 replicas with the worker callback proxy, otherwise 1
 kubectl -n nvcf get deploy invocation-service grpc-proxy-deployment -o wide
 # ess-api scales to 2 (its scheduled crypto jobs run only in a separate worker, not in-stack)
 kubectl -n ess get deploy ess-api-deployment -o wide
@@ -419,8 +422,9 @@ With HA enabled and capacity in at least two AZs:
 - **Single node loss:** Multi-replica replica-safe Deployments keep
   serving from their surviving replica; the scheduler recreates the lost pod on
   another node (and the PDB prevents drains from removing the last one).
-  `invocation-service` and `grpc-proxy` (single replica until Envoy) are briefly
-  unavailable while the scheduler restarts the pod on another node. Quorum
+  Without the worker callback proxy, `invocation-service` and `grpc-proxy`
+  (single replica) are briefly unavailable while the scheduler restarts the
+  pod on another node. Quorum
   services (Cassandra RF=3/`LOCAL_QUORUM`, NATS RF=3, OpenBao 3-node Raft)
   retain quorum with 2 of 3 members and continue serving reads and writes.
   For Cassandra this assumes the keyspaces are at RF=3, which an upgraded

@@ -41,8 +41,9 @@ global.affinity / global.topologySpreadConstraints override placement per class
 for that class. Component values remain the final escape hatch.
 
 Replica-safe Deployments get 2 replicas, anti-affinity, zone spread, and a PDB
-with minAvailable 1. invocation-service and grpc-proxy stay single-replica for
-now (placement still applied, no-op at 1 replica, no PDB).
+with minAvailable 1. invocation-service and grpc-proxy get 2 replicas and a
+PDB only with workerCallbackProxy.enabled; otherwise they stay single-replica
+(placement still applied, no-op at 1 replica, no PDB).
 
 Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
 spread, and a PDB tolerating one disruption at any replica count.
@@ -715,6 +716,23 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $workerCallbackProxyEnabled := dig "workerCallbackProxy" "enabled" false .Values }}
+{{- if not (kindIs "bool" $workerCallbackProxyEnabled) }}
+{{- fail "workerCallbackProxy.enabled must be a YAML boolean, true or false" }}
+{{- end }}
+{{- $workerCallbackProxyDomain := "" }}
+{{- if $workerCallbackProxyEnabled }}
+{{- $workerCallbackProxyDomain = dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower }}
+{{- if not $workerCallbackProxyDomain }}
+{{- fail "workerCallbackProxy.workerDomain is required when workerCallbackProxy.enabled is true, for example grpc-worker.nvcf.svc.cluster.local" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$" $workerCallbackProxyDomain) }}
+{{- fail (printf "workerCallbackProxy.workerDomain must be a DNS name without a scheme or wildcard, got %q" $workerCallbackProxyDomain) }}
+{{- end }}
+{{- if or $invocationWorkerBaseURL $grpcProxyWorkerConnectBaseURL }}
+{{- fail "workerCallbackProxy.enabled cannot be combined with global.workerEndpoints.invocationServiceURL, global.workerEndpoints.grpcProxyWorkerConnectURL, or grpcproxy.workerConnectBaseURL; workers reach both services through the proxy" }}
+{{- end }}
+{{- end }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $backendRouterGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
@@ -1029,10 +1047,16 @@ invocation:
   {{- with include "nvcf.natsStreamReplicas" .Values }}
   {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS" (dig "invocationProxyURL" "" $workerEndpoints | default "http://worker-callback-proxy.nvcf.svc.cluster.local:10084") }}
+  {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- if and $haEnabled $workerCallbackProxyEnabled }}
+  replicaCount: {{ max 2 (dig "invocation" "replicaCount" 1 .Values | int) }}
+  {{- else if $haEnabled }}
+  {{- /* Workers reach a specific replica only through the worker callback
+         proxy, so stay at one replica without it. */}}
   replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
@@ -1069,7 +1093,14 @@ invocation:
     {{- toYaml . | nindent 6 }}
   {{- end }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
-  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  {{- $invocationPDB := deepCopy (dig "invocation" "podDisruptionBudget" dict .Values) }}
+  {{- if and $haEnabled $workerCallbackProxyEnabled }}
+  {{- $_ := set $invocationPDB "enabled" true }}
+  {{- if not (or (dig "minAvailable" "" $invocationPDB | toString) (dig "maxUnavailable" "" $invocationPDB | toString)) }}
+  {{- $_ := set $invocationPDB "maxUnavailable" 1 }}
+  {{- end }}
+  {{- end }}
+  {{- with $invocationPDB }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -1159,9 +1190,37 @@ eventLedger:
 
 grpcproxy:
   fullnameOverride: grpc-proxy
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- if and $haEnabled $workerCallbackProxyEnabled }}
+  replicaCount: {{ max 2 (dig "grpcproxy" "replicaCount" 1 .Values | int) }}
+  {{- else if $haEnabled }}
+  {{- /* Workers reach a specific replica only through the worker callback
+         proxy, so stay at one replica without it. */}}
   replicaCount: 1
+  {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- /* Replaces the chart's port list, so the chart defaults are repeated. */}}
+  ports:
+    - name: client
+      containerPort: 10081
+      protocol: TCP
+    - name: worker-tcp
+      containerPort: 10086
+      protocol: TCP
+    - name: metrics
+      containerPort: 10083
+      protocol: TCP
+    - name: worker-quic
+      containerPort: 10084
+      protocol: UDP
+  volumes:
+    - name: worker-tls
+      secret:
+        secretName: grpc-proxy-pod-tls
+  volumeMounts:
+    - name: worker-tls
+      mountPath: /etc/grpc-proxy/worker-tls
+      readOnly: true
+  workerConnectBaseURL: {{ printf "https://%s" $workerCallbackProxyDomain | quote }}
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -1213,11 +1272,62 @@ grpcproxy:
     {{- if dig "addons" "eventLedger" "enabled" false .Values }}
     EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
     {{- end }}
+    {{- if $workerCallbackProxyEnabled }}
+    ENABLE_HTTP3_CONNECT: "true"
+    ENABLE_HTTP1_CONNECT: "false"
+    PUBLIC_CERT_PATH: /etc/grpc-proxy/worker-tls/tls.crt
+    PRIVATE_KEY_PATH: /etc/grpc-proxy/worker-tls/tls.key
+    {{- end }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
-  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  {{- $grpcProxyPDB := deepCopy (dig "grpcproxy" "podDisruptionBudget" dict .Values) }}
+  {{- if and $haEnabled $workerCallbackProxyEnabled }}
+  {{- $_ := set $grpcProxyPDB "enabled" true }}
+  {{- if not (or (dig "minAvailable" "" $grpcProxyPDB | toString) (dig "maxUnavailable" "" $grpcProxyPDB | toString)) }}
+  {{- $_ := set $grpcProxyPDB "maxUnavailable" 1 }}
+  {{- end }}
+  {{- end }}
+  {{- with $grpcProxyPDB }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+
+{{- if $workerCallbackProxyEnabled }}
+
+workerCallbackProxy:
+  workerDomain: {{ $workerCallbackProxyDomain | quote }}
+  {{- with dig "workerCallbackProxy" "replicaCount" nil .Values }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (. | int) }}{{ else }}{{ . | int }}{{ end }}
+  {{- end }}
+  {{- with dig "workerCallbackProxy" "image" dict .Values }}
+  image:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  tls:
+    frontend:
+      certificate:
+        issuerRef:
+          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          group: cert-manager.io
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "worker-callback-proxy" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "worker-callback-proxy" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- end }}
+{{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
