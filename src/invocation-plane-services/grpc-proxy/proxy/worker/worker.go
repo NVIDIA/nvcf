@@ -42,6 +42,7 @@ func NewWorkerConnection(requestId uuid.UUID, functionId, functionVersionId stri
 		RequestId:         requestId,
 		FunctionId:        functionId,
 		FunctionVersionId: functionVersionId,
+		AttachmentId:      uuid.New(),
 		CreatedAt:         time.Now(),
 		connPopulated:     make(chan struct{}),
 		onActive:          onActive,
@@ -67,6 +68,9 @@ type WorkerConnection struct {
 	RequestId         uuid.UUID
 	FunctionId        string
 	FunctionVersionId string
+	// AttachmentId identifies this tunnel. A request ID can have several over a
+	// session's life, one per rejoin.
+	AttachmentId uuid.UUID
 	// CreatedAt is when this connection entered the worker connection cache.
 	// Used to report how long a tunnel stayed open when it is closed.
 	CreatedAt time.Time

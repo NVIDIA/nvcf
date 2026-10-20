@@ -55,9 +55,9 @@ const (
 
 type mockInvoker invocation.Result
 
-func (m *mockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (m *mockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error) {
 	result := (invocation.Result)(*m)
-	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "")
 	return result, func() {}, nil
 }
 
@@ -91,7 +91,7 @@ func TestStreamDirector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local grpc server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -318,7 +318,7 @@ func TestRequestIdHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -380,7 +380,7 @@ func TestRequestIdCookie(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -747,7 +747,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect to local WebSocket server %s", err)
 	}
-	err = director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, dial)
+	err = director.RegisterWorker(proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, dial)
 	if err != nil {
 		t.Fatalf("failed to register worker %s", err)
 	}
@@ -1369,7 +1369,7 @@ type mockFailingInvoker struct {
 	failureErr error
 }
 
-func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error) {
 	if m.shouldFail {
 		return invocation.Result{}, func() {}, m.failureErr
 	}
@@ -1378,7 +1378,7 @@ func (m *mockFailingInvoker) InvokeStatefulFunction(_ context.Context, _ net.Con
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "test-token",
 	}
-	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "")
 	return result, func() {}, nil
 }
 
@@ -1583,7 +1583,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 		var mu sync.Mutex
 
 		// Create an invoker that succeeds on first call but returns a connection that gets closed
-		retryInvoker := FunctionInvokerFunc(func(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+		retryInvoker := FunctionInvokerFunc(func(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error) {
 			mu.Lock()
 			callCount++
 			currentCall := callCount
@@ -1595,7 +1595,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 					RequestId:                uuid.New(),
 					WorkerAuthorizationToken: "first-token",
 				}
-				onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+				onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "")
 				return result, func() {}, nil
 			}
 
@@ -1604,7 +1604,7 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 				RequestId:                uuid.New(),
 				WorkerAuthorizationToken: "retry-token",
 			}
-			onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+			onWorkerAuth(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "")
 			return result, func() {}, nil
 		})
 
@@ -1672,9 +1672,9 @@ func TestStreamDirector_ErrorHandling(t *testing.T) {
 }
 
 // FunctionInvokerFunc is a function type that implements the FunctionInvoker interface
-type FunctionInvokerFunc func(context.Context, net.Conn, string, string, string, *uuid.UUID, func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error)
+type FunctionInvokerFunc func(context.Context, net.Conn, string, string, string, *uuid.UUID, func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error)
 
-func (f FunctionInvokerFunc) InvokeStatefulFunction(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (f FunctionInvokerFunc) InvokeStatefulFunction(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error) {
 	return f(ctx, conn, auth, functionId, functionVersionId, requestId, onWorkerAuth)
 }
 

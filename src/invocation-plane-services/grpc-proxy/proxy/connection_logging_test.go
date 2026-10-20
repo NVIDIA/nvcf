@@ -59,7 +59,7 @@ func TestWorkerConnectionCacheEvictionLogging(t *testing.T) {
 	defer server.Close()
 
 	// Register the actual worker connection
-	err := director.RegisterWorker(proxyResponse.RequestId, proxyResponse.WorkerAuthorizationToken, testFunctionId, testFunctionVersionId, server)
+	err := director.RegisterWorker(proxyResponse.WorkerAuthorizationToken, workerAuthInfo{requestId: proxyResponse.RequestId, functionId: testFunctionId, functionVersionId: testFunctionVersionId}, server)
 	if err != nil {
 		t.Fatalf("failed to register worker: %v", err)
 	}
@@ -188,9 +188,9 @@ func (m *testMockConn) SetWriteDeadline(t time.Time) error { return nil }
 
 type testMockInvoker invocation.Result
 
-func (m *testMockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
+func (m *testMockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error) {
 	result := invocation.Result(*m)
-	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
+	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId, "")
 	return result, nil, nil
 }
 

@@ -70,7 +70,7 @@ func newRecordingPurger() *recordingPurger {
 	return &recordingPurger{purged: map[uuid.UUID]string{}}
 }
 
-func (p *recordingPurger) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, _ func(string, uuid.UUID, string, string)) (invocation.Result, context.CancelFunc, error) {
+func (p *recordingPurger) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _, _ string, _ *uuid.UUID, _ func(string, uuid.UUID, string, string, string)) (invocation.Result, context.CancelFunc, error) {
 	return invocation.Result{}, nil, errors.New("not used")
 }
 

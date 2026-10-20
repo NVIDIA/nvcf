@@ -496,3 +496,12 @@ Authentication follows the same rule as the NVCF API client. If the secrets
 file has an `eventLedgerToken` key, that token is sent as a bearer token and
 reloaded when the file changes. Otherwise the proxy uses OAuth2 client
 credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.
+
+Events use source `grpc-proxy` and carry the extensions `functionversionid`,
+`functionid`, `resourceid` (the NVCF request ID) and `ncaid` (the
+authenticated caller's NCA ID). The ledger keeps the latest event of each type
+per request, so a rejoin replaces the first attachment's events.
+
+| Type | When | Data |
+|---|---|---|
+| `GrpcProxy.Attachment.Established` | A worker tunnel attaches to a session | `schema_version`, `request_id`, `attachment_id`, `is_rejoin`, `setup_latency_ms` (from the client request starting session setup to the worker attaching) |
