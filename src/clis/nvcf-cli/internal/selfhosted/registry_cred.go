@@ -41,6 +41,11 @@ const (
 	// ACME solver stays here unless certManager.acmesolver.image is set.
 	certManagerRegistry = "quay.io"
 
+	// certManagerACMESolverRepository is the chart's ACME solver repository
+	// on quay.io, the scope its probe asks for: quay.io refuses an anonymous
+	// token with no scope.
+	certManagerACMESolverRepository = "jetstack/cert-manager-acmesolver"
+
 	// ngcRegistry is the default global.image.registry in the stack's
 	// environments/base.yaml, and the fallback when no source named a
 	// registry. See the tail of EnumerateRegistries.
@@ -117,6 +122,10 @@ type registryProbeOutcome struct {
 	// rejected for the scope: the one refusal that may be this machine's
 	// alone once the stack is installed.
 	keyOnly bool
+	// anonymousRefused marks a probeAnonymous whose anonymous token could not
+	// read the scope's tags. Only for a scope that is a repository the
+	// install pulls is that a missing credential.
+	anonymousRefused bool
 }
 
 func (o registryProbeOutcome) Error() string { return o.detail }
@@ -217,13 +226,15 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	if hasCred {
 		sent = &cred
 	}
-	_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, sent)
+	token, err := exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, sent)
 	note := ""
 	if login := settled.rejectedLogin; login != nil && hasCred {
 		note = "; " + rejectedLoginNote(registry, login.source)
 	}
 	if err == nil {
 		switch {
+		case !hasCred && !critical && lookupErr == nil && repoHint != "":
+			return interrupted(anonymousPullOutcome(pctx, client, registry, repoHint, token))
 		case !hasCred:
 			return anonymousOutcome(registry, critical, lookupErr)
 		case note != "":
@@ -294,12 +305,47 @@ func anonymousOutcome(registry string, critical bool, lookupErr error) error {
 	if critical || lookupErr != nil {
 		return noCredentialOutcome(registry, lookupErr)
 	}
-	return registryProbeOutcome{kind: probeAnonymous, detail: "reachable anonymously; no local credential checked"}
+	return registryProbeOutcome{kind: probeAnonymous, detail: anonymousDetail}
+}
+
+// anonymousDetail reports a registry that let this machine in anonymously,
+// with nothing more learned.
+const anonymousDetail = "reachable anonymously; no local credential checked"
+
+// anonymousPullOutcome grades a non-critical registry that issued an
+// anonymous token for repo, with no local credential to send. A token is not
+// access: quay.io issues one with no actions for a repository anyone may not
+// pull. So repo's tags are read with it: a list served means anyone may pull
+// repo, and a 401 or 403 that anyone may not. Any other answer, a 404 for a
+// path that is no repository included, leaves only what the token showed.
+func anonymousPullOutcome(ctx context.Context, client *http.Client, registry, repo, token string) error {
+	resp, err := doRegistryRequest(ctx, client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+			"https://"+registry+"/v2/"+repo+"/tags/list?n=1", nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		return req, err
+	})
+	if err != nil {
+		return anonymousOutcome(registry, false, nil)
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return registryProbeOutcome{kind: probeAnonymous,
+			detail: "anonymous pull allowed for " + scopeLabel(registry, repo) + ", so no credential is needed"}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return registryProbeOutcome{kind: probeAnonymous, anonymousRefused: true,
+			detail: fmt.Sprintf("anonymous pull of %s refused (%s); %s", scopeLabel(registry, repo), resp.Status,
+				noCredentialOutcome(registry, nil).detail)}
+	}
+	return anonymousOutcome(registry, false, nil)
 }
 
 // noCredentialOutcome reports that no local credential was read for
 // registry, with the reason a credential store failed when one did.
-func noCredentialOutcome(registry string, lookupErr error) error {
+func noCredentialOutcome(registry string, lookupErr error) registryProbeOutcome {
 	why := "(a credential helper such as credsStore may not be readable here)"
 	if lookupErr != nil {
 		why = "(reading them failed: " + lookupErr.Error() + ")"
@@ -414,8 +460,8 @@ type RegistryEntry struct {
 	Registry string
 	// RepoHint is the repository path used as the OAuth scope when probing
 	// credentials (e.g. "nvidia/nvcf-byoc/cluster-validator" for NGC).
-	// Empty means probe without a specific scope, which works for public
-	// registries (quay.io, Docker Hub public images) and GHCR anonymous access.
+	// Empty means probe without a specific scope, which works for most
+	// registries but not quay.io: it refuses an anonymous token with no scope.
 	RepoHint string
 	// Critical marks a registry a source named that the install must pull
 	// private images from: an NVIDIA registry named by the validator image or
@@ -428,6 +474,18 @@ type RegistryEntry struct {
 	// ChartsOnly marks a Charts entry no other source named. The clusters
 	// pull nothing from it, so the control-plane validator does not dial it.
 	ChartsOnly bool
+	// Repository marks a RepoHint that is a repository the install pulls,
+	// the validator image's or the ACME solver's, not a path its images sit
+	// under. Anonymous pull refused for it, with no local credential, is a
+	// warning.
+	Repository bool
+	// Local marks a registry on the loopback, localhost or a loopback
+	// address. Each node pulls such an image from its own image store or
+	// loopback registry, as a k3d or kind import is, which neither this
+	// machine nor the validator's pod can see. Its row probes it only where
+	// this machine holds a credential for it, and the validator never dials
+	// it.
+	Local bool
 }
 
 // ParseRegistryExtra parses one --cluster-validator-registries entry,
@@ -595,6 +653,21 @@ func stackGateways(merged map[string]any) []string {
 	return out
 }
 
+// readValuesFile is how ValuesFileReadable reads a file. A var so tests can
+// fail the read, which a file mode cannot do for every user.
+var readValuesFile = os.ReadFile
+
+// ValuesFileReadable reports whether path can be read and holds a values map,
+// the test loadValuesFiles applies before layering a file.
+func ValuesFileReadable(path string) bool {
+	data, err := readValuesFile(path)
+	if err != nil {
+		return false
+	}
+	var doc map[string]any
+	return yaml.Unmarshal(data, &doc) == nil
+}
+
 // loadValuesFiles layers files in order and reports whether any was read.
 // Unreadable or malformed files are skipped.
 func loadValuesFiles(files []string) (map[string]any, bool) {
@@ -711,7 +784,8 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 				return &out[i]
 			}
 		}
-		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical})
+		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical,
+			Local: isLoopbackRegistry(registry)})
 		return &out[len(out)-1]
 	}
 
@@ -725,7 +799,10 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
 	imageNamedRegistry := false
 	if reg, repo, _, ok := parseImageRef(imageRef); ok {
-		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg), false) != nil
+		if e := add(reg, repo, isNGCRegistry(reg), false); e != nil {
+			imageNamedRegistry = true
+			e.Repository = true
+		}
 	}
 
 	// Source 2: global.image.registry and global.image.repository from the
@@ -760,10 +837,14 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// quay.io/jetstack default unless certManager.acmesolver.image is set, so
 	// a mirrored site still pulls it from quay.io at its first HTTP-01 order.
 	// Probe quay.io unless the stack leaves cert-manager out or points the
-	// solver somewhere else. Without stack values, probe it as a guess.
+	// solver somewhere else. Without stack values, probe it as a guess. The
+	// probe is scoped to the solver's repository: quay.io refuses an
+	// anonymous token with no scope.
 	if acme := stack.ACMESolverRepository; !stack.Found ||
 		(stack.CertManagerEnabled && (acme == "" || strings.HasPrefix(acme, certManagerRegistry+"/"))) {
-		add(certManagerRegistry, "", false, false)
+		if e := add(certManagerRegistry, acmeSolverScope(acme), false, false); e != nil {
+			e.Repository = true
+		}
 	}
 
 	// Source 5: operator-supplied extras (--cluster-validator-registries),
@@ -790,6 +871,26 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	}
 
 	return out
+}
+
+// acmeSolverScope is the repository the ACME solver is pulled from on
+// quay.io: the chart's default, unless the stack names another one there.
+func acmeSolverScope(repository string) string {
+	if path, ok := strings.CutPrefix(repository, certManagerRegistry+"/"); ok && isRepositoryPath(path) {
+		return path
+	}
+	return certManagerACMESolverRepository
+}
+
+// isLoopbackRegistry reports a registry on the loopback: localhost or a
+// loopback address, with or without a port.
+func isLoopbackRegistry(registry string) bool {
+	host, _ := parseRegistryHostPort(registry)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // stackScope splits a stack's registry and repository, which the stack
