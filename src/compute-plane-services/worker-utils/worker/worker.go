@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -152,9 +153,14 @@ func NewNVCFWorker(ctx context.Context, zapLogger *logs.ZapLogger, config Config
 	if err != nil {
 		return nil, types.NewInternalError(fmt.Errorf("invalid function version id %s", config.FunctionVersionId))
 	}
-	otelUrl, err := url.Parse(config.OTELExporterOTLPEndpoint)
+	otlpHost, otlpInsecure, err := otlpTraceTarget(config.OTELExporterOTLPEndpoint)
 	if err != nil {
 		return nil, types.NewInternalError(err)
+	}
+	if otlpHost == "" {
+		zap.L().Info("OTEL_EXPORTER_OTLP_ENDPOINT is not set, tracing is disabled",
+			zap.String("function_id", config.FunctionId),
+			zap.String("function_version_id", config.FunctionVersionId))
 	}
 	config.MaxRequestConcurrency = max(1, config.MaxRequestConcurrency) // at least 1
 
@@ -313,9 +319,9 @@ func NewNVCFWorker(ctx context.Context, zapLogger *logs.ZapLogger, config Config
 				ServiceName: "gdn-nvcf-worker-service",
 				Version:     utils.Version,
 				Tracing: tracing.OTELConfig{
-					Enabled:     true,
-					Endpoint:    otelUrl.Host,
-					Insecure:    otelUrl.Scheme == "http",
+					Enabled:     otlpHost != "",
+					Endpoint:    otlpHost,
+					Insecure:    otlpInsecure,
 					AccessToken: config.TracingAccessToken,
 					Attributes: tracing.Attributes{
 						Extra: map[string]string{
@@ -629,4 +635,22 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 // Shutdown triggers a graceful shutdown of the worker -- This is only used by tests
 func (w *NVCFWorker) Shutdown() {
 	w.shutdownCancel()
+}
+
+// otlpTraceTarget parses OTEL_EXPORTER_OTLP_ENDPOINT into the host and
+// transport security for the OTLP gRPC trace exporter. An empty or unset
+// endpoint returns an empty host, which means tracing is disabled.
+func otlpTraceTarget(endpoint string) (host string, insecure bool, err error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", false, nil
+	}
+	otelURL, err := url.Parse(endpoint)
+	if err != nil {
+		return "", false, err
+	}
+	if otelURL.Host == "" {
+		return "", false, errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be a URL with a host, such as http://otel-collector:4317")
+	}
+	return otelURL.Host, otelURL.Scheme == "http", nil
 }

@@ -232,6 +232,7 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 			WorkloadMetrics: WorkloadMetricsConfig{
 				DropLabels: defaultWorkloadMetricsDropLabels,
 			},
+			CollectorTracesEnabled: true,
 		},
 	)
 	if err != nil {
@@ -275,8 +276,29 @@ func assertYAMLConfigEqual(t *testing.T, expectedYAML, actualYAML []byte) {
 	}
 }
 
+// collectorTracesYAML is the service.telemetry.traces block rendered when the
+// collector exports its own traces.
+const collectorTracesYAML = `    traces:
+      processors:
+        - batch:
+            exporter:
+              otlp:
+                protocol: grpc
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+                headers:
+                  - name: lightstep-access-token
+                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
+`
+
+func expectedCollectorTracesYAML(collectorTraces bool) string {
+	if collectorTraces {
+		return collectorTracesYAML
+	}
+	return ""
+}
+
 // returns the expected OpenTelemetry YAML configuration as a byte slice for function workloads
-func createExpectedOtelConfigYAMLForInternalTelemetryFunction(tracesTelemetryName string) []byte {
+func createExpectedOtelConfigYAMLForInternalTelemetryFunction(tracesTelemetryName string, collectorTraces bool) []byte {
 	internalTelemetryYAMLString := fmt.Sprintf(`receivers: {}
 exporters:
   otlp/SERVICENOW-%s-traces:
@@ -309,17 +331,7 @@ service:
           value: test-function-id
         - name: function.version.id
           value: test-function-version-id
-    traces:
-      processors:
-        - batch:
-            exporter:
-              otlp:
-                protocol: grpc
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
-                headers:
-                  - name: lightstep-access-token
-                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
-  pipelines:
+%s  pipelines:
     traces:
       receivers:
         - otlp
@@ -332,12 +344,12 @@ service:
   extensions:
     - healthcheckv2
     - cgroup_runtime
-`, tracesTelemetryName, tracesTelemetryName, tracesTelemetryName)
+`, tracesTelemetryName, tracesTelemetryName, expectedCollectorTracesYAML(collectorTraces), tracesTelemetryName)
 	return []byte(internalTelemetryYAMLString)
 }
 
 // returns the expected OpenTelemetry YAML configuration as a byte slice for task workloads
-func createExpectedOtelConfigYAMLForInternalTelemetryTask(tracesTelemetryName string) []byte {
+func createExpectedOtelConfigYAMLForInternalTelemetryTask(tracesTelemetryName string, collectorTraces bool) []byte {
 	internalTelemetryYAMLString := fmt.Sprintf(`receivers: {}
 exporters:
   otlp/SERVICENOW-%s-traces:
@@ -368,17 +380,7 @@ service:
           value: byoo-otel-collector
         - name: task.id
           value: test-task-id
-    traces:
-      processors:
-        - batch:
-            exporter:
-              otlp:
-                protocol: grpc
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
-                headers:
-                  - name: lightstep-access-token
-                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
-  pipelines:
+%s  pipelines:
     traces:
       receivers:
         - otlp
@@ -391,7 +393,7 @@ service:
   extensions:
     - healthcheckv2
     - cgroup_runtime
-`, tracesTelemetryName, tracesTelemetryName, tracesTelemetryName)
+`, tracesTelemetryName, tracesTelemetryName, expectedCollectorTracesYAML(collectorTraces), tracesTelemetryName)
 	return []byte(internalTelemetryYAMLString)
 }
 
@@ -426,11 +428,39 @@ func Test_generateExportersAndService(t *testing.T) {
 					return config
 				}(),
 				tmplConfig: TemplateConfig{
+					FunctionID:             "test-function-id",
+					FunctionVersionID:      "test-function-version-id",
+					Namespace:              "test-namespace",
+					CollectorTracesEnabled: true,
+				},
+				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryFunction("example-trace", true),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Function workload without collector traces when no OTLP endpoint is set",
+			args: args{
+				config: TelemetryConfig{
+					Telemetries: Telemetries{
+						Traces: &Telemetry{
+							Name:     "example-trace",
+							Protocol: "http",
+							Provider: "SERVICENOW",
+							Endpoint: "endpoint:8283",
+						},
+					},
+				},
+				otelConfig: func() *OpenTelemetryConfig {
+					config := &OpenTelemetryConfig{}
+					initializeConfigMaps(config)
+					return config
+				}(),
+				tmplConfig: TemplateConfig{
 					FunctionID:        "test-function-id",
 					FunctionVersionID: "test-function-version-id",
 					Namespace:         "test-namespace",
 				},
-				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryFunction("example-trace"),
+				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryFunction("example-trace", false),
 			},
 			wantErr: false,
 		},
@@ -453,10 +483,37 @@ func Test_generateExportersAndService(t *testing.T) {
 					return config
 				}(),
 				tmplConfig: TemplateConfig{
+					TaskID:                 "test-task-id",
+					Namespace:              "test-namespace",
+					CollectorTracesEnabled: true,
+				},
+				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryTask("example-trace", true),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Task workload without collector traces when no OTLP endpoint is set",
+			args: args{
+				config: TelemetryConfig{
+					Telemetries: Telemetries{
+						Traces: &Telemetry{
+							Name:     "example-trace",
+							Protocol: "http",
+							Provider: "SERVICENOW",
+							Endpoint: "endpoint:8283",
+						},
+					},
+				},
+				otelConfig: func() *OpenTelemetryConfig {
+					config := &OpenTelemetryConfig{}
+					initializeConfigMaps(config)
+					return config
+				}(),
+				tmplConfig: TemplateConfig{
 					TaskID:    "test-task-id",
 					Namespace: "test-namespace",
 				},
-				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryTask("example-trace"),
+				expectedOtelConfigYAML: createExpectedOtelConfigYAMLForInternalTelemetryTask("example-trace", false),
 			},
 			wantErr: false,
 		},

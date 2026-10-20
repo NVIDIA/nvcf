@@ -27,6 +27,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestMain(m *testing.M) {
@@ -66,6 +67,56 @@ func TestGenerateConfig(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, string(content), "https://sandbox-receivers.thanos.example.com/api/v1/receive")
 	assert.Contains(t, string(content), "kratos-thanos-sandbox")
+}
+
+func TestGenerateConfigCollectorTraces(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpoint    *string
+		wantTracing bool
+	}{
+		{name: "endpoint set", endpoint: ptr("https://otlp.example.invalid:4317"), wantTracing: true},
+		{name: "endpoint unset", endpoint: nil},
+		{name: "endpoint empty", endpoint: ptr("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NVCF_BACKEND_TYPE", "non-gfn")
+			t.Setenv("NVCF_INSTANCE_ID", "fake-instance-id")
+			t.Setenv("NVCF_NAMESPACE", "sr-fake-namespace")
+			t.Setenv("NVCF_WORKLOAD_TYPE", "container")
+			t.Setenv("NVCT_TASK_ID", "fake-task-id")
+			t.Setenv("ESS_SECRETS_PATH", "../../examples/secrets")
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			if tt.endpoint == nil {
+				require.NoError(t, os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+			} else {
+				t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", *tt.endpoint)
+			}
+
+			telemetries, err := os.ReadFile(filepath.Join("../../testdata", "otelcollector_stg.json"))
+			require.NoError(t, err)
+			outputFile := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, GenerateConfig(outputFile, base64.StdEncoding.EncodeToString(telemetries)))
+
+			content, err := os.ReadFile(outputFile)
+			require.NoError(t, err)
+			var rendered OpenTelemetryConfig
+			require.NoError(t, yaml.Unmarshal(content, &rendered))
+			_, hasTraces := rendered.Service.Telemetry["traces"]
+			assert.Equal(t, tt.wantTracing, hasTraces)
+			assert.NotContains(t, string(content), "localhost:4317", "the collector must not fall back to a local OTLP endpoint")
+			if tt.wantTracing {
+				assert.Contains(t, string(content), "endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}")
+			} else {
+				assert.NotContains(t, string(content), "OTEL_EXPORTER_OTLP_ENDPOINT")
+			}
+		})
+	}
+}
+
+func ptr(s string) *string {
+	return &s
 }
 
 func TestGenerateConfigKratosLogsMetricsTraces(t *testing.T) {
@@ -323,6 +374,61 @@ func TestGetTemplateConfig(t *testing.T) {
 			},
 			expectErr: true,
 		},
+		{
+			name: "OTLP endpoint set enables collector traces",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":           "non-gfn",
+				"NVCF_INSTANCE_ID":            "test-instance",
+				"NVCF_NAMESPACE":              "test-ns",
+				"NVCF_WORKLOAD_TYPE":          "container",
+				"NVCT_TASK_ID":                "task-123",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp.example.invalid:4317",
+			},
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.CollectorTracesEnabled)
+			},
+		},
+		{
+			name: "OTLP endpoint unset disables collector traces",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":  "non-gfn",
+				"NVCF_INSTANCE_ID":   "test-instance",
+				"NVCF_NAMESPACE":     "test-ns",
+				"NVCF_WORKLOAD_TYPE": "container",
+				"NVCT_TASK_ID":       "task-123",
+			},
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.False(t, cfg.CollectorTracesEnabled)
+			},
+		},
+		{
+			name: "OTLP endpoint empty disables collector traces",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":           "non-gfn",
+				"NVCF_INSTANCE_ID":            "test-instance",
+				"NVCF_NAMESPACE":              "test-ns",
+				"NVCF_WORKLOAD_TYPE":          "container",
+				"NVCT_TASK_ID":                "task-123",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "",
+			},
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.False(t, cfg.CollectorTracesEnabled)
+			},
+		},
+		{
+			name: "OTLP endpoint whitespace disables collector traces",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":           "non-gfn",
+				"NVCF_INSTANCE_ID":            "test-instance",
+				"NVCF_NAMESPACE":              "test-ns",
+				"NVCF_WORKLOAD_TYPE":          "container",
+				"NVCT_TASK_ID":                "task-123",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "  ",
+			},
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.False(t, cfg.CollectorTracesEnabled)
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -346,6 +452,7 @@ func TestGetTemplateConfig(t *testing.T) {
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG",
 				"BYOO_WORKLOAD_METRICS_DROP_LABELS",
 				"BYOO_OTEL_COLLECTOR_CONFIG_B64",
+				"OTEL_EXPORTER_OTLP_ENDPOINT",
 			}
 			backup := map[string]*string{}
 			for _, k := range envKeys {
