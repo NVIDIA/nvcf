@@ -142,6 +142,9 @@ func TestReadinessFollowsNATSConnection(t *testing.T) {
 	// service. Stop must not be called twice (callout.AuthorizationService.Stop closes
 	// a channel unconditionally).
 	t.Cleanup(func() {
+		if setup == nil || setup.AuthService == nil {
+			return
+		}
 		select {
 		case <-setup.AuthService.Closed():
 		case <-time.After(5 * time.Second):
