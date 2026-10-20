@@ -190,10 +190,13 @@ inside the pod on these ports:
 
 A telemetry endpoint has a provider, an endpoint, a set of signal types, and a
 secret. The BYOO collector renders an exporter only for the providers and
-signal types in this table. Telemetry registration and secret updates return
-400 for any other provider or signal type. Function and task creation return
-400 when they reference a telemetry for a signal type its provider does not
-support.
+signal types in this table. Telemetry registration returns 400 for any other
+provider or signal type. Secret updates return 400 for any other provider. A
+secret update checks the new secret against the stored signal types that the
+provider supports and ignores the others. An endpoint stored with an
+unsupported signal type can still rotate its secret. Function and task creation
+return 400 when they reference a telemetry for a signal type its provider does
+not support.
 
 The `secret.value` field is a string or a JSON object of string fields. The
 collector writes a string to one credential file. It writes each key of a JSON

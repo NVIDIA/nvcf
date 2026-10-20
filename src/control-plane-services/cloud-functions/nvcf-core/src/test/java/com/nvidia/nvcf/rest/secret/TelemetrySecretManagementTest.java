@@ -49,6 +49,7 @@ import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.MockEssServer;
 import java.net.URI;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -72,6 +73,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.RequestEntity;
 import org.springframework.test.context.ContextConfiguration;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.StringNode;
 
@@ -90,6 +92,13 @@ class TelemetrySecretManagementTest {
             UUID.fromString("5c3a9e72-8d14-4f6b-b0e3-7a1f2c9d6e21");
     private static final UUID KRATOS_TRACES_TELEMETRY_ID =
             UUID.fromString("a2e4f6b8-1c3d-4e5f-8a7b-9c0d1e2f3a42");
+    private static final UUID KRATOS_LOGS_TRACES_TELEMETRY_ID =
+            UUID.fromString("3b8e1f40-6c2d-4a9e-b7f1-2d5c8a0e9f63");
+    private static final UUID KRATOS_METRICS_TRACES_TELEMETRY_ID =
+            UUID.fromString("7e1c5a93-0f4b-4d2e-a6c8-1b9f3e7d5a84");
+    private static final UUID SPLUNK_LOGS_METRICS_TELEMETRY_ID =
+            UUID.fromString("c6d2b8e5-4a1f-4e3c-9d7b-5f0a2c8e1b95");
+    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
 
     @Autowired
     private TestRestTemplate testRestTemplate;
@@ -139,25 +148,40 @@ class TelemetrySecretManagementTest {
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
         );
-        createKratosTelemetry(KRATOS_LOGS_TELEMETRY_ID, TelemetryType.LOGS);
-        createKratosTelemetry(KRATOS_METRICS_TELEMETRY_ID, TelemetryType.METRICS);
-        createKratosTelemetry(KRATOS_TRACES_TELEMETRY_ID, TelemetryType.TRACES);
+        var kratosSecret = JSON_MAPPER.createObjectNode()
+                .put("collectorId", "collector-id")
+                .put("clientCert", "client-cert")
+                .put("clientKey", "client-key");
+        // Stored as they were before registration rejected types the provider does not export.
+        createStoredTelemetry(KRATOS_LOGS_TELEMETRY_ID, TelemetryProvider.KRATOS,
+                              Set.of(TelemetryType.LOGS), kratosSecret);
+        createStoredTelemetry(KRATOS_METRICS_TELEMETRY_ID, TelemetryProvider.KRATOS,
+                              Set.of(TelemetryType.METRICS), kratosSecret);
+        createStoredTelemetry(KRATOS_TRACES_TELEMETRY_ID, TelemetryProvider.KRATOS,
+                              Set.of(TelemetryType.TRACES), kratosSecret);
+        createStoredTelemetry(KRATOS_LOGS_TRACES_TELEMETRY_ID, TelemetryProvider.KRATOS,
+                              Set.of(TelemetryType.LOGS, TelemetryType.TRACES), kratosSecret);
+        createStoredTelemetry(KRATOS_METRICS_TRACES_TELEMETRY_ID, TelemetryProvider.KRATOS,
+                              Set.of(TelemetryType.METRICS, TelemetryType.TRACES), kratosSecret);
+        createStoredTelemetry(SPLUNK_LOGS_METRICS_TELEMETRY_ID, TelemetryProvider.SPLUNK,
+                              Set.of(TelemetryType.LOGS, TelemetryType.METRICS),
+                              new StringNode("splunk-token"));
     }
 
-    private void createKratosTelemetry(UUID telemetryId, TelemetryType type) {
+    private void createStoredTelemetry(UUID telemetryId,
+                                       TelemetryProvider provider,
+                                       Set<TelemetryType> types,
+                                       JsonNode secretValue) {
         testTelemetryService.createTelemetry(
                 TEST_NCA_ID,
                 telemetryId,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.KRATOS,
-                Set.of(type),
+                provider,
+                types,
                 SecretDto.builder()
-                        .name("kratos-" + type.name().toLowerCase() + "-secret")
-                        .value(JsonMapper.builder().build().createObjectNode()
-                                       .put("collectorId", "collector-id")
-                                       .put("clientCert", "client-cert")
-                                       .put("clientKey", "client-key"))
+                        .name(provider.name().toLowerCase() + "-" + telemetryId)
+                        .value(secretValue)
                         .build()
         );
     }
@@ -196,7 +220,7 @@ class TelemetrySecretManagementTest {
                                                              List.of(SCOPE_UPDATE_SECRETS), 100),
                              SecretDto.builder()
                                      .name("datadog.credentials")
-                                     .value(JsonMapper.builder().build().createObjectNode()
+                                     .value(JSON_MAPPER.createObjectNode()
                                                     .put("apiKey", "datadog-api-key"))
                                      .build(),
                              HttpStatus.BAD_REQUEST),
@@ -363,28 +387,48 @@ class TelemetrySecretManagementTest {
         });
     }
 
-    Stream<Arguments> updateKratosTelemetrySecretArgs() {
+    Stream<Arguments> updateStoredTelemetrySecretArgs() {
+        JsonNode clientCertPair = JSON_MAPPER.createObjectNode()
+                .put("clientCert", "client-cert")
+                .put("clientKey", "client-key");
+        JsonNode collectorIdOnly = JSON_MAPPER.createObjectNode()
+                .put("collectorId", "collector-id");
         return Stream.of(
-                Arguments.of(KRATOS_TRACES_TELEMETRY_ID, HttpStatus.NO_CONTENT, null),
-                Arguments.of(KRATOS_LOGS_TELEMETRY_ID, HttpStatus.BAD_REQUEST,
+                Arguments.of(KRATOS_TRACES_TELEMETRY_ID, clientCertPair,
+                             HttpStatus.NO_CONTENT, null),
+                Arguments.of(KRATOS_LOGS_TELEMETRY_ID, clientCertPair, HttpStatus.BAD_REQUEST,
                              "Telemetry provider 'KRATOS' with types [LOGS]: "
                                      + "secret is missing required fields [collectorId]"),
-                Arguments.of(KRATOS_METRICS_TELEMETRY_ID, HttpStatus.BAD_REQUEST,
-                             "Telemetry provider 'KRATOS' does not support types [METRICS]. "
-                                     + "Supported types: [LOGS, TRACES]"));
+                Arguments.of(KRATOS_LOGS_TRACES_TELEMETRY_ID, collectorIdOnly,
+                             HttpStatus.BAD_REQUEST,
+                             "Telemetry provider 'KRATOS' with types [LOGS, TRACES]: "
+                                     + "secret is missing required fields [clientCert, clientKey]"),
+                // Stored types the provider does not export do not block a secret update.
+                Arguments.of(KRATOS_METRICS_TELEMETRY_ID, clientCertPair,
+                             HttpStatus.NO_CONTENT, null),
+                Arguments.of(KRATOS_METRICS_TRACES_TELEMETRY_ID, clientCertPair,
+                             HttpStatus.NO_CONTENT, null),
+                Arguments.of(KRATOS_METRICS_TRACES_TELEMETRY_ID, collectorIdOnly,
+                             HttpStatus.BAD_REQUEST,
+                             "Telemetry provider 'KRATOS' with types [TRACES]: "
+                                     + "secret is missing required fields [clientCert, clientKey]"),
+                Arguments.of(SPLUNK_LOGS_METRICS_TELEMETRY_ID, new StringNode("new-token"),
+                             HttpStatus.NO_CONTENT, null),
+                Arguments.of(SPLUNK_LOGS_METRICS_TELEMETRY_ID,
+                             JSON_MAPPER.createObjectNode().put("token", "new-token"),
+                             HttpStatus.BAD_REQUEST,
+                             "Telemetry provider 'SPLUNK' with types [LOGS]: "
+                                     + "secret value must be a non-empty string"));
     }
 
     @ParameterizedTest
-    @MethodSource("updateKratosTelemetrySecretArgs")
-    void shouldValidateKratosSecretUpdateAgainstStoredTypes(UUID telemetryId,
-                                                            HttpStatus expectedStatus,
-                                                            String expectedMessage) {
-        var secret = SecretDto.builder()
-                .name("kratos-credentials")
-                .value(JsonMapper.builder().build().createObjectNode()
-                               .put("clientCert", "client-cert")
-                               .put("clientKey", "client-key"))
-                .build();
+    @MethodSource("updateStoredTelemetrySecretArgs")
+    void shouldValidateSecretUpdateAgainstStoredTypesTheProviderExports(
+            UUID telemetryId,
+            JsonNode secretValue,
+            HttpStatus expectedStatus,
+            String expectedMessage) {
+        var secret = SecretDto.builder().name("rotated-credentials").value(secretValue).build();
         var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT, List.of(SCOPE_UPDATE_SECRETS), 100);
         var requestBody = UpdateTelemetrySecretRequest.builder().secret(secret).build();
         var requestEntity = RequestEntity.put(URI.create("/v2/nvcf/secrets/telemetries/" + telemetryId))
@@ -395,8 +439,13 @@ class TelemetrySecretManagementTest {
         var response = testRestTemplate.exchange(requestEntity, String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(expectedStatus);
+        var savedValue = essService.getTelemetrySecret(TEST_NCA_ID, telemetryId)
+                .map(SecretDto::value);
         if (expectedMessage != null) {
             assertThat(response.getBody()).contains(expectedMessage);
+            assertThat(savedValue).isNotEqualTo(Optional.of(secretValue));
+        } else {
+            assertThat(savedValue).contains(secretValue);
         }
     }
 }

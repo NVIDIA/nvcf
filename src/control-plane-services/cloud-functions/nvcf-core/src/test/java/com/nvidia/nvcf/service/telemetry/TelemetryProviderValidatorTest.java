@@ -49,6 +49,10 @@ class TelemetryProviderValidatorTest {
     private static final Set<TelemetryTypeEnum> TRACES = Set.of(TelemetryTypeEnum.TRACES);
     private static final Set<TelemetryTypeEnum> LOGS_AND_TRACES =
             Set.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.TRACES);
+    private static final Set<TelemetryTypeEnum> LOGS_AND_METRICS =
+            Set.of(TelemetryTypeEnum.LOGS, TelemetryTypeEnum.METRICS);
+    private static final Set<TelemetryTypeEnum> METRICS_AND_TRACES =
+            Set.of(TelemetryTypeEnum.METRICS, TelemetryTypeEnum.TRACES);
 
     // Signals each provider's exporter renders in byoo-otel-collector render.go.
     private static final Map<TelemetryProviderEnum, Set<TelemetryTypeEnum>> COLLECTOR_TYPES =
@@ -82,6 +86,10 @@ class TelemetryProviderValidatorTest {
                 provider, ALL_TYPES, new StringNode("secret")))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Supported providers");
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateStoredSecretValue(
+                provider, ALL_TYPES, new StringNode("secret")))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("'" + provider + "' is not supported");
     }
 
     @ParameterizedTest
@@ -185,6 +193,8 @@ class TelemetryProviderValidatorTest {
             TelemetryProviderEnum provider, Set<TelemetryTypeEnum> types, JsonNode value) {
         assertThatCode(() -> TelemetryProviderValidator.validateSecretValue(provider, types, value))
                 .doesNotThrowAnyException();
+        assertThat(TelemetryProviderValidator.validateStoredSecretValue(provider, types, value))
+                .isEmpty();
     }
 
     static Stream<Arguments> invalidSecrets() {
@@ -266,6 +276,80 @@ class TelemetryProviderValidatorTest {
                 provider, types, value))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Telemetry provider '" + provider + "'")
+                .hasMessageContaining(expectedMessage);
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateStoredSecretValue(
+                provider, types, value))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Telemetry provider '" + provider + "'")
+                .hasMessageContaining(expectedMessage);
+    }
+
+    // Telemetries stored before the type check can list types the provider does not export.
+    static Stream<Arguments> storedSecretsWithTypesTheProviderDoesNotExport() {
+        return Stream.of(
+                Arguments.of(TelemetryProviderEnum.SPLUNK, LOGS_AND_METRICS,
+                             new StringNode("token"), METRICS),
+                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS_AND_TRACES,
+                             object("clientCert", "cert", "clientKey", "key"), METRICS),
+                Arguments.of(TelemetryProviderEnum.SERVICENOW, ALL_TYPES,
+                             new StringNode("token"), LOGS_AND_METRICS),
+                // No stored type is exported. The secret only has to be extractable.
+                Arguments.of(TelemetryProviderEnum.SPLUNK, METRICS,
+                             new StringNode("token"), METRICS),
+                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS,
+                             object("clientCert", "cert"), METRICS));
+    }
+
+    @ParameterizedTest
+    @MethodSource("storedSecretsWithTypesTheProviderDoesNotExport")
+    void shouldSkipStoredTypesTheProviderDoesNotExportOnSecretUpdate(
+            TelemetryProviderEnum provider, Set<TelemetryTypeEnum> storedTypes, JsonNode value,
+            Set<TelemetryTypeEnum> expectedSkippedTypes) {
+        assertThat(TelemetryProviderValidator.validateStoredSecretValue(
+                provider, storedTypes, value))
+                .isEqualTo(expectedSkippedTypes);
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateSecretValue(
+                provider, storedTypes, value))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Telemetry provider '" + provider
+                                              + "' does not support types "
+                                              + EnumSet.copyOf(expectedSkippedTypes));
+    }
+
+    static Stream<Arguments> invalidStoredSecrets() {
+        return Stream.of(
+                Arguments.of(TelemetryProviderEnum.SPLUNK, LOGS_AND_METRICS,
+                             object("token", "value"),
+                             "Telemetry provider 'SPLUNK' with types [LOGS]: "
+                                     + "secret value must be a non-empty string"),
+                Arguments.of(TelemetryProviderEnum.SPLUNK, LOGS_AND_METRICS, new StringNode(" "),
+                             "Telemetry provider 'SPLUNK' with types [LOGS]: "
+                                     + "secret value must be a non-empty string"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, LOGS_AND_TRACES,
+                             object("collectorId", "id"),
+                             "Telemetry provider 'KRATOS' with types [LOGS, TRACES]: "
+                                     + "secret is missing required fields [clientCert, clientKey]"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS_AND_TRACES,
+                             object("collectorId", "id"),
+                             "Telemetry provider 'KRATOS' with types [TRACES]: "
+                                     + "secret is missing required fields [clientCert, clientKey]"),
+                Arguments.of(TelemetryProviderEnum.SPLUNK, METRICS,
+                             JSON_MAPPER.createArrayNode().add("token"),
+                             "Telemetry provider 'SPLUNK': "
+                                     + "secret value must be a string or a JSON object"),
+                Arguments.of(TelemetryProviderEnum.KRATOS, METRICS,
+                             JSON_MAPPER.createObjectNode().set("nested", object("key", "value")),
+                             "Telemetry provider 'KRATOS': secret field 'nested' must be a string"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidStoredSecrets")
+    void shouldRejectInvalidSecretForStoredTypesTheProviderExports(
+            TelemetryProviderEnum provider, Set<TelemetryTypeEnum> storedTypes, JsonNode value,
+            String expectedMessage) {
+        assertThatThrownBy(() -> TelemetryProviderValidator.validateStoredSecretValue(
+                provider, storedTypes, value))
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(expectedMessage);
     }
 

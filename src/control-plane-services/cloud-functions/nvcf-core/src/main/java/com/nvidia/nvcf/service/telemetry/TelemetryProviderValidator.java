@@ -142,15 +142,44 @@ public final class TelemetryProviderValidator {
         }
     }
 
+    /**
+     * Validates the provider, types, and secret of a telemetry being registered. Rejects types
+     * the provider does not export.
+     */
     public static void validateSecretValue(TelemetryProviderEnum provider,
                                            Set<TelemetryTypeEnum> types,
                                            JsonNode value) {
         validateProvider(provider);
-        var requestedTypes = EnumSet.noneOf(TelemetryTypeEnum.class);
-        if (types != null) {
-            requestedTypes.addAll(types);
-        }
+        var requestedTypes = toEnumSet(types);
         validateTypes(provider, requestedTypes);
+        validateSecretShape(provider, requestedTypes, value);
+    }
+
+    /**
+     * Validates a new secret for a stored telemetry. A telemetry stored before the type check
+     * can list types its provider does not export, and no API changes a telemetry's types.
+     * Those types are skipped here so the owner can still rotate the secret. The secret rules
+     * apply to the stored types the provider exports. Function and task references still
+     * reject the skipped types through {@link #validateReference}.
+     *
+     * @return the stored types the provider does not export, which were not validated
+     */
+    public static Set<TelemetryTypeEnum> validateStoredSecretValue(
+            TelemetryProviderEnum provider,
+            Set<TelemetryTypeEnum> storedTypes,
+            JsonNode value) {
+        validateProvider(provider);
+        var exportedTypes = toEnumSet(storedTypes);
+        var skippedTypes = EnumSet.copyOf(exportedTypes);
+        skippedTypes.removeAll(SUPPORTED_TYPES.get(provider));
+        exportedTypes.removeAll(skippedTypes);
+        validateSecretShape(provider, exportedTypes, value);
+        return skippedTypes;
+    }
+
+    private static void validateSecretShape(TelemetryProviderEnum provider,
+                                            Set<TelemetryTypeEnum> requestedTypes,
+                                            JsonNode value) {
         validateExtractable(provider, value);
         if (requestedTypes.isEmpty()) {
             return;
@@ -189,6 +218,14 @@ public final class TelemetryProviderValidator {
             throw new BadRequestException(MESG_SECRET_MISSING_FIELDS.formatted(
                     provider, typesNeedingMissing, List.copyOf(missing)));
         }
+    }
+
+    private static EnumSet<TelemetryTypeEnum> toEnumSet(Set<TelemetryTypeEnum> types) {
+        var result = EnumSet.noneOf(TelemetryTypeEnum.class);
+        if (types != null) {
+            result.addAll(types);
+        }
+        return result;
     }
 
     private static void validateTypes(TelemetryProviderEnum provider,

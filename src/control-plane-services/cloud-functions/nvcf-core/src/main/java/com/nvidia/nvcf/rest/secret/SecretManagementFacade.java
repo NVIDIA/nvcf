@@ -59,6 +59,9 @@ public class SecretManagementFacade {
             "Function id '%s', version '%s': Forbidden to update secrets for this function";
     private static final String MESG_TELEMETRY_SECRETS_UPDATED =
             "Account '%s', telemetryId '%s' : Successfully updated secrets";
+    private static final String MESG_TELEMETRY_SKIPPED_TYPES =
+            "Account '%s', telemetryId '%s': Provider '%s' does not export stored types %s. "
+                    + "Validated the secret without them";
 
     private final EssService essService;
     private final FunctionLookupService functionLookupService;
@@ -136,7 +139,12 @@ public class SecretManagementFacade {
                 telemetryLookupService.lookupByAccountAndTelemetryIdOrThrow(ncaId, telemetryId);
         var provider = telemetryMapperService.toTelemetryProviderEnum(telemetryEntity.getProvider());
         var types = telemetryMapperService.toTelemetryTypeEnums(telemetryEntity.getTypes());
-        TelemetryProviderValidator.validateSecretValue(provider, types, secret.value());
+        var skippedTypes = TelemetryProviderValidator.validateStoredSecretValue(
+                provider, types, secret.value());
+        if (!skippedTypes.isEmpty()) {
+            log.warn(MESG_TELEMETRY_SKIPPED_TYPES.formatted(
+                    ncaId, telemetryId, provider, skippedTypes));
+        }
         essService.saveTelemetrySecret(ncaId, telemetryId, secret);
 
         // ### TODO: Set last updated timestamp on the account when it becomes available.
