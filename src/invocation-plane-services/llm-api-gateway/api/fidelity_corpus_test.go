@@ -48,9 +48,8 @@ import (
 // Expected requests explicitly account for gateway-owned rewrites:
 //   - All endpoints strip the function prefix from model.
 //   - Chat and Responses force upstream stream=true, even for unary clients.
-//   - Chat sets service_tier only when the client omits it, and removes debug.
-//     For unary clients only, it sets stream_options.include_usage=true,
-//     retaining other option members.
+//   - Chat removes debug. For unary clients only, it sets
+//     stream_options.include_usage=true, retaining other option members.
 //   - Messages strips extra_headers.
 //
 // upstream_input_tokens and upstream_affinity_key are optional. When present,

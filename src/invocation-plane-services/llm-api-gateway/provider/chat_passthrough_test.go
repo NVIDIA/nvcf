@@ -111,7 +111,7 @@ func TestOutboundChatRequestBodyForwardsClientFieldsVerbatim(t *testing.T) {
 
 	require.JSONEq(t, `"upstream-model"`, string(outbound["model"]))
 	require.JSONEq(t, `true`, string(outbound["stream"]))
-	require.JSONEq(t, `"auto"`, string(outbound["service_tier"]))
+	require.NotContains(t, outbound, "service_tier")
 	require.JSONEq(t, `{"continuous_usage_stats":true,"include_usage":true}`, string(outbound["stream_options"]))
 	require.NotContains(t, outbound, "Model")
 	require.NotContains(t, outbound, "debug")
@@ -157,8 +157,7 @@ func TestOutboundChatRequestBodyServiceTier(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct{ name, clientMember, want string }{
-		// normalizeChatRequest fills an omitted tier from the configured default.
-		{"omitted gets the resolved tier", ``, `{"service_tier":"flex"}`},
+		{"omitted stays omitted", ``, `{}`},
 		{"client value is forwarded unchanged", `,"service_tier":"priority"`, `{"service_tier":"priority"}`},
 		{"client null is forwarded unchanged", `,"service_tier":null`, `{"service_tier":null}`},
 		{"client spelling is forwarded unchanged", `,"SERVICE_TIER":"flex"`, `{"SERVICE_TIER":"flex"}`},
@@ -168,10 +167,6 @@ func TestOutboundChatRequestBodyServiceTier(t *testing.T) {
 				t,
 				`{"model":"m","messages":[{"role":"user","content":"hi"}]`+tc.clientMember+`}`,
 			)
-			if request.ChatRequest.ServiceTier == nil {
-				request.ChatRequest.ServiceTier = ptr.To("flex")
-			}
-
 			body, err := outboundChatRequestBody(request, true)
 			require.NoError(t, err)
 

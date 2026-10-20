@@ -610,7 +610,7 @@ type ChatCompletionResponse struct {
 	Choices           []ChatCompletionChoice `json:"choices"`
 	Usage             ChatCompletionUsage    `json:"usage"`
 	SystemFingerprint *string                `json:"system_fingerprint,omitempty"`
-	// ServiceTier is a plain string, not servicetier.Tier: backends can return tiers outside the gateway list.
+	// ServiceTier is a plain string: the gateway relays any tier the backend returns.
 	ServiceTier string `json:"service_tier,omitempty"`
 	// Extensions holds upstream members this struct does not declare.
 	Extensions map[string]json.RawMessage `json:"-"`
@@ -645,7 +645,7 @@ type ChatCompletionChunk struct {
 	SystemFingerprint *string                     `json:"system_fingerprint,omitempty"`
 	Choices           []ChatCompletionChunkChoice `json:"choices"`
 	Usage             *ChatCompletionUsage        `json:"usage,omitempty"`
-	// ServiceTier is a plain string, not servicetier.Tier: backends can return tiers outside the gateway list.
+	// ServiceTier is a plain string: the gateway relays any tier the backend returns.
 	ServiceTier string `json:"service_tier,omitempty"`
 }
 

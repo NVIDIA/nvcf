@@ -25,7 +25,6 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
@@ -157,10 +156,6 @@ func (h *Handlers) normalizeChatRequest(
 		h.modelURIAllowlistEnabled(),
 	); err != nil {
 		return nil, err
-	}
-
-	if request.ServiceTier == nil {
-		request.ServiceTier = ptr.To(h.config.DefaultServiceTier.String())
 	}
 
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(

@@ -182,7 +182,6 @@
     },
     "ignore_eos": true,
     "stream": true,
-    "service_tier": "auto",
     "stream_options": {
       "include_usage": true
     }

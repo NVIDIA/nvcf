@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 func TestDefaultSetsExpectedDefaults(t *testing.T) {
@@ -35,9 +33,6 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	}
 	if cfg.Telemetry.MetricsPort != 9464 {
 		t.Fatalf("metrics port = %d, want 9464", cfg.Telemetry.MetricsPort)
-	}
-	if cfg.DefaultServiceTier != servicetier.Auto {
-		t.Fatalf("default service tier = %q, want %q", cfg.DefaultServiceTier, servicetier.Auto)
 	}
 	if cfg.DefaultTPM != 0 {
 		t.Fatalf("default tpm = %d, want 0", cfg.DefaultTPM)
