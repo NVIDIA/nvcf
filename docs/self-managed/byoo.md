@@ -360,7 +360,19 @@ series with the value 0 for the failing jobs. OTLP telemetry from the workload
 and container logs are not affected.
 
 With a configured `target`, the same errors mean that the collector cannot
-reach the target. Check the target host and port, or set `enabled: false`.
+reach the target. NVCA checks the target at startup and every 5 minutes while
+`BYOObservability` is on. When the check fails, NVCA logs a warning, reports a
+`byoo-platform-metrics-federation` component with the error in its `/healthz`
+response, and sets
+`nvca_byoo_platform_metrics_federation_state{state="unreachable"}` to 1.
+Workloads still deploy. Check the target host and port, or set
+`enabled: false`.
+
+Read the NVCA log for the check result:
+
+```bash
+kubectl logs -n nvca-system deploy/nvca -c agent | grep byoo-platform-metrics-federation
+```
 
 Read the collector log:
 
