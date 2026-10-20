@@ -78,7 +78,7 @@ func TestInstrumentedHook(t *testing.T) {
 			}
 		case requestTotalMetricName:
 			foundTotal = true
-			if assert.Equal(t, 3, len(mf.Metric)) {
+			if assert.Equal(t, 4, len(mf.Metric)) {
 				assert.Equal(t, getLabelStrings(mf.Metric[0]), []string{
 					httpCodeLabel, "200",
 					webhookLabel, "/test-webhook",
@@ -96,6 +96,12 @@ func TestInstrumentedHook(t *testing.T) {
 					webhookLabel, "/test-webhook",
 				})
 				assert.Equal(t, 0.0, *mf.Metric[2].Counter.Value)
+
+				assert.Equal(t, getLabelStrings(mf.Metric[3]), []string{
+					httpCodeLabel, "503",
+					webhookLabel, "/test-webhook",
+				})
+				assert.Equal(t, 0.0, *mf.Metric[3].Counter.Value)
 			}
 		case requestInFlightMetricName:
 			foundInFlight = true

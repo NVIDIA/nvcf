@@ -149,7 +149,8 @@ func NewCommand() *cobra.Command {
 				k8sClient:        k8sClient,
 				dcgmMetrics:      dcgmMetricsCfg,
 				readTimeout:      5 * time.Second,
-				writeTimeout:     10 * time.Second,
+				writeTimeout:     defaultAdmissionHandlerTimeout + routerTimeoutBackstop + 5*time.Second,
+				handlerTimeout:   defaultAdmissionHandlerTimeout,
 				attrFetcher:      featureflag.DefaultFetcher,
 				addNodePublisher: sharedcluster.AddNodePublisher,
 				cw:               cw,
@@ -177,6 +178,18 @@ func NewCommand() *cobra.Command {
 	return cmd
 }
 
+// defaultAdmissionHandlerTimeout matches the default admission webhook timeoutSeconds
+// the API server applies when a MutatingWebhookConfiguration does not set one.
+const defaultAdmissionHandlerTimeout = 10 * time.Second
+
+// routerTimeoutBackstop is added to the admission deadline for the router-level timeout
+// installed by the shared middleware. The per-webhook deadline in handleWebhook is the one
+// meant to fire; the router-level one only catches handlers that are not webhooks.
+const routerTimeoutBackstop = 5 * time.Second
+
+// admissionTimeoutBody is the plain-text body returned when a webhook overruns its deadline.
+const admissionTimeoutBody = "admission request timed out\n"
+
 func setDefaults(cfg nvcaconfig.Config) nvcaconfig.Config {
 	cmdutil.SetEmptyValue(&cfg.Webhook.SvcAddress, "127.0.0.1:8443")
 	return cfg
@@ -187,7 +200,12 @@ type webhookManager struct {
 
 	readTimeout  time.Duration
 	writeTimeout time.Duration
-	dcgmMetrics  DCGMMetricsConfig
+	// handlerTimeout bounds a single admission request. It must not be shorter than
+	// the API server's webhook timeout (10s by default), otherwise the server answers
+	// a slow but still valid request with an HTTP 503 before the API server would have
+	// given up, and the API server reports that 503 as a failed pod create.
+	handlerTimeout time.Duration
+	dcgmMetrics    DCGMMetricsConfig
 
 	attrFetcher featureflag.AttributeFetcher
 
@@ -259,9 +277,19 @@ func newCertWatcher(ctx context.Context, cfg nvcaconfig.Config, k8sClient kubern
 	return cw, nil
 }
 
-func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.CancelCauseFunc, shutdownSignal chan struct{}) error {
-	log := core.GetLogger(ctx)
+// effectiveHandlerTimeout returns the per-request admission deadline, falling back to the
+// API server's default admission timeout when none was configured.
+func (m *webhookManager) effectiveHandlerTimeout() time.Duration {
+	if m.handlerTimeout <= 0 {
+		return defaultAdmissionHandlerTimeout
+	}
+	return m.handlerTimeout
+}
 
+// newRouter builds the webhook router with the metrics route and the shared HTTP
+// middleware applied. Webhook handlers are registered on it with handleWebhook.
+func (m *webhookManager) newRouter(ctx context.Context) *mux.Router {
+	log := core.GetLogger(ctx)
 	r := mux.NewRouter()
 
 	nvcametrics.AddMetricsRoute(r, log, nil, "")
@@ -272,8 +300,20 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 	const maxRequestSize = int64(7 * 1024 * 1024)
 	httpOpts := []core.HTTPMiddlewareOption{
 		core.WithRequestBodyLimit(maxRequestSize),
+		// The shared middleware defaults to a 5s http.TimeoutHandler, which replies with a
+		// plain-text HTTP 503 that the API server surfaces as a failed pod create, and it does
+		// so outside the webhook metrics wrapper. Webhooks apply the admission deadline inside
+		// the wrapper (handleWebhook); this router-level deadline is only a longer backstop.
+		core.WithHandlerTimeout(m.effectiveHandlerTimeout() + routerTimeoutBackstop),
 	}
 	r.Use(core.NewHTTPMiddleware(ctx, httpOpts...)...)
+	return r
+}
+
+func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.CancelCauseFunc, shutdownSignal chan struct{}) error {
+	log := core.GetLogger(ctx)
+
+	r := m.newRouter(ctx)
 
 	if featureflag.AttrHostIsolation.Enabled() && featureflag.AttrAccountIsolation.Enabled() {
 		log.Error("account and workload isolation are mutually exclusive")
@@ -287,7 +327,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating validating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/validate", valWH)
+	handleWebhook(ctx, r, "/validate", valWH, m.effectiveHandlerTimeout())
 
 	genNodeAffValWH, err := newStandaloneWebhook(ctx,
 		"validate-instance-type-nodeaffinity.nvca.nvcf.nvidia.io",
@@ -296,7 +336,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating instance type node affinity validating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/validate-instance-type-nodeaffinity", genNodeAffValWH)
+	handleWebhook(ctx, r, "/validate-instance-type-nodeaffinity", genNodeAffValWH, m.effectiveHandlerTimeout())
 
 	podAffinityMuWH, err := NewPodAffinityMutatingWebhook(ctx,
 		"mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io",
@@ -310,7 +350,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating pod node affinity mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/mutate-pod-nodeaffinity", podAffinityMuWH)
+	handleWebhook(ctx, r, "/mutate-pod-nodeaffinity", podAffinityMuWH, m.effectiveHandlerTimeout())
 
 	enfMuWH, err := NewPodEnforcementMutatingWebhook(ctx,
 		"mutate-pod-enforcement.nvca.nvcf.nvidia.io",
@@ -323,7 +363,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating pod enforcement mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/mutate-pod-enforcement", enfMuWH)
+	handleWebhook(ctx, r, "/mutate-pod-enforcement", enfMuWH, m.effectiveHandlerTimeout())
 
 	// Note: the helm storage mutating webhook is now just a stub for backwards-compatibility.
 	// The MiniService mutating webhook now handles all storage mutations.
@@ -333,7 +373,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating Helm storage mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/mutate-helm-storage", helmStorageMuWebhook)
+	handleWebhook(ctx, r, "/mutate-helm-storage", helmStorageMuWebhook, m.effectiveHandlerTimeout())
 
 	helmPersistentStorageMuWebhook, err := newStandaloneWebhook(ctx,
 		"mutate-helm-storage.nvca.nvcf.nvidia.io",
@@ -344,7 +384,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating Helm persistent storage mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/mutate-helm-persistent-storage", helmPersistentStorageMuWebhook)
+	handleWebhook(ctx, r, "/mutate-helm-persistent-storage", helmPersistentStorageMuWebhook, m.effectiveHandlerTimeout())
 
 	nvcaMutatingWebhook, err := newStandaloneWebhook(ctx,
 		"nvca-mutating-webhook.nvca.nvcf.nvidia.io",
@@ -353,7 +393,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating NVCA mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/nvca-mutating-webhook", nvcaMutatingWebhook)
+	handleWebhook(ctx, r, "/nvca-mutating-webhook", nvcaMutatingWebhook, m.effectiveHandlerTimeout())
 
 	miniserviceMuWH, err := NewMiniserviceMutatingWebhook(ctx,
 		"mutate-miniservice",
@@ -362,7 +402,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.WithError(err).Error("Error creating miniservice mutating webhook")
 		return err
 	}
-	handleWebhook(ctx, r, "/mutate-miniservice", miniserviceMuWH)
+	handleWebhook(ctx, r, "/mutate-miniservice", miniserviceMuWH, m.effectiveHandlerTimeout())
 
 	server := &http.Server{
 		Handler:      r,
@@ -418,7 +458,11 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 	return nil
 }
 
-func handleWebhook(ctx context.Context, r *mux.Router, path string, wh http.Handler) {
+// handleWebhook registers wh at path with the admission deadline applied inside the metrics
+// wrapper, so a request that overruns is recorded on nvca_webhook_requests_total as a 503
+// rather than disappearing into the router-level timeout.
+func handleWebhook(ctx context.Context, r *mux.Router, path string, wh http.Handler, timeout time.Duration) {
+	wh = http.TimeoutHandler(wh, timeout, admissionTimeoutBody)
 	wh = whmetrics.FromContext(ctx).InstrumentedHook(path, wh)
 	r.Path(path).Handler(wh).Methods("POST")
 }
