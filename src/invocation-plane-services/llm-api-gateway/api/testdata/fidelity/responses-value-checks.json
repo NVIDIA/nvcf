@@ -104,7 +104,7 @@
     "parallel_tool_calls": "no",
     "stream": true
   },
-  "upstream_input_tokens": "97",
+  "upstream_input_tokens": "85",
   "upstream_response": {
     "sse": [
       {

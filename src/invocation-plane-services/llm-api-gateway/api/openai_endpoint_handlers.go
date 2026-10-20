@@ -561,7 +561,7 @@ func countEmbeddingTokens(
 	total := 0
 	for _, input := range request.Input {
 		if input.Raw != nil {
-			total += estimatedTokenCountForText(string(input.Raw))
+			total += estimatedTokenCountForRawJSON(input.Raw)
 		} else if input.Tokens != nil {
 			total += len(input.Tokens)
 		} else {

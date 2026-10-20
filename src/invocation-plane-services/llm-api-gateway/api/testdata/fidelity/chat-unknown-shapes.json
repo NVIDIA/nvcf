@@ -100,7 +100,7 @@
       "include_usage": true
     }
   },
-  "upstream_input_tokens": "158",
+  "upstream_input_tokens": "95",
   "upstream_response": {
     "sse": [
       {

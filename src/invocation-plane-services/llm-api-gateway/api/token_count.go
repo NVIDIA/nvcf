@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -58,7 +59,7 @@ func estimatedTokenCountForRequest(model string, request *models.ChatCompletionR
 	totalTokens += estimatedTokenCountForStringPtr(request.ReasoningEffort)
 	totalTokens += estimatedTokenCountForValue(request.Metadata)
 	for _, value := range request.UndecodedMembers {
-		totalTokens += estimatedTokenCountForText(string(value))
+		totalTokens += estimatedTokenCountForRawJSON(value)
 	}
 
 	return totalTokens
@@ -68,7 +69,7 @@ func estimatedTokenCountForMessages(messages []models.ChatMessage) int {
 	totalTokens := 0
 	for _, message := range messages {
 		if message.Raw != nil {
-			totalTokens += estimatedTokenCountForText(string(message.Raw))
+			totalTokens += estimatedTokenCountForRawJSON(message.Raw)
 			continue
 		}
 		totalTokens += tokensPerMessage
@@ -97,7 +98,7 @@ func estimatedTokenCountForMessageContent(content models.ChatMessageContent) int
 			totalTokens += len(typed.String()) / 4
 			continue
 		case models.ContentPartRaw:
-			totalTokens += estimatedTokenCountForText(string(typed))
+			totalTokens += estimatedTokenCountForRawJSON(typed)
 			continue
 		}
 		totalTokens += estimatedTokenCountForValue(part)
@@ -181,6 +182,17 @@ func estimatedTokenCountForUnmodeledChatFields(rawBody []byte, messages []models
 		}
 	}
 	return totalTokens
+}
+
+// estimatedTokenCountForRawJSON counts JSON that the gateway keeps raw. Whitespace
+// between JSON tokens is not content, so the same element costs the same however
+// the client formats it.
+func estimatedTokenCountForRawJSON(raw []byte) int {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return estimatedTokenCountForText(string(raw))
+	}
+	return estimatedTokenCountForText(compact.String())
 }
 
 func estimatedTokenCountForText(text string) int {

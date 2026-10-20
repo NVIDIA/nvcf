@@ -120,7 +120,7 @@
     ],
     "stream": true
   },
-  "upstream_input_tokens": "213",
+  "upstream_input_tokens": "127",
   "upstream_response": {
     "sse": [
       {

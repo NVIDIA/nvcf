@@ -33,7 +33,7 @@
     ],
     "user": 42
   },
-  "upstream_input_tokens": "33",
+  "upstream_input_tokens": "20",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {

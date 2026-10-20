@@ -333,7 +333,7 @@ func estimatedTokenCountForRawTools(reqTools []openairesponses.Tool) int {
 	for _, tool := range reqTools {
 		switch t := tool.(type) {
 		case *openairesponses.RawTool:
-			totalTokens += estimatedTokenCountForText(string(t.Raw))
+			totalTokens += estimatedTokenCountForRawJSON(t.Raw)
 		case *openairesponses.NamespaceTool:
 			totalTokens += estimatedTokenCountForRawTools(t.Tools)
 		}

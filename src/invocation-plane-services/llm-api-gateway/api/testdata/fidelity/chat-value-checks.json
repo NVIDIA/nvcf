@@ -89,7 +89,7 @@
       "include_usage": true
     }
   },
-  "upstream_input_tokens": "157",
+  "upstream_input_tokens": "104",
   "upstream_response": {
     "sse": [
       {

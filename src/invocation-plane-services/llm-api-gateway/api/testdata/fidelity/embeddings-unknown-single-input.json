@@ -19,7 +19,7 @@
       }
     }
   },
-  "upstream_input_tokens": "32",
+  "upstream_input_tokens": "23",
   "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
