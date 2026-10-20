@@ -452,6 +452,7 @@ struct xdrop {
     CUmemAccessDesc acc[MAX_DEV + 1]; int na;  /* devices, and the CPU for host memory */
     struct valloc sv;  /* contents, as for a valloc */
     CUmemGenericAllocationHandle nh;  /* "load": the new one */
+    int numa;  /* host memory on the NUMA node of the GPU it is copied through (sv.dev): that node, else -1 */
 };
 VEC(struct xdrop, xdrops);
 static unsigned long long next_id = 1;
@@ -777,6 +778,17 @@ static int push_dev_ctx(CUdevice dev)
     if (CU(cuCtxPushCurrent, c) == CUDA_SUCCESS) return dev;
     CU(cuDevicePrimaryCtxRelease, dev);
     return -1;
+}
+
+/* The host NUMA node of GPU ordinal dev, or -1 when unknown. */
+static int dev_numa(int dev)
+{
+    CUdevice d;
+    int numa = -1;
+    if (dev < 0 || CU(cuDeviceGet, &d, dev) != CUDA_SUCCESS ||
+        CU(cuDeviceGetAttribute, &numa, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, d) != CUDA_SUCCESS)
+        return -1;
+    return numa;
 }
 
 /* Wait for all work on every active primary context. */
@@ -2504,6 +2516,7 @@ static CUresult xdrop_save_all(int *nx, size_t *nb)
                 x.acc[x.na++] = (CUmemAccessDesc){ x.prop.location, (CUmemAccess_flags)f };
             if (x.sv.dev < 0) continue;
         }
+        x.numa = host && dev_numa(x.sv.dev) == x.prop.location.id ? x.prop.location.id : -1;
         x.sv.va = l->va;
         x.sv.size = l->size;
         /* Drop the app's reference (its handle then stands for the new
@@ -2532,6 +2545,21 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         if (x->sv.chunks && stage_get() != CUDA_SUCCESS) { r = CUDA_ERROR_OUT_OF_MEMORY; break; }
         int dev = push_dev_ctx(x->sv.dev);
         if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
+        int numa = x->numa >= 0 ? dev_numa(x->sv.dev) : -1;
+        if (numa >= 0 && numa != x->numa) {
+            /* Host memory the app put on its GPU's NUMA node (NCCL's SHM
+             * buffers do) goes on the node of the GPU it has now. A restore
+             * onto other GPUs may change it, and CUDA creates pinned host
+             * memory only on a node one of the process's GPUs sits on
+             * (INVALID_VALUE otherwise): four GPUs all on node 0 cannot
+             * have it on node 1. The CPU's access follows it. */
+            for (int a = 0; a < x->na; a++)
+                if (x->acc[a].location.type == CU_MEM_LOCATION_TYPE_HOST_NUMA && x->acc[a].location.id == x->numa)
+                    x->acc[a].location.id = numa;
+            logf_("shared host allocation %#llx+%zu: NUMA node %d -> %d (its GPU's now)",
+                  (unsigned long long)x->va, x->size, x->numa, numa);
+            x->prop.location.id = x->numa = numa;
+        }
         CUmemGenericAllocationHandle nh = 0;
         CUmemAllocationProp p = x->prop;
         const char *step = "cuMemCreate";
