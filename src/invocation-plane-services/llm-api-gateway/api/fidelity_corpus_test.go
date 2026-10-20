@@ -192,6 +192,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"responses max_output_tokens not a number", responses, `{` + model + `,` + respInput + `,"max_output_tokens":"8"}`},
 		{"responses stream not a boolean", responses, `{` + model + `,` + respInput + `,"stream":"yes"}`},
 		{"responses prompt_cache_key control character", responses, `{` + model + `,` + respInput + `,"prompt_cache_key":"a\u0001"}`},
+		{"responses conversation id duplicate case", responses, `{` + model + `,` + respInput + `,"conversation":{"id":"a","ID":"b"}}`},
 		{"responses conversation id control character", responses, `{` + model + `,` + respInput + `,"conversation":{"id":"a\u0001"}}`},
 		{"responses input missing", responses, `{` + model + `}`},
 		{"responses input empty", responses, `{` + model + `,"input":[]}`},

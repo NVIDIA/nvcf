@@ -117,6 +117,8 @@ type Conversation struct {
 	ID *string `json:"id"`
 }
 
+func (*Conversation) DecodesMembers() {}
+
 func (c *Conversation) UnmarshalJSON(data []byte) error {
 	var id string
 	if err := json.Unmarshal(data, &id); err == nil {
