@@ -58,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnftables-dev \
     libdrm-dev \
     uuid-dev \
+    zstd \
     asciidoctor \
     xmlto \
     libbsd-dev \
@@ -100,13 +101,13 @@ RUN mkdir -p /criu-bundle/lib /criu-bundle/plugins && \
     patchelf --set-interpreter "/criu-bundle/lib/$(cat /criu-bundle/lib/.ld-name)" \
              --set-rpath /criu-bundle/lib /criu-bundle/criu
 
-# CRIU saves and restores tmpfs contents by running `tar --gzip` (which runs
-# `gzip`) from PATH, and the agent's restore replay runs tar and mkdir. At
-# restore both run inside the placeholder, whose image may have no tar
-# (distroless) or a tar without GNU options (busybox). Bundle GNU tar, gzip
-# and mkdir, pinned to the bundle's loader and libraries like criu.
+# CRIU saves and restores tmpfs contents by running tar with zstd (gzip for
+# images made without it) from PATH, and the agent's restore replay runs tar
+# and mkdir. At restore both run inside the placeholder, whose image may have
+# no tar (distroless) or a tar without GNU options (busybox). Bundle GNU tar,
+# zstd, gzip and mkdir, pinned to the bundle's loader and libraries like criu.
 RUN set -e; \
-    for bin in tar gzip mkdir; do \
+    for bin in tar zstd gzip mkdir; do \
         src="$(command -v $bin)"; \
         cp "$src" /criu-bundle/$bin; \
         ldd "$src" | awk '/=> \// {print $3}' | xargs -r -I {} cp -n {} /criu-bundle/lib/; \
@@ -209,6 +210,7 @@ RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && \
 # Verify CRIU and crit work
 RUN echo "=== CRIU version ===" && /criu-bundle/criu --version && \
     /criu-bundle/tar --version | head -1 && /criu-bundle/gzip --version | head -1 && \
+    /criu-bundle/zstd --version && \
     /criu-bundle/mkdir --version | head -1 && \
     echo "=== crit version ===" && python3 -m crit --version
 

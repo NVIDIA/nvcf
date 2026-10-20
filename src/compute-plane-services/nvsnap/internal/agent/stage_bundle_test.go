@@ -25,7 +25,7 @@ func TestStageV2BundleStagesPlaceholderTools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{"criu", "cuda-checkpoint.real", "plugins/cuda_plugin.so", "lib/libc.so.6", "tar", "gzip"} {
+	for _, f := range []string{"criu", "cuda-checkpoint.real", "plugins/cuda_plugin.so", "lib/libc.so.6", "tar", "zstd", "gzip"} {
 		write(f)
 	}
 	a := &Agent{config: Config{CRIUPath: filepath.Join(bundle, "criu")}}
@@ -34,7 +34,7 @@ func TestStageV2BundleStagesPlaceholderTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	staged := filepath.Join(root, "criu-bundle")
-	for _, name := range []string{"criu", "tar", "gzip", "lib/libc.so.6"} {
+	for _, name := range []string{"criu", "tar", "zstd", "gzip", "lib/libc.so.6"} {
 		if !fileExists(filepath.Join(staged, name)) {
 			t.Errorf("%s not staged", name)
 		}

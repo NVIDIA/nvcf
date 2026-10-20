@@ -122,8 +122,10 @@ func finalOf(leaveRunning bool) dumpFinal {
 // placeholderTools are the bundle's own copies of the tools run inside a
 // container's mount namespace, where the workload image may have none
 // (distroless) or ones without the options used (busybox): GNU tar and the
-// gzip it runs for criu's tmpfs contents, and mkdir for the agent's replay.
-var placeholderTools = []string{"tar", "gzip", "mkdir"}
+// zstd or gzip it runs for criu's tmpfs contents, and mkdir for the agent's
+// replay. Staging zstd makes whether a capture uses it a property of the
+// bundle, which its restore stages too, not of the workload image.
+var placeholderTools = []string{"tar", "zstd", "gzip", "mkdir"}
 
 // inContainerTool is the path to run name at inside the mount namespace of
 // host pid pid: the staged bundle copy when there is one, else name from the
