@@ -132,9 +132,13 @@ networkPolicy:
 
 ### OpenTelemetry
 
+Set the endpoint for your collector when enabling tracing. See
+[Tracing](./monitoring.md#tracing) for endpoint selection and verification.
+
 ```yaml
 otel:
   enabled: false
+  endpoint: ""          # Required when enabled; OTLP gRPC host:port
   lightstep:
     serviceName: ""        # Lightstep service name
     accessToken: ""        # Lightstep API token

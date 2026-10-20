@@ -35,10 +35,11 @@ independent.
 
 ## Navigation and links
 
-For current pages, start with `fern/navigation.yml`. Stable editions build
-from their own `docs/releases/X.Y.Z` branch; inspect that branch's navigation
-and source when answering a version-specific question. Historical product
-routes use the matching file under `fern/products/`.
+For current pages, start with `fern/navigation.yml`. Legacy editions build from
+immutable `docs/releases/X.Y.Z` branches. Umbrella versions build the approved
+`docs/versions/X.Y.Z` commit in `fern/editions.yml`. Inspect that approved source
+when answering a version-specific question. Historical product routes use the
+matching file under `fern/products/`.
 
 Confirm each `path:` exists. Treat `href:` as an external destination.
 Use explicit page slugs, and keep section `skip-slug` behavior intact.
@@ -58,8 +59,13 @@ rg -n "<term>" docs/overview docs/self-managed docs/compute-plane docs/observabi
 ## Editing
 
 Edit the owning current source tree for customer changes and `docs/dev/` for
-contributor guides. Changes on `main` update Development. Released docs branches
-are immutable; corrections require a new patch edition.
+contributor guides. Changes on `main` update Development. Legacy
+`docs/releases/` branches are immutable; corrections require a new patch
+edition. Opt-in umbrella entries use maintained `docs/versions/X.Y.Z`
+sources. Their approved docs commit can advance under the same product
+version, while the bound product manifest and artifact pins stay immutable.
+Use `umbrella docs-revise` to prepare a reviewed canonical registry update.
+Do not change the production default before the mixed-version preview gate.
 
 ### Artifact manifest
 
@@ -120,11 +126,11 @@ exact public locations in `publications` and mark unavailable versions in
 `version` so charts, images, and resources with the same name remain distinct.
 Version overrides also require `name` and `type`.
 
-Release a docs edition only after the complete three-stack combination is
-qualified. Use `edition prepare` with exact stack versions and a reviewed
-source commit, then protect and register `docs/releases/X.Y.Z`. Do not cut
-per-stack documentation folders or docs release tags. See
-[the edition release and rollback workflow](dev/docs-editions.md).
+Release only after the complete three-stack combination is qualified. For
+umbrella versions, follow [the product and maintained docs workflow](dev/umbrella-releases.md).
+For legacy immutable editions, use `edition prepare`, then protect and register
+`docs/releases/X.Y.Z`; see [the edition workflow](dev/docs-editions.md).
+Do not cut per-stack documentation folders or docs release tags.
 
 Generated blocks are marked with comments such as:
 

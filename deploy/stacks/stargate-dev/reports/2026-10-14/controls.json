@@ -1,0 +1,710 @@
+{
+  "baseline": [
+    {
+      "cluster": "a-hub",
+      "role": "helm-nvcf-llm-request-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-hub",
+      "role": "backend-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-hub",
+      "role": "auth",
+      "imageDigest": "sha256:7e417526735093c964af474b30c827009440ea8db2753deaa94d223517537de7",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "50m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "helm-nvcf-llm-request-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "backend-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "auth",
+      "imageDigest": "sha256:7e417526735093c964af474b30c827009440ea8db2753deaa94d223517537de7",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "50m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    }
+  ],
+  "candidate": [
+    {
+      "cluster": "a-hub",
+      "role": "helm-nvcf-llm-request-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-hub",
+      "role": "backend-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-hub",
+      "role": "auth",
+      "imageDigest": "sha256:8651cb36a4b06468cbb2802bfcd23a0a37d71566e07aaad21a99809349f40bea",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "50m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "a-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "helm-nvcf-llm-request-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "backend-router",
+      "imageDigest": "sha256:ab3c247702f79f34e7c79a8ae569232b355727194baceb01e4bcbb4ab40b56cf",
+      "replicas": 3,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-hub",
+      "role": "auth",
+      "imageDigest": "sha256:8651cb36a4b06468cbb2802bfcd23a0a37d71566e07aaad21a99809349f40bea",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "50m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m1",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "mock-dynamo",
+      "imageDigest": "sha256:335626c7fb2e2dc933d9ee5943aede26ea10a99c27c0e63929053e2178cc790d",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "1",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    {
+      "cluster": "b-m2",
+      "role": "pylon",
+      "imageDigest": "sha256:426c5159bd3d267d01994ef98e928fe6b06e9e5cc09ced471be53783a388b9b1",
+      "replicas": 1,
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "1Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "128Mi"
+        }
+      }
+    }
+  ]
+}

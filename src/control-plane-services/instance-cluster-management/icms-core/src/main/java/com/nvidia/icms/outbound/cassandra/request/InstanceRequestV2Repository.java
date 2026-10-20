@@ -76,6 +76,7 @@ public class InstanceRequestV2Repository {
             if (entity.getCreateTimeuuid() == null) {
                 entity.setCreateTimeuuid(TimeUtils.getTimeUuidNow());
             }
+            populateCreationBucket(entity);
 
             if (!instanceRequestV2Repo.isInserted(entity) ||
                     !instanceRequestV2ByDayRepo.isInserted(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity)))
@@ -139,6 +140,7 @@ public class InstanceRequestV2Repository {
     @Observed
     public void restore(InstanceRequestV2Entity entity) {
         try {
+            populateCreationBucket(entity);
             // Update: Update existing entry if present else insert
             instanceRequestV2Repo.update(entity);
             instanceRequestV2ByDayRepo.update(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity));
@@ -166,6 +168,23 @@ public class InstanceRequestV2Repository {
     @Observed
     public void updateRequests(List<InstanceRequestV2Entity> entities) {
         entities.forEach(this::update);
+    }
+
+    @Observed
+    public void updateCreationBucket(
+            String requestId,
+            Instant creationBucket,
+            long writeTimestamp) {
+        try {
+            instanceRequestV2Repo.updateCreationBucket(
+                    requestId, creationBucket, writeTimestamp);
+        } catch (Exception exception) {
+            log.error("Failed to update creation bucket for request {}, error: {}",
+                    requestId, exception.getMessage(), exception);
+            throw new IcmsInternalServerException(
+                    String.format("%s, error: %s", REQUEST_UPDATE_FAILED,
+                            exception.getMessage()), exception);
+        }
     }
 
     @Observed
@@ -446,6 +465,13 @@ public class InstanceRequestV2Repository {
             }
         }
 
+    }
+
+    private void populateCreationBucket(InstanceRequestV2Entity entity) {
+        if (entity.getCreationBucket() == null && entity.getCreateTimeuuid() != null) {
+            entity.setCreationBucket(TimeUtils.getDateFromInstant(
+                    TimeUtils.getInstantFromUuid(entity.getCreateTimeuuid())));
+        }
     }
 
 

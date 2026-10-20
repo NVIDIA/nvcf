@@ -595,7 +595,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.helmChartServiceName, "helm-chart-service", "", "Helm chart service name")
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	createCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
 	createCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
@@ -640,7 +640,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.functionID, "function-id", "", "Function ID (required)")
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	updateCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
 	updateCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 }
@@ -696,10 +696,6 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 		return ArtifactConfig{}, err
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
-	if err != nil {
-		return ArtifactConfig{}, err
-	}
 	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
 		return ArtifactConfig{}, err
 	}
@@ -709,7 +705,7 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 		LLMConfig: &LLMConfigInput{
 			URIs:           uris,
 			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			RoutingMethod:  optionalString(fields["routingMethod"]),
 		},
 	}, nil
 }
@@ -740,10 +736,6 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 		return ModelUpdateConfig{}, fmt.Errorf("name is required")
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
-	if err != nil {
-		return ModelUpdateConfig{}, err
-	}
 	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
 		return ModelUpdateConfig{}, err
 	}
@@ -752,7 +744,7 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 		ModelName: name,
 		LLMConfig: &LLMConfigUpdateInput{
 			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			RoutingMethod:  optionalString(fields["routingMethod"]),
 		},
 	}
 	if update.LLMConfig.TokenRateLimit == nil && update.LLMConfig.RoutingMethod == nil {
@@ -843,37 +835,6 @@ func validateLLMTokenRateLimit(raw string) error {
 	return nil
 }
 
-func normalizeLLMRoutingMethod(value string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "round_robin":
-		return "round_robin", nil
-	case "round-robin":
-		return "round_robin", nil
-	case "power_of_two":
-		return "power_of_two", nil
-	case "power-of-two":
-		return "power_of_two", nil
-	case "wait_and_widen", "wait-and-widen":
-		return "wait_and_widen", nil
-	case "pulsar_wait_and_widen", "pulsar-wait-and-widen":
-		return "pulsar_wait_and_widen", nil
-	case "groq_multiregion":
-		return "groq_multiregion", nil
-	case "groq-multiregion":
-		return "groq_multiregion", nil
-	case "pulsar":
-		return "pulsar", nil
-	case "random":
-		return "random", nil
-	default:
-		return "", fmt.Errorf("unsupported routingMethod %q (expected round_robin, power_of_two, wait_and_widen, pulsar_wait_and_widen, groq_multiregion, pulsar, or random)", value)
-	}
-}
-
 func optionalString(value string) *string {
 	if value == "" {
 		return nil
@@ -911,10 +872,6 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 		return nil, err
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(input.RoutingMethod))
-	if err != nil {
-		return nil, err
-	}
 	if err := validateLLMTokenRateLimit(optionalStringValue(input.TokenRateLimit)); err != nil {
 		return nil, err
 	}
@@ -922,7 +879,7 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 	return &client.LLMConfigDto{
 		URIs:           input.URIs,
 		TokenRateLimit: input.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		RoutingMethod:  optionalString(optionalStringValue(input.RoutingMethod)),
 	}, nil
 }
 
@@ -934,17 +891,13 @@ func modelUpdateConfigToClient(update ModelUpdateConfig) (client.ModelUpdateDto,
 		return client.ModelUpdateDto{}, fmt.Errorf("llmConfig is required")
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(update.LLMConfig.RoutingMethod))
-	if err != nil {
-		return client.ModelUpdateDto{}, err
-	}
 	if err := validateLLMTokenRateLimit(optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
 		return client.ModelUpdateDto{}, err
 	}
 
 	llmConfig := &client.LLMConfigUpdateDto{
 		TokenRateLimit: update.LLMConfig.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		RoutingMethod:  optionalString(optionalStringValue(update.LLMConfig.RoutingMethod)),
 	}
 	if llmConfig.TokenRateLimit == nil && llmConfig.RoutingMethod == nil {
 		return client.ModelUpdateDto{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")

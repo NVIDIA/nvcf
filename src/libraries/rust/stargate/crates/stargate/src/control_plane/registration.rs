@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
@@ -105,7 +105,7 @@ pub(super) async fn process_registration_stream(
     stop: CancellationToken,
 ) {
     let first_update = match next_registration_update(&mut stream, idle_timeout, &stop).await {
-        Ok(Some(update)) => update,
+        Ok(Some(received)) => received,
         Ok(None) => return,
         Err(error) => {
             warn!(
@@ -117,7 +117,7 @@ pub(super) async fn process_registration_stream(
         }
     };
     let session = match RegistrationSession::start(
-        &first_update,
+        &first_update.update,
         state,
         connection,
         auth_result.routing_key.as_deref(),
@@ -138,7 +138,7 @@ async fn next_registration_update(
     stream: &mut (impl Stream<Item = Result<InferenceServerRegistration, Status>> + Unpin),
     idle_timeout: Option<Duration>,
     stop: &CancellationToken,
-) -> Result<Option<InferenceServerRegistration>, RegistrationError> {
+) -> Result<Option<ReceivedRegistrationUpdate>, RegistrationError> {
     let next = if let Some(idle_timeout) = idle_timeout {
         // Once shutdown begins, cleanup must win over another ready stream update.
         tokio::select! {
@@ -162,13 +162,25 @@ async fn next_registration_update(
         Some(Err(status)) => return Err(RegistrationError::StreamRead(status)),
         Some(Ok(update)) => update,
     };
+    // Stamp receipt before any connection or RTT await: routing reservations
+    // compare it with their soft expiry to decide whether this update can
+    // include their request.
+    let received_at = Instant::now();
     debug!(
         inference_server_id = %update.inference_server_id,
         cluster_id = %update.cluster_id,
         model_ids = ?sorted_model_ids(&update),
         "received inference servers update"
     );
-    Ok(Some(update))
+    Ok(Some(ReceivedRegistrationUpdate {
+        update,
+        received_at,
+    }))
+}
+
+struct ReceivedRegistrationUpdate {
+    update: InferenceServerRegistration,
+    received_at: Instant,
 }
 
 fn log_deregistration(
@@ -288,14 +300,14 @@ impl RegistrationSession {
 
     async fn run(
         mut self,
-        mut update: InferenceServerRegistration,
+        mut received: ReceivedRegistrationUpdate,
         stream: &mut (impl Stream<Item = Result<InferenceServerRegistration, Status>> + Unpin),
         responses: &flume::Sender<Result<InferenceServerAck, Status>>,
         idle_timeout: Option<Duration>,
         stop: &CancellationToken,
     ) {
         let outcome = loop {
-            match self.apply_update(&update, stop).await {
+            match self.apply_update(&received, stop).await {
                 Ok(ApplyUpdateOutcome::Ack(ack)) => {
                     if !send_registration_response(responses, stop, Ok(ack)).await {
                         break if stop.is_cancelled() {
@@ -313,7 +325,7 @@ impl RegistrationSession {
                 }
             }
             match next_registration_update(stream, idle_timeout, stop).await {
-                Ok(Some(next_update)) => update = next_update,
+                Ok(Some(next_update)) => received = next_update,
                 Ok(None) => break Ok(()),
                 Err(error) => break Err(error),
             }
@@ -323,9 +335,13 @@ impl RegistrationSession {
 
     async fn apply_update(
         &mut self,
-        update: &InferenceServerRegistration,
+        received: &ReceivedRegistrationUpdate,
         stop: &CancellationToken,
     ) -> Result<ApplyUpdateOutcome, Status> {
+        let ReceivedRegistrationUpdate {
+            update,
+            received_at,
+        } = received;
         if let Some(status) = validate_running_update(self.registration.identity(), update) {
             return Err(status);
         }
@@ -341,7 +357,13 @@ impl RegistrationSession {
                 // Keep the no-ack retry behavior while clearing any stale route
                 // that depended on the now-unavailable direct connection.
                 self.state
-                    .apply_registration_update(&self.registration, update, false, None)
+                    .apply_received_registration_update(
+                        &self.registration,
+                        update,
+                        false,
+                        None,
+                        *received_at,
+                    )
                     .await;
                 return Ok(ApplyUpdateOutcome::Skip);
             }
@@ -356,7 +378,13 @@ impl RegistrationSession {
         }
 
         self.state
-            .apply_registration_update(&self.registration, update, reverse_connected, rtt)
+            .apply_received_registration_update(
+                &self.registration,
+                update,
+                reverse_connected,
+                rtt,
+                *received_at,
+            )
             .await;
 
         Ok(ApplyUpdateOutcome::Ack(build_registration_ack(
@@ -639,7 +667,13 @@ mod tests {
         assert_eq!(state.candidates_for_target(&target).await.len(), 1);
 
         let outcome = session
-            .apply_update(&update, &CancellationToken::new())
+            .apply_update(
+                &ReceivedRegistrationUpdate {
+                    update,
+                    received_at: Instant::now(),
+                },
+                &CancellationToken::new(),
+            )
             .await
             .expect("unavailable direct update should be handled");
 

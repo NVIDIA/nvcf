@@ -22,4 +22,4 @@ metadata:
     {{- include "nvcf-api.labels" . | nindent 4 }}
 data:
   secrets.json.tmpl: |-
-{{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }} 
+{{ include "nvcf-api.vaultAgentTemplate" . | indent 4 }}

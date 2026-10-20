@@ -442,6 +442,7 @@ public class IcmsClient {
                 Pair.of("NVCF_FQDN", selfFqdn),
                 Pair.of("NVCF_FQDN_GRPC", globalFqdnGrpc),
                 Pair.of("NVCF_FQDN_NATS", natsProperties.getWorkerUrl()),
+                Pair.of("NVCF_NATS_ACCOUNT", natsProperties.getAuthCalloutWorkerAccount()),
                 Pair.of("INFERENCE_CONTAINER", getInferenceContainer(function)),
                 Pair.of("INFERENCE_CONTAINER_ARGS", args),
                 Pair.of("INFERENCE_CONTAINER_ENV", cenv),

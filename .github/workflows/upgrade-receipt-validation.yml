@@ -1,0 +1,98 @@
+name: Upgrade receipt validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/upgrade-receipt-validation.yml'
+      - 'deploy/stacks/self-managed/charts/nvcf-upgrade-receipt/**'
+      - 'deploy/stacks/self-managed/helmfile.d/04-upgrade-receipt.yaml.gotmpl'
+      - 'deploy/stacks/self-managed/environments/base.yaml'
+      - 'deploy/stacks/self-managed/tests/upgrade-receipt*.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/upgrade-receipt-validation.yml'
+      - 'deploy/stacks/self-managed/charts/nvcf-upgrade-receipt/**'
+      - 'deploy/stacks/self-managed/helmfile.d/04-upgrade-receipt.yaml.gotmpl'
+      - 'deploy/stacks/self-managed/environments/base.yaml'
+      - 'deploy/stacks/self-managed/tests/upgrade-receipt*.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  receipt-hooks:
+    name: Receipt install and upgrade hooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned tools
+        env:
+          HELM_VERSION: '3.21.4'
+          HELM_SHA256: '61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14'
+          HELMFILE_VERSION: '1.1.9'
+          HELMFILE_SHA256: 'ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905'
+          K3D_VERSION: '5.8.3'
+          K3D_SHA256: 'dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e'
+          YQ_VERSION: '4.45.1'
+          KUBECTL_VERSION: '1.33.6'
+          KUBECTL_SHA256: 'd25d9b63335c038333bed785e9c6c4b0e41d791a09cac5f3e8df9862c684afbe'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mkdir -p receipt-bin
+          curl -fsSL --retry 3 "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" -o helm.tar.gz
+          echo "$HELM_SHA256  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+          mv linux-amd64/helm receipt-bin/helm
+          curl -fsSL --retry 3 "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz" -o helmfile.tar.gz
+          echo "$HELMFILE_SHA256  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+          mv helmfile receipt-bin/helmfile
+          curl -fsSL --retry 3 "https://github.com/k3d-io/k3d/releases/download/v${K3D_VERSION}/k3d-linux-amd64" -o receipt-bin/k3d
+          echo "$K3D_SHA256  receipt-bin/k3d" | sha256sum -c -
+          curl -fsSL --retry 3 "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" -o receipt-bin/yq
+          echo '654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049  receipt-bin/yq' | sha256sum -c -
+          curl -fsSL --retry 3 "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o receipt-bin/kubectl
+          echo "$KUBECTL_SHA256  receipt-bin/kubectl" | sha256sum -c -
+          chmod +x receipt-bin/*
+          echo "$RUNNER_TEMP/receipt-bin" >> "$GITHUB_PATH"
+
+      - name: Create isolated Kubernetes cluster
+        run: |
+          set -euo pipefail
+          cluster="nvcf-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          k3d cluster create "$cluster" --api-port 127.0.0.1:6550 \
+            --image 'rancher/k3s:v1.33.6-k3s1@sha256:d7119ab9e0054692a86a8eda454f2d3370dafc1c3a96b3ace5c5599f0c1e9f15' \
+            --kubeconfig-update-default=false --kubeconfig-switch-context=false --wait
+          k3d kubeconfig get "$cluster" > "$RUNNER_TEMP/receipt-kubeconfig"
+          chmod 600 "$RUNNER_TEMP/receipt-kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/receipt-kubeconfig" >> "$GITHUB_ENV"
+          echo "NVCF_RECEIPT_LIVE_CONTEXT=k3d-$cluster" >> "$GITHUB_ENV"
+          echo "NVCF_RECEIPT_LIVE_ARTIFACTS=$RUNNER_TEMP/receipt-results" >> "$GITHUB_ENV"
+
+      - name: Run real receipt hooks with the default public image
+        run: bash deploy/stacks/self-managed/tests/upgrade-receipt-live.sh
+
+      - name: Capture cluster state
+        if: always() && env.KUBECONFIG != ''
+        run: |
+          mkdir -p "$NVCF_RECEIPT_LIVE_ARTIFACTS"
+          kubectl --context "$NVCF_RECEIPT_LIVE_CONTEXT" -n nvcf get pods,jobs,configmaps -o json > "$NVCF_RECEIPT_LIVE_ARTIFACTS/final.json"
+          kubectl --context "$NVCF_RECEIPT_LIVE_CONTEXT" -n nvcf get events -o json > "$NVCF_RECEIPT_LIVE_ARTIFACTS/events.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receipt-hook-results
+          path: ${{ runner.temp }}/receipt-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Remove the isolated test cluster
+        if: always()
+        run: k3d cluster delete "nvcf-receipt-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

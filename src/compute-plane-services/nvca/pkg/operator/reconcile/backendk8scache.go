@@ -174,6 +174,10 @@ type BackendK8sCache struct {
 	// identitySource controls the identity mechanism: auto, psat, or spire.
 	identitySource string
 
+	// clusterValidatorEnabled is passed to the agent, which publishes the
+	// cluster-validator metrics baseline only where the validator runs.
+	clusterValidatorEnabled bool
+
 	// gracefulShutdown is set to true when the operator is shutting down gracefully.
 	// When true, the reconciliation loop will skip cleanup of NVCFBackend resources
 	// and let the shutdown handler manage the cleanup instead.
@@ -386,20 +390,25 @@ func (b *BackendK8sCacheBuilder) WithIdentitySource(identitySource string) *Back
 	return &next
 }
 
+func (b *BackendK8sCacheBuilder) WithClusterValidatorEnabled(enabled bool) *BackendK8sCacheBuilder {
+	next := *b
+	next.clusterValidatorEnabled = enabled
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.ClusterSource) *BackendK8sCacheBuilder {
 	next := *b
 	next.clusterSource = clusterSource
 	return &next
 }
 
-func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
-	log := core.GetLogger(ctx)
-	resyncPeriod := b.resyncPeriod
-
+// newCache builds the cache from the builder's settings without starting any
+// informers.
+func (b *BackendK8sCacheBuilder) newCache() *BackendK8sCache {
 	eventBroadcaster := record.NewBroadcaster()
 
 	c := &BackendK8sCache{
-		resyncPeriod:         resyncPeriod,
+		resyncPeriod:         b.resyncPeriod,
 		clients:              b.clients,
 		eventBroadcaster:     eventBroadcaster,
 		eventRecorder:        eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "nvca-operator"}),
@@ -439,11 +448,18 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		taskEnvOverridesB64:                b.taskEnvOverridesB64,
 		identitySource:                     b.identitySource,
 		clusterSource:                      b.clusterSource,
+		clusterValidatorEnabled:            b.clusterValidatorEnabled,
 	}
 
 	if c.operatorNamespace == "" {
 		c.operatorNamespace = NVCAOperatorNamespace
 	}
+	return c
+}
+
+func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
+	log := core.GetLogger(ctx)
+	c := b.newCache()
 
 	out := make(chan *core.Event)
 
@@ -1255,6 +1271,8 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 		hasAgentDeploymentConfigChanged(ctx, effectiveConfigForComparison.DeploymentConfig, nbMerged.Status),
 		hasAgentWorkerConfigOptionsChanged(ctx, effectiveConfigForComparison.NVCFWorkerConfig, nbMerged.Status),
 		hasEnvOverridesChangedCheck(ctx, bc.functionEnvOverridesB64, bc.taskEnvOverridesB64, nbMerged.Status),
+		hasClusterValidatorEnabledChangedCheck(ctx, bc.clusterValidatorEnabled,
+			bc.clients.K8s.AppsV1().Deployments(getSystemNamespace(nbMerged)).Get),
 	}
 
 	// Only check NGC service API key for NGC-managed clusters (or empty, which defaults to NGC-managed)

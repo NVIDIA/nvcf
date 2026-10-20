@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2016 gRPC authors.
@@ -427,7 +424,7 @@ func (ht *serverHandlerTransport) HandleStreams(ctx context.Context, startStream
 		st:               ht,
 		headerWireLength: 0, // won't have access to header wire length until golang/go#18997.
 	}
-	s.Stream.buf.init()
+	s.Stream.buf.init(ht.bufferPool)
 	s.readRequester = s
 	s.trReader = transportReader{
 		reader:        recvBufferReader{ctx: s.ctx, ctxDone: s.ctx.Done(), recv: &s.buf},
@@ -482,8 +479,8 @@ func (ht *serverHandlerTransport) runStream() {
 
 func (ht *serverHandlerTransport) incrMsgRecv() {}
 
-func (ht *serverHandlerTransport) Drain(string) {
-	panic("Drain() is not implemented")
+func (ht *serverHandlerTransport) Drain(s string) {
+	ht.Close(errors.New(s))
 }
 
 // mapRecvMsgError returns the non-nil err into the appropriate

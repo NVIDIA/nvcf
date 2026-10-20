@@ -36,6 +36,7 @@ Check these files first when they exist in your local workspace:
 ## Completion Expectations
 
 - Validate with the repo-native command set if one exists (`make`, Maven, Helm, npm, etc.).
+- After changing any entry in `nvctApi.remoteConfig.configData.nvct.sidecars`, run `make test`. It checks the `release-artifact-*-image` annotations that surface these images to stack release tooling.
 - If you change cross-repo behavior, mention the adjacent repo(s) that may also need follow-up.
 - In your final summary, state that routing was confirmed through `nvcf-agentic-dev` and name the workspace context used.
 

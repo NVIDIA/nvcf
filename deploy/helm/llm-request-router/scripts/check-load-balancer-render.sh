@@ -22,6 +22,8 @@ render() {
     "$@" >"${manifest}"
 }
 
+# Callers pipe this into grep without -q: an early grep exit would SIGPIPE yq
+# and fail the pipeline under pipefail.
 router_args() {
   local manifest="$1"
   yq ea -r \
@@ -34,7 +36,9 @@ render "${default_manifest}"
 
 default_config_maps="$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-lb")] | length' "${default_manifest}")"
 test "${default_config_maps}" = "0" || fail "default render created an embedded load-balancer ConfigMap"
-if router_args "${default_manifest}" | grep -q -- '^--lb-config-path='; then
+default_checksum="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router") | .spec.template.metadata.annotations."checksum/load-balancer-config"' "${default_manifest}")"
+test "${default_checksum}" = "null" || fail "default render added a load-balancer config checksum"
+if router_args "${default_manifest}" | grep -- '^--lb-config-path=' >/dev/null; then
   fail "default render overrode Stargate's built-in load-balancer policy"
 fi
 
@@ -57,14 +61,19 @@ embedded_config="$(yq ea -r 'select(.kind == "ConfigMap" and .metadata.name == "
 printf '%s' "${embedded_config}" | jq -e \
   '.default == "random" and .request_algorithms == {"round-robin":"round-robin"}' \
   >/dev/null || fail "explicit embedded load-balancer config did not round-trip semantically"
-router_args "${embedded_manifest}" | grep -qx -- '--lb-config-path=/etc/llm-request-router/lb-config.json' ||
+router_args "${embedded_manifest}" | grep -x -- '--lb-config-path=/etc/llm-request-router/lb-config.json' >/dev/null ||
   fail "explicit embedded config did not mount the chart-managed path"
+embedded_checksum="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router") | .spec.template.metadata.annotations."checksum/load-balancer-config"' "${embedded_manifest}")"
+expected_checksum="$(yq ea -o=json -I=0 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-lb") | .data."lb-config.json"' "${embedded_manifest}" |
+  jq -j . | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+test "${embedded_checksum}" = "${expected_checksum}" ||
+  fail "embedded config checksum annotation does not match the rendered config"
 
 path_manifest="${work_dir}/path.yaml"
 render "${path_manifest}" --set-string llmRequestRouter.loadBalancer.configPath=/etc/stargate/lb.json
 path_config_maps="$(yq ea -r '[select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-lb")] | length' "${path_manifest}")"
 test "${path_config_maps}" = "0" || fail "configPath-only render created an embedded ConfigMap"
-router_args "${path_manifest}" | grep -qx -- '--lb-config-path=/etc/stargate/lb.json' ||
+router_args "${path_manifest}" | grep -x -- '--lb-config-path=/etc/stargate/lb.json' >/dev/null ||
   fail "explicit load-balancer configPath was not forwarded"
 
 echo "load-balancer-render: all checks passed"

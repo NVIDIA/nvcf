@@ -159,6 +159,10 @@ var priorityMiddlewarePaths = []struct {
 		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
 	},
 	{
+		path: "/v1/messages",
+		body: `{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}],"max_tokens":16}`,
+	},
+	{
 		path: "/v1/embeddings",
 		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
 	},
@@ -292,6 +296,147 @@ func TestNVCFAuthMiddlewareRejectsMissingBearerToken(t *testing.T) {
 	}
 	if authClient.authorizeCalls != 0 {
 		t.Fatalf("authorize calls = %d, want 0", authClient.authorizeCalls)
+	}
+}
+
+func TestNVCFAuthMiddlewareCredentialHeaderSelection(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		path          string
+		body          string
+		authorization string
+		emptyAuth     bool
+		apiKey        string
+		wantStatus    int
+		wantToken     string
+	}{
+		{
+			name:       "chat completions rejects x-api-key without bearer",
+			path:       "/v1/chat/completions",
+			body:       `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "responses rejects x-api-key without bearer",
+			path:       "/v1/responses",
+			body:       `{"model":"fn-alpha/company-name/model-name","input":"hello"}`,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "embeddings rejects x-api-key without bearer",
+			path:       "/v1/embeddings",
+			body:       `{"model":"fn-alpha/company-name/model-name","input":"hello"}`,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "chat completions with bearer carries no request-id",
+			path:          "/v1/chat/completions",
+			body:          `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`,
+			authorization: "Bearer sk-bearer",
+			wantStatus:    http.StatusNoContent,
+			wantToken:     "sk-bearer",
+		},
+		{
+			name:          "messages prefers bearer over x-api-key",
+			path:          messagesEndpointPath,
+			body:          `{"model":"fn-alpha/company-name/model-name","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
+			authorization: "Bearer sk-bearer",
+			apiKey:        "sk-api-key",
+			wantStatus:    http.StatusNoContent,
+			wantToken:     "sk-bearer",
+		},
+		{
+			name:          "messages rejects non-bearer authorization even with x-api-key",
+			path:          messagesEndpointPath,
+			body:          `{"model":"fn-alpha/company-name/model-name","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
+			authorization: "Basic dXNlcjpwYXNz",
+			apiKey:        "sk-api-key",
+			wantStatus:    http.StatusUnauthorized,
+		},
+		{
+			name:       "messages treats an empty authorization header as present",
+			path:       messagesEndpointPath,
+			body:       `{"model":"fn-alpha/company-name/model-name","max_tokens":8,"messages":[{"role":"user","content":"hello"}]}`,
+			emptyAuth:  true,
+			apiKey:     "sk-api-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			authClient := &stubInvocationAuthClient{authResponse: &nvcf.InvocationAuthResponse{RateLimitKey: "org-test"}}
+			e := echo.New()
+			e.Use(NewContextMiddleware(config.Default()))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			e.POST(tc.path, func(c echo.Context) error {
+				return c.NoContent(http.StatusNoContent)
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			if tc.authorization != "" {
+				req.Header.Set(echo.HeaderAuthorization, tc.authorization)
+			}
+			if tc.emptyAuth {
+				req.Header[echo.HeaderAuthorization] = []string{""}
+			}
+			if tc.apiKey != "" {
+				req.Header.Set("X-Api-Key", tc.apiKey)
+			}
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if authClient.authorizeToken != tc.wantToken {
+				t.Fatalf("authorized token = %q, want %q", authClient.authorizeToken, tc.wantToken)
+			}
+			if got := rec.Header().Get(headerMessagesRequestID); tc.path != messagesEndpointPath && got != "" {
+				t.Fatalf("request-id = %q on %s, want none outside Messages", got, tc.path)
+			}
+		})
+	}
+}
+
+func TestMessagesAcceptsXAPIKeyWithoutForwardingIt(t *testing.T) {
+	captured := make(chan http.Header, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured <- r.Header.Clone()
+		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		_, _ = w.Write([]byte(`{"type":"message","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer backend.Close()
+
+	e, auth := messagesTestAPI(t, backend.URL, config.Default(), nil, []string{messagesEndpointPath})
+	req := httptest.NewRequest(http.MethodPost, messagesEndpointPath, strings.NewReader(messagesTestBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("x-api-key", "sk-anthropic-sdk")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if auth.authorizeToken != "sk-anthropic-sdk" {
+		t.Fatalf("authorized token = %q, want the x-api-key value", auth.authorizeToken)
+	}
+	got := <-captured
+	for _, name := range []string{"X-Api-Key", echo.HeaderAuthorization} {
+		if v := got.Get(name); v != "" {
+			t.Fatalf("backend received %s = %q, want it removed", name, v)
+		}
 	}
 }
 

@@ -265,12 +265,12 @@ fn no_eligible_candidates_response() -> Response<Body> {
     )
 }
 
-fn json_error_response(
+pub(super) fn json_error_response(
     status: StatusCode,
     error_code: &'static str,
-    body: &'static str,
+    body: impl Into<Body>,
 ) -> Response<Body> {
-    let mut response = Response::new(Body::from(body));
+    let mut response = Response::new(body.into());
     *response.status_mut() = status;
     response.headers_mut().insert(
         HeaderName::from_static(HEADER_STARGATE_ERROR_CODE),
@@ -339,6 +339,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: None,
+            last_cluster: None,
         }
     }
 

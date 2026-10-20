@@ -53,9 +53,48 @@ fn test_state() -> AppState {
         request_slots: None,
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
+        engine: None,
         stats_events: test_stats_events(),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
+}
+
+/// Checks that a stargate-dev mockdc argument set parses and selects the
+/// batched engine. The rendered argv is asserted by
+/// deploy/stacks/stargate-dev/tests/test_invariants.py; update both together.
+#[test]
+fn dev_chart_argv_shapes_parse() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--http-listen-addr=0.0.0.0:8090",
+        "--model-name=stargate-dev-model",
+        "--engine-model=batched",
+        "--num-gpu-workers=14",
+        "--kv-cache-capacity-tokens=1000000",
+        "--context-length-tokens=131072",
+        "--output-tokens-min=128",
+        "--output-tokens-max=8192",
+        "--output-token-distribution=gaussian",
+    ])
+    .expect("chart argv should parse");
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("chart argv selects the batched engine");
+    assert_eq!(config.num_gpu_workers, 14);
+    // The chart sets Pylon --max-engine-concurrency to numGpuWorkers x 25.
+    assert_eq!(config.max_concurrency(), 14 * 25);
+    assert_eq!(config.kv_cache_capacity_tokens, 1_000_000);
+    // The explicit limits match the h100-llama-3.1-8b profile.
+    let profile = Profile::H100Llama31EightB;
+    assert_eq!(
+        args.behavior().unwrap().context_length_tokens,
+        profile.behavior().context_length_tokens
+    );
+    assert_eq!(
+        args.output_tokens().unwrap(),
+        profile.default_output_tokens()
+    );
 }
 
 #[test]
@@ -889,6 +928,116 @@ async fn chat_completion_retains_prefix_only_after_modeled_prefill_completes() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn non_streaming_chat_reports_input_when_prefill_completes() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-prefill-stats"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let mut chat_request = request();
+    chat_request.stream = Some(false);
+
+    let request = tokio::spawn(chat_completions(State(state), headers, Json(chat_request)));
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(0));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert!(matches!(
+        stats_events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+    tokio::time::advance(Duration::from_millis(1)).await;
+
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    assert!(
+        !request.is_finished(),
+        "TTFT should still delay the response"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn responses_reports_input_without_waiting_for_stream_polling() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-response-prefill"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let response_request = ResponsesRequest {
+        stream: Some(true),
+        model: Some("dummy-model".to_string()),
+        max_output_tokens: Some(1),
+        input: None,
+    };
+
+    let request = tokio::spawn(responses(State(state), headers, Json(response_request)));
+    stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    request
+        .await
+        .expect("responses request should return a stream");
+}
+
 #[test]
 fn kv_cache_evicts_least_recently_used_entry() {
     let mut cache = KvCacheState::new(300);
@@ -1181,4 +1330,197 @@ async fn read_until_contains(
         }
     }
     Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[test]
+fn profile_defaults_to_the_batched_engine_with_configurable_workers() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--num-gpu-workers",
+        "4",
+    ])
+    .unwrap();
+    let config = args
+        .engine_config()
+        .unwrap()
+        .expect("profile uses batched engine");
+    assert_eq!(config.num_gpu_workers, 4);
+    assert_eq!(config.max_concurrency(), 100);
+
+    let legacy = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--engine-model",
+        "legacy",
+    ])
+    .unwrap();
+    assert!(legacy.engine_config().unwrap().is_none());
+    assert!(
+        Args::try_parse_from(["mock-dynamo"])
+            .unwrap()
+            .engine_config()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        Args::try_parse_from(["mock-dynamo", "--num-gpu-workers", "4"])
+            .unwrap()
+            .engine_config()
+            .is_err(),
+        "batched-only flags must not be ignored by the legacy model"
+    );
+}
+
+#[test]
+fn batched_engine_flags_override_profile_costs() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--engine-model",
+        "batched",
+        "--max-num-seqs",
+        "8",
+        "--kv-cache-capacity-tokens",
+        "1000",
+        "--step-prefill-ms-per-token",
+        "0.1",
+    ])
+    .unwrap();
+    let config = args.engine_config().unwrap().unwrap();
+    assert_eq!(config.max_num_seqs, 8);
+    assert_eq!(config.kv_cache_capacity_tokens, 1000);
+    assert_eq!(config.step_prefill_ms_per_token, 0.1);
+    assert!(
+        Args::try_parse_from([
+            "mock-dynamo",
+            "--engine-model",
+            "batched",
+            "--num-gpu-workers",
+            "0"
+        ])
+        .unwrap()
+        .engine_config()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn batched_engine_reuses_cached_prefixes_across_requests() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 4,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.1,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let state = AppState {
+        output_tokens: OutputTokenConfig::fixed(3),
+        engine: Some(engine),
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state.clone());
+    let (addr, _server) = spawn_test_app(app).await;
+    let body = serde_json::json!({"model": "dummy-model", "messages": []}).to_string();
+    let send = || {
+        json_response(
+            addr,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+            &body,
+        )
+    };
+
+    let started = std::time::Instant::now();
+    let cold = send().await;
+    let cold_elapsed = started.elapsed();
+    assert!(cold.contains("x-kv-cache-hit: false"), "{cold}");
+    assert!(cold.contains("x-kv-cache-uncached-input-tokens: 2000"));
+    assert!(cold.contains(r#""completion_tokens":3"#));
+    // 2,000 prefill tokens at 0.1 ms each.
+    assert!(
+        cold_elapsed >= Duration::from_millis(200),
+        "{cold_elapsed:?}"
+    );
+
+    let warm = send().await;
+    assert!(warm.contains("x-kv-cache-hit: true"), "{warm}");
+    assert!(warm.contains("x-kv-cache-reused-input-tokens: 2000"));
+
+    // The cached entry holds the prompt and its three output tokens.
+    let Json(stats) = kv_cache_stats(State(state)).await;
+    assert_eq!(
+        (stats.kv_cache_used_tokens, stats.kv_cache_capacity_tokens),
+        (2003, 100_000)
+    );
+
+    let streamed = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        "connection: close\r\nx-input-tokens: 2000\r\nx-cache-affinity-key: shared-prefix",
+        &serde_json::json!({"model": "dummy-model", "messages": [], "stream": true}).to_string(),
+    )
+    .await;
+    assert!(streamed.contains("x-kv-cache-hit: true"), "{streamed}");
+    assert_eq!(streamed.matches(r#""content":"#).count(), 3, "{streamed}");
+    assert!(streamed.contains("[DONE]"), "{streamed}");
+}
+
+#[test]
+fn stats_stream_pings_advertise_batched_engine_concurrency() {
+    let advertised = StatsStreamEvent::Ping {
+        v: 1,
+        model: Some("dummy-model".to_string()),
+        max_engine_concurrency: Some(100),
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&advertised).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1,\"model\":\"dummy-model\",\"max_engine_concurrency\":100}\n"
+    );
+    let legacy = StatsStreamEvent::Ping {
+        v: 1,
+        model: None,
+        max_engine_concurrency: None,
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&legacy).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1}\n"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_an_engine_request_frees_its_slot() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 1,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.0,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let mut running = engine.submit(None, 10, 1_000_000);
+    running.first_token().await;
+    let mut waiting = engine.submit(None, 10, 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+            .await
+            .is_err(),
+        "the only slot is busy"
+    );
+
+    // A client disconnect drops the request, which cancels it in the engine.
+    drop(running);
+    tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+        .await
+        .expect("the cancelled request's slot serves the waiting request");
 }

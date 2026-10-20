@@ -17,44 +17,117 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use headers::Authorization;
+use headers::{Authorization, HeaderMapExt};
 use http::header::AUTHORIZATION;
 use http::{Response, StatusCode};
 
+/// Parse one bearer header for control-plane or request-scoped handler validation.
 pub async fn auth_middleware(mut req: Request, next: Next) -> impl IntoResponse {
-    if let Some(auth) = req.headers().get(AUTHORIZATION) {
-        match auth.to_str() {
-            Ok(value) => {
-                if let Some(token) = value.strip_prefix("Bearer ") {
-                    let bearer = match Authorization::bearer(token) {
-                        Ok(b) => b,
-                        Err(_) => {
-                            tracing::warn!("failed to parse authorization header");
-                            return auth_err_response();
-                        }
-                    };
-                    let extensions = req.extensions_mut();
-                    extensions.insert(bearer); // <------ ADDS IT TO THE REQUEST AS AN EXPLICIT TYPE
-                    req.headers_mut().remove(AUTHORIZATION); //   <------ REMOVES IT FROM THE HEADERS
-                    tracing::trace!("auth middleware passed");
-                }
-            }
-            Err(_) => {
-                tracing::warn!("Could not cast authorization header to string");
-                return auth_err_response();
-            }
-        }
-    } else {
-        tracing::warn!("Missing Authorization header");
-        let mut missing_header = Response::new("Header of type `authorization` was missing".into());
-        *missing_header.status_mut() = StatusCode::UNAUTHORIZED;
-        return missing_header;
+    if req.headers().get_all(AUTHORIZATION).iter().count() != 1 {
+        tracing::warn!("expected one authorization header");
+        return auth_err_response();
     }
+    let Some(bearer) = req
+        .headers()
+        .typed_get::<Authorization<headers::authorization::Bearer>>()
+    else {
+        tracing::warn!("failed to parse bearer authorization header");
+        return auth_err_response();
+    };
+    if bearer.token().is_empty() || bearer.token().bytes().any(|b| b.is_ascii_whitespace()) {
+        tracing::warn!("invalid bearer authorization header");
+        return auth_err_response();
+    }
+
+    // Token validation is delegated to auth_invocation; worker attach routes
+    // validate their request-scoped tokens in their handlers.
+    req.extensions_mut().insert(bearer);
+    req.headers_mut().remove(AUTHORIZATION);
     next.run(req).await
 }
 
+/// Use the same response for every authorization-header parsing failure.
 fn auth_err_response() -> Response<Body> {
     let mut err_response: Response<Body> = Response::new("Unauthorized access".into());
     *err_response.status_mut() = StatusCode::UNAUTHORIZED;
     err_response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{extract::Extension, middleware, routing::get, Router};
+    use headers::authorization::Bearer;
+    use http::{HeaderMap, HeaderValue};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    fn app() -> Router {
+        Router::new()
+            .route("/", get(|Extension(auth): Extension<Authorization<Bearer>>, headers: HeaderMap| async move {
+                assert_eq!(auth.token(), "test-token");
+                assert!(!headers.contains_key(AUTHORIZATION));
+                StatusCode::NO_CONTENT
+            }))
+            .layer(middleware::from_fn(auth_middleware))
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_or_missing_authorization() {
+        for header in [
+            None,
+            Some(""),
+            Some("Basic test-token"),
+            Some("Bearer"),
+            Some("Bearer "),
+            Some("Bearer test token"),
+        ] {
+            let mut request = Request::new(Body::empty());
+            if let Some(header) = header {
+                request
+                    .headers_mut()
+                    .insert(AUTHORIZATION, HeaderValue::from_str(header).unwrap());
+            }
+            let response = app().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "Unauthorized access"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_duplicate_authorization_headers() {
+        let mut request = Request::new(Body::empty());
+        request
+            .headers_mut()
+            .append(AUTHORIZATION, HeaderValue::from_static("Bearer test-token"));
+        request.headers_mut().append(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer other-token"),
+        );
+        assert_eq!(
+            app().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn extracts_bearer_for_handler_validation() {
+        for header in [
+            "Bearer test-token",
+            "bearer test-token",
+            "BEARER test-token",
+        ] {
+            let request = Request::builder()
+                .header(AUTHORIZATION, header)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                app().oneshot(request).await.unwrap().status(),
+                StatusCode::NO_CONTENT
+            );
+        }
+    }
 }

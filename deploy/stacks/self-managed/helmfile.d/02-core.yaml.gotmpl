@@ -60,20 +60,27 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.9.0
+    version: 1.9.1
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 2.6.0
+    {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
+    chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
+    {{- if not $sisChartPath }}
+    version: 2.6.1
+    {{- end }}
     namespace: sis
-    inherit:
-      - template: service
     condition: icms.enabled
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    labels:
+      release-group: services
 
   - name: api
-    version: 1.28.0
+    version: 1.29.0
     namespace: nvcf
     inherit:
       - template: service
@@ -114,7 +121,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.7.0
+    version: 1.7.1
     namespace: nvcf
     inherit:
       - template: service
@@ -157,6 +164,7 @@ releases:
     chart: nvcf/helm-admin-token-issuer-proxy
     version: 1.6.0
     namespace: api-keys
+    condition: adminIssuerProxy.enabled
     values:
       - ../global.yaml.gotmpl
     # Finding #22 (E2E 2026-04-20): admin-issuer-proxy was not installed by
@@ -210,6 +218,13 @@ releases:
           name: nats-nkeys
           key: auth-callout-plugin.yaml
           mountPath: /etc/plugin-config/plugin.yaml
+      {{- if eq (dig "nats" "workerAuth" "nkey" .Values | toString) "token" }}
+      # The plugin config is read only at start-up, so a new worker auth mode or
+      # webhook URL must change the pod template to restart the auth callout.
+      - podAnnotations:
+          nvcf.nvidia.com/nats-worker-auth: token
+          nvcf.nvidia.com/nats-worker-auth-webhook-url: {{ dig "nats" "authCallout" "workerTokenAuth" "webhookUrl" "" .Values | quote }}
+      {{- end }}
       - extraEnvs:
           - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
             valueFrom:
@@ -232,7 +247,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.14.1
+    version: 1.16.0
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -245,7 +260,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.5.0
+    version: 1.6.0
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -256,7 +271,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.5.0
+    version: 0.7.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -276,12 +291,22 @@ releases:
     labels:
       release-group: services
 
+  - name: event-ledger
+    chart: nvcf/helm-nvcf-event-ledger
+    version: 0.6.0
+    namespace: nvcf
+    condition: addons.eventLedger.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.2
+    version: 1.18.3
     {{- end }}
     needs:
       - nvcf/notary-service

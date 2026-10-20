@@ -41,7 +41,7 @@ api:
     # This sets the pull policy for images.
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.18.0"
+    tag: "1.25.0"
 
   # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
   # imagePullSecrets:
@@ -223,6 +223,12 @@ api:
       protocol: TCP
 
   env: {}
+
+  # Send every worker the control plane's NATS NKey seed as NKEY_SEED. Set to
+  # false when the NATS auth callout authenticates workers by their worker
+  # token (helm-nvcf-nats nats.authCallout.workerTokenAuth.enabled).
+  workerNkeySeed:
+    enabled: true
 
   # Remote configuration via spring-cloud-kubernetes-client-config. When enabled,
   # the chart renders the ConfigMap + Role/RoleBinding + REMOTE_CONFIG_* env vars,

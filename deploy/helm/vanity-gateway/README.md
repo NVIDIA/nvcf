@@ -85,7 +85,8 @@ Important settings to review before deployment:
   only by models that set `functionType: LLM`
 - `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by
   default
-- `vanityGateway.mappingConfig.v2config` for the OpenAI and vanity route tables
+- `vanityGateway.mappingConfig.v2config` for the OpenAI, Anthropic, and vanity
+  route tables
 - `vanityGateway.serviceMonitor.enabled` for Prometheus Operator scraping
 
 ### Ports
@@ -105,27 +106,30 @@ or the pod is killed mid-drain.
 
 ## Route mapping
 
-`vanityGateway.mappingConfig.v2config` has two sections:
+`vanityGateway.mappingConfig.v2config` has three sections:
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
   requires `modelName` and `functionID`.
+- `anthropicMessages`: native Anthropic Messages model routes, served on
+  `POST /v1/messages`. Routes use the same fields as `openai.chatCompletions`
+  and share the API host set by `openai.host`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
 
-Both sections are empty by default.
+All sections are empty by default.
 `vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
 across all routes.
 
-An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
-instead of the invocation service, supported in `chatCompletions`, `responses`,
-and `embeddings`. Callers still send the public `modelName`; the gateway
+A model may set `functionType: LLM` to be served by the LLM Gateway instead of
+the invocation service, supported in `openai.chatCompletions`,
+`openai.responses`, `openai.embeddings`, and `anthropicMessages`. Callers still send the public `modelName`; the gateway
 rewrites the request model to `functionID/modelName` before forwarding.
 
 The values schema enforces what the gateway checks at startup, so a values file
 that would fail the container fails the render instead:
 
-- `functionType` is rejected outside those three endpoints
+- `functionType` is rejected outside those four endpoints
 - `usePexec`, `outgoingPathOverride`, and `sessionTimeout` are rejected on such
   a model, since the LLM Gateway ignores them. An explicit `false`, `""`, or `0`
   is accepted, because that is what an absent key produces
@@ -133,6 +137,30 @@ that would fail the container fails the render instead:
   answers `400 Bad Request` for any request carrying it
 - `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
   or `https` origin with no path
+
+A Messages route that targets the LLM Gateway:
+
+```yaml
+vanityGateway:
+  config:
+    llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+      anthropicMessages:
+        example_native-model:
+          modelName: example/native-model
+          functionID: <function-id>
+          functionType: LLM
+```
+
+Clients call `POST /v1/messages` on the shared host with the public
+`modelName`. Messages aliases appear in the shared `/v1/models` list with
+`supported_endpoints`, so OpenAI clients can tell which models accept only
+Messages. Upgrade Pylon workers, the Stargate router, and the LLM Gateway
+before enabling Messages routes. See `docs/overview/llm-gateway.md` for the
+request, accounting, and Claude Code details.
 
 Shadow traffic is supported. Each shadow target is resolved from the same model
 table and routed by its own `functionType`, so a shadow of an LLM model reaches
@@ -151,10 +179,14 @@ An `openai` route may mirror traffic to other routes in the same endpoint with
 primary:
   modelName: example/primary
   functionID: primary-function-id
+  promptCacheKeyHeaders:
+    - x-multi-turn-session-id
   shadows:
     - modelName: private/example/shadow-a
       percentage: 10                  # 1-100, default 100
-      samplingMethod: perBearerKey    # random (default) or perBearerKey
+      samplingMethod:
+        - promptCacheKey
+        - firstMessageHash
       cancelOnClientDisconnect: true  # default false
     - modelName: private/example/shadow-b
 shadow-a:
@@ -167,10 +199,56 @@ shadow-b:
 
 - a route with both legacy form and new form is rejected
 - an entry needs `modelName`; unknown entry keys are rejected
+- `samplingMethod` accepts one method or an ordered list
+- every method list has an implicit terminal `random` fallback
 
 The legacy route-level fields `shadowModelName`, `shadowModelNames`,
 `shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
-keep working unchanged; they apply one policy to every target on the route.
+remain supported; they apply one policy to every target on the route.
+`shadowSamplingMethod` also accepts one method or an ordered list.
+
+The supported methods are `random`, `perBearerKey`, `promptCacheKey`, and
+`firstMessageHash`. The gateway evaluates a list in order and advances only
+when a method cannot find usable source material. A valid bucket rejection is
+final. An explicit `random` must be last. Empty lists and entries, duplicates,
+unknown methods, and methods after `random` are rejected. A `100` percent target
+is admitted without parsing sampling material or drawing a random bucket.
+
+`promptCacheKey` and `firstMessageHash` are limited to `chatCompletions`,
+`responses`, and `anthropicMessages`. `promptCacheKey` first uses a nonempty string
+`prompt_cache_key` from the JSON body, then checks `promptCacheKeyHeaders` in
+order. The body value is trimmed like header values, and a whitespace-only value
+is unavailable. This route-level header list applies to both shadow forms. It
+defaults to `x-multi-turn-session-id`; set it to `[]` to disable header lookup.
+Messages has no `prompt_cache_key` body field, so it reads only the header list,
+which defaults to `x-multi-turn-session-id`, then `x-claude-code-session-id`.
+A header is usable only when it has exactly one nonempty value after trimming.
+Only the value is hashed, so equal values receive equal buckets across body and
+header sources and across endpoints. `Authorization` and `Proxy-Authorization`
+are rejected case-insensitively so credentials cannot be used as prompt cache
+keys.
+
+`firstMessageHash` uses a versioned, endpoint-specific canonical JSON envelope.
+For Chat Completions it hashes leading `system` and `developer` messages and the
+first `user` message. For Responses it hashes nonempty `instructions` and the
+first user input; a string `input` is user content. For Messages it hashes a
+nonempty top-level `system` and the first `user` message, without
+`cache_control` keys. Object-key order is
+normalized, while array and content-part order is preserved. Later turns are
+ignored. Sampling is stateless and does not recover input through conversations,
+`previous_response_id`, or streamed deltas. A Responses request that continues
+earlier turns, through a nonempty `previous_response_id` or a `conversation`,
+usually carries only its newest input. The gateway cannot reliably identify the
+original first message from it, so `firstMessageHash` is skipped and sampling
+continues to the next configured method, ending at `random`. Send the same
+`prompt_cache_key` or session header on every turn to keep a conversation in one
+sample.
+
+All deterministic methods use SHA-256, the first 8 digest bytes as a big-endian
+integer, and modulo 100. Missing bearer credentials now reach the implicit
+`random` fallback for scalar `perBearerKey` configuration instead of skipping
+the target. Sampling does not change forwarded request bytes. Raw credentials,
+prompt cache keys, and message content are not added to telemetry.
 
 ## Notes
 

@@ -5,9 +5,9 @@ name: build-test
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**', 'docs/**']
+    branches: [main, 'release-**', 'release/**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -68,6 +68,10 @@ jobs:
           DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
         run: ./tools/ci/check-doc-version-current-release
 
+  # "go-lib codegen" is a required status check on main. It also runs the
+  # vendored go-lib drift guard so that drift blocks merges. Keep the check
+  # name and keep this job unfiltered by paths: a skipped required check
+  # counts as passing.
   go-lib-codegen:
     name: go-lib codegen
     runs-on: ubuntu-latest
@@ -78,7 +82,16 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
+      # Runs before codegen, which may leave the library tree modified when
+      # it fails.
+      - name: Test the vendored go-lib drift guard
+        run: bash tools/ci/test-check-go-vendored-lib
+
+      - name: Check vendored copies of the shared Go library match its source
+        run: bash tools/ci/check-go-vendored-lib
+
       - name: Run go-lib codegen freshness check
+        if: ${{ !cancelled() }}
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
 
   helm-charts:
@@ -133,13 +146,30 @@ jobs:
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/helm/nvca-operator test-worker-timeouts-schema
+          make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Verify bundled receipt release inventory
+        env:
+          NVCF_RECEIPT_INVENTORY_E2E: "1"
+        run: go test -C tools/docs-version-sync -run '^TestReceiptInventoryIncludesBundledChartAndDefaultHookImage$' -count=1
+
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
+
+      - name: Test LLM request router chart rendering
+        run: make -C deploy/helm/llm-request-router test
+
+      - name: Run Stargate dev stack render tests
+        run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
 
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
@@ -147,8 +177,14 @@ jobs:
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
 
+      - name: Test OpenBao initialization tool requirements
+        run: bash deploy/helm/openbao/tests/init-tool-requirements.sh
+
       - name: Test ReVal authorization configuration
         run: bash deploy/helm/helm-reval/tests/auth-config.sh
+
+      - name: Test NVCT API sidecar release artifacts
+        run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -270,3 +306,27 @@ jobs:
         run: |
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
+
+  stargate-dev-benchmark:
+    name: Stargate development benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: deploy/stacks/stargate-dev/benchmark
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Test the benchmark controller
+        run: cargo test --locked --all-targets
+
+      - name: Check Rust diagnostics
+        run: cargo clippy --locked --all-targets -- -D warnings

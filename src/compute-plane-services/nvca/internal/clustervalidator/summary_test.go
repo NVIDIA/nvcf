@@ -20,6 +20,8 @@ package clustervalidator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -32,6 +34,41 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
+
+// The agent acts on all three answers: true publishes the baseline, false reads
+// no summary at all, and unset (an operator that predates the variable) reads
+// summaries without a baseline. A value that is not a boolean says nothing.
+func TestEnabled(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       *string
+		wantEnabled bool
+		wantSet     bool
+	}{
+		{name: "unset"},
+		{name: "empty", value: strPtr("")},
+		{name: "true", value: strPtr("true"), wantEnabled: true, wantSet: true},
+		{name: "padded upper case", value: strPtr(" TRUE "), wantEnabled: true, wantSet: true},
+		{name: "one", value: strPtr("1"), wantEnabled: true, wantSet: true},
+		{name: "false", value: strPtr("false"), wantSet: true},
+		{name: "garbage", value: strPtr("enabled")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setenv first so the variable is restored after the test even
+			// when the case unsets it.
+			t.Setenv(EnabledEnv, "")
+			if tt.value == nil {
+				require.NoError(t, os.Unsetenv(EnabledEnv))
+			} else {
+				t.Setenv(EnabledEnv, *tt.value)
+			}
+			enabled, set := Enabled()
+			assert.Equal(t, tt.wantEnabled, enabled, "enabled")
+			assert.Equal(t, tt.wantSet, set, "set")
+		})
+	}
+}
 
 func TestBuildSummary_PopulatesFixedChecksAndDynamicMaps(t *testing.T) {
 	reachOK := true
@@ -176,7 +213,7 @@ func TestWriteSummaryConfigMap_CreatesWhenMissing(t *testing.T) {
 		VerdictReady:  true,
 		Checks:        map[string]bool{CheckKeyControlPlane: true},
 	}
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", summary)
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", summary))
 
 	cm, err := client.CoreV1().ConfigMaps("nvca-operator").
 		Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -201,7 +238,7 @@ func TestWriteSummaryConfigMap_UpdatesExisting(t *testing.T) {
 		VerdictReady:  false,
 		Checks:        map[string]bool{CheckKeyControlPlane: false},
 	}
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", summary)
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", summary))
 
 	cm, err := client.CoreV1().ConfigMaps("nvca-operator").
 		Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -239,28 +276,100 @@ func TestWriteSummaryConfigMap_ConcurrentCreateFallsBackToUpdate(t *testing.T) {
 		return true, cm, nil
 	})
 
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", &ValidatorSummary{
+	require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator", &ValidatorSummary{
 		SchemaVersion: SummarySchemaVersion,
 		RanAt:         "2026-06-11T10:00:00Z",
 		Verdict:       "NVCF-Ready",
 		VerdictReady:  true,
-	})
+	}))
 
 	assert.Contains(t, updatedData, `"verdict": "NVCF-Ready"`,
 		"after AlreadyExists, this run's payload must be written via Update")
 }
 
-func TestWriteSummaryConfigMap_FailureDoesNotPanic(t *testing.T) {
-	// nil client would obviously panic; this checks the function tolerates
-	// the kind of API failure modes a real cluster surfaces. Specifically,
-	// even if marshal fails we should return cleanly.
-	client := fake.NewSimpleClientset()
-	// A summary that JSON-marshals fine — the API path is what we're testing.
-	writeSummaryConfigMap(context.Background(), testLog(), client, "nvca-operator", &ValidatorSummary{
-		SchemaVersion: SummarySchemaVersion,
-		RanAt:         "2026-06-11T10:00:00Z",
-	})
-	// Just no panic = success here.
+// A write that may succeed if repeated is retried in the run rather than left
+// to the Job's retry, which reruns every check inside the same deadline: an
+// update that lost a race to a concurrent run, and a throttled or failed
+// request.
+func TestWriteSummaryConfigMap_RetriesWhatMayClear(t *testing.T) {
+	gr := corev1.Resource("configmaps")
+	existing := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: SummaryConfigMapName, Namespace: "nvca-operator"}}
+	for name, tc := range map[string]struct {
+		objs []runtime.Object
+		verb string
+		err  error
+	}{
+		"update conflict": {objs: []runtime.Object{existing}, verb: "update",
+			err: apierrors.NewConflict(gr, SummaryConfigMapName, errors.New("stale"))},
+		"read throttled": {verb: "get", err: apierrors.NewTooManyRequestsError("slow down")},
+		"create 503":     {verb: "create", err: apierrors.NewServiceUnavailable("etcd leader change")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tc.objs...)
+			calls := 0
+			client.PrependReactor(tc.verb, "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+				calls++
+				if calls == 1 {
+					return true, nil, tc.err
+				}
+				return false, nil, nil
+			})
+			require.NoError(t, writeSummaryConfigMap(context.Background(), client, "nvca-operator",
+				&ValidatorSummary{SchemaVersion: SummarySchemaVersion, Verdict: VerdictReady}))
+
+			cm, err := client.CoreV1().ConfigMaps("nvca-operator").
+				Get(context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, cm.Data[SummaryConfigMapKey], `"verdict": "NVCF-Ready"`)
+		})
+	}
+}
+
+// Every way the write can fail is returned, so a launcher's Job can retry a
+// run that did not publish instead of completing without a summary.
+func TestWriteSummaryConfigMap_ReturnsEveryFailure(t *testing.T) {
+	gr := corev1.Resource("configmaps")
+	existing := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: SummaryConfigMapName, Namespace: "nvca-operator"}}
+	denied := func(why string) error { return apierrors.NewForbidden(gr, SummaryConfigMapName, errors.New(why)) }
+	internal := apierrors.NewInternalError(errors.New("etcd"))
+	conflict := apierrors.NewConflict(gr, SummaryConfigMapName, errors.New("stale"))
+	present := []runtime.Object{existing}
+	raced := apierrors.NewAlreadyExists(gr, SummaryConfigMapName)
+	for name, tc := range map[string]struct {
+		objs           []runtime.Object
+		verb           string
+		err            error
+		alreadyExisted bool
+	}{
+		"read denied":          {verb: "get", err: denied("rbac")},
+		"read 500":             {verb: "get", err: internal},
+		"create denied":        {verb: "create", err: denied("policy")},
+		"create 500":           {verb: "create", err: internal},
+		"update conflict":      {objs: present, verb: "update", err: conflict},
+		"update denied":        {objs: present, verb: "update", err: denied("policy")},
+		"re-read after a race": {verb: "create", err: raced, alreadyExisted: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tc.objs...)
+			client.PrependReactor(tc.verb, "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			if tc.alreadyExisted {
+				gets := 0
+				client.PrependReactor("get", "configmaps", func(ktesting.Action) (bool, runtime.Object, error) {
+					gets++
+					if gets == 1 {
+						return true, nil, apierrors.NewNotFound(gr, SummaryConfigMapName)
+					}
+					return true, nil, apierrors.NewInternalError(errors.New("etcd"))
+				})
+			}
+			err := writeSummaryConfigMap(context.Background(), client, "nvca-operator",
+				&ValidatorSummary{SchemaVersion: SummarySchemaVersion})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), SummaryConfigMapName)
+		})
+	}
 }
 
 // TestAllCheckKeysCoversEveryCheckKeyConst guards against forgetting to
@@ -282,8 +391,19 @@ func TestAllCheckKeysCoversEveryCheckKeyConst(t *testing.T) {
 		CheckKeyGPUOperator,
 		CheckKeyConfigurableNetpol,
 		CheckKeyNetpolEnforcement,
+		// Control-plane-specific keys added with the role-aware validator.
+		CheckKeyDefaultStorageClass,
+		CheckKeyGatewayAPICRDs,
+		CheckKeyEnvoyGateway,
+		CheckKeyGatewayRoutes,
+		CheckKeyExternalLB,
+		CheckKeyNodeToNode,
+		// Control-plane HA readiness keys.
+		CheckKeyTier1Deployments,
+		CheckKeyTier2StatefulSets,
 	} {
 		assert.True(t, known[k], "%q is a CheckKey constant but missing from AllCheckKeys", k)
 	}
-	assert.Len(t, AllCheckKeys, 10, "if you added a new CheckKey, also add it to AllCheckKeys AND to clusterValidatorCheckKeys() in internal/metrics/metrics.go")
+	assert.Len(t, AllCheckKeys, 18, "if you added a new CheckKey, also add it to AllCheckKeys AND to "+
+		"clusterValidatorCheckKeys() in internal/metrics/metrics.go")
 }
