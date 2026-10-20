@@ -341,3 +341,53 @@ func TestResolve_InitDestThroughSharedVolumeName(t *testing.T) {
 		t.Errorf("unmounted in the engine: landing = %+v", r.Landing)
 	}
 }
+
+// A tree whose layout the chart decides is shared by its layout too; a
+// Hugging Face repo the engine fetches, which nvsnap downloads in one
+// canonical layout, by the artifact alone.
+func TestShareKey_Layout(t *testing.T) {
+	engine := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Args: []string{"vllm serve --model org/m"},
+		Env:  []corev1.EnvVar{{Name: "HF_HUB_CACHE", Value: "/data/hub"}},
+	}}}}
+	if r, _ := Resolve(engine, 0); r.ShareKey() != "hf://org/m" {
+		t.Errorf("engine-fetched repo: key %q, want the artifact alone", r.ShareKey())
+	}
+	hfInit := func(args, home string) *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "fetch", Args: []string{args},
+				Env:          []corev1.EnvVar{{Name: "HF_HOME", Value: home}},
+				VolumeMounts: []corev1.VolumeMount{{Name: "m", MountPath: "/models"}}}},
+			Containers: []corev1.Container{{Args: []string{"vllm serve /models/x"}, VolumeMounts: []corev1.VolumeMount{{Name: "m", MountPath: "/models"}}}},
+			Volumes:    []corev1.Volume{emptyDir("m")},
+		}}
+	}
+	keys := map[string]string{}
+	for name, pod := range map[string]*corev1.Pod{
+		"local-dir": hfInit("hf download org/m --local-dir /models/x", ""),
+		"cache":     hfInit("hf download org/m", "/models/x"),
+		"cache-hf":  hfInit("hf download org/m", "/models/hf"),
+	} {
+		r, ok := Resolve(pod, 0)
+		if !ok {
+			t.Fatalf("%s: must resolve", name)
+		}
+		keys[name] = r.ShareKey()
+	}
+	want := map[string]string{
+		"local-dir": "hf://org/m#init-hf-local-dir:x",
+		"cache":     "hf://org/m#init-hf-cache:x",
+		"cache-hf":  "hf://org/m#init-hf-cache:hf",
+	}
+	for k, w := range want {
+		if keys[k] != w {
+			t.Errorf("%s: key %q, want %q", k, keys[k], w)
+		}
+	}
+	nim := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "nvcr.io/nim/meta/llama:1",
+		Env:          []corev1.EnvVar{{Name: "NIM_CACHE_PATH", Value: "/opt/nim/.cache"}},
+		VolumeMounts: []corev1.VolumeMount{{Name: "c", MountPath: "/opt/nim"}}}}, Volumes: []corev1.Volume{emptyDir("c")}}}
+	if r, _ := Resolve(nim, 0); r.ShareKey() != "nim://nvcr.io/nim/meta/llama:1#engine-nim:.cache" {
+		t.Errorf("NIM cache: key %q", r.ShareKey())
+	}
+}

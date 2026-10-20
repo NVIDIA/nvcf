@@ -56,7 +56,10 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	if !ok || res.Identity.Scheme == "path" {
 		return nil, nil
 	}
-	uri := res.Identity.URI()
+	// Pods share a volume by artifact and, where the chart decides it, by
+	// the tree's layout: a pod never reads a tree laid out for another
+	// chart (modelid.Result.ShareKey).
+	uri := res.ShareKey()
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri, "source": res.Source})
 	if !res.Landing.Substitutable() {
 		log.WithField("kind", res.Landing.Kind).Info("model volume: landing volume is the customer's; leaving pod alone")
@@ -364,7 +367,7 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 		Image:        main.Image,
 		Command:      []string{"/bin/sh", "-c"},
 		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(downloadMount, modelvolume.MarkerFile))},
-		Env:          downloadEnv(main, land),
+		Env:          downloadEnv(main),
 		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: downloadMount}},
 	}
 	return step, true
@@ -379,61 +382,31 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 // same bytes whatever path it is mounted at; the engine keeps its own.
 const downloadMount = "/nvsnap-model"
 
+// hubDir is where a Hugging Face repo nvsnap downloads lies in the model
+// volume: one canonical layout, a hub cache under hub/ at the volume root,
+// whatever chart first asked for the model. Every reader is pointed at it
+// where it mounts the volume (readerHubCache), so any chart reads any
+// download of the same repo.
+const hubDir = "hub"
+
 // downloadEnv points the Hugging Face tooling at the mounted landing for
 // both its cache and its home, so nothing it reads or writes lies under a
-// directory the download user may not own, and copies the token and hub
-// settings the engine was given.
-//
-// The landing volume is mounted at downloadMount here but at its own
-// mount in the engine, so the engine's cache paths are translated
-// relative to that mount: an engine reading HF_HUB_CACHE=/data/hub from a
-// volume mounted at /data/hub finds the files at the volume root, and one
-// with HF_HOME=/models/hf on a volume at /models finds them under hf/hub.
-// A path outside the landing volume falls back to the volume root.
-func downloadEnv(main *corev1.Container, land modelid.Landing) []corev1.EnvVar {
-	env := map[string]string{}
-	for _, e := range main.Env {
-		if e.ValueFrom == nil {
-			env[e.Name] = e.Value
-		}
-	}
-	root := landingMount(land)
-	engineHome := env["HF_HOME"]
-	if engineHome == "" {
-		engineHome = modelid.DefaultHFHome
-	}
-	engineHub := env["HF_HUB_CACHE"]
-	if engineHub == "" {
-		engineHub = path.Join(engineHome, "hub")
-	}
-	home := downloadMount
-	if rel, ok := relativeTo(root, engineHome); ok {
-		home = path.Join(downloadMount, rel)
-	}
-	hub := path.Join(home, "hub")
-	if rel, ok := relativeTo(root, engineHub); ok {
-		hub = path.Join(downloadMount, rel)
-	}
+// directory the download user may not own, writes the hub cache in the
+// canonical layout, and copies the token and hub settings the engine was
+// given.
+func downloadEnv(main *corev1.Container) []corev1.EnvVar {
 	return append([]corev1.EnvVar{
-		{Name: "HF_HOME", Value: home},
-		{Name: "HF_HUB_CACHE", Value: hub},
+		{Name: "HF_HOME", Value: downloadMount},
+		{Name: "HF_HUB_CACHE", Value: path.Join(downloadMount, hubDir)},
 		{Name: "HOME", Value: downloadMount},
 	}, tokenEnv(main)...)
 }
 
-// relativeTo returns p relative to root when p is root or lies under it.
-func relativeTo(root, p string) (string, bool) {
-	if root == "" || p == "" {
-		return "", false
-	}
-	root, p = path.Clean(root), path.Clean(p)
-	if p == root {
-		return "", true
-	}
-	if rel, ok := strings.CutPrefix(p, strings.TrimSuffix(root, "/")+"/"); ok {
-		return rel, true
-	}
-	return "", false
+// readerHubCache is the HF_HUB_CACHE that makes the engine read the
+// canonical layout where it mounts the model volume, whatever cache
+// location its chart chose (HF_HOME, HF_HUB_CACHE, or the default).
+func readerHubCache(land modelid.Landing) corev1.EnvVar {
+	return corev1.EnvVar{Name: "HF_HUB_CACHE", Value: path.Join(landingMount(land), hubDir)}
 }
 
 func landVolumeName(land modelid.Landing) string {
@@ -600,7 +573,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		Image:   main.Image,
 		Command: []string{"/bin/sh", "-c"},
 		Args:    []string{script},
-		Env:     downloadEnv(main, land),
+		Env:     downloadEnv(main),
 	}
 	// The init mostly waits; the fallback download is the one case that
 	// needs real resources, and policy needs limits either way.
@@ -625,6 +598,7 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 			patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
 		}
 		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_HUB_OFFLINE", Value: "1"}))
+		patches = append(patches, appendEnv(m.MainContainer, readerHubCache(land)))
 	}
 	return patches
 }

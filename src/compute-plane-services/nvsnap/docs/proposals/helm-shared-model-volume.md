@@ -76,6 +76,18 @@ not.
    is substituted like an emptyDir. Role flags and wiring env stay out of
    the hash (`stripRoleFlags`).
 
+   Pods share a volume by the identity and the tree's layout. A Hugging
+   Face repo the engine fetches is downloaded by nvsnap in one canonical
+   layout (a hub cache under `hub/` at the volume root), and every reader
+   gets `HF_HUB_CACHE=<its mount>/hub`, so any chart reads any download of
+   the repo whatever cache location it chose. A tree the chart lays out
+   itself (its init, or an engine script) is keyed by that layout too,
+   `<uri>#<form>:<path in the volume>` (`init-ngc:.`,
+   `init-hf-local-dir:qwen`): a chart that writes the same artifact
+   differently downloads its own rather than read a tree it cannot use.
+   The init's destination is resolved through the volume it names, so an
+   init and an engine that mount one volume at different paths agree.
+
 2. One download step per identity per cluster, as a Job (webhook). The
    webhook creates Job `nvsnap-model-dl-<key>` in the pod's namespace on
    first sight; create is idempotent, so concurrent admissions need no
@@ -389,7 +401,7 @@ Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
 Stock `vllm-workers` chart, Qwen2.5-32B-Instruct TP=4, replicas=2 on two
 nodes, no nvsnap markers in the chart, agent v0.2.76-mv5.
 
-```
+```text
 first deploy (nothing on the cluster)
   t+0       both pods admitted as readers (hostPath landing, wait init); one Job created
   t+354s    Job succeeded: 65 GB via `hf download` into the RWO claim; claim released
@@ -406,7 +418,7 @@ earlier run, identity already complete on the cluster
 PVC reader mode (the default since the function-namespace fixes), same
 chart, Qwen2.5-14B-Instruct TP=4, replicas=2, agent v0.2.76-mv6:
 
-```
+```text
 first deploy (fresh identity)
   t+0       both pods admitted as readers referencing nvsnap-model-<key>-ro; Pending on
             "persistentvolumeclaim not found"; one Job created (2 CPU / 4 Gi requests,
@@ -426,7 +438,7 @@ values only: init-container NGC download into an emptyDir, two
 StatefulSet replicas, Qwen2.5-0.5B-Instruct hosted on prod NGC, agent
 v0.2.76-mv8, PVC reader mode). No chart change and no nvsnap marker.
 
-```
+```text
 first deploy (fresh identity, function namespace sr-848a0bc4-...)
   t+0       both mini-service pods admitted as readers referencing the ro claim; one Job;
             NVCA's own webhook mutated the Job pod too, so /var/secrets/secrets.json with
