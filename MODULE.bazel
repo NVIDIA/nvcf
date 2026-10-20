@@ -473,7 +473,7 @@ oci.pull(
 # platform string literally when it names the generated child repository.
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:b1deb9e97732ab5da2f1f6e0d3ac1e56bdc2df0a5bf900180662a4740f05957c",
+    digest = "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
