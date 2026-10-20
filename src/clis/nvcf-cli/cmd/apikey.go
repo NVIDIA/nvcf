@@ -416,6 +416,24 @@ func nvctAPIKeysConfig(config *client.Config, ownerOverride string) *apikeys.Con
 	}
 }
 
+// eventLedgerAPIKeysConfig builds the api-keys client config for Event Ledger
+// keys, which use their own ServiceID.
+func eventLedgerAPIKeysConfig(config *client.Config, ownerOverride string) *apikeys.Config {
+	owner := getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local")
+	if ownerOverride != "" {
+		owner = ownerOverride
+	}
+	return &apikeys.Config{
+		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
+		ServiceID:     getConfigValueWithDefault("api_keys_event_ledger_service_id", "nvidia-event-ledger-ncp-service-id-ckozoh6f"),
+		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
+		OwnerID:       owner,
+		JWTToken:      config.Token,
+		HostHeader:    getConfigValueWithDefault("api_keys_host", ""),
+		Debug:         config.Debug,
+	}
+}
+
 // listedAPIKey pairs an API key with the service (function or task) it belongs
 // to, since the api-keys service response carries no issuer field.
 type listedAPIKey struct {
@@ -637,14 +655,15 @@ func runListAPIKeys(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	logging.Info("Listing API keys...")
+	if !IsJSONOutput() {
+		logging.Info("Listing API keys...")
+	}
 
 	ctx := context.Background()
 
-	// Function (NVCF) and task (NVCT) keys are issued under separate issuers,
-	// so enumerate both to give a complete picture (NVBug 6417533).
 	nvcfClient := apikeys.NewClient(nvcfAPIKeysConfig(config, ""))
 	nvctClient := apikeys.NewClient(nvctAPIKeysConfig(config, ""))
+	eventLedgerClient := apikeys.NewClient(eventLedgerAPIKeysConfig(config, ""))
 
 	var keys []listedAPIKey
 
@@ -662,6 +681,14 @@ func runListAPIKeys(cmd *cobra.Command, args []string) error {
 	}
 	for _, k := range taskKeys {
 		keys = append(keys, listedAPIKey{APIKey: k, Service: "task"})
+	}
+
+	eventLedgerKeys, err := eventLedgerClient.ListAPIKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list Event Ledger API keys: %w", err)
+	}
+	for _, k := range eventLedgerKeys {
+		keys = append(keys, listedAPIKey{APIKey: k, Service: "event-ledger"})
 	}
 
 	if IsJSONOutput() {

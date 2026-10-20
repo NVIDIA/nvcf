@@ -259,9 +259,10 @@ func TestApikeyGenerate_BothKeys(t *testing.T) {
 // --- list / delete / clear-all cover NVCT task keys (NVBug 6417533) -----------
 
 type apiKeysRecorder struct {
-	listIssuers   []string
-	deleteIssuers []string
-	deletedIDs    []string
+	listIssuers    []string
+	listServiceIDs []string
+	deleteIssuers  []string
+	deletedIDs     []string
 }
 
 func sliceContains(s []string, v string) bool {
@@ -273,22 +274,24 @@ func sliceContains(s []string, v string) bool {
 	return false
 }
 
-// fakeAPIKeysListServer serves GET /v1/keys (returning functionKeys under the
-// NVCF issuer and taskKeys under the NVCT issuer) and DELETE /v1/keys/{id}
-// (succeeding only when the key is deleted through its owning issuer, 404
-// otherwise). It records which issuers were used and which ids were deleted.
-func fakeAPIKeysListServer(t *testing.T, functionKeys, taskKeys []string) (*httptest.Server, *apiKeysRecorder) {
+// fakeAPIKeysListServer serves GET /v1/keys and DELETE /v1/keys/{id}, routed
+// by Key-Issuer-Id.
+func fakeAPIKeysListServer(t *testing.T, functionKeys, taskKeys, eventLedgerKeys []string) (*httptest.Server, *apiKeysRecorder) {
 	t.Helper()
 	rec := &apiKeysRecorder{}
+	keysByServiceID := map[string][]string{
+		"nvcf-test-service-id":         functionKeys,
+		"nvct-test-service-id":         taskKeys,
+		"event-ledger-test-service-id": eventLedgerKeys,
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		issuer := r.Header.Get("Key-Issuer-Service")
+		serviceID := r.Header.Get("Key-Issuer-Id")
 		switch {
 		case r.URL.Path == "/v1/keys" && r.Method == http.MethodGet:
 			rec.listIssuers = append(rec.listIssuers, issuer)
-			ids := functionKeys
-			if issuer == "nvct-api" {
-				ids = taskKeys
-			}
+			rec.listServiceIDs = append(rec.listServiceIDs, serviceID)
+			ids := keysByServiceID[serviceID]
 			keys := make([]map[string]any, 0, len(ids))
 			for _, id := range ids {
 				keys = append(keys, map[string]any{"id": id, "description": issuer, "status": "active"})
@@ -298,8 +301,7 @@ func fakeAPIKeysListServer(t *testing.T, functionKeys, taskKeys []string) (*http
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
 		case strings.HasPrefix(r.URL.Path, "/v1/keys/") && r.Method == http.MethodDelete:
 			id := strings.TrimPrefix(r.URL.Path, "/v1/keys/")
-			owned := (issuer == "nvcf-api" && sliceContains(functionKeys, id)) ||
-				(issuer == "nvct-api" && sliceContains(taskKeys, id))
+			owned := sliceContains(keysByServiceID[serviceID], id)
 			if !owned {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -316,7 +318,7 @@ func fakeAPIKeysListServer(t *testing.T, functionKeys, taskKeys []string) (*http
 }
 
 func TestApikeyList_CoversFunctionAndTaskKeys(t *testing.T) {
-	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"})
+	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"}, nil)
 	configureApikeyTest(t, srv.URL)
 
 	require.NoError(t, runListAPIKeys(nil, nil))
@@ -325,8 +327,29 @@ func TestApikeyList_CoversFunctionAndTaskKeys(t *testing.T) {
 	assert.Contains(t, rec.listIssuers, "nvct-api", "list should query the task issuer")
 }
 
+// A list that only switches on Key-Issuer-Service would merge Event Ledger
+// keys into function keys instead of listing them separately.
+func TestApikeyList_CoversEventLedgerKeys(t *testing.T) {
+	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, nil, []string{"el-1"})
+	configureApikeyTest(t, srv.URL)
+
+	out := captureListJSON(t)
+
+	assert.Contains(t, rec.listServiceIDs, "event-ledger-test-service-id", "list should query the Event Ledger ServiceID")
+	keys := out["keys"].([]interface{})
+	var services []string
+	for _, k := range keys {
+		entry := k.(map[string]interface{})
+		services = append(services, entry["service"].(string))
+		if entry["id"] == "el-1" {
+			assert.Equal(t, "event-ledger", entry["service"], "the Event Ledger key must be labeled event-ledger, not function")
+		}
+	}
+	assert.Contains(t, services, "event-ledger")
+}
+
 func TestApikeyClearAll_DeletesFunctionAndTaskKeys(t *testing.T) {
-	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1", "task-2"})
+	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1", "task-2"}, nil)
 	configureApikeyTest(t, srv.URL)
 
 	clearForce = true
@@ -342,7 +365,7 @@ func TestApikeyClearAll_DeletesFunctionAndTaskKeys(t *testing.T) {
 func TestApikeyDelete_FallsBackToTaskIssuer(t *testing.T) {
 	// The id belongs to the task issuer only, so delete must fall back to it
 	// after the function-issuer attempt 404s.
-	srv, rec := fakeAPIKeysListServer(t, nil, []string{"task-1"})
+	srv, rec := fakeAPIKeysListServer(t, nil, []string{"task-1"}, nil)
 	configureApikeyTest(t, srv.URL)
 
 	deleteForce = true
@@ -673,6 +696,32 @@ func captureGenerateJSON(t *testing.T) map[string]interface{} {
 	return out
 }
 
+// captureListJSON runs runListAPIKeys in JSON mode and returns the parsed
+// stdout object.
+func captureListJSON(t *testing.T) map[string]interface{} {
+	t.Helper()
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+
+	require.NoError(t, runListAPIKeys(nil, nil))
+
+	require.NoError(t, w.Close())
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	var out map[string]interface{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+	return out
+}
+
 func seedSavedAPIKeys(t *testing.T) {
 	t.Helper()
 	exp := time.Now().Add(time.Hour)
@@ -707,7 +756,7 @@ func TestApikeyClear_ClearsAllSavedKeys(t *testing.T) {
 
 func TestApikeyClearAll_ClearsAllSavedKeys(t *testing.T) {
 	resetApikeyFlags(t)
-	srv, _ := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"})
+	srv, _ := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"}, nil)
 	configureApikeyTest(t, srv.URL)
 	seedSavedAPIKeys(t)
 
@@ -720,7 +769,7 @@ func TestApikeyClearAll_ClearsAllSavedKeys(t *testing.T) {
 
 func TestApikeyClearAll_JSONClearsAllSavedKeys(t *testing.T) {
 	resetApikeyFlags(t)
-	srv, _ := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"})
+	srv, _ := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"}, nil)
 	configureApikeyTest(t, srv.URL)
 	seedSavedAPIKeys(t)
 
