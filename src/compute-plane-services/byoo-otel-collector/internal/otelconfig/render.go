@@ -80,6 +80,7 @@ const (
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
 	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
 	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
+	setObservedTimeProcessorID           = "transform/set_observed_time"
 	defaultMetricSubsetPort              = 19091
 )
 
@@ -641,6 +642,30 @@ func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
 	return dropEmptyLabelsProcessorID
 }
 
+// addSetObservedTimeProcessor sets the observed time of log records that
+// arrive without one to the time the collector processes them.
+//
+// The OpenTelemetry log data model requires the collection system to set
+// ObservedTimestamp. OpenTelemetry SDKs set it when they emit a record, but the
+// Fluent Bit opentelemetry output that forwards container stdout and stderr to
+// the same OTLP receiver leaves it at zero, so those records reached the
+// backend observed at the Unix epoch. The where clause keeps any observed time
+// a sender already set.
+func addSetObservedTimeProcessor(otelConfig *OpenTelemetryConfig) string {
+	otelConfig.Processors[setObservedTimeProcessorID] = map[string]interface{}{
+		"error_mode": "ignore",
+		"log_statements": []map[string]interface{}{
+			{
+				"context": "log",
+				"statements": []string{
+					"set(log.observed_time, Now()) where log.observed_time_unix_nano == 0",
+				},
+			},
+		},
+	}
+	return setObservedTimeProcessorID
+}
+
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
 		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
@@ -969,7 +994,11 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		logPipeline := otelConfig.Service.Pipelines["logs"]
 		logPipeline.Receivers = []string{"otlp"}
 		logPipeline.Exporters = []string{exporterId}
-		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata"}
+		logPipeline.Processors = []string{
+			"memory_limiter",
+			addSetObservedTimeProcessor(otelConfig),
+			"attributes/add-metadata",
+		}
 		if logChunking.Enabled {
 			otelConfig.Processors["logchunk/byoo"] = map[string]interface{}{
 				"max_payload_bytes": logChunking.MaxPayloadBytes,

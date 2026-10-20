@@ -217,6 +217,9 @@ navigation:
     - page: Registry Allowlist
       path: ../docs/self-managed/registry-allowlist.md
       slug: registry-allowlist
+    - page: Bring Your Own Observability
+      path: ../docs/self-managed/byoo.md
+      slug: byoo
     - section: Low Latency Streaming
       skip-slug: true
       contents:
@@ -288,6 +291,9 @@ navigation:
     - page: Topology-Aware Scheduling
       path: ../docs/compute-plane/cluster-management/topology-aware-scheduling.md
       slug: topology-aware-scheduling
+    - page: BYOO Telemetry Compatibility
+      path: ../docs/compute-plane/cluster-management/byoo-telemetry-compatibility.md
+      slug: byoo-telemetry-compatibility
   - section: Caching
     skip-slug: true
     contents:

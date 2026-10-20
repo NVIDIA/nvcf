@@ -110,9 +110,14 @@ func TestMessagesNativeProxyAndUsage(t *testing.T) {
 			}
 			e.ServeHTTP(rec, messagesHTTPRequest(body))
 			require.Equal(t, tc.status, rec.Code, rec.Body.String())
-			require.Equal(t, tc.response, rec.Body.String())
 			requestID := rec.Header().Get(headerMessagesRequestID)
 			require.NotEmpty(t, requestID)
+			if tc.status >= http.StatusBadRequest {
+				// Backend error bodies are relayed with the NVCF request_id added.
+				require.JSONEq(t, withRequestID(t, tc.response, requestID), rec.Body.String())
+			} else {
+				require.Equal(t, tc.response, rec.Body.String())
+			}
 			require.NotEqual(t, "msg-request", requestID, "NVCF id replaces the backend request-id")
 			require.Equal(t, []string{requestID}, rec.Header().Values(HeaderRequestID), "NVCF id replaces the backend X-Request-Id")
 			require.Equal(t, "session-test", rec.Header().Get(HeaderMultiTurnSessionID))

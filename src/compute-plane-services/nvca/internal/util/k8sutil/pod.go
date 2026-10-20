@@ -273,6 +273,38 @@ type ContainerStuckInitializing struct {
 	Message string
 }
 
+// IsContainerInRestartLoop reports whether a container has restarted at least RestartCountToFailInstance times
+// in a Pod launched more than PodLaunchThresholdSecondsOnFailedRestarts ago. RestartCount is never reset during
+// the Pod's lifetime, so a container whose latest run exited with code 0 after the Pod became Ready is not
+// counted: the app ended on purpose (for example a streaming app that quits when its session ends) and the
+// kubelet restarted it in place.
+func IsContainerInRestartLoop(pod *corev1.Pod, cs corev1.ContainerStatus, k8sTimeConfig *TimeConfig) bool {
+	if cs.RestartCount < RestartCountToFailInstance ||
+		!IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+		return false
+	}
+	return !exitedCleanlyAfterPodReady(pod.Status, cs)
+}
+
+// exitedCleanlyAfterPodReady reports whether the container's latest run exited with code 0 and the Pod was
+// Ready at some point after that run started.
+func exitedCleanlyAfterPodReady(status corev1.PodStatus, cs corev1.ContainerStatus) bool {
+	// State holds the latest run until the kubelet restarts the container, then LastTerminationState does.
+	last := cs.State.Terminated
+	if last == nil {
+		last = cs.LastTerminationState.Terminated
+	}
+	if last == nil || last.ExitCode != 0 || last.StartedAt.IsZero() {
+		return false
+	}
+	ready := getPodReadyCondition(status)
+	if ready == nil {
+		return false
+	}
+	// PodReady only toggles between True and False, so a False condition was True until its last transition.
+	return ready.Status == corev1.ConditionTrue || ready.LastTransitionTime.After(last.StartedAt.Time)
+}
+
 func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuckInitializing, bool) {
 	podStatus := pod.Status
 	initConditionTrue := false
@@ -285,8 +317,7 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuc
 	stuckContainers := []ContainerStuckInitializing{}
 	if initConditionTrue {
 		for _, containerStatus := range podStatus.ContainerStatuses {
-			if containerStatus.RestartCount >= RestartCountToFailInstance &&
-				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				reason := "ContainerInRestartLoop"
 				message := ""
 				switch {
@@ -312,8 +343,7 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuc
 		}
 	} else {
 		for _, containerStatus := range podStatus.InitContainerStatuses {
-			if containerStatus.RestartCount >= RestartCountToFailInstance &&
-				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				reason := "InitContainerInRestartLoop"
 				message := ""
 				switch {

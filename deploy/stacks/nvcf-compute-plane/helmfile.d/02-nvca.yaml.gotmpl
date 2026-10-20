@@ -281,6 +281,10 @@ releases:
         # this stack and a direct nvca-operator install produce the same objects.
         nameOverride: nvca-operator
         fullnameOverride: nvca-operator
+        {{- with dig "byoo" dict $nvcaOp }}
+        byoo:
+{{ toYaml . | nindent 10 }}
+        {{- end }}
         {{- with dig "utils" "resources" dict $nvcaOp }}
         utils:
           resources:

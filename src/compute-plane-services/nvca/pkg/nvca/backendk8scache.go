@@ -101,6 +101,11 @@ const (
 	NVCAFinalizer               = "nvca.finalizers.nvidia.io"
 	NVCADeploymentName          = "nvca"
 	SecretMirroredFromLabelKey  = "nvca.nvcf.nvidia.io/mirrored-from-namespace"
+
+	// ICMSRequestCreationRejectedAnnotation records why NVCA rejected a creation
+	// message because of cluster configuration. A rejected request is never
+	// applied: it is reported to ICMS as failed with this reason.
+	ICMSRequestCreationRejectedAnnotation = "nvca.nvcf.nvidia.io/creation-rejected-reason"
 )
 
 var (
@@ -2339,7 +2344,10 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	metrics.QueueMessageProcessedTotal.
 		WithLabelValues(metrics.WithDefaultLabelValues(string(msg.GetCreationQueueMessageMetadata().Action))...).Inc()
 
-	isBYOOEnabled := c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.BYOObservability)
+	// rejectReason is set for configuration rejections that will fail the same
+	// way on every retry. Such requests are persisted and reported as failed
+	// instead of being requeued.
+	var rejectReason string
 
 	switch mt := msg.(type) {
 	case function.CreationQueueMessage:
@@ -2350,22 +2358,22 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			mt.LaunchSpecification == nil || mt.LaunchSpecification.EnvironmentB64 == "" {
 			o.Spec.CreationMsgInfo.LaunchArtifacts = mt.LaunchArtifacts
 		}
-		if mt.LaunchSpecification != nil && mt.LaunchSpecification.Telemetries != nil &&
-			!(isBYOOEnabled && c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.UseFunctionTranslator)) {
-			return nil, fmt.Errorf("telemetries is set but required features are disabled: %s, %s",
-				featureflag.BYOObservability.Key, featureflag.UseFunctionTranslator.Key)
+		if mt.LaunchSpecification != nil && mt.LaunchSpecification.Telemetries != nil {
+			rejectReason = c.byooDisabledReason("function",
+				featureflag.BYOObservability, featureflag.UseFunctionTranslator)
 		}
 		o.Spec.CreationMsgInfo.FunctionLaunchSpecification = mt.LaunchSpecification
 		// Apply environment variable overrides if configured
-		if len(c.functionEnvOverrides) > 0 && mt.LaunchSpecification != nil {
+		if rejectReason == "" && len(c.functionEnvOverrides) > 0 && mt.LaunchSpecification != nil {
 			modified, err := envutil.ApplyEnvOverrides(
 				mt.LaunchSpecification.EnvironmentB64,
 				c.functionEnvOverrides,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("apply function env overrides: %w", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's function environment overrides: %v", err)
+			} else {
+				o.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64 = modified
 			}
-			o.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64 = modified
 		}
 		// TODO: remove these fields when migration is in place.
 		o.Spec.FunctionID = mt.Details.FunctionID
@@ -2382,22 +2390,22 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	case task.CreationQueueMessage:
 		o.Spec.TaskDetails = mt.Details
 
-		if mt.LaunchSpecification.Telemetries != nil && !isBYOOEnabled {
-			return nil, fmt.Errorf("telemetries is set but required features are disabled: %s",
-				featureflag.BYOObservability.Key)
+		if mt.LaunchSpecification.Telemetries != nil {
+			rejectReason = c.byooDisabledReason("task", featureflag.BYOObservability)
 		}
 
 		o.Spec.CreationMsgInfo.TaskLaunchSpecification = &mt.LaunchSpecification
 		// Apply environment variable overrides if configured
-		if len(c.taskEnvOverrides) > 0 {
+		if rejectReason == "" && len(c.taskEnvOverrides) > 0 {
 			modified, err := envutil.ApplyEnvOverrides(
 				mt.LaunchSpecification.EnvironmentB64,
 				c.taskEnvOverrides,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("apply task env overrides: %w", err)
+				rejectReason = fmt.Sprintf("NVCA could not apply the cluster's task environment overrides: %v", err)
+			} else {
+				o.Spec.CreationMsgInfo.TaskLaunchSpecification.EnvironmentB64 = modified
 			}
-			o.Spec.CreationMsgInfo.TaskLaunchSpecification.EnvironmentB64 = modified
 		}
 		o.ObjectMeta = getICMSRequestObjectMeta(types.DeploymentInfo{
 			RequestID:      msgMeta.RequestID,
@@ -2408,7 +2416,12 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
-	if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
+	if rejectReason != "" {
+		if o.Annotations == nil {
+			o.Annotations = map[string]string{}
+		}
+		o.Annotations[ICMSRequestCreationRejectedAnnotation] = rejectReason
+	} else if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
 		return nil, err
 	}
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
@@ -2419,6 +2432,34 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 	log.Debugf("successfully created the ICMS request %v/%v for request %s for further action", obj.Namespace, obj.Name, msgMeta.RequestID)
 
 	return obj, nil
+}
+
+// byooDisabledReason returns an actionable rejection reason when any of the
+// feature flags BYOO needs for this workload kind are disabled, or "" when all
+// of them are enabled.
+func (c *BackendK8sCache) byooDisabledReason(workload string, required ...*featureflag.FeatureFlag) string {
+	var disabled []string
+	for _, ff := range required {
+		if !c.featureFlagFetcher.IsFeatureFlagEnabled(ff) {
+			disabled = append(disabled, ff.Key)
+		}
+	}
+	if len(disabled) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Bring Your Own Observability (BYOO) is disabled on this cluster: "+
+		"the %s requests telemetries, but these NVCA feature flags are not enabled: %s. "+
+		"Enable them on the cluster, or deploy without telemetries.",
+		workload, strings.Join(disabled, ", "))
+}
+
+// GetCreationRejectionReason returns why NVCA rejected the creation message
+// for req, or "" if it was accepted.
+func GetCreationRejectionReason(req *nvcav2beta1new.ICMSRequest) string {
+	if req == nil {
+		return ""
+	}
+	return req.Annotations[ICMSRequestCreationRejectedAnnotation]
 }
 
 func (c *BackendK8sCache) CreateICMSTerminationMessageRequest(ctx context.Context, tm types.ICMSTerminationMessage, msgReceipt, msgID string) error {
@@ -2788,6 +2829,10 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 	case nvcav2beta1new.ICMSRequestStatusInProgress, nvcav2beta1new.ICMSRequestStatusCachingInProgress:
 		switch requestAction {
 		case common.FunctionCreationAction, common.TaskCreationAction:
+			if reason := GetCreationRejectionReason(req); reason != "" {
+				// Fail through the terminal error path so ICMS is told why.
+				return nvcaerrors.TerminalError(errors.New(reason))
+			}
 			if c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
 				// this occurs when the backend goes unhealthy
 				// ICMS sends a termination for all instances
