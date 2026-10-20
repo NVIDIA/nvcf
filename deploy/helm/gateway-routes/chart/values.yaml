@@ -81,6 +81,11 @@ nvcfGatewayRoutes:
         namespace: nvcf
         port: 8080
       routeAnnotations: {}
+      # Requires Envoy Gateway and its BackendTrafficPolicy CRD.
+      # Keep this below the API server's HTTP keep-alive timeout.
+      envoyBackendTrafficPolicy:
+        enabled: false
+        connectionIdleTimeout: 30s
       # Optional GRPCRoute for worker-facing NVCF API gRPC traffic.
       grpc:
         enabled: false

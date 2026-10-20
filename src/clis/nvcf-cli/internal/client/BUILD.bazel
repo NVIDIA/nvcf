@@ -22,6 +22,7 @@ go_library(
         "client.go",
         "clusters.go",
         "debug_transport.go",
+        "deployment_wait.go",
         "multi_token_transport.go",
         "queues.go",
         "registry.go",
@@ -45,6 +46,7 @@ go_test(
     srcs = [
         "client_test.go",
         "clusters_test.go",
+        "deployment_wait_test.go",
         "host_header_transport_test.go",
         "llm_config_test.go",
         "multi_token_transport_test.go",

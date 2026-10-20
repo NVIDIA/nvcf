@@ -2241,6 +2241,8 @@ nvcfGatewayRoutes:
     {{- end }}
   routes:
     nvcfApi:
+      envoyBackendTrafficPolicy:
+        {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "envoyBackendTrafficPolicy" dict .Values | toYaml | nindent 8 | trim }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
       grpc:

@@ -29,8 +29,8 @@ services referenced by the routes (`api`,
 - A Gateway controller with `GRPCRoute` and `UDPRoute` support when secure LLM
   worker routing is enabled
 - cert-manager when `llmRequestRouter.grpcTls.mode=certManager`
-- Envoy Gateway's `BackendTrafficPolicy` CRD when secure LLM worker routing is
-  enabled
+- Envoy Gateway's `BackendTrafficPolicy` CRD when secure LLM worker routing or
+  the API connection idle policy is enabled
 - The backend services that the routes target, deployed in their respective namespaces
 
 ## Getting Started
@@ -162,3 +162,39 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
   `grpcTls.allowInsecureHttp=true`; it renders the legacy `TCPRoute`.
   Keep the HTTPS and UDP Gateways separate when the infrastructure requires
   separate load balancers for each protocol.
+
+## API backend connection idle timeout
+
+For Envoy Gateway, enable the API connection policy to retire unused upstream
+HTTP connections before the API server closes them. This avoids reusing a
+connection during the server's idle close. The policy targets only the NVCF API
+HTTPRoute and is disabled by default for other Gateway controllers.
+
+Chart values:
+
+```yaml
+nvcfGatewayRoutes:
+  routes:
+    nvcfApi:
+      envoyBackendTrafficPolicy:
+        enabled: true
+        connectionIdleTimeout: 30s
+```
+
+The self-managed stack forwards the same options from
+`ingress.gatewayApi.routes.nvcfApi.envoyBackendTrafficPolicy` in the environment
+file. Use a gateway-routes chart release that includes this option, or set
+`ingress.gatewayApi.chartPath` to the local chart for development.
+
+Keep the connection idle timeout positive and below the API server's keep-alive
+timeout, with a margin for timer scheduling. The API default is `60s`, configured
+by `server.tomcat.keep-alive-timeout`; Spring Boot also accepts
+`SERVER_TOMCAT_KEEPALIVETIMEOUT`. If you override that setting, adjust the policy
+to match. Merge this timeout into any existing route-level BackendTrafficPolicy
+before enabling it to avoid conflicting policies.
+
+This setting applies when a connection has no active requests. It does not
+limit request duration or add request retries. Deployment status polling in the
+CLI separately retries transient GET failures (502, 503, 504, and selected
+transport errors) up to three times with 1s, 2s, and 4s delays, within the original
+wait deadline. Authentication errors and terminal deployment states stop polling.

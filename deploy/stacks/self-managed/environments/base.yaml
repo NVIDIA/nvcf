@@ -676,6 +676,9 @@ ingress:
     routes:
       nvcfApi:
         routeAnnotations: {}
+        # Enable only for routes managed by Envoy Gateway.
+        envoyBackendTrafficPolicy:
+          enabled: false
         grpc:
           enabled: false
           # Defaults to api-grpc.<global.domain> when enabled. Set to override.

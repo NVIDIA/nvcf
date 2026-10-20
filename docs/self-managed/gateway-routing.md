@@ -596,6 +596,9 @@ When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart 
   `TCPRoute` for plaintext development when the `llmWorker` route is enabled
 - Optional Envoy stream timeout policy when secure LLM worker routing has
   `grpcTls.enabled=true`
+- Optional Envoy connection idle policy for the NVCF API route when
+  `nvcfApi.envoyBackendTrafficPolicy.enabled=true`. See
+  [NVCF API connection idle timeout](#nvcf-api-connection-idle-timeout).
 - Optional gRPC listener `Certificate` when secure LLM worker routing uses
   `grpcTls.mode=certManager`
 - `ReferenceGrants` for cross-namespace routing permissions
@@ -627,6 +630,35 @@ The `<domain>` is your Gateway's load balancer address (e.g., `a1b2c3d4.us-west-
 When the LLM invocation route is enabled in self-managed deployments, send OpenAI-compatible requests to `http://${GATEWAY_ADDR}/v1/...` with `Host: llm.invocation.${GATEWAY_ADDR}` and set `model` to `<function-id>/<model-name>`.
 
 </Tip>
+
+### NVCF API connection idle timeout
+
+The NVCF API server closes idle keep-alive connections after 60 seconds. If
+Envoy reuses a pooled upstream connection while the server is closing it, the
+request can fail with `503 upstream connect error or disconnect/reset before
+headers. reset reason: connection termination`.
+
+With Envoy Gateway, enable the API connection idle policy in the environment
+file. Envoy then closes unused upstream connections before the API server does:
+
+```yaml
+ingress:
+  gatewayApi:
+    routes:
+      nvcfApi:
+        envoyBackendTrafficPolicy:
+          enabled: true
+          connectionIdleTimeout: 30s # optional, defaults to 30s
+```
+
+- The policy is off by default because it requires the Envoy Gateway
+  `BackendTrafficPolicy` CRD. Leave it off for other Gateway controllers.
+- Keep `connectionIdleTimeout` positive and below the API server keep-alive
+  timeout (`server.tomcat.keep-alive-timeout`, default `60s`).
+- The policy applies only to the NVCF API HTTPRoute. It does not limit request
+  duration or add retries.
+- The setting requires a `nvcf-gateway-routes` chart release that includes it.
+  With an older chart, the value is ignored.
 
 ### Invocation Path Diagrams
 
