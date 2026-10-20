@@ -18,8 +18,10 @@ limitations under the License.
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -445,6 +447,71 @@ func TestRunTelemetryUpdateSecret(t *testing.T) {
 	var parsed map[string]string
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	assert.Equal(t, "ok", parsed["status"])
+}
+
+// captureDebugLog enables --debug for the test and returns the buffer that
+// receives the HTTP debug transport output.
+func captureDebugLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	viper.Set("debug", true)
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &logs
+}
+
+func assertDebugLogRedacted(t *testing.T, logs, stdout string, secrets ...string) {
+	t.Helper()
+	require.Contains(t, logs, "Request Body:", "debug transport did not log the request")
+	assert.Contains(t, logs, `"name":"grafana"`)
+	assert.Contains(t, logs, "[REDACTED]")
+	for _, s := range secrets {
+		assert.NotContains(t, logs, s, "debug log leaked a secret value")
+		assert.NotContains(t, stdout, s, "command output leaked a secret value")
+	}
+}
+
+func TestRunTelemetryCreateDebugRedactsSecret(t *testing.T) {
+	resetTelemetryFlags(t)
+	srv, requests := fakeTelemetryServer(t)
+	configureAdminTest(t, srv.URL)
+	logs := captureDebugLog(t)
+
+	telemetryCreateFlags.name = "grafana"
+	telemetryCreateFlags.endpoint = "https://otlp.example.com"
+	telemetryCreateFlags.provider = "GRAFANA_CLOUD"
+	telemetryCreateFlags.types = []string{"LOGS"}
+	telemetryCreateFlags.secretFile = writeSecretFile(t, `{"instanceId":"inst-create-77","apiKey":"synthetic-create-key"}`)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runTelemetryCreate(telemetryCreateCmd, nil) })
+	require.NoError(t, runErr)
+
+	require.Len(t, *requests, 1)
+	assert.Equal(t, map[string]any{"instanceId": "inst-create-77", "apiKey": "synthetic-create-key"},
+		(*requests)[0].body["secret"].(map[string]any)["value"], "the API must still receive the secret")
+	assertDebugLogRedacted(t, logs.String(), out, "synthetic-create-key", "inst-create-77")
+}
+
+func TestRunTelemetryUpdateSecretDebugRedactsSecret(t *testing.T) {
+	resetTelemetryFlags(t)
+	srv, requests := fakeTelemetryServer(t)
+	configureAdminTest(t, srv.URL)
+	logs := captureDebugLog(t)
+
+	telemetrySecretFlags.secretFile = writeSecretFile(t, `{"instanceId":"inst-rotate-88","apiKey":"synthetic-rotated-key"}`)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runTelemetryUpdateSecret(telemetryUpdateSecretCmd, []string{"tel-1"}) })
+	require.NoError(t, runErr)
+
+	require.Len(t, *requests, 2)
+	put := (*requests)[1]
+	assert.Equal(t, http.MethodPut, put.method)
+	assert.Equal(t, map[string]any{"instanceId": "inst-rotate-88", "apiKey": "synthetic-rotated-key"},
+		put.body["secret"].(map[string]any)["value"], "the API must still receive the secret")
+	assertDebugLogRedacted(t, logs.String(), out, "synthetic-rotated-key", "inst-rotate-88")
 }
 
 func TestRunTelemetryUpdateSecretRejectsWrongShape(t *testing.T) {
