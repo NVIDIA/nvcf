@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.28.0
+    helm.sh/chart: helm-nvca-operator-1.36.1
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.8.0"
+    app.kubernetes.io/version: "3.16.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   
@@ -127,9 +127,9 @@ spec:
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
           - --function-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjMifQ=="
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvL252aWRpYS9udmNmLWJ5b2MvYnlvby1vdGVsLWNvbGxlY3RvcjowLjE2MC4wLW52LTAuNC4zIn0="
           - --task-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjMifQ=="
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvL252aWRpYS9udmNmLWJ5b2MvYnlvby1vdGVsLWNvbGxlY3RvcjowLjE2MC4wLW52LTAuNC4zIn0="
         image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.18.1
         imagePullPolicy: IfNotPresent
         securityContext:
