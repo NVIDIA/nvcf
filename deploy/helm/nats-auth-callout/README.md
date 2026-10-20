@@ -132,7 +132,7 @@ healthChecks:
   readinessProbe:
     enabled: true
     httpGet:
-      path: "/healthz"
+      path: "/readyz"
       port: "http"
       scheme: "HTTP"
     initialDelaySeconds: 5
@@ -155,11 +155,14 @@ healthChecks:
     successThreshold: 1
 ```
 
-**Available Health Endpoints:**
+Available health endpoints:
 
-- `/healthz` - Primary health check endpoint (recommended)
-- `/health` - Alternative health check endpoint
+- `/readyz` - Returns 200 while NATS is connected and 503 otherwise. Use for readiness and dependency monitoring.
+- `/healthz` - Returns 503 when the NATS connection is terminally closed. Stays 200 during reconnects to avoid restarting the service during an outage.
+- `/health` - Alias for `/healthz`.
 - `/v1/ping` - Basic connectivity test
+
+The default image supports `/readyz`. If you override `image.tag`, use version 0.8.5 or later. Older images require a matching readiness probe override.
 
 ### Tracing Configuration Validation
 
