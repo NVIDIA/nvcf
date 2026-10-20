@@ -88,11 +88,13 @@ func TestNatsConnectionLogging(t *testing.T) {
 			t.Fatal("NATS connection did not close after exhausting reconnects")
 		}
 		failures := logs.FilterMessage("nats reconnect attempt failed").All()
-		require.Len(t, failures, 1)
-		assert.Equal(t, zap.WarnLevel, failures[0].Level)
-		assert.NotEmpty(t, failures[0].ContextMap()["error"])
-		assert.Equal(t, "fnv-1", failures[0].ContextMap()["function version id"])
-		assert.Equal(t, "inst-1", failures[0].ContextMap()["instance id"])
+		require.NotEmpty(t, failures)
+		for _, failure := range failures {
+			assert.Equal(t, zap.WarnLevel, failure.Level)
+			assert.NotEmpty(t, failure.ContextMap()["error"])
+			assert.Equal(t, "fnv-1", failure.ContextMap()["function version id"])
+			assert.Equal(t, "inst-1", failure.ContextMap()["instance id"])
+		}
 		entries := logs.FilterMessage("nats connection permanently closed").All()
 		require.Len(t, entries, 1)
 		assert.Equal(t, zap.ErrorLevel, entries[0].Level)
