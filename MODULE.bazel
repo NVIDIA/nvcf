@@ -446,7 +446,7 @@ oci.pull(
 # JDK 25 matches --java_language_version=25 above.
 oci.pull(
     name = "distroless_java",
-    digest = "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+    digest = "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
     image = "nvcr.io/nvidia/distroless/java",
     platforms = [
         "linux/amd64",
@@ -597,7 +597,7 @@ maven.install(
         # nv-boot-parent third-party closure (Spring Boot 4 / Spring Cloud /
         # OTel / Cassandra / Testcontainers). Root coordinates only: BOM-managed
         # starters/modules, parent-owned explicit pins, and build/test tools.
-        "at.yawk.lz4:lz4-java:1.11.2",
+        "at.yawk.lz4:lz4-java:1.11.4",
         "com.github.ben-manes.caffeine:guava",
         "com.google.code.gson:gson",
         # Direct pin overrides the Spring Boot BOM, which manages this to
@@ -735,6 +735,10 @@ maven.install(
         "org.testcontainers:testcontainers-localstack",
     ],
     boms = [
+        # Keep both Jackson families on patched releases in their existing
+        # minor lines. These precede Spring Boot's older managed versions.
+        "com.fasterxml.jackson:jackson-bom:2.21.8",
+        "tools.jackson:jackson-bom:3.1.8",
         "net.javacrumbs.shedlock:shedlock-bom:7.9.0",
         "org.springframework.boot:spring-boot-dependencies:4.1.1",
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.3",
