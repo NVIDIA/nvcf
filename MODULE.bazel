@@ -448,7 +448,7 @@ oci.pull(
 # JDK 25 matches --java_language_version=25 above.
 oci.pull(
     name = "distroless_java",
-    digest = "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+    digest = "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
     image = "nvcr.io/nvidia/distroless/java",
     platforms = [
         "linux/amd64",
@@ -461,7 +461,7 @@ oci.pull(
 # rather than an internal-only path.
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:965c2a14a594d7d467bbe9a6517d958cee22ed035333097bdc216da68fd55ba5",
+    digest = "sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929",
     image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
@@ -475,8 +475,22 @@ oci.pull(
 # platform string literally when it names the generated child repository.
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:b1deb9e97732ab5da2f1f6e0d3ac1e56bdc2df0a5bf900180662a4740f05957c",
+    digest = "sha256:1c3f23958b14384dd07e57696954c6722861c3ee5de372fdc2af75a8e4b75313",
     image = "nvcr.io/nvidia/distroless/cc",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+
+# NVIDIA distroless static: the base for the BYOO collector images. Both
+# collector binaries are pure Go built with CGO disabled, so they need no libc.
+# Unlike distroless_go, this base ships no libc6 or zlib1g. It keeps the same
+# nvs user (1000:1000), CA certificates, and tzdata. v4.1.4.
+oci.pull(
+    name = "nvidia_distroless_static",
+    digest = "sha256:d9bff7801f2963231e01e567ab73d70f443b80c62306cec77d9f973a544db776",
+    image = "nvcr.io/nvidia/distroless/static",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
@@ -493,6 +507,9 @@ use_repo(
     "distroless_java",
     "distroless_java_linux_amd64",
     "distroless_java_linux_arm64_v8",
+    "nvidia_distroless_static",
+    "nvidia_distroless_static_linux_amd64",
+    "nvidia_distroless_static_linux_arm64_v8",
     "temurin_jre",
     "temurin_jre_linux_amd64",
     "temurin_jre_linux_arm64_v8",

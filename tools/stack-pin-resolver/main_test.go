@@ -351,6 +351,69 @@ func TestRealStackResolvesCompletely(t *testing.T) {
 	t.Logf("%d releases resolved", len(releases))
 }
 
+func TestBumpWorkflowStagesEveryStackPin(t *testing.T) {
+	// On a helm-nvca-operator release the resolver rewrote the compute-plane
+	// pin, but the workflow checked and staged only the self-managed stack,
+	// so the edit was dropped and the run reported the stack as already
+	// pinned. Every file the resolver can write has to sit under the paths the
+	// workflow both checks and stages.
+	root := repoRoot(t)
+	commands := bumpWorkflowPathspecs(t, filepath.Join(root, ".github", "workflows", "stack-pin-bump.yml"))
+	releases, err := LoadStack(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) == 0 {
+		t.Fatal("no releases found; the helmfile path or glob is wrong")
+	}
+	for command, specs := range commands {
+		for _, r := range releases {
+			if !coveredByPathspecs(r.File, specs) {
+				t.Errorf("%q in stack-pin-bump.yml does not cover %s (%s)", command, r.File, r.Name)
+			}
+		}
+	}
+}
+
+// bumpWorkflowPathspecs returns the pathspecs of the three commands a bump
+// workflow uses to decide whether anything moved, to show it, and to stage it.
+func bumpWorkflowPathspecs(t *testing.T, workflow string) map[string][]string {
+	t.Helper()
+	b, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"if git diff --quiet --", "git --no-pager diff --stat --", "git add"}
+	found := map[string][]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range prefixes {
+			if !strings.HasPrefix(line, prefix+" ") {
+				continue
+			}
+			rest := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, prefix)), "; then")
+			found[prefix] = append(found[prefix], strings.Fields(rest)...)
+		}
+	}
+	for _, prefix := range prefixes {
+		if len(found[prefix]) == 0 {
+			t.Fatalf("%s has no %q line; update this test to follow how the workflow stages a bump", workflow, prefix)
+		}
+	}
+	return found
+}
+
+func coveredByPathspecs(path string, specs []string) bool {
+	path = filepath.ToSlash(path)
+	for _, spec := range specs {
+		spec = strings.TrimSuffix(spec, "/")
+		if path == spec || strings.HasPrefix(path, spec+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()

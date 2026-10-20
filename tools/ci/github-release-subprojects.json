@@ -49,6 +49,18 @@
               ]
             }
           ]
+        },
+        {
+          "service": "nvca",
+          "values_files": [
+            {
+              "file": "environments/base.yaml",
+              "paths": [
+                "global.nvcaOperator.imageTag",
+                "global.nvcaOperator.selfManaged.nvcaVersion"
+              ]
+            }
+          ]
         }
       ]
     },
@@ -477,7 +489,13 @@
       "service_name": "helm-nvcf-api",
       "initial_version": "1.23.11",
       "deploys": [
-        "cloud-functions"
+        {
+          "service": "cloud-functions",
+          "values_paths": [
+            "api.image.tag"
+          ],
+          "app_version": true
+        }
       ]
     },
     {

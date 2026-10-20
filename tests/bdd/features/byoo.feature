@@ -309,19 +309,41 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
       When I send a "DELETE" request to "http://api.localhost:8080/v2/nvcf/telemetries/${BDD_BYOO_TASK_TELEMETRY_ID}" at scenario teardown expecting status 204
 
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-byoo-task                        |
+        | --scopes      | launch_task,task_details,delete_task |
+
       # Three results one minute apart let the sample's periodic metric export
       # run before the task completes and the collector stops.
-      When I successfully run command:
-        """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_IMAGE=${SAMPLE_BYOO_TASK_IMAGE} NVCT_BDD_TASK_NAME=bdd-byoo-task NVCT_BDD_TASK_NUM_RESULTS=3 NVCT_BDD_TASK_DELAY_MINUTES=1 NVCT_BDD_TASK_LOGS_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} NVCT_BDD_TASK_METRICS_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} NVCT_BDD_TASK_TRACES_TELEMETRY_ID=${BDD_BYOO_TASK_TELEMETRY_ID} tests/bdd/scripts/run-nvct-task-smoke.sh
-        """
-      Then the command output should contain "status: COMPLETED"
+      And I successfully create task "bdd-byoo-task" from image "${SAMPLE_BYOO_TASK_IMAGE}" with CLI options:
+        | option                 | value                              |
+        | --gpu                  | H100                               |
+        | --instance-type        | NCP.GPU.H100_1x                    |
+        | --backend              | ncp-local                          |
+        | --result-strategy      | NONE                               |
+        | --max-runtime          | PT10M                              |
+        | --max-queued           | PT10M                              |
+        | --termination-grace    | PT1M                               |
+        | --container-env        | NUM_OF_RESULTS=3                   |
+        | --container-env        | DELAY_BETWEEN_RESULTS_IN_MINUTES=1 |
+        | --container-env        | FILE_SIZE_BYTES=8192               |
+        | --container-env        | INCLUDE_METADATA=false             |
+        | --logs-telemetry-id    | ${BDD_BYOO_TASK_TELEMETRY_ID}      |
+        | --metrics-telemetry-id | ${BDD_BYOO_TASK_TELEMETRY_ID}      |
+        | --traces-telemetry-id  | ${BDD_BYOO_TASK_TELEMETRY_ID}      |
+
+      Then the task selected by NVCF CLI should reach status "COMPLETED" within "900" seconds, polling every "10" seconds
       # Only the task sample's metrics reach the debug/task-sample exporter.
       And Prometheus metrics on port "8888" of pods selected by "app=otlp-sink-task" in namespace "bdd-byoo-sink" using context "k3d-ncp-local" should total within "5m":
         | metric                                      | labels                     | comparison | total |
         | otelcol_receiver_accepted_spans_total       | receiver=otlp              | at least   | 1     |
         | otelcol_exporter_sent_metric_points_total   | exporter=debug/task-sample | at least   | 1     |
         | otelcol_receiver_accepted_log_records_total | receiver=otlp              | at least   | 1     |
+
+      # Delete the task after the sink check so the collector's final export
+      # is not cut short.
+      And I successfully delete the task selected by NVCF CLI
 
     @function-lifecycle
     Scenario: A container function with telemetries gets the collector sidecar

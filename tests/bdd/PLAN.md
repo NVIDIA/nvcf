@@ -145,14 +145,14 @@ They preserve the real command output for subsequent assertions.
 |------|---------|
 | `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
 
-#### Function lifecycle command adapters
+#### Function and task lifecycle command adapters
 
 These steps hide the repeated executable, config prefix, fixed subcommand, shell
-quoting, and exit-zero assertion. Every meaningful function, deployment, and
+quoting, and exit-zero assertion. Every meaningful function, task, deployment, and
 invocation input remains visible. Each action runs exactly one `nvcf-cli`
 command and preserves its result for existing output assertions.
 
-The adapters validate only Gherkin structure. They do not store function
+The adapters validate only Gherkin structure. They do not store function or task
 identity, apply defaults, parse or normalize product values, enforce product
 preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
 unchanged after `${VAR}` interpolation. The `successfully` wording is the
@@ -175,6 +175,10 @@ original order. Repeated options and empty values are preserved.
 | `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
 | `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
 | `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. A successful run is remembered, so a queued teardown undeploy skips it. |
+| `When I successfully generate a task API key with CLI options:` | Runs `api-key generate --for task` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own task key. |
+| `When I successfully create task {string} from image {string} with CLI options:` | Runs `task create --name <name> --image <image>` followed by the option rows. The CLI saves the created task as its selected task. |
+| `Then the task selected by NVCF CLI should reach status {string} within {string} seconds, polling every {string} seconds` | Repeats `task get --json` through the selected config, requires each poll to exit 0, and compares `.task.status` with the exact expected string. The runner owns only the timeout and poll interval, which must be positive integers. It keeps no status allowlist and treats no status as terminal. On timeout the error names the expected status, last observed status, timeout, and command-log location, never the task response. |
+| `And I successfully delete the task selected by NVCF CLI` | Runs `task delete`. Task selection remains owned by CLI state. |
 
 ### HTTP requests (Given / When / Then)
 
