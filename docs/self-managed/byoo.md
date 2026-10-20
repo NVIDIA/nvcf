@@ -124,10 +124,27 @@ In the compute-plane stack, set the same block under
 `global.nvcaOperator.byoo`. Set `enabled: false` to keep federation off
 explicitly.
 
-The federation jobs select series by the `job`, `namespace`, `pod`, and
-`container` labels of the NVIDIA-managed Prometheus, for example
-`job="kubelet"` for cAdvisor and `job="nvca"` for NVCA. Series that the target
-stores under other job names or labels are not exported.
+The federation jobs select series by their `job`, `namespace`, `pod`, and
+`container` labels. Series that the target stores under other job names or
+labels are not exported. With the `compute` or `all` profile, the default
+monitors of the observability stack store these series under the job names
+that the collector selects:
+
+| Series | Job | Observability stack source |
+| --- | --- | --- |
+| Worker | `nvcf-worker` | `nvcf-default-monitors-worker` PodMonitor |
+| NVCA | `nvca` | `nvcf-default-monitors-nvca` ServiceMonitor |
+| DCGM | `nvidia-dcgm-exporter` | `nvcf-default-monitors-dcgm` PodMonitor, for pods that NVCA labels with `nvca.nvcf.nvidia.io/dcgm-metrics-present` |
+| cAdvisor | `kubelet` | Not scraped |
+| kube-state-metrics | `kube-state-metrics` | Not scraped |
+
+Keep `defaultMonitors.computePlane.worker.jobName` and
+`defaultMonitors.computePlane.dcgm.jobName` at these defaults when you use
+federation. To export cAdvisor or kube-state-metrics series, or DCGM series
+from another exporter, scrape them into the target under the job names in the
+table and keep the workload `namespace`, `pod`, and `container` labels. The
+DCGM job reads these labels with an `exported_` prefix, which a scrape adds
+when the exporter labels conflict with the target labels.
 
 This setting needs an NVCA operator and a BYOO collector release that include
 it. Older releases ignore it and federate from the default target described in
