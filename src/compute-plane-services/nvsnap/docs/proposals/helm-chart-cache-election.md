@@ -196,7 +196,7 @@ Stock Deployment chart, TinyLlama-1.1B on vLLM v0.20.0 TP=2, no nvsnap
 labels or annotations in the template, agent v0.2.75-election2, server
 v0.0.32-election2, NVMesh shared-volume storage.
 
-```
+```text
 helm install replicas=2   14:57:37  webhook (same second): leader + follower, hash c8bbf555
                                     follower: SchedulingGated, no node, claim rox-c8bbf555...
 leader Ready              +70s
@@ -227,7 +227,7 @@ Capture only in `nvsnap-system` (hash c8bbf555); the same stock chart
 installed in `nvsnap-xns`, replicas=2, admitted in the same second, agent
 v0.2.75-election6, NVMesh shared-volume:
 
-```
+```text
 webhook   "L2 claim minted in restore namespace" namespace=nvsnap-xns, then both
           "election: promoted capture exists; restoring"
 claim     nvsnap-xns/rox-c8bbf555... Bound to nvsnap-ro-pv-c8bbf555...-1cfa3cd7
@@ -256,7 +256,7 @@ Stock Deployment, vLLM v0.20.0, torch.compile on (no enforce-eager),
 replicas=2 on one node, agent v0.2.75-election6, NVMesh. Capture 65.7 GB,
 805 files.
 
-```
+```text
 first deploy, replicas=2
   t+0        leader + follower admitted (same second); follower gated, no GPU
   t+325s     leader Ready (cold)
@@ -280,7 +280,7 @@ the FP8 block quantization does not split the MoE intermediate eight ways
 without it), replicas=2, one worker per 8x H100 node, agent v0.2.75-election6,
 NVMesh. Capture 237.0 GB, 2006 files.
 
-```
+```text
 first deploy, replicas=2
   t+0        leader + follower admitted; follower gated, no GPU
   t+870s     leader Ready (cold: 641 s download+load, 94 s compile, 292 s init, 42 s graphs)
