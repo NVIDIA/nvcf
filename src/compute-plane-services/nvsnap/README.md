@@ -4,7 +4,7 @@
 
 NvSnap captures a warmed GPU inference pod and restores it on any node with
 the expensive work already done: no model download, no weight reload, no
-kernel or graph recompilation, and, for single-GPU workloads, no engine
+kernel or graph recompilation, and, with process capture, no engine
 re-initialization at all. It works on **unmodified** inference containers
 (NVIDIA NIM, vLLM, SGLang, TensorRT-LLM): no application changes, no custom
 images, no SDK.
@@ -15,6 +15,11 @@ images, no SDK.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Kubernetes](https://img.shields.io/badge/kubernetes-1.25%2B-326ce5.svg)
+
+New here: [start here](docs/START-HERE.md) · install:
+[docs/operate/INSTALL.md](docs/operate/INSTALL.md) · how it works:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · every number:
+[docs/RESULTS.md](docs/RESULTS.md) · every document: [docs/](docs/README.md)
 
 **Why it works:** GPU cold starts are dominated by repeatable work: weight
 download, model load, CUDA graph capture, JIT and torch.compile. NvSnap does
@@ -99,34 +104,20 @@ Every node that fetches a checkpoint becomes a source for the next, so
 aggregate bandwidth scales with peer count instead of bottlenecking on the
 origin node.
 
-| Payload | Size | Per receiver |
-|---|---|---|
-| CRIU dump (vLLM 1.1B) | 30 GiB | 25 s (1.20 GB/s) |
-| Cache capture (Llama-70B) | 133 GiB | 415 s (0.32 GB/s, many-files HTTP overhead) |
-
-### Process checkpoint/restore (CRIU + cuda-checkpoint, single GPU)
+### Process checkpoint/restore (CRIU)
 
 The full process-restore path resumes a live, already-serving engine
-(no engine re-init at all). The numbers below are single-GPU; multi-GPU
-workloads restore this way under [gpushare](docs/design/GPUSHARE.md#validation).
+(no engine re-init at all). Multi-GPU workloads are checkpointed this way
+under [gpushare](docs/design/GPUSHARE.md).
 
-| Engine | Model | Ckpt size | Cold start | Capture | Restore | Speedup |
-|---|---|---|---|---|---|---|
-| NIM (TRT-LLM) | Qwen3-32B | 111 GB | 4m 03s | 3m 27s | 1m 40s | 2.4x |
-| vLLM | TinyLlama 1.1B | 28 GB | 2m 11s | 1m 32s | 46 s | 2.9x |
-| vLLM | Llama-3.1-8B | 76 GB | 1m 50s | 2m 41s | 1m 41s | 1.1x |
-| TRT-LLM | TinyLlama 1.1B | 29 GB | 1m 21s | 1m 54s | 49 s | 1.7x |
-| SGLang | TinyLlama 1.1B | 57 GB | 1m 01s | 6m 36s | 2m 51s | -- |
-| SGLang | Llama-3.1-8B | 88 GB | 1m 40s | 6m 52s | 3m 42s | -- |
+| Workload | Hardware, date | Result |
+|---|---|---|
+| Qwen2.5-72B-Instruct, vLLM TP=4, gpushare, restored on another node | 4x GB300 | 66.7 s to first token from the node's copy, 87.8 s from the store; cold 242 s without the download |
+| Llama-3.1-8B, vLLM, single GPU | H100, July 2026 | 32.4 s agent restore time |
+| Qwen2.5-32B, vLLM, single GPU | H100, July 2026 | 44.3 s agent restore time |
 
-"--" where restore is not faster than a cold start (SGLang's init is fast
-enough that CRIU overhead doesn't pay back at these sizes).
-
-We are actively working on improving the performance of the pure
-CRIU + cuda-checkpoint workflow; expect these numbers to improve.
-
-See [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md) for methodology and the full
-measured matrix.
+Every number with its date, hardware, build and source is in
+[docs/RESULTS.md](docs/RESULTS.md).
 
 ---
 
@@ -145,7 +136,8 @@ kubectl create secret docker-registry nvsnap-pull-secret \
   --docker-username='$oauthtoken' \
   --docker-password='<NGC_API_KEY>'
 
-# 2. Install (agent + server + blobstore)
+# 2. Install (agent, server, webhook)
+helm dependency build deploy/helm/nvsnap
 helm install nvsnap deploy/helm/nvsnap --namespace nvsnap-system
 
 # 3. Verify
@@ -193,12 +185,12 @@ config decides which tiers are present. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#6-where-bytes-live-and-how-they-move).
 
 **Why the moving parts exist** (details in
-[docs/architecture/](docs/design/)):
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
 
 - **In-namespace CRIU (criu-v2)** — the agent stages the CRIU bundle into
   the workload's mount namespace and runs dump and restore there, so the
-  dump sees the container's own paths and no userspace interception is
-  injected into the engine.
+  dump sees the container's own paths. Under process capture, the one
+  library injected into the engine is gpushare, which multi-GPU capture needs.
 - **Forked CRIU** — io_uring checkpoint and restore, portable ghost files
   and CUDA plugin fixes on top of upstream criu-dev. See [docs/design/THIRD-PARTY-FORKS.md](docs/design/THIRD-PARTY-FORKS.md).
 
@@ -208,7 +200,7 @@ config decides which tiers are present. See
 
 | Component | Supported | Notes |
 |---|---|---|
-| Linux kernel | 5.15.x | Kernel 6.x in progress (io_uring restore + cuda-checkpoint interaction). |
+| Linux kernel | 5.15, 6.x | The June 2026 cachedir results ran on 6.x ([results](docs/RESULTS.md#cachedir)). |
 | NVIDIA driver | R555+ | Required by `cuda-checkpoint`. Installed via the NVIDIA GPU Operator. |
 | Container runtime | containerd 1.7+/2.x, CRI-O | Discovery is at the Linux process level, not via runtime APIs. |
 | Kubernetes | 1.25+ | |
@@ -222,19 +214,17 @@ the ones validated end-to-end; others should work without modification.
 
 ## Security requirements
 
-CRIU checkpoint/restore needs elevated privileges, configured per-pod (not
-cluster-wide):
+The agent DaemonSet runs privileged, with `hostPID` and host-path mounts for
+`/proc`, the container runtime's state and checkpoint storage: it enters the
+workload's namespaces to dump and restore it. Workload pods and restore
+placeholders run with the privileges their own spec gives them; nvsnap does
+not make them privileged.
 
-| Requirement | Why |
-|---|---|
-| `privileged: true` | CRIU needs `/proc/<pid>`, ptrace, device files |
-| `hostPID: true` (restore) | Host PID namespace for CRIU mount ops |
-| Host path volumes | Checkpoint data on node-local storage |
-| NVIDIA device access | `/dev/nvidia*` for GPU checkpoint |
-
-The agent DaemonSet runs privileged with `hostPID`, `hostNetwork`, and
-host-path mounts for `/proc`, the container runtime state dir, and
-checkpoint storage.
+A checkpoint holds the captured processes' memory, which may include tokens,
+keys and request data. A pod restores only a capture from its own tenant
+scope, and the agent API takes a bearer token when `agent.auth.enabled` is
+set. The security model is in
+[docs/ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-security-model).
 
 ---
 
@@ -279,7 +269,9 @@ terraform/              example GKE cluster provisioning
 - [docs/operate/DEVELOPING.md](docs/operate/DEVELOPING.md) — build → capture → validate → merge
 - [docs/operate/INSTALL.md](docs/operate/INSTALL.md) — full install guide + troubleshooting
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
-- [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md) — benchmark methodology + results
+- [docs/START-HERE.md](docs/START-HERE.md) — what nvsnap is, in five minutes
+- [docs/RESULTS.md](docs/RESULTS.md) — every measured number, with its source
+- [docs/GLOSSARY.md](docs/GLOSSARY.md) · [docs/REFERENCE.md](docs/REFERENCE.md) — words; annotations, env vars, agent routes
 - [docs/design/THIRD-PARTY-FORKS.md](docs/design/THIRD-PARTY-FORKS.md) — forked dependencies + patch policy
 - [CONTRIBUTING.md](CONTRIBUTING.md) — developer setup + build-from-source
 

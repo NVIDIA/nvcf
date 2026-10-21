@@ -32,15 +32,17 @@ was not re-checked against the code.
 
 | You are | Read, in order |
 |---|---|
-| New to nvsnap | [README](../README.md), [glossary](GLOSSARY.md), [architecture](ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
+| New to nvsnap | [START-HERE](START-HERE.md), [glossary](GLOSSARY.md), [architecture](ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
 | Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml), [reference](REFERENCE.md) |
 | Changing the code | [Developing](operate/DEVELOPING.md), [architecture](ARCHITECTURE.md), the design note for the area you touch, [CONTRIBUTING](../CONTRIBUTING.md) |
-| Reviewing a claim or a number | [Results](#results); each number there names its date and hardware |
+| Reviewing a claim or a number | [RESULTS](RESULTS.md), then [ARCHITECTURE §0](ARCHITECTURE.md#0-evidence-levels) for what each capability's evidence is |
 
 ## Reference
 
 | Page | Answers | Status |
 |---|---|---|
+| [START-HERE.md](START-HERE.md) | What nvsnap is, in five minutes, with three measured numbers | Current, 2026-10-21 |
+| [RESULTS.md](RESULTS.md) | Every measured number, with date, hardware, build and source | Current, 2026-10-21 |
 | [GLOSSARY.md](GLOSSARY.md) | What each nvsnap word means, including the storage tiers L1–L4, and which words are retired | Current, 2026-10-21 |
 | [REFERENCE.md](REFERENCE.md) | Every `nvsnap.io/*` annotation and label, environment variable and agent route | Generated from the code; CI fails when it is stale |
 
@@ -57,11 +59,10 @@ The previous architecture and transport documents are in
 
 | Page | Answers | Status |
 |---|---|---|
-| [INSTALL.md](operate/INSTALL.md) | Prerequisites and a Helm install | Partly stale, 2026-10-21: does not cover the capture method, the CRIU opt-in, model volumes or the webhook's inject scope |
+| [INSTALL.md](operate/INSTALL.md) | The one install guide (Helm): prerequisites, the values that decide behaviour, turning nvsnap off, upgrade, troubleshooting | Current, 2026-10-21 |
 | [PULL-SECRETS.md](operate/PULL-SECRETS.md) | Registry credentials for the agent and the pods it creates | Not re-checked |
 | [DEVELOPING.md](operate/DEVELOPING.md) | Build, deploy, capture, validate, merge | Not re-checked |
-| [Chart README](../deploy/helm/nvsnap/README.md) | Chart values and install | Not re-checked |
-| [deploy/README.md](../deploy/README.md) | Installing with the SSH node installer | Not re-checked; the chart is the supported install |
+| [Chart README](../deploy/helm/nvsnap/README.md) | What each chart template renders; chart development | Current, 2026-10-21 |
 
 ## Design notes
 

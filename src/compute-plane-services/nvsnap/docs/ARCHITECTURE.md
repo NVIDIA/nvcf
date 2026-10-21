@@ -109,7 +109,7 @@ value `agent.captureMethod`; the chart passes it to the agent as
   no cachedir volume or cache environment on pods, no compile-cache set, no
   cachedir capture watcher and no election (`internal/webhook/model_volume.go`
   `criuModelEnvPatches`; `internal/agent/criu_auto_restore.go` `criuIsDefault`
-  gates the rest). The model volume still shares the model.
+  gates the rest). The model volume, when enabled, still shares the model.
 
 | Condition | What runs | Enforcing code |
 |---|---|---|
@@ -335,7 +335,8 @@ September 2026 is in
 | Llama-3.1-8B, vLLM, single-GPU CRIU (agent restore time) | H100, July 2026, app v0.2.22 | | 32.4 s | [results/BENCHMARK.md](results/BENCHMARK.md#faster-criu-v2-restore-levers-a--b-july-2026) |
 | Qwen2.5-72B-Instruct, vLLM 0.20.0 TP=4, CRIU with gpushare, restored on another node (new pod to first token) | 4x GB300, driver 610.57.04 | 363 s (242 s without the download) | 87.8 s from the store, 66.7 s from the node's copy | [design/GPUSHARE.md](design/GPUSHARE.md#validation) |
 
-These are headline rows; each source holds the full record with its method.
+These are headline rows; every number is in [RESULTS.md](RESULTS.md), and
+each source holds the full record with its method.
 
 ## 13. Known gaps
 

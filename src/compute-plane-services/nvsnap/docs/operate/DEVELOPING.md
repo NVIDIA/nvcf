@@ -63,8 +63,8 @@ kubectl -n nvsnap-system rollout status ds/nvsnap-agent
 
 `install-nvsnap.sh` wraps namespace + pull-secret + `helm install`
 ([deploy/helm/nvsnap](../../deploy/helm/nvsnap)). Use `--without-webhook` to
-skip cert-manager + the admission webhook. Details:
-[docs/operate/PULL-SECRETS.md](PULL-SECRETS.md).
+skip cert-manager + the admission webhook. Install options and
+troubleshooting: [INSTALL.md](INSTALL.md).
 
 ## 3. Capture a workload (the capture spec)
 
