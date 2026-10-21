@@ -94,7 +94,7 @@ Attach an endpoint with `--logs-telemetry-id`, `--metrics-telemetry-id`, or `--t
 |---|---|---|
 | `init` | Mint admin token from API Keys via public api gateway | Idempotent; writes `~/.nvcf-cli.state`; clears saved function state and all API keys (function and task) |
 | `status` | Show CLI state (token, last endpoints, function context) | Distinct from `self-hosted status` |
-| `api-key generate [--for function\|task\|event-ledger] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates a function key, a task key and an Event Ledger key; `--for function`, `--for task` or `--for event-ledger` generates one only (the Event Ledger key has the `fnds:getEvents` scope and is stored as `eventLedgerApiKey`); `--scopes` requires `--for` |
+| `api-key generate [--for function\|task\|event-ledger] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates a function key, a task key and an Event Ledger key; `--for function`, `--for task` or `--for event-ledger` generates one only; `--scopes` requires `--for` |
 | `api-key generate --validate` | Mint and immediately validate each generated key | Validates each key against its correct audience (NVCF for function keys, NVCT for task keys) |
 | `api-key list` | List API keys for current owner | Lists NVCF-scoped keys only |
 | `api-key delete KEY-ID` / `api-key revoke KEY-ID` | Remove an API key | **Confirm with user** |

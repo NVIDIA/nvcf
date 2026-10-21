@@ -640,10 +640,8 @@ with the corresponding NVCF API scope.
 ### Event Ledger Commands
 
 These commands read function deployment events from the Event Ledger. They need
-the Event Ledger addon on the control plane and an API key with the
-`fnds:getEvents` read scope. Generate one with `api-key generate --for event-ledger`. The CLI reaches the Event
-Ledger at `event_ledger_url`. When that is not set, it replaces the leading
-`api.` of `base_http_url` with `events.`.
+the Event Ledger addon on the control plane and an `EVENT_LEDGER_API_KEY`
+(see [Generate API Keys](#generate-api-keys)).
 
 | Command | Description |
 | --- | --- |
