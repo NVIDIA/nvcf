@@ -193,6 +193,11 @@ An instance (a StatefulSet, LeaderWorkerSet or Grove group) is captured and
 restored as one group, because its pods hold connections to each other and
 must stop and start together.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/instance-capture-restore-dark.svg">
+  <img alt="Instance capture: checks, a freeze point, each node dumps its member. Restore: placeholders, CRIU restore with one address map, unlock all, resume GPUs." src="figures/instance-capture-restore-light.svg">
+</picture>
+
 ### Who is captured
 
 Rank 0's agent leads the capture once the instance is Ready and has not been
@@ -222,6 +227,11 @@ happens after the dump (`internal/agent/group_freeze.go` `driveGroupFreeze`,
 is a group record: a ConfigMap naming every member's checkpoint
 (`criu_group.go` `criuGroupConfigMapName`, `updateGroupRecord`).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/group-freeze-dark.svg">
+  <img alt="Every member waits at the freeze point; the leader releases all once all arrive, or aborts all." src="figures/group-freeze-light.svg">
+</picture>
+
 ### Group restore
 
 1. At admission, each new member of an instance of the same configuration and
@@ -240,6 +250,11 @@ is a group record: a ConfigMap naming every member's checkpoint
 
 A restore takes the first copy of a checkpoint it finds, in this order
 (`internal/agent/cascade_fetch.go` `EnsureLocal`):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/data-tiers-dark.svg">
+  <img alt="A capture writes L1 then copies to the L2 volume pair; a restore tries L1, L2, L3, then L4." src="figures/data-tiers-light.svg">
+</picture>
 
 | Tier | Where | Code |
 |---|---|---|

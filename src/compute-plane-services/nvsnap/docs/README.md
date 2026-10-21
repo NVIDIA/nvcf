@@ -119,5 +119,7 @@ and are not maintained; they are not authoritative for the current code.
 
 A new document goes into this index in the same commit that adds it.
 `make check-docs` (and the `nvsnap docs` workflow) fails on a broken link,
-heading anchor or doc path, on a stale table of contents, and on a
-REFERENCE.md that no longer matches the code.
+heading anchor or doc path, on a stale table of contents, on a
+REFERENCE.md that no longer matches the code, and on a figure that no longer
+matches [its script](figures/scripts/figures.py). Figures are drawn by that
+script, one light and one dark SVG each; edit the script, not the SVG.

@@ -60,3 +60,6 @@ jobs:
 
       - name: Check the generated reference matches the code
         run: python3 src/compute-plane-services/nvsnap/scripts/docs/reference.py --check
+
+      - name: Check the figures match their script
+        run: python3 src/compute-plane-services/nvsnap/docs/figures/scripts/figures.py --check
