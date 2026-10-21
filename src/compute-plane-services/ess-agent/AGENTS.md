@@ -41,3 +41,7 @@ present in this public snapshot.
 - `child_test.TestReload_noSignal` is skipped through `go_test.args`; upstream
   vendored tests are tagged `manual` and excluded from the default test suite.
 - `ESS_AGENT_INIT=true` makes the agent render templates and exit immediately.
+- The executable carries only CAP_CHOWN. Containers must permit CHOWN in
+  their capability bound, including when no-new-privileges is enabled.
+  Retain UID/GID 1000 and verify the running process capability, not only the
+  Pod specification. Image capability and numeric-user tests guard packaging.
