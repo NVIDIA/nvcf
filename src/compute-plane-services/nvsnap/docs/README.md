@@ -117,6 +117,7 @@ and are not maintained; they are not authoritative for the current code.
 
 ## Keeping this index honest
 
+The rules for adding to these documents are in [AGENTS.md](AGENTS.md).
 A new document goes into this index in the same commit that adds it.
 `make check-docs` (and the `nvsnap docs` workflow) fails on a broken link,
 heading anchor or doc path, on a stale table of contents, on a
