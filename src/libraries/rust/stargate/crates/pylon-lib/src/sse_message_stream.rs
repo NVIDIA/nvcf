@@ -1719,6 +1719,45 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn default_deadlines_allow_queued_output_but_detect_a_stalled_stream() {
+        let defaults = crate::quic_http_tunnel::TunnelForwardingConfig::default();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let mut messages = upstream_sse_message_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+            defaults.first_output_timeout,
+            defaults.output_chunk_timeout,
+            defaults.max_sse_buffer_bytes,
+            true,
+        );
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(90)).await;
+        tx.send(Ok::<_, reqwest::Error>(Bytes::from_static(
+            b"data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"queued output\"}}]}\n\n",
+        )))
+        .await
+        .expect("the first-output deadline must allow a queued request");
+        assert!(
+            messages
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .facts
+                .generated_output
+                .is_some()
+        );
+
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert!(matches!(
+            messages.next().await,
+            Some(Err(UpstreamSseReadError::Timeout(
+                SseReadTimeoutPhase::SubsequentOutput
+            )))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn metadata_and_partial_bytes_do_not_extend_first_output_deadline() {
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         let mut messages = upstream_sse_message_stream(

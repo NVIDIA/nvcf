@@ -67,7 +67,9 @@ pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 // Complete events are delivered incrementally, so one input chunk cannot make
 // the pylon retain an unbounded batch of parsed events.
 pub const DEFAULT_MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
-pub(super) const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
+// Queued inference can take longer than an inter-token stall. Match the
+// first-output allowance on main while preserving the chunk stall deadline.
+pub(super) const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
 pub(super) const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
