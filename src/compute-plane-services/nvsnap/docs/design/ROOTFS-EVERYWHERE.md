@@ -44,14 +44,14 @@ The right move: make rootfs the single production path. Keep CRIU as code (rollb
 
 ## What's broken today (post-v0.0.48)
 
-Caught during GCP-H100-a benchmarking on 2026-06-09:
+Caught during H100 GKE test cluster A benchmarking on 2026-06-09:
 
 1. **Rootfs path doesn't produce an L2 PVC.** `rootfsonly.Capturer.Backend` is wired as `ConfigMapBackend(LocalBackend, cmNs)`. `PerCapturePVCBackend` (writer Job + rwx PVC + snapshot + rox PVC) is not in the chain. Result: no fan-out artifact. Multiple restored pods can't mount one rox PVC.
 2. **Manifest ConfigMap lands in `nvsnap-system`** instead of the source pod's namespace. Cross-namespace reads for restore. Breaks multi-tenant isolation. The agent's `cfg.CMNamespace` is a global default, not per-capture.
 3. **Rootfsonly Watcher polls** on a 30s interval. Hook B → label → watcher pickup observed at ~60s tail. Should be informer-driven on `nvsnap.io/capture=true` label add/update.
 4. **NVCA Hook B warmup buffer defaults to 10s.** Treats `0` as "use default 10s". A pod's readiness probe already guarantees ready; adding 10s captures stale CUDA graphs and adds latency for no benefit.
 5. **nvsnap-server's 422 redirect handoff** is in v0.0.15 (MR !78). Required because agent returns 422 with `redirect: rootfs` body; nvsnap-server now calls `runRootfsCheckpoint` which labels the pod for the watcher. Already shipped; included here for completeness.
-6. **nvsnap-server ClusterRole missing `pods/patch`** verb. Surfaced by (5) when nvsnap-server tried to label workload pods in the workload namespace. Patched live on GCP-H100-a; helm chart change pending in v0.0.49.
+6. **nvsnap-server ClusterRole missing `pods/patch`** verb. Surfaced by (5) when nvsnap-server tried to label workload pods in the workload namespace. Patched live on H100 GKE test cluster A; helm chart change pending in v0.0.49.
 
 ## Target architecture
 
@@ -135,7 +135,7 @@ No change. Webhook injects the rox PVC volume mount on pods with `nvsnap.io/rest
 
 ## Acceptance criteria
 
-1. Fresh NVCA-driven function deploy on GCP-H100-a:
+1. Fresh NVCA-driven function deploy on H100 GKE test cluster A:
    - Pod Ready 2/2 → catalog row `Phase=Completed` with hash + rox-`<hash>` PVC in source pod's namespace, in **≤ 90s** (was ≥120s with poll + warmup + ConfigMap+PVC roundtrip).
    - Manifest CM lives in the workload namespace, not `nvsnap-system`.
 2. Subsequent deploys of same fvID:
@@ -146,7 +146,7 @@ No change. Webhook injects the rox PVC volume mount on pods with `nvsnap.io/rest
    - Both serve inference.
 4. No leaks: `nvsnap-writer` Job auto-deletes after 60s (TTL from v0.0.48); rwx PVC deleted after snapshot.
 5. Unit tests pass: `go test ./internal/checkpointstore/... ./internal/rootfsonly/... ./internal/agent/...`.
-6. v0.0.49 image deployed on GCP-H100-a; end-to-end above runs against the deployed image.
+6. v0.0.49 image deployed on H100 GKE test cluster A; end-to-end above runs against the deployed image.
 
 ## Out of scope
 
@@ -159,7 +159,7 @@ No change. Webhook injects the rox PVC volume mount on pods with `nvsnap.io/rest
 
 ## Migration
 
-- v0.0.49 image rolls onto every nvsnap cluster (GCP-H100-a, future GCP-H100-b) via helm chart upgrade. No config changes required.
+- v0.0.49 image rolls onto every nvsnap cluster (H100 GKE test cluster A, future H100 GKE test cluster B) via helm chart upgrade. No config changes required.
 - Existing catalog rows + manifest ConfigMaps in `nvsnap-system` namespace remain readable. Restore-side code reads from whichever namespace the manifest lives in via SourcePodMeta resolution; old rows fall back to the constructor's default namespace.
 - NVCA operator gets v0.0.49 of nvca-nvsnap (warmup default flip). The change is backward-compatible: pre-existing NVCFBackend resources with `warmupBufferSeconds: 0` will now actually mean zero buffer (was 10s); operators wanting the old behavior set the value to `10` explicitly.
 

@@ -104,7 +104,7 @@ Failure modes diverge by path:
 
 When the WRAPPER list doesn't include the right path AND `cuda-checkpoint.real` runs anyway (because PATH found the wrapper), `ld.so` fails to resolve libcuda.so.1. The cuda_plugin sees nonzero exit and **silently falls back to "no GPU state to dump"** — the checkpoint completes successfully (CPU pages + rootfs diff captured) but contains zero GPU memory. The dump-side error is in cuda_plugin's log lines, not in the agent log.
 
-This silent-fall-through is what we observed on GCP-H100-a 2026-05-23: 4.4 GB checkpoint vs 28 GB baseline.
+This silent-fall-through is what we observed on H100 GKE test cluster A 2026-05-23: 4.4 GB checkpoint vs 28 GB baseline.
 
 ## Key files referenced
 

@@ -3,7 +3,7 @@
 **Status:** Exploration notes, not a final design. Captures the options
 discussed for moving NvSnap checkpoint data fast between nodes, between
 clusters, and to/from S3. Measurements are from real cluster runs on
-`gcp-ct1` against a 30 GB `vllm-small` CRIU dump. Where a claim is
+an H100 GKE test cluster against a 30 GB `vllm-small` CRIU dump. Where a claim is
 unmeasured, it says so.
 
 ## Problem framing
@@ -168,7 +168,7 @@ Settings live on the bucket. Standard AWS feature.
 
 These compose — you can have all four legs using different transports.
 
-## What was measured (real numbers, gcp-ct1)
+## What was measured (real numbers, an H100 GKE test cluster)
 
 Corpus: vllm-small CRIU dump, **30 GB across 5,628 files**.
 

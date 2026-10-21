@@ -492,7 +492,7 @@ A Go binary running on every GPU node with `hostPID: true`,
   blobstore uploader.
 - Prometheus metrics on `:8081`.
 
-**Image:** `stg.nvcr.io/zq9tgrjzrfpo/nvsnap-agent:v0.20.0-sitecustomize`
+**Image:** `stg.<registry>/nvsnap-agent:v0.20.0-sitecustomize`
 on this branch; one base layer (CRIU + system libs) + one app layer
 (Go binaries + intercept lib + sitecustomize.py).
 

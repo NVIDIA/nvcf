@@ -19,7 +19,7 @@
 
 ## Faster criu-v2 restore (Levers A + B), July 2026
 
-Cluster: aws-dev1, H100 80GB (single GPU), driver 580.126, criu-v2 engine.
+Cluster: the H100 NVMesh test cluster, H100 80GB (single GPU), driver 580.126, criu-v2 engine.
 Two restore-path optimizations, measured as matched agent-restore time.
 
 Lever A (base v0.0.11 / app v0.2.21, criu fork `1ddd5c9c3`): the CRIU fork
@@ -122,7 +122,7 @@ bring-up. The prewarm pays off on volumes whose single-stream reads are
 latency-bound but whose aggregate throughput is high (Hyperdisk ML), where the
 engine's per-fault mmap reads leave the volume idle and the parallel sweep does
 not. Treat the prewarm value as a property of the storage class, not the model:
-the sweep reads files in 256 MiB ranges so a few large weights files still use every reader (an NVMesh volume on dev1 read 270 MB/s per stream and 2.1 GB/s at eight, 2026-09-28), and its switch and reader count live in the storage profile (`prewarm`,
+the sweep reads files in 256 MiB ranges so a few large weights files still use every reader (an NVMesh volume on the H100 NVMesh test cluster read 270 MB/s per stream and 2.1 GB/s at eight, 2026-09-28), and its switch and reader count live in the storage profile (`prewarm`,
 `prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
 `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
 

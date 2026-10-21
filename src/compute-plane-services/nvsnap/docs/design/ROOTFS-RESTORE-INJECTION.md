@@ -42,7 +42,7 @@ The dispatch branches on **"does a Bound rox PVC exist"**, NOT on the
 `restore-entrypoint` → which waits forever for
 `/nvsnap-checkpoint/inventory.img` that a rootfs capture never produced.
 
-Repro (GCP-H100-a 2026-06-10): NVCA whisper restore — rox PVC bound,
+Repro (H100 GKE test cluster A 2026-06-10): NVCA whisper restore — rox PVC bound,
 pod Running, but the inference container hung in
 `=== NVSNAP Restore Entrypoint (go-criu) === Waiting for checkpoint at
 /nvsnap-checkpoint/inventory.img …`. The rox PVC holds `rootfs/` +

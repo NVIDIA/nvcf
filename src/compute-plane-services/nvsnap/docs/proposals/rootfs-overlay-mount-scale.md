@@ -31,7 +31,7 @@ A rootfs warm-restore of a fat multi-library image fails at admission:
 failed to create instance ... err: etcdserver: request is too large
 ```
 
-Observed on GCP-H100-a, gpt-oss-120b (vllm TP=4): capture recorded **1055 extract
+Observed on H100 GKE test cluster A, gpt-oss-120b (vllm TP=4): capture recorded **1055 extract
 paths** (857 `rootfs-extract` + 197 vllm `__pycache__` + 1 hf-cache). The restore
 Pod never gets created → NVCA ICMS request stuck `RequestPending` → no restore.
 
@@ -193,7 +193,7 @@ selection is by detected runtime; B′ remains the universal fallback.
    pivot_root shim + exec original command. Add `CAP_SYS_ADMIN` (not privileged) to
    the workload; keep v0.0.67 file caps.
 3. **Unit test**: constant Pod size for N=5 vs N=5000 paths (one volume/mount).
-4. **e2e (B′)**: gpt-oss-120b TP=4 warm restore on GCP-H100-a (the failing case) +
+4. **e2e (B′)**: gpt-oss-120b TP=4 warm restore on H100 GKE test cluster A (the failing case) +
    whisper single-GPU regression + a vllm single-GPU + 16-pod fan-out re-validate.
 5. **C provider**: nvsnap proxy snapshotter + DaemonSet containerd config; agent
    registers snapshot at promote; provider returns empty `Injection`. e2e same

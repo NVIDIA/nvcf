@@ -4,7 +4,7 @@ Goal: when a chart deploys N model workers, exactly one downloads and
 initializes; the rest start from its cache. If the cache already exists,
 every worker starts from it. No change to the customer's chart.
 
-Status: implemented on branch `nvsnap/helm-election`, verified on dev1 2026-09-25 (results below).
+Status: implemented on branch `nvsnap/helm-election`, verified on the H100 NVMesh test cluster 2026-09-25 (results below).
 Supersedes the `nvsnap.io/restore-from: "auto"` annotation, which required
 a template opt-in and could not be a capture source (issue #2099).
 
@@ -41,11 +41,11 @@ sequenceDiagram
 - [Claims across namespaces](#claims-across-namespaces)
 - [Grove and the scheduling gate](#grove-and-the-scheduling-gate)
 - [Verification](#verification)
-- [Results, dev1 2026-09-25](#results-dev1-2026-09-25)
-  - [Cross-namespace, dev1 2026-09-25](#cross-namespace-dev1-2026-09-25)
-  - [Dynamo disaggregated, dev1 2026-09-25](#dynamo-disaggregated-dev1-2026-09-25)
-  - [Qwen2.5-32B-Instruct TP=4 chart, dev1 2026-09-25](#qwen25-32b-instruct-tp4-chart-dev1-2026-09-25)
-  - [Qwen3-235B-A22B-Instruct-2507-FP8 TP=8 chart, two nodes, dev1 2026-09-25](#qwen3-235b-a22b-instruct-2507-fp8-tp8-chart-two-nodes-dev1-2026-09-25)
+- [Results, H100 NVMesh cluster, 2026-09-25](#results-h100-nvmesh-cluster-2026-09-25)
+  - [Cross-namespace, H100 NVMesh cluster, 2026-09-25](#cross-namespace-h100-nvmesh-cluster-2026-09-25)
+  - [Dynamo disaggregated, H100 NVMesh cluster, 2026-09-25](#dynamo-disaggregated-h100-nvmesh-cluster-2026-09-25)
+  - [Qwen2.5-32B-Instruct TP=4 chart, H100 NVMesh cluster, 2026-09-25](#qwen25-32b-instruct-tp4-chart-h100-nvmesh-cluster-2026-09-25)
+  - [Qwen3-235B-A22B-Instruct-2507-FP8 TP=8 chart, two nodes, H100 NVMesh cluster, 2026-09-25](#qwen3-235b-a22b-instruct-2507-fp8-tp8-chart-two-nodes-h100-nvmesh-cluster-2026-09-25)
 <!-- /toc -->
 
 ## Decision at admission
@@ -196,7 +196,7 @@ nvsnap-server, so in a namespace with no other egress allows it becomes
 default-deny for everything else, DNS included, and a restored vLLM cannot
 resolve huggingface.co (it lists the repo even with a warm cache). NVCF
 function namespaces carry NVCA's egress allows; a bare test namespace does
-not. Seen on dev1 2026-09-25; the chart should allow DNS in that policy or
+not. Seen on the H100 NVMesh test cluster 2026-09-25; the chart should allow DNS in that policy or
 document the requirement.
 
 ## Grove and the scheduling gate
@@ -221,7 +221,7 @@ values). Historically the TinyLlama TP=2 chart from the scale-up test, `replicas
 pod `SchedulingGated` until `ready`, then Ready without a download. Then
 `helm uninstall` and reinstall: both pods restore.
 
-## Results, dev1 2026-09-25
+## Results, H100 NVMesh cluster, 2026-09-25
 
 Stock Deployment chart, TinyLlama-1.1B on vLLM v0.20.0 TP=2, no nvsnap
 labels or annotations in the template, agent v0.2.75-election2, server
@@ -252,7 +252,7 @@ Two things the first runs taught:
   refused to start. Node hygiene, not an election failure; the run was
   repeated with that node excluded.
 
-### Cross-namespace, dev1 2026-09-25
+### Cross-namespace, H100 NVMesh cluster, 2026-09-25
 
 Capture only in `nvsnap-system` (hash c8bbf555); the same stock chart
 installed in `nvsnap-xns`, replicas=2, admitted in the same second, agent
@@ -271,7 +271,7 @@ The first attempt exposed a create-then-label race between the two
 admissions ("the object has been modified"); the per-namespace PV is now
 created already labelled and the fresh concurrent mint passed.
 
-### Dynamo disaggregated, dev1 2026-09-25
+### Dynamo disaggregated, H100 NVMesh cluster, 2026-09-25
 
 NVCF Dynamo sample (vllm-runtime 1.1.1, Qwen3-0.6B, frontend + prefill +
 decode). With the role-neutral hash both workers compose 18313f93: prefill
@@ -281,7 +281,7 @@ follower is unschedulable until `rox-<hash>` exists, so the leader is held
 with it. See "Grove and the scheduling gate"; the resolution for gang
 scheduling is a design decision recorded in issue #2099.
 
-### Qwen2.5-32B-Instruct TP=4 chart, dev1 2026-09-25
+### Qwen2.5-32B-Instruct TP=4 chart, H100 NVMesh cluster, 2026-09-25
 
 Stock Deployment, vLLM v0.20.0, torch.compile on (no enforce-eager),
 replicas=2 on one node, agent v0.2.75-election6, NVMesh. Capture 65.7 GB,
@@ -304,7 +304,7 @@ engine phases            cold (leader)   warm (follower)
   CUDA graph capture     10 s            10 s    (not cacheable)
 ```
 
-### Qwen3-235B-A22B-Instruct-2507-FP8 TP=8 chart, two nodes, dev1 2026-09-25
+### Qwen3-235B-A22B-Instruct-2507-FP8 TP=8 chart, two nodes, H100 NVMesh cluster, 2026-09-25
 
 Stock chart (`deploy/k8s/charts/vllm-workers`, `--enable-expert-parallel`;
 the FP8 block quantization does not split the MoE intermediate eight ways

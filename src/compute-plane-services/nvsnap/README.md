@@ -26,20 +26,27 @@ becomes a source), and object store for cross-cluster.
 
 ## How it works
 
-NvSnap picks one of two capture paths automatically, based on the
-workload:
+NvSnap has two capture methods. The cluster operator picks one with the
+chart value `agent.captureMethod` (default `cachedir`); it applies to every
+capture on the cluster:
 
-- **Warm cache restore (cachedir), any GPU count.** NvSnap captures the
+- **Warm cache restore (`cachedir`), any GPU count.** NvSnap captures the
   warm pod's model and JIT/compile caches into one canonical cache
   directory and mounts it read-only on restore. Engines skip the weight
   download and reuse prebuilt kernels, graphs, and compile caches. This is
   the path behind the headline numbers above.
-- **Full process checkpoint/restore, single GPU.** CRIU plus NVIDIA
+- **Full process checkpoint/restore (`criu`).** CRIU plus NVIDIA
   `cuda-checkpoint` snapshot the whole process (CPU state, open FDs,
   io_uring/epoll, and GPU memory). The restored pod resumes a live,
   already-serving engine with no re-initialization at all. Multi-GPU
-  process restore is currently blocked upstream by a `libcudart`
-  per-process GPU-state replay limitation.
+  (tensor-parallel) workloads are captured this way when they run under
+  [gpushare](docs/GPUSHARE.md), an `LD_PRELOAD` shim that releases the GPU
+  memory processes share before the checkpoint and re-creates it after
+  restore; without it a multi-GPU CRIU capture is refused. Multi-pod
+  instances (a StatefulSet, LeaderWorkerSet or Grove group, possibly
+  spanning nodes) are captured and restored as one group, but only on
+  request: pods annotated `nvsnap.io/criu-capture: "true"`, or matched by
+  the chart value `agent.criuCaptureOptIn`.
 
 A node-level **agent** (DaemonSet) performs capture/restore using
 `/proc` + cgroup inspection — runtime-agnostic, not tied to any container

@@ -27,7 +27,7 @@ make build
 ./deploy/nvsnap-installer --cluster ~/.nvsnap/cluster.yaml
 
 # Or deploy to a single node
-./deploy/nvsnap-installer --node 10.34.5.64
+./deploy/nvsnap-installer --node <node-ip>
 
 # Verify installation
 ./deploy/nvsnap-installer --verify
@@ -81,13 +81,13 @@ ssh:
   # key_file: ~/.ssh/id_rsa
 
 nodes:
-  - ip: 10.34.5.64
+  - ip: <node-ip>
     name: gpu-node-1
     roles: [gpu, master]
-  - ip: 10.86.2.83
+  - ip: <node-ip>
     name: gpu-node-2
     roles: [gpu]
-  - ip: 10.86.6.104
+  - ip: <node-ip>
     name: gpu-node-3
     roles: [gpu]
 
@@ -118,18 +118,18 @@ Once deployed, each node exposes:
 
 ```bash
 # Health check
-curl http://10.34.5.64:8081/health
+curl http://<node-ip>:8081/health
 
 # List GPU processes
-curl http://10.34.5.64:8081/processes
+curl http://<node-ip>:8081/processes
 
 # Checkpoint a process
-curl -X POST http://10.34.5.64:8081/checkpoint \
+curl -X POST http://<node-ip>:8081/checkpoint \
   -H 'Content-Type: application/json' \
   -d '{"pid": 12345, "checkpointId": "my-checkpoint"}'
 
 # Restore a process
-curl -X POST http://10.34.5.64:8081/restore \
+curl -X POST http://<node-ip>:8081/restore \
   -H 'Content-Type: application/json' \
   -d '{"checkpointPath": "/var/lib/nvsnap/checkpoints/my-checkpoint"}'
 ```

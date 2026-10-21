@@ -6,7 +6,7 @@ and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
 JIT) are built once per cluster, and every other pod consumes them. No chart
 change. No pod is ever held back from scheduling.
 
-Status: all five mechanisms built and verified on dev1 (H100) and on an
+Status: all five mechanisms built and verified on an H100 cluster with NVMesh storage and on an
 18 node GB300 cluster (arm64), 2026-09-30. Mechanism 5 is one cache-set
 volume per configuration; see the results at the end.
 Supersedes the gate-and-promote path of `helm-chart-cache-election.md`
@@ -49,7 +49,7 @@ sequenceDiagram
 - [Failure behaviour (decided: always fall back, never deadlock)](#failure-behaviour-decided-always-fall-back-never-deadlock)
 - [What changes in the code](#what-changes-in-the-code)
 - [Build order and verification](#build-order-and-verification)
-- [Results, dev1 2026-09-26 (NVMesh, block mode)](#results-dev1-2026-09-26-nvmesh-block-mode)
+- [Results, H100 NVMesh cluster, 2026-09-26 (NVMesh, block mode)](#results-h100-nvmesh-cluster-2026-09-26-nvmesh-block-mode)
 - [Results, GB300 cluster 2026-09-30 (NVMesh, block mode, arm64)](#results-gb300-cluster-2026-09-30-nvmesh-block-mode-arm64)
 - [Results, GB300 cluster 2026-10-01 (kimi-k3, 1.56 TB, two pods, TP 8)](#results-gb300-cluster-2026-10-01-kimi-k3-156-tb-two-pods-tp-8)
 <!-- /toc -->
@@ -130,7 +130,7 @@ not.
    chart's to do.
 
    Why a Job and not the first pod: on NVMesh a volume attached read-write
-   by a running pod cannot be attached read-only anywhere else (dev1,
+   by a running pod cannot be attached read-only anywhere else (the H100 NVMesh test cluster,
    2026-09-26: `NVMesh Attach Failed` on the read-only PV while the writer
    pod held the primary). The download step has to exit and release the
    volume before readers attach, so it cannot live inside a pod that goes
@@ -152,7 +152,7 @@ not.
    exists yet, because the model's size is unknown until it has been
    downloaded, registries do not all expose it, and not every storage
    system can grow a volume. kubelet removes an emptyDir the moment its
-   pod terminates (verified on dev1 2026-09-28), so the download is the
+   pod terminates (verified on the H100 NVMesh test cluster 2026-09-28), so the download is the
    pod's init container and a small hold container keeps the pod Running
    until the agent has copied the tree out (mechanism 3) and deletes the
    Job; a six-hour active deadline is the safety net. The pod carries no
@@ -196,7 +196,7 @@ not.
    the complete label for fifteen minutes are switched to reclaim Delete
    and removed, freeing the capacity of an abandoned copy. A PV that still
    has a VolumeAttachment is left for the next sweep: deleting it wedges
-   behind the attacher finalizer (dev1 2026-09-29). Complete primaries
+   behind the attacher finalizer (the H100 NVMesh test cluster 2026-09-29). Complete primaries
    are kept; retention is a separate decision.
 
 4. Readers reach the volume without help from inside the pod (webhook +
@@ -260,7 +260,7 @@ not.
    results) differ in content between ranks (measured 2026-09-29), so
    ranks are never merged, only placed side by side.
 
-   Why one volume and not one per rank (the first design, ct1
+   Why one volume and not one per rank (the first design, the GB300 NVMesh test cluster
    2026-09-30): per-rank volumes meant eight claims per namespace, eight
    read-only attaches per deployment on top of the model's, and on
    NVMesh a shared read-only attach can take 30 s under concurrent
@@ -331,7 +331,7 @@ not.
    a chart sets `nvsnap.io/cache-salt` on the pod template and bumps it
    with the change; the salt is folded into the identity.
 
-   Measured on dev1 (Qwen2.5-0.5B, TP=2 across two pods, H100): cold
+   Measured on the H100 NVMesh test cluster (Qwen2.5-0.5B, TP=2 across two pods, H100): cold
    torch.compile 23 s per pod; seeded from the cache volume 2.9 s; Ready
    +131 s instead of +183 s. The 31 MB cache copies in a few seconds.
    CUDA graph capture (7 s) is not cacheable.
@@ -372,10 +372,10 @@ between them. Everything after that first start is a full hit.
 | identity changes (revision, quantization, image) | different URI or cache key | separate volume; old one ages out |
 | gang scheduler | readers always schedulable in RWX or hostPath mode; in `pvc` mode readers pend on binding until the download completes, so gang-scheduled charts use `hostPath` | profile `readerMode: hostPath` |
 | function namespace with Kyverno enforced (`disallow-host-path`, requests and limits, no SA token) | `pvc` mode uses no hostPath; the download Job carries every mount the chart's init had (registry key secret, script ConfigMap), default requests and limits, seccomp, dropped capabilities and no token | none needed |
-| identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on dev1 2026-09-26) |
-| shared read-only attach is slow (NVMesh: 30 s IO-enable timeouts under 8 to 16 concurrent clients, ct1 2026-09-30) | every worker attached two shared volumes, its model and its rank cache, and the group attached eight distinct cache volumes | one cache-set volume per configuration (mechanism 5): the group's ranks are collected once into it, a warm pod attaches the model and the set, two attaches, and the cluster holds one cache volume per configuration instead of eight. |
+| identity deleted while a read-only PV is still Terminating (NVMesh) | the read-only PV name is deterministic per identity and namespace, so a re-download of the same identity cannot mint until the old PV finalizes; the attacher's detach timed out for minutes after the volume was gone | retention deletes read-only claims and PVs before the primary, and the controller retries minting; a stale VolumeAttachment on a deleted volume needs the finalizer cleared (seen on the H100 NVMesh test cluster 2026-09-26) |
+| shared read-only attach is slow (NVMesh: 30 s IO-enable timeouts under 8 to 16 concurrent clients, the GB300 NVMesh test cluster 2026-09-30) | every worker attached two shared volumes, its model and its rank cache, and the group attached eight distinct cache volumes | one cache-set volume per configuration (mechanism 5): the group's ranks are collected once into it, a warm pod attaches the model and the set, two attaches, and the cluster holds one cache volume per configuration instead of eight. |
 | complete volume nobody uses any more | storage held forever | retention: every admission against a complete primary stamps `nvsnap.io/last-used`; the reaper retires a complete model or cache primary, and its read-only views, once nothing has used it for `agent.modelVolume.retention` (default 7 days) and no reader is bound in a live namespace; 0 keeps forever |
-| last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on dev1 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
+| last reader of an identity leaves a node (NVMesh) | the agent's bind mount keeps the volume published; kubelet cannot unmount and the attacher's detach times out (seen on the H100 NVMesh test cluster 2026-09-26 during cleanup) | the agent must unbind and drop its mount-holder when no pod on the node uses the identity; part of retention (follow-up) |
 
 ## What changes in the code
 
@@ -406,11 +406,11 @@ Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
    (marker wait).
 3. NVMesh readers: agent completion, ro attach, bind into emptyDir.
 4. Compile caches: shared on DFS, cache-volume capture on NVMesh.
-5. Retire the gate; e2e on dev1 in all matrix rows that dev1 can host
+5. Retire the gate; e2e on the H100 NVMesh test cluster in all matrix rows it can host
    (NVMesh; DFS stands in with an NFS class), each measured cold, first
    deploy with two pods per instance, redeploy, second namespace.
 
-## Results, dev1 2026-09-26 (NVMesh, block mode)
+## Results, H100 NVMesh cluster, 2026-09-26 (NVMesh, block mode)
 
 Stock `vllm-workers` chart, Qwen2.5-32B-Instruct TP=4, replicas=2 on two
 nodes, no nvsnap markers in the chart, agent v0.2.76-mv5.
@@ -446,7 +446,7 @@ uninstall + reinstall
   t+118s    both Ready (claim minted at admission, no pending phase)
 ```
 
-Real NVCF Helm function, 2026-09-27 (dev1 through the staging control
+Real NVCF Helm function, 2026-09-27 (the H100 NVMesh test cluster through the staging control
 plane, QA org; stock `kimi-k3` 0.2.3 chart copied from the prod org with
 values only: init-container NGC download into an emptyDir, two
 StatefulSet replicas, Qwen2.5-0.5B-Instruct hosted on prod NGC, agent
@@ -470,16 +470,16 @@ redeploy (fixed override; identity already complete on the cluster)
             answered; function ACTIVE
 ```
 
-Kyverno on dev1 is Audit; the audit failures on the function pods belong to
+Kyverno on the H100 NVMesh test cluster is Audit; the audit failures on the function pods belong to
 the chart (IPC_LOCK add, no capability drop, root) and to NVCA's cert inits,
 not to the containers nvsnap creates. The namespace deletion left the first
 run's read-only PV Released: retention must also cover PVs whose claim
 namespace is gone.
 
-No hostPath and no agent bind in this mode. Kyverno on dev1 is Audit, so
+No hostPath and no agent bind in this mode. Kyverno on the H100 NVMesh test cluster is Audit, so
 the remaining warnings were the stock chart's own containers plus, until
 v0.2.76-mv8, the injected init (no resources, capabilities not dropped,
-no runAsNonRoot); the enforced rejection itself is not testable on dev1.
+no runAsNonRoot); the enforced rejection itself is not testable on the H100 NVMesh test cluster.
 
 Cold start of the same pod on the same node: 325 s. The reinstall number
 is the engine's own load and compile from a read-only NVMesh mount with no
@@ -530,7 +530,7 @@ admission to Ready 154 to 194 s for the six workers that did not hit the
 engine's video segfault (was 228 to 278 s; plain cold 490 s). A first
 attempt with a 512Mi memory limit on the sweep changed nothing: page
 cache is charged to the reading cgroup, so the sweep evicted its own
-pages. The ct1 storage-profile overlay copied from dev1 also had
+pages. The GB300 cluster's storage-profile overlay, copied from the H100 cluster's, also had
 `prewarm: false`, which silently dropped the step; the agent reads that
 ConfigMap once at start.
 

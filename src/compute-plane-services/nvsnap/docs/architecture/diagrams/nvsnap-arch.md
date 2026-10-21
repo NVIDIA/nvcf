@@ -26,7 +26,7 @@ nvca#189).
 - [4. L1–L4 data fabric (restore-side cascade)](#4-l1l4-data-fabric-restore-side-cascade)
 - [5. Storage-agnostic L2 promotion (nvsnap#171)](#5-storage-agnostic-l2-promotion-nvsnap171)
 - [6. Capture-once: NvSnapFunctionState lifecycle (nvca#189)](#6-capture-once-nvsnapfunctionstate-lifecycle-nvca189)
-- [7. Capture-path matrix](#7-capture-path-matrix)
+- [7. How the capture method is chosen](#7-how-the-capture-method-is-chosen)
 - [8. Cross-references](#8-cross-references)
 <!-- /toc -->
 
@@ -123,13 +123,30 @@ capture) — the observable proof the herd was contained.
 
 ---
 
-## 7. Capture-path matrix
+## 7. How the capture method is chosen
 
-Which dump path runs depends on arch × GPU count × backend (CLAUDE.md
-rule 20):
+The cluster operator sets one capture method for the whole cluster with the
+chart value `agent.captureMethod` (`cachedir`, the default, or `criu`); the
+chart passes it to the agent as `NVSNAP_DEFAULT_CAPTURE_PATH`
+(`deploy/helm/nvsnap/templates/agent-daemonset.yaml`). The rules below apply
+on top of it:
 
-| Arch | GPUs | Backend | Path |
-|---|---|---|---|
+| Condition | What runs | Enforcing code |
+|---|---|---|
+| `captureMethod: cachedir` | rootfs/cachedir capture; CRIU only for a request that explicitly asks for `criu` | `internal/agent/nim_backend.go` `RootfsIsDefault`, `resolveCheckpointRedirect` |
+| `captureMethod: criu` | CRIU + cuda-checkpoint; no cachedir machinery runs | same; `internal/agent/criu_auto_restore.go` `criuIsDefault` |
+| Riva or Triton backend | always rootfs; an explicit `criu` request is an error (cuda-checkpoint cannot serialize their host-pinned memory) | `internal/agent/nim_backend.go` `BackendKind.UseRootfsCapture` |
+| more than one distinct GPU, gpushare not loaded | CRIU capture is refused | `internal/agent/checkpoint.go` `countDistinctGPUDevices`, `gpushareLoadedBy` |
+| more than one distinct GPU under gpushare | CRIU + gpushare (validated on GB300, arm64; see [GPUSHARE.md](../../GPUSHARE.md#validation)) | `internal/agent/gpushare.go` |
+| multi-pod instance (StatefulSet, LeaderWorkerSet, Grove group) | captured and restored as one group, only when opted in | `internal/agent/criu_group.go` `captureOptedIn` |
+
+The agent has no architecture gate: arm64 and x86 follow the same rules.
+
+`cachedir` mode (canonical `/opt/nvsnap` cache path, identical at capture
+and restore) lets engines reuse prebuilt JIT/CUDA-graph kernels instead of
+recompiling — the bulk of the warm-restore win on compile-heavy models.
+
+---|---|---|---|
 | x86 | single | vLLM/SGLang/TRT-LLM/NIM-vLLM | **CRIU + cuda-checkpoint** |
 | x86 | multi | any | **rootfs** (no NCCL state in cuda-checkpoint) |
 | x86 | single | Riva / Triton | **rootfs** (host-pinned mem unregister aborts) |
@@ -146,4 +163,4 @@ recompiling — the bulk of the warm-restore win on compile-heavy models.
 
 - Storage-agnostic L2 design: `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`
 - NVCA × NvSnap integration: see the NVCA integration guide (separate, optional component for NVIDIA Cloud Functions deployments)
-- Capture-path matrix rationale: `CLAUDE.md` rule 20
+- How the capture method is chosen: §7 above; multi-GPU CRIU: `docs/GPUSHARE.md`

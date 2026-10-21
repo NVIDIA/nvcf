@@ -9,7 +9,7 @@ Lever B's combined "resume" invocation (restore+unlock in one cuda-checkpoint
 spawn) is implemented and measured; eliminating get-restore-tid via a /proc scan
 is remaining medium work, and per-pid context parallelization is deferred hard
 work. Lever C is proposed, not implemented. The decision to build A+B and
-defer C is locked (see Decision). Numbers are measured on aws-dev1 (driver
+defer C is locked (see Decision). Numbers are measured on the H100 NVMesh test cluster (driver
 580.126, p5 H100, criu-v2 engine).
 
 Timing convention: all top-line figures are agent-restore (the full
@@ -60,7 +60,7 @@ prep (~4s), network (0).
 
 ### A. madvise huge pages (attacks the 13.5s CPU-pages phase) -- IMPLEMENTED
 
-CRIU installs the process image as ~800k 4KB pages, single-threaded. dev1's host
+CRIU installs the process image as ~800k 4KB pages, single-threaded. the H100 NVMesh test cluster's host
 THP policy is `madvise` = "grant huge pages to regions that ask via madvise."
 We own the CRIU fork (io-uring-cr), so the restorer `madvise(MADV_HUGEPAGE)`s the
 premapped private-VMA arena before populating it: 2MB pages, ~1500 faults
@@ -100,7 +100,7 @@ Safety (must-have, implemented): madvise is a HINT, restore correctness never
 depends on it. It is called best-effort with the return value ignored.
 Degradation by node THP state:
 
-- `madvise` (dev1): grants 2MB pages -> the speedup.
+- `madvise` (the H100 NVMesh test cluster): grants 2MB pages -> the speedup.
 - `always`: redundant, harmless.
 - `never`: silent no-op (returns 0), normal 4KB pages, no crash, no speedup.
 - kernel without CONFIG_TRANSPARENT_HUGEPAGE (rare on distro kernels): madvise

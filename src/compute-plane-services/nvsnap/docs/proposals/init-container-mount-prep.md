@@ -38,7 +38,7 @@ paths — DeepSeek-V4-Flash captures 355 — this fails in production:
 | `failurePolicy: Ignore` (current) | On timeout, pod admits with NO patches | Pod comes up bare. Restore silently degrades to cold start. |
 | `failurePolicy: Fail` (alternate) | On timeout, pod admission rejected | Pod fails to admit. NVCA sees it. But every flaky admission rejects the pod — worse for SLO. |
 
-Observed 2026-06-06 on GCP-H100-a, restoring DeepSeek-V4-Flash:
+Observed 2026-06-06 on H100 GKE test cluster A, restoring DeepSeek-V4-Flash:
 
 ```text
 04:13:44  pod applied

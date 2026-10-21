@@ -362,7 +362,7 @@ Unit (in this MR or follow-up):
 
 E2E (live cluster):
 
-- vllm-llama-3.1-8b-FP8 capture on GCP-H100-a:
+- vllm-llama-3.1-8b-FP8 capture on H100 GKE test cluster A:
   - verify `rox-<hash>` PVC exists post-capture
   - verify catalog row has `pvc_name`
   - scale function to 5 pods on different nodes
@@ -381,7 +381,7 @@ Phase 1 (this MR sequence):
 - MR-B: agent capture-path promote (synchronous, gated by config flag,
   default off)
 - MR-C: webhook + Hook A mutation updates
-- MR-D: enable on GCP-H100-a (helm values set
+- MR-D: enable on H100 GKE test cluster A (helm values set
   `agent.l2.enabled=true`, `agent.l2.storageClass=hyperdisk-ml`); e2e
 
 Phase 2 (later):
@@ -591,5 +591,5 @@ operator to investigate.
 
 ## Decision pending operator review
 
-- StorageClass on GCP-H100-a: confirm `hyperdisk-ml` is the right
+- StorageClass on H100 GKE test cluster A: confirm `hyperdisk-ml` is the right
   one. Already provisioned per task #130.

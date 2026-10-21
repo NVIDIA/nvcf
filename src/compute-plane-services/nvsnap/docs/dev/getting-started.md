@@ -52,7 +52,7 @@ Go binaries and is what you rebuild most often:
 ```
 
 Bump the image tag on every rebuild — Kubernetes caches by tag
-(`IfNotPresent`), so reusing a tag ships stale code. See `CLAUDE.md` rule 19.
+(`IfNotPresent`), so reusing a tag ships stale code.
 
 ## 2. Deploy to a cluster
 
@@ -91,7 +91,7 @@ capture volume for pods that carry it when admitted.
 
 Every change that touches the agent's capture or restore code, the CRIU
 fork, or K8s manifests **must** pass an end-to-end run on a
-real GPU cluster before merge (`CLAUDE.md` rule 10):
+real GPU cluster before merge:
 
 ```bash
 ./scripts/test-e2e.sh vllm-small     # single-GPU: deploy → warm → capture → restore → verify inference
