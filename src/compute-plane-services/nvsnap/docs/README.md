@@ -86,7 +86,6 @@ the column below is that status, corrected where the code disagrees.
 | [init-container-mount-prep.md](design/init-container-mount-prep.md) | Moving restore mount prep from the webhook to an init container | **Disagrees with the code**: says "not implemented"; `cmd/nvsnap-mount-prep` is that init container |
 | [single-gpu-restore-speedup.md](design/single-gpu-restore-speedup.md) | Making single-GPU CRIU restore faster | Lever A built and measured (as the doc states) |
 | [MULTI-GPU-ROOTFS-FANOUT-DESIGN.md](design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md) | Multi-GPU restore through rootfs capture | Phase 1 shipped (as the doc states) |
-| [GENERIC-PYTHON-INJECTION-DESIGN.md](design/GENERIC-PYTHON-INJECTION-DESIGN.md) | Injecting Python libraries into any image | Proposal, 2026-05 (as the doc states) |
 | [RUNTIME-AGNOSTIC.md](design/RUNTIME-AGNOSTIC.md) | Finding a pod's processes without a runtime API | Partly stale (as the doc states: its LD_PRELOAD examples are the retired engine) |
 | [CUDA-CHECKPOINT-CALL-FLOW.md](design/CUDA-CHECKPOINT-CALL-FLOW.md) | How cuda-checkpoint is invoked | Not re-checked |
 | [THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) | What the CRIU fork carries and why | Not re-checked |
