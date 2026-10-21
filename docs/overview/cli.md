@@ -602,8 +602,14 @@ List the self-hosted cluster registrations stored in ICMS with the admin token:
 
 The NCA ID defaults to `nvcf-default`; use `--nca-id <nca-id>` to override it.
 Use `--json` for machine-readable output. `cluster list-registered` is distinct
-from `cluster list`, which lists NVCF cluster groups and requires API credentials
-with the corresponding NVCF API scope.
+from `cluster list`, which lists NVCF cluster groups and their GPUs. `cluster list`
+accepts the admin token from `init` or an API key generated with the
+`list_cluster_groups` scope:
+
+```bash
+./nvcf-cli api-key generate --for function --scopes list_cluster_groups
+./nvcf-cli cluster list
+```
 
 ### General Commands
 
