@@ -485,6 +485,19 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- end -}}
 
 {{/*
+Get the BYOO Fluent Bit image when agent.byooFluentBit.imageRepository is set.
+Otherwise return nothing so NVCA keeps its built-in upstream Fluent Bit image.
+Usage: {{ include "nvcaop.byooFluentBitImage" . }}
+*/}}
+{{- define "nvcaop.byooFluentBitImage" -}}
+{{- $agent := .Values.agent | default dict -}}
+{{- $byooFluentBit := $agent.byooFluentBit | default dict -}}
+{{- with $byooFluentBit.imageRepository -}}
+{{- printf "%s:%s" . (required "agent.byooFluentBit.imageTag is required when agent.byooFluentBit.imageRepository is set" $byooFluentBit.imageTag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Check if cluster validator is enabled (nil-safe).
 Returns non-empty string if enabled, empty string if disabled.
 Usage: {{- if (include "nvcaop.clusterValidatorEnabled" .) -}}

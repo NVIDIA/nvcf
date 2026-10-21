@@ -12,7 +12,7 @@
 # <NVIDIA-proprietary license from NVIDIA Proprietary - Legal - Confluence>
 
 # --- stage 1: build the binary ---
-FROM golang:1.25.6-alpine AS builder
+FROM golang:1.26.9-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -52,5 +52,5 @@ COPY --from=builder /bin/${BIN_NAME} /bin/${BIN_NAME}
 COPY ./.release/docker-entrypoint.sh /bin/
 ENTRYPOINT ["/bin/docker-entrypoint.sh"]
 
-USER ${BIN_NAME}:${BIN_NAME}
+USER ${UID}:${GID}
 CMD ["/bin/ess-agent"]

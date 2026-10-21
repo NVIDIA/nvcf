@@ -32,14 +32,21 @@ const (
 	// messagesRequestIDHeader is the header Anthropic SDKs report as the request ID.
 	messagesRequestIDHeader = "Request-Id"
 	messagesPath            = "/v1/messages"
+	anthropicVersionHeader  = "Anthropic-Version"
 )
 
 type requestIDContextKey struct{}
 
+// IsAnthropicRequest reports whether the caller speaks the Anthropic API.
+// Anthropic SDKs and Claude Code send anthropic-version on every request.
+func IsAnthropicRequest(r *http.Request) bool {
+	return r.Header.Get(anthropicVersionHeader) != ""
+}
+
 // RequestID keeps the caller's X-Request-Id or creates one, forwards it
-// upstream, and sets it on every response. Messages responses also carry it as
-// request-id. Headers are set before the handler runs so responses the gateway
-// writes itself carry them too.
+// upstream, and sets it on every response. Messages responses and responses to
+// Anthropic clients also carry it as request-id. Headers are set before the
+// handler runs so responses the gateway writes itself carry them too.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
@@ -49,7 +56,7 @@ func RequestID(next http.Handler) http.Handler {
 		r.Header.Set(RequestIDHeader, id)
 
 		owned := []string{RequestIDHeader}
-		if r.URL.Path == messagesPath {
+		if r.URL.Path == messagesPath || IsAnthropicRequest(r) {
 			owned = append(owned, messagesRequestIDHeader)
 		}
 		for _, name := range owned {

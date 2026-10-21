@@ -327,10 +327,17 @@ agent:
       mode: hash_seed
       hashSeed: 1234
       failClosed: false
+    platformMetricsFederation:
+      enabled: false
+      target: vmsingle.monitoring.svc.cluster.local:8428
 `))
 	require.NoError(t, err)
 
 	completed := cfg.Complete()
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Enabled)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Enabled)
+	assert.Equal(t, "vmsingle.monitoring.svc.cluster.local:8428",
+		completed.Agent.BYOOOTelCollector.PlatformMetricsFederation.Target)
 	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
 	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
 	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
@@ -586,6 +593,16 @@ agent:
       mode: hash_seed
 `))
 		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
+	})
+
+	t.Run("rejects_invalid_byoo_federation_target", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    platformMetricsFederation:
+      target: http://prometheus.example.invalid:9090
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: platform metrics federation: target")
 	})
 
 	t.Run("rejects_bundle_transport_trust_with_quic_insecure", func(t *testing.T) {

@@ -503,6 +503,35 @@ func TestValidateDeploymentPodReadinessFailsOnCrashLoop(t *testing.T) {
 	}
 }
 
+// TestValidateDeploymentPodReadinessWarnsAfterCleanExit covers a streaming app
+// that exits with code 0 when its session ends: the kubelet restarts it in
+// place, so a restart count past the threshold is not a crash loop.
+func TestValidateDeploymentPodReadinessWarnsAfterCleanExit(t *testing.T) {
+	now := time.Now()
+	pod := fakeCrashLoopingPod(testRequestsNS, "inst-a", "inference", 3, 0, "Completed")
+	pod.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Minute))
+	cs := &pod.Status.ContainerStatuses[0]
+	cs.State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-50 * time.Second))}}
+	cs.LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-17 * time.Hour))
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{pod},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckWarning {
+		t.Errorf("pod-readiness = %s, want WARN (%s)", got.Status, got.Message)
+	}
+}
+
 func TestValidateDeploymentPodReadinessFailsWhenPodMissing(t *testing.T) {
 	v := newFakeValidator(nil,
 		[]runtime.Object{
