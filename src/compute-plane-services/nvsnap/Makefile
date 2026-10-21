@@ -29,16 +29,16 @@ nvsnap-server:
 	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-server ./cmd/nvsnap-server
 
 
-# Build container image for agent
-docker-build: agent
-	@echo "Building container image $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) build -t $(FULL_IMAGE) -f docker/agent/Dockerfile .
+# Build the agent image the way it ships: Dockerfile.app on the CRIU base
+# (scripts/build-agent.sh; registry and version from scripts/versions.sh or
+# NVSNAP_REGISTRY / NVSNAP_APP_VERSION).
+docker-build:
+	./scripts/build-agent.sh app
 
 
 # Push container image
 docker-push: docker-build
-	@echo "Pushing $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) push $(FULL_IMAGE)
+	./scripts/build-agent.sh push-app
 
 # Install CRDs
 install-crds:
