@@ -145,6 +145,7 @@ jobs:
       - name: Test NVCA chart schema and defaults
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator

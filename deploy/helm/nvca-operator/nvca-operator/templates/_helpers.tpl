@@ -470,17 +470,15 @@ nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector image when its tag is configured.
+Get the BYOO OTel collector image when its tag is configured. values.yaml
+holds the only default tag, which the release bump updates. An empty or null
+tag renders nothing, so the chart sets no BYOO_OTEL_COLLECTOR_CONTAINER.
 */}}
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.160.0-nv-0.2.5" -}}
-{{- if hasKey $byooOtelCollector "imageTag" -}}
-{{- $imageTag = $byooOtelCollector.imageTag -}}
-{{- end -}}
-{{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository "clusterSource" ((.Values.ngcConfig).clusterSource | default "ngc-managed"))) $imageTag -}}
+{{- with $byooOtelCollector.imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" $.Values.image.repository "clusterSource" (($.Values.ngcConfig).clusterSource | default "ngc-managed"))) . -}}
 {{- end -}}
 {{- end -}}
 
