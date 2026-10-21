@@ -59,6 +59,11 @@ jobs:
           # commits must be rebased onto the complete default-branch history
           # before the resolver runs there.
           fetch-depth: 0
+          # No credential left in the git config. The steps below run
+          # repository code (go test, the resolver, the branch helper), and
+          # this repository is public, so their fetches need none. Only the
+          # push and pull request steps hold a token.
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -143,19 +148,15 @@ jobs:
             git --no-pager diff --stat -- deploy/stacks
           fi
 
-      - name: Open or refresh the pull request
+      - name: Commit the bump
+        id: commit
         if: steps.bump.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
           LEVEL: ${{ steps.bump.outputs.level }}
-          SERVER_URL: ${{ github.server_url }}
-          REPO: ${{ github.repository }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          branch="chore/stack-pin-bumps"
-
           git add deploy/stacks
           # The commit type carries the semver step of the chart release into
           # the stack release. Each stack under deploy/stacks is itself a
@@ -181,15 +182,52 @@ jobs:
               -m "${subject}" \
               -m "Opened by the stack pin bump workflow on release of ${TAG}."
           fi
-          git push --force-with-lease origin "${branch}"
 
           # The pull request squashes to one commit, so its title has to carry
           # the largest step among every pin accumulated on the branch.
           pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
-          case "${pr_type}" in
-            *!) title="${pr_type%!}(stack)!: bump stack chart pins"
+          echo "pr_type=${pr_type}" >> "${GITHUB_OUTPUT}"
+
+      - name: Push the bump branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: chore/stack-pin-bumps
+          # The repository secret, not github.token: GitHub starts no workflow
+          # for a push made with github.token, so the pull request's checks
+          # never ran on the bot's commits until a person pushed. github.token
+          # remains the fallback where the secret is absent, such as on a fork.
+          PUSH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+        # A step of its own that runs no repository code, so the steps that do
+        # never hold the token. The credential helper reads the token from
+        # this step's environment when git asks for it. It is not written to
+        # the git config, a remote URL, the command line, or the log. Hooks are
+        # off, so nothing an earlier step left in .git runs here.
+        run: |
+          set -euo pipefail
+          # Single quotes on purpose: the helper expands PUSH_TOKEN when git
+          # runs it, so the token never appears on this command line.
+          # shellcheck disable=SC2016
+          git -c core.hooksPath=/dev/null \
+            -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || return 0; printf "username=x-access-token\npassword=%s\n" "${PUSH_TOKEN}"; }; f' \
+            push --force-with-lease origin "${BRANCH}"
+
+      - name: Open or refresh the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PR_TYPE: ${{ steps.commit.outputs.pr_type }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch="chore/stack-pin-bumps"
+
+          case "${PR_TYPE}" in
+            *!) title="${PR_TYPE%!}(stack)!: bump stack chart pins"
                 breaking="BREAKING CHANGE: a pinned chart moved to a new major version." ;;
-            *)  title="${pr_type}(stack): bump stack chart pins"
+            *)  title="${PR_TYPE}(stack): bump stack chart pins"
                 breaking="" ;;
           esac
 
