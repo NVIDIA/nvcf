@@ -517,6 +517,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list": {
+			ExitCode: 0,
+			Stdout:   "Listing cluster groups...\nFound 1 cluster groups:\n\nID: test-cluster-group-id\n---\n",
+		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
 			Stderr:   "deployment failed: function deployment failed with status: ERROR\n",
