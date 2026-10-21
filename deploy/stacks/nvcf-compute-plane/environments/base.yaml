@@ -75,8 +75,9 @@ global:
     #       target: vmsingle.monitoring.svc.cluster.local:8428
     # BYOO OpenTelemetry Collector sidecar image, passed to the nvca-operator
     # chart as agent.byooOtelCollector. A byoo-otel-collector release bumps
-    # imageTag. Set imageRepository to pull the collector from a registry the
-    # cluster can reach; leave it unset to keep the chart default repository.
+    # imageTag. imageRepository defaults to
+    # ${global.image.registry}/${global.image.repository}/byoo-otel-collector.
+    # Set it only when the collector is published outside global.image.
     byooOtelCollector:
       # imageRepository: <registry>/<repository>/byoo-otel-collector
       imageTag: "0.160.0-nv-0.4.3"

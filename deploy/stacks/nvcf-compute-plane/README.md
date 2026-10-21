@@ -98,8 +98,10 @@ global:
 
 With `BYOObservability` on, NVCA adds a BYOO OpenTelemetry Collector sidecar
 to workloads that export telemetry. The stack pins its tag in
-`global.nvcaOperator.byooOtelCollector.imageTag`. Set `imageRepository` to pull
-it from a registry the cluster can reach:
+`global.nvcaOperator.byooOtelCollector.imageTag`. Its repository defaults to
+`${global.image.registry}/${global.image.repository}/byoo-otel-collector`, so
+mirror the collector with the other stack images. If the collector is
+published outside that global image path, set its repository explicitly:
 
 ```yaml
 global:

@@ -241,6 +241,7 @@ The following tables list the complete artifact inventory.
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
+| `byoo-otel-collector` | `0.160.0-nv-0.4.3` | `compute-plane` | Required | Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled. | `nvcr.io/nvidia/nvcf/byoo-otel-collector:0.160.0-nv-0.4.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `fluent-bit` | `3.2` | `compute-plane` | Optional | Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar. | `docker.io/fluent/fluent-bit:3.2` | [Upstream](https://github.com/fluent/fluent-bit) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
