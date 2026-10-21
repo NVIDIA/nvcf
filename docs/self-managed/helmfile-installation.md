@@ -1322,6 +1322,48 @@ kubectl --kubeconfig <gpu-cluster-kubeconfig> \
   --dry-run=client -o yaml | kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
 ```
 
+#### Enabling KAI Scheduler, Grove, and Dynamo
+
+The KAI Scheduler, Grove, and Dynamo compute-plane add-ons are disabled by
+default. Enable them in the same environment file when Helm functions use gang
+scheduling, multi-node Grove workloads, or Dynamo resources such as
+`DynamoGraphDeployment`:
+
+```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
+addons:
+  kaiScheduler:
+    enabled: true
+  groveOperator:
+    enabled: true
+  dynamoOperator:
+    enabled: true
+```
+
+Grove requires KAI Scheduler, and Dynamo requires Grove. Each add-on installs
+its component and allows its resource types in Helm functions. Without the
+add-ons, NVCF rejects those functions with an error such as
+`unsupported types: ["nvidia.com/v1alpha1.DynamoGraphDeployment"]`. When KAI
+Scheduler is enabled, NVCA assigns every NVCF workload Pod on the cluster to
+KAI, not only gang-scheduled workloads.
+
+To enable the add-ons on an installed GPU cluster, update the environment file
+and run the `apply` target with the values from Step 8:
+
+```bash
+make -C deploy/stacks/nvcf-compute-plane apply \
+  CLUSTER_NAME=<gpu-cluster-name> \
+  HELMFILE_ENV=<environment-name> \
+  NCA_ID=<nca-id> \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig>
+```
+
+See [Gang Scheduling](../compute-plane/cluster-management/gang-scheduling.md)
+for workload examples,
+[KAI Scheduler](../compute-plane/cluster-management/kai-scheduler.md) for
+queue configuration, and
+[Topology-Aware Scheduling](../compute-plane/cluster-management/topology-aware-scheduling.md)
+for NVLink clique placement.
+
 ### Step 8. Register and install each GPU cluster
 
 Register each GPU cluster before installing NVCA. Registration discovers the
