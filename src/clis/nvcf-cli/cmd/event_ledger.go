@@ -175,7 +175,7 @@ func runStagesEventsList(cmd *cobra.Command, _ []string) error {
 }
 
 func newEventLedgerClient() (*eventledger.Client, string, time.Duration, error) {
-	config, err := client.LoadConfig()
+	config, err := client.LoadConfigWithoutAuth()
 	if err != nil {
 		return nil, "", 0, fmt.Errorf(errFailedToLoadConfig, err)
 	}
