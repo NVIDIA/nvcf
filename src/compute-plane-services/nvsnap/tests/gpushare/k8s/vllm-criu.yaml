@@ -3,7 +3,7 @@
 # vLLM TP=2 pod that can be CRIU-dumped and restored into a NEW pod.
 # Used by tests/gpushare/k8s/vllm_criu_bench.sh; run criu-build.yaml on the
 # node first, and copy nvsnap-pull-secret into the namespace
-# (docs/PULL-SECRET-SETUP.md).
+# (docs/operate/PULL-SECRETS.md).
 #
 # vLLM runs with default settings — NCCL cuMem P2P and custom all-reduce
 # (CUDA IPC) between the TP workers — under LD_PRELOAD=libnvsnap_gpushare.so,

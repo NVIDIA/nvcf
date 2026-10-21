@@ -178,7 +178,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// reads its prewarm policy (on/off, reader count). nil = defaults.
 		StorageProfile: a.l2Profile,
 		// One-downloader election for chart pods; nil when off or L2 is
-		// off (docs/proposals/helm-chart-cache-election.md).
+		// off (docs/design/helm-chart-cache-election.md).
 		Elector: a.elector,
 		// Write-once model volume for Helm functions; nil when off.
 		ModelVolume:       a.modelVolume,

@@ -7,7 +7,7 @@
 # nvsnap.io/gpushare: "true" has the webhook preload libnvsnap_gpushare.so and
 # mount a per-pod chunk store; the agent then saves the GPU memory with
 # nvsnap-gpu-suspend and dumps the CPU side with plain CRIU (no CUDA plugin).
-# See docs/GPUSHARE.md. Not privileged, like a function pod: the container
+# See docs/design/GPUSHARE.md. Not privileged, like a function pod: the container
 # sees only its own GPUs. NCCL, gloo and vLLM use loopback so no socket
 # depends on the pod IP (the restore pod has another one).
 apiVersion: v1

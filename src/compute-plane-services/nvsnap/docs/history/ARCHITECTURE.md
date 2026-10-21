@@ -467,7 +467,7 @@ NvSnap's strategy:
    `cuda-checkpoint`'s restore and uses CRIU's CUDA plugin alone with
    our patched libraries handling NCCL communicator rebuild.
 
-See [`docs/architecture/QUIESCENCE-ARCHITECTURE.md`](architecture/QUIESCENCE-ARCHITECTURE.md)
+See [`docs/design/QUIESCENCE-ARCHITECTURE.md`](architecture/QUIESCENCE-ARCHITECTURE.md)
 for the detailed signal-handling layout, and
 [`docs/architecture/05-MULTI-PROCESS.md`](architecture/05-MULTI-PROCESS.md)
 for the multi-process coordination protocol.

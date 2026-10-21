@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Check nvsnap's documentation against itself: every relative link, heading
-# anchor and backticked doc path resolves, and every maintained doc's table of
-# contents matches its headings. Markdown style is markdown-lint.yml's job;
+# anchor and doc path resolves (in docs, code, scripts and the chart), and
+# every maintained doc's table of contents matches its headings. Markdown style is markdown-lint.yml's job;
 # this one catches what style cannot, a doc that points at something that
-# moved. Runs only when nvsnap's Markdown, the checkers or this workflow
-# change.
+# moved. Runs only when nvsnap or this workflow changes; it takes seconds.
 #
 # If this fails on your change, run the same check locally:
 #
@@ -21,8 +20,9 @@ on:
   push:
     branches: [main, 'release-**']
     paths: &paths
-      - 'src/compute-plane-services/nvsnap/**/*.md'
-      - 'src/compute-plane-services/nvsnap/scripts/docs/**'
+      # Code is included: a doc path named in a comment, script or chart
+      # must exist too, so moving a doc and changing code both can break it.
+      - 'src/compute-plane-services/nvsnap/**'
       - '.github/workflows/nvsnap-docs.yml'
   pull_request:
     branches: [main, 'release-**']

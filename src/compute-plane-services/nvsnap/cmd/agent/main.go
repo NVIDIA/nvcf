@@ -163,14 +163,14 @@ func main() {
 	// once the rox PVC binds; kubelet may stall in
 	// ContainerCreating in the meantime).
 	// One-downloader-per-hash admission election for chart-shaped model
-	// workloads (docs/proposals/helm-chart-cache-election.md). Needs L2.
+	// workloads (docs/design/helm-chart-cache-election.md). Needs L2.
 	flag.BoolVar(&config.Election.Enabled, "election", false,
 		"Elect one capture leader per cache hash at admission and gate the other model workers until the capture is promoted (needs L2)")
 	flag.DurationVar(&config.Election.Deadline, "election-deadline", 0,
 		"Bound on a leader's cold start plus capture; past it nvsnap-server evicts the gated followers for re-election (default 60m)")
 
 	// Write-once model volume for Helm functions
-	// (docs/proposals/helm-shared-model-volume.md). Needs L2.
+	// (docs/design/helm-shared-model-volume.md). Needs L2.
 	flag.BoolVar(&config.ModelVolume.Enabled, "model-volume", false,
 		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
 	flag.StringVar(&config.ModelVolume.HostRoot, "model-volume-host-root", "",

@@ -47,7 +47,7 @@ NvSnap's container images live at `nvcr.io/0651155215864979/ncp-dev/`. To pull t
 1. An NGC account at <https://ngc.nvidia.com>.
 2. An API key from **Setup → API Key → Generate**. Copy the key — NGC shows it only once.
 
-See [PULL-SECRET-SETUP.md](PULL-SECRET-SETUP.md) for the K8s side once you have the key.
+See [PULL-SECRET-SETUP.md](PULL-SECRETS.md) for the K8s side once you have the key.
 
 ### 3. Local tooling
 
@@ -116,7 +116,7 @@ kubectl create secret docker-registry nvsnap-pull-secret \
   --docker-password='<NGC_API_KEY>'
 ```
 
-The username is the literal string `$oauthtoken` (note the leading `$` and lowercase letters — that's the actual username NGC expects, not a placeholder). The password is the API key. See [PULL-SECRET-SETUP.md](PULL-SECRET-SETUP.md) for rotation + mirroring.
+The username is the literal string `$oauthtoken` (note the leading `$` and lowercase letters — that's the actual username NGC expects, not a placeholder). The password is the API key. See [PULL-SECRET-SETUP.md](PULL-SECRETS.md) for rotation + mirroring.
 
 ### Step 3: (Optional) cert-manager
 
@@ -152,7 +152,7 @@ helm install nvsnap deploy/helm/nvsnap --namespace nvsnap-system \
   --set blobstore.persistence.storageClassName=my-sc
 ```
 
-See [deploy/helm/nvsnap/README.md](../deploy/helm/nvsnap/README.md) for the full values reference.
+See [deploy/helm/nvsnap/README.md](../../deploy/helm/nvsnap/README.md) for the full values reference.
 
 ### Step 5: Verify
 

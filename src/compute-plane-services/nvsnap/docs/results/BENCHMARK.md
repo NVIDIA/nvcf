@@ -47,7 +47,7 @@ phase 13.5 s to 3.8 s (-72%); B cut the cuda_plugin GPU restore phase by one
 cuInit per pid (~2.7 s x 2 pids). Both are best-effort and correctness-neutral:
 A is a no-op on a non-THP node, B issues the same driver operations in the same
 order. 5/5 single-GPU e2e PASS on the A+B build. Design:
-`docs/proposals/single-gpu-restore-speedup.md`.
+`docs/design/single-gpu-restore-speedup.md`.
 
 ## Warm cache restore (cachedir), June 2026
 
@@ -74,7 +74,7 @@ recompiling.
 The first three rows are from an EKS cluster with NVMesh storage
 (2026-09-25), not the June GKE run. The two Qwen rows are two-replica Helm
 chart deployments through the admission election
-(`docs/proposals/helm-chart-cache-election.md`): their first deploy pays one
+(`docs/design/helm-chart-cache-election.md`): their first deploy pays one
 cold leader plus capture, and every later start of the chart is the restore
 number.
 Phase split for Qwen3-235B, cold to warm: model download and load 641 s to

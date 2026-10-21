@@ -10,7 +10,7 @@ Two entry points:
 | Script | Answers | Writes |
 |---|---|---|
 | `test-e2e.sh <workload>` | does capture/restore work for this workload | pass/fail + step timings to stdout |
-| `test-bench.sh <workload>` | how long does cold vs warm vs restore take | a row in `docs/PDF-BENCH-RESULTS.md` |
+| `test-bench.sh <workload>` | how long does cold vs warm vs restore take | a row in `docs/results/PDF-BENCH-RESULTS.md` |
 
 Use `test-e2e.sh` to check correctness, `test-bench.sh` to produce numbers.
 

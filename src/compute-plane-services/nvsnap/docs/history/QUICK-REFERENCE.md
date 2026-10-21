@@ -37,8 +37,8 @@
 
 | Document | Purpose |
 |----------|---------|
-| [ARCHITECTURE.md](archive/ARCHITECTURE.md) | Complete system architecture and implementation plan |
-| [VLLM-DEEP-DIVE.md](architecture/VLLM-DEEP-DIVE.md) | Technical deep dive on vLLM challenges |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Complete system architecture and implementation plan |
+| [VLLM-DEEP-DIVE.md](VLLM-DEEP-DIVE.md) | Technical deep dive on vLLM challenges |
 
 ---
 
@@ -226,5 +226,5 @@ make deploy-dev
 
 ## Resources
 
-- **Docs**: the [`docs/`](.) directory and the top-level [README](../README.md)
+- **Docs**: the [`docs/`](../design) directory and the top-level [README](../../README.md)
 - **Issues**: the project issue tracker

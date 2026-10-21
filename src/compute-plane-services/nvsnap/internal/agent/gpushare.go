@@ -24,7 +24,7 @@ package agent
 // releases the shared memory to chunk files and checkpoints the driver state
 // of every process; CRIU then dumps the CPU side only, without the CUDA
 // plugin. Restore runs CRIU, then nvsnap-gpu-suspend resume. See
-// docs/GPUSHARE.md.
+// docs/design/GPUSHARE.md.
 
 import (
 	"bufio"

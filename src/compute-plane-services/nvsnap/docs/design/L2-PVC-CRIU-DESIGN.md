@@ -7,8 +7,8 @@ promoted to shared volumes. References to nvsnap-blobstore are historical.
 > **Status:** The per-capture PVC fan-out described here is current and
 > shipping. This document is framed around the CRIU dump path; the same L2
 > mechanism now also serves the rootfs/cachedir capture paths (the primary
-> paths today). See [ROOTFS-EVERYWHERE](design/ROOTFS-EVERYWHERE.md) and
-> [STORAGE-AGNOSTIC-L2-PROMOTION](design/STORAGE-AGNOSTIC-L2-PROMOTION.md).
+> paths today). See [ROOTFS-EVERYWHERE](ROOTFS-EVERYWHERE.md) and
+> [STORAGE-AGNOSTIC-L2-PROMOTION](STORAGE-AGNOSTIC-L2-PROMOTION.md).
 
 **Issue**: nvsnap#63 · **Last updated**: 2026-05-31
 

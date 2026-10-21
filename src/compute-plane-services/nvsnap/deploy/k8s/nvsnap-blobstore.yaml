@@ -4,7 +4,7 @@
 # nvsnap-blobstore — Phase 5d.2 durable backstop for cross-node restore.
 #
 # Custom HTTP content-addressed blob store. NOT MinIO/S3-compat;
-# protocol is documented in docs/archive/PHASE5D-PEER-FANOUT-BLOB-STORE.md
+# protocol is documented in docs/history/PHASE5D-PEER-FANOUT-BLOB-STORE.md
 # and implemented in internal/blobstore/. Single replica is fine for
 # v1 — when the blob store is unreachable, peers still serve hot
 # captures, only cold-tier fanout breaks.

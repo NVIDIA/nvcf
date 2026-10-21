@@ -443,7 +443,7 @@ func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, 
 	// capture), so a non-root image user cannot even stat them; cp -a keeps
 	// that ownership and the chmod opens the per-pod scratch copy to whatever
 	// UID the engine runs as. Whether the sweep runs is a property of the
-	// volume (70B A/B in docs/BENCHMARK.md): the storage profile decides, and
+	// volume (70B A/B in docs/results/BENCHMARK.md): the storage profile decides, and
 	// the pod's own NVSNAP_PREWARM=0/1 wins.
 	rox := volumeAt{Volume: cacheDirVolumeName, Path: cacheSeedSrcPath}
 	inits := []corev1.Container{seedStep("nvsnap-seed-cache", &main, rox, "cache", volumeAt{Volume: cacheRWVolumeName, Path: cacheSeedDstPath}, "", "restore cache", rootPosture, false)}

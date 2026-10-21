@@ -38,7 +38,7 @@ import (
 //   - sweepStep reads the volume into the node's page cache with parallel
 //     byte-range readers before the engine starts, because the engine's own
 //     loader reads from one thread and a single stream over a network block
-//     device is latency-bound (docs/BENCHMARK.md, "Page-cache prewarm").
+//     device is latency-bound (docs/results/BENCHMARK.md, "Page-cache prewarm").
 //   - seedStep copies one directory of the volume into the pod's writable
 //     cache, because the engine must be able to write its cache and the
 //     volume is shared.
@@ -152,7 +152,7 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 		Name:  name,
 		Image: main.Image,
 		// The index of seeded paths lets the agent tell what the engine
-		// adds later (docs/proposals/helm-chart-cache-refresh.md).
+		// adds later (docs/design/helm-chart-cache-refresh.md).
 		Command: []string{HelperBin, "seed", "--from", from, "--to", to, "--label", label, "--index", SeedIndexFile},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: src.Volume, MountPath: src.Path, ReadOnly: true},

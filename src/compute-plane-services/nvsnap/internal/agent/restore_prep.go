@@ -17,7 +17,7 @@ limitations under the License.
 
 // restore_prep.go implements the async overlay-prep
 // job manager that backs the nvsnap-mount-prep init container
-// (docs/proposals/init-container-mount-prep.md, nvsnap#202).
+// (docs/design/init-container-mount-prep.md, nvsnap#202).
 //
 // Architectural note: the webhook used to call OverlayPreparer.PrepareOverlay
 // SYNCHRONOUSLY during K8s admission, which forced hundreds of

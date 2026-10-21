@@ -249,7 +249,7 @@ ConfigMap; the ConfigMap exists for new/3rd-party backends and overrides.
 
 Two optional keys tune the cachedir restore's page-cache prewarm per storage
 class, because whether the parallel read-ahead helps depends on the volume,
-not the model (see the 70B A/B in `docs/BENCHMARK.md`):
+not the model (see the 70B A/B in `docs/results/BENCHMARK.md`):
 
 - `prewarm` (default `true`): add the `nvsnap-prewarm` init container that
   reads the whole rox tree before the engine starts. Set `false` where a

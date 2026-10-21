@@ -420,10 +420,10 @@ Blobs are content-addressed (SHA-256) so corruption is detectable. Open: ack-on-
 
 ## Related documents
 
-- `docs/archive/spikes/SPIKE-RESULTS.md` — Spike 1–4 measurements that drive the design
-- `docs/archive/spikes/SCALE-OUT-DESIGN.md` — the 200-pod cold-cluster scenario
-- `docs/archive/spikes/WORKLOAD-ROADMAP.md` — overall two-track optimization strategy
-- `docs/archive/spikes/EROFS-VALIDATION.md` — EROFS as an artifact format; not shipping but revisit triggers captured
+- `docs/history/spikes/SPIKE-RESULTS.md` — Spike 1–4 measurements that drive the design
+- `docs/history/spikes/SCALE-OUT-DESIGN.md` — the 200-pod cold-cluster scenario
+- `docs/history/spikes/WORKLOAD-ROADMAP.md` — overall two-track optimization strategy
+- `docs/history/spikes/EROFS-VALIDATION.md` — EROFS as an artifact format; not shipping but revisit triggers captured
 - `internal/checkpointstore/mounter.go` — the `Backend` interface that anticipates S3/GCS implementations
 - `internal/agent/cascade_fetch.go` — the L1 cascade implementation being upgraded
 

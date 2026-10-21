@@ -183,7 +183,7 @@ pod, no sharing.
 ## Acceptance
 
 - gpt-oss-120b TP=4 PDF bench: restore succeeds, post-restore
-  inference probe returns 200, recorded in docs/PDF-BENCH-RESULTS.md.
+  inference probe returns 200, recorded in docs/results/PDF-BENCH-RESULTS.md.
 - vllm-small + e5-mistral CRIU path benches: no regression
   (single-GPU CRIU path is unaffected).
 - vllm-70b TP=4 rootfs bench: no regression (the OverlayFS path

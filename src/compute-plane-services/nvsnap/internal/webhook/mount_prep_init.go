@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // mount_prep_init.go — emits the nvsnap-mount-prep init container patch.
-// See docs/proposals/init-container-mount-prep.md.
+// See docs/design/init-container-mount-prep.md.
 
 package webhook
 

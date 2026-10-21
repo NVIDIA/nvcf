@@ -215,7 +215,7 @@ type ObjectStoreConfig struct {
 }
 
 // ElectionConfig configures the admission election
-// (docs/proposals/helm-chart-cache-election.md).
+// (docs/design/helm-chart-cache-election.md).
 type ElectionConfig struct {
 	// Enabled turns the election on. Default off until qualified.
 	Enabled bool
@@ -225,7 +225,7 @@ type ElectionConfig struct {
 	Deadline time.Duration
 }
 
-// ModelVolumeConfig configures docs/proposals/helm-shared-model-volume.md.
+// ModelVolumeConfig configures docs/design/helm-shared-model-volume.md.
 type ModelVolumeConfig struct {
 	// Enabled turns the write-once model volume on. Needs L2 and a storage
 	// profile that resolves a mode (block on NVMesh, rwx when declared).
@@ -239,7 +239,7 @@ type ModelVolumeConfig struct {
 	HostRoot string
 	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
 	// least time between generations of one set (zero: 6 hours).
-	// docs/proposals/helm-chart-cache-refresh.md.
+	// docs/design/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
 	// ReapInterval is how often the reaper removes read-only model PVs
@@ -251,7 +251,7 @@ type ModelVolumeConfig struct {
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
-// docs/L2-PVC-CRIU-DESIGN.md.
+// docs/design/L2-PVC-CRIU-DESIGN.md.
 type L2BackendConfig struct {
 	// StorageClass is the RWX-capable StorageClass name. Required
 	// to enable L2 — empty disables. On GKE production we set this
@@ -724,7 +724,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.startGPUShareStoreReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
-		// this node (docs/proposals/helm-shared-model-volume.md).
+		// this node (docs/design/helm-shared-model-volume.md).
 		mvc := &ModelVolumeController{
 			Kube:              a.kubeClient,
 			Provisioner:       a.modelVolume,

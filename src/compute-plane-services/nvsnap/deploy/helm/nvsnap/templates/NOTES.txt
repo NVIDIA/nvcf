@@ -39,6 +39,6 @@ Next steps:
 
 Pull-secret reminder: every namespace running NvSnap-managed pods needs
 the nvsnap-pull-secret (or whatever you configured in
-.Values.nvsnap.imagePullSecrets). See docs/PULL-SECRET-SETUP.md.
+.Values.nvsnap.imagePullSecrets). See docs/operate/PULL-SECRETS.md.
 
 Documentation: https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap

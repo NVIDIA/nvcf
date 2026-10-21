@@ -281,7 +281,7 @@ on top of it:
 | `captureMethod: criu` | CRIU + cuda-checkpoint; no cachedir machinery runs | same; `internal/agent/criu_auto_restore.go` `criuIsDefault` |
 | Riva or Triton backend | always rootfs; an explicit `criu` request is an error (cuda-checkpoint cannot serialize their host-pinned memory) | `internal/agent/nim_backend.go` `BackendKind.UseRootfsCapture` |
 | more than one distinct GPU, gpushare not loaded | CRIU capture is refused | `internal/agent/checkpoint.go` `countDistinctGPUDevices`, `gpushareLoadedBy` |
-| more than one distinct GPU under gpushare | CRIU + gpushare (validated on GB300, arm64; see [GPUSHARE.md](../GPUSHARE.md#validation)) | `internal/agent/gpushare.go` |
+| more than one distinct GPU under gpushare | CRIU + gpushare (validated on GB300, arm64; see [GPUSHARE.md](../design/GPUSHARE.md#validation)) | `internal/agent/gpushare.go` |
 | multi-pod instance (StatefulSet, LeaderWorkerSet, Grove group) | captured and restored as one group, only when opted in | `internal/agent/criu_group.go` `captureOptedIn` |
 
 The agent has no architecture gate: arm64 and x86 follow the same rules.
@@ -307,4 +307,4 @@ recompiling — the bulk of the warm-restore win on compile-heavy models.
 
 - Storage-agnostic L2 design: `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`
 - NVCA × NvSnap integration: see the NVCA integration guide (separate, optional component for NVIDIA Cloud Functions deployments)
-- How the capture method is chosen: §7 above; multi-GPU CRIU: `docs/GPUSHARE.md`
+- How the capture method is chosen: §7 above; multi-GPU CRIU: `docs/design/GPUSHARE.md`

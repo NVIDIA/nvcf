@@ -17,7 +17,7 @@ limitations under the License.
 
 // Package rootfsonly is the capture orchestrator for the rootfs-only
 // multi-GPU restore path (Phase 1 of the rootfs design — see
-// docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md). It snapshots a running pod's
+// docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md). It snapshots a running pod's
 // overlay upperdir + classified user-data volumes and writes them to a
 // checkpointstore.Backend.
 //

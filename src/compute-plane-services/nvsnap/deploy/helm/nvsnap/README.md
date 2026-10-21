@@ -6,7 +6,7 @@ GPU checkpoint/restore for Kubernetes. Deploys the nvsnap-agent DaemonSet on GPU
 
 - Kubernetes 1.25+
 - GPU nodes labeled `nvidia.com/gpu.present=true` (NVIDIA GPU operator sets this; GKE GPU node pools too)
-- A pull secret named `nvsnap-pull-secret` in the install namespace, authorized for `nvcr.io/0651155215864979/ncp-dev/*`. See [docs/PULL-SECRET-SETUP.md](../../../docs/PULL-SECRET-SETUP.md) for setup.
+- A pull secret named `nvsnap-pull-secret` in the install namespace, authorized for `nvcr.io/0651155215864979/ncp-dev/*`. See [docs/operate/PULL-SECRETS.md](../../../docs/operate/PULL-SECRETS.md) for setup.
 - cert-manager: only if you keep `webhook.enabled=true` (default). The chart's webhook block creates a self-signed Issuer + Certificate; cert-manager reconciles them into the TLS Secret the agent mounts.
 
 ## Install

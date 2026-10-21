@@ -18,7 +18,7 @@ limitations under the License.
 // Package webhook implements the customer-facing surface for transparent
 // rootfs-only restore: a mutating admission webhook that injects cache
 // volumes + mounts into pods marked with the nvsnap.io/restore-from
-// annotation. See docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.5.
+// annotation. See docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.5.
 //
 // This file is the pure-logic Mutator (pod in → JSON Patch ops out). The
 // HTTPS / cert / AdmissionReview transport layer lives separately so the
@@ -314,7 +314,7 @@ type Mutator struct {
 	ArchScope election.ArchScope
 
 	// ModelVolume, when set, turns on the write-once model volume for
-	// Helm-function pods (docs/proposals/helm-shared-model-volume.md):
+	// Helm-function pods (docs/design/helm-shared-model-volume.md):
 	// the download lands in a per-identity shared volume, one writer,
 	// readers wait for the completion marker. Takes precedence over the
 	// gate-and-promote election above. Groups resolves identity for

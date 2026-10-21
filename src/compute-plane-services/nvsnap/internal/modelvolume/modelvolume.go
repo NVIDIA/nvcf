@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Package modelvolume owns the per-identity model volume of
-// docs/proposals/helm-shared-model-volume.md: one volume per model URI per
+// docs/design/helm-shared-model-volume.md: one volume per model URI per
 // cluster, written once, immutable afterwards, read by every other pod.
 //
 // One lifecycle, whatever the storage. The primary claim lives in the
@@ -127,7 +127,7 @@ const (
 	// CacheRankDeltaAnnotation marks a warm rank whose cachedir holds
 	// files the seeded set did not have; the bytes and a fingerprint of
 	// the new paths ride along. Any such rank proposes a set refresh
-	// (docs/proposals/helm-chart-cache-refresh.md).
+	// (docs/design/helm-chart-cache-refresh.md).
 	CacheRankDeltaAnnotation            = "nvsnap.io/cache-rank-delta"
 	CacheRankDeltaBytesAnnotation       = "nvsnap.io/cache-rank-delta-bytes"
 	CacheRankDeltaFingerprintAnnotation = "nvsnap.io/cache-rank-delta-fingerprint"

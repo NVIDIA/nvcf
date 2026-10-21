@@ -237,7 +237,7 @@ These are open questions before adopting any of these paths.
 
 - `docs/CROSS-CLUSTER-REPLICATION-DESIGN.md` — the broader replication
   architecture this feeds into.
-- `docs/archive/PHASE5C-EROFS-COMPACTION.md` — original EROFS proposal
+- `docs/history/PHASE5C-EROFS-COMPACTION.md` — original EROFS proposal
   (never implemented; risks called out here are now resolved by
   today's test).
 - `internal/agent/blob_uploader.go` — current per-file PUT path.

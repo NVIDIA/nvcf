@@ -65,7 +65,7 @@ docker login nvcr.io
   Password: <NGC API key>
 ```
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the developer setup including push.
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the developer setup including push.
 
 ## Mirroring the secret across namespaces
 

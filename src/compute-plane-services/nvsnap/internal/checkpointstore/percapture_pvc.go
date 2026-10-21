@@ -40,7 +40,7 @@ limitations under the License.
 // the caller (agent CRIU path) treats L2 promote as best-effort with
 // a fall-through to L3/L4 — see internal/agent/checkpoint.go.
 //
-// Design: docs/L2-PVC-CRIU-DESIGN.md.
+// Design: docs/design/L2-PVC-CRIU-DESIGN.md.
 
 package checkpointstore
 

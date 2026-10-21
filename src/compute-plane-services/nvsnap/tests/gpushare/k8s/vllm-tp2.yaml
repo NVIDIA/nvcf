@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # vLLM TP=2 pod for validating nvsnap-gpu-suspend on a real workload.
 #   kubectl create ns nvsnap-gpushare
-#   (copy nvsnap-pull-secret into it: docs/PULL-SECRET-SETUP.md)
+#   (copy nvsnap-pull-secret into it: docs/operate/PULL-SECRETS.md)
 #   kubectl apply -n nvsnap-gpushare -f tests/gpushare/k8s/vllm-tp2.yaml
 #   tests/gpushare/k8s/vllm_ckpt_cycle.sh nvsnap-gpushare vllm-tp2
 #

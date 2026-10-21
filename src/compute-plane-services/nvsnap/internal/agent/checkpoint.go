@@ -380,7 +380,7 @@ type CheckpointMetadata struct {
 	// Cross-pod mount replay (v1.7+): list of mountpoints whose contents
 	// were tarred at checkpoint into <ckpt>/mounts/<sanitized>.tar and
 	// must be untarred into the placeholder pod's mntns at the same path
-	// before CRIU restore. See docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+	// before CRIU restore. See docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 	ReplayMounts []ReplayMount `json:"replayMounts,omitempty"`
 
 	// Compression info (v1.5+): set when checkpoint uses transparent compression
@@ -412,7 +412,7 @@ type CheckpointMetadata struct {
 // ReplayMount records a single mountpoint whose contents were captured
 // at checkpoint time and must be replayed into the placeholder pod's
 // mount namespace before CRIU restore. Captured by tarMount; replayed
-// by untarIntoMntns. See docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+// by untarIntoMntns. See docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 type ReplayMount struct {
 	// Path is the mountpoint inside the source container, e.g. "/dev/shm".
 	Path string `json:"path"`
@@ -698,7 +698,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// untarIntoMntns can replay them into the placeholder pod's mntns
 	// before CRIU restore. Required for multi-GPU NCCL/PSM workloads whose
 	// inter-rank SHM segments only exist in the source pod's tmpfs.
-	// See docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+	// See docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 	//
 	// Timing: the dump takes them from criu's post-dump hook, the tree
 	// stopped, so they match the dumped memory (dump_snapshot.go). Per-mount

@@ -18,7 +18,7 @@ import (
 )
 
 // Compile-cache volume for Helm functions on block storage (mechanism 5 of
-// docs/proposals/helm-shared-model-volume.md). Each pod compiles into its
+// docs/design/helm-shared-model-volume.md). Each pod compiles into its
 // local cachedir emptyDir; the first pod of a given engine configuration
 // and ordinal that becomes Ready has its cache subtree captured by the
 // agent on its node into a sized read-only volume (the model-volume
@@ -178,7 +178,7 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(ordinal))...)
 		// The same group identity a capture pod carries, so a warm rank can
 		// be measured, listed and streamed by the agents when the set is
-		// refreshed (docs/proposals/helm-chart-cache-refresh.md).
+		// refreshed (docs/design/helm-chart-cache-refresh.md).
 		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
 		patches = append(patches, mp.annotation(modelvolume.CacheGroupSizeAnnotation, strconv.Itoa(m.groupSize(ctx, pod)))...)
 		patches = append(patches, mp.annotation(modelvolume.CacheSeedGenerationAnnotation, strconv.Itoa(st.Generation))...)

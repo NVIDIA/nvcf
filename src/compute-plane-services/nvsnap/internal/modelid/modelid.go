@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Package modelid answers, for any GPU pod at admission, the first two of
-// the four questions in docs/proposals/helm-shared-model-volume.md:
+// the four questions in docs/design/helm-shared-model-volume.md:
 //
 //   - Identity: which model artifact will this pod download, as a URI
 //     (hf://org/repo[@rev], ngc://org/team/model:ver, s3://bucket/path,

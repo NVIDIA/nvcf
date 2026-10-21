@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // restore_prep_http.go — HTTP handlers for the nvsnap-mount-prep init
-// container. See docs/proposals/init-container-mount-prep.md.
+// container. See docs/design/init-container-mount-prep.md.
 
 package agent
 

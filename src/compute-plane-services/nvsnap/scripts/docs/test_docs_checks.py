@@ -72,6 +72,14 @@ class LinkCheckTest(unittest.TestCase):
             "docs/A.md: no heading #missing in docs/A.md",
         ]))
 
+    def test_doc_paths_named_in_code_must_exist(self):
+        root = self.repo({
+            "docs/A.md": "# A\n",
+            "internal/x.go": "// See docs/A.md and docs/MOVED.md.\npackage x\n",
+            "deploy/notes.txt": "history: docs/history/OLD.md\n",
+        })
+        self.assertEqual(links.check(root)[1], ["internal/x.go: names docs/MOVED.md, which does not exist"])
+
     def test_fences_and_frozen_docs_are_skipped(self):
         root = self.repo({
             "README.md": "# R\n\n```text\n[x](nowhere.md)\n```\n",

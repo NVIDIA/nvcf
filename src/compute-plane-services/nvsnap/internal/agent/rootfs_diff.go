@@ -211,7 +211,7 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 
 // tarMount captures the contents of a single mountpoint inside a source
 // container's view into a tar file. Used by cross-pod mount replay
-// (docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md) for replay-class mounts whose
+// (docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md) for replay-class mounts whose
 // contents the placeholder pod cannot reproduce on its own (e.g.
 // /dev/shm/psm_* NCCL segments for multi-GPU).
 //

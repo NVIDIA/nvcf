@@ -447,7 +447,7 @@ vLLM can run in several configurations:
 > (which is what the NCCL interception below would support) is blocked upstream
 > on a `libcudart` per-process GPU-state replay limitation. The shipping
 > multi-GPU path is rootfs cache-distribution (see the README and
-> `docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md`). The code below is a design sketch,
+> `docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md`). The code below is a design sketch,
 > not a description of `lib/nvsnap_intercept/`.
 
 ```c

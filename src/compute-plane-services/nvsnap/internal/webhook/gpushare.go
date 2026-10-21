@@ -28,7 +28,7 @@ import (
 // gpushare: pods annotated nvsnap.io/gpushare=true run their GPU containers
 // under libnvsnap_gpushare.so, so the agent can checkpoint processes that
 // share GPU memory (NCCL P2P and NVLS, CUDA IPC). The library must be loaded
-// from process start, which only admission can arrange. See docs/GPUSHARE.md
+// from process start, which only admission can arrange. See docs/design/GPUSHARE.md
 // and internal/agent/gpushare.go.
 const (
 	// GPUShareAnnotation opts a pod in.

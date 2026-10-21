@@ -9,8 +9,11 @@ External URLs, ``mailto:`` and pure anchors are skipped; a ``#fragment`` is
 checked against the target's headings when the target is Markdown (a pure
 ``#fragment`` against the file's own). A doc path written as text
 (``docs/X.md`` in backticks or as link text) must exist too, under the nvsnap
-root or the repository root. ``docs/history/`` and ``docs/results/`` are
-records of how things were and are not maintained, so they are not checked.
+root or the repository root, and so must one named in a comment or string
+of code, a script or a chart (``CODE_DOC_PATH``), so moving a doc cannot
+strand the code that points readers at it. ``docs/history/`` and
+``docs/results/`` are records of how things were and are not maintained, so
+they are not checked.
 
 Usage: ``scripts/docs/check-doc-links.py [nvsnap-root]`` (default: the
 nvsnap directory this script lives in).
@@ -29,8 +32,10 @@ LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 IMG = re.compile(r"<img[^>]*\ssrc=\"([^\"]+)\"")
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$", re.M)
 DOC_PATH_TEXT = re.compile(r"(?:`|\[)(docs/[A-Za-z0-9_][A-Za-z0-9_./-]*\.md)(?:`|\])")
+CODE_DOC_PATH = re.compile(r"(?<![\w/.-])(docs/[A-Za-z0-9_][A-Za-z0-9_./-]*\.md)")
+CODE_SUFFIXES = (".go", ".sh", ".py", ".yaml", ".yml", ".txt", ".tpl", ".c", ".h", "Makefile", "Dockerfile")
 SKIP = ("http://", "https://", "mailto:", "file://", "ssh://", "git@")
-FROZEN = ("docs/history/", "docs/results/", "docs/archive/")
+FROZEN = ("docs/history/", "docs/results/")
 
 
 def tracked_markdown(root: pathlib.Path) -> list[pathlib.Path]:
@@ -40,6 +45,15 @@ def tracked_markdown(root: pathlib.Path) -> list[pathlib.Path]:
     ).stdout
     # ui/node_modules ships third-party Markdown that is not ours to check.
     return sorted({root / p for p in out.splitlines() if p and "node_modules/" not in p})
+
+
+def tracked_code(root: pathlib.Path) -> list[pathlib.Path]:
+    out = subprocess.run(["git", "-C", str(root), "ls-files"],
+                         check=True, capture_output=True, text=True).stdout
+    # The checkers and their tests name example docs that do not exist.
+    return sorted(root / p for p in out.splitlines()
+                  if p.endswith(CODE_SUFFIXES) and "node_modules/" not in p
+                  and not p.startswith("scripts/docs/"))
 
 
 def repo_root(root: pathlib.Path) -> pathlib.Path:
@@ -116,6 +130,14 @@ def check(root: pathlib.Path) -> tuple[int, list[str]]:
         for written in DOC_PATH_TEXT.findall(text):
             if not (root / written).exists() and not (top / written).exists():
                 problems.append(f"{rel}: names {written}, which does not exist")
+    for code in tracked_code(root):
+        try:
+            text = code.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for written in sorted(set(CODE_DOC_PATH.findall(text))):
+            if not str(written).startswith(FROZEN) and not (root / written).exists() and not (top / written).exists():
+                problems.append(f"{code.relative_to(root)}: names {written}, which does not exist")
     return checked, problems
 
 

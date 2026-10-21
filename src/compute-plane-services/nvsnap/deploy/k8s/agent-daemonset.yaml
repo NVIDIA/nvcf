@@ -121,7 +121,7 @@ spec:
             # Rootfs-only multi-GPU capture loop. Local backend post-5d:
             # captures land at --rootfs-cache-dir on this node; cross-node
             # fanout goes through nvsnap-server's peer catalog +
-            # nvsnap-blobstore (see docs/archive/PHASE5D-PEER-FANOUT-BLOB-STORE.md).
+            # nvsnap-blobstore (see docs/history/PHASE5D-PEER-FANOUT-BLOB-STORE.md).
             - --rootfs-capture
             - --rootfs-cache-dir=/var/lib/nvsnap/cache
             - --rootfs-cm-namespace=nvsnap-system

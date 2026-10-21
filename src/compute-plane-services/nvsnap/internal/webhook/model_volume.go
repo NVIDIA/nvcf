@@ -18,7 +18,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
-// Model volume decoration (docs/proposals/helm-shared-model-volume.md).
+// Model volume decoration (docs/design/helm-shared-model-volume.md).
 // For a pod that will download a model, the webhook turns the download
 // into a write-once step: one download Job per identity fills the primary
 // volume, every pod of that identity is a reader that references a

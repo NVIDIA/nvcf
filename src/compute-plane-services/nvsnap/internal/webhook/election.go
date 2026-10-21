@@ -18,7 +18,7 @@ import (
 )
 
 // electionPatches is the admission decision for a model workload that
-// carries no explicit restore-from (docs/proposals/helm-chart-cache-election.md):
+// carries no explicit restore-from (docs/design/helm-chart-cache-election.md):
 //
 //   - a promoted cachedir capture exists for the composed hash: restore.
 //   - otherwise elect. The leader gets the capture decoration and the

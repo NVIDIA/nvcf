@@ -598,7 +598,7 @@ func (p *SharedVolumePromoter) deleteNamespacedClaims(ctx context.Context, hash 
 
 // MintReadOnly exposes the write-once model volume (a writer claim that
 // has finished downloading) as a read-only claim in ns, for
-// docs/proposals/helm-shared-model-volume.md on block storage. Same
+// docs/design/helm-shared-model-volume.md on block storage. Same
 // mechanics as the promote: the primary PV is kept (Retain), a secondary
 // static PV with the namespace-rewritten handle is pre-bound to roClaim
 // in ns. Unlike the promote the writer claim is kept: the writer pod is

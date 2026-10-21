@@ -21,7 +21,7 @@ if [ -z "$builder" ] || [ -z "$cuda" ]; then
     echo "check-gpushare-build: no 'AS gpushare-builder' or 'AS cuda-headers' stage in Dockerfile.base" >&2
     exit 1
 fi
-# Workload images must provide this glibc or newer (docs/GPUSHARE.md).
+# Workload images must provide this glibc or newer (docs/design/GPUSHARE.md).
 max_glibc="${MAX_GLIBC:-2.17}"
 
 for platform in ${PLATFORMS:-linux/amd64 linux/arm64}; do

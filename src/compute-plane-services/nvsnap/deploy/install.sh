@@ -18,7 +18,7 @@
 #     (no separate pod). Requires cert-manager pre-installed.
 #
 # The nvsnap-pull-secret for nvcr.io/0651155215864979/ncp-dev/* must already
-# exist in nvsnap-system before running this. See docs/PULL-SECRET-SETUP.md
+# exist in nvsnap-system before running this. See docs/operate/PULL-SECRETS.md
 # for the full walkthrough (NGC API key + per-namespace secret + rotation).
 #
 # Variants:
@@ -80,7 +80,7 @@ echo "[3/7] Checking image pull secret..."
 if ! kubectl get secret -n $NAMESPACE nvsnap-pull-secret >/dev/null 2>&1; then
     echo "  WARN: nvsnap-pull-secret missing in $NAMESPACE."
     echo "        Agents and server will ImagePullBackOff until this is created."
-    echo "        See docs/PULL-SECRET-SETUP.md for the setup walkthrough."
+    echo "        See docs/operate/PULL-SECRETS.md for the setup walkthrough."
 else
     echo "  OK pull secret present"
 fi

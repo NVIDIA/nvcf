@@ -26,7 +26,7 @@ import (
 )
 
 // MountClass categorizes how a source-pod mount is handled by the cross-pod
-// restore mechanism. See docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+// restore mechanism. See docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 type MountClass int
 
 const (

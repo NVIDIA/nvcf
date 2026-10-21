@@ -90,7 +90,7 @@ type StorageProfile struct {
 	// about 12 min per pod for nothing). Empty means DefaultPrewarmMaxBytes.
 	PrewarmMaxBytes string `json:"prewarmMaxBytes,omitempty"`
 	// ModelVolume configures the write-once model volume for Helm
-	// functions (docs/proposals/helm-shared-model-volume.md). One
+	// functions (docs/design/helm-shared-model-volume.md). One
 	// lifecycle on every storage: primary in the nvsnap namespace, views
 	// per reader namespace, local compile caches shared through a cache
 	// set. Mode "block" is the default for shared-volume strategies

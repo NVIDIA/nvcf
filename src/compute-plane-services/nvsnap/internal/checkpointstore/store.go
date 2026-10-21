@@ -23,7 +23,7 @@ limitations under the License.
 // to the store, every other pod reads from the store.
 //
 // Phase 1 ships Local (file-tree on a node-local NVMe path) and GCS
-// backends. See docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.
+// backends. See docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.
 package checkpointstore
 
 import (
@@ -77,7 +77,7 @@ const (
 	// filtering. Used by the PerCapturePVCBackend to promote a
 	// just-finished CRIU dump into the per-capture RWX PVC so multi-
 	// node restore can mount it ReadOnly in parallel (see
-	// docs/L2-PVC-CRIU-DESIGN.md).
+	// docs/design/L2-PVC-CRIU-DESIGN.md).
 	SourceKindCRIU SourceKind = "criu"
 )
 

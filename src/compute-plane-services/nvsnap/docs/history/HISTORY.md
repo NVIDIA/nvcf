@@ -9,12 +9,12 @@ rather than excavated.
 **Canonical current-state docs live in `docs/`**, not here:
 
 - `docs/architecture/NVSNAP-ARCHITECTURE.md` — current system architecture
-- `docs/architecture/04-RUNTIME-AGNOSTIC.md` — `/proc`+cgroup discovery mechanics (still as-built)
-- `docs/architecture/06-CUDA-CHECKPOINT-CALL-FLOW.md` — the two cuda-checkpoint invocation paths (as-built; debugging reference)
-- `docs/architecture/VLLM-DEEP-DIVE.md`, `docs/architecture/QUIESCENCE-ARCHITECTURE.md`
+- `docs/design/RUNTIME-AGNOSTIC.md` — `/proc`+cgroup discovery mechanics (still as-built)
+- `docs/design/CUDA-CHECKPOINT-CALL-FLOW.md` — the two cuda-checkpoint invocation paths (as-built; debugging reference)
+- `docs/history/VLLM-DEEP-DIVE.md`, `docs/design/QUIESCENCE-ARCHITECTURE.md`
 - `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md` — current L2 promotion design
 - `docs/TRANSPORT-ARCHITECTURE.md` — 3-leg data-movement design (under review)
-- `docs/BENCHMARK.md`, `docs/PDF-BENCH-RESULTS.md`, `docs/BENCH-NVCA-2026-06.md` — bench methodology + current results
+- `docs/results/BENCHMARK.md`, `docs/results/PDF-BENCH-RESULTS.md`, `docs/BENCH-NVCA-2026-06.md` — bench methodology + current results
 
 **Naming note.** These docs span the `nvsnap → cryo → nvSnap` naming churn.
 Treat `nvsnap-lib` ≈ `cryo-lib`, `NVSNAP_RESTORED` ≈ `CRYO_RESTORED`,

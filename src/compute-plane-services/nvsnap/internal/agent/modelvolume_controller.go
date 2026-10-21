@@ -39,7 +39,7 @@ import (
 )
 
 // ModelVolumeController is the agent half of
-// docs/proposals/helm-shared-model-volume.md.
+// docs/design/helm-shared-model-volume.md.
 //
 //   - Download Jobs, RWX (any node): when the Job for an identity
 //     succeeds, the shared claim is labelled complete.
@@ -109,7 +109,7 @@ type ModelVolumeController struct {
 	CacheWarmup time.Duration
 	// RefreshDisabled turns set refresh off; RefreshCooldown is the least
 	// time between a generation's creation and the next refresh of the
-	// same set (zero: 6 hours). docs/proposals/helm-chart-cache-refresh.md.
+	// same set (zero: 6 hours). docs/design/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
 	// deltaScan is the warm-rank scan (seam for tests): new files not in
@@ -1633,7 +1633,7 @@ func (c *ModelVolumeController) servePVCReader(ctx context.Context, pod *corev1.
 // scanWarmRank measures a warm rank after Ready and the settle period,
 // marks it rank-ready so it can be listed and streamed, and when its
 // cachedir holds files the seed index did not, marks the delta and
-// proposes a refresh (docs/proposals/helm-chart-cache-refresh.md).
+// proposes a refresh (docs/design/helm-chart-cache-refresh.md).
 func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Pod) {
 	if c.RefreshDisabled {
 		return

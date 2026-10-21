@@ -37,8 +37,8 @@ in the same PR.
   (`PHASE5C-EROFS-COMPACTION`), `TRANSPARENT-COMPRESSION-DESIGN`,
   `LAZY-PAGES-SPIKE`, `UNIFIED-CAPTURE-STORAGE-DESIGN`. Useful to
   understand *why* we didn't go those directions; the active path
-  is documented in `docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md` and
-  `docs/GENERIC-PYTHON-INJECTION-DESIGN.md`.
+  is documented in `docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md` and
+  `docs/design/GENERIC-PYTHON-INJECTION-DESIGN.md`.
 
 - **Bug post-mortems** — io_uring (`IO_URING_*`), CRIU patches
   (`CRIU_IO_URING_*`, `CRIU-FORK-CHANGES`, `CRIU-RESTORE-FIX-PLAN`),

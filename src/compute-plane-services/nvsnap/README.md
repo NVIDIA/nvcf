@@ -40,7 +40,7 @@ capture on the cluster:
   io_uring/epoll, and GPU memory). The restored pod resumes a live,
   already-serving engine with no re-initialization at all. Multi-GPU
   (tensor-parallel) workloads are captured this way when they run under
-  [gpushare](docs/GPUSHARE.md), an `LD_PRELOAD` shim that releases the GPU
+  [gpushare](docs/design/GPUSHARE.md), an `LD_PRELOAD` shim that releases the GPU
   memory processes share before the checkpoint and re-creates it after
   restore; without it a multi-GPU CRIU capture is refused. Multi-pod
   instances (a StatefulSet, LeaderWorkerSet or Grove group, possibly
@@ -56,10 +56,10 @@ into workload pods.
 
 Deeper design docs:
 [architecture](docs/architecture/NVSNAP-ARCHITECTURE.md) ·
-[quiescence / io_uring](docs/architecture/QUIESCENCE-ARCHITECTURE.md) ·
-[runtime-agnostic discovery](docs/architecture/04-RUNTIME-AGNOSTIC.md) ·
-[cuda-checkpoint call flow](docs/architecture/06-CUDA-CHECKPOINT-CALL-FLOW.md) ·
-[vLLM multi-process](docs/architecture/VLLM-DEEP-DIVE.md).
+[quiescence / io_uring](docs/design/QUIESCENCE-ARCHITECTURE.md) ·
+[runtime-agnostic discovery](docs/design/RUNTIME-AGNOSTIC.md) ·
+[cuda-checkpoint call flow](docs/design/CUDA-CHECKPOINT-CALL-FLOW.md) ·
+[vLLM multi-process](docs/history/VLLM-DEEP-DIVE.md).
 
 ---
 
@@ -84,7 +84,7 @@ recompiling. "Speedup" is `cold_start / restore` for time-to-ready.
 
 Wins scale with the cold start's download + JIT/compile cost (the full
 measured matrix, including compile-light workloads that see little change,
-is in [docs/BENCHMARK.md](docs/BENCHMARK.md)). Phase breakdown for
+is in [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md)). Phase breakdown for
 Qwen3.6-35B-A3B: model download 269 s to ~5 s (loads from the cache volume),
 model init 128 s to ~32 s (torch.compile 53.5 s to 5.8 s on cache hit).
 
@@ -123,7 +123,7 @@ enough that CRIU overhead doesn't pay back at these sizes).
 We are actively working on improving the performance of the pure
 CRIU + cuda-checkpoint workflow; expect these numbers to improve.
 
-See [docs/BENCHMARK.md](docs/BENCHMARK.md) for methodology and the full
+See [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md) for methodology and the full
 measured matrix.
 
 ---
@@ -153,8 +153,8 @@ kubectl -n nvsnap-system get svc nvsnap-server
 
 `scripts/install-nvsnap.sh` wraps the above (prereq checks, pull secret,
 optional webhook). Full guide, options, and troubleshooting:
-[docs/INSTALL.md](docs/INSTALL.md). Pull-secret details:
-[docs/PULL-SECRET-SETUP.md](docs/PULL-SECRET-SETUP.md).
+[docs/operate/INSTALL.md](docs/operate/INSTALL.md). Pull-secret details:
+[docs/operate/PULL-SECRETS.md](docs/operate/PULL-SECRETS.md).
 
 ### Try it end-to-end
 
@@ -191,14 +191,14 @@ tiers are present. See
 [docs/TRANSPORT-ARCHITECTURE.md](docs/TRANSPORT-ARCHITECTURE.md).
 
 **Why the moving parts exist** (details in
-[docs/architecture/](docs/architecture/)):
+[docs/architecture/](docs/design/)):
 
 - **In-namespace CRIU (criu-v2)** — the agent stages the CRIU bundle into
   the workload's mount namespace and runs dump and restore there, so the
   dump sees the container's own paths and no userspace interception is
   injected into the engine.
 - **Forked CRIU** — io_uring checkpoint and restore, portable ghost files
-  and CUDA plugin fixes on top of upstream criu-dev. See [docs/THIRD-PARTY-FORKS.md](docs/THIRD-PARTY-FORKS.md).
+  and CUDA plugin fixes on top of upstream criu-dev. See [docs/design/THIRD-PARTY-FORKS.md](docs/design/THIRD-PARTY-FORKS.md).
 
 ---
 
@@ -274,11 +274,11 @@ terraform/              example GKE cluster provisioning
 ## Documentation
 
 - [docs/](docs/README.md) — documentation index (operator + developer)
-- [docs/dev/getting-started.md](docs/dev/getting-started.md) — build → capture → validate → merge
-- [docs/INSTALL.md](docs/INSTALL.md) — full install guide + troubleshooting
+- [docs/operate/DEVELOPING.md](docs/operate/DEVELOPING.md) — build → capture → validate → merge
+- [docs/operate/INSTALL.md](docs/operate/INSTALL.md) — full install guide + troubleshooting
 - [docs/architecture/NVSNAP-ARCHITECTURE.md](docs/architecture/NVSNAP-ARCHITECTURE.md) — system architecture
-- [docs/BENCHMARK.md](docs/BENCHMARK.md) — benchmark methodology + results
-- [docs/THIRD-PARTY-FORKS.md](docs/THIRD-PARTY-FORKS.md) — forked dependencies + patch policy
+- [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md) — benchmark methodology + results
+- [docs/design/THIRD-PARTY-FORKS.md](docs/design/THIRD-PARTY-FORKS.md) — forked dependencies + patch policy
 - [CONTRIBUTING.md](CONTRIBUTING.md) — developer setup + build-from-source
 
 ---

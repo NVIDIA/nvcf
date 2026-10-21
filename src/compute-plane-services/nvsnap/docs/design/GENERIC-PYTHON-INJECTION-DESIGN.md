@@ -256,4 +256,4 @@ note at the head of each migrated `*-restore.yaml`.
 - `./scripts/test-e2e.sh vllm-small` still passes (no regression).
 - A pod manifest with only the three env vars + init containers — no `command:` override — successfully cold-starts, checkpoints, and restores.
 - Multi-Python uvloop/pyzmq wheels live in builder image; smoke test imports each under the matching cpython.
-- `docs/GENERIC-PYTHON-INJECTION-DESIGN.md` (this doc) merged.
+- `docs/design/GENERIC-PYTHON-INJECTION-DESIGN.md` (this doc) merged.
