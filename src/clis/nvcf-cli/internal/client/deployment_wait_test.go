@@ -147,6 +147,7 @@ func TestDeploymentStatusResetsRetryBudget(t *testing.T) {
 }
 
 func TestDeploymentStatusWaitCancellation(t *testing.T) {
+	const body = `{"function":{"status":"DEPLOYING"}}`
 	for _, phase := range []string{"request", "poll", "retry"} {
 		t.Run(phase, func(t *testing.T) {
 			c := &Client{config: &Config{}, baseURL: "http://example.test", httpClient: &http.Client{Transport: deploymentTransportFunc(func(r *http.Request) (*http.Response, error) {
@@ -158,12 +159,21 @@ func TestDeploymentStatusWaitCancellation(t *testing.T) {
 				if phase == "retry" {
 					code = 503
 				}
-				return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(`{"function":{"status":"DEPLOYING"}}`)), Header: make(http.Header)}, nil
+				return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 			})}}
 			start := time.Now()
 			err := c.waitForFunctionDeployment(context.Background(), "function", "version", 30*time.Millisecond, time.Hour, time.Hour)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("got %v", err)
+			}
+			if phase == "retry" {
+				var apiErr *APIError
+				if !errors.As(err, &apiErr) {
+					t.Fatalf("API error lost on timeout: %v", err)
+				}
+				if apiErr.StatusCode != http.StatusServiceUnavailable || apiErr.Body != body {
+					t.Fatalf("unexpected API error: %#v", apiErr)
+				}
 			}
 			if time.Since(start) > time.Second {
 				t.Fatal("wait exceeded the original deadline")

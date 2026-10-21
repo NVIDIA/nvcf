@@ -55,7 +55,7 @@ func (c *Client) waitForFunctionDeployment(parent context.Context, functionID, v
 			return parent.Err()
 		}
 		if lastQueryError != nil {
-			return fmt.Errorf("deployment status could not be confirmed within %s (last query failed: %v): %w", timeout, lastQueryError, ctx.Err())
+			return fmt.Errorf("deployment status could not be confirmed within %s (last query failed: %w): %w", timeout, lastQueryError, ctx.Err())
 		}
 		return fmt.Errorf("function deployment timed out after %s: %w", timeout, ctx.Err())
 	}
