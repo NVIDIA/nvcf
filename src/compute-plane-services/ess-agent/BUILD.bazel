@@ -9,6 +9,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 # gazelle:prefix github.com/hashicorp/consul-template
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
+# gazelle:exclude image_capability_test.go
 
 # Non-Go top-level dirs.
 # gazelle:exclude docs
