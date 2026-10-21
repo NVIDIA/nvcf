@@ -447,6 +447,25 @@ nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- end -}}
 
 {{/*
+Return "true" when the operator would read OTEL_COLLECTOR_IMAGE_TAG: the
+collector is enabled at the top level, or the NVCFBackend this chart renders
+enables it without its own tag. The operator's built-in tag is not kept
+current, so the chart fails instead of leaving the tag unset in that case.
+*/}}
+{{- define "nvcaop.otelCollectorTagNeeded" -}}
+{{- $source := (.Values.ngcConfig).clusterSource | default "ngc-managed" -}}
+{{- $backend := dict -}}
+{{- if eq $source "self-managed" -}}
+{{- $backend = (.Values.selfManaged | default dict).otelCollector | default dict -}}
+{{- else if eq $source "helm-managed" -}}
+{{- $backend = (.Values.helmManaged | default dict).otelCollector | default dict -}}
+{{- end -}}
+{{- if or (.Values.otelCollector | default dict).enabled (and $backend.enabled (not $backend.imageTag)) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 Get the BYOO OTel collector repository based on image.repository and
 ngcConfig.clusterSource. If imageRepository is explicitly set, use it.
 Otherwise, staging resolves by image.repository prefix, and production

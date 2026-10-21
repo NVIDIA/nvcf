@@ -203,10 +203,11 @@ spec:
           value: {{ .Values.otelCollector.enabled | quote }}
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
-        {{- /* An unset tag leaves the operator's built-in default in effect. */}}
-        {{- with .Values.otelCollector.imageTag }}
+        {{- if .Values.otelCollector.imageTag }}
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: {{ . | quote }}
+          value: {{ .Values.otelCollector.imageTag | quote }}
+        {{- else if include "nvcaop.otelCollectorTagNeeded" . }}
+        {{- fail "otelCollector.imageTag is required when the OTel collector is enabled" }}
         {{- end }}
         {{- if .Values.otelCollector.resources }}
         - name: OTEL_COLLECTOR_RESOURCES_B64

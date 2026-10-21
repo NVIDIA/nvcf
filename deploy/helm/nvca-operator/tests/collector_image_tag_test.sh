@@ -89,8 +89,8 @@ render "${set_manifest}" \
   --set-string agent.byooOtelCollector.imageTag=4.5.6-test
 assert_tags "${set_manifest}" "1.2.3-test" "${byoo_repository}:4.5.6-test" "explicit tag"
 
-# An empty tag keeps the chart out of the way: the operator keeps its built-in
-# collector tag and NVCA gets no BYOO_OTEL_COLLECTOR_CONTAINER override.
+# With the collector disabled, an empty tag keeps the chart out of the way:
+# no OTEL_COLLECTOR_IMAGE_TAG and no BYOO_OTEL_COLLECTOR_CONTAINER override.
 empty_manifest="${work_dir}/empty.yaml"
 render "${empty_manifest}" \
   --set-string otelCollector.imageTag= \
@@ -104,5 +104,39 @@ render "${null_manifest}" \
   --set otelCollector.imageTag=null \
   --set agent.byooOtelCollector.imageTag=null
 assert_tags "${null_manifest}" "" "" "null tag"
+
+# An NVCFBackend tag takes precedence over OTEL_COLLECTOR_IMAGE_TAG, so an
+# enabled backend collector with its own tag does not need the operator tag.
+backend_tag_manifest="${work_dir}/backend-tag.yaml"
+render "${backend_tag_manifest}" \
+  --set-string otelCollector.imageTag= \
+  --set selfManaged.otelCollector.enabled=true
+assert_tags "${backend_tag_manifest}" "" \
+  "${byoo_repository}:$(yq -r '.agent.byooOtelCollector.imageTag' "${chart}/values.yaml")" \
+  "enabled backend collector with its own tag"
+
+# expect_render_failure CASE HELM_ARGS... checks that an enabled collector
+# without any tag fails the render and names the value to set. Otherwise the
+# operator would fall back to a built-in tag that is not kept current.
+expect_render_failure() {
+  local case_name="$1" output="${work_dir}/failure.log"
+  shift
+  if render "${work_dir}/failure.yaml" "$@" 2>"${output}"; then
+    fail "${case_name}: render succeeded without a collector tag"
+  fi
+  grep -Fq "otelCollector.imageTag is required" "${output}" ||
+    fail "${case_name}: render failed without naming otelCollector.imageTag: $(cat "${output}")"
+}
+
+expect_render_failure "enabled with empty tag" \
+  --set otelCollector.enabled=true \
+  --set-string otelCollector.imageTag=
+expect_render_failure "enabled with null tag" \
+  --set otelCollector.enabled=true \
+  --set otelCollector.imageTag=null
+expect_render_failure "enabled backend collector without a tag" \
+  --set selfManaged.otelCollector.enabled=true \
+  --set-string selfManaged.otelCollector.imageTag= \
+  --set-string otelCollector.imageTag=
 
 echo "collector-image-tag: all checks passed"
