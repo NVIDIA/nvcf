@@ -193,6 +193,12 @@ processors:
       - action: insert
         key: instance_id
         value: ${env:NVCF_INSTANCE_ID:-unknown}
+  transform/set_observed_time:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.observed_time, Now()) where log.observed_time_unix_nano == 0
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -240,7 +246,7 @@ service:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
                 headers:
                   - name: lightstep-access-token
                     value: ${env:OTEL_TRACING_ACCESS_TOKEN}
@@ -253,6 +259,7 @@ service:
         - otlp_http/KRATOS-kratos-logs-stage-logs
       processors:
         - memory_limiter
+        - transform/set_observed_time
         - attributes/add-metadata
         - batch
   extensions:

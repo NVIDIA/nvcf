@@ -252,7 +252,8 @@ curl -N -sS -X POST "http://${GATEWAY_ADDR}/v1/messages" \
 Set `stream` to `false` or omit it for a native JSON response. The gateway
 requires a positive `max_tokens` and a non-empty `messages` array. The backend
 validates content blocks, tools, thinking settings, and beta feature support.
-Upstream status codes, error bodies, and SSE event bytes pass through.
+Upstream status codes and SSE event bytes pass through. Backend error bodies
+use the Anthropic error envelope, as described below.
 
 The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 `Content-Type`, `Accept`, `User-Agent`, and W3C trace headers. NVCF sets
@@ -260,10 +261,9 @@ The gateway preserves `anthropic-version`, all `anthropic-beta` values,
 Messages response, including gateway errors, carries the same ID in the
 Anthropic `request-id` header, which Anthropic SDKs report as the request ID.
 NVCF replaces any `request-id` or `X-Request-Id` the backend returns. Error
-bodies the gateway writes also include it as `request_id`; native Anthropic
-error bodies relayed from the backend keep the backend's own `request_id`. Use
-this ID to find the request in gateway logs. The gateway requests identity
-response encoding so usage can be observed without decoding or changing the
+bodies also include it as `request_id`, including backend error bodies, where
+it replaces any backend value. Use this ID to find the request in gateway logs.
+The gateway requests identity response encoding so usage can be observed without decoding or changing the
 response. Send the NVCF API key in
 `Authorization: Bearer` or in `x-api-key`, the Anthropic SDK default. When a
 request carries an `Authorization` header, the gateway uses it and ignores
@@ -279,6 +279,32 @@ Admission fields (`model`, `max_tokens`, `stream`, `messages`, `system`, and
 ambiguous duplicates so the backend and admission logic use the same values.
 Messages use the existing authorization-resolved priority. Pylon strips inbound
 engine priority headers before generating its own Dynamo priority headers.
+
+#### What the gateway checks and what it passes through
+
+The gateway checks only what it needs to authenticate, route, and admit a
+request. Everything else goes to the backend unchanged, so validation of the
+remaining fields depends on the backend. A backend that accepts an invalid
+value returns `200`, where the Anthropic API would return `400`.
+
+| Field or header | Checked by the gateway | Otherwise |
+| --- | --- | --- |
+| `model` | Yes. Requires the `<function-id>/` prefix. | Rewritten to the backend model name. |
+| `max_tokens` | Yes. Must be a positive integer. | Passed through. |
+| `messages` | Yes. Must be a non-empty array. Content is not checked. | Passed through. |
+| Spelling of `model`, `max_tokens`, `stream`, `messages`, `system`, `tools` | Yes. Must use the canonical lowercase name. | Passed through. |
+| `anthropic-version`, `anthropic-beta` | No. Not required, validated, or interpreted. | Forwarded to the backend. |
+| Content blocks, images, documents | No. | Backend validates. |
+| `tools`, `tool_choice`, `tool_result` | No. Tools are only counted for token admission. | Backend validates. |
+| `thinking`, `cache_control`, `metadata`, `service_tier` | No. | Backend validates and decides support. |
+| Backend error bodies | Rendered in the Anthropic error envelope with `request_id`. | Message text comes from the backend. |
+
+The gateway relays a backend error body when it already uses the Anthropic
+envelope with a lowercase snake_case error type, as the Anthropic API does,
+and sets its `request_id`. Any other backend error body, such as an
+OpenAI-style or FastAPI validation error, is rendered in the Anthropic envelope
+with the type that matches the status code and the backend's message. The message text is the backend's. Function owners
+are responsible for what their container puts in error messages.
 
 Token admission estimates system, messages, and tools and reserves
 `max_tokens` for output. `X-Input-Tokens` and `X-Token-Estimate` both describe
@@ -330,6 +356,24 @@ to these aliases so clients can distinguish Messages-only models:
   }
 }
 ```
+
+A request to Vanity Gateway that carries `anthropic-version`, as Anthropic SDKs
+and Claude Code send, gets the Anthropic Models API instead. `GET /v1/models`
+lists only `anthropicMessages` aliases, each with `type`, `id`, `display_name`,
+and `created_at`, plus `has_more`, `first_id`, and `last_id`. Use `limit`
+(1 to 1000, default 20) with `after_id` or `before_id` to page.
+`GET /v1/models/{model}` returns one alias, or `404` `not_found_error` for a
+model that is not served on Messages. An offline model returns `503`
+`api_error` with `Retry-After: 10800`, and an expired model returns `410`
+`not_found_error`. Requests without `anthropic-version` get
+the shared OpenAI-shaped list.
+
+Messages shadows support sticky sampling methods. On Messages, `promptCacheKey`
+reads only headers, by default `x-multi-turn-session-id` and then
+`x-claude-code-session-id`, so a Claude Code conversation stays on one side of
+the shadow. `firstMessageHash` hashes `system` and the first user message. List
+both, for example `[promptCacheKey, firstMessageHash]`, to fall back to the
+first message when no session header is present.
 
 For Claude Code, configure the invocation origin and pin both foreground and
 background requests to a declared model:

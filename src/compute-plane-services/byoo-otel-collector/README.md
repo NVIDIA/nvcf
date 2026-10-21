@@ -143,7 +143,7 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: deprecated alias for `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`. When both are set, `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES` wins.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
 - `BYOO_DEBUG_MODE`: enables collector debug logging and adds the `debug` exporter to every generated pipeline.
-- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, log batch, and separate log and trace sampler settings. Both samplers support sampling percentage, mode, hash seed, and fail closed. The log sampler also supports attribute source, source attribute, and sampling priority.
+- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, log batch, and separate log and trace sampler settings. Both samplers support sampling percentage, mode, hash seed, and fail closed. The log sampler also supports attribute source, source attribute, and sampling priority. `platformMetricsFederation.target` sets the `host:port` that the Kubernetes templates federate platform metrics from, and `platformMetricsFederation.enabled: false` removes those `/federate` scrape jobs. Unset, the jobs read from `nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090`.
 - `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
 - `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
 - `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload metrics pipelines. When the metric subset pipeline is enabled, configured labels extend the default `metric_subset_enabled` label. Labels are removed from both the primary and metric subset pipelines.
@@ -180,6 +180,45 @@ Examples:
 - DATADOG-aws-us-east-key
 
 See [examples](./examples/secrets) for more details.
+
+### Supported Providers
+
+The collector renders an exporter for these provider and signal pairs. Any other pair fails to render, and the collector does not start.
+
+| Provider | Logs | Metrics | Traces |
+| --- | --- | --- | --- |
+| `AZURE_MONITOR` | Yes | Yes | Yes |
+| `DATADOG` | Yes | Yes | Yes |
+| `GRAFANA_CLOUD` | Yes | Yes | Yes |
+| `KRATOS` | Yes | No | Yes |
+| `KRATOS_THANOS` | No | Yes | No |
+| `OTEL_COLLECTOR` | Yes | Yes | Yes |
+| `PROMETHEUS` | No | Yes | No |
+| `SERVICENOW` | No | No | Yes |
+| `SPLUNK` | Yes | No | No |
+
+#### KRATOS Traces
+
+`KRATOS` traces go to the Kratos OTLP/HTTP traces gateway over mTLS. Register a separate `KRATOS` telemetry endpoint with type `TRACES`. The UI does not offer this yet, so register it through the API with `POST /v2/nvcf/telemetries`:
+
+```json
+{
+  "provider": "KRATOS",
+  "protocol": "GRPC",
+  "endpoint": "https://<kratos-traces-gateway>:4318/v1/traces",
+  "types": ["TRACES"],
+  "secret": {
+    "name": "<secret-name>",
+    "value": {"clientCert": "<pem>", "clientKey": "<pem>"}
+  }
+}
+```
+
+- `endpoint` is the full OTLP/HTTP traces URL. The collector uses it as `traces_endpoint` unchanged and sends protobuf.
+- The secret needs `clientCert` and `clientKey`, which are enough on their own. If either is missing or empty, the collector fails to render its config and names the missing key. `collectorId` and `caFile` are optional. When the secret has a non-empty `collectorId`, the collector sends it as the `collector-id` header. When it has a non-empty `caFile`, the collector uses it as the CA for the gateway. A blank value is ignored.
+- The collector reads these values when it renders its config at startup, so adding a key takes effect after the collector container restarts. Removing `caFile` or `collectorId` needs a new deployment or a recreated pod, not only a collector restart. The secrets extractor writes only the keys that are present, and the extracted files live on an `emptyDir` volume that survives container restarts, so the old file stays and the collector keeps using it.
+- `protocol` does not change the exporter, which always uses OTLP/HTTP. It only sets the OTLP protocol that NVCA injects into workload containers for sending spans to the collector. Use `GRPC` unless your NVCA release injects `http/protobuf` for HTTP telemetry ([#2676](https://github.com/NVIDIA/nvcf/issues/2676)). Earlier releases inject `http`, which SDKs that follow the OpenTelemetry spec, such as Dynamo, reject.
+- `KRATOS_THANOS` accepts metrics only. A `KRATOS_THANOS` telemetry with type `TRACES` fails to render.
 
 ### 🏷️ Attribute Enrichment
 

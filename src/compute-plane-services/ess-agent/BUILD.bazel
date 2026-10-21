@@ -98,3 +98,13 @@ sh_test(
     args = ["$(location :image.tar)"],
     data = [":image.tar"],
 )
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
+)

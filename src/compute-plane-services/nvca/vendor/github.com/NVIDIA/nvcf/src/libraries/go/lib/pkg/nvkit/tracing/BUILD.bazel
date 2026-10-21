@@ -7,7 +7,6 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
         "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
         "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
         "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",

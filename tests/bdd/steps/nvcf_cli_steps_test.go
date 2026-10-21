@@ -757,3 +757,257 @@ func TestSelectedFunctionReportsInstancesValidatesGherkinInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskAPIKeyGenerationSuppressesSecretBearingStdout(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--description", "bdd task key"},
+		{"--scopes", "launch_task,task_details,delete_task"},
+	})
+
+	if err := sc.iSuccessfullyGenerateTaskAPIKey(context.Background(), options); err != nil {
+		t.Fatalf("generate task API key: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %+v, want one command", fake.runs)
+	}
+	command := fake.runs[0].command
+	for _, expected := range []string{
+		`exec "$@" >/dev/null`,
+		"api-key generate --for task",
+		"--description 'bdd task key'",
+		"--scopes launch_task,task_details,delete_task",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("command = %q, want %q", command, expected)
+		}
+	}
+	if strings.Contains(command, "--for function") {
+		t.Fatalf("command = %q, must not mint a function key", command)
+	}
+}
+
+func TestTaskCreatePassesEveryArgumentWithoutProductValidation(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "/tmp/nvcf cli")
+	t.Setenv("BDD_TASK_IMAGE", "registry.example/task:tag")
+	sc.NVCFCLIConfig = "/tmp/config file.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--future-option", "not-an-api-value"},
+		{"--max-runtime", "forever"},
+		{"--container-env", "A=1"},
+		{"--container-env", "B=has space"},
+		{"--backend", ""},
+	})
+
+	err := sc.iSuccessfullyCreateTask(context.Background(), "task with spaces", "${BDD_TASK_IMAGE}", options)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	want := "'/tmp/nvcf cli' --config '/tmp/config file.yaml' task create" +
+		" --name 'task with spaces' --image registry.example/task:tag" +
+		" --future-option not-an-api-value --max-runtime forever" +
+		" --container-env A=1 --container-env 'B=has space' --backend ''"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %+v, want command %q", fake.runs, want)
+	}
+}
+
+func TestTaskCreateRequiresAtLeastOneOptionRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	err := sc.iSuccessfullyCreateTask(context.Background(), "task", "image", docTable(t, [][]string{{"option", "value"}}))
+	if err == nil || len(fake.runs) != 0 {
+		t.Fatalf("error = %v, runs = %d, want a structural error before any command", err, len(fake.runs))
+	}
+}
+
+func TestTaskCreateRequiresExitZero(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 2, Stderr: "unknown flag"}
+	fake.err = errors.New("exit status 2")
+
+	err := sc.iSuccessfullyCreateTask(context.Background(), "task", "image", docTable(t, [][]string{
+		{"option", "value"}, {"--unknown", "x"},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "exit code = 2, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+}
+
+func TestTaskDeleteRunsWithoutNamingATask(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.iSuccessfullyDeleteSelectedTask(context.Background()); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	want := "nvcf-cli --config config.yaml task delete"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %+v, want command %q", fake.runs, want)
+	}
+}
+
+func TestTaskDeleteRequiresExitZero(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 1, Stderr: "no task selected"}
+	fake.err = errors.New("exit status 1")
+
+	err := sc.iSuccessfullyDeleteSelectedTask(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+}
+
+func fastTaskPolling(t *testing.T) {
+	t.Helper()
+	previous := taskPollUnit
+	taskPollUnit = time.Millisecond
+	t.Cleanup(func() { taskPollUnit = previous })
+}
+
+func taskJSON(status string) string {
+	return `{"task":{"id":"task-1","name":"secret-task-name","status":"` + status + `"}}`
+}
+
+func TestTaskStatusPollsTaskGetJSONUntilExactMatch(t *testing.T) {
+	fastTaskPolling(t)
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: taskJSON("QUEUED")},
+		{ExitCode: 0, Stdout: taskJSON("RUNNING")},
+		{ExitCode: 0, Stdout: taskJSON("COMPLETED")},
+	}
+
+	if err := sc.selectedTaskShouldReachStatus(context.Background(), "COMPLETED", "60000", "1"); err != nil {
+		t.Fatalf("reach status: %v", err)
+	}
+	if len(fake.runs) != 3 {
+		t.Fatalf("runs = %d, want 3 polls", len(fake.runs))
+	}
+	for _, run := range fake.runs {
+		if run.command != "nvcf-cli --config config.yaml task get --json" {
+			t.Fatalf("poll command = %q", run.command)
+		}
+	}
+}
+
+func TestTaskStatusDoesNotClassifyTerminalStatuses(t *testing.T) {
+	fastTaskPolling(t)
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: taskJSON("ERRORED")},
+		{ExitCode: 0, Stdout: taskJSON("COMPLETED")},
+	}
+
+	if err := sc.selectedTaskShouldReachStatus(context.Background(), "COMPLETED", "60000", "1"); err != nil {
+		t.Fatalf("reach status: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want polling to continue past ERRORED", len(fake.runs))
+	}
+}
+
+func TestTaskStatusMatchesExactlyAndAcceptsUnknownExpectedStatus(t *testing.T) {
+	fastTaskPolling(t)
+	for _, test := range []struct {
+		name, expected, observed string
+		wantMatch                bool
+	}{
+		{name: "case differs", expected: "completed", observed: "COMPLETED"},
+		{name: "prefix only", expected: "COMPLETE", observed: "COMPLETED"},
+		{name: "unknown status", expected: "FUTURE_STATUS", observed: "FUTURE_STATUS", wantMatch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("NVCF_CLI", "nvcf-cli")
+			sc.NVCFCLIConfig = "config.yaml"
+			fake.result = harness.Result{ExitCode: 0, Stdout: taskJSON(test.observed)}
+
+			err := sc.selectedTaskShouldReachStatus(context.Background(), test.expected, "30", "10")
+			if test.wantMatch && err != nil {
+				t.Fatalf("error = %v, want match", err)
+			}
+			if !test.wantMatch && err == nil {
+				t.Fatal("expected a timeout")
+			}
+		})
+	}
+}
+
+func TestTaskStatusTimeoutReportsExpectedObservedTimeoutAndLogsOnly(t *testing.T) {
+	fastTaskPolling(t)
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	sc.Suite.Config.CommandLogDir = "/tmp/bdd-logs"
+	fake.result = harness.Result{ExitCode: 0, Stdout: taskJSON("RUNNING")}
+
+	err := sc.selectedTaskShouldReachStatus(context.Background(), "COMPLETED", "50", "10")
+	if err == nil {
+		t.Fatal("expected a timeout failure")
+	}
+	for _, fragment := range []string{`"COMPLETED"`, `"RUNNING"`, "50ms", "/tmp/bdd-logs"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("error = %v, want it to name %q", err, fragment)
+		}
+	}
+	if strings.Contains(err.Error(), "secret-task-name") {
+		t.Fatalf("error = %v, must not print the task response", err)
+	}
+}
+
+func TestTaskStatusFailsImmediatelyWhenTaskGetExitsNonZero(t *testing.T) {
+	fastTaskPolling(t)
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 1, Stdout: taskJSON("RUNNING"), Stderr: "boom"}
+	fake.err = errors.New("exit status 1")
+
+	err := sc.selectedTaskShouldReachStatus(context.Background(), "COMPLETED", "60000", "1")
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want no retry after a failed task get", len(fake.runs))
+	}
+	if strings.Contains(err.Error(), "secret-task-name") {
+		t.Fatalf("error = %v, must not print the task response", err)
+	}
+}
+
+func TestTaskStatusValidatesOnlyTimingInputs(t *testing.T) {
+	for _, test := range []struct{ name, timeout, poll string }{
+		{name: "zero timeout", timeout: "0", poll: "1"},
+		{name: "non-numeric timeout", timeout: "10m", poll: "1"},
+		{name: "negative poll", timeout: "10", poll: "-1"},
+		{name: "empty poll", timeout: "10", poll: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			err := sc.selectedTaskShouldReachStatus(context.Background(), "COMPLETED", test.timeout, test.poll)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want no command before timing validates", len(fake.runs))
+			}
+		})
+	}
+}
