@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,5 +208,56 @@ func TestGroupFreeze_PostPhaseAbortsOnAFailedDump(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a1.postDumpDir("s6", "ns", "worker-0"), "abort")); err != nil {
 		t.Errorf("the dumped member was not aborted: %v", err)
+	}
+}
+
+// A member whose agent does not take the release (restarting, a dropped
+// connection) ends the capture at once: the others are aborted at the freeze
+// point and at the post-dump barrier, instead of dumping and then waiting
+// out postDumpWait for it (review).
+func TestGroupFreeze_AbortsWhenAReleaseIsNotTaken(t *testing.T) {
+	defer func(d time.Duration) { releaseRetry = d }(releaseRetry)
+	releaseRetry = 10 * time.Millisecond
+	log := logrus.NewEntry(logrus.New())
+	a1, b1 := freezeServer(t)
+	a1.config.CheckpointDir = t.TempDir()
+	var gone []string
+	var mu sync.Mutex
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"reached":true,"failed":false}`))
+			return
+		}
+		mu.Lock()
+		gone = append(gone, r.URL.Query().Get("phase")+":"+r.URL.Query().Get("go"))
+		mu.Unlock()
+		http.Error(w, "agent restarting", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(down.Close)
+	ctx := context.Background()
+	errs := make(chan error, 1)
+	go func() { errs <- a1.awaitGroupFreeze(ctx, "s7", "ns", "worker-0", log) }()
+	t0 := time.Now()
+	ok := driveGroupFreeze(ctx, http.DefaultClient, "s7", "", []freezeMember{
+		{Base: b1, Namespace: "ns", Pod: "worker-0"}, {Base: down.URL, Namespace: "ns", Pod: "etcd-0"},
+	}, 20*time.Millisecond, log, nil)
+	if ok {
+		t.Fatal("driver reported the group released though a member never got its release")
+	}
+	if d := time.Since(t0); d > 5*time.Second {
+		t.Errorf("took %s to give up", d)
+	}
+	// The healthy member got true first, then the abort is queued for it:
+	// it either dumps and stops at the barrier, or is aborted here.
+	if err := <-errs; err != nil {
+		t.Logf("healthy member: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(a1.postDumpDir("s7", "ns", "worker-0"), "abort")); err != nil {
+		t.Errorf("no post-dump abort recorded for the released member: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{":true", ":true", ":true", ":false", ":false", ":false", "post:false", "post:false", "post:false"}; strings.Join(gone, ",") != strings.Join(want, ",") {
+		t.Errorf("the unreachable member was asked %v, want %v", gone, want)
 	}
 }

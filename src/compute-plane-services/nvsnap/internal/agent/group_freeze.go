@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -252,25 +253,32 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase s
 		wait = postDumpWait
 	}
 	deadline := time.Now().Add(wait)
-	release := func(ok bool) {
+	// release posts the decision of phase to every member and reports
+	// whether each one acknowledged it. A member that did not (its agent
+	// restarting, a dropped connection) is asked again briefly.
+	release := func(ok bool, phase string) bool {
 		var wg sync.WaitGroup
+		var missed atomic.Int32
 		for _, m := range members {
 			wg.Add(1)
 			go func(m freezeMember) {
 				defer wg.Done()
 				u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?go=%t&phase=%s", m.Base, url.PathEscape(session), url.PathEscape(m.Namespace), url.PathEscape(m.Pod), ok, url.QueryEscape(phase))
-				req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodPost, u, nil)
-				if err != nil {
-					return
+				var err error
+				for attempt := 0; attempt < releaseAttempts; attempt++ {
+					if attempt > 0 {
+						time.Sleep(releaseRetry)
+					}
+					if err = postFreeze(context.WithoutCancel(ctx), client, u); err == nil {
+						return
+					}
 				}
-				if resp, err := client.Do(req); err == nil {
-					resp.Body.Close()
-				} else {
-					log.WithError(err).WithField("pod", m.Namespace+"/"+m.Pod).Warn("group capture: cannot reach a member's freeze point")
-				}
+				missed.Add(1)
+				log.WithError(err).WithField("pod", m.Namespace+"/"+m.Pod).Warn("group capture: a member did not get its freeze point's decision")
 			}(m)
 		}
 		wg.Wait()
+		return missed.Load() == 0
 	}
 	for {
 		all := true
@@ -284,7 +292,7 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase s
 			}
 			if done || failed {
 				log.WithFields(logrus.Fields{"pod": m.Namespace + "/" + m.Pod, "phase": phaseName(phase)}).Warn("group capture: a member ended before the freeze point; aborting the others")
-				release(false)
+				release(false, phase)
 				return false
 			}
 			all = false
@@ -300,17 +308,53 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase s
 				case <-ctx.Done():
 				}
 			}
-			release(true)
+			if !release(true, phase) {
+				// The member that missed it stays at its freeze point
+				// while the rest dump and then wait for it at the
+				// post-dump barrier: end the capture now instead. The
+				// post-dump abort is recorded ahead of the members that
+				// already dump, and they stop on reaching the barrier.
+				log.WithField("phase", phaseName(phase)).Warn("group capture: a member was not released; aborting the others")
+				release(false, phase)
+				if phase == "" {
+					release(false, "post")
+				}
+				return false
+			}
 			log.WithFields(logrus.Fields{"members": len(members), "phase": phaseName(phase)}).Info("group capture: every member at the freeze point; released together")
 			return true
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			log.Warn("group capture: not every member reached the freeze point; aborting")
-			release(false)
+			release(false, phase)
 			return false
 		}
 		time.Sleep(poll)
 	}
+}
+
+// releaseAttempts and releaseRetry bound how long the driver keeps asking a
+// member that did not acknowledge its freeze point's decision.
+const releaseAttempts = 3
+
+var releaseRetry = 500 * time.Millisecond
+
+// postFreeze posts to a member's freeze point; an error unless the member's
+// agent accepted it.
+func postFreeze(ctx context.Context, client *http.Client, u string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("status %s", resp.Status)
+	}
+	return nil
 }
 
 func phaseName(phase string) string {
