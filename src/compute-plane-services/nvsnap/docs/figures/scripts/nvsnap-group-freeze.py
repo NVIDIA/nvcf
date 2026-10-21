@@ -17,7 +17,7 @@ from figlib import Fig  # noqa: E402
 
 f = Fig(
     "nvsnap-group-freeze", 1240, 900,
-    "The Group Freeze Point: Stop Together, Resume Together",
+    "The Group Freeze Point: Stop Together, Finish Together",
     "Each member of a group capture is dumped by its own node's agent after its own preparation. Every member "
     "waits at a freeze point; the leader's agent, the driver, releases them all at once when every member has "
     "arrived, or aborts them all. After the dump, each member's CRIU waits in its post-dump hook with its "
@@ -58,18 +58,19 @@ f.plabel(GX[1] + GW - 106, 220, "reached", anchor="end")
 f.plabel(GX[1] + GW - 44, 220, "go or abort", anchor="start")
 cx = GX[1] + GW // 2
 f.plabel(cx - 56, 440, "dumped", anchor="end")
-f.plabel(cx + 56, 440, "dump; resume", anchor="start")
+f.plabel(cx + 56, 440, "dump; finish", anchor="start")
 
 y = f.legend(40, 660, [
     (1, "Each member's agent finishes its member's preparation and holds it at the freeze point. The driver polls "
         "each agent until every member has reached it, for up to 30 minutes."),
     (2, "The driver posts go to every member at once; each must acknowledge it."),
     (3, "Each member's CRIU dumps it and waits in its post-dump hook; the driver polls again until every member is dumped."),
-    (4, "The driver posts go again, and every member resumes."),
+    (4, "The driver posts go again, and every member's dump finishes at once. A group capture stops the instance for "
+        "good (no --leave-running); its replacement pods restore from the capture. An in-place capture resumes instead."),
 ])
 for i, line in enumerate(textwrap.wrap(
         "Why both points: members dumped seconds apart saw the gap as real (an etcd expired a client's lease), and a "
-        "member that resumed while another was still being dumped left a TCP connection at different points in the "
+        "member that went on while another was still being dumped left a TCP connection at different points in the "
         "two images, which never resynchronised after the restore.", 190)):
     f.note(40, y + 4 + 15 * i, line)
 f.write(y + 4 + 15 * (i + 1) + 10)

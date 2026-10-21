@@ -19,7 +19,9 @@ package agent
 // at different points and the restored connection never resynchronised. So
 // each member's criu also waits in its post-dump hook, its tree still
 // stopped and its network still locked, until every member is dumped; then
-// they all resume.
+// they all go on together: they resume when the capture leaves the instance
+// running, and end when it stops it for good, as a group capture does
+// (checkpointInstance).
 
 import (
 	"context"
