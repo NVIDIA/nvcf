@@ -18,6 +18,7 @@ was not re-checked against the code.
 **Contents**
 
 - [Reading paths](#reading-paths)
+- [Reference](#reference)
 - [Architecture](#architecture)
 - [Operate](#operate)
 - [Design notes](#design-notes)
@@ -31,10 +32,17 @@ was not re-checked against the code.
 
 | You are | Read, in order |
 |---|---|
-| New to nvsnap | [README](../README.md), [architecture](architecture/NVSNAP-ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
-| Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml) |
+| New to nvsnap | [README](../README.md), [glossary](GLOSSARY.md), [architecture](architecture/NVSNAP-ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
+| Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml), [reference](REFERENCE.md) |
 | Changing the code | [Developing](operate/DEVELOPING.md), [architecture](architecture/NVSNAP-ARCHITECTURE.md), the design note for the area you touch, [CONTRIBUTING](../CONTRIBUTING.md) |
 | Reviewing a claim or a number | [Results](#results); each number there names its date and hardware |
+
+## Reference
+
+| Page | Answers | Status |
+|---|---|---|
+| [GLOSSARY.md](GLOSSARY.md) | What each nvsnap word means, including the storage tiers L1–L4, and which words are retired | Current, 2026-10-21 |
+| [REFERENCE.md](REFERENCE.md) | Every `nvsnap.io/*` annotation and label, environment variable and agent route | Generated from the code; CI fails when it is stale |
 
 ## Architecture
 
@@ -109,4 +117,5 @@ and are not maintained; they are not authoritative for the current code.
 
 A new document goes into this index in the same commit that adds it.
 `make check-docs` (and the `nvsnap docs` workflow) fails on a broken link,
-heading anchor or doc path, and on a stale table of contents.
+heading anchor or doc path, on a stale table of contents, and on a
+REFERENCE.md that no longer matches the code.

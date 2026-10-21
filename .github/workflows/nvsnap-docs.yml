@@ -3,7 +3,8 @@
 #
 # Check nvsnap's documentation against itself: every relative link, heading
 # anchor and doc path resolves (in docs, code, scripts and the chart), and
-# every maintained doc's table of contents matches its headings. Markdown style is markdown-lint.yml's job;
+# every maintained doc's table of contents matches its headings, and
+# docs/REFERENCE.md (annotations, env vars, agent routes) matches the code. Markdown style is markdown-lint.yml's job;
 # this one catches what style cannot, a doc that points at something that
 # moved. Runs only when nvsnap or this workflow changes; it takes seconds.
 #
@@ -12,7 +13,8 @@
 #   make -C src/compute-plane-services/nvsnap check-docs
 #
 # A stale table of contents is rewritten by scripts/docs/docs-toc.py (no
-# arguments); edit the headings, never the generated list.
+# arguments); edit the headings, never the generated list. A stale
+# REFERENCE.md is rewritten by scripts/docs/reference.py.
 
 name: nvsnap docs
 
@@ -55,3 +57,6 @@ jobs:
 
       - name: Check tables of contents
         run: python3 src/compute-plane-services/nvsnap/scripts/docs/docs-toc.py --check
+
+      - name: Check the generated reference matches the code
+        run: python3 src/compute-plane-services/nvsnap/scripts/docs/reference.py --check

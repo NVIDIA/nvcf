@@ -74,12 +74,14 @@ test:
 check-gpushare:
 	./scripts/check-gpushare-build.sh
 
-# Check doc links, anchors and doc paths, and that every maintained doc's
-# table of contents matches its headings; same check as CI.
+# Check doc links, anchors and doc paths, that every maintained doc's table
+# of contents matches its headings, and that docs/REFERENCE.md matches the
+# code; same check as CI.
 check-docs:
 	cd scripts/docs && python3 -m unittest -q test_docs_checks
 	python3 scripts/docs/check-doc-links.py
 	python3 scripts/docs/docs-toc.py --check
+	python3 scripts/docs/reference.py --check
 
 test-coverage:
 	mkdir -p coverage

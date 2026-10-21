@@ -23,6 +23,7 @@ def load(name: str, file: str):
 
 links = load("check_doc_links", "check-doc-links.py")
 toc = load("docs_toc", "docs-toc.py")
+ref = load("reference", "reference.py")
 
 
 class SlugTest(unittest.TestCase):
@@ -105,6 +106,25 @@ class TocTest(unittest.TestCase):
         self.assertEqual(toc.render(short), short)
         # A stale TOC in a doc that no longer needs one is removed.
         self.assertEqual(toc.render(toc.render(self.DOC).replace("### Inner\n", "").replace("## Second\n", "")).count(toc.BEGIN), 0)
+
+
+class ReferenceTest(unittest.TestCase):
+    def test_first_sentence_drops_the_name_and_keeps_one_sentence(self):
+        self.assertEqual(ref.first_sentence("GPUShareAnnotation opts a pod in. More detail.", "GPUShareAnnotation"),
+                         "Opts a pod in.")
+        self.assertEqual(ref.first_sentence("Splits a|b at v1.2 safely"), "Splits a\\|b at v1.2 safely")
+
+    def test_declarations_and_routes_parse(self):
+        m = ref.DECL.match('\tCRIUGroupAnnotation = "nvsnap.io/criu-group" // trailing')
+        self.assertEqual((m.group(1), m.group(2), m.group(3)), ("CRIUGroupAnnotation", "nvsnap.io/criu-group", "trailing"))
+        r = ref.ROUTE.search('\trouter.Handle("/debug/pprof/heap", pprof.Handler("heap"))')
+        self.assertEqual((r.group(1), r.group(2)), ("/debug/pprof/heap", 'pprof.Handler("heap")'))
+        r = ref.ROUTE.search('\trouter.HandleFunc("/v1/x/{id}", a.xHandler).Methods("GET", "POST")')
+        self.assertEqual((r.group(2), r.group(3)), ("a.xHandler", '"GET", "POST"'))
+
+    def test_generated_page_is_current(self):
+        self.assertEqual(ref.render(), ref.OUT.read_text(encoding="utf-8"),
+                         "docs/REFERENCE.md is stale: run scripts/docs/reference.py")
 
 
 if __name__ == "__main__":
