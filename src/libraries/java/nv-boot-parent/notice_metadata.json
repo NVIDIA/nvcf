@@ -1336,6 +1336,13 @@
       "name": "Bouncy Castle Provider (LTS Distribution)",
       "url": "https://www.bouncycastle.org/lts-java"
     },
+    "org.bouncycastle:bcprov-lts8on:2.73.13": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider (LTS Distribution)",
+      "url": "https://www.bouncycastle.org/lts-java"
+    },
     "org.bouncycastle:bcprov-lts8on:2.73.8": {
       "licenses": [
         "Bouncy Castle Licence"
