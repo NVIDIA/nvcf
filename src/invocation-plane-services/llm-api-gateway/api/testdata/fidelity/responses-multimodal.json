@@ -63,6 +63,8 @@
       "enable_thinking": false
     }
   },
+  "upstream_input_tokens": "47",
+  "upstream_affinity_key": "mt:v1:payload:9ad999442723a571f09c3040539286caa1f8028f38d2b34dc5c366f70421066e",
   "upstream_response": {
     "sse": [
       {

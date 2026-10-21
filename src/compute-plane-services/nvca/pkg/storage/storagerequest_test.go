@@ -695,6 +695,42 @@ func TestGetStorageRequestErrorLog(t *testing.T) {
 			expectedError: "failed to create shared-storage object nvcf-smb-server: Pod is invalid: requests 500m above limit 100m",
 		},
 		{
+			name: "failed phase with SMB server pod not starting",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageFailed,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSMBServerReady,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonUnschedulable,
+							Message: "pod nvcf-smb-server cannot be scheduled: 0/3 nodes are available: 3 Insufficient cpu.",
+						},
+					},
+				},
+			},
+			expectedError: "pod nvcf-smb-server cannot be scheduled: 0/3 nodes are available: 3 Insufficient cpu.",
+		},
+		{
+			name: "in-progress phase with SMB server pod not starting reports nothing yet",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageInitRunning,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSMBServerReady,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonImagePullFailed,
+							Message: "container \"smb-server\" cannot pull image",
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
 			name: "failed phase without SMB CSI driver condition",
 			storageReq: &nvcav2beta1.StorageRequest{
 				ObjectMeta: metav1.ObjectMeta{

@@ -147,6 +147,10 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		countRequest,
 	)
 	estimatedInputTokens += estimatedTokenCountForText(customToolFormatText(request.Tools))
+	estimatedInputTokens += estimatedTokenCountForRawTools(request.Tools)
+	for _, value := range request.UndecodedMembers {
+		estimatedInputTokens += estimatedTokenCountForRawJSON(value)
+	}
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(countRequest)
 	checkRequest := ratelimit.ResourceRequest{

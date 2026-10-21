@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "oci-capability-layer_lib",
+    srcs = ["main.go"],
+    importpath = "nvcf/tools/oci-capability-layer",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "oci-capability-layer",
+    embed = [":oci-capability-layer_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "oci-capability-layer_test",
+    srcs = ["main_test.go"],
+    embed = [":oci-capability-layer_lib"],
+)

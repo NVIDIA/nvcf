@@ -19,7 +19,6 @@ package openairesponses
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,76 +78,6 @@ func TestCreateRequest_Validate(t *testing.T) {
 			errMsg:  "`model`: is required",
 		},
 		{
-			name: "invalid temperature",
-			request: CreateRequest{
-				Model:       "gpt-4",
-				Input:       Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				Temperature: ptrFloat64(3.0),
-			},
-			wantErr: true,
-			errMsg:  "`temperature`: must be between 0 and 2",
-		},
-		{
-			name: "invalid top_p",
-			request: CreateRequest{
-				Model: "gpt-4",
-				Input: Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				TopP:  ptrFloat64(1.5),
-			},
-			wantErr: true,
-			errMsg:  "`top_p`: must be between 0 and 1",
-		},
-		{
-			name: "invalid service tier",
-			request: CreateRequest{
-				Model:       "gpt-4",
-				Input:       Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				ServiceTier: ptrString("invalid"),
-			},
-			wantErr: true,
-			errMsg:  "`service_tier`: must be one of: auto, default, flex",
-		},
-		{
-			name: "invalid truncation",
-			request: CreateRequest{
-				Model:      "gpt-4",
-				Input:      Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				Truncation: ptrString("invalid"),
-			},
-			wantErr: true,
-			errMsg:  "`truncation`: must be one of: auto, disabled",
-		},
-		{
-			name: "max_tool_calls below minimum",
-			request: CreateRequest{
-				Model:        "openai/gpt-oss-20b",
-				Input:        Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				MaxToolCalls: ptr.To(0),
-			},
-			wantErr: true,
-			errMsg:  "`max_tool_calls`: must be between 1 and 100",
-		},
-		{
-			name: "max_tool_calls negative",
-			request: CreateRequest{
-				Model:        "openai/gpt-oss-20b",
-				Input:        Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				MaxToolCalls: ptr.To(-1),
-			},
-			wantErr: true,
-			errMsg:  "`max_tool_calls`: must be between 1 and 100",
-		},
-		{
-			name: "max_tool_calls above maximum",
-			request: CreateRequest{
-				Model:        "openai/gpt-oss-20b",
-				Input:        Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				MaxToolCalls: ptr.To(101),
-			},
-			wantErr: true,
-			errMsg:  "`max_tool_calls`: must be between 1 and 100",
-		},
-		{
 			name: "max_tool_calls valid minimum",
 			request: CreateRequest{
 				Model:        "openai/gpt-oss-20b",
@@ -165,26 +94,6 @@ func TestCreateRequest_Validate(t *testing.T) {
 				MaxToolCalls: ptr.To(100),
 			},
 			wantErr: false,
-		},
-		{
-			name: "top_logprobs negative",
-			request: CreateRequest{
-				Model:       "openai/gpt-oss-20b",
-				Input:       Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				TopLogprobs: ptr.To(-1),
-			},
-			wantErr: true,
-			errMsg:  "`top_logprobs`: must be between 0 and 20",
-		},
-		{
-			name: "top_logprobs above maximum",
-			request: CreateRequest{
-				Model:       "openai/gpt-oss-20b",
-				Input:       Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				TopLogprobs: ptr.To(21),
-			},
-			wantErr: true,
-			errMsg:  "`top_logprobs`: must be between 0 and 20",
 		},
 		{
 			name: "top_logprobs valid minimum",
@@ -230,57 +139,46 @@ func TestCreateRequest_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		// The backend validates ranges, enums and metadata limits.
 		{
-			name: "metadata too many pairs",
+			name: "out-of-range values are left to the backend",
 			request: CreateRequest{
-				Model: "llama-3.3-70b-versatile",
-				Input: Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				Metadata: &Metadata{
-					"k1":  "v1",
-					"k2":  "v2",
-					"k3":  "v3",
-					"k4":  "v4",
-					"k5":  "v5",
-					"k6":  "v6",
-					"k7":  "v7",
-					"k8":  "v8",
-					"k9":  "v9",
-					"k10": "v10",
-					"k11": "v11",
-					"k12": "v12",
-					"k13": "v13",
-					"k14": "v14",
-					"k15": "v15",
-					"k16": "v16",
-					"k17": "v17",
-				},
+				Model:        "gpt-4",
+				Input:        Input{Items: []InputItem{newAdapterTextItem("Hello")}},
+				Temperature:  ptrFloat64(3.0),
+				ServiceTier:  ptrString("priority"),
+				MaxToolCalls: ptr.To(0),
 			},
-			wantErr: true,
-			errMsg:  "`metadata`: must have at most 16 key-value pairs",
+			wantErr: false,
 		},
 		{
-			name: "metadata key too long",
-			request: CreateRequest{
-				Model: "llama-3.3-70b-versatile",
-				Input: Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				Metadata: &Metadata{
-					strings.Repeat("k", 65): "value",
-				},
-			},
+			name:    "missing input without stored context",
+			request: CreateRequest{Model: "gpt-4"},
 			wantErr: true,
-			errMsg:  "exceeds 64 character limit",
+			errMsg:  "`input`: must provide input, prompt, previous_response_id or conversation",
 		},
 		{
-			name: "metadata value too long",
+			name:    "previous_response_id without input",
+			request: CreateRequest{Model: "gpt-4", PreviousResponseID: ptrString("resp_1")},
+			wantErr: false,
+		},
+		{
+			name:    "prompt without input",
+			request: CreateRequest{Model: "gpt-4", Prompt: &Prompt{ID: "pmpt_1"}},
+			wantErr: false,
+		},
+		{
+			name:    "conversation without input",
+			request: CreateRequest{Model: "gpt-4", Conversation: &Conversation{ID: ptrString("conv_1")}},
+			wantErr: false,
+		},
+		{
+			name: "undecoded prompt without input",
 			request: CreateRequest{
-				Model: "llama-3.3-70b-versatile",
-				Input: Input{Items: []InputItem{newAdapterTextItem("Hello")}},
-				Metadata: &Metadata{
-					"key": strings.Repeat("v", 513),
-				},
+				Model:            "gpt-4",
+				UndecodedMembers: map[string]json.RawMessage{"prompt": json.RawMessage(`7`)},
 			},
-			wantErr: true,
-			errMsg:  "exceeds 512 character limit",
+			wantErr: false,
 		},
 		{
 			name: "metadata nil is valid",
@@ -448,9 +346,14 @@ func TestInputItem_UnmarshalJSON(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "unknown type",
-			json:    `{"type": "unknown"}`,
-			wantErr: true,
+			name:     "unknown type stays raw",
+			json:     `{"type": "unknown"}`,
+			expected: InputItem{Type: "unknown", Raw: json.RawMessage(`{"type": "unknown"}`)},
+		},
+		{
+			name:     "known type that fails to decode stays raw",
+			json:     `{"type": "function_call", "arguments": {"a": 1}}`,
+			expected: InputItem{Type: ItemTypeFunctionCall, Raw: json.RawMessage(`{"type": "function_call", "arguments": {"a": 1}}`)},
 		},
 	}
 
@@ -467,6 +370,7 @@ func TestInputItem_UnmarshalJSON(t *testing.T) {
 				assert.Equal(t, tt.expected.Type, item.Type)
 				assert.Equal(t, tt.expected.Role, item.Role)
 				assert.Equal(t, tt.expected.ID, item.ID)
+				assert.Equal(t, tt.expected.Raw, item.Raw)
 				if len(tt.expected.MessageContent) > 0 {
 					assert.Equal(t, tt.expected.MessageContent, item.MessageContent)
 				}
@@ -1068,11 +972,6 @@ func TestUnmarshalErrors(t *testing.T) {
 			name: "invalid tool choice",
 			json: `"invalid"`,
 			dest: &ToolChoice{},
-		},
-		{
-			name: "invalid input item type",
-			json: `{"type": "unknown_type"}`,
-			dest: &InputItem{},
 		},
 		{
 			name: "invalid output item type",

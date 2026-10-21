@@ -158,14 +158,10 @@ func (h *Handlers) normalizeChatRequest(
 		return nil, err
 	}
 
-	if !request.ServiceTier.IsValid() {
-		request.ServiceTier = h.config.DefaultServiceTier
-	}
-
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(
 		request.Model,
 		request,
-	) + estimatedTokenCountForUnmodeledChatFields(rawBody)
+	) + estimatedTokenCountForUnmodeledChatFields(rawBody, *request.Messages)
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(request)
 	checkRequest := ratelimit.ResourceRequest{

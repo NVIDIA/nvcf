@@ -169,6 +169,8 @@
       "vendor_option": true
     }
   },
+  "upstream_input_tokens": "150",
+  "upstream_affinity_key": "mt:v1:payload:5c23b03d9dd97330d64c38874d27b452b2bd90141b17ccd744a89e4046d8f3e4",
   "upstream_response": {
     "sse": [
       {
