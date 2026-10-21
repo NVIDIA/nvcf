@@ -19,9 +19,10 @@
         "content": "Reply OK."
       }
     ],
-    "stream": true,
-    "service_tier": "auto"
+    "stream": true
   },
+  "upstream_input_tokens": "7",
+  "upstream_affinity_key": "mt:v1:payload:8943a5f01468f5a2c493621685fc85cb6b704deab95d06881f47a1f2c67e5763",
   "upstream_response": {
     "sse": [
       {
