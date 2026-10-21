@@ -258,6 +258,21 @@ public class MockIcmsServer {
         }
     }
 
+    // Overrides the any-account cluster groups stub for one account, so a test can tell
+    // which account ID the caller resolved.
+    public static void stubClusterGroupsForAccount(String ncaId, String clusterGroupName) {
+        var body = """
+                {"clusterGroups": [{"id": "%s", "name": "%s", "ncaId": "%s",
+                  "authorizedNcaIds": [], "gpus": [], "clusters": []}]}
+                """.formatted(UUID.randomUUID(), clusterGroupName, ncaId);
+        mockIcmsServer.stubFor(get(urlPathEqualTo("/v1/si/accounts/%s/clusterGroups".formatted(ncaId)))
+                                       .atPriority(1)
+                                       .willReturn(aResponse().withStatus(200)
+                                                           .withHeader(HttpHeaders.CONTENT_TYPE,
+                                                                       APPLICATION_JSON_VALUE)
+                                                           .withBody(body)));
+    }
+
     private static void addStubForGetClusterGroupsEndpoint(
             WireMockServer mockIcmsServer,
             ClusterGroupsResponseState responseState) {
