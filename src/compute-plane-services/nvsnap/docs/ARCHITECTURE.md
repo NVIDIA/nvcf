@@ -399,8 +399,4 @@ In the order they matter for multi-node instances:
 
 ## 14. Where other documents disagree with the code
 
-| Claim | Where | What the code does |
-|---|---|---|
-| Cross-cluster replication is "Proposed" | [design/cross-cluster-replication.md](design/cross-cluster-replication.md) | `internal/agent/replication*.go` and `POST /v1/replicate/{hash}` implement it, opt-in |
-| Storage-agnostic L2 promotion is a "proposal" | [design/STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | `internal/checkpointstore/promoter*.go` implement snapshot and shared promoters |
-| gpushare runs when the pod is annotated `nvsnap.io/gpushare: "true"` | [design/GPUSHARE.md](design/GPUSHARE.md) "Use through nvsnap" | Under `captureMethod: criu` it runs on every GPU pod that does not run to completion, unless annotated `"false"` (`internal/webhook/gpushare.go` `gpushareMode`) |
+None: every design note and guide was checked claim by claim against the code on 2026-10-21 and corrected. A disagreement found later is listed here until the document is fixed.
