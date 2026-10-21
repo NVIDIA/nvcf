@@ -573,7 +573,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "Vjs2aLDiztq2JcqxCwBcmhWsa/nb80kDJ1sMT56l+0k=",
-        "usagesDigest": "HKF3I6aSEqTmxswUgbBLsv6vboCPRZe6QGLO1XqlxM4=",
+        "usagesDigest": "lvC/qbe52/J79xcIUOL6zKJc8JPcQV1ur817pMArC+0=",
         "recordedInputs": [
           "REPO_MAPPING:aspect_bazel_lib+,bazel_tools bazel_tools",
           "REPO_MAPPING:bazel_features+,bazel_tools bazel_tools",
@@ -776,7 +776,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platform": "linux/amd64",
               "target_name": "distroless_java_linux_amd64",
               "bazel_tags": []
@@ -789,7 +789,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platform": "linux/arm64/v8",
               "target_name": "distroless_java_linux_arm64_v8",
               "bazel_tags": []
@@ -803,7 +803,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/java",
-              "identifier": "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
+              "identifier": "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
               "platforms": {
                 "@@platforms//cpu:x86_64": "@distroless_java_linux_amd64",
                 "@@platforms//cpu:arm64": "@distroless_java_linux_arm64_v8"
