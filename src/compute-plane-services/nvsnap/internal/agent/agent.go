@@ -251,7 +251,7 @@ type ModelVolumeConfig struct {
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
-// docs/design/L2-PVC-CRIU-DESIGN.md.
+// docs/ARCHITECTURE.md §6.
 type L2BackendConfig struct {
 	// StorageClass is the RWX-capable StorageClass name. Required
 	// to enable L2 — empty disables. On GKE production we set this
@@ -699,7 +699,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// chain in buildAgentBackend appends a.l2Backend when non-nil so
 	// every rootfs capture also produces the L2 PVC for fan-out. The
 	// previous order (rootfs first, L2 second) silently dropped L2 from
-	// the rootfs path — see docs/design/ROOTFS-EVERYWHERE.md gap #1.
+	// the rootfs path.
 	l2, err := a.startL2Backend(ctx, a.config.L2)
 	if err != nil {
 		a.log.WithError(err).Error("L2 backend failed to start; multi-node restore will use L3 peer cascade only")

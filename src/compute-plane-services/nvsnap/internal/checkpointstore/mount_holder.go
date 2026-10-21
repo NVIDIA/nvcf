@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Mount-holder pod for the v0.0.51 L2 writer redesign
-// (docs/design/ROOTFS-EVERYWHERE.md). The mount-holder's sole job is
+// (docs/ARCHITECTURE.md §2). The mount-holder's sole job is
 // to satisfy kubelet's "PVC needs a referrer to attach+mount" rule:
 //
 //   - The pod schedules on the capturing agent's node (nodeName pin).

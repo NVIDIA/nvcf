@@ -212,7 +212,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 }
 
 // buildAgentBackend constructs the checkpointstore backend the agent
-// writes captures to. Chain layout (per docs/design/ROOTFS-EVERYWHERE.md):
+// writes captures to. Chain layout (per docs/ARCHITECTURE.md §2):
 //
 //   - LocalBackend         — per-node hostPath cache (restore-fast on same node)
 //   - ConfigMapBackend     — manifest CM (cluster-wide hash → metadata lookup)

@@ -72,9 +72,8 @@ Time to ready, cold and restored. nvsnap build: not recorded.
 
 | Record | What it holds |
 |---|---|
-| [results/BENCHMARK.md](results/BENCHMARK.md) | The tables above with their phase breakdowns and method; the page-cache prewarm A/B (September 2026); the February 2026 single-GPU results of the earlier engine |
-| [results/PDF-BENCH-RESULTS.md](results/PDF-BENCH-RESULTS.md) | The cold / warm / restore matrix written by `scripts/test-bench.sh` (H100, June 2026) |
-| [results/CRIU-TEST-MATRIX.md](results/CRIU-TEST-MATRIX.md) | Which workload shapes capture and restore with CRIU, and how each case is run |
+| [results/BENCHMARK.md](results/BENCHMARK.md) | The tables above with their phase breakdowns and method; the page-cache prewarm A/B (September 2026) |
+| [results/PDF-BENCH-RESULTS.md](results/PDF-BENCH-RESULTS.md) | Where `scripts/test-bench.sh` appends its cold / warm / restore rows; empty until the next run |
 | [design/GPUSHARE.md](design/GPUSHARE.md#validation) | gpushare validation |
 | [design/helm-shared-model-volume.md](design/helm-shared-model-volume.md) | Model volume results (H100, NVMesh, September 2026) |
 | [design/helm-chart-cache-election.md](design/helm-chart-cache-election.md) | Election results (H100, NVMesh, 2026-09-25) |

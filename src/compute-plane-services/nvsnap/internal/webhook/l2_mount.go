@@ -30,7 +30,7 @@ limitations under the License.
 // The L1 hostPath + nodeAffinity path stays as the fallback (called
 // from Mutate when this returns ErrNotFound).
 //
-// Design: docs/design/L2-PVC-CRIU-DESIGN.md §"Restore-side resolver".
+// Design: docs/ARCHITECTURE.md §6.
 
 package webhook
 

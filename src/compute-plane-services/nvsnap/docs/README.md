@@ -75,29 +75,17 @@ the column below is that status, corrected where the code disagrees.
 | [helm-shared-model-volume.md](design/helm-shared-model-volume.md) | One model volume per model per cluster, and the cache set | Built and verified (as the doc states) |
 | [helm-chart-cache-election.md](design/helm-chart-cache-election.md) | One downloader per hash when a chart starts many workers | Built and verified (as the doc states) |
 | [helm-chart-cache-refresh.md](design/helm-chart-cache-refresh.md) | Cache sets that learn what warm starts compile | Not re-checked |
-| [pidns-capture.md](design/pidns-capture.md) | Capturing a container's pid namespace | **Disagrees with the code**: says "not implemented"; `internal/agent/pidns_capture.go` dumps a container's pid 1 from outside its namespace |
 | [cross-cluster-replication.md](design/cross-cluster-replication.md) | Replicating checkpoints across clusters | **Disagrees with the code**: says "Proposed"; opt-in replication and `POST /v1/replicate` exist (`internal/agent/agent.go` `Replication`) |
 | [dynamo-cr-validation.md](design/dynamo-cr-validation.md) | How a Dynamo workload's checkpoint/restore is validated | Proposal (as the doc states) |
-| [L2-PVC-CRIU-DESIGN.md](design/L2-PVC-CRIU-DESIGN.md) | The per-capture rwx/rox volume pair for CRIU checkpoints | Current (as the doc states) |
 | [STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | Promoting the L2 volume on any storage | **Disagrees with the code**: says "proposal"; `internal/checkpointstore/promoter*.go` implement promoters |
-| [ROOTFS-EVERYWHERE.md](design/ROOTFS-EVERYWHERE.md) | Rootfs capture as the default path, and its bugs | Record of the v0.0.49 work |
-| [ROOTFS-RESTORE-INJECTION.md](design/ROOTFS-RESTORE-INJECTION.md) | Capture-type-aware restore injection | Record of the v0.0.55 work |
-| [rootfs-restore-overlayfs.md](design/rootfs-restore-overlayfs.md) | Restoring a rootfs capture through OverlayFS | Built (as the doc states) |
-| [rootfs-overlay-mount-scale.md](design/rootfs-overlay-mount-scale.md) | Keeping mount topology out of the Pod object | Built (as the doc states) |
-| [init-container-mount-prep.md](design/init-container-mount-prep.md) | Moving restore mount prep from the webhook to an init container | **Disagrees with the code**: says "not implemented"; `cmd/nvsnap-mount-prep` is that init container |
-| [single-gpu-restore-speedup.md](design/single-gpu-restore-speedup.md) | Making single-GPU CRIU restore faster | Lever A built and measured (as the doc states) |
-| [MULTI-GPU-ROOTFS-FANOUT-DESIGN.md](design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md) | Multi-GPU restore through rootfs capture | Phase 1 shipped (as the doc states) |
-| [RUNTIME-AGNOSTIC.md](design/RUNTIME-AGNOSTIC.md) | Finding a pod's processes without a runtime API | Partly stale (as the doc states: its LD_PRELOAD examples are the retired engine) |
-| [CUDA-CHECKPOINT-CALL-FLOW.md](design/CUDA-CHECKPOINT-CALL-FLOW.md) | How cuda-checkpoint is invoked | Not re-checked |
-| [THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) | What the CRIU fork carries and why | Not re-checked |
+| [THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) | What the CRIU fork carries and why | Current, 2026-10-21 (pin and check in `scripts/versions.sh`, `scripts/build-agent.sh`) |
 
 ## Results
 
 | Page | Answers | Status |
 |---|---|---|
-| [BENCHMARK.md](results/BENCHMARK.md) | Measured capture and restore times, by workload | Record |
-| [PDF-BENCH-RESULTS.md](results/PDF-BENCH-RESULTS.md) | The cold / warm / restore matrix produced by `scripts/test-bench.sh` | Record (H100, June 2026) |
-| [CRIU-TEST-MATRIX.md](results/CRIU-TEST-MATRIX.md) | Which workload shapes capture and restore with CRIU | Record |
+| [BENCHMARK.md](results/BENCHMARK.md) | Measured restore times with phase breakdowns: single-GPU CRIU (July 2026), cachedir (June 2026), page-cache prewarm (September 2026) | Record |
+| [PDF-BENCH-RESULTS.md](results/PDF-BENCH-RESULTS.md) | Where `scripts/test-bench.sh` appends its cold / warm / restore rows | Empty until the next run |
 
 ## Using the API
 

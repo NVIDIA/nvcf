@@ -345,8 +345,7 @@ type updatePVCPromoteStateRequest struct {
 // updatePVCPromoteStateByHash handles POST
 // /api/v1/checkpoints/by-hash/{hash}/pvc-state. Writes the L2
 // state-machine columns on every catalog row that shares the given
-// content hash. See docs/design/L2-PVC-CRIU-DESIGN.md §"pvc_promote_state
-// state machine".
+// content hash. See docs/ARCHITECTURE.md §6.
 //
 // Hash-keyed (not id-keyed) because the L2 artifact rox-<short-hash>
 // is hash-keyed and multiple capture rows can share a hash

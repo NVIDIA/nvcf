@@ -48,7 +48,7 @@ rules:
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
-    # docs/design/ROOTFS-EVERYWHERE.md). The holder is a Kyverno-
+    # docs/ARCHITECTURE.md §2). The holder is a Kyverno-
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.

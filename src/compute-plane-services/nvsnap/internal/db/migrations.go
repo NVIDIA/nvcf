@@ -192,8 +192,7 @@ var migrations = []string{
 	//
 	// Restore-side polls /api/v1/checkpoints/lookup?hash=<hash> and
 	// reads pvc_promote_state to decide L1 → L2-bound → L2-poll-wait →
-	// L3-peer → L4-blob (see docs/design/L2-PVC-CRIU-DESIGN.md §"Restore-side
-	// resolver"). The index on pvc_promote_state makes the orphan-GC
+	// L3-peer → L4-blob (see docs/ARCHITECTURE.md §6). The index on pvc_promote_state makes the orphan-GC
 	// sweep (find rows stuck in writing/snapshotting past a deadline)
 	// a single-pass query.
 	`ALTER TABLE checkpoints ADD COLUMN pvc_name TEXT NOT NULL DEFAULT '';

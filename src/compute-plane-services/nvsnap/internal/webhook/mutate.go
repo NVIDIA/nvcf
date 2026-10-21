@@ -18,7 +18,7 @@ limitations under the License.
 // Package webhook implements the customer-facing surface for transparent
 // rootfs-only restore: a mutating admission webhook that injects cache
 // volumes + mounts into pods marked with the nvsnap.io/restore-from
-// annotation. See docs/design/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.5.
+// annotation. See docs/ARCHITECTURE.md §2.
 //
 // This file is the pure-logic Mutator (pod in → JSON Patch ops out). The
 // HTTPS / cert / AdmissionReview transport layer lives separately so the
@@ -670,7 +670,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// TYPE, not merely on "does a rox PVC exist". A rootfs capture
 	// promoted to an L2 PVC is a filesystem tree, NOT a CRIU dump —
 	// routing it through the CRIU branch would hang the restore waiting
-	// for inventory.img. See docs/design/ROOTFS-RESTORE-INJECTION.md.
+	// for inventory.img. See docs/ARCHITECTURE.md §2.
 	//
 	// ErrNotFound is tolerated here, NOT fatal: a CRIU capture lives only
 	// on the L2 PVC, so the L1/ConfigMap Backend may legitimately not have

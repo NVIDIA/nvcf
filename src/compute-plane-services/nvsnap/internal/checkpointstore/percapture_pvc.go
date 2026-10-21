@@ -40,7 +40,7 @@ limitations under the License.
 // the caller (agent CRIU path) treats L2 promote as best-effort with
 // a fall-through to L3/L4 — see internal/agent/checkpoint.go.
 //
-// Design: docs/design/L2-PVC-CRIU-DESIGN.md.
+// Design: docs/ARCHITECTURE.md §6.
 
 package checkpointstore
 
@@ -695,7 +695,7 @@ func (b *PerCapturePVCBackend) createRWXPVC(ctx context.Context, ns, name string
 }
 
 // runMountHolderCopy implements the v0.0.51 single-copy L2 writer
-// (docs/design/ROOTFS-EVERYWHERE.md). Replaces the legacy writer Job
+// (docs/ARCHITECTURE.md §2). Replaces the legacy writer Job
 // which couldn't run privileged in Kyverno-enforced source namespaces.
 //
 // Flow:

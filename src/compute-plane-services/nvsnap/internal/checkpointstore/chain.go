@@ -23,7 +23,7 @@ limitations under the License.
 //   - PerCapturePVCBackend    — rwx → snapshot → rox PVC (cluster-wide fan-out
 //                               for N restored pods mounting one read-only disk)
 //
-// See docs/design/ROOTFS-EVERYWHERE.md.
+// See docs/ARCHITECTURE.md §2.
 
 package checkpointstore
 

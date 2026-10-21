@@ -22,7 +22,7 @@
 #      the runtime-discovery layer (1) makes it less load-bearing.
 #   3. Whatever LD_LIBRARY_PATH the parent already had.
 #
-# See docs/design/CUDA-CHECKPOINT-CALL-FLOW.md for the full flow.
+# See docs/ARCHITECTURE.md §3 for the full flow.
 
 unset LD_PRELOAD
 if [ -f /etc/ld.so.preload ]; then

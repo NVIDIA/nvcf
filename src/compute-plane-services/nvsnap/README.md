@@ -61,9 +61,7 @@ into workload pods.
 
 Deeper design docs:
 [architecture](docs/ARCHITECTURE.md) ·
-[gpushare](docs/design/GPUSHARE.md) ·
-[runtime-agnostic discovery](docs/design/RUNTIME-AGNOSTIC.md) ·
-[cuda-checkpoint call flow](docs/design/CUDA-CHECKPOINT-CALL-FLOW.md).
+[gpushare](docs/design/GPUSHARE.md).
 
 ---
 

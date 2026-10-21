@@ -23,6 +23,7 @@ about the current build. Checked against the code of branch
 - [0. Evidence levels](#0-evidence-levels)
 - [1. What nvsnap is and what a deployment runs](#1-what-nvsnap-is-and-what-a-deployment-runs)
 - [2. The two capture methods and how one is chosen](#2-the-two-capture-methods-and-how-one-is-chosen)
+  - [Restoring a cachedir capture](#restoring-a-cachedir-capture)
 - [3. Single-pod CRIU capture and restore](#3-single-pod-criu-capture-and-restore)
   - [Capture](#capture)
   - [Restore](#restore)
@@ -113,6 +114,24 @@ value `agent.captureMethod`; the chart passes it to the agent as
 
 There is no architecture gate: amd64 and arm64 follow the same rules.
 
+### Restoring a cachedir capture
+
+A pod whose hash has a cachedir capture is restored by one of three paths,
+chosen at admission from the capture method the manifest records
+(`internal/webhook/mutate.go` `Mutate`). An older capture whose method is
+`rootfs` (a set of cache paths from the container's writable layer) is
+restored the same way, through an overlay.
+
+| Path | When | What the pod gets | Enforcing code |
+|---|---|---|---|
+| L2 cachedir | The capture's `rox-<hash>` volume is bound | The volume mounted read-only at the cachedir root, the same cache environment as at capture, and `nvsnap-rootfs-restore` as the entrypoint: it reads the tree into the page cache, then runs the recorded entrypoint | `internal/webhook/cachedir.go` `tryL2CacheDir`; `cmd/nvsnap-rootfs-restore` |
+| L2 overlay (`rootfs` captures) | The `rox-<hash>` volume is bound | One OverlayFS per pod, the volume as the read-only lower and a scratch upper, built by `nvsnap-rootfs-restore`, which then switches the workload's root into it; the Pod object carries one mount however many paths the capture holds | `internal/webhook/rootfs_l2_overlay.go` `tryL2RootfsOverlay`; `cmd/nvsnap-rootfs-restore` |
+| L1 host overlay | No bound `rox-<hash>` volume | The pod is pinned to a node that holds the capture; the agent there builds the overlay mounts in the background while the `nvsnap-mount-prep` init container waits for them, because mount work inside the admission webhook timed out on captures with hundreds of paths | `internal/webhook/mutate.go` `buildPatches`, `nodeAffinityPatches`; `internal/webhook/mount_prep_init.go`; `internal/agent/restore_prep.go` |
+
+Election followers that restore from a capture still being promoted wait in
+the `nvsnap-l2-wait` init container until the server reports the volume
+ready or failed (`cmd/nvsnap-l2-wait`; `internal/webhook/election.go`).
+
 ## 3. Single-pod CRIU capture and restore
 
 ### Capture
@@ -122,6 +141,15 @@ bundle at `/nvsnap`, gpushare in `LD_PRELOAD`, a per-pod chunk store, and the
 pod's identity (`nvsnap.io/cache-uri`, its rank and group size;
 `internal/webhook/criu_identity.go` `criuIdentityPatches`). It also widens
 liveness probes too tight to survive the freeze (section 10).
+
+The agent finds the pod's container through the node's container runtime
+(containerd or CRI-O, detected at start; `internal/runtime`) and its GPU
+processes from `/proc` (`internal/cuda` `FindAllGPUPIDsForContainer`). CRIU
+runs inside the container's namespaces, from a bundle the agent stages into
+the container at `/criu-bundle` (`internal/agent/checkpoint_v2.go`
+`stageV2Bundle`). Under gpushare the dump omits CRIU's CUDA plugin, because
+`nvsnap-gpu-suspend` has already checkpointed the GPU state; without gpushare
+the plugin runs the staged `cuda-checkpoint` (`dumpV2Args`).
 
 When the pod is Ready, the agent on its node:
 
@@ -356,8 +384,6 @@ In the order they matter for multi-node instances:
 
 | Claim | Where | What the code does |
 |---|---|---|
-| PID namespace capture is "not implemented" | [design/pidns-capture.md](design/pidns-capture.md) | `internal/agent/pidns_capture.go` dumps a container's pid 1 from outside its namespace |
 | Cross-cluster replication is "Proposed" | [design/cross-cluster-replication.md](design/cross-cluster-replication.md) | `internal/agent/replication*.go` and `POST /v1/replicate/{hash}` implement it, opt-in |
 | Storage-agnostic L2 promotion is a "proposal" | [design/STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | `internal/checkpointstore/promoter*.go` implement snapshot and shared promoters |
-| Init-container mount prep is "not implemented" | [design/init-container-mount-prep.md](design/init-container-mount-prep.md) | `cmd/nvsnap-mount-prep` is that init container |
 | gpushare's nvsnap integration as of 2026-10-10 | [design/GPUSHARE.md](design/GPUSHARE.md) | Since then: the rootfs diff is one archive; placeholders get only the model landing; no cachedir machinery under CRIU |
