@@ -306,12 +306,12 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			if sr.Spec.Action != common.TerminationAction {
 				continue
 			}
-			existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+			existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
 		}
 
 		// Process termination messages
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress while paused, skipping", message.MessageID)
 				continue
 			}
@@ -364,12 +364,12 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			if sr.Spec.Action != common.TerminationAction {
 				continue
 			}
-			existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+			existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
 		}
 
 		// Process termination messages
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
@@ -423,9 +423,9 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 	existingMsgIDs := sets.Set[string]{}
 	rejectedSRsByMsgID := map[string]*nvcav2beta1.ICMSRequest{}
 	for _, sr := range existingSRs {
-		existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+		existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
 		if GetCreationRejectionReason(sr) != "" {
-			rejectedSRsByMsgID[sr.Labels[SQSMessageIDKey]] = sr
+			rejectedSRsByMsgID[queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID)] = sr
 		}
 	}
 	qm.deleteRedeliveredRejectedMessages(ctx, qwInputs, qwOutputs, rejectedSRsByMsgID)
@@ -439,11 +439,11 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		anyQueuePullError = true
 	} else {
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
-			existingMsgIDs.Insert(message.MessageID)
+			existingMsgIDs.Insert(queueMessageKey(message))
 			if message.Body == nil {
 				log.Debugf("Termination ICMS request for %s has an empty body, skipping", message.MessageID)
 				continue
@@ -510,6 +510,30 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 	return nil
 }
 
+// A memory stream can reuse a sequence after restart. Keep existing message
+// labels stable, but distinguish a new request from redelivery of the old one.
+func queueRequestKey(messageID, requestID string) string {
+	if requestID == "" {
+		return messageID
+	}
+	return messageID + "\x00" + requestID
+}
+
+func queueMessageKey(message queue.ReceiveMessageOutput) string {
+	var request struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := json.Unmarshal(message.Body, &request); err != nil {
+		// The normal message decoder remains responsible for reporting bad input.
+		return message.MessageID
+	}
+	return queueRequestKey(message.MessageID, request.RequestID)
+}
+
+func queueMessageExists(existing sets.Set[string], message queue.ReceiveMessageOutput) bool {
+	return existing.Has(queueMessageKey(message)) || existing.Has(message.MessageID)
+}
+
 func createCreationMessageMatricesByGPU(
 	log *logrus.Entry,
 	qwInputs []queueWorkInput,
@@ -531,11 +555,11 @@ func createCreationMessageMatricesByGPU(
 		var tuples []createMessageTuple
 		// Construct creation message tuples in order, and dedupe against current messages
 		for _, message := range qwOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Creation ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
-			existingMsgIDs.Insert(message.MessageID)
+			existingMsgIDs.Insert(queueMessageKey(message))
 			if message.Body == nil {
 				log.Debugf("Creation ICMS request for %s has an empty body, skipping", message.MessageID)
 				continue
@@ -764,7 +788,10 @@ func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
 			continue
 		}
 		for _, message := range qwOutput.messages {
-			sr, ok := rejectedSRsByMsgID[message.MessageID]
+			sr, ok := rejectedSRsByMsgID[queueMessageKey(message)]
+			if !ok {
+				sr, ok = rejectedSRsByMsgID[message.MessageID]
+			}
 			if !ok {
 				continue
 			}
