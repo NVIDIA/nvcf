@@ -71,6 +71,8 @@ type Config struct {
 	Token      string // Function creation specific token (NVCF_TOKEN)
 	NVCTAPIKey string // NVCT-scoped API key for task operations (NVCF_NVCT_API_KEY)
 
+	EventLedgerAPIKey string // Event Ledger read API key (EVENT_LEDGER_API_KEY)
+
 	// Account configuration
 	ClientID string // NVIDIA Cloud Account client ID (NVCF_CLIENT_ID)
 
@@ -202,9 +204,10 @@ func LoadConfig() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
-		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
+		APIKey:            getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:             getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey:        getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
+		EventLedgerAPIKey: getTokenWithFallback("event_ledger_api_key", currentState.EventLedgerAPIKey, currentState.EventLedgerAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),
@@ -361,9 +364,10 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
-		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
+		APIKey:            getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:             getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey:        getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
+		EventLedgerAPIKey: getTokenWithFallback("event_ledger_api_key", currentState.EventLedgerAPIKey, currentState.EventLedgerAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),

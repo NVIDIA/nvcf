@@ -13,17 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "servicetier",
-    srcs = ["servicetier.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier",
-    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
+    name = "eventledger",
+    srcs = ["client.go"],
+    importpath = "nvcf-cli/internal/eventledger",
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
 )
 
-alias(
-    name = "go_default_library",
-    actual = ":servicetier",
-    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
+go_test(
+    name = "eventledger_test",
+    srcs = ["client_test.go"],
+    embed = [":eventledger"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

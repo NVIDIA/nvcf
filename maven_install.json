@@ -57,6 +57,7 @@
     "org.assertj:assertj-core": 1863574844,
     "org.awaitility:awaitility": -1630939750,
     "org.bouncycastle:bcprov-jdk18on": -1559819624,
+    "org.bouncycastle:bcprov-lts8on": -640500547,
     "org.jacoco:org.jacoco.agent": 418115308,
     "org.jacoco:org.jacoco.cli": 630637678,
     "org.junit.jupiter:junit-jupiter-api": 194920406,
@@ -315,13 +316,13 @@
     "io.micrometer:micrometer-tracing-bridge-otel": -1543628496,
     "io.micrometer:micrometer-tracing-bridge-otel:jar:sources": -569095445,
     "io.micrometer:micrometer-tracing:jar:sources": -1818825194,
-    "io.nats:jnats": -1835042585,
+    "io.nats:jnats": 393532265,
     "io.nats:jnats-json": 1080840129,
     "io.nats:jnats-json:jar:sources": -35506321,
     "io.nats:jnats:jar:sources": 194791155,
-    "io.nats:jwt-java": 1389770019,
+    "io.nats:jwt-java": -1596598957,
     "io.nats:jwt-java:jar:sources": -1854451321,
-    "io.nats:nkeys-java": 1763468041,
+    "io.nats:nkeys-java": 1600190085,
     "io.nats:nkeys-java:jar:sources": 748006274,
     "io.netty:netty-buffer": -592871867,
     "io.netty:netty-buffer:jar:sources": 1192905399,
@@ -527,8 +528,8 @@
     "org.bouncycastle:bcpkix-jdk18on:jar:sources": 453349016,
     "org.bouncycastle:bcprov-jdk18on": -1428224811,
     "org.bouncycastle:bcprov-jdk18on:jar:sources": 1596284461,
-    "org.bouncycastle:bcprov-lts8on": 973431866,
-    "org.bouncycastle:bcprov-lts8on:jar:sources": -196135755,
+    "org.bouncycastle:bcprov-lts8on": 83896074,
+    "org.bouncycastle:bcprov-lts8on:jar:sources": 394926954,
     "org.bouncycastle:bcutil-jdk18on": -497402802,
     "org.bouncycastle:bcutil-jdk18on:jar:sources": -294288512,
     "org.codehaus.mojo:animal-sniffer-annotations": -1570976252,
@@ -2288,10 +2289,10 @@
     },
     "org.bouncycastle:bcprov-lts8on": {
       "shasums": {
-        "jar": "492049b928f8baab535af0185bbab8734d14e1c7648ae2a2037d58486cafb676",
-        "sources": "d4447a4f412b328f3e43595ab99603dd38b08ee1db9f1ea341e6158eeb86a70d"
+        "jar": "a0c940ec60598268f9a5be580f8b86640df6c74b8b1b0aefaa80bf3439e95126",
+        "sources": "fce9428358d5332abc8a233d46e413dfb75e7ca223837ca946bd66f0c6472769"
       },
-      "version": "2.73.8"
+      "version": "2.73.13"
     },
     "org.bouncycastle:bcutil-jdk18on": {
       "shasums": {
@@ -3686,7 +3687,6 @@
     "com.squareup.okio:okio-jvm:3.6.0": "com.squareup.okio:okio-jvm:3.16.4",
     "commons-io:commons-io:2.19.0": "commons-io:commons-io:2.20.0",
     "org.apache.commons:commons-compress:1.27.1": "org.apache.commons:commons-compress:1.28.0",
-    "org.bouncycastle:bcprov-lts8on:2.73.7": "org.bouncycastle:bcprov-lts8on:2.73.8",
     "org.jetbrains:annotations:13.0": "org.jetbrains:annotations:17.0.0"
   },
   "dependencies": {
@@ -7926,6 +7926,7 @@
       "org.bouncycastle.crypto.hpke",
       "org.bouncycastle.crypto.io",
       "org.bouncycastle.crypto.kems",
+      "org.bouncycastle.crypto.kems.mlkem",
       "org.bouncycastle.crypto.macs",
       "org.bouncycastle.crypto.modes",
       "org.bouncycastle.crypto.modes.gcm",
@@ -7936,6 +7937,8 @@
       "org.bouncycastle.crypto.prng",
       "org.bouncycastle.crypto.prng.drbg",
       "org.bouncycastle.crypto.signers",
+      "org.bouncycastle.crypto.signers.mldsa",
+      "org.bouncycastle.crypto.signers.slhdsa",
       "org.bouncycastle.crypto.tls",
       "org.bouncycastle.crypto.util",
       "org.bouncycastle.iana",
@@ -7996,6 +7999,7 @@
       "org.bouncycastle.jce.netscape",
       "org.bouncycastle.jce.provider",
       "org.bouncycastle.jce.spec",
+      "org.bouncycastle.ldap",
       "org.bouncycastle.math",
       "org.bouncycastle.math.ec",
       "org.bouncycastle.math.ec.custom.djb",

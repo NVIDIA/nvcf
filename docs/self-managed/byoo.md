@@ -235,7 +235,7 @@ counts as not set.
 | `KRATOS_THANOS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
 | `OTEL_COLLECTOR` | Yes | Yes | Yes | OTLP HTTP base URL, for example `https://otel.example.com:4318` | String. Sent as `Authorization: Bearer <value>`. |
 | `PROMETHEUS` | No | Yes | No | Remote-write URL | Object with `clientCert` and `clientKey`, `caFile`, or all three. All values are PEM text. |
-| `SERVICENOW` | No | No | Yes | OTLP gRPC endpoint | String. Sent in the `lightstep-access-token` header. |
+| `SERVICENOW` | No | No | Yes | OTLP gRPC endpoint | String. A token that starts with `otel_` is sent in the `otel-token` header. Any other token is sent in the `lightstep-access-token` header. |
 | `SPLUNK` | Yes | No | No | Splunk HTTP Event Collector (HEC) URL | String. The HEC token. |
 
 Use `OTEL_COLLECTOR` to send to any OTLP HTTP receiver, including your own

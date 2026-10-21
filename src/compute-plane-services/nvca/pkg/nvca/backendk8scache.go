@@ -2289,7 +2289,7 @@ func getICMSLabelSelectorString(msgID string) string {
 	return fmt.Sprintf("%s=%s", SQSMessageIDKey, msgID)
 }
 
-func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID string) (bool, error) {
+func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID, requestID string) (bool, error) {
 	log := core.GetLogger(ctx)
 	selectorStr := getICMSLabelSelectorString(msgID)
 	icmsRequests, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).List(ctx, metav1.ListOptions{LabelSelector: selectorStr})
@@ -2297,9 +2297,13 @@ func (c *BackendK8sCache) checkICMSRequestExists(ctx context.Context, msgID stri
 		return true, fmt.Errorf("failed to list ICMS request in %v namespace: err: %v", c.requestsNamespace, err)
 	}
 
-	if icmsRequests != nil && len(icmsRequests.Items) > 0 {
-		log.Debugf("ICMS request for %v already in progress, skipping", msgID)
-		return true, nil
+	if icmsRequests != nil {
+		for _, request := range icmsRequests.Items {
+			if requestID == "" || request.Spec.RequestID == "" || request.Spec.RequestID == requestID {
+				log.WithField("requestId", requestID).Debugf("ICMS request for %v already in progress, skipping", msgID)
+				return true, nil
+			}
+		}
 	}
 	return false, nil
 }
@@ -2310,15 +2314,14 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 ) (*nvcav2beta1new.ICMSRequest, error) {
 	log := core.GetLogger(ctx)
 
-	exists, err := c.checkICMSRequestExists(ctx, msgID)
+	msgMeta := msg.GetCreationQueueMessageMetadata()
+	exists, err := c.checkICMSRequestExists(ctx, msgID, msgMeta.RequestID)
 	if err != nil {
 		return nil, fmt.Errorf("failed precheck %v, err: %v", msgID, err)
 	}
 	if exists {
 		return nil, nil
 	}
-
-	msgMeta := msg.GetCreationQueueMessageMetadata()
 
 	o := nvcav2beta1new.ICMSRequest{
 		Spec: nvcav2beta1new.ICMSRequestSpec{
@@ -2465,7 +2468,7 @@ func GetCreationRejectionReason(req *nvcav2beta1new.ICMSRequest) string {
 func (c *BackendK8sCache) CreateICMSTerminationMessageRequest(ctx context.Context, tm types.ICMSTerminationMessage, msgReceipt, msgID string) error {
 	log := core.GetLogger(ctx)
 
-	exists, err := c.checkICMSRequestExists(ctx, msgID)
+	exists, err := c.checkICMSRequestExists(ctx, msgID, tm.RequestID)
 	if err != nil {
 		return fmt.Errorf("failed precheck %v, err: %v", msgID, err)
 	}
