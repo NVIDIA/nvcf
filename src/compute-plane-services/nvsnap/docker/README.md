@@ -27,7 +27,6 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
 
 ## Rules
 
-- Every image has a checked-in Dockerfile — never build from an ad-hoc inline
-  Dockerfile (`CLAUDE.md` rule 13).
-- Bump the image tag in `versions.sh` on every rebuild; nodes cache by tag
-  (rule 19).
+- Every image has a checked-in Dockerfile; never build from an ad-hoc inline
+  Dockerfile.
+- Bump the image tag in `versions.sh` on every rebuild; nodes cache by tag.
