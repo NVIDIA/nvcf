@@ -29,7 +29,7 @@ workflow) enforces the ones a script can check; the rest are for review.
 | Working notes behind an architecture section | `design/`, each opening with a status line |
 | Recipes: install, operate, develop | `operate/` |
 | A dated run: a benchmark, a test campaign | `results/`; a record, not maintained |
-| A superseded document | `history/`, opening with when it was replaced and by what; not maintained |
+| A superseded document | Nowhere: delete it (git history keeps it), after moving any still-true rule into ARCHITECTURE.md and any result that has no other record into RESULTS.md |
 
 The top level holds only START-HERE, ARCHITECTURE, RESULTS, GLOSSARY,
 REFERENCE, README and this file. A new document goes into

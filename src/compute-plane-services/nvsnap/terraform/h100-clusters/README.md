@@ -87,8 +87,7 @@ get-credentials` commands for both clusters. After that:
    ./scripts/test-e2e.sh vllm-small
    ```
 
-4. **Cross-cluster cascade bench**: see `scripts/bench-cross-node-restore.sh`
-   and `docs/history/CACHING-MEETING-BRIEF.md` for what we're measuring.
+4. **Cross-cluster cascade bench**: see `scripts/bench-cross-node-restore.sh`.
 
 ## Teardown
 

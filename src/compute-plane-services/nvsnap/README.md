@@ -62,10 +62,8 @@ into workload pods.
 Deeper design docs:
 [architecture](docs/ARCHITECTURE.md) ·
 [gpushare](docs/design/GPUSHARE.md) ·
-[quiescence / io_uring](docs/design/QUIESCENCE-ARCHITECTURE.md) ·
 [runtime-agnostic discovery](docs/design/RUNTIME-AGNOSTIC.md) ·
-[cuda-checkpoint call flow](docs/design/CUDA-CHECKPOINT-CALL-FLOW.md) ·
-[vLLM multi-process](docs/history/VLLM-DEEP-DIVE.md).
+[cuda-checkpoint call flow](docs/design/CUDA-CHECKPOINT-CALL-FLOW.md).
 
 ---
 

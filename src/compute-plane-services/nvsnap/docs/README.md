@@ -6,7 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 
 Start with the top-level [README](../README.md) for what nvsnap is. This page
 lists every maintained document, what question it answers, and how current it
-is. A document that is not listed here is history.
+is. A document that is not listed here should not exist: superseded
+documents are deleted, and git history keeps them.
 
 Status values: **Current** (checked against the code on the date given),
 **Partly stale** (what is stale is named), **Proposal** (not built),
@@ -24,7 +25,6 @@ was not re-checked against the code.
 - [Design notes](#design-notes)
 - [Results](#results)
 - [Using the API](#using-the-api)
-- [History](#history)
 - [Keeping this index honest](#keeping-this-index-honest)
 <!-- /toc -->
 
@@ -51,9 +51,6 @@ was not re-checked against the code.
 | Page | Answers | Status |
 |---|---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | What nvsnap does, how each mechanism works, the code that enforces each rule, how it fails, what is not done, and where other docs disagree with the code | Current, 2026-10-21 |
-
-The previous architecture and transport documents are in
-[history/](history/NVSNAP-ARCHITECTURE.md), replaced by ARCHITECTURE.md.
 
 ## Operate
 
@@ -92,7 +89,6 @@ the column below is that status, corrected where the code disagrees.
 | [GENERIC-PYTHON-INJECTION-DESIGN.md](design/GENERIC-PYTHON-INJECTION-DESIGN.md) | Injecting Python libraries into any image | Proposal, 2026-05 (as the doc states) |
 | [RUNTIME-AGNOSTIC.md](design/RUNTIME-AGNOSTIC.md) | Finding a pod's processes without a runtime API | Partly stale (as the doc states: its LD_PRELOAD examples are the retired engine) |
 | [CUDA-CHECKPOINT-CALL-FLOW.md](design/CUDA-CHECKPOINT-CALL-FLOW.md) | How cuda-checkpoint is invoked | Not re-checked |
-| [QUIESCENCE-ARCHITECTURE.md](design/QUIESCENCE-ARCHITECTURE.md) | Quiescing io_uring and libuv before a dump | Not re-checked |
 | [THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) | What the CRIU fork carries and why | Not re-checked |
 
 ## Results
@@ -108,12 +104,6 @@ the column below is that status, corrected where the code disagrees.
 - [Example: REST API client](../examples/checkpoint-restore/): a dependency-free
   Go client that drives checkpoint, poll, list, restore and delete.
 - [OpenAPI spec](../internal/server/openapi.yaml): the server API contract.
-
-## History
-
-[history/](history/) holds superseded designs, early plans and investigations,
-with [HISTORY.md](history/HISTORY.md) as a digest. They record how things were
-and are not maintained; they are not authoritative for the current code.
 
 ## Keeping this index honest
 

@@ -77,14 +77,14 @@ class LinkCheckTest(unittest.TestCase):
         root = self.repo({
             "docs/A.md": "# A\n",
             "internal/x.go": "// See docs/A.md and docs/MOVED.md.\npackage x\n",
-            "deploy/notes.txt": "history: docs/history/OLD.md\n",
+            "deploy/notes.txt": "record: docs/results/OLD.md\n",
         })
         self.assertEqual(links.check(root)[1], ["internal/x.go: names docs/MOVED.md, which does not exist"])
 
     def test_fences_and_frozen_docs_are_skipped(self):
         root = self.repo({
             "README.md": "# R\n\n```text\n[x](nowhere.md)\n```\n",
-            "docs/history/OLD.md": "# Old\n\n[x](nowhere.md) `docs/NOWHERE.md`\n",
+            "docs/results/OLD.md": "# Old\n\n[x](nowhere.md) `docs/NOWHERE.md`\n",
         })
         self.assertEqual(links.check(root)[1], [])
 

@@ -142,8 +142,8 @@ type Config struct {
 
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
-	// Filestore, NFS, etc. Phase 2c of the 16-node distribution
-	// plan (docs/history/TRANSPORT-ARCHITECTURE.md). When set, every
+	// Filestore, NFS, etc. (the L2 tier, docs/ARCHITECTURE.md
+	// section 6). When set, every
 	// successful CRIU capture is asynchronously published into
 	// <FSStorePath>/<id>/ and EnsureLocal probes that path before
 	// trying peer agents. Empty disables both halves — agents fall
@@ -365,8 +365,8 @@ type Agent struct {
 
 	// peerLoad counts this agent's in-flight peer fetches per peer
 	// URL. Used by EnsureLocal to pick the least-loaded peer when
-	// several peers have the same checkpoint. Phase 1 of the 16-node
-	// distribution plan (docs/history/TRANSPORT-ARCHITECTURE.md).
+	// several peers have the same checkpoint (the L3 tier,
+	// docs/ARCHITECTURE.md section 6).
 	peerLoad *peerLoadTracker
 
 	// fsStore is the shared-filesystem backend. Non-nil when

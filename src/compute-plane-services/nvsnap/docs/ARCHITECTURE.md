@@ -170,6 +170,7 @@ When the pod is Ready, the agent on its node:
 | The placeholder has every mount the captured pod had, at the same paths | CRIU binds external mounts from the placeholder; a missing one fails the restore | `internal/webhook/criu_restore.go` `criuRestorePatches` (same spec); `internal/webhook/model_volume.go` `placeholderModelPatches` (the model landing) |
 | The chunk store is at the same path at capture and restore | Restored processes keep the path they saved to | `internal/agent/gpushare.go` `GPUShareStoreInContainer` |
 | A rootfs diff keeps owners and modes | Files such as an etcd database are refused with other modes | `internal/agent/rootfs_diff.go` `archiveOverlayDir` (one tar archive, numeric owners) |
+| The engine runs unmodified: no preload but gpushare, stock libuv and uvloop | io_uring rings are dumped and restored by the bundled CRIU, so nothing in the engine has to quiesce them | `internal/agent/checkpoint_v2.go` (package comment); the CRIU fork, [design/THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) |
 | A restore never reuses a checkpoint that failed | A failing checkpoint would fail every pod that tries it | `internal/agent/criu_auto_restore.go` `markFailed` (ConfigMap `nvsnap-criu-restore-failed`) |
 
 ## 4. gpushare: GPU memory shared between processes
@@ -338,9 +339,7 @@ specs. The webhook covers a function's namespace through the inject scope
 `nvsnap.io/inject=true`). A multi-pod function is captured when its pods match
 `agent.criuCaptureOptIn` (for example by `function-id`). NVCA's
 capture-once state machine and its hooks are NVCA's code
-(`src/compute-plane-services/nvca`); the description of them as of
-September 2026 is in
-[history/NVSNAP-ARCHITECTURE.md](history/NVSNAP-ARCHITECTURE.md#6-capture-once-nvsnapfunctionstate-lifecycle-nvca189).
+(`src/compute-plane-services/nvca`), and are described there, not here.
 
 ## 12. Measured performance
 
@@ -374,5 +373,4 @@ In the order they matter for multi-node instances:
 | Cross-cluster replication is "Proposed" | [design/cross-cluster-replication.md](design/cross-cluster-replication.md) | `internal/agent/replication*.go` and `POST /v1/replicate/{hash}` implement it, opt-in |
 | Storage-agnostic L2 promotion is a "proposal" | [design/STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | `internal/checkpointstore/promoter*.go` implement snapshot and shared promoters |
 | Init-container mount prep is "not implemented" | [design/init-container-mount-prep.md](design/init-container-mount-prep.md) | `cmd/nvsnap-mount-prep` is that init container |
-| L1/L2/L3 are transport legs (intra-cluster, object storage, cross-cluster) | [history/TRANSPORT-ARCHITECTURE.md](history/TRANSPORT-ARCHITECTURE.md) | The code's tiers are L1 node, L2 cluster storage, L3 peers, L4 object store (section 6) |
 | gpushare's nvsnap integration as of 2026-10-10 | [design/GPUSHARE.md](design/GPUSHARE.md) | Since then: the rootfs diff is one archive; placeholders get only the model landing; no cachedir machinery under CRIU |

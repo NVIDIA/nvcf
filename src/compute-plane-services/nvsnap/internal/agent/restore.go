@@ -476,8 +476,8 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// allowlist: /dev/shm) into the placeholder's mntns. CRIU's
 		// path-based file restoration walks /dev/shm/<file> at restore
 		// time; without this, multi-GPU NCCL/PSM segments captured at
-		// checkpoint can't be reopened. See
-		// docs/history/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+		// checkpoint can't be reopened. See docs/ARCHITECTURE.md
+		// section 3.
 		//
 		// A failed or incomplete replay fails the restore: the archive
 		// holds files the workload has open or mapped (and the parent

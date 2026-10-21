@@ -16,8 +16,8 @@ Anchors use the slug and duplicate numbering of check-doc-links.py (GitHub's),
 so a TOC link resolves exactly as a cross-file link would.
 
 Usage: ``scripts/docs/docs-toc.py [--check] [FILE ...]``. With no FILE, every
-git-tracked Markdown file under ``docs/`` except the frozen ``docs/history/``
-and ``docs/results/``. ``--check`` changes nothing and exits 1 when a file's
+git-tracked Markdown file under ``docs/`` except the frozen
+``docs/results/``. ``--check`` changes nothing and exits 1 when a file's
 TOC is missing or differs from its headings.
 
 A file gets a TOC when it has at least two listable headings; a file with

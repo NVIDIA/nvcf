@@ -11,9 +11,9 @@ checked against the target's headings when the target is Markdown (a pure
 (``docs/X.md`` in backticks or as link text) must exist too, under the nvsnap
 root or the repository root, and so must one named in a comment or string
 of code, a script or a chart (``CODE_DOC_PATH``), so moving a doc cannot
-strand the code that points readers at it. ``docs/history/`` and
-``docs/results/`` are records of how things were and are not maintained, so
-they are not checked.
+strand the code that points readers at it. ``docs/results/``
+holds dated records of how things were and is not maintained, so it is not
+checked.
 
 Usage: ``scripts/docs/check-doc-links.py [nvsnap-root]`` (default: the
 nvsnap directory this script lives in).
@@ -35,7 +35,7 @@ DOC_PATH_TEXT = re.compile(r"(?:`|\[)(docs/[A-Za-z0-9_][A-Za-z0-9_./-]*\.md)(?:`
 CODE_DOC_PATH = re.compile(r"(?<![\w/.-])(docs/[A-Za-z0-9_][A-Za-z0-9_./-]*\.md)")
 CODE_SUFFIXES = (".go", ".sh", ".py", ".yaml", ".yml", ".txt", ".tpl", ".c", ".h", "Makefile", "Dockerfile")
 SKIP = ("http://", "https://", "mailto:", "file://", "ssh://", "git@")
-FROZEN = ("docs/history/", "docs/results/")
+FROZEN = ("docs/results/",)
 
 
 def tracked_markdown(root: pathlib.Path) -> list[pathlib.Path]:
