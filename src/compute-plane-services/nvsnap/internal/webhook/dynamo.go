@@ -14,6 +14,7 @@ package webhook
 // are the instance's own, so the profile applies only then.
 
 import (
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -71,6 +72,9 @@ func instanceLocalEndpoints(pod *corev1.Pod) bool {
 	return true
 }
 
+// localHost reports whether an endpoint names a service of the pod's own
+// namespace: a host name without a dot. An IP address names no namespace,
+// whatever its form ("[2001:db8::1]:2379" has no dot either).
 func localHost(endpoint string) bool {
 	host := endpoint
 	if strings.Contains(endpoint, "://") {
@@ -80,10 +84,14 @@ func localHost(endpoint string) bool {
 		}
 		host = u.Host
 	}
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
 	}
-	return host != "" && !strings.Contains(host, ".")
+	host = strings.Trim(host, "[]")
+	if host == "" || net.ParseIP(host) != nil {
+		return false
+	}
+	return !strings.Contains(host, ".")
 }
 
 // dynamoNamespacePatches sets the fixed Dynamo namespace on every

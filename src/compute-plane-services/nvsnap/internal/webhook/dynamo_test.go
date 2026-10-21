@@ -94,3 +94,28 @@ func TestDynamoLeaseTTL(t *testing.T) {
 		t.Errorf("outside the profile (shared etcd): patched %v", p)
 	}
 }
+
+// An endpoint is namespace-local only when it names a service by a host name
+// without a dot; an IP address of any form never is (review: a bracketed
+// IPv6 address was taken for a local name).
+func TestLocalHost(t *testing.T) {
+	for ep, want := range map[string]bool{
+		"mini-service-etcd:2379":               true,
+		"nats://mini-service-nats:4222":        true,
+		"http://mini-service-etcd":             true,
+		"mini-service-etcd":                    true,
+		"etcd.other-ns:2379":                   false,
+		"etcd.other-ns.svc.cluster.local:2379": false,
+		"10.0.0.1:2379":                        false,
+		"[2001:db8::1]:2379":                   false,
+		"[2001:db8::1]":                        false,
+		"2001:db8::1":                          false,
+		"nats://[2001:db8::1]:4222":            false,
+		"":                                     false,
+		"http://":                              false,
+	} {
+		if got := localHost(ep); got != want {
+			t.Errorf("localHost(%q) = %v, want %v", ep, got, want)
+		}
+	}
+}
