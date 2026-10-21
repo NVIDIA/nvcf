@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, gpt-oss 120B, TP=4 on one pod (as bench-gpt-oss-120b).
+kind: Deployment
+launch: exec
+gpusPerPod: 4
+model: openai/gpt-oss-120b
+servedModelName: gpt-oss-120b
+maxModelLen: 8192
+gpuMemoryUtilization: 0.90
+extraArgs: --trust-remote-code --max-num-seqs 256 --max-num-batched-tokens 8192 --max-cudagraph-capture-size 2048 --stream-interval 20 --no-enable-prefix-caching
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

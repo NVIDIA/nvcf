@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Package modelvolume owns the per-identity model volume of
-// docs/proposals/helm-shared-model-volume.md: one volume per model URI per
+// docs/design/helm-shared-model-volume.md: one volume per model URI per
 // cluster, written once, immutable afterwards, read by every other pod.
 //
 // One lifecycle, whatever the storage. The primary claim lives in the
@@ -127,7 +127,7 @@ const (
 	// CacheRankDeltaAnnotation marks a warm rank whose cachedir holds
 	// files the seeded set did not have; the bytes and a fingerprint of
 	// the new paths ride along. Any such rank proposes a set refresh
-	// (docs/proposals/helm-chart-cache-refresh.md).
+	// (docs/design/helm-chart-cache-refresh.md).
 	CacheRankDeltaAnnotation            = "nvsnap.io/cache-rank-delta"
 	CacheRankDeltaBytesAnnotation       = "nvsnap.io/cache-rank-delta-bytes"
 	CacheRankDeltaFingerprintAnnotation = "nvsnap.io/cache-rank-delta-fingerprint"
@@ -148,6 +148,13 @@ const (
 	DeltaFingerprintAnnotation = "nvsnap.io/cache-delta-fingerprint"
 	// RefreshStableAnnotation stops further refreshes of a set.
 	RefreshStableAnnotation = "nvsnap.io/cache-refresh-stable"
+	// CacheOwnersAnnotation on a complete set primary says its files
+	// keep the owners and modes the engine gave them (CacheOwnersKept).
+	// A restored engine reopens its cache files and CRIU refuses any
+	// whose mode differs from the dump, so a set without it, whose
+	// copies were made root's, is seeded opened to every user instead.
+	CacheOwnersAnnotation = "nvsnap.io/cache-owners"
+	CacheOwnersKept       = "kept"
 	// SourcePVLabel on a read-only view names the primary it was minted
 	// from, so liveness and retirement work per generation.
 	SourcePVLabel = "nvsnap.io/source-pv"
@@ -400,6 +407,9 @@ type State struct {
 	// for a cold capture; RefreshStable says no further refresh runs.
 	DeltaFingerprint string
 	RefreshStable    bool
+	// OwnersKept: the set's files keep their owners and modes
+	// (CacheOwnersAnnotation).
+	OwnersKept bool
 }
 
 // Generation reads a primary's generation annotation; absent means 1.
@@ -452,7 +462,7 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 // of any number of agents racing for one identity exactly one sees
 // created and owns the copy; the rest get AlreadyExists and back off. A
 // Get before the Create is not an election (five agents once passed
-// through that gap together, ct1 2026-09-30), so there is none.
+// through that gap together, 2026-09-30), so there is none.
 func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
 	return p.ClaimSizedClaimNamed(ctx, p.Cfg.ClaimName(uri), uri, ns, size)
 }
@@ -578,6 +588,7 @@ func (p *Provisioner) Lookup(ctx context.Context, uri string) (State, error) {
 		st.Generation, st.PrimaryCreated = Generation(best), best.CreationTimestamp.Time
 		st.DeltaFingerprint = best.Annotations[DeltaFingerprintAnnotation]
 		st.RefreshStable = best.Annotations[RefreshStableAnnotation] == "true"
+		st.OwnersKept = best.Annotations[CacheOwnersAnnotation] == CacheOwnersKept
 		return st, nil
 	}
 	list, err := p.Kube.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: p.Cfg.Label() + "=" + Key(uri)})
@@ -770,6 +781,7 @@ type DownloadStep struct {
 	ImagePullSecrets []corev1.LocalObjectReference
 	Tolerations      []corev1.Toleration
 	NodeSelector     map[string]string
+	Affinity         *corev1.Affinity
 	// VolumeName is the name the container mounts the claim under.
 	VolumeName string
 	// Volumes are the other volumes the container mounts (secrets with
@@ -781,6 +793,9 @@ type DownloadStep struct {
 	// MainSecurityContext is the source pod's engine container posture,
 	// inherited by the download container.
 	MainSecurityContext *corev1.SecurityContext
+	// HelperVolume is the node directory holding the helper, which the
+	// download and hold containers run.
+	HelperVolume corev1.Volume
 }
 
 // EnsureDownloadJob creates the one download Job for uri in ns. With a
@@ -849,8 +864,9 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		ImagePullSecrets:             step.ImagePullSecrets,
 		Tolerations:                  step.Tolerations,
 		NodeSelector:                 step.NodeSelector,
+		Affinity:                     step.Affinity,
 		Containers:                   []corev1.Container{c},
-		Volumes:                      volumes,
+		Volumes:                      append(volumes, step.HelperVolume),
 	}
 	var activeDeadline *int64
 	if claim == "" {
@@ -861,9 +877,10 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 		// until the agent has copied the tree and deletes the Job. The
 		// active deadline bounds a node whose agent never gets to it.
 		hold := corev1.Container{
-			Name:    HoldContainer,
-			Image:   c.Image,
-			Command: []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 60; done"},
+			Name:         HoldContainer,
+			Image:        c.Image,
+			Command:      []string{IdleBin},
+			VolumeMounts: []corev1.VolumeMount{HelperMount()},
 		}
 		Harden(&hold, HoldResources, step.MainSecurityContext)
 		podSpec.InitContainers = []corev1.Container{c}
@@ -1160,4 +1177,23 @@ func (p *Provisioner) MarkRefreshStable(ctx context.Context, pvName string) erro
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true"}}}`, RefreshStableAnnotation)
 	_, err := p.Kube.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	return err
+}
+
+// The steps nvsnap adds to a pod run nvsnap-helper (cmd/nvsnap-helper):
+// static, so a step needs nothing from the workload's image. The agent
+// stages it with the node bundle; steps mount that directory read-only at
+// HelperMountPath (internal/webhook/helper.go).
+const (
+	HelperVolumeName = "nvsnap-helper"
+	HelperMountPath  = "/nvsnap-helper"
+	HelperBin        = HelperMountPath + "/nvsnap-helper"
+	// IdleBin keeps a container alive until stopped (cmd/nvsnap-idle):
+	// single-threaded, so a CRIU restore placeholder holds no pid the dump
+	// may need.
+	IdleBin = HelperMountPath + "/nvsnap-idle"
+)
+
+// HelperMount mounts the helper read-only.
+func HelperMount() corev1.VolumeMount {
+	return corev1.VolumeMount{Name: HelperVolumeName, MountPath: HelperMountPath, ReadOnly: true}
 }

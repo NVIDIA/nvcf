@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -55,6 +56,9 @@ import (
 type Config struct {
 	ListenAddr    string
 	CheckpointDir string
+	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
+	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
+	CRIUGhostLimit int64
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -66,8 +70,11 @@ type Config struct {
 	ContainerdNamespace string
 	CudaCheckpointPath  string
 	CRIUPath            string
-	NodeName            string
-	LogLevel            string
+	// CaptureOptIn opts matching pods into the multi-pod instance capture
+	// (criu_group.go); NVSNAP_CRIU_CAPTURE_OPT_IN, JSON.
+	CaptureOptIn []CaptureOptIn
+	NodeName     string
+	LogLevel     string
 
 	// AuthToken is the shared bearer token callers must present on the
 	// agent API. Sourced from a Secret rather than a flag so it does not
@@ -135,8 +142,8 @@ type Config struct {
 
 	// FSStorePath is the agent-container path to a distributed
 	// filesystem mounted on every node — Lustre, Weka, EFS,
-	// Filestore, NFS, etc. Phase 2c of the 16-node distribution
-	// plan (docs/TRANSPORT-ARCHITECTURE.md). When set, every
+	// Filestore, NFS, etc. (the L2 tier, docs/ARCHITECTURE.md
+	// section 6). When set, every
 	// successful CRIU capture is asynchronously published into
 	// <FSStorePath>/<id>/ and EnsureLocal probes that path before
 	// trying peer agents. Empty disables both halves — agents fall
@@ -208,7 +215,7 @@ type ObjectStoreConfig struct {
 }
 
 // ElectionConfig configures the admission election
-// (docs/proposals/helm-chart-cache-election.md).
+// (docs/design/helm-chart-cache-election.md).
 type ElectionConfig struct {
 	// Enabled turns the election on. Default off until qualified.
 	Enabled bool
@@ -218,7 +225,7 @@ type ElectionConfig struct {
 	Deadline time.Duration
 }
 
-// ModelVolumeConfig configures docs/proposals/helm-shared-model-volume.md.
+// ModelVolumeConfig configures docs/design/helm-shared-model-volume.md.
 type ModelVolumeConfig struct {
 	// Enabled turns the write-once model volume on. Needs L2 and a storage
 	// profile that resolves a mode (block on NVMesh, rwx when declared).
@@ -232,7 +239,7 @@ type ModelVolumeConfig struct {
 	HostRoot string
 	// RefreshDisabled turns cache set refresh off; RefreshCooldown is the
 	// least time between generations of one set (zero: 6 hours).
-	// docs/proposals/helm-chart-cache-refresh.md.
+	// docs/design/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
 	// ReapInterval is how often the reaper removes read-only model PVs
@@ -244,7 +251,7 @@ type ModelVolumeConfig struct {
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See
-// docs/L2-PVC-CRIU-DESIGN.md.
+// docs/ARCHITECTURE.md §6.
 type L2BackendConfig struct {
 	// StorageClass is the RWX-capable StorageClass name. Required
 	// to enable L2 — empty disables. On GKE production we set this
@@ -285,6 +292,29 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 
 // Agent is the NVSNAP node agent
 type Agent struct {
+	// freezes are this node's members waiting at a group capture's freeze point.
+	freezes freezePoints
+	// holds are this node's member pods frozen for a group capture
+	// (pod_hold.go).
+	holds podHolds
+	// capturing holds the container IDs with a checkpoint in progress: two
+	// captures of one workload would each suspend it and both fail.
+	capturing sync.Map
+
+	// fabricSessions maps a multi-node gpushare session's pod key to its
+	// directory on this node (see gpushare_fabric.go).
+	fabricSessions sync.Map
+
+	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
+	// is the cluster's capture method (criu_auto_restore.go).
+	criuRestore *criuAutoRestorer
+	// specCacheURI hashes a pod's configuration as admission does (the
+	// webhook's SpecCacheURI); nil when the webhook is off.
+	specCacheURI    func(*corev1.Pod) (string, bool)
+	criuRestoreOnce sync.Once
+	// checkpointing holds the pods being checkpointed (namespace/pod).
+	checkpointing sync.Map
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime
@@ -335,8 +365,8 @@ type Agent struct {
 
 	// peerLoad counts this agent's in-flight peer fetches per peer
 	// URL. Used by EnsureLocal to pick the least-loaded peer when
-	// several peers have the same checkpoint. Phase 1 of the 16-node
-	// distribution plan (docs/TRANSPORT-ARCHITECTURE.md).
+	// several peers have the same checkpoint (the L3 tier,
+	// docs/ARCHITECTURE.md section 6).
 	peerLoad *peerLoadTracker
 
 	// fsStore is the shared-filesystem backend. Non-nil when
@@ -488,6 +518,8 @@ func New(cfg Config) (*Agent, error) {
 // Run starts the agent
 func (a *Agent) Run(ctx context.Context) error {
 	metrics.RegisterAgent()
+	// A capture this agent was holding pods for ended with its last run.
+	a.recoverPodHolds(a.log.WithField("subsys", "pod-hold"))
 
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset,
 	// so prod clusters without Jaeger pay zero overhead.
@@ -540,7 +572,26 @@ func (a *Agent) Run(ctx context.Context) error {
 	// API routes
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
+	// Multi-node gpushare: a group checkpoint drives one fabric session; the
+	// fabric routes serve this node's pods in a session to that driver.
+	router.HandleFunc("/v1/gpushare/group-checkpoint", a.groupCheckpointHandler).Methods("POST")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}", a.fabricStateHandler).Methods("GET")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/verdict", a.fabricVerdictHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/in", a.fabricInHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/unlock", a.fabricUnlockHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/group-restore", a.groupRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
+	// Instance companions (criu_companion.go): a rank's connections, and
+	// the continue of a companion restored stopped.
+	router.HandleFunc("/v1/pods/{namespace}/{pod}/peers", a.peersHandler).Methods("GET")
+	// Capture preflight (capture_preflight.go): an instance's report, and
+	// the host checks of a pod on this node.
+	router.HandleFunc("/v1/capture-preflight/pod/{namespace}/{pod}", a.podPreflightHandler).Methods("GET")
+	router.HandleFunc("/v1/capture-preflight/{namespace}/{pod}", a.instancePreflightHandler).Methods("GET")
+	// A node bundle version, for a peer whose restore placeholder needs it
+	// (bundle_versions.go).
+	router.HandleFunc("/v1/bundles/{id}", a.bundleHandler).Methods("GET")
+	router.HandleFunc("/v1/group-freeze/{session}/{namespace}/{pod}", a.freezeHandler).Methods("GET", "POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
 	// A ready rank's cache tree for the agent collecting its set
@@ -648,7 +699,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// chain in buildAgentBackend appends a.l2Backend when non-nil so
 	// every rootfs capture also produces the L2 PVC for fan-out. The
 	// previous order (rootfs first, L2 second) silently dropped L2 from
-	// the rootfs path — see docs/design/ROOTFS-EVERYWHERE.md gap #1.
+	// the rootfs path.
 	l2, err := a.startL2Backend(ctx, a.config.L2)
 	if err != nil {
 		a.log.WithError(err).Error("L2 backend failed to start; multi-node restore will use L3 peer cascade only")
@@ -667,9 +718,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
 	}
+	if err := a.startCRIUAutoRestore(ctx); err != nil {
+		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
+	}
+	a.startGPUShareStoreReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
-		// this node (docs/proposals/helm-shared-model-volume.md).
+		// this node (docs/design/helm-shared-model-volume.md).
 		mvc := &ModelVolumeController{
 			Kube:              a.kubeClient,
 			Provisioner:       a.modelVolume,

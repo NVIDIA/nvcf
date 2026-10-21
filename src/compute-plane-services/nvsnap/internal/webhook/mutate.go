@@ -18,7 +18,7 @@ limitations under the License.
 // Package webhook implements the customer-facing surface for transparent
 // rootfs-only restore: a mutating admission webhook that injects cache
 // volumes + mounts into pods marked with the nvsnap.io/restore-from
-// annotation. See docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.5.
+// annotation. See docs/ARCHITECTURE.md §2.
 //
 // This file is the pure-logic Mutator (pod in → JSON Patch ops out). The
 // HTTPS / cert / AdmissionReview transport layer lives separately so the
@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -107,6 +109,23 @@ var mergeableArrayRe = regexp.MustCompile(`^/spec/containers/\d+/(volumeMounts|e
 // that multiple builders may bootstrap (so the plan must be normalized).
 func isMergeableArray(path string) bool {
 	return path == "/spec/volumes" || path == "/spec/initContainers" || mergeableArrayRe.MatchString(path)
+}
+
+// sliceElems returns the elements of a slice value of any element type:
+// patchers write typed slices ([]corev1.EnvVar, []corev1.Volume), and a
+// second whole-array add of the same path must become appends, not replace
+// the first (the gpushare variables were lost to the debug variables on a
+// container with no env of its own).
+func sliceElems(v any) ([]any, bool) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	out := make([]any, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
 }
 
 // patchElementName pulls the "name" field out of a patch value (volume,
@@ -198,7 +217,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 		}
 		// Whole-array bootstrap form: /spec/volumes with a slice value.
 		if isMergeableArray(p.Path) {
-			elems, ok := p.Value.([]any)
+			elems, ok := sliceElems(p.Value)
 			if !ok {
 				out = append(out, p) // not the bootstrap shape we manage
 				continue
@@ -295,7 +314,7 @@ type Mutator struct {
 	ArchScope election.ArchScope
 
 	// ModelVolume, when set, turns on the write-once model volume for
-	// Helm-function pods (docs/proposals/helm-shared-model-volume.md):
+	// Helm-function pods (docs/design/helm-shared-model-volume.md):
 	// the download lands in a per-identity shared volume, one writer,
 	// readers wait for the completion marker. Takes precedence over the
 	// gate-and-promote election above. Groups resolves identity for
@@ -330,6 +349,38 @@ type Mutator struct {
 	// hashes but stalls on in-flight ones.
 	L2WaitImage string
 
+	// AgentPlacement is the agent DaemonSet's node placement; the download
+	// Job runs within it.
+	AgentPlacement AgentPlacement
+
+	// DynamoNamespace is the fixed Dynamo namespace the webhook gives
+	// every Dynamo component whose etcd and NATS are its instance's own
+	// (dynamo.go). Empty leaves the operator's.
+	DynamoNamespace string
+	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
+	// those components get unless they set one; 0 leaves Dynamo's default.
+	DynamoLeaseTTL int
+	// CaptureLivenessBudget, in seconds, is the silence the liveness
+	// probes of a pod a capture may freeze are widened to tolerate, so the
+	// freeze does not get the pod restarted (liveness.go); 0 leaves probes
+	// as they are.
+	CaptureLivenessBudget int
+	// CaptureCandidate reports whether a pod without GPUs may be frozen by
+	// a capture: a companion of an instance opted into capture. A GPU pod
+	// is a candidate whenever it is set. Nil (captures do not freeze
+	// processes: the capture method is not CRIU) widens no probe.
+	CaptureCandidate func(ctx context.Context, pod *corev1.Pod) bool
+
+	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
+	// as a companion of a group restore: not while a GPU rank of its
+	// namespace already runs. Nil admits.
+	CRIUCompanionAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// CRIUCompanionSlot claims for pod one of slots, the slots of identical
+	// companions of group g, that no other placeholder of its instance
+	// holds; two pods admitted together never get the same one. Nil
+	// leaves identical companions to start cold.
+	CRIUCompanionSlot func(ctx context.Context, pod *corev1.Pod, g CRIUGroup, slots []int) (int, error)
+
 	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
 	// container POSTs to. Typically
 	// http://nvsnap-server.<ns>.svc.cluster.local:8080. Empty
@@ -355,6 +406,14 @@ type Mutator struct {
 	// Operators don't get a Helm knob, by design: a single
 	// config value can't safely span all three.
 	HostBundleRoot string
+	// BundleID is the node bundle version the agent staged
+	// (<root>/current-bundle); pods mount <root>/versions/<BundleID>.
+	// Empty mounts the legacy <root>/nvsnap.
+	BundleID string
+
+	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
+	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.
+	GPUShareHostRoot string
 
 	// Composer translates a pod spec to a checkpointstore.HashInput when
 	// the annotation value is "auto". Required for "auto" handling; if
@@ -365,6 +424,41 @@ type Mutator struct {
 	// MainContainer is the index of the container the cache is injected
 	// into. Most nvsnap workloads are single-container (0).
 	MainContainer int
+
+	// CheckpointHostRoot is the node directory holding CRIU checkpoints;
+	// a CRIU restore pod mounts it at /checkpoints.
+	CheckpointHostRoot string
+	// CRIURestoreBlocked reports a checkpoint that failed to restore; its
+	// pods start fresh instead. Nil: none is blocked.
+	CRIURestoreBlocked func(ctx context.Context, checkpointID string) bool
+	// GPUShareByDefault puts every GPU pod under the gpushare library
+	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
+	GPUShareByDefault bool
+	// CRIUCapture is set when the cluster captures with CRIU (agent
+	// captureMethod criu): a restore brings the whole process back, so the
+	// cachedir capture and its compile-cache set do not run, and GPU pods
+	// carry the identity an instance capture keys on (criu_identity.go).
+	CRIUCapture bool
+	// Kube reads what admission needs beyond the pod: the replicas of the
+	// StatefulSet that owns it. Nil: such a pod counts as a group of one.
+	Kube kubernetes.Interface
+	// CRIUGroups returns the complete group capture recorded under a
+	// configuration key (criu_group.go). Nil: multi-pod instances are not
+	// restored with CRIU.
+	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+	// CRIUScope returns the tenant scope of a namespace, the value a CRIU
+	// capture records under checkpointstore.CRIUScopeMetaKey. Nil: the
+	// scope is the namespace itself.
+	CRIUScope func(ctx context.Context, namespace string) (string, error)
+
+	// CRIUGroupAdmits reports whether pod's instance of several ranks can
+	// restore as a group, and why not: a group restore needs every rank to
+	// arrive as a placeholder together. Not asked for a single pod. nil
+	// admits.
+	CRIUGroupAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// DebugEnv sets debug variables on the GPU containers of matching
+	// pods (debug_env.go).
+	DebugEnv []DebugEnv
 
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
@@ -492,6 +586,15 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// Patches accumulated by the model-volume and cachedir branches below,
 	// merged ahead of the restore-from patches.
 	var injectPatches []PatchOp
+	// The identity of the spec as received, before any patch below.
+	injectPatches = append(injectPatches, m.admittedConfigPatches(pod)...)
+	// gpushare placement is independent of every other decision below and
+	// rides along with whichever patches they return.
+	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
+	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
+	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.criuIdentityPatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
@@ -500,6 +603,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// the label-driven capture inject below keeps its behaviour. An
 		// error is logged and admits the pod unchanged: the election is
 		// an optimisation, never a gate.
+		// A rank of an instance whose group capture exists becomes its
+		// restore placeholder; that carries the model volume too.
+		if gp := m.criuGroupRestorePatches(ctx, pod); gp != nil {
+			return gp, nil
+		}
 		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
 			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
 				Warn("model volume decision failed; admitting pod unchanged")
@@ -524,8 +632,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
 				WithField("patches", len(injectPatches)).
 				Info("inject only")
+			return mergePatchPlan(injectPatches), nil
 		}
-		return injectPatches, nil
+		return nil, nil
 	}
 
 	span.SetAttributes(attribute.Bool("nvsnap.restore", true))
@@ -542,11 +651,26 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	}
 	span.SetAttributes(attribute.String("nvsnap.hash", hash))
 
+	// A CRIU capture: the pod becomes the placeholder the agent restores
+	// the captured process into.
+	plog := m.logger().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "hash": checkpointstore.ShortHash(hash)})
+	if id, cman := m.criuRestoreFor(ctx, pod, hash, plog); id != "" {
+		cp, err := m.criuRestorePatches(pod, id, cman)
+		if err != nil {
+			plog.WithError(err).Warn("CRIU restore: cannot prepare the pod; cold start")
+			return mergePatchPlan(injectPatches), nil
+		}
+		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
+		// Not injectPatches: a gpushare restore mounts the checkpoint's
+		// chunk store, not the pod's own empty one.
+		return mergePatchPlan(withPIDReserve(pod, cp)), nil
+	}
+
 	// Resolve the manifest so the L2 dispatch can branch on the capture
 	// TYPE, not merely on "does a rox PVC exist". A rootfs capture
 	// promoted to an L2 PVC is a filesystem tree, NOT a CRIU dump —
 	// routing it through the CRIU branch would hang the restore waiting
-	// for inventory.img. See docs/design/ROOTFS-RESTORE-INJECTION.md.
+	// for inventory.img. See docs/ARCHITECTURE.md §2.
 	//
 	// ErrNotFound is tolerated here, NOT fatal: a CRIU capture lives only
 	// on the L2 PVC, so the L1/ConfigMap Backend may legitimately not have

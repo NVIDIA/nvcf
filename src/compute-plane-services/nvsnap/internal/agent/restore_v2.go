@@ -29,15 +29,15 @@ limitations under the License.
 // during the restore itself (proven by the in-container PoC: inference works
 // immediately after criu restore returns).
 //
-// Restored stdio: the PoC-convention source manifest launches the
-// workload via setsid with stdio redirected to a file in the container
-// rootfs, so CRIU restores those fds as plain files — the placeholder's
-// pid1 tails that file to surface logs via kubelet.
+// Restored stdio: the workload's stdout and stderr pipes are replaced with
+// the placeholder's own, so it logs to the new pod (restore_stdio.go).
 
 package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,9 +60,18 @@ import (
 // read the images.
 const v2CheckpointsMountInContainer = "/checkpoints"
 
-func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, log *logrus.Entry) (*RestoreResult, error) {
+// errNotPlaceholder marks a restore refused because the target already runs
+// a GPU workload: a pod restored before, or not a placeholder at all.
+var errNotPlaceholder = errors.New("refusing to restore into a non-placeholder")
+
+func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, group restoreV2Group, log *logrus.Entry) (*RestoreResult, error) {
 	if placeholderInfo == nil {
 		return nil, fmt.Errorf("criu-v2 restore requires a placeholder pod (placeholderPodName/placeholderNamespace)")
+	}
+	if group.InetAddrMap != "" && group.Session == "" {
+		// --keep-network-lock with nobody to release it would leave the pod
+		// unable to send.
+		return nil, errors.New("criu-v2: an address map needs a group restore session to unlock the network")
 	}
 	hostPID := int(placeholderInfo.PID)
 	procBase := "/proc"
@@ -82,7 +91,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2: cannot verify target is a placeholder (GPU-process check failed): %w", gerr)
 	}
 	if gpuPID != 0 {
-		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d) — refusing to restore into a non-placeholder", gpuPID)
+		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d): %w", gpuPID, errNotPlaceholder)
 	}
 
 	// The images must be visible inside the placeholder at
@@ -117,10 +126,26 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// starts, but the reservation only lands after that shell finishes sourcing
 	// its login profile, a few hundred forks in these images. Sampling once
 	// races that window and rejects a placeholder that was about to be fine.
-	if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
-		return nil, perr
-	} else if maxPID > 0 {
-		log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+	// A checkpoint that carries its pid namespace is restored into a nested
+	// one, where every pid is free (pidns_capture.go).
+	pidns, pidnsCapture, err := readPIDNSMarkerOrFalse(checkpointDir)
+	if err != nil {
+		return nil, err
+	}
+	if !pidns {
+		need, nerr := dumpedTaskIDs(checkpointDir)
+		if nerr != nil {
+			// Without the dumped ids every low pid counts as a clash.
+			log.WithError(nerr).Warn("criu-v2: cannot read the dumped task ids; any placeholder pid below the reserved range blocks the restore")
+			need = nil
+		}
+		if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, need, log); perr != nil {
+			return nil, perr
+		} else if maxPID > 0 {
+			log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+		}
+	} else if err := a.stagePIDNSRestoreHelper(root); err != nil {
+		return nil, err
 	}
 
 	log.WithFields(logrus.Fields{
@@ -131,31 +156,84 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// Same execution shape as dumpV2: minimal env, PATH covers the bundle
 	// (cuda_plugin execs cuda-checkpoint and CRIU network-lock execs
 	// iptables-restore from PATH), no LD_LIBRARY_PATH.
-	args := []string{
-		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
-		v2BinDirInContainer + "/criu", "restore",
-		"-D", imgsInContainer,
-		"-o", "restore.log", "-v4",
-		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
-		"--libdir", v2BinDirInContainer,
-		// Match the dump: unlock TCP in-process via libnftables (workload
-		// images ship no iptables binary).
-		"--network-lock", "nftables",
-		// Never restore cgroup membership: the dumped paths are the SOURCE
-		// pod's kubepods slice, which kubelet has already torn down.
-		// Recreating it puts the restored tree into an orphaned pod cgroup
-		// that kubelet housekeeping SIGKILLs (instantly on quick retries,
-		// ~90s in otherwise — killing the target mid GPU-resume, which
-		// surfaced as CUDA "OS call failed"). Same setting the legacy
-		// engine uses (ManageCgroups: ignore).
-		"--manage-cgroups=ignore",
-		"--restore-detached",
+	gs := metadata.GPUShare
+	if gs != nil {
+		// The restored processes re-map the shim from the path they had and
+		// load their GPU memory from the store path they saved to; the
+		// placeholder has to provide both (its manifest mounts them).
+		if gs.LibPath != "" && !fileExists(filepath.Join(root, strings.TrimPrefix(gs.LibPath, "/"))) {
+			return nil, fmt.Errorf("gpushare: placeholder has no %s; mount the node bundle there", gs.LibPath)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(gs.StorePath, "/"), "chunks")) {
+			return nil, fmt.Errorf("gpushare: placeholder has no chunk store at %s; mount the checkpoint's %s directory there",
+				gs.StorePath, GPUShareCheckpointSubdir)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
+			if serr := a.stageV2Bundle(root, log); serr != nil {
+				return nil, fmt.Errorf("gpushare: stage %s into placeholder: %w", gpushareToolName, serr)
+			}
+		}
+	}
+	// A group restore's session: the driver learns from it that this pod
+	// is restored, and answers with the unlock (and, for gpushare, the
+	// handle exchange of the resume).
+	var sess *restoreSession
+	if group.Session != "" {
+		if group.InetAddrMap != "" && !bundledSupportsNetMigration() {
+			return nil, errors.New("criu-v2: the bundled CRIU has no --inet-addr-map/net-unlock; the agent base image predates them")
+		}
+		s, err := a.openRestoreSession(group, checkpointDir, gs != nil)
+		if err != nil {
+			return nil, err
+		}
+		sess = s
+		defer sess.close()
+		log = log.WithField("fabricSession", group.Session)
+	}
+	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)
+	if pidns {
+		// -n: CRIU's TCP lock and unlock act on the network namespace it
+		// runs in, which must be the pod's, never the node's (the agent
+		// runs on the node's network).
+		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-r", "-w", "--",
+			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
+			append(pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixListeners, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap),
+				stdioInheritFDs(pidnsCapture)...)...)
+		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
+	}
+	// The restore does not count as time the restored tasks ran
+	// (restore_clock.go).
+	if bundledSupportsTimensBudget() {
+		budget := restoreClockBudget(checkpointDir)
+		args = append(args, "--timens-budget", strconv.FormatInt(budget.Milliseconds(), 10))
+		log.WithField("budget", budget.Round(time.Second).String()).Info("criu-v2: the restored clocks continue from the dump once the restore has taken its budget")
+	}
+	// An in-namespace restore: the restored tree logs to the placeholder's
+	// stdout and stderr (restore_stdio.go). nsenter passes the extra files
+	// on to criu.
+	var stdioFiles []*os.File
+	if !pidns {
+		pipes, serr := readStdioMarker(checkpointDir)
+		if serr == nil {
+			var extra []string
+			stdioFiles, extra, serr = placeholderStdio(procBase, hostPID, pipes)
+			args = append(args, extra...)
+		}
+		if serr != nil {
+			log.WithError(serr).Warn("criu-v2: the restored workload will not log to the new pod")
+		}
+		defer func() {
+			for _, f := range stdioFiles {
+				_ = f.Close()
+			}
+		}()
 	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
 	cmd := exec.CommandContext(rctx, "nsenter", args...)
+	cmd.ExtraFiles = stdioFiles
 	// criu forks the restorer and the restored tree below it. A failed
 	// restore has been seen leave criu waiting on its restorer tasks for
 	// good ("Restoring FAILED" logged, process alive 20 min later,
@@ -177,6 +255,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	cmd.Env = []string{
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
+	}
+	if pidns && len(pidnsCapture.UnixListeners) > 0 {
+		cmd.Env = append(cmd.Env, PIDNSUnixListenersEnv+"="+encodeUnixListeners(pidnsCapture.UnixListeners))
+	}
+	if pidns && (pidnsCapture.StdoutPipe != 0 || pidnsCapture.StderrPipe != 0) {
+		cmd.Env = append(cmd.Env, PIDNSStdioEnv+"=1")
 	}
 	// Place criu — and therefore the restored tree, which inherits its
 	// cgroup (--manage-cgroups=ignore) — into the PLACEHOLDER's cgroup via
@@ -201,6 +285,94 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+	if spent, ok := recordRestoreClock(checkpointDir); ok {
+		log.WithField("criuRestore", spent.Round(time.Millisecond).String()).Info("criu-v2: recorded the restore's length for the next one's clock budget")
+	}
+	if group.InetAddrMap != "" {
+		// Before the unlock: a connection to a peer outside the group goes
+		// to an address of the captured instance (criu_companion.go).
+		resetDeadPeers(hostPID, keepAddresses("", group.InetAddrMap), log)
+		if err := natInstanceAddresses(hostPID, group.InetAddrMap, log); err != nil {
+			return nil, fmt.Errorf("criu-v2: lead the instance's captured addresses to its restored pods: %w", err)
+		}
+	}
+
+	fabricDir := ""
+	if sess != nil {
+		fabricDir = sess.containerDir
+	}
+	// resumeGPU reloads the restored processes' GPU memory (gpushare).
+	resumeGPU := func() error {
+		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
+		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
+		resumePID := hostPID
+		if pidns {
+			// The restored processes live in the nested pid namespace; their
+			// saved pids are pids there. They resume on the placeholder's
+			// GPUs, whose entries the dump left out.
+			p, err := nestedInitHostPID(procBase, hostPID)
+			if err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: %w", err)
+			}
+			resumePID = p
+			made, err := installPlaceholderGPUs(procBase, hostPID, p)
+			if err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: give the restored tree the pod's GPUs: %w", err)
+			}
+			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
+		}
+		if sess != nil {
+			// The restored processes write their handle lists into the
+			// session directory, as the user they run as; the agent made it
+			// as root. The capture side hands its session over the same way.
+			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
+			}
+		}
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+			gsSpan.RecordError(err)
+			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
+			gsSpan.End()
+			return fmt.Errorf("gpushare resume: %w", err)
+		}
+		gsSpan.End()
+		return nil
+	}
+
+	if sess != nil {
+		// A GPU rank of a group reloads its GPU memory before it reports
+		// restored, its network still locked: the instance's members
+		// without GPU state are restored only once every rank has, so an
+		// etcd among them does not count the reload against its leases
+		// (gpushare_group_restore.go).
+		if gs != nil {
+			if err := resumeGPU(); err != nil {
+				return nil, err
+			}
+		}
+		// Every pod of the instance must be restored before any of them
+		// sends: hold the lock until the driver says so, then release it in
+		// this pod's network namespace.
+		verdict, err := sess.awaitUnlock(ctx, log)
+		if err != nil {
+			return nil, err
+		}
+		if verdict != "unlock" {
+			return nil, fmt.Errorf("criu-v2: group restore %s aborted: another pod of the instance failed to restore; this pod stays locked until it is deleted", group.Session)
+		}
+		if group.InetAddrMap != "" {
+			if err := netUnlock(ctx, hostPID, checkpointDir, log); err != nil {
+				return nil, err
+			}
+		}
+	} else if gs != nil {
+		if err := resumeGPU(); err != nil {
+			return nil, err
+		}
+	}
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("criu-v2: restore completed")
@@ -241,8 +413,10 @@ func placeholderCgroupDirFD(procBase string, pid int) (int, error) {
 	return -1, fmt.Errorf("open cgroup dir %s: %w", cgPath, err)
 }
 
-// gpuProcessInSamePidNS returns the host pid of any GPU-using process that
-// shares the target container's pid namespace, or 0 if none.
+// gpuProcessInSamePidNS returns the host pid of any GPU-using process in
+// the target container, or 0 if none: one in its pid namespace, or one
+// descended from it in a nested namespace (where a pid-1 workload's
+// restore puts the restored tree).
 func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, containerPID int) (int, error) {
 	targetNS, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(containerPID), "ns", "pid"))
 	if err != nil {
@@ -252,9 +426,19 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 	if err != nil {
 		return 0, err
 	}
+	var tree map[int]bool
 	for _, p := range gpuPIDs {
 		ns, rerr := os.Readlink(filepath.Join(procBase, strconv.Itoa(p), "ns", "pid"))
 		if rerr == nil && ns == targetNS {
+			return p, nil
+		}
+		if tree == nil {
+			tree = map[int]bool{}
+			for _, q := range processTree(procBase, containerPID) {
+				tree[q] = true
+			}
+		}
+		if tree[p] {
 			return p, nil
 		}
 	}
@@ -268,24 +452,45 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 // the floor is set well clear of both rather than tuned.
 const reservedPIDFloor = 50000
 
-// placeholderMaxNSPID returns the highest in-container pid currently live in
-// the placeholder's pid namespace.
+// placeholderPIDs returns the highest in-container pid live in the
+// placeholder's pid namespace, and the lowest one other than its init's
+// (0 when init is alone). Threads count: CRIU recreates every thread at its
+// dumped id, so a placeholder thread holding a low id collides as surely as
+// a process does.
 //
 // Read from the host rather than by exec'ing into the pod: entering the
 // namespace to measure it would itself allocate a pid there, which is the very
 // resource under test.
-func placeholderMaxNSPID(procBase string, hostPID int) (int, error) {
+func placeholderPIDs(procBase string, hostPID int) (max, low int, err error) {
+	max, held, err := placeholderTaskIDs(procBase, hostPID)
+	for _, id := range held {
+		if id != 1 && (low == 0 || id < low) {
+			low = id
+		}
+	}
+	return max, low, err
+}
+
+// placeholderTaskIDs returns the highest in-container task id live in the
+// placeholder's pid namespace and every task id held there (processes and
+// threads).
+func placeholderTaskIDs(procBase string, hostPID int) (highest int, held []int, err error) {
 	want, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "pid"))
 	if err != nil {
-		return 0, fmt.Errorf("read placeholder pid namespace: %w", err)
+		return 0, nil, fmt.Errorf("read placeholder pid namespace: %w", err)
 	}
 
 	entries, err := os.ReadDir(procBase)
 	if err != nil {
-		return 0, fmt.Errorf("read %s: %w", procBase, err)
+		return 0, nil, fmt.Errorf("read %s: %w", procBase, err)
 	}
 
-	max := 0
+	see := func(nspid int) {
+		if nspid > highest {
+			highest = nspid
+		}
+		held = append(held, nspid)
+	}
 	for _, e := range entries {
 		pid, aerr := strconv.Atoi(e.Name())
 		if aerr != nil {
@@ -296,18 +501,28 @@ func placeholderMaxNSPID(procBase string, hostPID int) (int, error) {
 		if rerr != nil || ns != want {
 			continue
 		}
-		nspid, nerr := nsPIDOf(procBase, pid)
-		if nerr != nil {
+		tasks, terr := os.ReadDir(filepath.Join(procBase, e.Name(), "task"))
+		if terr != nil || len(tasks) == 0 {
+			if nspid, nerr := nsPIDOf(procBase, pid); nerr == nil {
+				see(nspid)
+			}
 			continue
 		}
-		if nspid > max {
-			max = nspid
+		for _, task := range tasks {
+			if nspid, nerr := nsPIDOf(filepath.Join(procBase, e.Name(), "task"), atoiOr0(task.Name())); nerr == nil {
+				see(nspid)
+			}
 		}
 	}
-	if max == 0 {
-		return 0, fmt.Errorf("no processes found in the placeholder's pid namespace")
+	if highest == 0 {
+		return 0, nil, fmt.Errorf("no processes found in the placeholder's pid namespace")
 	}
-	return max, nil
+	return highest, held, nil
+}
+
+func atoiOr0(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // nsPIDOf returns a process's pid as seen from the innermost namespace it
@@ -339,7 +554,10 @@ func nsPIDOf(procBase string, pid int) (int, error) {
 const pidReservationTimeout = 90 * time.Second
 
 // awaitPlaceholderPIDReservation blocks until the placeholder's pid allocations
-// clear the dumped range, and returns the highest pid it saw.
+// clear the dumped range: one live task at or above the floor shows the
+// ns_last_pid bump landed, and none other than init below it shows nothing
+// the placeholder started before the bump still holds a pid CRIU may need.
+// It returns the highest pid it saw.
 //
 // Returns an error only when the reservation never lands, which means the
 // restore would fail partway through with a clone3 EEXIST that reads as
@@ -348,23 +566,49 @@ const pidReservationTimeout = 90 * time.Second
 // A procfs read error is not fatal: the pid namespace may still be settling,
 // and treating a transient read as a missing reservation would reintroduce
 // exactly the false negative this function exists to avoid.
-func awaitPlaceholderPIDReservation(procBase string, hostPID int, log *logrus.Entry) (int, error) {
-	return awaitPlaceholderPIDReservationFor(procBase, hostPID, pidReservationTimeout, log)
+//
+// need, when known, is the set of task ids the dump recreates
+// (dumpedTaskIDs): a placeholder task below the floor is then a collision
+// only when it holds one of them. In a pod that shares its pid namespace
+// across containers, a sidecar started before the placeholder (a native
+// sidecar, which starts ahead of every container) holds a low pid, as it
+// did beside the captured process; only an exact clash matters.
+func awaitPlaceholderPIDReservation(procBase string, hostPID int, need map[int]bool, log *logrus.Entry) (int, error) {
+	return awaitPlaceholderPIDReservationFor(procBase, hostPID, pidReservationTimeout, need, log)
+}
+
+// placeholderClash returns a task id held in the placeholder that the
+// restore needs: one of need, or with need unknown, any but init's below
+// reservedPIDFloor; 0 when none.
+func placeholderClash(held []int, need map[int]bool) int {
+	clash := 0
+	for _, id := range held {
+		hit := false
+		if need != nil {
+			hit = need[id]
+		} else {
+			hit = id != 1 && id < reservedPIDFloor
+		}
+		if hit && (clash == 0 || id < clash) {
+			clash = id
+		}
+	}
+	return clash
 }
 
 // awaitPlaceholderPIDReservationFor is the body, with the wait injectable so
 // tests can exercise the timeout path without waiting it out.
-func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, log *logrus.Entry) (int, error) {
+func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, need map[int]bool, log *logrus.Entry) (int, error) {
 	deadline := time.Now().Add(timeout)
-	var lastSeen int
+	var lastSeen, lastLow int
 	var lastErr error
 	warned := false
 
 	for {
-		maxPID, err := placeholderMaxNSPID(procBase, hostPID)
+		maxPID, held, err := placeholderTaskIDs(procBase, hostPID)
 		if err == nil {
-			lastSeen = maxPID
-			if maxPID >= reservedPIDFloor {
+			lastSeen, lastLow = maxPID, placeholderClash(held, need)
+			if maxPID >= reservedPIDFloor && lastLow == 0 {
 				return maxPID, nil
 			}
 		} else {
@@ -376,7 +620,7 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 		}
 		if !warned {
 			// One line, not one per poll: this is the normal startup window.
-			log.WithFields(logrus.Fields{"maxNSPID": lastSeen, "want": reservedPIDFloor}).
+			log.WithFields(logrus.Fields{"maxNSPID": lastSeen, "lowNSPID": lastLow, "want": reservedPIDFloor}).
 				Info("criu-v2: waiting for the placeholder to reserve its pid range")
 			warned = true
 		}
@@ -386,6 +630,16 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 	if lastSeen == 0 && lastErr != nil {
 		return 0, fmt.Errorf("criu-v2: could not read the placeholder's pid namespace "+
 			"to verify its pid range was reserved: %w", lastErr)
+	}
+	if lastSeen >= reservedPIDFloor && need != nil {
+		return lastSeen, fmt.Errorf(
+			"criu-v2: placeholder holds pid %d, which the checkpoint restores, after %s: "+
+				"CRIU's exact-pid fork would collide with it", lastLow, timeout)
+	}
+	if lastSeen >= reservedPIDFloor {
+		return lastSeen, fmt.Errorf(
+			"criu-v2: placeholder still holds pid %d below its reserved range after %s: "+
+				"CRIU's exact-pid forks could collide with it", lastLow, timeout)
 	}
 	return lastSeen, fmt.Errorf(
 		"criu-v2: placeholder never reserved its pid range (highest pid %d < %d after %s): "+
@@ -429,4 +683,94 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 			return
 		}
 	}
+}
+
+// restoreV2Args builds the nsenter + criu restore argv. A gpushare restore
+// omits the CUDA plugin: nvsnap-gpu-suspend restores the GPU state after
+// CRIU. directIO reads the pages image with O_DIRECT.
+func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool, inetAddrMap string) []string {
+	args := []string{
+		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
+		v2BinDirInContainer + "/criu", "restore",
+		"-D", imgsInContainer,
+		"-o", "restore.log", "-v4",
+		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
+	}
+	if !gpushare {
+		args = append(args, "--libdir", v2BinDirInContainer)
+	}
+	args = append(args,
+		// Match the dump: unlock TCP in-process via libnftables (workload
+		// images ship no iptables binary).
+		"--network-lock", "nftables",
+		// Never restore cgroup membership: the dumped paths are the SOURCE
+		// pod's kubepods slice, which kubelet has already torn down; the
+		// restored tree would land in an orphaned cgroup kubelet kills.
+		"--manage-cgroups=ignore",
+		"--restore-detached",
+	)
+	if directIO {
+		args = append(args, "--image-io-mode", "direct")
+	}
+	if inetAddrMap != "" {
+		// A group restore: the connections between the instance's pods
+		// move to the new pods' addresses, and stay locked after CRIU
+		// exits, so a pod restored early cannot reach a peer that is not
+		// restored yet (its kernel would answer with a reset). The driver
+		// unlocks every pod once all of them are restored.
+		args = append(args, "--inet-addr-map", inetAddrMap, "--keep-network-lock")
+	}
+	return args
+}
+
+// dumpedTaskIDs returns the task ids a restore of the checkpoint in dir
+// recreates at their dumped values: every process and thread of its
+// pstree.img, and the session and process-group ids, which CRIU recreates
+// as helper tasks when their leader is not in the tree.
+func dumpedTaskIDs(dir string) (map[int]bool, error) {
+	img := ""
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "pstree.img" && img == "" {
+			img = p
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if img == "" {
+		return nil, fmt.Errorf("no pstree.img under %s", dir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "crit", "decode", "-i", img).Output()
+	if err != nil {
+		return nil, fmt.Errorf("crit decode %s: %w", img, err)
+	}
+	return parsePstreeIDs(out)
+}
+
+// parsePstreeIDs reads the task ids out of crit's JSON of a pstree.img.
+func parsePstreeIDs(b []byte) (map[int]bool, error) {
+	var doc struct {
+		Entries []struct {
+			PID     int   `json:"pid"`
+			PGID    int   `json:"pgid"`
+			SID     int   `json:"sid"`
+			Threads []int `json:"threads"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse pstree: %w", err)
+	}
+	if len(doc.Entries) == 0 {
+		return nil, fmt.Errorf("pstree has no tasks")
+	}
+	ids := map[int]bool{}
+	for _, e := range doc.Entries {
+		for _, id := range append([]int{e.PID, e.PGID, e.SID}, e.Threads...) {
+			if id > 0 {
+				ids[id] = true
+			}
+		}
+	}
+	return ids, nil
 }

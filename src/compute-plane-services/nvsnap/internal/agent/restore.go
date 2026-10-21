@@ -94,7 +94,7 @@ func precreateUnixSocketDirs(filesImg string, placeholderPID int, log *logrus.En
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	created := 0
 	for d := range dirs {
-		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", "mkdir", "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", inContainerTool(placeholderPID, "mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 		if err := mk.Run(); err != nil {
 			log.WithError(err).WithField("dir", d).Warn("Failed to mkdir unix-socket parent dir in placeholder")
 			continue
@@ -147,6 +147,22 @@ type RestoreRequest struct {
 	PlaceholderContainerID string `json:"placeholderContainerId,omitempty"` // Container to restore into
 	PlaceholderPodName     string `json:"placeholderPodName,omitempty"`     // Pod name of placeholder
 	PlaceholderNamespace   string `json:"placeholderNamespace,omitempty"`   // Namespace of placeholder
+
+	// GPUShareFabricSession joins the restore to a group restore driven by
+	// another agent (see gpushare_fabric.go). InetAddrMap ("OLD=NEW,...",
+	// every pod of the instance) moves the connections between the pods
+	// to their new addresses; the restore then holds them locked until the
+	// driver reports every pod restored.
+	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
+	InetAddrMap           string `json:"inetAddrMap,omitempty"`
+
+	// PlaceholderContainerName picks the container in a multi-container
+	// placeholder pod; empty takes the first one.
+	PlaceholderContainerName string `json:"placeholderContainerName,omitempty"`
+	// ReservePIDs raises the placeholder's next pid above the dumped range
+	// before the restore. Needed for a placeholder the webhook made from
+	// the workload's own pod: it is not privileged, so it cannot do it.
+	ReservePIDs bool `json:"reservePids,omitempty"`
 }
 
 // RestoreResult is the result of a restore operation
@@ -210,6 +226,12 @@ func (a *Agent) GeneratePlaceholderManifest(ctx context.Context, req Placeholder
 	// The placeholder runs a bash reaper; the agent restores into it on POST /v1/restore
 	containerImage := metadata.ContainerImage
 
+	gpus := 1
+	if metadata.GPUShare != nil {
+		gpus = gpushareGPUCount(filepath.Join(checkpointDir, GPUShareCheckpointSubdir, gpushareGPUMapFile))
+	}
+	gsMounts, gsVolumes := a.gpushareRestoreMounts(&metadata, req.CheckpointID)
+
 	// criu-v2 placeholder: same image as the source (CRIU's path-based file
 	// checks resolve against an identical rootfs), bash pid1 reaps orphans,
 	// the pod keeps its own fresh pid namespace and bumps ns_last_pid so the
@@ -248,10 +270,10 @@ spec:
         - name: checkpoints
           mountPath: /checkpoints
         - name: dev-shm
-          mountPath: /dev/shm
+          mountPath: /dev/shm%s
       resources:
         limits:
-          nvidia.com/gpu: 1
+          nvidia.com/gpu: %d
   volumes:
     - name: checkpoints
       hostPath:
@@ -259,7 +281,7 @@ spec:
         type: Directory
     - name: dev-shm
       emptyDir:
-        medium: Memory
+        medium: Memory%s
 `,
 		podName,
 		namespace,
@@ -268,7 +290,10 @@ spec:
 		targetNode,
 		containerImage,
 		req.CheckpointID,
-		a.config.CheckpointDir,
+		gsMounts,
+		gpus,
+		a.checkpointHostRoot(),
+		gsVolumes,
 	)
 
 	return manifest, nil
@@ -308,7 +333,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		if err := a.EnsureLocal(ctx, req.CheckpointID); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "ensure-local cascade failed")
-			return nil, fmt.Errorf("ensure-local cascade failed: %w", err)
+			return nil, fmt.Errorf("%w: ensure-local cascade failed: %w", errCheckpointUnavailable, err)
 		}
 		log.WithField("ensureLocalElapsed", time.Since(ensureStart).String()).
 			Info("Checkpoint materialized locally (same-node or cascade)")
@@ -343,7 +368,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	if req.PlaceholderPodName != "" && req.PlaceholderNamespace != "" {
 		log.Info("Looking for placeholder container to restore into")
 		var findErr error
-		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, "")
+		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, req.PlaceholderContainerName)
 		if findErr != nil {
 			return nil, fmt.Errorf("failed to find placeholder container: %w", findErr)
 		}
@@ -352,6 +377,11 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			"placeholderPid": placeholderInfo.PID,
 		})
 		log.Info("Found placeholder container")
+		if req.ReservePIDs {
+			if out, err := exec.CommandContext(ctx, "nsenter", criuReservePIDArgs(int(placeholderInfo.PID))...).CombinedOutput(); err != nil { //nolint:gosec // fixed command; the pid comes from the runtime
+				return nil, fmt.Errorf("reserve the pid range: %w (%s)", err, strings.TrimSpace(string(out)))
+			}
+		}
 
 		// Run CRIU inside the placeholder's mount namespace. The helper
 		// subcommand grafts the criu bundle + checkpoints dir into the
@@ -380,12 +410,27 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// loopback so CRIU's TCP socket restore can re-bind to it.
 		// Without this, bind(2) returns EADDRNOTAVAIL — the placeholder
 		// was assigned a different pod IP by the K8s CNI.
-		if metadata.SourcePodIP != "" {
+		//
+		// Not when the inet address map moves that address: criu then
+		// re-binds the sockets to the new one, and the instance's DNAT
+		// rules send the pod's own traffic to its old address here. An
+		// alias would make the old address local, and capture the traffic
+		// of another pod of the instance that now has it.
+		if inetAddrMapMoves(req.InetAddrMap, metadata.SourcePodIP) {
+			log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Source pod IP moved by the inet address map; no alias on placeholder lo")
+		} else if metadata.SourcePodIP != "" {
 			if aerr := addSourcePodIPToPlaceholderLo(placeholderMntnsPID, metadata.SourcePodIP); aerr != nil {
 				log.WithError(aerr).Warn("Failed to alias source pod IP on placeholder lo; TCP restore may fail")
 			} else {
 				log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Aliased source pod IP on placeholder lo")
 			}
+		}
+
+		// Stage the bundle first: the steps below and criu's own tmpfs
+		// restore run tools inside the placeholder, and must not depend
+		// on what the workload image ships.
+		if sErr := a.stageV2Bundle(fmt.Sprintf("/proc/%d/root", placeholderMntnsPID), log); sErr != nil {
+			log.WithError(sErr).Warn("Failed to stage the criu bundle into the placeholder; the replay uses the image's tools")
 		}
 
 		// Pre-create parent dirs of every path-bound unix socket the dump
@@ -411,7 +456,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// (nsenter into its mntns and untar at /), not directly to its
 		// upperdir: overlayfs caches the merged-view dentries at mount
 		// time and doesn't see external upperdir mutations.
-		diffSrc := filepath.Join(checkpointDir, "rootfs-diff")
+		diffSrc := filepath.Join(checkpointDir, rootfsDiffArchive)
+		if _, dErr := os.Stat(diffSrc); dErr != nil {
+			diffSrc = filepath.Join(checkpointDir, rootfsDiffDir) // a checkpoint from before the archive
+		}
 		if _, dErr := os.Stat(diffSrc); dErr == nil {
 			// Read the placeholder's current mountinfo: every non-"/"
 			// entry is a runtime/CDI/kubelet bind that's already
@@ -428,30 +476,21 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// allowlist: /dev/shm) into the placeholder's mntns. CRIU's
 		// path-based file restoration walks /dev/shm/<file> at restore
 		// time; without this, multi-GPU NCCL/PSM segments captured at
-		// checkpoint can't be reopened. See
-		// docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
+		// checkpoint can't be reopened. See docs/ARCHITECTURE.md
+		// section 3.
 		//
-		// Per-mount failures are logged and skipped — CRIU may still
-		// succeed if the workload didn't depend on the missing content
-		// (Q6 in design). Rootfs mirror failure above is fatal; this is
-		// not.
-		var replayed, replayFailed int
+		// A failed or incomplete replay fails the restore: the archive
+		// holds files the workload has open or mapped (and the parent
+		// directories of its deleted ones), and CRIU would fail on the
+		// first one missing, or restore a workload without them.
 		for _, rm := range metadata.ReplayMounts {
 			tarAbs := filepath.Join(checkpointDir, rm.Tarball)
 			if rErr := untarIntoMntns(placeholderMntnsPID, rm.Path, tarAbs, log); rErr != nil {
-				log.WithError(rErr).WithField("mp", rm.Path).
-					Warn("Failed to replay mount into placeholder; CRIU may fail for this mount")
-				replayFailed++
-				continue
+				return nil, fmt.Errorf("replay %s into the placeholder: %w", rm.Path, rErr)
 			}
-			replayed++
 		}
-		if replayed > 0 || replayFailed > 0 {
-			log.WithFields(logrus.Fields{
-				"replayed": replayed,
-				"failed":   replayFailed,
-				"total":    len(metadata.ReplayMounts),
-			}).Info("Cross-pod mount replay complete")
+		if len(metadata.ReplayMounts) > 0 {
+			log.WithField("total", len(metadata.ReplayMounts)).Info("Cross-pod mount replay complete")
 		}
 	}
 
@@ -460,7 +499,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	// applies. The shared placeholder prep above (pod-IP alias, unix-sk
 	// dirs, rootfs-diff + mount replay) has already run.
 	if metadata.CapturePath == CapturePathCRIUV2 {
-		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, log)
+		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, restoreV2Group{
+			Session: req.GPUShareFabricSession, InetAddrMap: req.InetAddrMap,
+			Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName,
+		}, log)
 	}
 
 	// Every checkpoint this agent writes is criu-v2 (Checkpoint stamps

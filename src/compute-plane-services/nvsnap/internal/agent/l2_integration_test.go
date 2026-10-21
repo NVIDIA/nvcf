@@ -21,6 +21,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -276,5 +278,34 @@ func TestDefaultL2Size_CacheDirUsesTotalSize(t *testing.T) {
 	if got >= 80*oneGiB {
 		t.Errorf("cachedir capture fell through to the vRAM estimate (%d GiB)",
 			got/oneGiB)
+	}
+}
+
+// A CRIU capture is sized from what it occupies on disk, not from a vRAM
+// guess (384 GiB was asked for a 1.1 TB checkpoint).
+func TestDefaultL2Size_CRIUMeasured(t *testing.T) {
+	const oneGiB = int64(1) << 30
+	m := checkpointstore.Manifest{CaptureMethod: "criu", TotalSizeBytes: 1100 * oneGiB,
+		SourcePodMeta: map[string]string{"gpu_count": "4", "gpu_vram_gb": "80"}}
+	if got, want := defaultL2Size("h", m), 1210*oneGiB; got != want {
+		t.Errorf("size = %d GiB, want %d GiB", got/oneGiB, want/oneGiB)
+	}
+}
+
+func TestDiskUsageCountsAllocatedBlocks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "data"), make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(dir, "sparse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(1 << 30); err != nil { // 1 GiB of holes
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if got := diskUsage(dir); got < 1<<20 || got > 8<<20 {
+		t.Errorf("disk usage = %d bytes, want about 1 MiB (holes are free)", got)
 	}
 }

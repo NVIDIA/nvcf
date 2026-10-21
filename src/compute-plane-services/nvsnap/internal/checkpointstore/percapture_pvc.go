@@ -40,7 +40,7 @@ limitations under the License.
 // the caller (agent CRIU path) treats L2 promote as best-effort with
 // a fall-through to L3/L4 — see internal/agent/checkpoint.go.
 //
-// Design: docs/L2-PVC-CRIU-DESIGN.md.
+// Design: docs/ARCHITECTURE.md §6.
 
 package checkpointstore
 
@@ -195,8 +195,10 @@ type PerCapturePVCBackend struct {
 	SizeBytesFor func(hash string, m Manifest) int64
 
 	// LeaseDuration is how long a Put holds the hash-keyed lease.
-	// Should be bounded by 2× estimated writer-Job duration. Default
-	// 15 min. A lost holder (Put goroutine crashed) frees the lease
+	// It must outlast the promote (l2PromoteTimeout): the lease is not
+	// renewed, and a 1.1 TB checkpoint copies for about 10 minutes at
+	// NVMesh rates, so 15 minutes left a slow copy open to a second
+	// agent. Default 100 min. A lost holder (Put goroutine crashed) frees the lease
 	// after this elapses, allowing a fresh attempt.
 	LeaseDuration time.Duration
 
@@ -263,7 +265,7 @@ func (b *PerCapturePVCBackend) targetNamespace(m Manifest) string {
 // applyDefaults fills in unset timing knobs.
 func (b *PerCapturePVCBackend) applyDefaults() {
 	if b.LeaseDuration == 0 {
-		b.LeaseDuration = 15 * time.Minute
+		b.LeaseDuration = 100 * time.Minute
 	}
 	if b.PollInterval == 0 {
 		b.PollInterval = 2 * time.Second
@@ -693,7 +695,7 @@ func (b *PerCapturePVCBackend) createRWXPVC(ctx context.Context, ns, name string
 }
 
 // runMountHolderCopy implements the v0.0.51 single-copy L2 writer
-// (docs/design/ROOTFS-EVERYWHERE.md). Replaces the legacy writer Job
+// (docs/ARCHITECTURE.md §2). Replaces the legacy writer Job
 // which couldn't run privileged in Kyverno-enforced source namespaces.
 //
 // Flow:

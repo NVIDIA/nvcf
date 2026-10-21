@@ -6,7 +6,8 @@ NvSnap is a GPU checkpoint/restore system for Kubernetes.
 
 The canonical repo is `github.com/NVIDIA/nvcf`, under
 `src/compute-plane-services/nvsnap`. The CRIU fork NvSnap builds from is public
-at `github.com/balajinvda/criu` (branch `io-uring-cr`).
+at `github.com/balajinvda/criu` (branch `criu-dev`; the build pins a commit,
+`NVSNAP_CRIU_REF` in `scripts/versions.sh`).
 
 ## What you need to build
 
@@ -18,10 +19,12 @@ The criu-v2 engine builds from public inputs only:
   in the base image's `cuda-cli-builder` stage, on the public CUDA driver
   checkpoint API (`cuCheckpointProcess*`, driver 570+ at runtime). Works for
   x86-64 and arm64 - no committed binaries.
-- The Go agent and `nvsnap_cr.so`: this repository.
+- The Go agent, the gpushare library and `nvsnap-gpu-suspend`
+  (`docker/agent/gpushare`): this repository.
 
-There is no LD_PRELOAD injection stack any more: criu-v2 restores io_uring and
-epoll state inside CRIU, and the patched uvloop/libuv/libzmq forks were retired.
+criu-v2 restores io_uring and epoll state inside CRIU, and the patched
+uvloop/libuv/libzmq forks were retired. The one library nvsnap injects into
+workloads is gpushare (`LD_PRELOAD`), which multi-GPU CRIU capture needs.
 
 ## Build
 
@@ -29,12 +32,11 @@ epoll state inside CRIU, and the patched uvloop/libuv/libzmq forks were retired.
 # 1. Clone the CRIU fork as a sibling (scripts auto-discover ../criu).
 git clone -b criu-dev https://github.com/balajinvda/criu ../criu
 
-# 2. Build the base image: CRIU + cuda_plugin on ubuntu:22.04. ~5 min.
+# 2. Build the base image: CRIU, cuda_plugin and gpushare.
 BASE_VERSION=dev ./scripts/build-agent.sh base
 
-# 3. Build the agent image on top of the base (no private inputs).
-docker build -f docker/agent/Dockerfile.app.criuv2 \
-  --build-arg BASE_IMAGE=nvsnap-agent-base:dev -t nvsnap-agent:dev .
+# 3. Build the agent image on top of the base (docker/agent/Dockerfile.app).
+BASE_VERSION=dev APP_VERSION=dev ./scripts/build-agent.sh app
 ```
 
 Glibc: the base is `ubuntu:22.04` (glibc 2.35) and criu carries its own
@@ -79,9 +81,9 @@ source (above) for a fully public path.
 File an issue with:
 
 - Agent image tag: `kubectl -n nvsnap-system get ds nvsnap-agent -o jsonpath='{.spec.template.spec.containers[0].image}'`
-- Workload (vLLM, SGLang, TRT-LLM, etc.), model, and GPU count
+- Workload (vLLM, SGLang, NIM, etc.), model, and GPU count
 - Agent log: `kubectl -n nvsnap-system logs ds/nvsnap-agent`
-- CRIU log if relevant: `/var/log/criu/<checkpoint-id>/dump.log` on the GPU node
+- CRIU log if relevant: `dump.log` in the checkpoint's directory on the GPU node (`agent.hostPaths.checkpoints`, default `/var/lib/containerd/nvsnap-checkpoints/<checkpoint-id>/`)
 
 ## License
 

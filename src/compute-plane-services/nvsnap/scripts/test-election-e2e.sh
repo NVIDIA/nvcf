@@ -11,7 +11,7 @@
 #   KUBECONFIG=... ./scripts/test-election-e2e.sh [helm --set overrides...]
 #   NS=nvsnap-system REL=qwen MODEL=Qwen/Qwen2.5-32B-Instruct ./scripts/test-election-e2e.sh --set tensorParallel=4
 #
-# Design and recorded results: docs/proposals/helm-chart-cache-election.md
+# Design and recorded results: docs/design/helm-chart-cache-election.md
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CHART=${CHART:-$HERE/../deploy/k8s/charts/vllm-workers}

@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -233,11 +234,17 @@ func TestEnsureLocal_AllPeersFail(t *testing.T) {
 	if atomic.LoadInt32(peerAdds) != 0 {
 		t.Errorf("peer-add fired %d times after total failure; want 0", atomic.LoadInt32(peerAdds))
 	}
-	// Critically: no partial dest dir left. (Avoids future runs
-	// thinking we already have it.)
-	if _, err := os.Stat(filepath.Join(dir, id)); err == nil {
-		t.Errorf("dest dir left behind after total failure")
+	// No partial checkpoint is taken for a whole one later. The directory
+	// itself stays: a placeholder may hold it bind-mounted.
+	if localCheckpointComplete(dir, id) {
+		t.Error("a failed fetch reads as a complete checkpoint")
 	}
+	_ = filepath.WalkDir(filepath.Join(dir, id), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			t.Errorf("file left behind after total failure: %s", p)
+		}
+		return nil
+	})
 }
 
 // TestEnsureLocal_SkipsSelfInPeerList — catalog returns OUR own URL

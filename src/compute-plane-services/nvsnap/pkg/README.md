@@ -9,10 +9,10 @@ Everything else is repo-private under [`../internal/`](../internal/).
 
 ## Package map
 
-- [`discovery/`](discovery/) — GPU process discovery via `/proc` + cgroup
-  inspection (runtime-agnostic, no container-runtime API).
-- [`introspection/`](introspection/) — per-process introspection (FDs,
-  namespaces, GPU device usage) used to group a workload's process tree.
+- [`discovery/`](discovery/) — container information (rootfs, spec) resolved
+  through the containerd client.
+- [`introspection/`](introspection/) — container introspection via `/proc`:
+  mounts, namespaces and rootfs.
 - [`metadata/`](metadata/) — checkpoint metadata types shared across producers
   and consumers.
 

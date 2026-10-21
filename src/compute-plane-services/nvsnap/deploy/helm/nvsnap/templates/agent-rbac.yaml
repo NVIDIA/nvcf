@@ -48,7 +48,7 @@ rules:
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
-    # docs/design/ROOTFS-EVERYWHERE.md). The holder is a Kyverno-
+    # docs/ARCHITECTURE.md §2). The holder is a Kyverno-
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.
@@ -93,6 +93,14 @@ rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
     verbs: ["get"]
+  # An instance's companions (instance companion capture): the pods its
+  # GPU ranks hold connections to, directly or through a Service.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]

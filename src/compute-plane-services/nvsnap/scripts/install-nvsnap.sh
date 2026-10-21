@@ -4,7 +4,7 @@
 
 # install-nvsnap.sh — one-command bootstrap for nvsnap on a fresh K8s cluster.
 #
-# Walks the prereqs from docs/INSTALL.md:
+# Walks the prereqs from docs/operate/INSTALL.md:
 #   1. Verify kubectl + helm versions
 #   2. Detect cluster + check it has at least one GPU node
 #   3. Create the nvsnap-system namespace

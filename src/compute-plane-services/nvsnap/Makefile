@@ -9,7 +9,7 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate
+.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate check-gpushare check-docs
 
 all: build
 
@@ -29,16 +29,16 @@ nvsnap-server:
 	CGO_ENABLED=0 GOOS=linux go build $(GO_FLAGS) -o $(BUILD_DIR)/nvsnap-server ./cmd/nvsnap-server
 
 
-# Build container image for agent
-docker-build: agent
-	@echo "Building container image $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) build -t $(FULL_IMAGE) -f docker/agent/Dockerfile .
+# Build the agent image the way it ships: Dockerfile.app on the CRIU base
+# (scripts/build-agent.sh; registry and version from scripts/versions.sh or
+# NVSNAP_REGISTRY / NVSNAP_APP_VERSION).
+docker-build:
+	./scripts/build-agent.sh app
 
 
 # Push container image
 docker-push: docker-build
-	@echo "Pushing $(FULL_IMAGE)..."
-	$(CONTAINER_TOOL) push $(FULL_IMAGE)
+	./scripts/build-agent.sh push-app
 
 # Install CRDs
 install-crds:
@@ -70,6 +70,20 @@ test:
 
 # Run all unit tests with coverage profile (used by CI).
 # Coverage output lands in coverage/coverage.out for Codecov upload.
+# Compile the gpushare C code for amd64 and arm64 (Docker, no GPU); same check as CI.
+check-gpushare:
+	./scripts/check-gpushare-build.sh
+
+# Check doc links, anchors and doc paths, that every maintained doc's table
+# of contents matches its headings, that docs/REFERENCE.md matches the code,
+# and that the figures match their script; same check as CI.
+check-docs:
+	cd scripts/docs && python3 -m unittest -q test_docs_checks
+	python3 scripts/docs/check-doc-links.py
+	python3 scripts/docs/docs-toc.py --check
+	python3 scripts/docs/reference.py --check
+	python3 docs/figures/scripts/check.py
+
 test-coverage:
 	mkdir -p coverage
 	go test -v -race -coverprofile=coverage/coverage.out -covermode=atomic $(GO_TEST_PKGS)

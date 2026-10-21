@@ -109,6 +109,7 @@ func (c *AgentCopier) Copy(ctx context.Context, destRoot string, sources []check
 				"kind":   string(kind),
 				"source": src.DstSubpath,
 			}))
+			tc.SetFaithful(src.Faithful)
 			bytes, files, err := tc.Copy(ctx, fullSrc, fullDst)
 			if err != nil {
 				return totalBytes, totalFiles, fmt.Errorf("%s copy %s → %s: %w", kind, fullSrc, fullDst, err)

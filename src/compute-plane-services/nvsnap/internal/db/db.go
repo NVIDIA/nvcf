@@ -29,38 +29,61 @@ import (
 // DB wraps a sql.DB connection to the SQLite checkpoint catalog.
 type DB struct {
 	db *sql.DB
+	// w is the one connection every write goes through. SQLite takes one
+	// writer at a time; the process's writers queue for this connection
+	// rather than contend for the file's lock, where a writer that waited
+	// past the busy timeout failed with SQLITE_BUSY (an instance's agents
+	// recording their captures at once, under load). Reads keep the pool:
+	// in WAL mode they do not wait for the writer.
+	w *sql.DB
 }
 
 // Open opens (or creates) a SQLite database at path.
-// Configures WAL mode and busy timeout for concurrent access.
+//
+// The pragmas go in the DSN so that every connection of the pool gets them:
+// set with Exec, they applied to one pooled connection only, and the others
+// failed concurrent writes at once with "database is locked (SQLITE_BUSY)".
+// Transactions take the write lock when they begin (_txlock=immediate): a
+// read that upgrades to a write in WAL mode gets SQLITE_BUSY without waiting
+// for the busy timeout. ":memory:" is one database per connection, so it
+// gets a single connection.
 func Open(path string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite", path)
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+	if path == ":memory:" {
+		dsn = ":memory:?_pragma=busy_timeout(5000)"
+	}
+	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-
-	// WAL mode for concurrent reads during writes
-	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
+	writer := sqlDB
+	if path == ":memory:" {
+		sqlDB.SetMaxOpenConns(1)
+	} else if writer, err = sql.Open("sqlite", dsn); err != nil {
 		_ = sqlDB.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-
-	// 5s busy timeout to avoid "database is locked" under contention
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("set busy timeout: %w", err)
+	writer.SetMaxOpenConns(1)
+	d := &DB{db: sqlDB, w: writer}
+	if err := sqlDB.Ping(); err != nil {
+		_ = d.Close()
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-
-	d := &DB{db: sqlDB}
 	if err := d.runMigrations(); err != nil {
-		_ = sqlDB.Close()
+		_ = d.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	return d, nil
 }
 
-// Close closes the database connection.
+// Close closes the database connections.
 func (d *DB) Close() error {
-	return d.db.Close()
+	err := d.db.Close()
+	if d.w != d.db {
+		if werr := d.w.Close(); err == nil {
+			err = werr
+		}
+	}
+	return err
 }

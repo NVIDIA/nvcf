@@ -90,7 +90,7 @@ type StorageProfile struct {
 	// about 12 min per pod for nothing). Empty means DefaultPrewarmMaxBytes.
 	PrewarmMaxBytes string `json:"prewarmMaxBytes,omitempty"`
 	// ModelVolume configures the write-once model volume for Helm
-	// functions (docs/proposals/helm-shared-model-volume.md). One
+	// functions (docs/design/helm-shared-model-volume.md). One
 	// lifecycle on every storage: primary in the nvsnap namespace, views
 	// per reader namespace, local compile caches shared through a cache
 	// set. Mode "block" is the default for shared-volume strategies
@@ -173,7 +173,7 @@ var builtinProfiles = map[string]StorageProfile{
 	// Prewarm on with eight readers: an NVMesh volume reads 270 MB/s per
 	// stream and scales to 2.1 GB/s at eight (dev1 2026-09-28), while the
 	// engine's mmap load is a single stream (15 GB in 33 s). The sweep
-	// must split files into ranges to use that; see webhook prewarmCommand.
+	// must split files into ranges to use that; see the helper's prewarm (cmd/nvsnap-helper).
 	"nvmesh-csi.excelero.com":      {Strategy: StrategySharedVolume, VolumeHandleTransform: "nvmesh", MountOptions: []string{"ro", "norecovery", "nouuid"}, PrewarmParallelism: 8},
 	"efs.csi.aws.com":              {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},
 	"filestore.csi.storage.gke.io": {Strategy: StrategySharedVolume, VolumeHandleTransform: "none"},

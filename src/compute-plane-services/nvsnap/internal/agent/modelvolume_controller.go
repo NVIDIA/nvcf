@@ -39,7 +39,7 @@ import (
 )
 
 // ModelVolumeController is the agent half of
-// docs/proposals/helm-shared-model-volume.md.
+// docs/design/helm-shared-model-volume.md.
 //
 //   - Download Jobs, RWX (any node): when the Job for an identity
 //     succeeds, the shared claim is labelled complete.
@@ -109,7 +109,7 @@ type ModelVolumeController struct {
 	CacheWarmup time.Duration
 	// RefreshDisabled turns set refresh off; RefreshCooldown is the least
 	// time between a generation's creation and the next refresh of the
-	// same set (zero: 6 hours). docs/proposals/helm-chart-cache-refresh.md.
+	// same set (zero: 6 hours). docs/design/helm-chart-cache-refresh.md.
 	RefreshDisabled bool
 	RefreshCooldown time.Duration
 	// deltaScan is the warm-rank scan (seam for tests): new files not in
@@ -144,10 +144,14 @@ type ModelVolumeController struct {
 	// mount holder on this node.
 	markFailed func(ctx context.Context, uri, sysNS, claim, reason string) error
 
-	mu       sync.Mutex
-	holders  map[string]*checkpointstore.MountHolder
-	inflight map[string]bool
-	attempts map[string]int
+	mu      sync.Mutex
+	holders map[string]*checkpointstore.MountHolder
+	// idleSince is when each bound volume was first seen unused.
+	idleSince map[string]time.Time
+	// bindLocks serializes binding and releasing one volume key.
+	bindLocks sync.Map
+	inflight  map[string]bool
+	attempts  map[string]int
 }
 
 // stagingBindTimeout bounds the wait for a freshly created primary
@@ -182,6 +186,9 @@ func (c *ModelVolumeController) Run(ctx context.Context) error {
 		return fmt.Errorf("model volume informers did not sync")
 	}
 	c.log().WithFields(logrus.Fields{"node": c.NodeName, "mode": c.Provisioner.Cfg.Mode, "host_root": c.HostRoot}).Info("model volume controller started")
+	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		go c.runBindRelease(ctx)
+	}
 	<-ctx.Done()
 	return nil
 }
@@ -249,6 +256,11 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	if uri == "" {
 		return
 	}
+	// A CRIU restore placeholder is never a source: its volumes hold what
+	// the checkpoint brought back (or nothing yet), so it is not captured,
+	// measured or collected. It stays a reader whose landing the agent may
+	// still have to bind.
+	restoring := pod.Annotations[webhook.CRIURestoreAnnotation] != ""
 	if staging := pod.Annotations[modelvolume.StagingAnnotation]; staging != "" {
 		// A Block-mode staging pod: its download init finished and the
 		// hold container keeps the emptyDir alive for this node's agent.
@@ -269,7 +281,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		}
 		return
 	}
-	if pod.Labels[modelvolume.CaptureLabel] == "true" {
+	if pod.Labels[modelvolume.CaptureLabel] == "true" && !restoring {
 		// The engine downloaded the model itself into a pod volume; once
 		// the pod is Ready the tree is final and this node's agent copies
 		// it into the primary. Not a reader: it never waits on a claim.
@@ -278,7 +290,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		}
 		return
 	}
-	if pod.Labels[cacheCaptureLabel] != "true" && pod.Labels[modelvolume.CacheKeyLabel] != "" && pod.Annotations[cacheURIAnnotation] != "" {
+	if !restoring && pod.Labels[cacheCaptureLabel] != "true" && pod.Labels[modelvolume.CacheKeyLabel] != "" && pod.Annotations[cacheURIAnnotation] != "" {
 		// A warm rank seeded from a complete set. Once Ready and settled
 		// its cachedir is compared with the seed index; a rank that gained
 		// files proposes a refresh and every agent runs that election.
@@ -290,7 +302,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			c.scanWarmRank(ctx, pod)
 		}
 	}
-	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
+	if !restoring && pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
 		switch {
 		case pod.Annotations[modelvolume.CacheRankReadyAnnotation] == "true":
 			// A rank became ready somewhere in the cluster: every agent
@@ -1098,7 +1110,7 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 	for _, r := range ranks {
 		rankDst := filepath.Join(dst, strconv.Itoa(r.ordinal))
 		if r.pod.Spec.NodeName == c.NodeName {
-			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src, Excludes: cacheSetExcludes()}}); err != nil {
+			if _, _, err := c.Copier.Copy(ctx, rankDst, []checkpointstore.CaptureSource{{Kind: checkpointstore.SourceKindRootfs, SrcPath: r.src, Excludes: cacheSetExcludes(), Faithful: true}}); err != nil {
 				return fmt.Errorf("copy rank %d: %w", r.ordinal, err)
 			}
 			continue
@@ -1111,7 +1123,12 @@ func (c *ModelVolumeController) collectSet(ctx context.Context, uri, sysNS, clai
 		return fmt.Errorf("release collect holder: %w", err)
 	}
 	released = true
-	if err := c.Cache.MarkCompleteClaim(ctx, uri, sysNS, claim, meta); err != nil {
+	// Both copies above keep the engine's owners and modes.
+	stamp := map[string]string{modelvolume.CacheOwnersAnnotation: modelvolume.CacheOwnersKept}
+	for k, v := range meta {
+		stamp[k] = v
+	}
+	if err := c.Cache.MarkCompleteClaim(ctx, uri, sysNS, claim, stamp); err != nil {
 		return err
 	}
 	return c.Cache.ClearFailure(ctx, uri)
@@ -1388,6 +1405,9 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		return
 	}
 	dst := filepath.Join(c.HostRoot, modelvolume.Key(uri))
+	// The release of unused binds (modelvolume_release.go) must not unbind
+	// what is being bound for this reader.
+	defer c.lockBind(modelvolume.Key(uri))()
 	// The mount table is the truth, not memory: the agent may have
 	// restarted, the volume may have been replaced by a re-download of the
 	// same identity, or an operator may have unmounted by hand. A bind is
@@ -1460,7 +1480,7 @@ func (c *ModelVolumeController) attachWithHolder(ctx context.Context, ns, claim 
 		if entry == nil {
 			entry = logrus.NewEntry(logrus.New())
 		}
-		name := "nvsnap-model-holder-" + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
+		name := modelHolderPrefix + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
 		h = checkpointstore.NewMountHolder(c.Kube, entry, ns, name, c.NodeName, claim, pvc.UID, c.HolderImage, "/host", c.HolderPullSecrets)
 		if err := h.Create(ctx); err != nil {
 			return "", fmt.Errorf("create mount-holder: %w", err)
@@ -1613,7 +1633,7 @@ func (c *ModelVolumeController) servePVCReader(ctx context.Context, pod *corev1.
 // scanWarmRank measures a warm rank after Ready and the settle period,
 // marks it rank-ready so it can be listed and streamed, and when its
 // cachedir holds files the seed index did not, marks the delta and
-// proposes a refresh (docs/proposals/helm-chart-cache-refresh.md).
+// proposes a refresh (docs/design/helm-chart-cache-refresh.md).
 func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Pod) {
 	if c.RefreshDisabled {
 		return

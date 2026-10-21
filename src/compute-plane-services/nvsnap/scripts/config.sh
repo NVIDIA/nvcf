@@ -28,9 +28,6 @@ export CUDA_CHECKPOINT_PATH="${CUDA_CHECKPOINT_PATH:-${NVSNAP_PROJECT_ROOT}/../c
 # KUBECONFIG alone: if the user has it set, we honor it; if not,
 # kubectl picks up ~/.kube/config the standard way.
 
-# SSH credentials file
-export NVSNAP_CREDENTIALS="${NVSNAP_CREDENTIALS:-$HOME/.nvsnap/credentials}"
-
 # Function to find cuda-checkpoint binary
 find_cuda_checkpoint() {
     # Check explicit path first
@@ -71,22 +68,6 @@ validate_criu_source() {
     # Check for criu subdirectory
     if [ ! -d "${CRIU_FORK_SRC}/criu" ]; then
         echo "ERROR: ${CRIU_FORK_SRC} doesn't look like a CRIU source directory (no criu/ subdir)" >&2
-        return 1
-    fi
-    return 0
-}
-
-# Function to load SSH credentials
-load_credentials() {
-    if [ -f "$NVSNAP_CREDENTIALS" ]; then
-        source "$NVSNAP_CREDENTIALS"
-    fi
-    
-    if [ -z "${SSH_USER:-}" ] || [ -z "${SSH_PASS:-}" ]; then
-        echo "ERROR: SSH_USER and SSH_PASS must be set" >&2
-        echo "Either export them or create $NVSNAP_CREDENTIALS with:" >&2
-        echo "  SSH_USER=your_username" >&2
-        echo "  SSH_PASS=your_password" >&2
         return 1
     fi
     return 0

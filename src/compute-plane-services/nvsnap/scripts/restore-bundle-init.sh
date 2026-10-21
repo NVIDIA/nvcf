@@ -18,7 +18,6 @@
 # The intercept payload (libnvsnap_intercept.so, patched uvloop/libuv/
 # libzmq, sitecustomize) is no longer staged: criu-v2 dumps and restores
 # in-namespace, so no userspace interception is injected into workloads.
-# lib/nvsnap_intercept/ stays in-tree for future multi-GPU work.
 
 set -euo pipefail
 
@@ -29,25 +28,28 @@ if [[ ! -d /criu-bundle ]]; then
   exit 1
 fi
 
-# Atomic rename of a populated TMP into DST. Caller MUST have already
-# populated TMP. Stale `.new` / `.old` siblings from a prior crashed
-# run are cleaned first; the post-mv cleanup of `.old` may race a
-# very recently-scheduled pod still holding the old inode, which is
-# fine — the kernel only frees the inode once that pod's mount goes
-# away.
+# Install a populated TMP as DST. DST keeps its directory: pods bind-mount
+# it (/nvsnap in every GPU pod under gpushare), and replacing the
+# directory left every such mount pointing at a deleted one. A CRIU
+# capture of those pods then recorded the mount as deleted and could not
+# be restored ("Can't stat : Bad file descriptor" re-creating it). So each
+# file is renamed over its old copy inside DST: atomic per file, and a
+# running process keeps the file it already mapped.
 atomic_swap() {
   local dst="$1"
   local tmp="$2"
-  if [[ -d "$dst" ]]; then
-    local old="${dst}.old"
-    rm -rf "$old"
-    mv "$dst" "$old"
-    mv "$tmp" "$dst"
-    rm -rf "$old" || true
-  else
+  if [[ ! -d "$dst" ]]; then
     mkdir -p "$(dirname "$dst")"
     mv "$tmp" "$dst"
+    return
   fi
+  (cd "$tmp" && find . -mindepth 1 -type d -printf '%P\n') | while IFS= read -r d; do
+    mkdir -p "$dst/$d"
+  done
+  (cd "$tmp" && find . -mindepth 1 ! -type d -printf '%P\n') | while IFS= read -r f; do
+    mv -f "$tmp/$f" "$dst/$f"
+  done
+  rm -rf "$tmp"
 }
 
 # ─── Phase 1: tools tree ──────────────────────────────────────────────
@@ -60,6 +62,33 @@ mkdir -p "$TOOLS_TMP"
 cp -a /criu-bundle/. "$TOOLS_TMP/"
 if [[ -x /usr/local/bin/py-spy ]]; then cp /usr/local/bin/py-spy "$TOOLS_TMP/"; fi
 if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
+
+# ─── Phase 1b: versioned copy (docs/design/VERSIONED-NODE-BUNDLE.md) ──
+# Pods mount <root>/versions/<id>, never changed once staged: a process
+# keeps mapping the files it started with, and a checkpoint's restore mounts
+# the version its capture ran. The id is the image's version, the same on
+# every architecture (each node stages its own architecture's files under
+# it); an unversioned build falls back to the bundle's content hash.
+ROOT="$(dirname "$NVSNAP_DST")"
+VERSIONS="$ROOT/versions"
+BUNDLE_ID=""
+if [[ -f /criu-bundle/BUNDLE_VERSION ]]; then
+  BUNDLE_ID="$(tr -d '[:space:]' < /criu-bundle/BUNDLE_VERSION)"
+fi
+if [[ ! "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || [[ "$BUNDLE_ID" == dev || "$BUNDLE_ID" == latest ]]; then
+  BUNDLE_ID="$(cd "$TOOLS_TMP" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)"
+fi
+mkdir -p "$VERSIONS"
+if [[ ! -d "$VERSIONS/$BUNDLE_ID" ]]; then
+  rm -rf "$VERSIONS/.$BUNDLE_ID.tmp"
+  cp -a "$TOOLS_TMP" "$VERSIONS/.$BUNDLE_ID.tmp"
+  mv "$VERSIONS/.$BUNDLE_ID.tmp" "$VERSIONS/$BUNDLE_ID"
+  echo "restore-bundle-init: staged version $BUNDLE_ID"
+fi
+echo "$BUNDLE_ID" > "$ROOT/.current-bundle.tmp"
+mv -f "$ROOT/.current-bundle.tmp" "$ROOT/current-bundle"
+
+# Legacy tree, for pods admitted before versions.
 atomic_swap "$NVSNAP_DST" "$TOOLS_TMP"
 
 # ─── Sanity checks ────────────────────────────────────────────────────
@@ -68,4 +97,8 @@ if [[ ! -x "$NVSNAP_DST/criu" ]]; then
   ls -la "$NVSNAP_DST" >&2
   exit 1
 fi
-echo "restore-bundle-init: staged into $NVSNAP_DST"
+if [[ ! -x "$VERSIONS/$BUNDLE_ID/criu" ]]; then
+  echo "restore-bundle-init: $VERSIONS/$BUNDLE_ID/criu missing or not executable" >&2
+  exit 1
+fi
+echo "restore-bundle-init: staged into $NVSNAP_DST and version $BUNDLE_ID"

@@ -46,7 +46,7 @@ type CheckpointPeer struct {
 // rather than sqlite's datetime('now') so reads parse uniformly.
 func (d *DB) AddPeer(checkpointID, nodeName, agentURL string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := d.db.Exec(`
+	_, err := d.w.Exec(`
 		INSERT INTO checkpoint_peers (checkpoint_id, node_name, agent_url, registered_at, last_seen)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(checkpoint_id, node_name) DO UPDATE SET
@@ -65,7 +65,7 @@ func (d *DB) AddPeer(checkpointID, nodeName, agentURL string) error {
 // exist (idempotent — we don't want eviction notifications to error
 // just because the catalog already pruned the entry).
 func (d *DB) RemovePeer(checkpointID, nodeName string) error {
-	_, err := d.db.Exec(`
+	_, err := d.w.Exec(`
 		DELETE FROM checkpoint_peers WHERE checkpoint_id = ? AND node_name = ?
 	`, checkpointID, nodeName)
 	if err != nil {
@@ -110,7 +110,7 @@ func (d *DB) ListPeers(checkpointID string) ([]CheckpointPeer, error) {
 // a peer that was just deregistered by another path.
 func (d *DB) TouchPeer(checkpointID, nodeName string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := d.db.Exec(`
+	res, err := d.w.Exec(`
 		UPDATE checkpoint_peers SET last_seen = ?
 		WHERE checkpoint_id = ? AND node_name = ?
 	`, now, checkpointID, nodeName)

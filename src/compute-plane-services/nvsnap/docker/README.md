@@ -18,17 +18,15 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
 
 **Services**
 
-- [`Dockerfile.server`](Dockerfile.server), [`nvsnap-blobstore/`](nvsnap-blobstore/),
-  [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
+- [`Dockerfile.server`](Dockerfile.server), [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
 
 **CRIU fork build** (see
-[docs/THIRD-PARTY-FORKS.md](../docs/THIRD-PARTY-FORKS.md))
+[docs/design/THIRD-PARTY-FORKS.md](../docs/design/THIRD-PARTY-FORKS.md))
 
 - [`criu-builder/`](criu-builder/).
 
 ## Rules
 
-- Every image has a checked-in Dockerfile — never build from an ad-hoc inline
-  Dockerfile (`CLAUDE.md` rule 13).
-- Bump the image tag in `versions.sh` on every rebuild; nodes cache by tag
-  (rule 19).
+- Every image has a checked-in Dockerfile; never build from an ad-hoc inline
+  Dockerfile.
+- Bump the image tag in `versions.sh` on every rebuild; nodes cache by tag.

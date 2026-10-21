@@ -21,7 +21,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -45,6 +47,12 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "pidns-restore-exec":
+			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)
+				os.Exit(1)
+			}
+			return
 		case "capture-write", "capture-copy":
 			log := logrus.New()
 			log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
@@ -66,6 +74,8 @@ func main() {
 	var config agent.Config
 
 	flag.StringVar(&config.NodeName, "node-name", os.Getenv("NODE_NAME"), "Node name")
+	kubeQPS := flag.Float64("kube-client-qps", float64(agent.KubeClientQPS), "Requests per second for each Kubernetes client the agent builds")
+	flag.IntVar(&agent.KubeClientBurst, "kube-client-burst", agent.KubeClientBurst, "Request burst for each Kubernetes client the agent builds")
 	// Phase 5d.1: catalog URL + node IP for peer-fanout cascade.
 	flag.StringVar(&config.CatalogURL, "catalog-url", os.Getenv("NVSNAP_CATALOG_URL"),
 		"NvSnap-server base URL for peer-fanout catalog lookups (e.g. http://nvsnap-server.nvsnap-system.svc.cluster.local:8080). Empty disables cross-node cascade.")
@@ -153,14 +163,14 @@ func main() {
 	// once the rox PVC binds; kubelet may stall in
 	// ContainerCreating in the meantime).
 	// One-downloader-per-hash admission election for chart-shaped model
-	// workloads (docs/proposals/helm-chart-cache-election.md). Needs L2.
+	// workloads (docs/design/helm-chart-cache-election.md). Needs L2.
 	flag.BoolVar(&config.Election.Enabled, "election", false,
 		"Elect one capture leader per cache hash at admission and gate the other model workers until the capture is promoted (needs L2)")
 	flag.DurationVar(&config.Election.Deadline, "election-deadline", 0,
 		"Bound on a leader's cold start plus capture; past it nvsnap-server evicts the gated followers for re-election (default 60m)")
 
 	// Write-once model volume for Helm functions
-	// (docs/proposals/helm-shared-model-volume.md). Needs L2.
+	// (docs/design/helm-shared-model-volume.md). Needs L2.
 	flag.BoolVar(&config.ModelVolume.Enabled, "model-volume", false,
 		"Download each model once per cluster into a shared volume and attach it to every other pod that names it (needs L2)")
 	flag.StringVar(&config.ModelVolume.HostRoot, "model-volume-host-root", "",
@@ -187,6 +197,21 @@ func main() {
 	// default "/var/lib/nvsnap/bundle" (matches the DaemonSet's
 	// nvsnap-bundle-stage initContainer destination). Tests / dev
 	// overrides only — production should keep the default.
+	flag.StringVar(&config.Webhook.AgentPlacement, "webhook-agent-placement", "",
+		"The agent DaemonSet's nodeSelector and nodeAffinity as JSON; pods nvsnap creates without a GPU request run within it.")
+
+	flag.StringVar(&config.Webhook.DynamoNamespace, "webhook-dynamo-namespace", "",
+		"Fixed Dynamo namespace (DYN_NAMESPACE, DYN_NAMESPACE_PREFIX) for Dynamo components whose etcd and NATS are their instance's own; empty keeps the operator's.")
+
+	flag.Int64Var(&config.CRIUGhostLimit, "criu-ghost-limit", 0,
+		"Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit), such as an engine's CPU KV-cache tier in /dev/shm; 0 is 1 TiB.")
+
+	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
+		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
+
+	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
+		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
+
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")
 
@@ -226,6 +251,13 @@ func main() {
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
 	flag.Parse()
+	agent.KubeClientQPS = float32(*kubeQPS)
+	if raw := os.Getenv("NVSNAP_CRIU_CAPTURE_OPT_IN"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &config.CaptureOptIn); err != nil {
+			fmt.Fprintln(os.Stderr, "NVSNAP_CRIU_CAPTURE_OPT_IN is not a valid opt-in list; ignoring it:", err)
+			config.CaptureOptIn = nil
+		}
+	}
 
 	// Fail startup on a bad mode rather than falling back to disabled: an
 	// operator who typo'd --auth-mode should hear about it now, not discover
