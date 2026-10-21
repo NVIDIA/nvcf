@@ -790,9 +790,6 @@ func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
 		for _, message := range qwOutput.messages {
 			sr, ok := rejectedSRsByMsgID[queueMessageKey(message)]
 			if !ok {
-				sr, ok = rejectedSRsByMsgID[message.MessageID]
-			}
-			if !ok {
 				continue
 			}
 			msgLog := logging.NewICMSRequestFieldLogger(sr, log).WithFields(logrus.Fields{

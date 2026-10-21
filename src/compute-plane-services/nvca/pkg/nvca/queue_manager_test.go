@@ -2406,6 +2406,7 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 		rejected  bool
 		redeliver bool
 		paused    bool
+		legacy    bool
 	}{
 		{name: "function", body: []byte(goodCM)},
 		{name: "task", body: cmsgTaskContainer},
@@ -2413,6 +2414,9 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 		{name: "function redelivery", body: []byte(goodCM), redeliver: true},
 		{name: "task redelivery", body: cmsgTaskContainer, redeliver: true},
 		{name: "rejected task redelivery", body: cmsgTaskContainer, rejected: true, redeliver: true},
+		{name: "legacy rejected task with new request", body: cmsgTaskContainer, rejected: true, legacy: true},
+		{name: "legacy rejected task redelivery", body: cmsgTaskContainer, rejected: true, redeliver: true, legacy: true},
+		{name: "legacy accepted task with new request", body: cmsgTaskContainer, legacy: true},
 		{name: "termination", body: []byte(goodTM), term: true},
 		{name: "termination while paused", body: []byte(goodTM), term: true, paused: true},
 		{name: "termination while cordoned", body: []byte(goodTM), term: true, mode: types.MaintenanceModeCordon},
@@ -2434,6 +2438,9 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 			if tc.rejected {
 				old.Annotations = map[string]string{ICMSRequestCreationRejectedAnnotation: "previous rejection"}
 			}
+			if tc.legacy {
+				old.Spec.RequestID = ""
+			}
 			_, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).Create(ctx, old, metav1.CreateOptions{})
 			require.NoError(t, err)
 			factory := nvcainformers.NewSharedInformerFactoryWithOptions(clients.BART, ResyncInterval, nvcainformers.WithNamespace(RequestsNamespace))
@@ -2445,7 +2452,7 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 			require.NoError(t, json.Unmarshal(tc.body, &payload))
 			requestID := "new-request"
 			if tc.redeliver {
-				requestID = "original-request"
+				requestID = old.Spec.RequestID
 			}
 			payload["requestId"] = requestID
 			body, err := json.Marshal(payload)
@@ -2471,11 +2478,11 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 			reqs, err := clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).List(ctx, metav1.ListOptions{})
 			require.NoError(t, err)
 			want := 2
-			if tc.redeliver {
+			if tc.redeliver || tc.legacy {
 				want = 1
 			}
-			require.Len(t, reqs.Items, want, "a reused transport ID must not suppress a different request")
-			if !tc.redeliver {
+			require.Len(t, reqs.Items, want, "identified requests are distinct; legacy requests keep conservative deduplication")
+			if !tc.redeliver && !tc.legacy {
 				var found bool
 				for _, request := range reqs.Items {
 					if request.Spec.RequestID == requestID {
@@ -2492,6 +2499,9 @@ func TestSyncQueuesReusedMessageID(t *testing.T) {
 			}
 			if tc.rejected && !tc.redeliver {
 				assert.Len(t, messages, 1, "do not acknowledge a new request as a prior rejected request")
+			}
+			if tc.legacy && !tc.rejected {
+				assert.Len(t, messages, 1, "do not acknowledge an accepted request during queue synchronization")
 			}
 		})
 	}
