@@ -21,6 +21,7 @@
     "stream": true
   },
   "upstream_input_tokens": "6",
+  "upstream_affinity_key": "",
   "upstream_response": {
     "sse": [
       {
