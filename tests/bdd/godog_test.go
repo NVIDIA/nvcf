@@ -3205,8 +3205,6 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-w","value":"nvapi-write"}`}, nil
 		case method == "POST":
 			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-1","value":"nvapi-test"}`}, nil
-		case method == "GET" && path == "/v1/keys":
-			return harness.HTTPResponse{Status: 200, Body: `{"keys":[]}`}, nil
 		default:
 			return harness.HTTPResponse{Status: 204}, nil
 		}
@@ -3398,8 +3396,6 @@ func TestScenarioTeardownFailureFailsAnOtherwisePassingScenario(t *testing.T) {
 
 func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
-	const apiKeyListCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml api-key list --json`
-	const apiKeyDeleteCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml api-key delete key-1 --force`
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
@@ -3435,11 +3431,6 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "  ICMS_FNDS_MESSAGES_ENABLED: \"true\"\n  ICMS_FNDS_MESSAGES_V3_ENABLED: \"true\"\n",
 		},
-		apiKeyListCommand: {
-			ExitCode: 0,
-			Stdout:   `{"keys":[{"id":"key-1","description":"bdd-el-cli-list-and-delete","service":"event-ledger","status":"active"}]}`,
-		},
-		apiKeyDeleteCommand: {ExitCode: 0},
 	})
 	runner.onRun = func(command string) error {
 		if strings.Contains(command, " function delete --deployment-only") {
