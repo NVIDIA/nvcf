@@ -51,6 +51,7 @@ func (a *Agent) reapNode(ctx context.Context, now time.Time) {
 		a.log.WithError(err).Warn("node reaper: cannot list this node's pods; keeping every store and checkpoint")
 		return
 	}
+	a.recordBundleDigest(ctx)
 	a.reapGPUShareStores(pods.Items, now)
 	a.reapCheckpoints(ctx, pods.Items, now)
 	a.reapBundleVersions(pods.Items, now)

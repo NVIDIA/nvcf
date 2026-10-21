@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "agent.go",
         "auth.go",
+        "bundle_digest.go",
         "bundle_versions.go",
         "cache_rank_handler.go",
         "capture_cascade.go",
@@ -123,6 +124,7 @@ go_test(
     srcs = [
         "advertise_test.go",
         "auth_test.go",
+        "bundle_digest_test.go",
         "bundle_versions_test.go",
         "capture_candidate_test.go",
         "capture_preflight_test.go",

@@ -380,6 +380,12 @@ func (a *Agent) fetchBundleFrom(ctx context.Context, node, id string) error {
 		_ = os.RemoveAll(tmp)
 		return rerr
 	}
+	// The peer is trusted for nothing: only contents with the digest the
+	// staging agents recorded are installed.
+	if verr := a.verifyBundle(fctx, id, a.nodeArch(fctx, a.config.NodeName), tmp); verr != nil {
+		_ = os.RemoveAll(tmp)
+		return verr
+	}
 	if cerr := os.Chmod(tmp, 0o755); cerr != nil {
 		_ = os.RemoveAll(tmp)
 		return cerr
