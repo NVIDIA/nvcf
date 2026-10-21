@@ -242,6 +242,10 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// A CRIU capture freezes the pods it captures; only those get
 		// their liveness probes widened.
 		mut.CaptureCandidate = a.captureCandidate
+		mut.CRIUCapture = true
+	}
+	if a.kubeClient != nil {
+		mut.Kube = a.kubeClient
 	}
 	if a.kubeClient != nil {
 		// A checkpoint that failed to restore starts its next pods fresh.

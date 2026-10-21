@@ -38,6 +38,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
@@ -433,6 +434,14 @@ type Mutator struct {
 	// GPUShareByDefault puts every GPU pod under the gpushare library
 	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
 	GPUShareByDefault bool
+	// CRIUCapture is set when the cluster captures with CRIU (agent
+	// captureMethod criu): a restore brings the whole process back, so the
+	// cachedir capture and its compile-cache set do not run, and GPU pods
+	// carry the identity an instance capture keys on (criu_identity.go).
+	CRIUCapture bool
+	// Kube reads what admission needs beyond the pod: the replicas of the
+	// StatefulSet that owns it. Nil: such a pod counts as a group of one.
+	Kube kubernetes.Interface
 	// CRIUGroups returns the complete group capture recorded under a
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
@@ -585,6 +594,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
 	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.criuIdentityPatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

@@ -814,6 +814,7 @@ func cacheMutator(t *testing.T, kc *fake.Clientset) *Mutator {
 	ccfg := m.ModelVolume.Cfg
 	ccfg.Kind = modelvolume.KindCache
 	m.CacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+	m.Kube = kc // the agent's client: StatefulSet sizes
 	return m
 }
 

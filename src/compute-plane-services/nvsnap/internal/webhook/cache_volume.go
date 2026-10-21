@@ -126,10 +126,10 @@ func (m *Mutator) groupSize(ctx context.Context, pod *corev1.Pod) int {
 		}
 	}
 	for _, o := range pod.OwnerReferences {
-		if o.Kind != "StatefulSet" || m.CacheVolume == nil || m.CacheVolume.Kube == nil {
+		if o.Kind != "StatefulSet" || m.Kube == nil {
 			continue
 		}
-		sts, err := m.CacheVolume.Kube.AppsV1().StatefulSets(pod.Namespace).Get(ctx, o.Name, metav1.GetOptions{})
+		sts, err := m.Kube.AppsV1().StatefulSets(pod.Namespace).Get(ctx, o.Name, metav1.GetOptions{})
 		if err == nil && sts.Spec.Replicas != nil && *sts.Spec.Replicas > 0 {
 			return int(*sts.Spec.Replicas)
 		}
