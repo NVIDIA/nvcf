@@ -230,4 +230,7 @@ func TestDecodeMembersCheckedErrorNamesRequestField(t *testing.T) {
 	if !strings.Contains(err.Error(), "ChatCompletionRequest.max_tokens") {
 		t.Fatalf("Unmarshal() error = %q, want it to name ChatCompletionRequest.max_tokens", err)
 	}
+	if typeErr.Offset != 0 {
+		t.Fatalf("Unmarshal() error offset = %d, want 0 because a member offset does not point into the body", typeErr.Offset)
+	}
 }

@@ -117,6 +117,8 @@ func DecodeMembers(data []byte, target any, checked ...string) (failed map[strin
 				if errors.As(err, &typeErr) {
 					typeErr.Struct = value.Type().Name()
 					typeErr.Field = strings.TrimSuffix(name+"."+typeErr.Field, ".")
+					// The offset counts from the member, not the body, so echo would print a wrong position.
+					typeErr.Offset = 0
 				}
 				// Not wrapped: echo builds its 400 message from *json.UnmarshalTypeError by type assertion.
 				return nil, err
