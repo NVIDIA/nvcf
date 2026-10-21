@@ -107,20 +107,31 @@ Effective remote-config data. Worker sidecar references are composed from
 api.remoteConfig.workerImageTags, one tag per worker, so release automation can
 move a worker pin without rewriting the whole reference. configData is merged
 over them, so an explicit configData.nvcf.sidecars entry replaces a reference.
+A tag is required only when configData does not set its reference. Values
+stored by a release from before workerImageTags existed carry every reference,
+so helm upgrade --reuse-values still renders them.
 */}}
 {{- define "nvcf-api.remoteConfigData" -}}
 {{- $remoteConfig := .Values.api.remoteConfig | default dict -}}
 {{- $tags := $remoteConfig.workerImageTags | default dict -}}
-{{- $prefix := "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}" -}}
-{{- $initTag := required "api.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
-{{- $utilsTag := required "api.remoteConfig.workerImageTags.utils is required" $tags.utils | toString -}}
-{{- $llmCredentialsTag := required "api.remoteConfig.workerImageTags.llmCredentials is required" $tags.llmCredentials | toString -}}
-{{- $workers := dict
-  "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $initTag)
-  "utils-container-image" (dict "go" (printf "%s/nvcf-worker-utils-oss:%s" $prefix $utilsTag))
-  "llm-credential-manager-image" (printf "%s/nvcf-worker-llm-credentials-oss:%s" $prefix $llmCredentialsTag)
--}}
 {{- $configData := deepCopy ($remoteConfig.configData | default dict) -}}
+{{- $configNvcf := $configData.nvcf | default dict -}}
+{{- $configSidecars := $configNvcf.sidecars | default dict -}}
+{{- $configUtils := get $configSidecars "utils-container-image" | default dict -}}
+{{- $prefix := "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}" -}}
+{{- $workers := dict -}}
+{{- if not (get $configSidecars "init-container") -}}
+{{- $tag := required "api.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
+{{- $_ := set $workers "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $tag) -}}
+{{- end -}}
+{{- if not (and (kindIs "map" $configUtils) (get $configUtils "go")) -}}
+{{- $tag := required "api.remoteConfig.workerImageTags.utils is required" $tags.utils | toString -}}
+{{- $_ := set $workers "utils-container-image" (dict "go" (printf "%s/nvcf-worker-utils-oss:%s" $prefix $tag)) -}}
+{{- end -}}
+{{- if not (get $configSidecars "llm-credential-manager-image") -}}
+{{- $tag := required "api.remoteConfig.workerImageTags.llmCredentials is required" $tags.llmCredentials | toString -}}
+{{- $_ := set $workers "llm-credential-manager-image" (printf "%s/nvcf-worker-llm-credentials-oss:%s" $prefix $tag) -}}
+{{- end -}}
 {{- toYaml (mergeOverwrite (dict "nvcf" (dict "sidecars" $workers)) $configData) -}}
 {{- end -}}
 

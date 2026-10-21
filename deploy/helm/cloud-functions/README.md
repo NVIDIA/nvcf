@@ -112,7 +112,9 @@ API resolves the placeholders at runtime. A worker release moves its key through
 `tools/ci/github-release-subprojects.json`. To replace a whole reference, for
 example to use another image name, set the matching
 `api.remoteConfig.configData.nvcf.sidecars` entry. It takes precedence over the
-composed value.
+composed value, and the matching tag is then optional. That keeps
+`helm upgrade --reuse-values` working for a release whose stored values predate
+`workerImageTags`.
 
 ## Sidecar release-artifact annotations
 

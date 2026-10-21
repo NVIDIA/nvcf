@@ -44,7 +44,9 @@ through `tools/chart-version-bumper`, which reads the `deploys` entries in
 `tools/ci/github-release-subprojects.json`. To replace a whole reference, for
 example to use another image name, set the matching
 `nvctApi.remoteConfig.configData.nvct.sidecars` entry. It takes precedence over
-the composed value.
+the composed value, and the matching tag is then optional. That keeps
+`helm upgrade --reuse-values` working for a release whose stored values predate
+`workerImageTags`.
 
 ## Remote Config RBAC
 

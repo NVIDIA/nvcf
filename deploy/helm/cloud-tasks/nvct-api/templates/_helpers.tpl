@@ -81,19 +81,26 @@ Effective remote-config data. Worker sidecar references are composed from
 nvctApi.remoteConfig.workerImageTags, one tag per worker, so release automation
 can move a worker pin without rewriting the whole reference. configData is
 merged over them, so an explicit configData.nvct.sidecars entry replaces a
-reference.
+reference. A tag is required only when configData does not set its reference.
+Values stored by a release from before workerImageTags existed carry every
+reference, so helm upgrade --reuse-values still renders them.
 */}}
 {{- define "nvct-api.remoteConfigData" -}}
 {{- $remoteConfig := .Values.nvctApi.remoteConfig | default dict -}}
 {{- $tags := $remoteConfig.workerImageTags | default dict -}}
-{{- $prefix := "${nvct.sidecars.hostname}/${nvct.sidecars.repository}" -}}
-{{- $initTag := required "nvctApi.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
-{{- $taskTag := required "nvctApi.remoteConfig.workerImageTags.task is required" $tags.task | toString -}}
-{{- $workers := dict
-  "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $initTag)
-  "utils-container" (printf "%s/nvcf-worker-task-oss:%s" $prefix $taskTag)
--}}
 {{- $configData := deepCopy ($remoteConfig.configData | default dict) -}}
+{{- $configNvct := $configData.nvct | default dict -}}
+{{- $configSidecars := $configNvct.sidecars | default dict -}}
+{{- $prefix := "${nvct.sidecars.hostname}/${nvct.sidecars.repository}" -}}
+{{- $workers := dict -}}
+{{- if not (get $configSidecars "init-container") -}}
+{{- $tag := required "nvctApi.remoteConfig.workerImageTags.init is required" $tags.init | toString -}}
+{{- $_ := set $workers "init-container" (printf "%s/nvcf-worker-init-oss:%s" $prefix $tag) -}}
+{{- end -}}
+{{- if not (get $configSidecars "utils-container") -}}
+{{- $tag := required "nvctApi.remoteConfig.workerImageTags.task is required" $tags.task | toString -}}
+{{- $_ := set $workers "utils-container" (printf "%s/nvcf-worker-task-oss:%s" $prefix $tag) -}}
+{{- end -}}
 {{- toYaml (mergeOverwrite (dict "nvct" (dict "sidecars" $workers)) $configData) -}}
 {{- end -}}
 

@@ -180,6 +180,40 @@ fi
 grep -Fq "nvctApi.remoteConfig.workerImageTags.task is required" "${tmp_dir}/empty-tag.log" ||
   fail "an empty worker tag did not name the missing key"
 
+# helm upgrade --reuse-values renders these templates against the values stored
+# with the previous release. Values from before workerImageTags existed have no
+# tags but carry every worker reference in configData, so they must still
+# render and keep those references. The null drops the chart default tags.
+stored_values="${tmp_dir}/stored-values.yaml"
+cat > "${stored_values}" <<EOF
+nvctApi:
+  remoteConfig:
+    workerImageTags: null
+    configData:
+      nvct:
+        sidecars:
+          init-container: "${prefix}/nvcf-worker-init-oss:0.9.1"
+          utils-container: "${prefix}/nvcf-worker-task-oss:0.9.2"
+EOF
+stored_manifest="${tmp_dir}/manifest-stored-values.yaml"
+render_with_sidecar_env --values "${stored_values}" > "${stored_manifest}" ||
+  fail "values stored before workerImageTags existed no longer render"
+assert_remote_config "${stored_manifest}" '.nvct.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:0.9.1" "stored init reference"
+assert_remote_config "${stored_manifest}" '.nvct.sidecars."utils-container"' \
+  "${prefix}/nvcf-worker-task-oss:0.9.2" "stored task reference"
+grep -Fq "release-artifact-utils-container-image: \"${hostname}/${repository}/nvcf-worker-task-oss:0.9.2\"" \
+  "${stored_manifest}" ||
+  fail "the task release-artifact annotation did not follow the stored reference"
+
+# A tag stays required for a worker whose reference configData does not set.
+if render --set nvctApi.remoteConfig.workerImageTags=null \
+  > "${tmp_dir}/no-tags.yaml" 2> "${tmp_dir}/no-tags.log"; then
+  fail "missing worker tags were accepted without stored worker references"
+fi
+grep -Fq "nvctApi.remoteConfig.workerImageTags.init is required" "${tmp_dir}/no-tags.log" ||
+  fail "missing worker tags did not name the missing key"
+
 # Without the sidecar registry env vars the annotations must be omitted entirely
 # rather than emitting partially-resolved (invalid) references.
 render > "${manifest_without_sidecar_env}"

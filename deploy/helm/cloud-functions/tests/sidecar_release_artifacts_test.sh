@@ -186,6 +186,44 @@ fi
 grep -Fq "api.remoteConfig.workerImageTags.init is required" "${tmp_dir}/empty-tag.log" ||
   fail "an empty worker tag did not name the missing key"
 
+# helm upgrade --reuse-values renders these templates against the values stored
+# with the previous release. Values from before workerImageTags existed have no
+# tags but carry every worker reference in configData, so they must still
+# render and keep those references. The null drops the chart default tags.
+stored_values="${tmp_dir}/stored-values.yaml"
+cat > "${stored_values}" <<EOF
+api:
+  remoteConfig:
+    workerImageTags: null
+    configData:
+      nvcf:
+        sidecars:
+          init-container: "${prefix}/nvcf-worker-init-oss:0.9.1"
+          utils-container-image:
+            go: "${prefix}/nvcf-worker-utils-oss:0.9.2"
+          llm-credential-manager-image: "${prefix}/nvcf-worker-llm-credentials-oss:0.9.3"
+EOF
+stored_manifest="${tmp_dir}/manifest-stored-values.yaml"
+render_with_sidecar_env --values "${stored_values}" > "${stored_manifest}" ||
+  fail "values stored before workerImageTags existed no longer render"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."init-container"' \
+  "${prefix}/nvcf-worker-init-oss:0.9.1" "stored init reference"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."utils-container-image".go' \
+  "${prefix}/nvcf-worker-utils-oss:0.9.2" "stored utils reference"
+assert_remote_config "${stored_manifest}" '.nvcf.sidecars."llm-credential-manager-image"' \
+  "${prefix}/nvcf-worker-llm-credentials-oss:0.9.3" "stored llm-credentials reference"
+grep -Fq "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:0.9.1\"" \
+  "${stored_manifest}" ||
+  fail "the init release-artifact annotation did not follow the stored reference"
+
+# A tag stays required for a worker whose reference configData does not set.
+if render --set api.remoteConfig.workerImageTags=null \
+  > "${tmp_dir}/no-tags.yaml" 2> "${tmp_dir}/no-tags.log"; then
+  fail "missing worker tags were accepted without stored worker references"
+fi
+grep -Fq "api.remoteConfig.workerImageTags.init is required" "${tmp_dir}/no-tags.log" ||
+  fail "missing worker tags did not name the missing key"
+
 # Without the sidecar registry env vars the annotations must be omitted entirely
 # rather than emitting partially-resolved (invalid) references.
 render > "${manifest_without_sidecar_env}"
