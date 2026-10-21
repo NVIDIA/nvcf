@@ -171,6 +171,14 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 		// capture.
 		PostCommit: a.postCaptureCommit,
 	}
+	if criuIsDefault() {
+		// CRIU captures the whole process; the cachedir capture watcher
+		// would only take a second, lesser capture of labeled pods (and
+		// none of an elected one: there is no election under CRIU). The
+		// backend above still serves the webhook and the restores.
+		a.log.Info("rootfs-only capture watcher not started: the capture method is CRIU")
+		return backend, nil
+	}
 	watcher := &rootfsonly.Watcher{
 		Capturer:    capturer,
 		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: cfg.CUDADriverMajor},

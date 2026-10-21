@@ -188,7 +188,9 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// driver in the nvsnap-storage-profiles ConfigMap instead.
 	promoter, profile, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
 	a.l2Profile = profile
-	if a.config.Election.Enabled || a.config.ModelVolume.Enabled {
+	// The election picks one pod to take a cachedir capture for the rest
+	// of its configuration; CRIU captures every instance whole.
+	if (a.config.Election.Enabled || a.config.ModelVolume.Enabled) && !criuIsDefault() {
 		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
 		a.electionScope = &election.NodeArchScope{KubeClient: kc}
 		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
@@ -202,10 +204,14 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 		} else {
 			a.modelVolume, a.modelMinter = mv, minter
 			// The compile-cache set is the model volume mechanism with
-			// another kind: same storage, same views, every mode.
-			ccfg := mv.Cfg
-			ccfg.Kind = modelvolume.KindCache
-			a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			// another kind: same storage, same views, every mode. A CRIU
+			// restore brings the caches back with the process, so under
+			// CRIU there is no set to collect or seed.
+			if !criuIsDefault() {
+				ccfg := mv.Cfg
+				ccfg.Kind = modelvolume.KindCache
+				a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			}
 		}
 	}
 

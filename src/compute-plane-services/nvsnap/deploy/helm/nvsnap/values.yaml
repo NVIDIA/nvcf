@@ -342,7 +342,11 @@ agent:
   # How workloads are captured and restored: "cachedir" (the engine's
   # caches and model, restored into a fresh start) or "criu" (the whole
   # process, restored in place of a fresh start). Applies to every capture
-  # on the cluster, including NVCA functions.
+  # on the cluster, including NVCA functions. With "criu" a restore brings
+  # the compile caches back with the process, so the cachedir machinery
+  # does not run: no cachedir volume or cache env on pods, no compile-cache
+  # set (modelVolume still shares the model), no cachedir capture watcher
+  # and no admission election. podCacheDir and election are then unused.
   captureMethod: cachedir
   # Multi-pod instances (a Helm StatefulSet, LeaderWorkerSet or Grove group)
   # are captured only on request: their pods annotated

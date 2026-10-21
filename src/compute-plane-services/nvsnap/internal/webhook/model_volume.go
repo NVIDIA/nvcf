@@ -720,6 +720,9 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 // filesystem once put them there). The model entries of the template are
 // dropped: the model lives in the landing volume, not under the cachedir.
 func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
+	if m.CRIUCapture {
+		return m.criuModelEnvPatches(main, land)
+	}
 	if m.CacheDir == "" {
 		return nil
 	}
@@ -756,6 +759,38 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	// that shares the compile caches between pods of one configuration.
 	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
 	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
+}
+
+// criuHFModulesCache is where transformers writes trust_remote_code module
+// sources under CRIU capture: the container's writable layer, which the
+// capture's rootfs diff carries to a restore. /tmp is writable by any user
+// in every engine image.
+const criuHFModulesCache = "/tmp/nvsnap/hf_modules"
+
+// criuModelEnvPatches is modelCacheEnvPatches under CRIU capture. A CRIU
+// restore brings the process back with its compile caches, so they stay
+// where the engine writes them (the writable layer, carried by the rootfs
+// diff): HOME does not move, and no cachedir or compile-cache set is
+// added. What stays is what the read-only model landing itself needs: an
+// engine reading the Hugging Face default cache finds the model where it
+// is mounted, and module sources are not written under it.
+func (m *Mutator) criuModelEnvPatches(main *corev1.Container, land modelid.Landing) []PatchOp {
+	var patches []PatchOp
+	pinned := pinsHFHome(main, land)
+	moduleCache := (pinned || hfHomeUnderLanding(main, land)) && !hasEnv(main, "HF_MODULES_CACHE")
+	if !pinned && !moduleCache {
+		return nil
+	}
+	if main.Env == nil {
+		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
+	}
+	if pinned {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_HOME", Value: land.Path}))
+	}
+	if moduleCache {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: criuHFModulesCache}))
+	}
+	return patches
 }
 
 // pinsHFHome reports whether the engine reads its model through the Hugging

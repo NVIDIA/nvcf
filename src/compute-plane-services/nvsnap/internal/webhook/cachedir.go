@@ -216,7 +216,8 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 // label check skipped for an elected leader, which is chosen by the
 // election rather than by the chart author.
 func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []PatchOp {
-	if m.CacheDir == "" {
+	// With CRIU capture a pod is captured whole; no cachedir capture runs.
+	if m.CacheDir == "" || m.CRIUCapture {
 		return nil
 	}
 	// Opt-in only: inject the cachedir capture plumbing into pods explicitly
