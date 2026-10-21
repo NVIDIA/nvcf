@@ -225,6 +225,8 @@ NVCF_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
     "@nv_third_party_deps//:org_slf4j_slf4j_api",
     "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_resource_server",
     "@nv_third_party_deps//:org_springframework_spring_beans",
     "@nv_third_party_deps//:org_springframework_spring_context",
     "@nv_third_party_deps//:org_springframework_spring_core",
