@@ -72,6 +72,7 @@ var defaultScopes = []string{
 	"list_functions",
 	"queue_details",
 	"list_functions_details",
+	"manage_telemetries",
 }
 
 var defaultNVCTScopes = []string{

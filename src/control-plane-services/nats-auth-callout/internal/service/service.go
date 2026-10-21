@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,10 +40,14 @@ type Service struct {
 	nc             *nats.Conn
 	logger         *zap.Logger
 	calloutService *callout.AuthorizationService
+	closed         chan struct{}
 	// stopping marks a close requested by Stop, so it is not reported as a failure.
 	stopping atomic.Bool
 }
 
+// NewFromConfig connects to NATS with the service's nkey and starts the authorization
+// callout service on that connection. The connection reconnects without limit; see
+// Closed and CheckReady for how its state is reported.
 func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *zap.Logger) (*Service, error) {
 	// Create NKey keypair from embedded seed
 	nkeyPair, err := nkeys.FromSeed([]byte(config.NkeySeed))
@@ -87,7 +92,22 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 		config: config,
 		logger: logger,
 	}
-	nc, err := nats.Connect(config.NatsURL, append([]nats.Option{nkeyOpt}, s.connectionOptions()...)...)
+	// nats.go's default is to give up after 60 reconnect attempts (~2 min) and then
+	// stay closed while the process keeps running and reporting healthy. A NATS
+	// outage longer than that left the callout permanently disconnected and every
+	// login timing out until someone restarted it by hand. Reconnect without limit,
+	// and expose a connection that closes anyway so the process can exit.
+	closed := make(chan struct{})
+	var closeOnce sync.Once
+	nc, err := nats.Connect(config.NatsURL, append(s.connectionOptions(), nkeyOpt,
+		func(opts *nats.Options) error {
+			previousClosedHandler := opts.ClosedCB
+			return nats.ClosedHandler(func(c *nats.Conn) {
+				previousClosedHandler(c)
+				closeOnce.Do(func() { close(closed) })
+			})(opts)
+		},
+	)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -135,9 +155,12 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 	logger.Info("Svc info:", zap.Any("info", calloutService.Service.Info()))
 
 	s.calloutService = calloutService
+	s.closed = closed
 	return s, nil
 }
 
+// Stop stops the callout service and closes the NATS connection. Call it once: the
+// underlying callout.AuthorizationService.Stop closes a channel unconditionally.
 func (s *Service) Stop() {
 	// callout.AuthorizationService.Stop panics when called twice.
 	if s.stopping.Swap(true) {
@@ -145,6 +168,21 @@ func (s *Service) Stop() {
 	}
 	_ = s.calloutService.Stop()
 	s.nc.Close()
+}
+
+// Closed is closed once the NATS connection is closed for good: on Stop, or on an
+// error the client does not retry. While it stays open, the client keeps reconnecting.
+func (s *Service) Closed() <-chan struct{} {
+	return s.closed
+}
+
+// CheckReady returns an error while the service cannot answer auth requests,
+// i.e. while its NATS connection is not up.
+func (s *Service) CheckReady() error {
+	if !s.nc.IsConnected() {
+		return fmt.Errorf("NATS connection is %s", s.nc.Status())
+	}
+	return nil
 }
 
 // calloutLogAdapter adapts our zap.Logger to what callout expects.
