@@ -19,9 +19,19 @@ fail() {
   exit 1
 }
 
-# Collector tags have the form <upstream>-nv-<release>.
-tag_pattern='[0-9]+\.[0-9]+\.[0-9]+-nv-[0-9]+\.[0-9]+\.[0-9]+'
-if copies="$(grep -rEn --exclude=values.yaml "${tag_pattern}" "${chart}")"; then
+# Collector tags have the form <upstream>-nv-<release>. Older collector images
+# used a plain <upstream> tag, so also match a collector image with one.
+tag_pattern='[0-9]+\.[0-9]+\.[0-9]+-nv-[0-9]+\.[0-9]+\.[0-9]+|(byoo|nvcf)-otel-collector:[0-9]+\.[0-9]+\.[0-9]+'
+# deployment.yaml compares env overrides with this exact image so it can
+# replace the value an older chart packaged. It names that past value, not a
+# default, so it never moves with a release and is not a copy.
+legacy_override='nvcr\.io/nvidia/nvcf-byoc/byoo-otel-collector:0\.157\.11"'
+copies="$(
+  grep -rEn --exclude=values.yaml "${tag_pattern}" "${chart}" |
+    sed -E "s|${legacy_override}||g" |
+    grep -E "${tag_pattern}" || true
+)"
+if [[ -n "${copies}" ]]; then
   printf '%s\n' "${copies}" >&2
   fail "collector tag literal outside values.yaml; read the tag from values instead"
 fi
