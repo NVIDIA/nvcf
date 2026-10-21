@@ -52,6 +52,7 @@ go_library(
         "self_hosted_up.go",
         "status.go",
         "task.go",
+        "telemetry.go",
         "undeploy.go",
         "version.go",
     ],
@@ -138,6 +139,7 @@ go_test(
         "self_hosted_uninstall_test.go",
         "self_hosted_up_test.go",
         "task_test.go",
+        "telemetry_test.go",
     ],
     embed = [":cmd"],
     deps = [

@@ -67,6 +67,27 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 | `task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | Values are encrypted at rest |
 | `task bulk --task-ids=ID1[,ID2,…]` | Fetch details for multiple tasks in one request | |
 
+## Telemetry endpoints
+
+Telemetry endpoints configure Bring Your Own Observability (BYOO): the OpenTelemetry collector sidecar exports a function's or task's logs, metrics, or traces to an endpoint the tenant owns. Endpoint commands require the `manage_telemetries` scope, which the default function API key includes. `update-secret` also requires `update_secrets`, which the default function key does not include. `--scopes` replaces the default scopes and the new key replaces the saved function key, so keep the defaults in the list:
+
+```bash
+nvcf-cli api-key generate --for function \
+  --scopes invoke_function,list_functions,queue_details,list_functions_details,manage_telemetries,update_secrets
+```
+
+Provider support and secret shapes are in [flags.md](flags.md).
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `telemetry create --name=X --endpoint=URL --provider=P --type=T [--protocol=HTTP\|GRPC] --secret-file=FILE` | Register an endpoint and store its credentials | Prints the telemetry ID; `--secret-file -` reads standard input; the CLI rejects provider, type, and secret combinations the collector cannot render |
+| `telemetry list` | List endpoints in the account | Credentials are never returned |
+| `telemetry get TELEMETRY-ID` | Endpoint details | |
+| `telemetry update-secret TELEMETRY-ID --secret-file=FILE` | Replace the stored credentials | Same secret shape as `create`; cross-account updates use `admin secrets update-telemetry` |
+| `telemetry delete TELEMETRY-ID [--force]` | Delete an endpoint and its credentials | Confirm with user; fails while a function still references it |
+
+Attach an endpoint with `--logs-telemetry-id`, `--metrics-telemetry-id`, or `--traces-telemetry-id` on `function create` or `task create`. `function get`, `task get`, and both create commands show the attached IDs under `Telemetries` (`telemetries` in `--json`).
+
 ## Auth
 
 | Command | Purpose | Notes |

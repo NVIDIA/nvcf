@@ -85,7 +85,7 @@ By default, generates a function key (NVCF), a task key (NVCT) and an Event
 Ledger key in one command. Use --for to generate only one.
 
 Function key default scopes: invoke_function, list_functions, queue_details,
-list_functions_details.
+list_functions_details, manage_telemetries.
 
 Task key default scopes: launch_task, list_tasks, task_details, cancel_task,
 delete_task, list_events, list_results, update_secrets.

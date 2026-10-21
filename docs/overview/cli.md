@@ -466,6 +466,7 @@ Default function key scopes:
 | `list_functions` | View available functions |
 | `list_functions_details` | View detailed function metadata |
 | `queue_details` | Monitor function execution queues |
+| `manage_telemetries` | Manage telemetry endpoints |
 
 Default task key scopes:
 

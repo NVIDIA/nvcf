@@ -357,6 +357,24 @@ to these aliases so clients can distinguish Messages-only models:
 }
 ```
 
+A request to Vanity Gateway that carries `anthropic-version`, as Anthropic SDKs
+and Claude Code send, gets the Anthropic Models API instead. `GET /v1/models`
+lists only `anthropicMessages` aliases, each with `type`, `id`, `display_name`,
+and `created_at`, plus `has_more`, `first_id`, and `last_id`. Use `limit`
+(1 to 1000, default 20) with `after_id` or `before_id` to page.
+`GET /v1/models/{model}` returns one alias, or `404` `not_found_error` for a
+model that is not served on Messages. An offline model returns `503`
+`api_error` with `Retry-After: 10800`, and an expired model returns `410`
+`not_found_error`. Requests without `anthropic-version` get
+the shared OpenAI-shaped list.
+
+Messages shadows support sticky sampling methods. On Messages, `promptCacheKey`
+reads only headers, by default `x-multi-turn-session-id` and then
+`x-claude-code-session-id`, so a Claude Code conversation stays on one side of
+the shadow. `firstMessageHash` hashes `system` and the first user message. List
+both, for example `[promptCacheKey, firstMessageHash]`, to fall back to the
+first message when no session header is present.
+
 For Claude Code, configure the invocation origin and pin both foreground and
 background requests to a declared model:
 

@@ -917,6 +917,7 @@ type FunctionData struct {
 	ContainerImage      string                  `json:"containerImage"`
 	CreationTime        string                  `json:"creationTime"`
 	LLMInvocationConfig *LLMInvocationConfigDto `json:"llmInvocationConfig,omitempty"`
+	Telemetries         *TelemetriesDto         `json:"telemetries,omitempty"`
 }
 
 // CreateFunction creates a new function
@@ -1793,6 +1794,7 @@ type FunctionDto struct {
 	RateLimit               *RateLimitDto               `json:"rateLimit,omitempty"`
 	Models                  []ArtifactDto               `json:"models,omitempty"`
 	LLMInvocationConfig     *LLMInvocationConfigDto     `json:"llmInvocationConfig,omitempty"`
+	Telemetries             *TelemetriesDto             `json:"telemetries,omitempty"`
 }
 
 // ClusterGroupsResponse represents the response from listing cluster groups
