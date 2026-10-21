@@ -43,8 +43,11 @@ def tracked_markdown(root: pathlib.Path) -> list[pathlib.Path]:
         ["git", "-C", str(root), "ls-files", "--", "*.md"],
         check=True, capture_output=True, text=True,
     ).stdout
-    # ui/node_modules ships third-party Markdown that is not ours to check.
-    return sorted({root / p for p in out.splitlines() if p and "node_modules/" not in p})
+    # ui/node_modules ships third-party Markdown that is not ours to check, and
+    # .agents/skills/ holds skills copied unchanged from other repositories,
+    # whose links point into those repositories.
+    return sorted({root / p for p in out.splitlines()
+                   if p and "node_modules/" not in p and not p.startswith(".agents/")})
 
 
 def tracked_code(root: pathlib.Path) -> list[pathlib.Path]:

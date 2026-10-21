@@ -82,7 +82,7 @@ check-docs:
 	python3 scripts/docs/check-doc-links.py
 	python3 scripts/docs/docs-toc.py --check
 	python3 scripts/docs/reference.py --check
-	python3 docs/figures/scripts/figures.py --check
+	python3 docs/figures/scripts/check.py
 
 test-coverage:
 	mkdir -p coverage

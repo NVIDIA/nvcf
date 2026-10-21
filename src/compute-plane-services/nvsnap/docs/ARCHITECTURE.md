@@ -83,15 +83,7 @@ The Helm chart (`deploy/helm/nvsnap`) installs:
 | Server (Deployment) | REST API, web UI and the checkpoint catalog | `cmd/nvsnap-server`, `internal/server`, `internal/db` |
 | Node bundle | CRIU, gpushare and the helper, staged by the agent on every node and mounted read-only into the pods it prepares | `internal/webhook/bundle_mount.go` |
 
-```mermaid
-flowchart LR
-  API[Kubernetes API] -- pod CREATE --> WH[agent: webhook]
-  WH -- patched pod --> API
-  AG[agent on each GPU node] -- capture, restore --> POD[workload pods]
-  AG <-- L3 peer fetch --> AG2[other agents]
-  AG -- catalog rows --> SRV[server + catalog]
-  AG -- L2 volume pair --> ST[(cluster storage)]
-```
+![nvsnap on one cluster: the webhook, the agent on every GPU node, the server and catalog, cluster storage and peer agents](figures/nvsnap-components.svg)
 
 ## 2. The two capture methods and how one is chosen
 
@@ -184,6 +176,8 @@ pointers and captured CUDA graphs stay valid. `nvsnap-gpu-suspend` drives it.
 Across nodes, the members' tools vote on the quiesce and exchange fabric
 handles through the agents (`internal/agent/gpushare_fabric.go`).
 
+![gpushare in nvsnap: admission, capture, the checkpoint, and the restore of a placeholder](figures/nvsnap-gpushare-integration.svg)
+
 The full description, limits and validation are in
 [design/GPUSHARE.md](design/GPUSHARE.md); the sources are under
 `docker/agent/gpushare/`.
@@ -194,10 +188,7 @@ An instance (a StatefulSet, LeaderWorkerSet or Grove group) is captured and
 restored as one group, because its pods hold connections to each other and
 must stop and start together.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="figures/instance-capture-restore-dark.svg">
-  <img alt="Instance capture: checks, a freeze point, each node dumps its member. Restore: placeholders, CRIU restore with one address map, unlock all, resume GPUs." src="figures/instance-capture-restore-light.svg">
-</picture>
+![An instance captured and restored as one group: the leader drives every node's agent, a group record names each checkpoint, new members become placeholders](figures/nvsnap-instance-capture-restore.svg)
 
 ### Who is captured
 
@@ -228,10 +219,7 @@ happens after the dump (`internal/agent/group_freeze.go` `driveGroupFreeze`,
 is a group record: a ConfigMap naming every member's checkpoint
 (`criu_group.go` `criuGroupConfigMapName`, `updateGroupRecord`).
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="figures/group-freeze-dark.svg">
-  <img alt="Every member waits at the freeze point; the leader releases all once all arrive, or aborts all." src="figures/group-freeze-light.svg">
-</picture>
+![The group freeze point: every member waits, the driver releases all or aborts all, before the dump and after it](figures/nvsnap-group-freeze.svg)
 
 ### Group restore
 
@@ -252,10 +240,7 @@ is a group record: a ConfigMap naming every member's checkpoint
 A restore takes the first copy of a checkpoint it finds, in this order
 (`internal/agent/cascade_fetch.go` `EnsureLocal`):
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="figures/data-tiers-dark.svg">
-  <img alt="A capture writes L1 then copies to the L2 volume pair; a restore tries L1, L2, L3, then L4." src="figures/data-tiers-light.svg">
-</picture>
+![Where a checkpoint lives and the order a restore tries: own disk, shared filesystem, the rox volume, then peer agents](figures/nvsnap-data-tiers.svg)
 
 | Tier | Where | Code |
 |---|---|---|
@@ -280,6 +265,8 @@ it downloads it once into a primary volume, and every other pod reads it
 through a read-only view, landed at the path the engine already reads
 (`internal/modelid` decides the model at admission; `internal/modelvolume`
 owns the volume; `internal/webhook/model_volume.go` lands it).
+
+![Model volumes: one download per model, a read-only view in every reader's namespace](figures/nvsnap-model-volume.svg)
 
 Under cachedir, the election chooses one pod per hash to download and capture
 when a chart starts many workers at once: a Lease create, which only one

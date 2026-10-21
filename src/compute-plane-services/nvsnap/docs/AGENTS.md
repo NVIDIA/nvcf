@@ -63,11 +63,15 @@ replaced.
 
 ## Figures
 
-Review-grade figures are drawn by
-[figures/scripts/figures.py](figures/scripts/figures.py), one light and one
-dark SVG each, shown with a `<picture>` element. Edit the script, run it,
-render both SVGs and look at them before committing. Mermaid is for quick
-inline sketches.
+Review-grade figures follow the NVIDIA Cloud Architecture Diagrams style,
+through the `nvaf-architecture-diagrams` skill in
+`.agents/skills/` (copied unchanged from the nvaf repository, as flashbox and
+bedrock do). Each figure is an SVG drawn by its own script under
+`figures/scripts/`, with a light and a dark PNG rendered beside it by
+`figures/scripts/render.sh`; a document embeds the SVG with
+`![alt](figures/<name>.svg)`. Look at both PNGs before committing, and commit
+the script, the SVG and the PNGs together. Mermaid is for quick inline
+sketches. How to regenerate: [figures/README.md](figures/README.md).
 
 ## Generated pages
 

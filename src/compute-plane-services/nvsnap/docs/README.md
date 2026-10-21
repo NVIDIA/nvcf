@@ -45,6 +45,7 @@ was not re-checked against the code.
 | [RESULTS.md](RESULTS.md) | Every measured number, with date, hardware, build and source | Current, 2026-10-21 |
 | [GLOSSARY.md](GLOSSARY.md) | What each nvsnap word means, including the storage tiers L1–L4, and which words are retired | Current, 2026-10-21 |
 | [REFERENCE.md](REFERENCE.md) | Every `nvsnap.io/*` annotation and label, environment variable and agent route | Generated from the code; CI fails when it is stale |
+| [figures/README.md](figures/README.md) | Every architecture figure, the script that draws it, the style it follows, and how to regenerate it | Current, 2026-10-21 |
 
 ## Architecture
 
@@ -111,5 +112,5 @@ A new document goes into this index in the same commit that adds it.
 `make check-docs` (and the `nvsnap docs` workflow) fails on a broken link,
 heading anchor or doc path, on a stale table of contents, on a
 REFERENCE.md that no longer matches the code, and on a figure that no longer
-matches [its script](figures/scripts/figures.py). Figures are drawn by that
-script, one light and one dark SVG each; edit the script, not the SVG.
+matches its script. Each figure is drawn by its own script; edit the script,
+not the SVG ([figures/README.md](figures/README.md)).

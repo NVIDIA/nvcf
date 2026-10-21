@@ -37,13 +37,7 @@ checkpointed with gpushare, which handles the GPU memory their processes
 share. Checkpoints reach other nodes through cluster storage and from peer
 agents.
 
-```mermaid
-flowchart LR
-  A[first replica starts cold] --> B[serving]
-  B -- agent captures --> C[(checkpoint)]
-  C -- fetched to the new node --> D[new replica restored]
-  D --> E[serving]
-```
+![nvsnap on one cluster: the webhook, the agent on every GPU node, the server and catalog, cluster storage and peer agents](figures/nvsnap-components.svg)
 
 ## Three measured numbers
 

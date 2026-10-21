@@ -20,6 +20,8 @@ releases the memory before the driver checkpoint and re-creates it at the same
 virtual addresses after restore, so pointers and captured CUDA graphs stay
 valid. `nvsnap-gpu-suspend` drives the shim and the CUDA checkpoint API.
 
+![The memory gpushare releases before the driver checkpoint and re-creates after the restore](../figures/nvsnap-gpushare-memory.svg)
+
 The sources are under `docker/agent/gpushare/`. Both binaries are built in the
 agent base image (`Dockerfile.base`, `gpushare-builder` stage, CUDA 13 headers)
 and installed in `/criu-bundle/`. Tests are under `tests/gpushare/`.
@@ -59,6 +61,8 @@ If any step of `suspend` fails, the tool rolls back: it undoes the driver
 lock or checkpoint, then `load`, `remap` and `resume` restore exactly what
 `release` had dropped, so the workload runs on as before. The tool says
 whether the rollback worked.
+
+![nvsnap-gpu-suspend: quiesce, release, driver lock and checkpoint, CRIU; after the restore, driver restore, load, remap, resume](../figures/nvsnap-gpushare-suspend-resume.svg)
 
 The shim backs `cuMemAlloc` of 2 MiB or more with exportable cuMem allocations,
 so that CUDA IPC works across a restore. cuMem memory is reachable only from
@@ -166,15 +170,7 @@ name. So:
 Annotate the pod `nvsnap.io/gpushare: "true"`. nvsnap then does the steps in
 Usage itself, around its criu-v2 capture and restore.
 
-```mermaid
-flowchart LR
-  A[admission: webhook] -->|shim in LD_PRELOAD, bundle at /nvsnap, per-pod store| B[workload runs]
-  B --> C[capture: agent]
-  C -->|nvsnap-gpu-suspend suspend, stop| D[plain CRIU dump]
-  D -->|store moved into the checkpoint| E[node-local checkpoint]
-  E --> F[restore: placeholder]
-  F -->|CRIU restore, then resume --gpu-map| G[serving]
-```
+![gpushare in nvsnap: admission, capture, the checkpoint, and the restore of a placeholder](../figures/nvsnap-gpushare-integration.svg)
 
 At admission, the webhook changes every container that requests GPUs:
 
