@@ -197,7 +197,7 @@ api:
           init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.4
           utils-container-image:
             go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.2.6
-          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.3
+          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.4
           llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.5
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
@@ -210,7 +210,7 @@ nvctApi:
         sidecars:
           init-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.4
           utils-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.6
-          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.3
+          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.4
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -436,7 +436,7 @@ addons:
         tag: "0.14.11"
     requestRouter:
       image:
-        tag: "0.18.2"
+        tag: "0.18.3"
       # replicaCount defaults to the request-router chart value. Set it here
       # only when the stack needs a different topology.
       # replicaCount: 3
@@ -629,6 +629,10 @@ rateLimiter:
 icms:
   enabled: true
 
+sis:
+  image:
+    tag: "0.7.6"
+
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.
 
@@ -647,9 +651,15 @@ apikeys:
     maxUnavailable: 1
 
 ess:
+  image:
+    tag: "0.5.4"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
+
+notary:
+  image:
+    tag: "1.14.5"
 
 invocation:
   image:
