@@ -15,11 +15,11 @@ documented in [values.yaml](values.yaml); what the components do is in
 
 | Template | Renders |
 |---|---|
-| `agent-daemonset.yaml`, `agent-rbac.yaml`, `agent-token-secret.yaml` | The agent, its RBAC and its API token |
+| `agent-daemonset.yaml`, `agent-rbac.yaml`, `agent-token-secret.yaml` | The agent and its two Services, its RBAC and its API token |
 | `server.yaml` | The server Deployment, Service, RBAC and catalog PVC |
 | `webhook.yaml` | The webhook Service, the MutatingWebhookConfiguration and its certificate |
 | `cachedir-env-configmap.yaml` | The cachedir environment template the webhook reads at capture (when `agent.podCacheDir` is set) |
-| `network-policy-restore-pods.yaml` | Lets restore pods in the namespaces listed in `agent.l2.restoreNamespaces` reach the server |
+| `network-policy-restore-pods.yaml` | Lets restore pods in the namespaces listed in `agent.l2.restoreNamespaces` reach the server, and, with `webhook.restorePrepStrategy: init-container`, the agent |
 | `post-install-smoke.yaml` | The post-install health probe Job |
 | `grafana-dashboard.yaml` | The nvsnap Grafana dashboard |
 

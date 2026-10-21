@@ -8,7 +8,9 @@ change. No pod is ever held back from scheduling.
 
 Status: all five mechanisms built and verified on an H100 cluster with NVMesh storage and on an
 18 node GB300 cluster (arm64), 2026-09-30. Mechanism 5 is one cache-set
-volume per configuration; see the results at the end.
+volume per configuration; see the results at the end. Under CRIU capture
+(`agent.captureMethod: criu`) only the model volume runs; the cache set
+(mechanism 5) does not (`internal/webhook/criu_identity.go`).
 Supersedes the gate-and-promote path of `helm-chart-cache-election.md`
 for Helm functions. Issue #2099. Diagrams are checked with
 `scripts/check-mermaid.sh`.
@@ -401,7 +403,7 @@ Removed for Helm: `schedulingGates`, promote-to-ROX of the whole tree,
 ## Build order and verification
 
 1. Identity, landing path, group inheritance; tests from real specs
-   (prd11 NGC function, Dynamo sample, LWS example, plain Deployment).
+   (an NGC function, a Dynamo sample, an LWS example, a plain Deployment).
 2. Model volume and writer path on both storage classes; readers on DFS
    (marker wait).
 3. NVMesh readers: agent completion, ro attach, bind into emptyDir.

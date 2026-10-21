@@ -22,8 +22,9 @@ not name it.
 ## CRIU with gpushare (multi-GPU)
 
 Source: [design/GPUSHARE.md](design/GPUSHARE.md#validation). vLLM 0.20.0 at
-default flags, 4x GB300, driver 610.57.04, unless the row says otherwise. nvsnap
-build: not recorded. Output after restore matched the output before the
+default flags, 4x GB300, driver 610.57.04, unless the row says otherwise.
+Recorded between 2026-10-05 and 2026-10-09 (the commits that added each result
+to GPUSHARE.md). nvsnap build: not recorded. Output after restore matched the output before the
 checkpoint byte for byte in every case.
 
 | Workload | What was measured | Result |

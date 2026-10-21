@@ -20,7 +20,8 @@ Entry points (`main` packages). One directory per binary.
 - [`nvsnap-l2-wait/`](nvsnap-l2-wait/) — init container that blocks until the L2
   per-capture PVC is promoted.
 - [`nvsnap-helper/`](nvsnap-helper/): static helper that runs the steps the
-  webhook adds to a pod (wait, write, seed, prewarm, idle) in any image.
+  webhook adds to a pod (`skip`, `wait`, `write`, `seed`, `prewarm`,
+  `await-pid-floor`) in any image.
 - [`nvsnap-idle/`](nvsnap-idle/): static C program that holds a CRIU restore
   placeholder's container until the agent restores the captured processes.
 

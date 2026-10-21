@@ -17,6 +17,14 @@ lazily).
 Extends `helm-shared-model-volume.md`, mechanism 5. Same identity, same
 collector, same election. One new idea: a set has generations.
 
+Status: built, off by default (`agent.cacheVolume.refresh`), and not used
+under CRIU capture, which has no cache set. `Lookup` returns the newest
+complete generation (`internal/modelvolume/modelvolume.go`), the reaper
+judges generations by their own primary (`internal/modelvolume/reaper.go`),
+and the agent stamps rank deltas (`internal/agent/modelvolume_controller.go`).
+The tables below describe the change as it was planned; "today" in them is
+the code before it.
+
 ```mermaid
 flowchart TD
     A[warm worker Ready + settle] --> B{paths in the cachedir that are not in the seed index?}

@@ -144,10 +144,11 @@ and creates a fresh cold one, leaving two pods with the router likely favouring
 the operator's. The test then passes while proving nothing.
 
 Use the production path instead. Annotate the component so the operator's own
-pod carries `nvsnap.io/restore-from`; the webhook rewrites that container's
-command to `restore-entrypoint` and stashes the original in
-`NVSNAP_ORIG_COMMAND`; the agent restores into the pod in place. Nothing is
-deleted, so the operator has nothing to reconcile.
+pod carries `nvsnap.io/restore-from`; the webhook makes that pod its own
+restore placeholder (its main container idles instead of starting the
+engine, `internal/webhook/criu_restore.go`), and the agent on its node
+restores the captured processes into it (`internal/agent/criu_auto_restore.go`).
+Nothing is deleted, so the operator has nothing to reconcile.
 
 This also means rungs 4 and 5 exercise the production path rather than a
 test-only convention, which is worth more than the convenience of the harness.

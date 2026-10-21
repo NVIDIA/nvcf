@@ -167,8 +167,12 @@ name. So:
 
 ## Use through nvsnap
 
-Annotate the pod `nvsnap.io/gpushare: "true"`. nvsnap then does the steps in
-Usage itself, around its criu-v2 capture and restore.
+Where CRIU is the capture method (`agent.captureMethod: criu`), the webhook
+runs every GPU pod under gpushare unless the pod runs to completion (a Job's
+or a task's) or is annotated `nvsnap.io/gpushare: "false"`; elsewhere,
+annotate the pod `nvsnap.io/gpushare: "true"` (`internal/webhook/gpushare.go`
+`gpushareMode`). nvsnap then does the steps in Usage itself, around its
+criu-v2 capture and restore.
 
 ![gpushare in nvsnap: admission, capture, the checkpoint, and the restore of a placeholder](../figures/nvsnap-gpushare-integration.svg)
 
@@ -202,8 +206,9 @@ Limits of the integration:
 - An `LD_PRELOAD` set only by the image (Dockerfile `ENV`) is not visible at
   admission and is replaced by the shim.
 - One capture per workload at a time; a second request is refused.
-- Per-pod store directories are emptied when a capture collects them, not
-  deleted when the pod goes away.
+- Per-pod store directories are emptied when a capture collects them; the
+  agent's reaper removes the store of a pod no longer on the node
+  (`internal/agent/gpushare_store_reaper.go`).
 - `<checkpoint root>/gpushare-pods/` holds the stores of running pods. A
   cleanup of the checkpoint root must keep it: deleting a pod's directory
   leaves its store mount pointing at an unlinked directory, and that pod's
@@ -219,8 +224,11 @@ node, and their tools must vote on the quiesce and exchange fabric handles
 (see `--fabric-map` under Requirements and limits). nvsnap drives that as a
 fabric session:
 
-1. Annotate every pod `nvsnap.io/gpushare-fabric: "true"` as well. The
-   webhook sets `NVSNAP_GPUSHARE_FABRIC=1` unless the pod sets it.
+1. The webhook turns fabric on for a pod whose engine spans pods (a
+   multi-node flag, or a group of more than one pod) and sets
+   `NVSNAP_GPUSHARE_FABRIC=1` unless the pod sets it;
+   `nvsnap.io/gpushare-fabric` set either way wins
+   (`internal/webhook/gpushare.go` `gpushareMode`).
 2. Ask any agent for a group checkpoint of all the pods:
 
    ```bash
@@ -398,7 +406,8 @@ Limits of the move:
 ## Validation
 
 All results are with vLLM 0.20.0 at default flags on 4x GB300 with driver
-610.57.04, unless noted otherwise. In every case the output after restore
+610.57.04, unless noted otherwise, recorded between 2026-10-05 and
+2026-10-09; the nvsnap build is not recorded. In every case the output after restore
 matched the output before the checkpoint byte for byte.
 
 In-place suspend and resume, Qwen2.5-7B-Instruct, TP=4: 3 out of 3 cycles

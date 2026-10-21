@@ -26,7 +26,7 @@ flowchart TD
         R1 --> P1["pod on node 1"]
         RN --> PN["pod on node N"]
     end
-    P0 -. "MountDevice: Timed-out after 30 s waiting for IO Enabled,<br/>kubelet retries, mount succeeds later" .-> X["observed on GB300 cluster:<br/>p50 10 s, p90 49 s, max 66 s per attach<br/>delay is per node, both volumes finish together"]
+    P0 -. "MountDevice: Timed-out after 30 s waiting for IO Enabled,<br/>kubelet retries, mount succeeds later" .-> X["measured run below (GB300, 2026-09-30):<br/>created to Running min 6 s, median 22 s, max 77 s"]
 ```
 
 In production the writer is nvsnap's download or collection step and the
@@ -80,12 +80,3 @@ created->running: min 6s  median 22s  max 77s; pods with a 30 s IO-enable timeou
 Same bytes, same volume, eight nodes: 6 s on the fastest node, 77 s on
 the slowest after one `Timed-out after waiting 30.0 seconds for volume
 ... to have IO Enabled` and a kubelet retry.
-
-## Related measurements
-
-The report that motivated this (24 h of node-driver logs on an 18 node
-GB300 cluster) is kept with the cluster's own data, outside this
-repository. Its headline: 543 IO-enable timeouts in 24 h, all but 12 on
-SHARED_READ_ONLY attaches, and each node's two attaches complete at the
-same instant, so the wait is on the node's attach path rather than on a
-volume.

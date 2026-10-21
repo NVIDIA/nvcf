@@ -58,8 +58,8 @@ was not re-checked against the code.
 | Page | Answers | Status |
 |---|---|---|
 | [INSTALL.md](operate/INSTALL.md) | The one install guide (Helm): prerequisites, the values that decide behaviour, turning nvsnap off, upgrade, troubleshooting | Current, 2026-10-21 |
-| [PULL-SECRETS.md](operate/PULL-SECRETS.md) | Registry credentials for the agent and the pods it creates | Not re-checked |
-| [DEVELOPING.md](operate/DEVELOPING.md) | Build, deploy, capture, validate, merge | Not re-checked |
+| [PULL-SECRETS.md](operate/PULL-SECRETS.md) | Registry credentials for the agent and the pods it creates | Current, 2026-10-21 |
+| [DEVELOPING.md](operate/DEVELOPING.md) | Build, deploy, capture, validate, merge | Current, 2026-10-21 |
 | [Chart README](../deploy/helm/nvsnap/README.md) | What each chart template renders; chart development | Current, 2026-10-21 |
 
 ## Design notes
@@ -69,15 +69,15 @@ the column below is that status, corrected where the code disagrees.
 
 | Page | Answers | Status |
 |---|---|---|
-| [GPUSHARE.md](design/GPUSHARE.md) | How multi-GPU workloads are checkpointed: the gpushare shim, its chunk store, limits, validation | Current as of 2026-10-10; predates the rootfs-diff archive and placeholder model landings |
+| [GPUSHARE.md](design/GPUSHARE.md) | How multi-GPU workloads are checkpointed: the gpushare shim, its chunk store, limits, validation | Integration section checked 2026-10-21; predates the rootfs-diff archive and placeholder model landings |
 | [STOP-THE-WORLD-CAPTURE.md](design/STOP-THE-WORLD-CAPTURE.md) | Why an instance is frozen as a whole for a capture, and how | Built (`internal/agent/group_freeze.go`) |
 | [VERSIONED-NODE-BUNDLE.md](design/VERSIONED-NODE-BUNDLE.md) | How the node bundle (CRIU, gpushare, helper) is versioned so upgrades do not break running pods | Built (`internal/webhook/bundle_mount.go` `BundleVersionsDir`) |
 | [helm-shared-model-volume.md](design/helm-shared-model-volume.md) | One model volume per model per cluster, and the cache set | Built and verified (as the doc states) |
 | [helm-chart-cache-election.md](design/helm-chart-cache-election.md) | One downloader per hash when a chart starts many workers | Built and verified (as the doc states) |
-| [helm-chart-cache-refresh.md](design/helm-chart-cache-refresh.md) | Cache sets that learn what warm starts compile | Not re-checked |
-| [cross-cluster-replication.md](design/cross-cluster-replication.md) | Replicating checkpoints across clusters | **Disagrees with the code**: says "Proposed"; opt-in replication and `POST /v1/replicate` exist (`internal/agent/agent.go` `Replication`) |
+| [helm-chart-cache-refresh.md](design/helm-chart-cache-refresh.md) | Cache sets that learn what warm starts compile | Built, off by default (as the doc states) |
+| [cross-cluster-replication.md](design/cross-cluster-replication.md) | Replicating checkpoints across clusters | Partly built, cachedir captures and GCS only (as the doc states) |
 | [dynamo-cr-validation.md](design/dynamo-cr-validation.md) | How a Dynamo workload's checkpoint/restore is validated | Proposal (as the doc states) |
-| [STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | Promoting the L2 volume on any storage | **Disagrees with the code**: says "proposal"; `internal/checkpointstore/promoter*.go` implement promoters |
+| [STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | Promoting the L2 volume on any storage | Built (as the doc states) |
 | [THIRD-PARTY-FORKS.md](design/THIRD-PARTY-FORKS.md) | What the CRIU fork carries and why | Current, 2026-10-21 (pin and check in `scripts/versions.sh`, `scripts/build-agent.sh`) |
 
 ## Results

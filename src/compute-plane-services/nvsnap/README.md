@@ -3,18 +3,17 @@
 **GPU checkpoint/restore for Kubernetes. Start large models warm, not cold.**
 
 NvSnap captures a warmed GPU inference pod and restores it on any node with
-the expensive work already done: no model download, no weight reload, no
-kernel or graph recompilation, and, with process capture, no engine
+the expensive work already done: with cache capture, no model download and no
+kernel or graph recompilation; with process capture, no engine
 re-initialization at all. It works on **unmodified** inference containers
-(NVIDIA NIM, vLLM, SGLang, TensorRT-LLM): no application changes, no custom
-images, no SDK.
+(results recorded for NVIDIA NIM, vLLM and SGLang): no application changes, no
+custom images, no SDK.
 
-> **DeepSeek-V4-Flash (SGLang, TP=8): serving in 289 s instead of 1162 s.**
-> gemma-4-31B 4.5x, gpt-oss-120b 3.2x, NVFP4/FP8 MoE models 1.9-2.6x.
-> [Benchmarks](#benchmarks).
+> **DeepSeek-V4-Flash (SGLang, TP=8): serving in 289 s instead of 1162 s**
+> (8x H100, June 2026). gemma-4-31B 4.5x, gpt-oss-120b 3.2x, NVFP4/FP8 MoE
+> models 1.9-2.6x. [Benchmarks](#benchmarks).
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Kubernetes](https://img.shields.io/badge/kubernetes-1.25%2B-326ce5.svg)
 
 New here: [start here](docs/START-HERE.md) · install:
 [docs/operate/INSTALL.md](docs/operate/INSTALL.md) · how it works:
@@ -25,7 +24,8 @@ New here: [start here](docs/START-HERE.md) · install:
 download, model load, CUDA graph capture, JIT and torch.compile. NvSnap does
 that work once, captures the result, and distributes it: same-node cache,
 shared ReadOnlyMany volume, peer-to-peer cascade (every node that restores
-becomes a source), and object store for cross-cluster.
+becomes a source), and, for cache captures, an object store for
+cross-cluster.
 
 ---
 
@@ -53,11 +53,12 @@ capture on the cluster:
   request: pods annotated `nvsnap.io/criu-capture: "true"`, or matched by
   the chart value `agent.criuCaptureOptIn`.
 
-A node-level **agent** (DaemonSet) performs capture/restore using
-`/proc` + cgroup inspection — runtime-agnostic, not tied to any container
-runtime API. A **server** provides a REST API, web UI, and checkpoint
-catalog. An optional **admission webhook** injects restore plumbing
-into workload pods.
+A node-level **agent** (DaemonSet) performs capture/restore: it finds a
+container through the runtime's API (containerd or CRI-O, detected at start,
+`internal/runtime`) and its processes through `/proc`. A **server** provides a
+REST API, web UI, and checkpoint catalog. An **admission webhook**, served by
+the agent and on by default (`webhook.enabled`), prepares workload pods for
+capture and restore.
 
 Deeper design docs:
 [architecture](docs/ARCHITECTURE.md) ·
@@ -96,9 +97,9 @@ tensor-parallel worker spawn) is a fixed floor paid by cold and warm alike.
 
 ### Cross-node distribution (peer cascade)
 
-Every node that fetches a checkpoint becomes a source for the next, so
-aggregate bandwidth scales with peer count instead of bottlenecking on the
-origin node.
+Every node that fetches a checkpoint registers as a source for the next
+(`internal/agent/cascade_fetch.go` `EnsureLocal`), so later fetches are not
+limited to the origin node. No fan-out throughput has been recorded.
 
 ### Process checkpoint/restore (CRIU)
 
@@ -108,7 +109,7 @@ under [gpushare](docs/design/GPUSHARE.md).
 
 | Workload | Hardware, date | Result |
 |---|---|---|
-| Qwen2.5-72B-Instruct, vLLM TP=4, gpushare, restored on another node | 4x GB300 | 66.7 s to first token from the node's copy, 87.8 s from the store; cold 242 s without the download |
+| Qwen2.5-72B-Instruct, vLLM TP=4, gpushare, restored on another node | 4x GB300, October 2026 | 66.7 s to first token from the node's copy, 87.8 s from the store; cold 242 s without the download |
 | Llama-3.1-8B, vLLM, single GPU | H100, July 2026 | 32.4 s agent restore time |
 | Qwen2.5-32B, vLLM, single GPU | H100, July 2026 | 44.3 s agent restore time |
 
@@ -119,9 +120,10 @@ Every number with its date, hardware, build and source is in
 
 ## Quickstart
 
-Prerequisites: a Kubernetes 1.25+ cluster with GPU nodes, NVIDIA driver
-**555+** (required by `cuda-checkpoint`), containerd 1.7+/2.x or CRI-O, and
-`kubectl` + `helm` 3.13+.
+Prerequisites: a Kubernetes cluster with GPU nodes, an NVIDIA driver with the
+CUDA checkpoint driver API (`cuCheckpointProcess*`; multi-GPU capture under
+gpushare needs 610 or later, see [gpushare](docs/design/GPUSHARE.md#requirements-and-limits)),
+containerd or CRI-O, and `kubectl` + `helm` 3.
 
 ```bash
 # 1. Namespace + image pull secret for the project registry
@@ -132,7 +134,8 @@ kubectl create secret docker-registry nvsnap-pull-secret \
   --docker-username='$oauthtoken' \
   --docker-password='<NGC_API_KEY>'
 
-# 2. Install (agent, server, webhook)
+# 2. Install (agent, server, webhook; also cert-manager and the GPU Operator
+#    as subcharts unless you set cert-manager.enabled / gpu-operator.enabled false)
 helm dependency build deploy/helm/nvsnap
 helm install nvsnap deploy/helm/nvsnap --namespace nvsnap-system
 
@@ -162,7 +165,7 @@ optional webhook). Full guide, options, and troubleshooting:
 ┌──────────────────┐     ┌───────────────────────────────────────┐
 │  nvsnap-server   │     │            GPU Node                   │
 │  REST API + UI   │◄───►│  nvsnap-agent (DaemonSet)             │
-│  catalog (SQLite)│     │   ├─ process discovery (/proc+cgroup) │
+│  catalog (SQLite)│     │   ├─ runtime API + /proc discovery    │
 │  metrics + audit │     │   ├─ CRIU orchestration (criu-v2)     │
 └──────────────────┘     │   ├─ cuda-checkpoint integration      │
                          │   ├─ cachedir capture watcher           │
@@ -175,9 +178,10 @@ optional webhook). Full guide, options, and troubleshooting:
               L1 node ─► L2 cluster storage ─► L3 peers ─► L4 object store
 ```
 
-Checkpoints are fetched through a tiered path (the node's own copy →
-cluster storage → peer agents → a cross-cluster object store); cluster
-config decides which tiers are present. See
+A restore fetches a checkpoint from the first tier that has it: the node's
+own copy, then cluster storage, then peer agents. The cross-cluster object
+store (L4) is filled and pulled by replication in the background, not tried
+by a restore. Cluster config decides which tiers are present. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#6-where-bytes-live-and-how-they-move).
 
 **Why the moving parts exist** (details in
@@ -196,15 +200,13 @@ config decides which tiers are present. See
 
 | Component | Supported | Notes |
 |---|---|---|
-| Linux kernel | 5.15, 6.x | The June 2026 cachedir results ran on 6.x ([results](docs/RESULTS.md#cachedir)). |
-| NVIDIA driver | R555+ | Required by `cuda-checkpoint`. Installed via the NVIDIA GPU Operator. |
-| Container runtime | containerd 1.7+/2.x, CRI-O | Discovery is at the Linux process level, not via runtime APIs. |
-| Kubernetes | 1.25+ | |
-| Engines tested | NIM, vLLM, SGLang, TensorRT-LLM | Unmodified stock images. |
+| Linux kernel | 6.x recorded | The June 2026 cachedir results ran on 6.x ([results](docs/RESULTS.md#cachedir)). |
+| NVIDIA driver | CUDA checkpoint driver API | Multi-GPU capture under gpushare: 610 or later ([gpushare](docs/design/GPUSHARE.md#requirements-and-limits)). The chart can install it through the GPU Operator subchart. |
+| Container runtime | containerd, CRI-O | The agent talks to the runtime's socket (`internal/runtime`). |
+| Engines with recorded results | NIM, vLLM, SGLang | Unmodified stock images ([results](docs/RESULTS.md)). |
 
 Checkpointing operates at the Linux process level, not at the engine or
-framework level — so any GPU process is a candidate. The engines above are
-the ones validated end-to-end; others should work without modification.
+framework level. Only the engines above have recorded results.
 
 ---
 
@@ -212,9 +214,13 @@ the ones validated end-to-end; others should work without modification.
 
 The agent DaemonSet runs privileged, with `hostPID` and host-path mounts for
 `/proc`, the container runtime's state and checkpoint storage: it enters the
-workload's namespaces to dump and restore it. Workload pods and restore
-placeholders run with the privileges their own spec gives them; nvsnap does
-not make them privileged.
+workload's namespaces to dump and restore it. nvsnap never makes a workload
+pod or restore placeholder privileged. One case changes the engine
+container's security context: a restore from an older whole-rootfs capture
+runs it as uid 0 with `DAC_OVERRIDE`, `CHOWN` and `FOWNER` added (and
+`SYS_ADMIN` when the overlay is assembled in the pod), so it can write the
+restored tree (`internal/webhook/bundle_mount.go` `securityContextPatches`,
+`internal/webhook/mutate.go` `buildPatches`).
 
 A checkpoint holds the captured processes' memory, which may include tokens,
 keys and request data. A pod restores only a capture from its own tenant
@@ -247,7 +253,7 @@ The full endpoint list (including agent-side cascade endpoints) is in
 ## Project layout
 
 ```text
-cmd/                    binary entry points (agent, server, mount-prep, rootfs-restore, l2-wait, helper, CLI)
+cmd/                    binary entry points (agent, server, mount-prep, rootfs-restore, l2-wait, helper, idle, CLI)
 internal/               agent, server, webhook, CRIU, checkpointstore (Go)
 deploy/helm/nvsnap/     Helm chart
 deploy/k8s/             manifests + sample workloads

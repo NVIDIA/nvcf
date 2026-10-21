@@ -33,17 +33,9 @@ kubectl create secret docker-registry nvsnap-pull-secret \
   --docker-username='$oauthtoken' \
   --docker-password='<paste NGC API key here>' \
   --namespace=nvsnap-system
-
-# 3. Same secret for any namespace where NvSnap-managed workloads live
-kubectl create namespace your-workload-ns
-kubectl create secret docker-registry nvsnap-pull-secret \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password='<paste NGC API key here>' \
-  --namespace=your-workload-ns
 ```
 
-Manifests reference the secret by name as `nvsnap-pull-secret` (the convention used across `deploy/k8s/*.yaml` and the Helm chart). Override the name via `--set imagePullSecrets[0].name=...` if you've already standardized on a different one.
+The chart references the secret by name as `nvsnap-pull-secret` (`nvsnap.imagePullSecrets`). Use another name with `--set nvsnap.imagePullSecrets[0]=<name>`.
 
 ## Getting an NGC API key
 
@@ -69,18 +61,16 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the developer setup including p
 
 ## Mirroring the secret across namespaces
 
-NvSnap's image references appear in three places:
+Where nvsnap images are pulled:
 
-| Manifest | Namespace it lands in |
-|---|---|
-| `deploy/k8s/agent-daemonset.yaml` (nvsnap-agent DaemonSet) | `nvsnap-system` |
-| `deploy/k8s/nvsnap-server.yaml` | `nvsnap-system` |
-| `deploy/k8s/workloads/*.yaml` (vLLM / SGLang / TRT-LLM / NIM pods) | whatever your workloads use |
-| `nvsnap-init` (init container injected into restored pods) | matches the workload's namespace |
+| Pod | Namespace | Pull secret it uses |
+|---|---|---|
+| The agent DaemonSet, the server and the post-install job (the chart) | the release namespace | `nvsnap.imagePullSecrets` |
+| `nvsnap-l2-wait` (`agent.l2.waitImage`) and, with `webhook.restorePrepStrategy: init-container`, `nvsnap-mount-prep`: init containers the webhook adds to restore pods | the workload's namespace | the workload pod's own `imagePullSecrets`; the webhook adds none |
 
-The pull secret must exist in **every namespace** where one of these pods will land. There's no cluster-wide pull-secret in Kubernetes; namespaces are independent.
+Everything else the webhook adds to a workload pod (gpushare, CRIU, the helper) runs from the node bundle the agent stages on each node, mounted by hostPath, so it pulls no image (`internal/webhook/bundle_mount.go`). A pull secret is per namespace; there is no cluster-wide pull secret in Kubernetes.
 
-For a fresh cluster running the full demo set:
+To create the secret in several namespaces:
 
 ```bash
 for ns in nvsnap-system default kube-system; do
@@ -107,7 +97,7 @@ For multi-tenant production clusters, install something like [reflector](https:/
 
 ## Rotation
 
-NGC API keys don't expire by default, but rotate them on a regular cadence (90 days) and immediately if there's any chance the key leaked.
+Rotate the key on a regular cadence, and immediately if there's any chance it leaked.
 
 ```bash
 # 1. Generate a new key at https://ngc.nvidia.com → Setup → API Key
@@ -145,4 +135,4 @@ The secret is fine; the image tag doesn't exist on NGC. Check the manifest's ima
 
 ### Pod stuck pulling for >5 minutes
 
-NGC has region-specific rate limits during high-traffic windows. If multiple pods are pulling 30 GB CUDA images simultaneously, that's the bottleneck — not the secret. Consider [Image Streaming on GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/image-streaming) or mirroring to a closer registry.
+Large images pulled by many pods at once are slow regardless of the secret. Consider [Image Streaming on GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/image-streaming) or mirroring to a closer registry.

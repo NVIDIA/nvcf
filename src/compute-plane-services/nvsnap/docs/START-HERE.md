@@ -43,7 +43,7 @@ agents.
 
 | What | Result | Hardware, date |
 |---|---|---|
-| Qwen2.5-72B-Instruct, TP=4, CRIU with gpushare, restored on another node | 66.7 s to first token from the node's copy, against 242 s cold without the download | 4x GB300 ([GPUSHARE.md](design/GPUSHARE.md#validation)) |
+| Qwen2.5-72B-Instruct, TP=4, CRIU with gpushare, restored on another node | 66.7 s to first token from the node's copy, against 242 s cold without the download | 4x GB300, October 2026 ([GPUSHARE.md](design/GPUSHARE.md#validation)) |
 | DeepSeek-V4-Flash, SGLang TP=8, cachedir | 289 s to ready, against 1162 s cold | 8x H100, June 2026 ([RESULTS.md](RESULTS.md#cachedir)) |
 | Llama-3.1-8B, vLLM, single-GPU CRIU | 32.4 s agent restore time | H100, July 2026 ([RESULTS.md](RESULTS.md#criu-single-gpu)) |
 

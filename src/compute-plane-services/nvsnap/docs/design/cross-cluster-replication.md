@@ -1,6 +1,13 @@
 # Cross-cluster / cross-cloud checkpoint replication
 
-**Status:** Proposed
+**Status:** partly built, for cachedir captures only. Built: the GCS provider
+(`internal/objectstore`; `s3` returns "not yet implemented"), the push of a
+committed cachedir capture to the home bucket (`internal/agent/replication.go`
+`postCaptureCommit`), the pull into a local L2 volume (`POST
+/v1/replicate/{hash}`, `internal/agent/replication_pull.go`) and an elected
+auto-pull poller (`replication_poll.go`). Not built: S3, replication of CRIU
+checkpoints, and a pull from the restore fetch order (`EnsureLocal` tries L1
+to L3 only). The rest of this note is the proposal as written.
 **Supersedes:** the custom `nvsnap-blobstore` CAS service (L4) as the durability/reach tier.
 **Related:** #18 (S3/GCS store), #46 (cross-cluster mobility), #163 (multi-zone L2), #171 (L2 too GCP-specific).
 
@@ -26,7 +33,7 @@ A capture taken on one cluster should be restorable on another — e.g. capture 
 **GCP asia**, restore on **AWS us-west-2**, both H100 with the same driver major.
 
 Within a cluster we already have a fast tier: the **L2 per-capture PVC**
-(`PerCapturePVCBackend`, Hyperdisk-ML rox on GCP / io2 ROX on AWS). One capture,
+(`PerCapturePVCBackend`, Hyperdisk-ML rox on GCP). One capture,
 N restore pods mount the same ReadOnlyMany volume and fan out at storage-tier
 bandwidth. But L2 **cannot leave its zone, let alone its cluster or cloud**:
 

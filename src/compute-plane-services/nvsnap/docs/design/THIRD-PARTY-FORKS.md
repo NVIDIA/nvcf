@@ -28,15 +28,15 @@ Retired (no longer built or shipped): the patched `libuv`, `uvloop`,
 `libzmq` and `pyzmq` forks, the `go-criu` fork, `libnvsnap_intercept.so`
 and the in-pod `restore-entrypoint`. The in-namespace engine (criu-v2)
 restores io_uring rings and epoll state inside CRIU, so no userspace
-interception is injected into workloads any more. Their history lives in
-the `archive/*` tags of the old fork repository.
+interception is injected into workloads any more; the one injected library
+is gpushare, nvsnap's own (see [GPUSHARE.md](GPUSHARE.md)).
 
 ## criu
 
-Fork of record: `https://github.com/balajinvda/criu`, branch `criu-dev`.
-The base image is built from the commit `scripts/versions.sh` pins in
-`NVSNAP_CRIU_REF` (tagged `nvsnap-base-<base version>` in the fork), and
-`scripts/build-agent.sh base` refuses any other source. Tracking is by
+Fork of record: `https://github.com/balajinvda/criu` (`NVSNAP_CRIU_REPO`),
+branch `criu-dev`. The base image is built from the commit `scripts/versions.sh`
+pins in `NVSNAP_CRIU_REF`, and `scripts/build-agent.sh base` refuses any other
+source unless `NVSNAP_CRIU_ALLOW_REF_MISMATCH=1`. Tracking is by
 periodic merge of upstream `criu-dev`; the delta is kept to the features
 below so the next merge stays small.
 
@@ -63,16 +63,19 @@ there and the agent probes the bundled binary for the flag spelling.
 
 How nvsnap uses it: the agent stages the bundle into the workload's
 mount namespace and runs `criu dump` and `criu restore` there (criu-v2).
-The CUDA plugin drives cuda-checkpoint during the dump and restore, so
-GPU state needs no separate orchestration.
+Without gpushare, the CUDA plugin drives cuda-checkpoint during the dump and
+restore. Under gpushare the dump runs without the plugin, and
+`nvsnap-gpu-suspend` drives the CUDA checkpoint API around it
+([GPUSHARE.md](GPUSHARE.md#use-through-nvsnap)).
 
 ## Build provenance
 
-`scripts/build-agent.sh base` clones the fork at `NVSNAP_CRIU_REF` (or
-uses `NVSNAP_CRIU_SRC` when set) and fails if the source HEAD is not the
-pinned commit. The resulting image records the commit in
-`/criu-bundle/criu-version`. `scripts/build-agent.sh check-criu-ref`
-reports drift between the pin and a local checkout.
+`scripts/build-agent.sh base` builds from a local checkout
+(`NVSNAP_CRIU_SRC`, else `../criu` or `../nvsnap-criu`), or clones the fork at
+`NVSNAP_CRIU_REF` when none exists, and fails if the source HEAD is not the
+pinned commit. It writes the commit it built from to `.criu-base-commit` in
+the project root. `scripts/build-agent.sh check-criu-ref` reports drift
+between the pin, the local checkout and the last base build.
 
 ## Upstream contribution status
 

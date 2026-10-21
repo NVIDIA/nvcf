@@ -94,9 +94,11 @@ disk work, not live process initialization.
 ### Page-cache prewarm A/B, September 2026
 
 The cachedir restore adds an `nvsnap-prewarm` init container that reads the
-whole rox tree (`find | xargs -P 6 cat`) before the engine starts, so the
-engine's weight load hits page cache instead of storage. Opt out per pod with
-`NVSNAP_PREWARM=0`. Measured on Llama-3.1-70B-Instruct, vLLM v0.20.0 TP=4,
+whole rox tree before the engine starts, so the engine's weight load hits page
+cache instead of storage. Opt out per pod with `NVSNAP_PREWARM=0`. In this A/B
+the sweep was a per-file `find | xargs -P 6 cat`; it is now `nvsnap-helper
+prewarm`, which reads 256 MiB ranges with the storage profile's reader count
+(`internal/webhook/reader_steps.go`, `cmd/nvsnap-helper`). Measured on Llama-3.1-70B-Instruct, vLLM v0.20.0 TP=4,
 131.6 GB rox on a network block volume (NVMesh, ~1 GB/s per volume), same node,
 page cache dropped before every run:
 

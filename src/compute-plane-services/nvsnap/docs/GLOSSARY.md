@@ -32,7 +32,7 @@ are listed in the generated [reference](REFERENCE.md).
 | cold start | A start with no checkpoint: download, load, compile. |
 | placeholder | The pod a CRIU restore runs into: same spec as the captured pod, its main container waiting until the agent restores the captured processes into it. |
 | rootfs diff | The captured container's writable layer, saved as `rootfs-diff.tar` and replayed into the placeholder before CRIU restores the processes. |
-| replay mounts | The contents of a pod's in-memory and emptyDir mounts (for example `/dev/shm`), saved with the checkpoint and written back before restore. |
+| replay mounts | The contents of `/dev/shm`, `/opt/nvsnap` and the pod's disk-backed emptyDir mounts, saved with the checkpoint and written back before restore; a memory-backed emptyDir is a tmpfs CRIU saves itself (`internal/agent/replay_mounts.go`). |
 | gpushare | `libnvsnap_gpushare.so`, an `LD_PRELOAD` shim that releases GPU memory shared between processes before the CUDA checkpoint and re-creates it at the same addresses after; it is what makes multi-GPU CRIU capture possible. See [design/GPUSHARE.md](design/GPUSHARE.md). |
 | chunk store | The node-local directory gpushare writes a process's GPU memory into, mounted at the same path at capture and restore. |
 | node bundle | The binaries the agent stages on each node for other pods (CRIU, gpushare, the helper), versioned so an upgrade never replaces files a running pod uses. |
@@ -50,8 +50,10 @@ are listed in the generated [reference](REFERENCE.md).
 
 ## Where bytes live: the tiers
 
-A restore looks for a checkpoint in this order and takes the first copy it
-finds (`internal/agent/cascade_fetch.go` `EnsureLocal`).
+A restore looks for a checkpoint in L1, L2 and L3, in that order, and takes
+the first copy it finds (`internal/agent/cascade_fetch.go` `EnsureLocal`). L4
+is not in that order: replication fills it and pulls from it in the
+background.
 
 | Word | Meaning |
 |---|---|
@@ -60,14 +62,14 @@ finds (`internal/agent/cascade_fetch.go` `EnsureLocal`).
 | volume pair | The `rwx-<hash>` volume a capture is written to and the `rox-<hash>` read-only volume restores mount, made from it by promotion. |
 | promotion | Turning a written `rwx-` volume into its read-only `rox-` twin (by snapshot or by a shared read-only attach, depending on storage). |
 | L3 | Peer fetch: another agent that holds the checkpoint sends it over HTTP; every node that restores becomes a peer. |
-| L4 | An object-store bucket shared between clusters (cross-cluster replication). |
+| L4 | An object-store bucket shared between clusters (cross-cluster replication of cachedir captures, `internal/agent/replication.go`). |
 
 ## Models and caches
 
 | Word | Meaning |
 |---|---|
 | model volume | One volume per model per cluster, downloaded once and read by every pod that runs the model (`internal/modelvolume`). |
-| identity | The model a pod will download, as a URI (`hf://`, `ngc://`, `s3://`), decided at admission (`internal/modelid`). |
+| identity | The model a pod will download, as a URI (`hf://`, `ngc://`, `s3://`, `nim://`), decided at admission (`internal/modelid`). |
 | landing | Where a pod finds the model volume: the path the engine already reads, mounted from the volume. |
 | primary | The volume a model or cache set is written to; readers mount read-only views of it. |
 | cache set | The compile caches of one configuration, every rank's in one volume. Not used under CRIU capture. |

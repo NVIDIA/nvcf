@@ -18,9 +18,8 @@ SPDX-License-Identifier: Apache-2.0
 
 An instance capture used to checkpoint a serving instance and let it run on
 (`criu dump --leave-running`). For a large model the capture freezes the GPU
-ranks for minutes: a Kimi-K3 rank saves 4 x 250 GB of GPU memory in about
-70 s before its dump. Everything around the frozen engine that keeps time
-notices:
+ranks for minutes: each rank saves its GPU memory before its dump.
+Everything around the frozen engine that keeps time notices:
 
 - the instance's etcd keeps running and expires the ranks' leases, and a
   Dynamo worker whose lease is gone shuts itself down;
@@ -70,9 +69,7 @@ Large engine buffers in deleted shared-memory files (a vLLM CPU KV-cache tier,
 
 The first instance of a configuration is out of service for the capture and
 one restore, once per configuration. It should be captured before traffic is
-routed to it (or drained first); its in-flight requests fail otherwise. The
-platform's integration holds it out of routing until the verifying restore is
-Ready.
+routed to it (or drained first); its in-flight requests fail otherwise.
 
 ## Not covered
 

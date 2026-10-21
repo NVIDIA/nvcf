@@ -1,6 +1,13 @@
 # Storage-agnostic L2 promotion (PVC provider abstraction)
 
-Status: **proposal** — design for review, not yet implemented.
+Status: built. `internal/checkpointstore/promoter.go` defines the `Promoter`
+interface (with an `EnsureClaim` this proposal did not have);
+`promoter_snapshot.go` implements snapshot-clone (one shared ReadOnlyMany
+claim, or a clone per pod on storage without ReadOnlyMany) and
+`promoter_shared.go` the shared-volume strategy for NVMesh. Profiles come
+from a built-in table plus the `nvsnap-storage-profiles` ConfigMap
+(`storage_profile.go`, `internal/agent/l2_integration.go`). The text below is
+the proposal; where it and the code differ, the code is right.
 Owner: nvsnap L2 / per-capture-PVC.
 Related: nvsnap#63 (L2 tier), nvsnap#81 (RWO writer + ROX reader), nvsnap#171
 (L2 backend too GCP-specific — this is the design that closes it).

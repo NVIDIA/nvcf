@@ -33,10 +33,10 @@ is described in [ARCHITECTURE.md](../ARCHITECTURE.md#1-what-nvsnap-is-and-what-a
 
 | Requirement | Why |
 |---|---|
-| Kubernetes 1.25+ and Helm 3 | The chart and its subcharts |
-| GPU nodes labelled `nvidia.com/gpu.present=true` (GPU Operator) or `cloud.google.com/gke-gpu=true` (GKE) | The agent DaemonSet's node affinity (`agent.nodeAffinity`) |
-| An NVIDIA driver that supports the CUDA checkpoint API (R555 or newer) | CRIU capture checkpoints GPU state through it |
-| containerd (default) or CRI-O (`agent.runtime`) | The agent reads container state from the runtime's directories |
+| Kubernetes and Helm 3 | The chart and its subcharts |
+| GPU nodes labelled `nvidia.com/gpu.present=true` (GPU Operator), `cloud.google.com/gke-gpu=true` (GKE) or `feature.node.kubernetes.io/pci-10de.present=true` (Node Feature Discovery) | The agent DaemonSet's node affinity (`agent.nodeAffinity`) |
+| An NVIDIA driver with the CUDA checkpoint driver API (`cuCheckpointProcess*`); 610 or later for multi-GPU capture under gpushare ([GPUSHARE.md](../design/GPUSHARE.md#requirements-and-limits)) | CRIU capture checkpoints GPU state through it |
+| containerd (default) or CRI-O | The agent talks to the runtime's socket (`agent.hostPaths.containerdSock`) and reads its storage directory (`agent.hostPaths.containerdStorage`); `agent.runtime` is informational |
 | cgroup v2 | Process discovery and freezing |
 | Credentials for the image registry (`nvsnap.imageRegistry`) | Every nvsnap image is pulled from it |
 
@@ -124,11 +124,12 @@ start while agents run different revisions.
 
 ```bash
 helm uninstall nvsnap --namespace nvsnap-system
-kubectl -n nvsnap-system delete pvc nvsnap-server-db   # optional: Helm keeps PVCs
 ```
 
-Checkpoints on the nodes' disks and in L2 volumes are not removed by an
-uninstall.
+The uninstall deletes the catalog volume `nvsnap-server-db` with the release:
+it is a chart object without a keep policy (`templates/server.yaml`).
+Checkpoints on the nodes' disks, L2 volumes and model volumes are created by
+the agent, not the chart, and are not removed.
 
 ## Troubleshooting
 
@@ -143,7 +144,7 @@ No node matches the agent's node affinity, or the matching nodes carry a
 taint it does not tolerate:
 
 ```bash
-kubectl get nodes -L nvidia.com/gpu.present,cloud.google.com/gke-gpu
+kubectl get nodes -L nvidia.com/gpu.present,cloud.google.com/gke-gpu,feature.node.kubernetes.io/pci-10de.present
 ```
 
 Replace `agent.nodeAffinity` (and, for tainted nodes, `agent.tolerations`)

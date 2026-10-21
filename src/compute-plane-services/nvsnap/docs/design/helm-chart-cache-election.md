@@ -4,7 +4,9 @@ Goal: when a chart deploys N model workers, exactly one downloads and
 initializes; the rest start from its cache. If the cache already exists,
 every worker starts from it. No change to the customer's chart.
 
-Status: implemented on branch `nvsnap/helm-election`, verified on the H100 NVMesh test cluster 2026-09-25 (results below).
+Status: built (`internal/election`, `internal/webhook/election.go`), off by
+default (`agent.election.enabled`) and not used under CRIU capture; verified
+on the H100 NVMesh test cluster 2026-09-25 (results below).
 Supersedes the `nvsnap.io/restore-from: "auto"` annotation, which required
 a template opt-in and could not be a capture source (issue #2099).
 

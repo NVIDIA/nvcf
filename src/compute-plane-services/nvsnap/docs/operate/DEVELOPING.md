@@ -20,16 +20,15 @@ For install/operations (not building from source), see
 - [2. Deploy to a cluster](#2-deploy-to-a-cluster)
 - [3. Capture a workload (the capture spec)](#3-capture-a-workload-the-capture-spec)
 - [4. Validate](#4-validate)
-- [5. Open a merge request](#5-open-a-merge-request)
+- [5. Open a pull request](#5-open-a-pull-request)
 <!-- /toc -->
 
 ## Prerequisites
 
-- **Build host**: Go 1.24+, Docker (with `DOCKER_HOST` *unset* — never `sudo`),
-  `make`, `git`.
-- **A GPU cluster to validate on**: Kubernetes 1.25+, NVIDIA driver **555+**
-  (required by `cuda-checkpoint`), containerd 1.7+/2.x or CRI-O, `kubectl` +
-  `helm` 3.13+. A CPU-only cluster runs the unit tests but not the e2e.
+- **Build host**: Go 1.25 (`go.mod`), Docker with buildx, `make`, `git`.
+- **A GPU cluster to validate on**: see the prerequisites in
+  [INSTALL.md](INSTALL.md#prerequisites). Unit tests need no cluster; the
+  e2e needs GPU nodes.
 
 nvsnap depends on a forked CRIU. Prebuilt images are the fast path; only
 changes to CRIU itself need the fork built from source. See [CONTRIBUTING.md](../../CONTRIBUTING.md) and
@@ -51,8 +50,9 @@ Go binaries and is what you rebuild most often:
 ./scripts/build-agent.sh app && ./scripts/build-agent.sh push-app
 ```
 
-Bump the image tag on every rebuild — Kubernetes caches by tag
-(`IfNotPresent`), so reusing a tag ships stale code.
+Use a new image tag for every build. The chart pulls the agent and server
+with `pullPolicy: Always`, but other images (for example `agent.l2.waitImage`)
+use `IfNotPresent`, and a reused tag makes it unclear which build ran.
 
 ## 2. Deploy to a cluster
 
@@ -68,14 +68,19 @@ troubleshooting: [INSTALL.md](INSTALL.md).
 
 ## 3. Capture a workload (the capture spec)
 
-nvsnap picks the capture path automatically per workload; you don't choose it
-in code, you *label* the workload:
+The capture method is chosen for the whole cluster by the chart value
+`agent.captureMethod` ([ARCHITECTURE.md §2](../ARCHITECTURE.md#2-the-two-capture-methods-and-how-one-is-chosen)):
 
-- **Single-GPU** → CRIU + `cuda-checkpoint` snapshot the whole process. Trigger
-  it via the agent/server API (`POST /api/v1/checkpoints`, see the
-  [example client](../../examples/checkpoint-restore)).
-- **Multi-GPU / large models / cachedir mode** → the rootfs/cachedir path. Add
-  the label `nvsnap.io/capture: "true"` to the workload pod. At admission the
+- **`criu`** → CRIU snapshots the whole process, GPU memory included
+  (multi-GPU under gpushare). The agent API `POST /v1/checkpoint` runs it, as
+  does the server's `POST /api/v1/checkpoints` (see the
+  [example client](../../examples/checkpoint-restore)); multi-pod instances
+  are captured as a group when opted in.
+- **`cachedir`** (the default) → add the label `nvsnap.io/capture: "true"` to
+  the workload pod. On this method the agent answers a CRIU checkpoint request
+  with HTTP 422 and a redirect to the cachedir path, unless the agent request
+  sets `"capturePath": "criu"` (`internal/agent/nim_backend.go`
+  `resolveCheckpointRedirect`). At admission the
   webhook injects the capture plumbing (`/opt/nvsnap` for cachedir), and once
   the pod is Ready + warm the agent's `rootfsonly.Watcher` captures it into a
   **capture manifest** — a `ConfigMap` labeled
@@ -102,14 +107,13 @@ CAPTURE_PATH=rootfs ./scripts/test-e2e.sh vllm-small   # force the rootfs/cached
 timings for the benchmark matrix. Both verify inference *after* restore — a run
 only passes if the restored engine actually serves.
 
-## 5. Open a merge request
+## 5. Open a pull request
 
 1. Branch from `main` (never commit straight to `main`).
-2. Bump any rebuilt image tag (rule 19).
-3. Push; the GitLab pipeline runs lint, `bazel build/test`, and the image
-   builds. Fix red before requesting review.
+2. Use a new tag for every rebuilt image.
+3. Open a pull request on GitHub; the repository's workflows under
+   `.github/workflows` run on it. Fix red before requesting review.
 4. Attach the e2e result for changes under the paths in step 4.
 
-Issues and MRs live on GitLab (`nvcf/nvcf-cache/nvsnap`). Reference the issue
-number in the MR. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for the full
-policy.
+Reference the issue number in the pull request if there is one. See
+[CONTRIBUTING.md](../../CONTRIBUTING.md) for the full policy.
