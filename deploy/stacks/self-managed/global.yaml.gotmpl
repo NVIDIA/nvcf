@@ -2154,7 +2154,7 @@ nvcfUi:
       - name: nats-auth-callout-service
         namespace: nats-system
         endpoints:
-          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/readyz
       {{- if dig "nats" "enabled" true .Values }}
       - name: nats
         namespace: nats-system

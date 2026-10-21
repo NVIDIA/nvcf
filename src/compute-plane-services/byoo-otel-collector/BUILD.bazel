@@ -55,6 +55,12 @@ gazelle(
 # Release publishing is split: source CI builds these public image
 # indexes and emits release-manifest.json; nvcf-internal owns NVCR
 # destination config and promotion.
+#
+# Both images use @nvidia_distroless_static, not @distroless_go. The
+# wrapper is built pure (--@rules_go//go/config:pure in .bazelrc) and
+# the collector genrule sets CGO_ENABLED=0, so neither binary links
+# libc. The static base drops libc6 and zlib1g, which the collector
+# never loads, and keeps the nvs user, CA certificates, and tzdata.
 # ============================================================================
 
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
@@ -66,7 +72,7 @@ load("//rules/oci:transition.bzl", "multi_arch")
 # Wrapper-only image. Built via the standard go_oci_image macro.
 go_oci_image(
     name = "nvcf-otel-collector-image",
-    base = "@distroless_go",
+    base = "@nvidia_distroless_static",
     binary = "//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin",
     binary_path = "/otelcol-contrib",
     tags = ["nvcf-otel-collector"],
@@ -107,7 +113,7 @@ pkg_tar(
 
 oci_image(
     name = "byoo-otel-collector-image_pre_transitioned",
-    base = "@distroless_go",
+    base = "@nvidia_distroless_static",
     entrypoint = ["/app/byoo-otel-collector"],
     tars = [":byoo_combined_layer"],
     visibility = ["//visibility:private"],

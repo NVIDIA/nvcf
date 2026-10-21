@@ -230,3 +230,53 @@ byoo:
 EOF_VALUES
 assert_render_fails 'effective agent configuration: keys "MaxPayloadBytes" and "maxPayloadBytes" under "agent.byooLogChunking" differ only by case' \
   --values "${first_class_values}"
+
+# The chart passes platform metrics federation settings through unchanged. The
+# operator applies the self-managed default when neither key is set.
+federation_values="${tmp_dir}/federation-values.yaml"
+cat > "${federation_values}" <<'EOF_VALUES'
+byoo:
+  otelCollector:
+    platformMetricsFederation:
+      target: vmsingle.monitoring.svc.cluster.local:8428
+EOF_VALUES
+federation_manifest="${tmp_dir}/federation-manifest.yaml"
+render "${federation_manifest}" --values "${federation_values}"
+assert_equal "vmsingle.monitoring.svc.cluster.local:8428" \
+  "$(agent_config_value "${federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.target')" \
+  "byoo.otelCollector.platformMetricsFederation.target was not passed to the agent"
+assert_absent "${federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.enabled' \
+  "the chart should leave the federation default to the operator"
+
+disabled_federation_manifest="${tmp_dir}/disabled-federation-manifest.yaml"
+render "${disabled_federation_manifest}" --set byoo.otelCollector.platformMetricsFederation.enabled=false
+assert_equal "false" \
+  "$(agent_config_value "${disabled_federation_manifest}" '.agent.byooOtelCollector.platformMetricsFederation.enabled | tostring')" \
+  "byoo.otelCollector.platformMetricsFederation.enabled was not passed to the agent"
+
+assert_render_fails 'platformMetricsFederation' \
+  --set-string byoo.otelCollector.platformMetricsFederation.target=http://prometheus.example.invalid:9090
+assert_render_fails 'platformMetricsFederation' \
+  --set-string byoo.otelCollector.platformMetricsFederation.targets=prometheus.example.invalid:9090
+
+# The schema accepts the ports that the NVCA and collector validators accept.
+for port in 0 00000 65536 70000 99999; do
+  assert_render_fails 'platformMetricsFederation' \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=prometheus.example.invalid:${port}"
+done
+assert_render_fails 'platformMetricsFederation' \
+  --set-string 'byoo.otelCollector.platformMetricsFederation.target=[::1]:65536'
+for target in prometheus.example.invalid:1 prometheus.example.invalid:65535 '[::1]:9090'; do
+  render "${tmp_dir}/federation-port-manifest.yaml" \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done
+
+# Bracketed hosts must be IPv6 addresses that net.ParseIP accepts.
+for target in '[.]:9090' '[:]:9090' '[1::2::3]:9090' '[12345::1]:9090' '[1:2:3:4:5:6:7:8:9]:9090' '[::ffff:256.0.0.1]:9090'; do
+  assert_render_fails 'platformMetricsFederation' \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done
+for target in '[::]:9090' '[2001:db8::1]:9090' '[2001:DB8:0:0:0:0:0:1]:9090' '[::ffff:192.0.2.1]:9090' '[fe80::1:2:3:4]:65535'; do
+  render "${tmp_dir}/federation-ipv6-manifest.yaml" \
+    --set-string "byoo.otelCollector.platformMetricsFederation.target=${target}"
+done

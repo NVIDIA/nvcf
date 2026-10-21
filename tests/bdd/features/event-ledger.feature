@@ -174,6 +174,7 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
           "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
         }
         """
+      Then the HTTP status should be 200
       When I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
       # Delete the key when the scenario ends, even if it fails.
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
@@ -334,7 +335,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/stats"
       Then the HTTP status should be 403
-
 
   Rule: Helmfile installs NVCA on the same local cluster after registration
 

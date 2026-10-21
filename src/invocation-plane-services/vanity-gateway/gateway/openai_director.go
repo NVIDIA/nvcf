@@ -63,6 +63,7 @@ const (
 	shadowSamplingEndpointNone            shadowSamplingEndpoint = ""
 	shadowSamplingEndpointChatCompletions shadowSamplingEndpoint = "chatCompletions"
 	shadowSamplingEndpointResponses       shadowSamplingEndpoint = "responses"
+	shadowSamplingEndpointMessages        shadowSamplingEndpoint = "messages"
 )
 
 // ModelDirector shares model routing across native OpenAI and Anthropic endpoints.
@@ -307,42 +308,42 @@ func buildModelMapping(
 }
 
 func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*ModelDirector, error) {
-	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions), privateModelMatcher)
+	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions, "openai.chatCompletions"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	completions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Completions), privateModelMatcher)
+	completions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Completions, "openai.completions"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	embeddings, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Embeddings), privateModelMatcher)
+	embeddings, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Embeddings, "openai.embeddings"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	responses, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Responses), privateModelMatcher)
+	responses, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Responses, "openai.responses"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.AnthropicMessages), privateModelMatcher)
+	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.AnthropicMessages, "anthropicMessages"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageGenerations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageGenerations), privateModelMatcher)
+	imageGenerations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageGenerations, "openai.imageGenerations"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageEdits, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageEdits), privateModelMatcher)
+	imageEdits, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageEdits, "openai.imageEdits"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageVariations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageVariations), privateModelMatcher)
+	imageVariations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageVariations, "openai.imageVariations"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +473,7 @@ func (d *ModelDirector) getFilteredModels() []ModelInfo {
 	return d.filteredModelsCache
 }
 
-func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]config.ModelFunctionDetails) map[string]ModelNameToFunctionIdVersionId {
+func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]config.ModelFunctionDetails, sectionName string) map[string]ModelNameToFunctionIdVersionId {
 	modelNameToFunctionIdVersionId := make(map[string]ModelNameToFunctionIdVersionId)
 	for _, entry := range mapping {
 		modelNameToFunctionIdVersionId[entry.ModelName] = ModelNameToFunctionIdVersionId{
@@ -486,7 +487,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			OfflineMessage:         entry.OfflineMessage,
 			TooManyRequestsMessage: entry.TooManyRequestsMessage,
 			Shadows:                normalizeShadowConfigs(entry.EffectiveShadows()),
-			PromptCacheKeyHeaders:  entry.EffectivePromptCacheKeyHeaders(),
+			PromptCacheKeyHeaders:  entry.EffectivePromptCacheKeyHeadersForSection(sectionName),
 			FunctionType:           entry.FunctionType,
 		}
 	}
@@ -553,7 +554,7 @@ func (d *ModelDirector) ServeResponses(writer http.ResponseWriter, request *http
 }
 
 func (d *ModelDirector) ServeMessages(writer http.ResponseWriter, request *http.Request) {
-	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl, shadowSamplingEndpointNone)
+	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl, shadowSamplingEndpointMessages)
 }
 
 func (d *ModelDirector) ServeImageGenerations(writer http.ResponseWriter, request *http.Request) {
@@ -568,7 +569,14 @@ func (d *ModelDirector) ServeImageVariations(writer http.ResponseWriter, request
 	d.proxyModelMappedRequest(writer, request, d.imageVariations.modelNameToNVCFUrl, shadowSamplingEndpointNone)
 }
 
-func (d *ModelDirector) ListModels(writer http.ResponseWriter, _ *http.Request) {
+// ListModels answers in the caller's API: Anthropic clients get the Messages
+// models in the Anthropic shape, everyone else the shared OpenAI list.
+func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Request) {
+	if middleware.IsAnthropicRequest(request) {
+		d.listAnthropicModels(writer, request)
+		return
+	}
+
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
 
@@ -598,6 +606,10 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	} else {
 		markGatewayRejected(writer, request)
 		http.Error(writer, "model name was undefined", http.StatusInternalServerError)
+		return
+	}
+	if middleware.IsAnthropicRequest(request) {
+		d.getAnthropicModel(writer, request, modelName)
 		return
 	}
 

@@ -122,9 +122,14 @@ func newShadowSamplingDecisionsCounter(meter otelmetric.Meter) (otelmetric.Int64
 
 // initializeShadowSamplingMetrics emits every valid label combination at zero
 // so the series exist on the first scrape. Request-body methods are limited to
-// the Chat Completions and Responses endpoints, as in config validation.
+// the Chat Completions, Responses, and Messages endpoints, as in config
+// validation.
 func initializeShadowSamplingMetrics() {
-	bodyEndpoints := []shadowSamplingEndpoint{shadowSamplingEndpointChatCompletions, shadowSamplingEndpointResponses}
+	bodyEndpoints := []shadowSamplingEndpoint{
+		shadowSamplingEndpointChatCompletions,
+		shadowSamplingEndpointResponses,
+		shadowSamplingEndpointMessages,
+	}
 	allEndpoints := append([]shadowSamplingEndpoint{shadowSamplingEndpointNone}, bodyEndpoints...)
 	for _, admitted := range []bool{true, false} {
 		for _, endpoint := range allEndpoints {

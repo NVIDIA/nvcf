@@ -21,10 +21,10 @@ metadata:
   name: agent-config-merge
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.28.0
+    helm.sh/chart: helm-nvca-operator-1.36.4
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.8.0"
+    app.kubernetes.io/version: "3.16.1"
     app.kubernetes.io/managed-by: Helm
 data:
   config.yaml: |
@@ -33,9 +33,6 @@ data:
       UtilsResources:
         cpu: "4"
         memory: 4Gi
-      byooLogChunking:
-        dryRun: false
-        maxPayloadBytes: 0
     cluster:
       validationPolicy:
         allowedExtraKubernetesTypes:
@@ -92,3 +89,8 @@ data:
           resource: dynamoworkermetadatas
           version: v1alpha1
         name: Unrestricted
+    workload:
+      workerInitDownload:
+        chunkSizeBytes: 16777216
+        concurrentChunks: 4
+        concurrentDownloads: 5
