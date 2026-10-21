@@ -41,7 +41,7 @@ api:
     # This sets the pull policy for images.
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: "1.25.0"
+    tag: "1.27.1"
 
   # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
   # imagePullSecrets:
@@ -241,6 +241,18 @@ api:
     # (release-scoped, collision-safe across installs in the same namespace).
     # Override with a fixed string only when an external contract pins the name.
     configMapName: ""
+    # Worker sidecar image tags. The chart renders each one into
+    # configData.nvcf.sidecars as
+    # ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/<image>:<tag>:
+    #   init            init-container                nvcf-worker-init-oss
+    #   utils           utils-container-image.go      nvcf-worker-utils-oss
+    #   llmCredentials  llm-credential-manager-image  nvcf-worker-llm-credentials-oss
+    # Release automation moves these keys when a worker releases. Set the
+    # matching configData.nvcf.sidecars entry to replace a whole reference.
+    workerImageTags:
+      init: "1.3.1"
+      utils: "1.3.2"
+      llmCredentials: "1.1.2"
     # Can be used for remote configuration by adding NVCF-specific properties here. 
     # Add only the keys you need to override.
     # Placeholders like ${nvcf.sidecars.hostname} resolve from environment variables,
@@ -257,14 +269,10 @@ api:
       nvcf:
         sidecars:
           inference-container: nvcr.io/nvidia/tritonserver:23.04-py3
-          init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.1
-          utils-container-image:
-            go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.2.3
           otel-container: dummy
           niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.110.0
           ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.1
           otel-collector-container: ""
-          llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.2
           llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.15.1
         notary:
           turn:

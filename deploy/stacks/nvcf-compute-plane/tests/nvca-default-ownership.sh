@@ -142,8 +142,25 @@ test -n "${pinned_byoo_collector_tag}" && test "${pinned_byoo_collector_tag}" !=
   fail "environments/base.yaml does not pin global.nvcaOperator.byooOtelCollector.imageTag"
 test "$(yq -r '.agent.byooOtelCollector.imageTag' "${default_values}")" = "${pinned_byoo_collector_tag}" ||
   fail "the stack BYOO collector tag pin was not forwarded to agent.byooOtelCollector.imageTag"
-test "$(yq -r '.agent.byooOtelCollector.imageRepository // "omitted"' "${default_values}")" = "omitted" ||
-  fail "stack set a BYOO collector repository without an explicit value"
+base_image_prefix="$(yq -r '.global.image.registry + "/" + .global.image.repository' "${base_values}")"
+test "$(yq -r '.agent.byooOtelCollector.imageRepository' "${default_values}")" = "${base_image_prefix}/byoo-otel-collector" ||
+  fail "the default BYOO collector repository was not derived from global.image"
+mirror_image_values="${work_dir}/mirror-image-values.yaml"
+render_values "${mirror_image_values}" \
+  --state-values-set-string global.image.registry=mirror.example.invalid \
+  --state-values-set-string global.image.repository=team/nvcf
+test "$(yq -r '.agent.byooOtelCollector.imageRepository' "${mirror_image_values}")" = "mirror.example.invalid/team/nvcf/byoo-otel-collector" ||
+  fail "the default BYOO collector repository did not follow global.image.registry and global.image.repository"
+empty_byoo_collector_repository_state="${work_dir}/empty-byoo-collector-repository-state.yaml"
+printf '%s\n' \
+  'global:' \
+  '  nvcaOperator:' \
+  '    byooOtelCollector:' \
+  '      imageRepository: ""' >"${empty_byoo_collector_repository_state}"
+empty_byoo_collector_repository_values="${work_dir}/empty-byoo-collector-repository-values.yaml"
+render_values "${empty_byoo_collector_repository_values}" --state-values-file "${empty_byoo_collector_repository_state}"
+test "$(yq -r '.agent.byooOtelCollector.imageRepository' "${empty_byoo_collector_repository_values}")" = "${base_image_prefix}/byoo-otel-collector" ||
+  fail "an empty BYOO collector repository should fall back to the global.image default"
 byoo_collector_values="${work_dir}/byoo-collector-values.yaml"
 render_values "${byoo_collector_values}" \
   --state-values-set-string global.nvcaOperator.byooOtelCollector.imageRepository=mirror.example.invalid/team/byoo-otel-collector \

@@ -616,7 +616,7 @@ maven.install(
         # nv-boot-parent third-party closure (Spring Boot 4 / Spring Cloud /
         # OTel / Cassandra / Testcontainers). Root coordinates only: BOM-managed
         # starters/modules, parent-owned explicit pins, and build/test tools.
-        "at.yawk.lz4:lz4-java:1.11.2",
+        "at.yawk.lz4:lz4-java:1.11.4",
         "com.github.ben-manes.caffeine:guava",
         "com.google.code.gson:gson",
         # Direct pin overrides the Spring Boot BOM, which manages this to
@@ -756,6 +756,10 @@ maven.install(
         "org.testcontainers:testcontainers-localstack",
     ],
     boms = [
+        # Keep both Jackson families on patched releases in their existing
+        # minor lines. These precede Spring Boot's older managed versions.
+        "com.fasterxml.jackson:jackson-bom:2.21.8",
+        "tools.jackson:jackson-bom:3.1.8",
         "net.javacrumbs.shedlock:shedlock-bom:7.9.0",
         "org.springframework.boot:spring-boot-dependencies:4.1.1",
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.3",
