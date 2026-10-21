@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check nvsnap's documentation against itself: every relative link, heading
+# anchor and backticked doc path resolves, and every maintained doc's table of
+# contents matches its headings. Markdown style is markdown-lint.yml's job;
+# this one catches what style cannot, a doc that points at something that
+# moved. Runs only when nvsnap's Markdown, the checkers or this workflow
+# change.
+#
+# If this fails on your change, run the same check locally:
+#
+#   make -C src/compute-plane-services/nvsnap check-docs
+#
+# A stale table of contents is rewritten by scripts/docs/docs-toc.py (no
+# arguments); edit the headings, never the generated list.
+
+name: nvsnap docs
+
+on:
+  push:
+    branches: [main, 'release-**']
+    paths: &paths
+      - 'src/compute-plane-services/nvsnap/**/*.md'
+      - 'src/compute-plane-services/nvsnap/scripts/docs/**'
+      - '.github/workflows/nvsnap-docs.yml'
+  pull_request:
+    branches: [main, 'release-**']
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nvsnap-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check nvsnap doc links and contents
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Test the checkers
+        working-directory: src/compute-plane-services/nvsnap/scripts/docs
+        run: python3 -m unittest -v test_docs_checks
+
+      - name: Check links, anchors and doc paths
+        run: python3 src/compute-plane-services/nvsnap/scripts/docs/check-doc-links.py
+
+      - name: Check tables of contents
+        run: python3 src/compute-plane-services/nvsnap/scripts/docs/docs-toc.py --check

@@ -18,14 +18,11 @@ nvsnap's logic lives here; `cmd/` binaries wire these together.
 - [`rootfsonly/`](rootfsonly/) — rootfs/cachedir capture orchestrator + the
   warm-pod watcher.
 - [`treecopy/`](treecopy/) — shared file-tree copier (sendfile + parallel walk).
-- [`streamer/`](streamer/) — dormant streaming-compression path (see
-  [THIRD-PARTY-FORKS](../docs/THIRD-PARTY-FORKS.md)).
 
 **Storage / catalog**
 
 - [`checkpointstore/`](checkpointstore/) — the Backend chain (Local → ConfigMap
   → per-capture PVC → blob store).
-- [`blobstore/`](blobstore/) — disk-backed content-addressed blob store.
 - [`objectstore/`](objectstore/) — object-store buckets (GCS) for cross-cluster.
 - [`db/`](db/) — SQLite catalog (checkpoints, retention, audit).
 

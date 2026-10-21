@@ -18,8 +18,7 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
 
 **Services**
 
-- [`Dockerfile.server`](Dockerfile.server), [`nvsnap-blobstore/`](nvsnap-blobstore/),
-  [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
+- [`Dockerfile.server`](Dockerfile.server), [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
 
 **CRIU fork build** (see
 [docs/THIRD-PARTY-FORKS.md](../docs/THIRD-PARTY-FORKS.md))

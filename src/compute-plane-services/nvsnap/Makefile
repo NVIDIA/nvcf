@@ -9,7 +9,7 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate check-gpushare
+.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate check-gpushare check-docs
 
 all: build
 
@@ -73,6 +73,13 @@ test:
 # Compile the gpushare C code for amd64 and arm64 (Docker, no GPU); same check as CI.
 check-gpushare:
 	./scripts/check-gpushare-build.sh
+
+# Check doc links, anchors and doc paths, and that every maintained doc's
+# table of contents matches its headings; same check as CI.
+check-docs:
+	cd scripts/docs && python3 -m unittest -q test_docs_checks
+	python3 scripts/docs/check-doc-links.py
+	python3 scripts/docs/docs-toc.py --check
 
 test-coverage:
 	mkdir -p coverage

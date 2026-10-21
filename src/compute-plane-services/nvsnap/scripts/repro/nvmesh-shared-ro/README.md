@@ -35,7 +35,7 @@ same as the ones this script creates.
 
 ## Run
 
-```
+```bash
 export KUBECONFIG=...
 READERS=8 SC=nvcf-sc NODE_SELECTOR=nvidia.com/gpu.present=true ./repro.sh run
 ./repro.sh cleanup
@@ -64,7 +64,7 @@ concurrent case. Re-running `run` after `cleanup` produces a fresh volume.
 18 node GB300 cluster, NVMesh CSI v1.9.1, `READERS=8`, 2 GiB volume with
 900 MB written, busybox readers, 2026-09-30:
 
-```
+```text
 pod              sched_s  run_s  30s-timeouts
 repro-reader-0         0     22   0
 repro-reader-1         0      7   0

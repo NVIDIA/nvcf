@@ -13,11 +13,6 @@ Entry points (`main` packages). One directory per binary.
   mutating webhook, and the peer-cascade HTTP server.
 - [`nvsnap-server/`](nvsnap-server/) — REST API, web UI, and checkpoint catalog.
 - [`nvsnap/`](nvsnap/) — the `nvsnap` CLI.
-- [`nvsnap-blobstore/`](nvsnap-blobstore/) — disk-backed content-addressed blob
-  store (the L3 tier).
-- [`restore-entrypoint/`](restore-entrypoint/) — CRIU-path restore entrypoint:
-  waits for the dump, runs CRIU restore + cuda-checkpoint replay, reinitializes
-  io_uring/libuv/zmq.
 - [`nvsnap-rootfs-restore/`](nvsnap-rootfs-restore/) — rootfs/cachedir restore
   shim: mounts the captured cache and prewarms it (no in-process restore).
 - [`nvsnap-mount-prep/`](nvsnap-mount-prep/) — init container the webhook
@@ -26,8 +21,6 @@ Entry points (`main` packages). One directory per binary.
   per-capture PVC is promoted.
 - [`nvsnap-helper/`](nvsnap-helper/): static helper that runs the steps the
   webhook adds to a pod (wait, write, seed, prewarm, idle) in any image.
-- [`nvsnap-gpu-restore/`](nvsnap-gpu-restore/) — GPU restore helper (C) invoking
-  the CUDA Checkpoint API.
 
 ## Rules
 
