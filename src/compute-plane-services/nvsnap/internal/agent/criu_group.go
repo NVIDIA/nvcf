@@ -257,11 +257,13 @@ type CaptureOptIn struct {
 // captured: annotated nvsnap.io/criu-capture, or matched by the agent's
 // configured opt-ins.
 func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
-	if pod.Annotations[criuCaptureAnnotation] == "true" {
-		return true
-	}
+	return pod.Annotations[criuCaptureAnnotation] == "true" || a.optInMatches(pod.Labels)
+}
+
+// optInMatches reports whether labels match one of the configured opt-ins.
+func (a *Agent) optInMatches(labels map[string]string) bool {
 	for _, o := range a.config.CaptureOptIn {
-		v, ok := pod.Labels[o.Label]
+		v, ok := labels[o.Label]
 		if !ok {
 			continue
 		}
@@ -272,6 +274,25 @@ func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// captureCandidate reports whether a pod without GPUs may be frozen by an
+// instance capture (webhook.Mutator.CaptureCandidate): it is opted in
+// itself (captureOptedIn), or its namespace is, by the configured opt-in
+// labels or the label nvsnap.io/criu-capture=true. A capture freezes the
+// companions of the instance it captures, the pods without GPUs of its
+// namespace; a service of any other namespace never is.
+func (a *Agent) captureCandidate(ctx context.Context, pod *corev1.Pod) bool {
+	if a.captureOptedIn(pod) {
+		return true
+	}
+	labels, err := a.namespaceLabels(ctx, pod.Namespace)
+	if err != nil {
+		a.log.WithError(err).WithField("namespace", pod.Namespace).
+			Debug("capture candidate: namespace unreadable; the pod's probes stay as they are")
+		return false
+	}
+	return labels[criuCaptureAnnotation] == "true" || a.optInMatches(labels)
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {

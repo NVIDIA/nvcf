@@ -4,6 +4,7 @@
 package webhook
 
 import (
+	"context"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,8 +18,15 @@ import (
 // threshold that makes it tolerate CaptureLivenessBudget seconds of
 // silence; a probe that already does is left alone. This costs no
 // performance, only a slower restart of an engine that really hangs.
-func (m *Mutator) livenessBudgetPatches(pod *corev1.Pod) []PatchOp {
-	if m.CaptureLivenessBudget <= 0 {
+//
+// Only a pod a capture may freeze is widened: a GPU pod, or a pod without
+// GPUs that CaptureCandidate admits as a companion of an instance opted
+// into capture. Any other service keeps the recovery its probe asks for.
+func (m *Mutator) livenessBudgetPatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
+	if m.CaptureLivenessBudget <= 0 || m.CaptureCandidate == nil {
+		return nil
+	}
+	if gpuRequest(pod) == 0 && !m.CaptureCandidate(ctx, pod) {
 		return nil
 	}
 	var patches []PatchOp

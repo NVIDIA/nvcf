@@ -99,6 +99,11 @@ spec:
       {{- with $v.dynamo.runtimeVersion }}
       runtimeVersionOverride: {{ . | quote }}
       {{- end }}
+      {{- if $v.criuCapture }}
+      # A companion of the captured instance: the capture freezes it too.
+      extraPodMetadata:
+        annotations: {nvsnap.io/criu-capture: "true"}
+      {{- end }}
       extraPodSpec:
         {{- if $v.ngcImagePullSecretName }}
         imagePullSecrets: [{name: {{ $v.ngcImagePullSecretName }}}]

@@ -90,7 +90,13 @@ func (a *Agent) podPreflight(pod *corev1.Pod, container string, rank bool) []Pre
 		fs = append(fs, PreflightFinding{Pod: pod.Name, Container: c, Severity: sev, Check: check, Detail: detail})
 	}
 	if err := freezeTolerated([]*corev1.Pod{pod}, a.config.Webhook.CaptureLivenessBudget); err != nil {
-		add("", preflightBlock, "liveness", err.Error()+"; the kubelet would restart it during the capture")
+		detail := err.Error() + "; the kubelet would restart it during the capture"
+		if !rank {
+			// The webhook widens a companion's probes only when it or its
+			// namespace is opted into capture.
+			detail += " (opt the companion in: label its namespace " + criuCaptureAnnotation + "=true, or annotate the pod, and recreate it)"
+		}
+		add("", preflightBlock, "liveness", detail)
 	}
 	if rank && !a.gpushareEnabledFor(pod) {
 		add(container, preflightBlock, "gpushare", "a GPU rank without the gpushare library: its GPU memory cannot be saved")

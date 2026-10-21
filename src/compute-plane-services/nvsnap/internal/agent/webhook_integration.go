@@ -238,6 +238,11 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 			mut.DebugEnv = nil
 		}
 	}
+	if criuIsDefault() {
+		// A CRIU capture freezes the pods it captures; only those get
+		// their liveness probes widened.
+		mut.CaptureCandidate = a.captureCandidate
+	}
 	if a.kubeClient != nil {
 		// A checkpoint that failed to restore starts its next pods fresh.
 		mut.CRIURestoreBlocked = a.criuRestorer().Blocked

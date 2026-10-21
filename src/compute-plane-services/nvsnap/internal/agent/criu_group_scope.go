@@ -42,6 +42,34 @@ type criuScopeEntry struct {
 
 var criuScopeCache sync.Map // namespace -> criuScopeEntry
 
+// nsLabelsTTL bounds how long namespaceLabels serves a namespace's labels
+// from memory: the webhook asks on every admission of a pod without GPUs.
+const nsLabelsTTL = time.Minute
+
+type nsLabelsEntry struct {
+	labels map[string]string
+	at     time.Time
+}
+
+var nsLabelsCache sync.Map // namespace -> nsLabelsEntry
+
+// namespaceLabels returns the labels of namespace ns, cached for
+// nsLabelsTTL; none without a Kubernetes client.
+func (a *Agent) namespaceLabels(ctx context.Context, ns string) (map[string]string, error) {
+	if a.kubeClient == nil || ns == "" {
+		return nil, nil
+	}
+	if e, ok := nsLabelsCache.Load(ns); ok && time.Since(e.(nsLabelsEntry).at) < nsLabelsTTL {
+		return e.(nsLabelsEntry).labels, nil
+	}
+	n, err := a.kubeClient.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	nsLabelsCache.Store(ns, nsLabelsEntry{labels: n.Labels, at: time.Now()})
+	return n.Labels, nil
+}
+
 // criuGroupScope returns the tenant scope of namespace ns: its function
 // version when the platform labelled it, else the namespace itself.
 func (a *Agent) criuGroupScope(ctx context.Context, ns string) (string, error) {

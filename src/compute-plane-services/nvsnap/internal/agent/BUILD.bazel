@@ -124,6 +124,7 @@ go_test(
         "advertise_test.go",
         "auth_test.go",
         "bundle_versions_test.go",
+        "capture_candidate_test.go",
         "capture_preflight_test.go",
         "cascade_fetch_test.go",
         "catalog_test.go",

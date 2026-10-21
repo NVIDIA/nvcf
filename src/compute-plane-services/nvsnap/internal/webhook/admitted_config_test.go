@@ -4,6 +4,7 @@
 package webhook
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,7 +18,8 @@ import (
 // capture records a companion by it and its replacement is admitted by it.
 func TestAdmittedConfigSurvivesTheWebhooksOwnPatches(t *testing.T) {
 	m := &Mutator{Composer: &rootfsonly.HashInputComposer{CUDADriverMajor: 610}, DynamoNamespace: "nvcf-nvsnap",
-		DynamoLeaseTTL: 60, CaptureLivenessBudget: 60}
+		DynamoLeaseTTL: 60, CaptureLivenessBudget: 60,
+		CaptureCandidate: func(context.Context, *corev1.Pod) bool { return true }}
 	tight := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/live"}}, PeriodSeconds: 5, FailureThreshold: 1}
 	env := []corev1.EnvVar{
 		{Name: "DYN_NAMESPACE", Value: "sr-1-graph"},
@@ -44,12 +46,12 @@ func TestAdmittedConfigSurvivesTheWebhooksOwnPatches(t *testing.T) {
 		var patches []PatchOp
 		patches = append(patches, m.admittedConfigPatches(pod)...)
 		patches = append(patches, m.dynamoNamespacePatches(pod)...)
-		patches = append(patches, m.livenessBudgetPatches(pod)...)
+		patches = append(patches, m.livenessBudgetPatches(context.Background(), pod)...)
 		got := applyPatches(t, pod, mergePatchPlan(patches))
 		if got.Annotations[AdmittedConfigAnnotation] != admitted {
 			t.Errorf("%s: stamped %q, want the admitted identity %q", name, got.Annotations[AdmittedConfigAnnotation], admitted)
 		}
-		if len(m.dynamoNamespacePatches(pod))+len(m.livenessBudgetPatches(pod)) == 0 {
+		if len(m.dynamoNamespacePatches(pod))+len(m.livenessBudgetPatches(context.Background(), pod)) == 0 {
 			t.Errorf("%s: the test pod got no webhook patches; it does not test anything", name)
 		}
 		// A stamped pod is not stamped again.

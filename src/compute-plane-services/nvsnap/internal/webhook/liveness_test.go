@@ -4,10 +4,16 @@
 package webhook
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+func candidate(yes bool) func(context.Context, *corev1.Pod) bool {
+	return func(context.Context, *corev1.Pod) bool { return yes }
+}
 
 func TestLivenessBudgetPatches(t *testing.T) {
 	probe := func(period, threshold int32) *corev1.Probe {
@@ -20,8 +26,8 @@ func TestLivenessBudgetPatches(t *testing.T) {
 		{Name: "defaults", LivenessProbe: probe(0, 0)},
 		{Name: "none"},
 	}}}
-	m := &Mutator{CaptureLivenessBudget: 60}
-	got := applyPatches(t, pod, m.livenessBudgetPatches(pod))
+	m := &Mutator{CaptureLivenessBudget: 60, CaptureCandidate: candidate(true)}
+	got := applyPatches(t, pod, m.livenessBudgetPatches(context.Background(), pod))
 	want := map[string]int32{"tight": 12, "loose": 9, "defaults": 6}
 	for _, c := range got.Spec.Containers {
 		if c.LivenessProbe == nil {
@@ -31,8 +37,36 @@ func TestLivenessBudgetPatches(t *testing.T) {
 			t.Errorf("%s: failureThreshold %d, want %d", c.Name, c.LivenessProbe.FailureThreshold, want[c.Name])
 		}
 	}
-	if p := (&Mutator{}).livenessBudgetPatches(pod); p != nil {
+	if p := (&Mutator{CaptureCandidate: candidate(true)}).livenessBudgetPatches(context.Background(), pod); p != nil {
 		t.Errorf("budget off: patched %v", p)
+	}
+}
+
+// Only a pod a capture may freeze gets the budget: an ordinary service keeps
+// the recovery its probe asks for (review: a CPU service with a 5 s probe
+// was widened to five minutes cluster-wide).
+func TestLivenessBudgetPatches_OnlyPodsACaptureMayFreeze(t *testing.T) {
+	tight := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/live"}},
+		PeriodSeconds: 5, FailureThreshold: 1}
+	cpu := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "svc", LivenessProbe: tight}}}}
+	gpu := cpu.DeepCopy()
+	gpu.Spec.Containers[0].Resources.Limits = corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+	ctx := context.Background()
+	for _, c := range []struct {
+		name      string
+		candidate func(context.Context, *corev1.Pod) bool
+		pod       *corev1.Pod
+		widened   bool
+	}{
+		{"not CRIU: no capture freezes anything", nil, gpu, false},
+		{"service that no capture covers", candidate(false), cpu, false},
+		{"companion of an opted-in instance", candidate(true), cpu, true},
+		{"GPU pod", candidate(false), gpu, true},
+	} {
+		m := &Mutator{CaptureLivenessBudget: 300, CaptureCandidate: c.candidate}
+		if got := len(m.livenessBudgetPatches(ctx, c.pod)) > 0; got != c.widened {
+			t.Errorf("%s: widened %v, want %v", c.name, got, c.widened)
+		}
 	}
 }
 

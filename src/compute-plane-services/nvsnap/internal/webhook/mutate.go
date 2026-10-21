@@ -359,10 +359,16 @@ type Mutator struct {
 	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
 	// those components get unless they set one; 0 leaves Dynamo's default.
 	DynamoLeaseTTL int
-	// CaptureLivenessBudget, in seconds, is the silence every liveness
-	// probe is widened to tolerate, so a capture's freeze does not get the
-	// pod restarted (liveness.go); 0 leaves probes as they are.
+	// CaptureLivenessBudget, in seconds, is the silence the liveness
+	// probes of a pod a capture may freeze are widened to tolerate, so the
+	// freeze does not get the pod restarted (liveness.go); 0 leaves probes
+	// as they are.
 	CaptureLivenessBudget int
+	// CaptureCandidate reports whether a pod without GPUs may be frozen by
+	// a capture: a companion of an instance opted into capture. A GPU pod
+	// is a candidate whenever it is set. Nil (captures do not freeze
+	// processes: the capture method is not CRIU) widens no probe.
+	CaptureCandidate func(ctx context.Context, pod *corev1.Pod) bool
 
 	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
 	// as a companion of a group restore: not while a GPU rank of its
@@ -578,7 +584,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
-	injectPatches = append(injectPatches, m.livenessBudgetPatches(pod)...)
+	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

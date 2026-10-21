@@ -563,8 +563,12 @@ webhook:
   # members come back one after another. Costs only a slower removal of a
   # crashed component from routing. 0 keeps Dynamo's default (10 s).
   dynamoLeaseTTL: 60
-  # Seconds of silence every liveness probe is widened to tolerate (its
-  # failureThreshold raised, never lowered). A capture stops the instance
+  # Seconds of silence the liveness probes of a pod a CRIU capture may
+  # freeze are widened to tolerate (their failureThreshold raised, never
+  # lowered): GPU pods, and pods without GPUs whose namespace or own labels
+  # opt them into capture (criuCaptureOptIn, nvsnap.io/criu-capture=true),
+  # the companions of an instance. Other pods keep their probes; with
+  # captureMethod cachedir nothing is widened. A capture stops the instance
   # while its GPU memory is saved and its pods are dumped: minutes for a
   # large model (Kimi-K3, 4 x 250 GB per pod: about 2.5 minutes). The
   # kubelet keeps probing, and a probe that gives up first restarts a
