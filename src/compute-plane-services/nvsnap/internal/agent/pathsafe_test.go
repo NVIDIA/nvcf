@@ -162,7 +162,7 @@ func TestPathVarGuardRejectsTraversal(t *testing.T) {
 	// Every guarded variable, not just "id": dropping the check on hash or
 	// pod-uid is exactly the regression this test exists to catch, and
 	// testing one key would let the other two rot.
-	for _, key := range []string{"id", "hash", "pod-uid"} {
+	for _, key := range []string{"id", "hash", "pod-uid", "session", "key", "ordinal", "namespace", "pod"} {
 		for _, bad := range []string{"..", "../../etc", "a/b", "", "/abs", ".hidden"} {
 			reached = false
 			w := httptest.NewRecorder()
@@ -179,11 +179,15 @@ func TestPathVarGuardRejectsTraversal(t *testing.T) {
 		}
 		// ...and a legitimate value for the same key must still pass, or a
 		// guard that rejects everything would look like a pass above.
+		good := "a1b2c3d4__20260724-120000"
+		if key == "namespace" || key == "pod" {
+			good = "worker-0" // a Kubernetes name: no underscores
+		}
 		reached = false
 		w := httptest.NewRecorder()
 		req := mux.SetURLVars(
 			httptest.NewRequest(http.MethodGet, "/v1/checkpoints/x/manifest", http.NoBody),
-			map[string]string{key: "a1b2c3d4__20260724-120000"})
+			map[string]string{key: good})
 		guarded.ServeHTTP(w, req)
 		if !reached || w.Code != http.StatusOK {
 			t.Errorf("%s: legitimate value rejected: reached=%v status=%d", key, reached, w.Code)
@@ -225,5 +229,30 @@ func TestJoinWithinRoot(t *testing.T) {
 	}
 	if _, err := joinWithinRoot(root, "cache/payload"); err == nil {
 		t.Error("write through a symlink pointing outside the root was allowed")
+	}
+}
+
+// Namespace and pod names follow Kubernetes' rules, not the shorter path
+// segment's: a long generated pod name passes, a selector operator does not
+// reach the label selector {key} feeds (review: {session}, {namespace} and
+// {pod} reached path joins unchecked).
+func TestPathVarGuardRouteVarsByName(t *testing.T) {
+	long := strings.Repeat("a", 200) + "-0"
+	for _, c := range []struct {
+		key, value string
+		ok         bool
+	}{
+		{"pod", long, true},
+		{"pod", "k3-prd19-mxhard-0-vllmworker-0-vllmworker-ldr-mcp2g", true},
+		{"pod", "Upper", false},
+		{"namespace", "sr-7183ceba-1809-4298-aa69-17111f6a7b0f", true},
+		{"namespace", "a.b", false},
+		{"key", "8cc96f5f05c4fb05", true},
+		{"key", "a,b!=c", false},
+		{"session", "s420a50a4ec330f01", true},
+	} {
+		if err := validRouteVar(c.key, c.value); (err == nil) != c.ok {
+			t.Errorf("%s=%q: error %v, want ok=%v", c.key, c.value, err, c.ok)
+		}
 	}
 }
