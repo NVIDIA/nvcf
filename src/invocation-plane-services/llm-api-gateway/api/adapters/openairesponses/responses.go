@@ -230,6 +230,11 @@ type Input struct {
 }
 
 func (i *Input) UnmarshalJSON(data []byte) error {
+	// null is no input. Without this, null decodes as one empty text item.
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		i.Items = nil
+		return nil
+	}
 	// Try string first
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {

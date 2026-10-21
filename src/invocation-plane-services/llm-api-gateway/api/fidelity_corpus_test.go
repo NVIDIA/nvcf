@@ -195,6 +195,7 @@ func TestGatewayKeptRequestChecks(t *testing.T) {
 		{"responses conversation id control character", responses, `{` + model + `,` + respInput + `,"conversation":{"id":"a\u0001"}}`},
 		{"responses input missing", responses, `{` + model + `}`},
 		{"responses input empty", responses, `{` + model + `,"input":[]}`},
+		{"responses input null", responses, `{` + model + `,"input":null}`},
 		{"embeddings malformed JSON", embeddings, `{` + model + `,`},
 		{"embeddings body not an object", embeddings, `[]`},
 		{"embeddings duplicate member case", embeddings, `{` + model + `,` + embInput + `,"INPUT":"x"}`},
