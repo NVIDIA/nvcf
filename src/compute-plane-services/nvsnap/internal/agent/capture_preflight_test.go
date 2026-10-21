@@ -4,11 +4,14 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -177,4 +180,27 @@ func readMountinfoFrom(t *testing.T, content string) []mountEntry {
 		t.Fatal(err)
 	}
 	return readMountinfo(p)
+}
+
+// Every member's findings survive: the spec checks of later members were
+// appended while earlier members' host checks appended from their
+// goroutines, and findings were lost (review: 255 of 256). Run with -race.
+func TestCapturePreflightKeepsEveryFinding(t *testing.T) {
+	a := &Agent{config: Config{Webhook: WebhookConfig{CaptureLivenessBudget: 300}}}
+	const n = 128
+	var ranks []*corev1.Pod
+	for i := range n {
+		ranks = append(ranks, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("rank-%d", i)},
+			Spec: corev1.PodSpec{NodeName: "node", Containers: []corev1.Container{{Name: "main"}}}})
+	}
+	var spec int
+	for _, r := range ranks {
+		spec += len(a.podPreflight(r, "main", true))
+	}
+	// Without a cluster client every host check fails at once: one
+	// warning per member, appended as fast as the loop runs.
+	fs := a.capturePreflight(context.Background(), ranks, nil, nil, logrus.NewEntry(logrus.New()))
+	if want := spec + n; len(fs) != want {
+		t.Errorf("%d findings, want %d (%d spec + %d host)", len(fs), want, spec, n)
+	}
 }

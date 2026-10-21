@@ -273,11 +273,16 @@ func (a *Agent) capturePreflight(ctx context.Context, ranks, companions []*corev
 	for _, c := range companions {
 		members = append(members, member{c, companionContainers[c.Name], false})
 	}
-	var mu sync.Mutex
+	// The spec checks all run before any host check starts: the host
+	// checks append from their goroutines, and the slice is theirs alone
+	// (under mu) from then on.
 	var fs []PreflightFinding
-	var wg sync.WaitGroup
 	for _, m := range members {
 		fs = append(fs, a.podPreflight(m.pod, m.container, m.rank)...)
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, m := range members {
 		wg.Add(1)
 		go func(m member) {
 			defer wg.Done()
