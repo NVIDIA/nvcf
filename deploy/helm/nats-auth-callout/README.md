@@ -157,8 +157,8 @@ healthChecks:
 
 Available health endpoints:
 
-- `/readyz` - Returns 200 while NATS is connected and 503 otherwise. Use for readiness and dependency monitoring.
-- `/healthz` - Returns 503 when the NATS connection is terminally closed. Stays 200 during reconnects to avoid restarting the service during an outage.
+- `/readyz` - Readiness probe. Passes when NATS is connected or no NATS dependency is configured.
+- `/healthz` - Liveness probe. Remains healthy during reconnects and fails if the NATS connection closes permanently.
 - `/health` - Alias for `/healthz`.
 - `/v1/ping` - Basic connectivity test
 
