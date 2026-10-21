@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # Common builder stage (executes ONLY on the build platform)
 # ------------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder-base
+FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm AS builder-base
 
 # ---- Build configuration -----------------------------------------------------
 ARG EGX_VERSION
@@ -24,7 +24,7 @@ COPY vendor ./vendor
 COPY cmd ./cmd
 
 # ------------------------------------------------------------------------------
-# Builder stage – compile image-credential-helper binary for all TARGETARCHS
+# Builder stage - compile image-credential-helper binary for all TARGETARCHS
 # ------------------------------------------------------------------------------
 FROM builder-base AS builder
 RUN set -eux; \
@@ -38,14 +38,13 @@ RUN set -eux; \
     done
 
 # ------------------------------------------------------------------------------
-# Final runtime image – one per requested TARGETPLATFORM
+# Final runtime image - one per requested TARGETPLATFORM
 # BuildKit will create a final image per platform and copy the pre-built
 # binary that matches the platform's architecture.
 # ------------------------------------------------------------------------------
 
-# This distroless image already provides a non-root runtime user, so do not add a USER override here unless
-# the runtime requirements change.
-FROM nvcr.io/nvidia/distroless/go:v4.1.2
+FROM nvcr.io/nvidia/distroless/go:v4.1.6@sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929
+USER 1000:1000
 LABEL io.k8s.display-name="NVCF Image Credential Helper"
 
 # The following build args are automatically populated by BuildKit.

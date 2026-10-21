@@ -209,6 +209,13 @@ pub struct Stickiness {
     pub required_minutes: u32,
 }
 
+impl Stickiness {
+    /// History this window needs at one sample per minute, never less than `default`.
+    pub fn lookback(&self, default: Duration) -> Duration {
+        default.max(Duration::from_secs(u64::from(self.window_minutes) * 60))
+    }
+}
+
 /// Resolved scaling policy for a function — returned by get_policy_for_function
 #[derive(Debug, Clone)]
 pub struct ResolvedScalingPolicy {
@@ -216,6 +223,18 @@ pub struct ResolvedScalingPolicy {
     pub factors: ScalingFactors,
     pub scale_up_stickiness: Option<Stickiness>,
     pub scale_down_stickiness: Option<Stickiness>,
+}
+
+impl ResolvedScalingPolicy {
+    /// Utilization history to fetch so every stickiness window sees one sample
+    /// per minute of its length. Never shorter than `default`.
+    pub fn utilization_lookback(&self, default: Duration) -> Duration {
+        [&self.scale_up_stickiness, &self.scale_down_stickiness]
+            .into_iter()
+            .flatten()
+            .map(|s| s.lookback(default))
+            .fold(default, Duration::max)
+    }
 }
 
 /// Entry stored in cache per function_version_id
@@ -339,9 +358,12 @@ pub enum MetricSource {
 pub struct ScalingInputs {
     pub metric_source: MetricSource,
     pub current_instances: usize,
-    /// Chronologically ordered, finite utilization percentages. Non-finite or
-    /// unparsable samples have already been coerced to 0.0.
-    pub utilization_samples: Vec<f64>,
+    /// Chronologically ordered `(timestamp_seconds, utilization)` samples with
+    /// finite percentages. Non-finite or unparsable values are already 0.0.
+    pub utilization_samples: Vec<(i64, f64)>,
+    /// End of the queried range in seconds. Sample windows are measured back
+    /// from here, so a gap in the series never stretches a window into older data.
+    pub window_end: i64,
     /// True when the function was invoked within the scale-to-zero idle window.
     pub recently_invoked: bool,
 }
@@ -355,18 +377,30 @@ pub struct ScalingInputs {
 /// average and silently disables the `< scale_down_threshold` scale-to-zero
 /// guard, because every NaN comparison is false. Coerce every non-finite or
 /// unparsable sample to 0.0 so all paths see a finite series.
-pub fn sanitize_utilization(raw: Vec<(i64, String)>) -> Vec<f64> {
+pub fn sanitize_utilization(raw: Vec<(i64, String)>) -> Vec<(i64, f64)> {
     let mut rows = raw;
     // Sort by timestamp so oldest is first — decay weighting and the
     // "most recent point" logic both expect chronological order.
     rows.sort_by_key(|(ts, _)| *ts);
     rows.into_iter()
-        .map(|(_, v)| {
-            v.parse::<f64>()
+        .map(|(ts, v)| {
+            let value = v
+                .parse::<f64>()
                 .ok()
                 .filter(|x| x.is_finite())
-                .unwrap_or(0.0)
+                .unwrap_or(0.0);
+            (ts, value)
         })
+        .collect()
+}
+
+/// Values of the samples taken within `lookback` of `window_end`.
+fn values_within(samples: &[(i64, f64)], window_end: i64, lookback: Duration) -> Vec<f64> {
+    let cutoff = window_end.saturating_sub(lookback.as_secs() as i64);
+    samples
+        .iter()
+        .filter(|(ts, _)| *ts >= cutoff)
+        .map(|(_, value)| *value)
         .collect()
 }
 
@@ -376,12 +410,18 @@ pub struct ScalingDecision {
     pub average_utilization: f32,
 }
 
+/// `lookback` is the configured lookback. The average and instantaneous gates
+/// only see samples within it; a stickiness gate only sees its own window.
+/// All windows end at `window_end`.
 pub fn get_desired_instances(
-    utilization_samples: &[f64],
+    samples: &[(i64, f64)],
+    window_end: i64,
+    lookback: Duration,
     policy: &ResolvedScalingPolicy,
     current_instances: usize,
     decay_factor: f32,
 ) -> Option<ScalingDecision> {
+    let utilization_samples = values_within(samples, window_end, lookback);
     // Return current instances if no data is available.
     if utilization_samples.is_empty() {
         tracing::debug!(
@@ -393,19 +433,23 @@ pub fn get_desired_instances(
         });
     }
 
-    let avg_utilization = calculate_average_utilization(utilization_samples, decay_factor)?;
+    let avg_utilization = calculate_average_utilization(&utilization_samples, decay_factor)?;
     let base_instances = current_instances.max(1);
 
     let up = policy.thresholds.scale_up_threshold;
     let down = policy.thresholds.scale_down_threshold;
     let scale_up = breached_enough(
-        utilization_samples,
+        samples,
+        window_end,
+        lookback,
         policy.scale_up_stickiness.as_ref(),
         "scale-up",
         |v| v > up,
     );
     let scale_down = breached_enough(
-        utilization_samples,
+        samples,
+        window_end,
+        lookback,
         policy.scale_down_stickiness.as_ref(),
         "scale-down",
         |v| v < down,
@@ -433,18 +477,28 @@ pub fn get_desired_instances(
 /// With stickiness, at least `required_minutes` of the last `window_minutes`
 /// samples must breach. Without it, the check is instantaneous, which is just
 /// the same rule over a window of one (only the most recent sample counts).
+/// A stickiness gate only considers samples within its own window of
+/// `window_end`, so gaps in the series never pull in older data. The
+/// instantaneous gate considers samples within the configured `lookback`.
 /// `label` is used only for the trace line so the gate is debuggable in prod.
 fn breached_enough(
-    samples: &[f64],
+    samples: &[(i64, f64)],
+    window_end: i64,
+    lookback: Duration,
     stickiness: Option<&Stickiness>,
     label: &str,
     breaches: impl Fn(f32) -> bool,
 ) -> bool {
-    let (window, required) = match stickiness {
-        Some(s) => (s.window_minutes as usize, s.required_minutes as usize),
-        None => (1, 1),
+    let (window, required, lookback) = match stickiness {
+        Some(s) => (
+            s.window_minutes as usize,
+            s.required_minutes as usize,
+            Duration::from_secs(u64::from(s.window_minutes) * 60),
+        ),
+        None => (1, 1, lookback),
     };
-    let recent = &samples[samples.len().saturating_sub(window)..];
+    let in_range = values_within(samples, window_end, lookback);
+    let recent = &in_range[in_range.len().saturating_sub(window)..];
     let count = recent.iter().filter(|&&v| breaches(v as f32)).count();
     tracing::debug!(
         "{} gate: {} of {} recent sample(s) breached (need {}, window {})",
@@ -475,6 +529,7 @@ pub fn decide_scaling(
     inputs: &ScalingInputs,
     policy: &ResolvedScalingPolicy,
     decay_factor: f32,
+    lookback: Duration,
     last_predicted_instance_count: usize,
 ) -> Option<ScalingDecision> {
     if inputs.current_instances == 0 && last_predicted_instance_count > 0 {
@@ -485,6 +540,8 @@ pub fn decide_scaling(
     // factors never multiply by zero.
     let mut decision = get_desired_instances(
         &inputs.utilization_samples,
+        inputs.window_end,
+        lookback,
         policy,
         inputs.current_instances,
         decay_factor,
@@ -545,15 +602,50 @@ mod tests {
         ScalingFactors::default()
     }
 
+    const WINDOW_END: i64 = 1_700_000_000;
+    const LOOKBACK: Duration = Duration::from_secs(600);
+
+    /// Sample `minutes_ago` minutes before `WINDOW_END`.
+    fn at(minutes_ago: i64, value: f64) -> (i64, f64) {
+        (WINDOW_END - minutes_ago * 60, value)
+    }
+
+    /// One sample per minute, the last one at `WINDOW_END`.
+    fn per_minute(values: &[f64]) -> Vec<(i64, f64)> {
+        let newest = values.len() as i64 - 1;
+        values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| at(newest - i as i64, *value))
+            .collect()
+    }
+
+    fn desired(
+        values: &[f64],
+        policy: &ResolvedScalingPolicy,
+        current_instances: usize,
+        decay_factor: f32,
+    ) -> Option<ScalingDecision> {
+        get_desired_instances(
+            &per_minute(values),
+            WINDOW_END,
+            LOOKBACK,
+            policy,
+            current_instances,
+            decay_factor,
+        )
+    }
+
     fn inputs_with(
         current_instances: usize,
-        utilization_samples: Vec<f64>,
+        utilization_samples: Vec<(i64, f64)>,
         recently_invoked: bool,
     ) -> ScalingInputs {
         ScalingInputs {
             metric_source: MetricSource::WorkerThreads,
             current_instances,
             utilization_samples,
+            window_end: WINDOW_END,
             recently_invoked,
         }
     }
@@ -568,7 +660,10 @@ mod tests {
             (1080, "0.50".to_string()),
             (1140, "0.60".to_string()),
         ];
-        assert_eq!(sanitize_utilization(raw), vec![0.5, 0.6, 0.7]);
+        assert_eq!(
+            sanitize_utilization(raw),
+            vec![(1080, 0.5), (1140, 0.6), (1200, 0.7)]
+        );
     }
 
     #[test]
@@ -578,7 +673,10 @@ mod tests {
             (1140, "0.60".to_string()),
             (1200, "".to_string()),
         ];
-        assert_eq!(sanitize_utilization(raw), vec![0.0, 0.6, 0.0]);
+        assert_eq!(
+            sanitize_utilization(raw),
+            vec![(1080, 0.0), (1140, 0.6), (1200, 0.0)]
+        );
     }
 
     /// Prometheus encodes 0/0 (e.g. the CP utilization query at zero instances)
@@ -592,8 +690,8 @@ mod tests {
             (1200, "-Inf".to_string()),
         ];
         let samples = sanitize_utilization(raw);
-        assert!(samples.iter().all(|x| x.is_finite()));
-        assert_eq!(samples, vec![0.0, 0.0, 0.0]);
+        assert!(samples.iter().all(|(_, x)| x.is_finite()));
+        assert_eq!(samples, vec![(1080, 0.0), (1140, 0.0), (1200, 0.0)]);
     }
 
     #[test]
@@ -605,25 +703,25 @@ mod tests {
 
     #[test]
     fn test_scale_up_high_utilization() {
-        let result = get_desired_instances(&[95.0, 98.0, 92.0], &default_policy(), 10, 0.1);
+        let result = desired(&[95.0, 98.0, 92.0], &default_policy(), 10, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12)); // 10 * 1.2
     }
 
     #[test]
     fn test_scale_up_moderate_utilization() {
-        let result = get_desired_instances(&[75.0, 80.0, 78.0], &default_policy(), 10, 0.1);
+        let result = desired(&[75.0, 80.0, 78.0], &default_policy(), 10, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12)); // 10 * 1.2
     }
 
     #[test]
     fn test_scale_down_low_utilization() {
-        let result = get_desired_instances(&[25.0, 20.0, 28.0], &default_policy(), 10, 0.1);
+        let result = desired(&[25.0, 20.0, 28.0], &default_policy(), 10, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8)); // 10 * 0.8
     }
 
     #[test]
     fn test_scale_down_very_low_utilization() {
-        let result = get_desired_instances(&[5.0, 8.0, 6.0], &default_policy(), 10, 0.1);
+        let result = desired(&[5.0, 8.0, 6.0], &default_policy(), 10, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8)); // 10 * 0.8
     }
 
@@ -631,52 +729,52 @@ mod tests {
     /// reachable via decide_scaling's idle path.
     #[test]
     fn test_extreme_scale_down_from_one_instance_never_returns_zero() {
-        let result = get_desired_instances(&[5.0, 8.0, 6.0], &default_policy(), 1, 0.1);
+        let result = desired(&[5.0, 8.0, 6.0], &default_policy(), 1, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(1));
     }
 
     #[test]
     fn test_moderate_scale_down_from_one_instance_never_returns_zero() {
-        let result = get_desired_instances(&[25.0, 20.0, 28.0], &default_policy(), 1, 0.1);
+        let result = desired(&[25.0, 20.0, 28.0], &default_policy(), 1, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(1));
     }
 
     #[test]
     fn test_extreme_scale_down_from_two_instances_clamps_to_one() {
-        let result = get_desired_instances(&[5.0, 8.0, 6.0], &default_policy(), 2, 0.1);
+        let result = desired(&[5.0, 8.0, 6.0], &default_policy(), 2, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(1));
     }
 
     #[test]
     fn test_no_scaling_optimal_range() {
-        let result = get_desired_instances(&[45.0, 50.0, 55.0], &default_policy(), 10, 0.1);
+        let result = desired(&[45.0, 50.0, 55.0], &default_policy(), 10, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
     #[test]
     fn test_instantaneous_uses_last_point() {
         // Without stickiness, scaling uses the most recent (last) data point only.
-        let result = get_desired_instances(&[90.0, 90.0, 5.0], &default_policy(), 10, 0.8);
+        let result = desired(&[90.0, 90.0, 5.0], &default_policy(), 10, 0.8);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8)); // 5 < 30 -> floor(10*0.8)
     }
 
     #[test]
     fn test_empty_data() {
-        let result = get_desired_instances(&[], &default_policy(), 5, 0.1);
+        let result = desired(&[], &default_policy(), 5, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(5));
         assert_eq!(result.as_ref().map(|d| d.average_utilization), Some(0.0));
     }
 
     #[test]
     fn test_empty_data_with_zero_current_returns_at_least_one() {
-        let result = get_desired_instances(&[], &default_policy(), 0, 0.1);
+        let result = desired(&[], &default_policy(), 0, 0.1);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(1));
         assert_eq!(result.as_ref().map(|d| d.average_utilization), Some(0.0));
     }
 
     #[test]
     fn test_scaling_decision_structure() {
-        let result = get_desired_instances(&[80.0, 85.0, 90.0], &default_policy(), 10, 0.1);
+        let result = desired(&[80.0, 85.0, 90.0], &default_policy(), 10, 0.1);
         let decision = result.expect("decision");
         assert_eq!(decision.desired_instances, 12); // 10 * 1.2
         assert!(decision.average_utilization > 80.0);
@@ -687,25 +785,25 @@ mod tests {
 
     #[test]
     fn test_boundary_exact_scale_up_threshold_does_not_scale() {
-        let result = get_desired_instances(&[70.0, 70.0, 70.0], &default_policy(), 10, 0.0);
+        let result = desired(&[70.0, 70.0, 70.0], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
     #[test]
     fn test_boundary_exact_scale_down_threshold_does_not_scale() {
-        let result = get_desired_instances(&[30.0, 30.0, 30.0], &default_policy(), 10, 0.0);
+        let result = desired(&[30.0, 30.0, 30.0], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
     #[test]
     fn test_boundary_just_above_scale_up_threshold() {
-        let result = get_desired_instances(&[70.1, 70.1, 70.1], &default_policy(), 10, 0.0);
+        let result = desired(&[70.1, 70.1, 70.1], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
     }
 
     #[test]
     fn test_boundary_just_below_scale_down_threshold() {
-        let result = get_desired_instances(&[29.9, 29.9, 29.9], &default_policy(), 10, 0.0);
+        let result = desired(&[29.9, 29.9, 29.9], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8));
     }
 
@@ -717,7 +815,7 @@ mod tests {
             scale_up_threshold: 60.0,
             scale_down_threshold: 40.0,
         };
-        let result = get_desired_instances(
+        let result = desired(
             &[55.0, 55.0, 55.0],
             &policy_with(thresholds, default_factors()),
             10,
@@ -732,7 +830,7 @@ mod tests {
             scale_up_factor: 2.0,
             scale_down_factor: 0.5,
         };
-        let result = get_desired_instances(
+        let result = desired(
             &[90.0, 90.0, 90.0],
             &policy_with(default_thresholds(), factors),
             10,
@@ -747,7 +845,7 @@ mod tests {
             scale_up_factor: 1.5,
             scale_down_factor: 0.5,
         };
-        let result = get_desired_instances(
+        let result = desired(
             &[5.0, 5.0, 5.0],
             &policy_with(default_thresholds(), factors),
             10,
@@ -758,7 +856,7 @@ mod tests {
 
     #[test]
     fn test_scale_up_from_single_instance() {
-        let result = get_desired_instances(&[90.0, 90.0, 90.0], &default_policy(), 1, 0.0);
+        let result = desired(&[90.0, 90.0, 90.0], &default_policy(), 1, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(2)); // ceil(1*1.2)
     }
 
@@ -768,7 +866,7 @@ mod tests {
             scale_up_factor: 1.5,
             scale_down_factor: 0.5,
         };
-        let result = get_desired_instances(
+        let result = desired(
             &[5.0, 5.0, 5.0],
             &policy_with(default_thresholds(), factors),
             3,
@@ -781,13 +879,13 @@ mod tests {
 
     #[test]
     fn test_large_instance_count_scale_up() {
-        let result = get_desired_instances(&[90.0, 90.0, 90.0], &default_policy(), 1000, 0.0);
+        let result = desired(&[90.0, 90.0, 90.0], &default_policy(), 1000, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(1200));
     }
 
     #[test]
     fn test_large_instance_count_scale_down() {
-        let result = get_desired_instances(&[5.0, 5.0, 5.0], &default_policy(), 1000, 0.0);
+        let result = desired(&[5.0, 5.0, 5.0], &default_policy(), 1000, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(800));
     }
 
@@ -796,14 +894,14 @@ mod tests {
     #[test]
     fn test_zero_decay_factor_gives_uniform_average() {
         // (90+10+50)/3 = 50, in optimal range -> no scaling
-        let result = get_desired_instances(&[90.0, 10.0, 50.0], &default_policy(), 10, 0.0);
+        let result = desired(&[90.0, 10.0, 50.0], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
     #[test]
     fn test_high_decay_factor_ignores_old_data() {
         // Very high decay: only the newest value (10) matters -> scale down
-        let result = get_desired_instances(&[90.0, 90.0, 10.0], &default_policy(), 10, 5.0);
+        let result = desired(&[90.0, 90.0, 10.0], &default_policy(), 10, 5.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8));
     }
 
@@ -811,13 +909,13 @@ mod tests {
 
     #[test]
     fn test_utilization_above_100_still_scales_up() {
-        let result = get_desired_instances(&[150.0, 200.0, 180.0], &default_policy(), 10, 0.0);
+        let result = desired(&[150.0, 200.0, 180.0], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
     }
 
     #[test]
     fn test_all_zero_utilization_scales_down() {
-        let result = get_desired_instances(&[0.0, 0.0, 0.0], &default_policy(), 10, 0.0);
+        let result = desired(&[0.0, 0.0, 0.0], &default_policy(), 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8));
     }
 
@@ -840,7 +938,7 @@ mod tests {
             }),
             scale_down_stickiness: None,
         };
-        let result = get_desired_instances(&[25.0, 30.0, 28.0, 35.0, 22.0], &policy, 10, 0.0);
+        let result = desired(&[25.0, 30.0, 28.0, 35.0, 22.0], &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(20)); // 10 * 2.0
     }
 
@@ -862,7 +960,7 @@ mod tests {
             scale_down_stickiness: None,
         };
         // Only 2 of 5 points above 20 -> required 3 not met
-        let result = get_desired_instances(&[25.0, 15.0, 12.0, 18.0, 22.0], &policy, 10, 0.0);
+        let result = desired(&[25.0, 15.0, 12.0, 18.0, 22.0], &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
@@ -884,7 +982,7 @@ mod tests {
             }),
         };
         // 4 of 5 points below 30 -> required 3 met
-        let result = get_desired_instances(&[10.0, 15.0, 50.0, 8.0, 12.0], &policy, 10, 0.0);
+        let result = desired(&[10.0, 15.0, 50.0, 8.0, 12.0], &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(5)); // floor(10*0.5)
     }
 
@@ -910,8 +1008,158 @@ mod tests {
         };
         // Last 3 points [15,10,12] all < 30 -> scale down floor(10*0.8)
         let samples = [90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 15.0, 10.0, 12.0];
-        let result = get_desired_instances(&samples, &policy, 10, 0.0);
+        let result = desired(&samples, &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8));
+    }
+
+    // ---- Stickiness windows longer than the default lookback ----
+
+    fn sticky(window_minutes: u32, required_minutes: u32) -> Option<Stickiness> {
+        Some(Stickiness {
+            window_minutes,
+            required_minutes,
+        })
+    }
+
+    fn sticky_policy(
+        scale_up_stickiness: Option<Stickiness>,
+        scale_down_stickiness: Option<Stickiness>,
+    ) -> ResolvedScalingPolicy {
+        ResolvedScalingPolicy {
+            scale_up_stickiness,
+            scale_down_stickiness,
+            ..default_policy()
+        }
+    }
+
+    /// `quiet` non-breaching samples followed by `hot` samples at 100%.
+    fn breach_tail(quiet: usize, hot: usize) -> Vec<f64> {
+        let mut samples = vec![50.0; quiet];
+        samples.extend(vec![100.0; hot]);
+        samples
+    }
+
+    #[test]
+    fn test_lookback_without_stickiness_uses_default() {
+        let default = Duration::from_secs(600);
+        assert_eq!(default_policy().utilization_lookback(default), default);
+    }
+
+    #[test]
+    fn test_lookback_short_windows_keep_default() {
+        let default = Duration::from_secs(600);
+        let policy = sticky_policy(sticky(5, 3), sticky(10, 9));
+        assert_eq!(policy.utilization_lookback(default), default);
+    }
+
+    #[test]
+    fn test_lookback_covers_largest_stickiness_window() {
+        let default = Duration::from_secs(600);
+        assert_eq!(
+            sticky_policy(sticky(30, 15), None).utilization_lookback(default),
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            sticky_policy(sticky(15, 5), sticky(60, 45)).utilization_lookback(default),
+            Duration::from_secs(60 * 60)
+        );
+    }
+
+    #[test]
+    fn test_lookback_keeps_larger_configured_default() {
+        let default = Duration::from_secs(2 * 60 * 60);
+        let policy = sticky_policy(sticky(60, 30), None);
+        assert_eq!(policy.utilization_lookback(default), default);
+    }
+
+    /// Regression for a 30m window / 15m threshold at sustained 100%: the
+    /// 31 one-minute samples fetched over a 30m lookback satisfy the gate.
+    #[test]
+    fn test_long_window_scales_up_with_full_window_of_samples() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let samples = vec![100.0; 31];
+        let result = desired(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+    }
+
+    /// The 11 samples a 600s lookback yields can never satisfy 15 required
+    /// minutes; fewer samples than required must not count as a breach.
+    #[test]
+    fn test_long_window_not_met_with_insufficient_samples() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = desired(&[100.0; 11], &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    #[test]
+    fn test_long_window_breach_shorter_than_threshold_does_not_scale() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = desired(&breach_tail(17, 14), &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    #[test]
+    fn test_long_window_breach_exactly_threshold_scales() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = desired(&breach_tail(16, 15), &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+    }
+
+    #[test]
+    fn test_one_hour_window_counts_samples_across_whole_window() {
+        let policy = sticky_policy(sticky(60, 45), None);
+        // 61 samples from a 1h lookback; the oldest falls outside the window.
+        let mut samples = breach_tail(16, 45);
+        assert_eq!(samples.len(), 61);
+        let result = desired(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+
+        samples[16] = 50.0;
+        let result = desired(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    /// A 60m scale-up window widens the fetched history, but the instantaneous
+    /// scale-down gate must not act on a sample older than the configured lookback.
+    #[test]
+    fn test_stale_sample_beyond_lookback_does_not_drive_instant_gate() {
+        let policy = sticky_policy(sticky(60, 45), None);
+        let samples = [at(45, 5.0)];
+        let result = get_desired_instances(&samples, WINDOW_END, LOOKBACK, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    /// Gaps in the series must not stretch a stickiness gate past its own window.
+    #[test]
+    fn test_stickiness_gate_ignores_samples_older_than_its_window() {
+        let policy = sticky_policy(sticky(60, 45), sticky(20, 10));
+        // Low utilization 46-60 minutes ago, then only the last 5 minutes reported.
+        let mut samples: Vec<_> = (46..=60).rev().map(|m| at(m, 5.0)).collect();
+        samples.extend((0..5).rev().map(|m| at(m, 5.0)));
+        let result = get_desired_instances(&samples, WINDOW_END, LOOKBACK, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    /// A window shorter than the lookback only counts samples inside itself.
+    #[test]
+    fn test_short_stickiness_gate_ignores_samples_older_than_its_window() {
+        let policy = sticky_policy(None, sticky(3, 2));
+        let samples = [at(9, 5.0), at(8, 5.0)];
+        let result = get_desired_instances(&samples, WINDOW_END, LOOKBACK, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    /// Scale-to-zero averages only the configured lookback, even when a long
+    /// stickiness window fetched older, lower utilization.
+    #[test]
+    fn test_scale_to_zero_average_ignores_history_beyond_lookback() {
+        let policy = sticky_policy(sticky(60, 45), None);
+        let mut values = vec![5.0; 50];
+        values.extend([90.0; 11]);
+        let inputs = inputs_with(10, per_minute(&values), false);
+        let decision = decide_scaling(&inputs, &policy, 0.0, LOOKBACK, 10).expect("decision");
+        assert_eq!(decision.desired_instances, 10);
+        assert_eq!(decision.average_utilization, 90.0);
     }
 
     // ---- decide_scaling: the single decision path shared by all metric sources ----
@@ -927,9 +1175,9 @@ mod tests {
     /// metric source.
     #[test]
     fn test_decide_scale_to_zero_when_idle_and_low_util() {
-        let inputs = inputs_with(2, vec![5.0, 6.0, 4.0], false);
+        let inputs = inputs_with(2, per_minute(&[5.0, 6.0, 4.0]), false);
         assert_eq!(
-            decide_scaling(&inputs, &default_policy(), 0.0, 2),
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 2),
             scaled(0, 5.0)
         );
     }
@@ -937,10 +1185,10 @@ mod tests {
     /// Recently invoked must never scale to zero, even at low utilization.
     #[test]
     fn test_decide_no_scale_to_zero_when_recently_invoked() {
-        let inputs = inputs_with(2, vec![5.0, 6.0, 4.0], true);
+        let inputs = inputs_with(2, per_minute(&[5.0, 6.0, 4.0]), true);
         // Low util but invoked -> utilization-based scale down, clamped to >=1.
         assert_eq!(
-            decide_scaling(&inputs, &default_policy(), 0.0, 2),
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 2),
             scaled(1, 5.0)
         );
     }
@@ -948,9 +1196,9 @@ mod tests {
     /// Idle but utilization still high -> honor the scale decision, do not zero.
     #[test]
     fn test_decide_no_scale_to_zero_when_idle_but_high_util() {
-        let inputs = inputs_with(10, vec![90.0, 90.0, 90.0], false);
+        let inputs = inputs_with(10, per_minute(&[90.0, 90.0, 90.0]), false);
         assert_eq!(
-            decide_scaling(&inputs, &default_policy(), 0.0, 10),
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 10),
             scaled(12, 90.0)
         );
     }
@@ -958,17 +1206,20 @@ mod tests {
     /// 0 active but instances were requested last cycle -> stale reading, skip.
     #[test]
     fn test_decide_skips_when_requested_but_none_active() {
-        let inputs = inputs_with(0, vec![], false);
-        assert_eq!(decide_scaling(&inputs, &default_policy(), 0.0, 5), None);
+        let inputs = inputs_with(0, per_minute(&[]), false);
+        assert_eq!(
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 5),
+            None
+        );
     }
 
     /// No active instances and nothing requested: base of 1, and an idle low-util
     /// function still scales to zero (not skipped).
     #[test]
     fn test_decide_zero_current_zero_requested_idle_scales_to_zero() {
-        let inputs = inputs_with(0, vec![0.0, 0.0, 0.0], false);
+        let inputs = inputs_with(0, per_minute(&[0.0, 0.0, 0.0]), false);
         assert_eq!(
-            decide_scaling(&inputs, &default_policy(), 0.0, 0),
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 0),
             scaled(0, 0.0)
         );
     }
@@ -978,13 +1229,13 @@ mod tests {
     #[test]
     fn test_decide_with_sanitized_non_finite_scales_to_zero() {
         let samples = sanitize_utilization(vec![
-            (1080, "NaN".to_string()),
-            (1140, "NaN".to_string()),
-            (1200, "NaN".to_string()),
+            (WINDOW_END - 120, "NaN".to_string()),
+            (WINDOW_END - 60, "NaN".to_string()),
+            (WINDOW_END, "NaN".to_string()),
         ]);
         let inputs = inputs_with(1, samples, false);
         assert_eq!(
-            decide_scaling(&inputs, &default_policy(), 0.0, 1),
+            decide_scaling(&inputs, &default_policy(), 0.0, LOOKBACK, 1),
             scaled(0, 0.0)
         );
     }

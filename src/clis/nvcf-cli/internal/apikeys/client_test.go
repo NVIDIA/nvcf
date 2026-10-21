@@ -193,3 +193,10 @@ func TestGenerateAPIKey_RejectsUnexpectedResponsePrefix(t *testing.T) {
 	assert.ErrorContains(t, err, "failed to parse API key response")
 	assert.ErrorContains(t, err, "invalid character")
 }
+
+func TestDefaultScopes_IncludeManageTelemetries(t *testing.T) {
+	assert.Contains(t, DefaultScopes(), "manage_telemetries")
+
+	payload, _ := captureRequest(t, &Config{ServiceID: "svc-id"}, nil)
+	assert.Contains(t, scopesFrom(policyFrom(t, payload)), "manage_telemetries")
+}

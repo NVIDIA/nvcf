@@ -27,6 +27,9 @@ set -euo pipefail
 MODE="${1:-all}"
 
 export ESS_SECRETS_PATH="$(pwd)/examples/secrets"
+# generate-otelconfig.go renders the collector's own trace export, which reads
+# this variable. The wrapper renders that export only when it is set.
+export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}"
 mkdir -p _output
 
 ensure_otelcol_binary() {

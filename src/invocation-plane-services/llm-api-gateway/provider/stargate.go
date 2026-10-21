@@ -39,7 +39,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
@@ -514,16 +513,13 @@ func outboundChatRequest(
 		streamOptions.IncludeUsage = ptr.To(true)
 		outbound.StreamOptions = &streamOptions
 	}
-	if !outbound.ServiceTier.IsValid() {
-		outbound.ServiceTier = servicetier.Auto
-	}
 
 	return &outbound
 }
 
 // gatewayOwnedChatFields are replaced or removed in the forwarded client body.
 // Keys are matched case-insensitively because encoding/json binds them that way.
-var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "service_tier", "debug"}
+var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "debug"}
 
 func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, error) {
 	outbound := outboundChatRequest(request, stream)
@@ -564,9 +560,6 @@ func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, e
 		return nil, err
 	}
 	if err := setJSONField(payload, "stream", outbound.Stream); err != nil {
-		return nil, err
-	}
-	if err := setJSONField(payload, "service_tier", outbound.ServiceTier); err != nil {
 		return nil, err
 	}
 
@@ -693,8 +686,10 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 			response.CreatedAt = chunk.CreatedAt
 			response.Model = chunk.Model
 			response.SystemFingerprint = chunk.SystemFingerprint
-			response.ServiceTier = chunk.ServiceTier
 			seenChunk = true
+		}
+		if response.ServiceTier == "" {
+			response.ServiceTier = chunk.ServiceTier
 		}
 		if chunk.Usage != nil {
 			response.Usage = *chunk.Usage

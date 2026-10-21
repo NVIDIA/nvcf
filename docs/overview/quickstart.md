@@ -187,6 +187,20 @@ rm deploy/stacks/self-managed/secrets/local-secrets.yaml.bak
 
 ## Step 4: Run the install
 
+The sample function does not require Event Ledger. Disable this optional addon
+so the local install does not require its chart. Create
+`deploy/stacks/self-managed/environments/local.yaml` with the following values.
+If the file already exists, merge this override into its existing values:
+
+```yaml
+addons:
+  eventLedger:
+    enabled: false
+```
+
+Helmfile loads `environments/base.yaml` first, then applies the overrides in
+`environments/local.yaml`. You do not need to copy `base.yaml`.
+
 Check local tools and Kubernetes access:
 
 ```bash
@@ -252,12 +266,13 @@ nvcf-cli --config "${NVCF_CLI_CONFIG}" function create \
   --health-timeout PT30S
 ```
 
-Deploy the function to the local fake GPU backend:
+Deploy the function to the local fake GPU backend. The default topology
+provides two fake H100 GPUs per GPU node, so use `NCP.GPU.H100_2x`:
 
 ```bash
 nvcf-cli --config "${NVCF_CLI_CONFIG}" function deploy create \
   --gpu H100 \
-  --instance-type NCP.GPU.H100_8x \
+  --instance-type NCP.GPU.H100_2x \
   --backend ncp-local \
   --regions us-west-1 \
   --min-instances 1 \
@@ -269,6 +284,7 @@ Generate an API key for invocation:
 
 ```bash
 nvcf-cli --config "${NVCF_CLI_CONFIG}" api-key generate \
+  --for function \
   --description quickstart-load-tester-supreme \
   --scopes invoke_function,list_functions,queue_details,list_functions_details
 ```
@@ -284,8 +300,16 @@ nvcf-cli --config "${NVCF_CLI_CONFIG}" function invoke \
 
 Expected result: the invocation response contains `quickstart-echo`.
 
-For other local fake GPU configurations, choose a `--gpu` and
-`--instance-type` that match the discovered node labels and GPU count.
+For other local fake GPU configurations, inspect the GPU and instance types
+advertised by the backend:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" cluster list
+```
+
+This query requires a token with the `list_cluster_groups` scope. If it returns
+`403 Forbidden`, check the token's permissions before retrying. Choose a
+`--gpu` and `--instance-type` from the backend's advertised configuration.
 
 ## Clean up
 

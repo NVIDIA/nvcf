@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -48,15 +49,20 @@ data: [DONE]
 `
 
 type passthroughUpstream struct {
-	server      *httptest.Server
-	requests    chan []byte
-	inputTokens chan string
+	server       *httptest.Server
+	requests     chan []byte
+	inputTokens  chan string
+	affinityKeys chan string
 }
 
 func newPassthroughUpstream(t *testing.T, contentType string, responseBody string) *passthroughUpstream {
 	t.Helper()
 
-	upstream := &passthroughUpstream{requests: make(chan []byte, 1), inputTokens: make(chan string, 1)}
+	upstream := &passthroughUpstream{
+		requests:     make(chan []byte, 1),
+		inputTokens:  make(chan string, 1),
+		affinityKeys: make(chan string, 1),
+	}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, err := io.ReadAll(r.Body)
@@ -65,6 +71,7 @@ func newPassthroughUpstream(t *testing.T, contentType string, responseBody strin
 		}
 		upstream.requests <- body
 		upstream.inputTokens <- r.Header.Get("X-Input-Tokens")
+		upstream.affinityKeys <- r.Header.Get("X-Cache-Affinity-Key")
 		w.Header().Set(echo.HeaderContentType, contentType)
 		_, _ = io.WriteString(w, responseBody)
 	}))
@@ -76,11 +83,14 @@ func newPassthroughAPI(t *testing.T, upstreamURL string) *echo.Echo {
 	t.Helper()
 
 	cfg := config.Default()
+	cfg.ModelURIAllowlistEnabled = true
 	stargate, err := provider.NewStargateProvider(config.StargateConfig{URL: upstreamURL})
 	require.NoError(t, err)
 
 	e := echo.New()
 	e.Use(NewContextMiddleware(cfg))
+	// Models without a spec skip the allowlist; company/restricted has no allowed route.
+	e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{"company/restricted": {URIs: []string{"/v1/other"}}}))
 	RegisterRoutes(e, NewHandlers(cfg, stargate, nil, nil))
 	return e
 }
@@ -265,15 +275,15 @@ func TestChatCompletionsAdmissionEstimateCountsUnmodeledPromptFields(t *testing.
 func TestEstimatedTokenCountForUnmodeledChatFields(t *testing.T) {
 	t.Parallel()
 
-	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(nil))
+	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(nil, nil))
 	require.Zero(t, estimatedTokenCountForUnmodeledChatFields(
-		[]byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"n"}],"temperature":0.1}`),
+		[]byte(`{"model":"m","messages":[{"role":"user","content":"hi","name":"n"}],"temperature":0.1}`), nil,
 	))
 	require.Equal(
 		t,
 		estimatedTokenCountForText(`{"enable_thinking":false}`)+estimatedTokenCountForText(`"why"`),
 		estimatedTokenCountForUnmodeledChatFields(
-			[]byte(`{"model":"m","messages":[{"role":"assistant","content":"x","reasoning_content":"why"}],"chat_template_kwargs":{"enable_thinking":false}}`),
+			[]byte(`{"model":"m","messages":[{"role":"assistant","content":"x","reasoning_content":"why"}],"chat_template_kwargs":{"enable_thinking":false}}`), nil,
 		),
 	)
 }
