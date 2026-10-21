@@ -21,6 +21,13 @@
       "name": "LZ4 Java Compression",
       "url": "https://github.com/yawkat/lz4-java"
     },
+    "at.yawk.lz4:lz4-java:1.11.4": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "LZ4 Java Compression",
+      "url": "https://github.com/yawkat/lz4-java"
+    },
     "ch.qos.logback:logback-classic:1.5.34": {
       "licenses": [
         "EPL-2.0",
@@ -97,6 +104,13 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "com.fasterxml.jackson.core:jackson-core:2.21.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "com.fasterxml.jackson.core:jackson-databind:2.21.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -105,6 +119,13 @@
       "url": "https://github.com/FasterXML/jackson"
     },
     "com.fasterxml.jackson.core:jackson-databind:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "com.fasterxml.jackson.core:jackson-databind:2.21.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -125,6 +146,13 @@
       "name": "Jackson-dataformat-YAML",
       "url": "https://github.com/FasterXML/jackson-dataformats-text"
     },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-dataformat-YAML",
+      "url": "https://github.com/FasterXML/jackson-dataformats-text"
+    },
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -133,6 +161,13 @@
       "url": "https://github.com/FasterXML/jackson-modules-java8"
     },
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson datatype: JSR310",
+      "url": "https://github.com/FasterXML/jackson-modules-java8"
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -451,7 +486,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-commons",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-core:1.16.6": {
       "licenses": [
@@ -465,7 +500,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-core",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-jakarta9:1.16.6": {
       "licenses": [
@@ -479,7 +514,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-jakarta9",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-observation:1.16.6": {
       "licenses": [
@@ -493,7 +528,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-observation",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-tracing-bridge-otel:1.6.6": {
       "licenses": [
@@ -507,7 +542,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-tracing-bridge-otel",
-      "url": "https://github.com/micrometer-metrics/tracing"
+      "url": "https://github.com/micrometer-metrics/tracing-commercial"
     },
     "io.micrometer:micrometer-tracing:1.6.6": {
       "licenses": [
@@ -521,7 +556,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-tracing",
-      "url": "https://github.com/micrometer-metrics/tracing"
+      "url": "https://github.com/micrometer-metrics/tracing-commercial"
     },
     "io.nats:jnats:2.23.0": {
       "licenses": [
@@ -1295,6 +1330,13 @@
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
     "org.bouncycastle:bcprov-lts8on:2.73.10": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider (LTS Distribution)",
+      "url": "https://www.bouncycastle.org/lts-java"
+    },
+    "org.bouncycastle:bcprov-lts8on:2.73.13": {
       "licenses": [
         "Bouncy Castle Licence"
       ],
@@ -2709,6 +2751,13 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "tools.jackson.core:jackson-core:3.1.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "tools.jackson.core:jackson-databind:3.1.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -2723,6 +2772,13 @@
       "name": "jackson-databind",
       "url": "https://github.com/FasterXML/jackson"
     },
+    "tools.jackson.core:jackson-databind:3.1.8": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
     "tools.jackson.module:jackson-module-blackbird:3.1.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -2731,6 +2787,13 @@
       "url": "https://github.com/FasterXML/jackson-modules-base"
     },
     "tools.jackson.module:jackson-module-blackbird:3.1.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson module: Blackbird",
+      "url": "https://github.com/FasterXML/jackson-modules-base"
+    },
+    "tools.jackson.module:jackson-module-blackbird:3.1.8": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
