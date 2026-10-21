@@ -1684,7 +1684,10 @@ func Test_exporterTraces_ServiceNowTokenHeader(t *testing.T) {
 		{name: "no secret file keeps the classic header", wantHeader: "lightstep-access-token"},
 		{name: "classic token", token: ptr("fake-classic-access-token"), wantHeader: "lightstep-access-token"},
 		{name: "otel_ token", token: ptr("otel_fake-ingest-token"), wantHeader: "otel-token"},
-		{name: "otel_ token with surrounding whitespace", token: ptr(" otel_fake-ingest-token\n"), wantHeader: "otel-token"},
+		{name: "otel_ token with a trailing newline", token: ptr("otel_fake-ingest-token\n"), wantHeader: "otel-token"},
+		// The collector sends the file as it is, so the header must follow the
+		// raw value: a token with leading whitespace is not an otel_ token.
+		{name: "leading whitespace is not the prefix", token: ptr(" otel_fake-ingest-token"), wantHeader: "lightstep-access-token"},
 		{name: "prefix is case-sensitive", token: ptr("OTEL_fake-ingest-token"), wantHeader: "lightstep-access-token"},
 		{name: "otel- is not the prefix", token: ptr("otel-fake-ingest-token"), wantHeader: "lightstep-access-token"},
 		{name: "otel_ inside the token does not count", token: ptr("fake-otel_token"), wantHeader: "lightstep-access-token"},

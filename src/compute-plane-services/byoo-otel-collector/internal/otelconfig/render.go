@@ -243,7 +243,9 @@ const (
 // Lightstep access token and keeps lightstep-access-token. Ingest gateways
 // reject a request that carries both headers, so exactly one is chosen. Only
 // the prefix is read: the rendered config still references the token file.
-// A missing file keeps the classic header.
+// The prefix is matched against the raw file, not a trimmed copy, because the
+// collector sends the file's contents as they are. A missing file keeps the
+// classic header.
 func serviceNowTokenHeader(path string) (string, error) {
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -252,7 +254,7 @@ func serviceNowTokenHeader(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
 	}
-	if bytes.HasPrefix(bytes.TrimSpace(content), []byte(otelTokenPrefix)) {
+	if bytes.HasPrefix(content, []byte(otelTokenPrefix)) {
 		return serviceNowOtelTokenHeader, nil
 	}
 	return serviceNowLightstepHeader, nil
