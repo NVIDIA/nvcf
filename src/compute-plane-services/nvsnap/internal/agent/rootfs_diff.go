@@ -52,33 +52,6 @@ func excludeArgsForMountpoints(mps []string) []string {
 	return args
 }
 
-// mirrorOverlayDir copies one overlay directory tree to another, preserving
-// everything CRIU's path-based file restoration depends on: regular files
-// (with sizes/mtimes/perms), symlinks, hardlinks, sparse holes, special
-// files (sockets/fifos/character devices), xattrs, and ACLs.
-//
-// On the restore side, callers must write through the placeholder's overlay
-// (via mirrorIntoMntns), not directly to its diff dir — overlayfs caches
-// the merged-view dentries at mount time and doesn't invalidate them when
-// the upperdir is modified externally. This function is suitable for
-// dump-side capture where we read straight from the source's diff dir.
-//
-// xattrs in particular are not optional: overlayfs whiteouts are
-// represented as char devs with rdev=0 (or trusted.overlay.* xattrs); both
-// must travel for the destination to maintain the same effective view.
-//
-// Used by:
-//   - checkpoint flow: snapshots the source container's overlay upperdir
-//     into the checkpoint directory's rootfs-diff/ subdir, so everything
-//     the container wrote at runtime travels with the dump.
-//   - restore flow: replays that snapshot into the placeholder pod's
-//     overlay upperdir before CRIU runs, so file paths CRIU recorded by
-//     name resolve and stat() with the right size.
-//
-// rsync is invoked via a tar-pipe rather than direct rsync to avoid
-// requiring rsync in the agent image (it isn't in our Debian slim base).
-// tar over pipe preserves all the same attributes and is sufficient for
-// the contained data set (overlay diff, not a general filesystem).
 // rootfsDiffExcludeGlobs returns tar --exclude patterns for large,
 // re-fetchable content that must not be double-shipped in the rootfs-diff.
 // The dominant case: a model cache written to the container's writable layer
@@ -103,9 +76,27 @@ func rootfsDiffExcludeGlobs() []string {
 	return []string{"*/huggingface/hub", "*/huggingface/hub/*"}
 }
 
-func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string, log *logrus.Entry) error {
-	if src == "" || dst == "" {
-		return fmt.Errorf("mirrorOverlayDir: empty src or dst")
+// The checkpoint's copy of the source container's overlay upperdir. It is
+// one archive, rootfsDiffArchive: the ways a checkpoint moves between nodes
+// (a peer agent's fetch, the L2 copy) carry regular files' contents and at
+// most their modes, so a tree lost what CRIU checks and the workload needs
+// on a restore elsewhere: modes, owners, xattrs, whiteouts (seen
+// 2026-10-21: a fetched etcd data file came back 0644, not 0600, and its
+// restore failed). Checkpoints from before hold the tree in rootfsDiffDir.
+const (
+	rootfsDiffArchive = "rootfs-diff.tar"
+	rootfsDiffDir     = "rootfs-diff"
+)
+
+// archiveOverlayDir writes the overlay directory src into the tar outFile,
+// keeping everything CRIU's path-based file restoration and the workload
+// depend on: modes, owners (numeric), symlinks, hardlinks, sparse holes,
+// special files (overlayfs whiteouts are char devices), xattrs and ACLs.
+// trusted.overlay.* xattrs are overlayfs's own and stay behind. The
+// archive appears only once complete.
+func archiveOverlayDir(src, outFile string, excludeMountpoints, excludeGlobs []string, log *logrus.Entry) error {
+	if src == "" || outFile == "" {
+		return fmt.Errorf("archiveOverlayDir: empty src or out")
 	}
 	st, err := os.Stat(src)
 	if err != nil {
@@ -117,18 +108,13 @@ func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string
 	if !st.IsDir() {
 		return fmt.Errorf("src %s is not a directory", src)
 	}
-	if mkErr := os.MkdirAll(dst, 0o755); mkErr != nil {
-		return fmt.Errorf("mkdir dst %s: %w", dst, mkErr)
+	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+		return fmt.Errorf("mkdir parent of %s: %w", outFile, err)
 	}
-
-	// tar -C src -cf - --xattrs --acls --numeric-owner --sparse . | tar -C dst -xf - --xattrs --acls --numeric-owner
-	// Exclude trusted.overlay.* — those xattrs are managed by overlayfs
-	// itself; preserving them across mirrors is incorrect and would confuse
-	// the destination overlay. Other trusted.* xattrs (none expected in
-	// container upperdirs) are intentionally not included.
-	srcArgs := []string{
+	partial := outFile + ".partial"
+	args := []string{
 		"-C", src,
-		"-cf", "-",
+		"-cf", partial,
 		"--xattrs",
 		"--xattrs-exclude=trusted.overlay.*",
 		"--acls",
@@ -136,34 +122,32 @@ func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string
 		"--sparse",
 		"--one-file-system",
 	}
-	srcArgs = append(srcArgs, excludeArgsForMountpoints(excludeMountpoints)...)
+	args = append(args, excludeArgsForMountpoints(excludeMountpoints)...)
 	for _, g := range excludeGlobs {
-		srcArgs = append(srcArgs, "--exclude="+g)
+		args = append(args, "--exclude="+g)
 	}
-	srcArgs = append(srcArgs, ".")
-	srcTar := exec.Command("tar", srcArgs...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-
-	dstTar := exec.Command("tar",
-		"-C", dst,
-		"-xf", "-",
-		"--xattrs",
-		"--xattrs-exclude=trusted.overlay.*",
-		"--acls",
-		"--numeric-owner",
-		"--preserve-permissions",
-	)
-
-	if err := runTarPipe(srcTar, dstTar, "src tar (-C "+src+")", "dst tar (-C "+dst+")"); err != nil {
-		return err
+	args = append(args, ".")
+	cmd := exec.Command("tar", args...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(partial)
+		return fmt.Errorf("tar (-C %s): %w (stderr: %s)", src, err, strings.TrimSpace(stderr.String()))
 	}
-
+	if err := os.Rename(partial, outFile); err != nil {
+		_ = os.Remove(partial)
+		return fmt.Errorf("rename %s: %w", partial, err)
+	}
 	if log != nil {
-		size := dirSizeBytes(dst)
+		var size int64
+		if fi, err := os.Stat(outFile); err == nil {
+			size = fi.Size()
+		}
 		log.WithFields(logrus.Fields{
 			"src":   src,
-			"dst":   dst,
+			"out":   outFile,
 			"bytes": size,
-		}).Info("Mirrored overlay diff")
+		}).Info("Archived overlay diff")
 	}
 	return nil
 }
@@ -176,37 +160,45 @@ func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string
 // overlayfs caches its merged-view dentries at mount time and doesn't see
 // external mutations to the upperdir.
 //
-// The tar pipe preserves the same attributes as mirrorOverlayDir
-// (xattrs/ACLs/hardlinks/sparse). The target tar runs unprivileged
-// from the placeholder's perspective; the agent's privilege provides the
-// nsenter capability.
+// srcDiff is the checkpoint's rootfsDiffArchive, streamed as it is, or
+// (checkpoints from before it) a rootfsDiffDir tree, archived on the fly.
+// Either way the extract leaves out the placeholder's own mountpoints
+// (excludeMountpoints) and the agent's directories. The target tar runs
+// unprivileged from the placeholder's perspective; the agent's privilege
+// provides the nsenter capability.
 func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []string, log *logrus.Entry) error {
 	if srcDiff == "" || placeholderPID <= 0 {
 		return fmt.Errorf("mirrorIntoMntns: empty src or invalid pid")
 	}
-	if _, err := os.Stat(srcDiff); err != nil {
+	st, err := os.Stat(srcDiff)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat src %s: %w", srcDiff, err)
 	}
 
-	srcTar := exec.Command("tar", replayDiffSourceArgs(srcDiff, excludeMountpoints)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
-	dstTar := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		inContainerTool(placeholderPID, "tar"),
-		"-C", "/",
-		"-xf", "-",
-		"--xattrs",
-		"--xattrs-exclude=trusted.overlay.*",
-		"--acls",
-		"--numeric-owner",
-		"--preserve-permissions",
-		"--overwrite",
-	)
-	if err := runTarPipe(srcTar, dstTar, "src tar (-C "+srcDiff+")", fmt.Sprintf("dst tar (nsenter pid=%d)", placeholderPID)); err != nil {
-		return err
+	dstTar := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		inContainerTool(placeholderPID, "tar")}, replayDiffExtractArgs("/", excludeMountpoints)...)...)
+	dstName := fmt.Sprintf("dst tar (nsenter pid=%d)", placeholderPID)
+	if !st.IsDir() {
+		f, err := os.Open(srcDiff)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", srcDiff, err)
+		}
+		defer func() { _ = f.Close() }()
+		dstTar.Stdin = f
+		var stderr strings.Builder
+		dstTar.Stderr = &stderr
+		if err := dstTar.Run(); err != nil {
+			return fmt.Errorf("%s: %w (stderr: %s)", dstName, err, strings.TrimSpace(stderr.String()))
+		}
+	} else {
+		srcTar := exec.Command("tar", replayDiffSourceArgs(srcDiff, excludeMountpoints)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		if err := runTarPipe(srcTar, dstTar, "src tar (-C "+srcDiff+")", dstName); err != nil {
+			return err
+		}
 	}
 	if log != nil {
 		log.WithFields(logrus.Fields{
@@ -226,7 +218,7 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 // Reads via /proc/<srcPID>/root/<mp> rather than nsenter so the agent
 // stays in its own mntns; tar is purely a file-system operation that
 // follows the proc magic-link. --one-file-system prevents accidental
-// recursion into nested mounts (parity with mirrorOverlayDir).
+// recursion into nested mounts (parity with archiveOverlayDir).
 //
 // Returns nil if the source path is missing or empty — a captured-but-
 // empty mount on restore is the same as no capture (untar is a no-op).
@@ -458,22 +450,6 @@ func SanitizeMountPath(mp string) string {
 	return strings.ReplaceAll(mp, "/", "_")
 }
 
-// dirSizeBytes returns the cumulative apparent size of regular files under
-// path. Best-effort; returns 0 on errors.
-func dirSizeBytes(path string) int64 {
-	var total int64
-	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info == nil {
-			return nil
-		}
-		if info.Mode().IsRegular() {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
-}
-
 // agentContainerDirs are the directories the agent stages into a
 // container; a replay never writes them.
 var agentContainerDirs = []string{v2BinDirInContainer, v2ImagesDirInContainer}
@@ -516,6 +492,25 @@ func runTarPipe(src, dst *exec.Cmd, srcName, dstName string) error {
 }
 
 // replayDiffSourceArgs is the tar that reads a captured diff for a replay.
+// replayDiffExtractArgs is the tar command line that extracts a rootfs diff
+// from stdin into root, leaving out the placeholder's mountpoints and the
+// agent's directories the same way replayDiffSourceArgs does when it
+// archives a diff tree.
+func replayDiffExtractArgs(root string, excludeMountpoints []string) []string {
+	args := []string{
+		"-C", root,
+		"-xf", "-",
+		"--xattrs",
+		"--xattrs-exclude=trusted.overlay.*",
+		"--acls",
+		"--numeric-owner",
+		"--preserve-permissions",
+		"--overwrite",
+	}
+	args = append(args, excludeArgsForMountpoints(excludeMountpoints)...)
+	return append(args, excludeArgsForMountpoints(agentContainerDirs)...)
+}
+
 func replayDiffSourceArgs(srcDiff string, excludeMountpoints []string) []string {
 	args := []string{
 		"-C", srcDiff,

@@ -310,3 +310,165 @@ func tarNames(t *testing.T, path string) []string {
 		names = append(names, filepath.Clean(strings.TrimPrefix(h.Name, "./")))
 	}
 }
+
+// writeDiffTree builds a container upperdir as the etcd capture of
+// 2026-10-21 had it: a data file only its owner may read in a directory
+// only its owner may enter, a symlink, an empty directory, and nvsnap's own
+// staging, which a capture leaves out.
+func writeDiffTree(t *testing.T) string {
+	t.Helper()
+	src := t.TempDir()
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{{"bitnami/etcd/data/member/snap", 0o700}, {"var/empty", 0o755}, {"criu-bundle", 0o755}} {
+		if err := os.MkdirAll(filepath.Join(src, d.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(src, d.path), d.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"bitnami/etcd/data/member/snap/db", "criu-bundle/criu", "proc-mount/x"} {
+		p := filepath.Join(src, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil && !os.IsExist(err) {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("member/snap/db", filepath.Join(src, "bitnami", "etcd", "data", "db-link")); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
+// The archive is the checkpoint's copy of the diff: copied as plain bytes, as
+// a peer agent's fetch copies a checkpoint's files, and extracted with the
+// replay's arguments, it gives back what the source had. A tree did not: the
+// fetch recreated the etcd data file 0644, CRIU refused to reopen it ("bad
+// mode 0100644 (expect 0100600)"), and the instance's restore failed.
+func TestArchiveOverlayDir_SurvivesAContentOnlyCopy(t *testing.T) {
+	src := writeDiffTree(t)
+	ckpt := t.TempDir()
+	archive := filepath.Join(ckpt, rootfsDiffArchive)
+	if err := archiveOverlayDir(src, archive, []string{"/proc-mount"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(archive + ".partial"); !os.IsNotExist(err) {
+		t.Errorf("partial archive left behind: %v", err)
+	}
+
+	// What the peer fetch does: the file's bytes, a fresh default mode.
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := filepath.Join(t.TempDir(), rootfsDiffArchive)
+	if err = os.WriteFile(fetched, data, 0o644); err != nil { //nolint:gosec // test temp dir
+
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
+	f, err := os.Open(fetched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	cmd := exec.Command("tar", replayDiffExtractArgs(dst, nil)...) //nolint:gosec,noctx // test temp dir
+	cmd.Stdin = f
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("extract: %v: %s", err, out)
+	}
+
+	for _, c := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{"bitnami/etcd/data/member/snap/db", 0o600},
+		{"bitnami/etcd/data/member/snap", os.ModeDir | 0o700},
+		{"var/empty", os.ModeDir | 0o755},
+	} {
+		fi, err := os.Lstat(filepath.Join(dst, c.path))
+		if err != nil {
+			t.Errorf("%s: %v", c.path, err)
+			continue
+		}
+		if got := fi.Mode() & (os.ModeDir | os.ModePerm); got != c.mode {
+			t.Errorf("%s: mode %v, want %v", c.path, got, c.mode)
+		}
+	}
+	if target, err := os.Readlink(filepath.Join(dst, "bitnami", "etcd", "data", "db-link")); err != nil || target != "member/snap/db" {
+		t.Errorf("symlink: %q, %v; want member/snap/db", target, err)
+	}
+	for _, gone := range []string{"criu-bundle", "proc-mount"} {
+		if _, err := os.Lstat(filepath.Join(dst, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s replayed (%v); a capture leaves it out", gone, err)
+		}
+	}
+}
+
+// The archive records owners by number: the restore, run as root, gives the
+// workload's user (etcd runs as 1001) back its files.
+func TestArchiveOverlayDir_RecordsNumericOwners(t *testing.T) {
+	src := writeDiffTree(t)
+	archive := filepath.Join(t.TempDir(), rootfsDiffArchive)
+	if err := archiveOverlayDir(src, archive, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	tr := tar.NewReader(f)
+	uid := os.Getuid()
+	seen := false
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == "./bitnami/etcd/data/member/snap/db" {
+			seen = true
+			if h.Uid != uid || h.Uname != "" || h.Mode&0o777 != 0o600 {
+				t.Errorf("db header uid %d uname %q mode %o; want uid %d, no name, 0600", h.Uid, h.Uname, h.Mode, uid)
+			}
+		}
+	}
+	if !seen {
+		t.Error("db not in the archive")
+	}
+}
+
+// A capture that cannot read its source leaves no archive for a restore to
+// replay half of.
+func TestArchiveOverlayDir_MissingSource(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), rootfsDiffArchive)
+	if err := archiveOverlayDir(filepath.Join(t.TempDir(), "gone"), archive, nil, nil, nil); err == nil {
+		t.Fatal("no error for a missing upperdir")
+	}
+	for _, p := range []string{archive, archive + ".partial"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s exists (%v)", p, err)
+		}
+	}
+}
+
+// The extract leaves out the placeholder's own mountpoints and the agent's
+// directories, as the archiving of a diff tree did.
+func TestReplayDiffExtractArgs_LeavesOutMountpointsAndAgentDirs(t *testing.T) {
+	args := strings.Join(replayDiffExtractArgs("/", []string{"/usr/bin/nvidia-smi"}), " ")
+	for _, want := range []string{"-C / -xf -", "--preserve-permissions", "--numeric-owner", "--overwrite",
+		"--exclude=./usr/bin/nvidia-smi", "--exclude=./usr/bin/nvidia-smi/*",
+		"--exclude=." + v2BinDirInContainer, "--exclude=." + v2ImagesDirInContainer} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args %q lack %q", args, want)
+		}
+	}
+}

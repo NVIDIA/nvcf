@@ -456,7 +456,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// (nsenter into its mntns and untar at /), not directly to its
 		// upperdir: overlayfs caches the merged-view dentries at mount
 		// time and doesn't see external upperdir mutations.
-		diffSrc := filepath.Join(checkpointDir, "rootfs-diff")
+		diffSrc := filepath.Join(checkpointDir, rootfsDiffArchive)
+		if _, dErr := os.Stat(diffSrc); dErr != nil {
+			diffSrc = filepath.Join(checkpointDir, rootfsDiffDir) // a checkpoint from before the archive
+		}
 		if _, dErr := os.Stat(diffSrc); dErr == nil {
 			// Read the placeholder's current mountinfo: every non-"/"
 			// entry is a runtime/CDI/kubelet bind that's already

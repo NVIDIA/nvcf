@@ -1436,30 +1436,22 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 	return replayMounts
 }
 
-// mirrorRootfsDiff copies the source container's overlay upperdir into
-// checkpointDir/rootfs-diff.
+// mirrorRootfsDiff archives the source container's overlay upperdir into
+// checkpointDir/rootfs-diff.tar (see rootfsDiffArchive).
 func (a *Agent) mirrorRootfsDiff(ctx context.Context, checkpointDir, sourceUpperdir string, sourceMountPoints []string, log *logrus.Entry) {
 	if sourceUpperdir != "" {
 		_, mirrorSpan := tracing.Tracer().Start(ctx, "checkpoint.mirror_rootfs_diff")
-		diffDst := filepath.Join(checkpointDir, "rootfs-diff")
+		diffDst := filepath.Join(checkpointDir, rootfsDiffArchive)
 		// nvsnap's own staging in the container (the criu bundle, the
 		// images directory) is not the workload's state: leave it out, or
 		// a restore replays it over what the agent stages for itself.
 		diffExcludes := append(append([]string{}, sourceMountPoints...), v2BinDirInContainer, v2ImagesDirInContainer)
-		if mErr := mirrorOverlayDir(sourceUpperdir, diffDst, diffExcludes, rootfsDiffExcludeGlobs(), log); mErr != nil {
+		if mErr := archiveOverlayDir(sourceUpperdir, diffDst, diffExcludes, rootfsDiffExcludeGlobs(), log); mErr != nil {
 			mirrorSpan.RecordError(mErr)
-			log.WithError(mErr).Warn("Failed to mirror overlay upperdir; restore may fail on missing files")
+			log.WithError(mErr).Warn("Failed to archive overlay upperdir; restore may fail on missing files")
 		}
 		if fi, _ := os.Stat(diffDst); fi != nil {
-			// Best-effort: report rootfs-diff size as span attribute.
-			var total int64
-			_ = filepath.Walk(diffDst, func(_ string, info os.FileInfo, _ error) error {
-				if info != nil && !info.IsDir() {
-					total += info.Size()
-				}
-				return nil
-			})
-			mirrorSpan.SetAttributes(attribute.Int64("nvsnap.rootfs_diff_bytes", total))
+			mirrorSpan.SetAttributes(attribute.Int64("nvsnap.rootfs_diff_bytes", fi.Size()))
 		}
 		mirrorSpan.End()
 	}

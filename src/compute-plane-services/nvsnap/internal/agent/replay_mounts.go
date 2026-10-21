@@ -36,7 +36,7 @@ const (
 	MountClassSkip MountClass = iota
 
 	// MountClassRootfs is the container's overlay root at "/". Handled by
-	// mirrorOverlayDir + mirrorIntoMntns over the resolved upperdir.
+	// archiveOverlayDir + mirrorIntoMntns over the resolved upperdir.
 	MountClassRootfs
 
 	// MountClassReplay is tarred at checkpoint into <ckpt>/mounts/<x>.tar
