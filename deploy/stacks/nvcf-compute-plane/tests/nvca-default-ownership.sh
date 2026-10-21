@@ -71,6 +71,15 @@ render_values "${event_ledger_values}" \
 test "$(yq -r '.selfManaged.eventLedgerServiceURL' "${event_ledger_values}")" = "https://events.example.invalid" ||
   fail "global.nvcaOperator.selfManaged.eventLedgerServiceURL was not forwarded to the chart"
 
+test "$(yq -r '.selfManaged.otelCollector.enabled' "${default_values}")" = "false" ||
+  fail "OTel collector was not disabled by default"
+
+printf '  otelCollector:\n    enabled: true\n' >>"${registration_values}"
+collector_values="${work_dir}/collector-values.yaml"
+render_values "${collector_values}"
+test "$(yq -r '.selfManaged.otelCollector.enabled' "${collector_values}")" = "false" ||
+  fail "registration selfManaged.otelCollector.enabled must not auto-enable the OTel collector"
+
 test "$(yq -r '.utils // "omitted"' "${default_values}")" = "omitted" ||
   fail "stack shadowed the chart utils reservation default without an explicit value"
 utils_values="${work_dir}/utils-values.yaml"
