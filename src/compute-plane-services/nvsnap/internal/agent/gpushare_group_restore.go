@@ -340,10 +340,6 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	return res, &groupRestoreFailure{fmt.Errorf("group restore %s: %d of %d members failed: %s", res.Session, len(failed), len(res.Members), strings.Join(failed, "; "))}
 }
 
-// groupRestoreFailure is a group restore that ran and failed: the
-// checkpoints themselves are suspect. Any other error of groupRestore
-// (a pod without an IP, a fetch that did not finish) says nothing about
-// them.
 // addressCollision is a placement the instance cannot restore into: a
 // target pod got the address another pod of the instance had at capture.
 // The restored instance reaches its pods under the addresses it captured
@@ -357,6 +353,10 @@ func (e *addressCollision) Error() string {
 	return "target pods " + strings.Join(e.Pods, ", ") + " got addresses other pods of the instance had at capture"
 }
 
+// groupRestoreFailure is a group restore that ran and failed: the
+// checkpoints themselves are suspect. Any other error of groupRestore
+// (a pod without an IP, a fetch that did not finish) says nothing about
+// them.
 type groupRestoreFailure struct{ err error }
 
 func (e *groupRestoreFailure) Error() string { return e.err.Error() }
