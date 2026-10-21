@@ -32,6 +32,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 const mvURI = "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
@@ -1257,5 +1258,34 @@ func TestModelVolumeController_FailureMarkerWrittenByTheJobsNode(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("only the Job's node writes the marker, got %d writers", calls)
+	}
+}
+
+// A CRIU restore placeholder is never a source: carrying the model-capture
+// label (the webhook decorated it like the captured pod) it is not copied
+// into the primary, which would publish whatever the idle placeholder's
+// volume holds as the model.
+func TestModelVolumeController_NeverCapturesFromARestorePlaceholder(t *testing.T) {
+	ctx := context.Background()
+	kc, p, _ := stagingFixture(t, "node-a")
+	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mini-service-kimi-k3-0", Namespace: "sr-fn", UID: "pod-uid-placeholder",
+			Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CaptureLabel: "true"},
+			Annotations: map[string]string{modelvolume.IdentityAnnotation: uri, modelvolume.CaptureVolumeAnnotation: "ngc-models",
+				webhook.CRIURestoreAnnotation: "ckpt-1"}},
+		Spec:   corev1.PodSpec{NodeName: "node-a"},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+	c, _, _ := mvController(t, kc, p, "node-a")
+	var measured string
+	c.stageSize = func(path string) (int64, error) { measured = path; return 1 << 30, nil }
+	c.Handle(ctx, pod)
+	time.Sleep(100 * time.Millisecond)
+	if measured != "" {
+		t.Fatalf("captured the model from a restore placeholder: measured %s", measured)
+	}
+	if st, _ := p.Lookup(ctx, uri); st.Complete {
+		t.Fatal("the primary was completed from a restore placeholder")
 	}
 }

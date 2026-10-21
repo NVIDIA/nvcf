@@ -256,6 +256,11 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	if uri == "" {
 		return
 	}
+	// A CRIU restore placeholder is never a source: its volumes hold what
+	// the checkpoint brought back (or nothing yet), so it is not captured,
+	// measured or collected. It stays a reader whose landing the agent may
+	// still have to bind.
+	restoring := pod.Annotations[webhook.CRIURestoreAnnotation] != ""
 	if staging := pod.Annotations[modelvolume.StagingAnnotation]; staging != "" {
 		// A Block-mode staging pod: its download init finished and the
 		// hold container keeps the emptyDir alive for this node's agent.
@@ -276,7 +281,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		}
 		return
 	}
-	if pod.Labels[modelvolume.CaptureLabel] == "true" {
+	if pod.Labels[modelvolume.CaptureLabel] == "true" && !restoring {
 		// The engine downloaded the model itself into a pod volume; once
 		// the pod is Ready the tree is final and this node's agent copies
 		// it into the primary. Not a reader: it never waits on a claim.
@@ -285,7 +290,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		}
 		return
 	}
-	if pod.Labels[cacheCaptureLabel] != "true" && pod.Labels[modelvolume.CacheKeyLabel] != "" && pod.Annotations[cacheURIAnnotation] != "" {
+	if !restoring && pod.Labels[cacheCaptureLabel] != "true" && pod.Labels[modelvolume.CacheKeyLabel] != "" && pod.Annotations[cacheURIAnnotation] != "" {
 		// A warm rank seeded from a complete set. Once Ready and settled
 		// its cachedir is compared with the seed index; a rank that gained
 		// files proposes a refresh and every agent runs that election.
@@ -297,7 +302,7 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			c.scanWarmRank(ctx, pod)
 		}
 	}
-	if pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
+	if !restoring && pod.Labels[cacheCaptureLabel] == "true" && pod.Annotations[cacheURIAnnotation] != "" {
 		switch {
 		case pod.Annotations[modelvolume.CacheRankReadyAnnotation] == "true":
 			// A rank became ready somewhere in the cluster: every agent

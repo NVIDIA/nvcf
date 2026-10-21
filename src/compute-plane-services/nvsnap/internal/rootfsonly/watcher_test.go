@@ -583,3 +583,31 @@ func TestWatcher_UnverifiedStampCapturesUnderComposedHash(t *testing.T) {
 		}
 	}
 }
+
+// A CRIU restore placeholder runs a restored process: even labeled and
+// Ready it is never cachedir-captured.
+func TestWatcher_SkipsCRIURestorePlaceholder(t *testing.T) {
+	env := newWatcherEnv(t)
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+	w := env.watcher()
+	w.sem = make(chan struct{}, w.concurrency())
+
+	pod := fakePod("uid-3", "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	pod.UID = types.UID(env.podUID)
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[criuRestoreAnnotation] = "ckpt-1"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	w.HandlePodEvent(ctx, pod)
+
+	time.Sleep(200 * time.Millisecond)
+	entries, _ := os.ReadDir(env.backendRoot)
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Fatalf("a restore placeholder produced a capture: %s", e.Name())
+		}
+	}
+}

@@ -169,6 +169,10 @@ func (w *Watcher) HandlePodEvent(ctx context.Context, obj any) {
 	w.handlePodEvent(ctx, obj)
 }
 
+// criuRestoreAnnotation marks a CRIU restore placeholder
+// (webhook.CRIURestoreAnnotation; that package imports this one).
+const criuRestoreAnnotation = "nvsnap.io/criu-restore"
+
 func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok || pod == nil {
@@ -177,6 +181,12 @@ func (w *Watcher) handlePodEvent(ctx context.Context, obj any) {
 	plog := w.logger().WithField("pod", pod.Namespace+"/"+pod.Name)
 	if !w.isLabeledForCapture(pod) {
 		plog.Debug("watcher: skipping, not labeled for capture")
+		return
+	}
+	if pod.Annotations[criuRestoreAnnotation] != "" {
+		// A CRIU restore placeholder runs a restored process, not a fresh
+		// engine: its cachedir is the checkpoint's, nothing to capture.
+		plog.Debug("watcher: skipping, a CRIU restore placeholder")
 		return
 	}
 	if !IsPodReady(pod) {
