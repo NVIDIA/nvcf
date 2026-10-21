@@ -297,6 +297,9 @@ jobs:
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
 
+      - name: Test bump workflow push credentials
+        run: bash tools/ci/test-bump-workflow-push
+
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version
 
