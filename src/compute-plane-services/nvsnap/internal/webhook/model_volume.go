@@ -147,6 +147,52 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	return patches, nil
 }
 
+// placeholderModelPatches gives a CRIU group restore placeholder the model
+// landing its captured pod had, and nothing else. The restored engine
+// keeps the mounts it was dumped with (they are external to the dump and
+// bound from the placeholder at the same paths), so the landing must be
+// there; it does not load weights, compile or download, so no download
+// step, prewarm or cache environment comes with it. A hostPath landing is
+// bound after the pod starts, so the placeholder waits for it as a reader
+// does. (nil, nil): the captured pod had no model volume either. An error
+// (the volume lookup failed, or the model is not complete: the captured
+// pod read it complete) leaves the instance to start cold.
+func (m *Mutator) placeholderModelPatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
+	if m.ModelVolume == nil || gpuRequest(pod) == 0 {
+		return nil, nil
+	}
+	res, ok, err := modelid.ResolveWithGroup(ctx, pod, m.MainContainer, m.Groups)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model identity: %w", err)
+	}
+	if !ok || res.Identity.Scheme == "path" || !res.Landing.Substitutable() {
+		return nil, nil
+	}
+	uri := res.ShareKey()
+	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri, "source": res.Source})
+	st, err := m.ModelVolume.Lookup(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Complete {
+		return nil, fmt.Errorf("model volume %s is not complete", uri)
+	}
+	main := &pod.Spec.Containers[m.MainContainer]
+	mp := newMetaPatcher(pod)
+	patches := mp.annotation(modelvolume.IdentityAnnotation, uri)
+	patches = append(patches, mp.label(modelvolume.IdentityLabel, modelvolume.Key(uri))...)
+	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
+	landing, err := m.readerLanding(ctx, pod, main, res.Landing, uri, st, log)
+	if err != nil {
+		return nil, err
+	}
+	patches = append(patches, landing...)
+	if m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		patches = append(patches, m.downloadStepPatches(pod, main, res.Landing, res.Identity, false)...)
+	}
+	return patches, nil
+}
+
 // ensureDownload creates the one download Job for uri. The Job runs in the
 // pod's namespace because that is where the chart's registry credentials
 // are. Where it writes is the one place the storage mode shows: on storage

@@ -11,7 +11,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
 
@@ -144,5 +147,77 @@ func TestCRIUGroupRestore_SinglePodSkipsGroupAdmission(t *testing.T) {
 	}
 	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "r0__1" {
 		t.Errorf("single pod must restore, got annotations %v", got.Annotations)
+	}
+}
+
+// A rank's restore placeholder gets the model landing its captured pod had
+// (the restored engine's mounts are bound from it) and the configuration
+// stamp the agent's trust check reads, but nothing a fresh engine needs to
+// start: no download, no prewarm, no cache seed, no capture labels
+// (review: it re-ran the whole cold-start pipeline before every restore).
+func TestCRIUGroupRestore_PlaceholderGetsOnlyTheLanding(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	m.CRIUCapture = true
+	m.CheckpointHostRoot = "/var/lib/containerd/nvsnap-checkpoints"
+	m.CRIUGroups = func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
+		return CRIUGroup{Key: "key-of/" + ns + "/" + uri, Checkpoints: []string{"r0__1"}, GPUShare: true}, true
+	}
+	completeModelPV(t, kc, ngcFunctionKey)
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	if got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Fatalf("not admitted as the restore placeholder: %v", got.Annotations)
+	}
+	if want, _ := m.cacheURI(pod); got.Annotations[CacheURIAnnotation] != want {
+		t.Errorf("cache-uri %q, want the pod's configuration %q", got.Annotations[CacheURIAnnotation], want)
+	}
+	landing := false
+	for _, v := range got.Spec.Volumes {
+		if v.Name == "ngc-models" && v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == modelvolume.ReadOnlyClaimName(ngcFunctionKey) {
+			landing = true
+		}
+		if v.Name == cacheSeedVolumeName || v.Name == cacheDirVolumeName {
+			t.Errorf("placeholder got the cache volume %s", v.Name)
+		}
+	}
+	if !landing {
+		t.Errorf("placeholder lacks the model's read-only view at the captured landing: %v", got.Spec.Volumes)
+	}
+	for _, c := range got.Spec.InitContainers {
+		switch c.Name {
+		case injectedDownloadInit, modelPrewarmName, cacheSeedInitName, "nvsnap-prewarm":
+			t.Errorf("placeholder got the cold-start init %s", c.Name)
+		}
+	}
+	for _, l := range []string{modelvolume.CaptureLabel, CacheCaptureLabel, modelvolume.CacheKeyLabel, modelvolume.PendingLabel} {
+		if _, ok := got.Labels[l]; ok {
+			t.Errorf("placeholder labelled %s", l)
+		}
+	}
+	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Errorf("admitting a placeholder created %d download Job(s)", len(jobs.Items))
+	}
+}
+
+// The model the captured pod read is gone (retired, never completed): the
+// instance starts cold rather than downloading it before a restore.
+func TestCRIUGroupRestore_PlaceholderWithoutTheModelStartsCold(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
+	m.CRIUCapture = true
+	m.CRIUGroups = func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
+		return CRIUGroup{Key: "k", Checkpoints: []string{"r0__1"}, GPUShare: true}, true
+	}
+	pod := ngcFunctionPod()
+	if p := m.criuGroupRestorePatches(context.Background(), pod); p != nil {
+		t.Errorf("admitted as a placeholder without its model landing: %v", p)
+	}
+	if jobs, _ := kc.BatchV1().Jobs("sr-fn").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Errorf("created %d download Job(s) for a restore", len(jobs.Items))
 	}
 }

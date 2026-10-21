@@ -191,19 +191,16 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		log.WithFields(logrus.Fields{"checkpoint": id, "slot": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its instance's companion placeholder")
 		return mergePatchPlan(withPIDReserve(pod, cp))
 	}
-	// The restored processes keep the files they had open on the model
-	// and cache volumes, so the placeholder gets the same mounts the
-	// captured pod had. The placeholder's volumes come first: the
-	// checkpoint's chunk store replaces the pod's own empty one.
-	vp, err := m.modelVolumePatches(ctx, pod)
+	// The restored processes keep the mounts they were dumped with, so the
+	// placeholder gets the model landing the captured pod had; nothing a
+	// fresh engine needs to start (it is not one). Its configuration is
+	// stamped for the agent's trust check, which binds it to the record.
+	vp, err := m.placeholderModelPatches(ctx, pod)
 	if err != nil {
-		log.WithError(err).Warn("CRIU group restore: model volume decision failed; cold start")
+		log.WithError(err).Warn("CRIU group restore: the captured pod's model landing is not available; cold start")
 		return nil
 	}
-	if vp == nil {
-		// A pod without a model volume got the cache directory at capture.
-		vp = m.cacheDirCapturePatches(pod)
-	}
+	cp = append(cp, newMetaPatcher(pod).annotation(CacheURIAnnotation, uri)...)
 	log.WithFields(logrus.Fields{"checkpoint": id, "ordinal": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its rank's restore placeholder")
 	return mergePatchPlan(withPIDReserve(pod, append(cp, vp...)))
 }
