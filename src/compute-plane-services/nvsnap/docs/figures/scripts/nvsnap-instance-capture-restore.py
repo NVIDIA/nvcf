@@ -24,15 +24,15 @@ f = Fig(
     "The agent on rank 0's node leads. Once the instance is Ready it checks the instance and has every node's "
     "agent dump its own member at a shared freeze point, then writes a group record naming each member's "
     "checkpoint. A later instance of the same configuration and size is admitted as placeholders, one per "
-    "slot; the leader restores every member with one address map and connections locked, unlocks them all, "
-    "then resumes the GPUs, companions after the ranks.",
+    "slot; the leader restores every member with one address map and connections locked: the GPU ranks first, "
+    "each reloading its GPU memory, then the companions; then it unlocks them all.",
     "Two GPU nodes and the companions of one tensor-parallel instance. The same paths carry the capture and "
     "the restore.",
 )
 
 f.hcard("card-leader", 40, 100, 1160, 90, "icon-service", "Leader: the agent on rank 0's node",
         "checks the instance, drives the freeze point and writes the group record;",
-        "at restore, restores every member, unlocks them all, then resumes the GPUs", nv=True)
+        "at restore, restores the GPU ranks with their GPU memory, then the companions, then unlocks them all", nv=True)
 
 GX = [40, 435, 830]
 GW = 370
@@ -64,13 +64,13 @@ f.path(f"M{GX[1] + GW // 2} 640 L{GX[1] + GW // 2} 560")
 f.callout(4, GX[1] + GW // 2, 600)
 
 y = f.legend(40, 800, [
-    (1, "The leader refuses the capture unless the instance is opted in, its ranks form a whole engine, no "
+    (1, "The leader refuses the capture unless the instance is opted in (when it has more than one pod), every rank runs under gpushare, its ranks form a whole engine, no "
         "member's liveness probe would restart it during the freeze, every node's agent runs the same revision, "
         "and every member passes the preflight."),
     (2, "Each node's agent dumps its own member. Every member waits at the freeze point and the leader releases "
         "them together, or aborts them all (next figure). 3 The group record names every member's checkpoint."),
     (4, "Each new member of an instance of the same configuration and size becomes a placeholder of its slot "
         "(nvsnap.io/criu-group, its ordinal and the group size). A member that cannot restore with its instance "
-        "starts cold, and so does the instance. A member whose new address collides with an old one is replaced."),
+        "starts cold; the other placeholders then cannot restore together and are deleted once the restore stalls. A member whose new address collides with an old one is replaced."),
 ])
 f.write(y + 14)

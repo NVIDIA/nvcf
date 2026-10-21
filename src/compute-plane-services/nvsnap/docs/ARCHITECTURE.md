@@ -82,7 +82,7 @@ The Helm chart (`deploy/helm/nvsnap`) installs:
 | Agent (DaemonSet, one per GPU node) | Captures and restores on its node, serves the agent HTTP API, fetches checkpoints for its node, and serves the mutating admission webhook | `cmd/agent`, `internal/agent` |
 | Webhook registration | Sends pod creation to the agents' webhook; which namespaces it covers is the inject scope | `templates/webhook.yaml`, `internal/webhook` |
 | Server (Deployment) | REST API, web UI and the checkpoint catalog | `cmd/nvsnap-server`, `internal/server`, `internal/db` |
-| Node bundle | CRIU, gpushare and the helper, staged by the agent on every node and mounted read-only into the pods it prepares | `internal/webhook/bundle_mount.go` |
+| Node bundle | CRIU, gpushare and the helper, staged by the agent on every node and mounted read-only at `/nvsnap` into the pods it puts under gpushare | `internal/webhook/gpushare.go` `gpusharePatches`; `internal/webhook/bundle_mount.go` `bundleDir` |
 
 ![nvsnap on one cluster: the webhook, the agent on every GPU node, the server and catalog, cluster storage and peer agents](figures/nvsnap-components.svg)
 
@@ -92,9 +92,10 @@ The operator sets one capture method for the whole cluster with the chart
 value `agent.captureMethod`; the chart passes it to the agent as
 `NVSNAP_DEFAULT_CAPTURE_PATH` (`templates/agent-daemonset.yaml`).
 
-- **cachedir** (default): the webhook points the engine's caches at one
-  directory, the agent captures that directory and the model once the pod is
-  warm, and a later pod of the same hash mounts it read-only and starts fresh
+- **cachedir** (default): for a pod labelled `nvsnap.io/capture: "true"`, or
+  the one the election picks, the webhook points the engine's caches at one
+  directory (`internal/webhook/cachedir.go` `cacheDirCapturePatchesFor`), the
+  agent captures that directory and the model once the pod is Ready, and a later pod of the same hash mounts it read-only and starts fresh
   against it. It saves the download and compilation, not engine start-up.
 - **criu**: the agent checkpoints the processes themselves (CRIU, plus the CUDA
   checkpoint API through gpushare) and a later pod resumes them. It saves
@@ -107,10 +108,10 @@ value `agent.captureMethod`; the chart passes it to the agent as
 | Condition | What runs | Enforcing code |
 |---|---|---|
 | `captureMethod: cachedir` | cachedir capture; CRIU only for a request that asks for `criu` | `internal/agent/nim_backend.go` `RootfsIsDefault`, `resolveCheckpointRedirect` |
-| Riva or Triton backend | cachedir always; an explicit `criu` request is an error | `internal/agent/nim_backend.go` `BackendKind.UseRootfsCapture` |
-| More than one distinct GPU, gpushare not loaded | CRIU capture is refused | `internal/agent/checkpoint.go` `countDistinctGPUDevices`, `gpushareLoadedBy` |
+| Riva or Triton backend | Never CRIU: an explicit `criu` request is an error, any other is refused with a redirect to the cachedir capture; under `captureMethod: criu` such a pod is not captured | `internal/agent/nim_backend.go` `BackendKind.UseRootfsCapture`, `resolveCheckpointRedirect` |
+| More than one distinct GPU, gpushare not loaded | CRIU capture is refused | `internal/agent/checkpoint.go` `countDistinctGPUDevices`; `internal/agent/gpushare.go` `gpushareLoadedBy` |
 | More than one distinct GPU under gpushare | CRIU with gpushare | `internal/agent/gpushare.go` |
-| Multi-pod instance | group capture, only when opted in | `internal/agent/criu_group.go` `captureOptedIn` |
+| Multi-pod instance | group capture, only when opted in (a single pod needs no opt-in) | `internal/agent/criu_group.go` `considerGroupCapture`, `captureOptedIn` |
 
 There is no architecture gate: amd64 and arm64 follow the same rules.
 
@@ -136,11 +137,16 @@ ready or failed (`cmd/nvsnap-l2-wait`; `internal/webhook/election.go`).
 
 ### Capture
 
-At admission the webhook prepares every GPU pod for a later capture: the node
-bundle at `/nvsnap`, gpushare in `LD_PRELOAD`, a per-pod chunk store, and the
-pod's identity (`nvsnap.io/cache-uri`, its rank and group size;
-`internal/webhook/criu_identity.go` `criuIdentityPatches`). It also widens
-liveness probes too tight to survive the freeze (section 10).
+At admission the webhook prepares every GPU pod for a later capture. It stamps
+the pod's identity (`nvsnap.io/cache-uri`, its rank and group size;
+`internal/webhook/criu_identity.go` `criuIdentityPatches`) and, unless the pod
+runs to completion (`restartPolicy` `Never` or `OnFailure`) or is annotated
+`nvsnap.io/gpushare: "false"`, mounts the node bundle at `/nvsnap`, adds
+gpushare to `LD_PRELOAD` and gives it a per-pod chunk store
+(`internal/webhook/gpushare.go` `gpushareMode`). It also widens liveness probes
+too tight to survive the freeze (section 10). Only a pod under gpushare is
+captured (`criu_group.go` `gpushareEnabledFor`), and only one with a controller
+(a StatefulSet, LeaderWorkerSet, Grove group or the like: `hasInstance`).
 
 The agent finds the pod's container through the node's container runtime
 (containerd or CRI-O, detected at start; `internal/runtime`) and its GPU
@@ -163,9 +169,10 @@ When the pod is Ready, the agent on its node:
    (`internal/agent/rootfs_diff.go` `archiveOverlayDir`) and the contents of
    its in-memory mounts that are on the allowlist (`internal/agent/replay_mounts.go`
    `ReplayMountAllowlist`);
-4. moves the chunk store into the checkpoint, records the checkpoint in the
-   catalog with its tenant scope, registers the node as its first source, and
-   starts the copy to the L2 volume pair in the background
+4. moves the chunk store into the checkpoint, registers the node in the
+   catalog as the checkpoint's first source, records the capture with its
+   tenant scope (`internal/agent/criu_auto_restore.go` `recordCRIUCapture`),
+   and starts the copy to the L2 volume pair in the background
    (`internal/agent/checkpoint.go`, `runL2PromoteAsync`).
 
 ### Restore
@@ -226,15 +233,18 @@ refuses unless every check passes:
 
 | Check | Enforcing code |
 |---|---|
-| The instance is opted in | `criu_group.go` `captureOptedIn` |
+| The instance is opted in, when it has more than one pod | `criu_group.go` `captureOptedIn` |
+| Every rank runs under gpushare | `criu_group.go` `gpushareEnabledFor` |
 | The ranks form a whole engine | `criu_group_guard.go` `instanceCoversEngine` |
 | No member's liveness probe would restart it during the freeze | `criu_group_guard.go` `freezeTolerated` |
 | Every node agent runs the same revision | `criu_group_guard.go` `agentsSettled` |
 | Every member passes the preflight (spec and host checks) | `capture_preflight.go` `capturePreflight` |
 | No GPU pod names its own instance in a way a restore would break | `criu_group.go` `identityBlocksCapture` |
 
-Companions (pods without GPUs that the ranks talk to: an etcd, a NATS, a
-frontend) are captured with the ranks.
+Companions are captured with the ranks: the pods of the namespace without GPUs
+that the ranks hold TCP connections to (an etcd, a NATS), directly or through a
+Service, and the pods connected to those (a frontend)
+(`internal/agent/criu_companion.go` `discoverCompanions`).
 
 ### Group capture
 
@@ -254,11 +264,15 @@ is a group record: a ConfigMap naming every member's checkpoint
 1. At admission, each new member of an instance of the same configuration and
    size becomes a placeholder of its slot (`nvsnap.io/criu-group`, its
    ordinal and the group size; `internal/webhook/criu_group.go`). A member that
-   cannot restore with its instance starts cold, and so does the instance.
+   cannot restore with its instance starts cold; the instance's other
+   placeholders then cannot restore together, and are deleted once the restore
+   stalls (section 10).
 2. The leader's agent restores every member with one address map for the whole
-   instance and the connections locked, unlocks them all once every member is
-   restored, and only then resumes the GPUs with the gpushare handle exchange;
-   companions resume after the ranks (`internal/agent/gpushare_group_restore.go`
+   instance and its connections locked. The GPU ranks go first: each reloads
+   its GPU memory, exchanging fabric handles with the others, before it reports
+   restored. The companions are restored once every rank has, so an etcd's
+   clock starts after the reload. Then the leader unlocks every member's
+   connections together (`internal/agent/gpushare_group_restore.go`
    `groupRestore`).
 3. A member whose new address collides with an old one is replaced
    (`criu_group.go` `replaceColliding`).
@@ -274,7 +288,7 @@ A restore takes the first copy of a checkpoint it finds, in this order
 |---|---|---|
 | L1 | The node's own disk | `localCheckpointComplete` |
 | L2 | A shared filesystem, when configured; then the checkpoint's `rox-<hash>` read-only volume | `EnsureLocal` (FSStore), `fetchFromL2`; `internal/checkpointstore` |
-| L3 | Another agent that holds it, over HTTP, least-loaded first | `fetchFromPeer`; every node that fetches registers as a peer (`registerAsPeer`) |
+| L3 | Another agent that holds it, over HTTP; the agent tries first the peers it has the fewest fetches in flight from, and spreads large files over every peer that holds them | `sortPeersByLoad`, `fetchFromPeer`; every node that fetches registers as a peer (`registerAsPeer`) |
 | L4 | An object-store bucket shared between clusters (opt-in) | `internal/objectstore`, `internal/agent/replication*.go` |
 
 The L2 pair is written after the capture, in the background: an `rwx-<hash>`
@@ -308,9 +322,12 @@ The design and its measured results are in
 
 ## 8. Catalog and lifecycle
 
-A capture is keyed by its hash: what the pod runs and the GPU's compute
-capability (`internal/checkpointstore/hash.go`). The first capture of a hash
-wins (`TestRecordCRIUCapture_FirstCaptureOfAHashWins`). The server's catalog
+A cachedir capture is keyed by its hash: what the pod runs and the GPU's
+compute capability (`internal/checkpointstore/hash.go`). A CRIU instance
+capture is keyed by the configuration of its members and the tenant scope
+(`internal/agent/criu_group_scope.go` `criuGroupKey`). The first CRIU capture
+recorded for a hash is the one restores use
+(`TestRecordCRIUCapture_FirstCaptureOfAHashWins`). The server's catalog
 (SQLite, `internal/db`) records checkpoints, their sources and retention
 policies, and enforces retention. An agent that restarts and finds an instance capture in progress
 with a rank on its node fails the capture and deletes the instance's pods, so
@@ -337,11 +354,11 @@ keys and request data.
 
 | Failure | What nvsnap does | Code |
 |---|---|---|
-| No usable capture for a pod's hash | The pod is admitted unchanged and starts cold | `internal/webhook/mutate.go` |
+| No usable capture for a pod's hash | The pod is admitted without a restore and starts cold (under CRIU it is still prepared for a later capture) | `internal/webhook/mutate.go` |
 | A CRIU restore fails, or the restored engine dies | The checkpoint is blocked and the pod deleted; its replacement starts cold | `internal/agent/criu_auto_restore.go` `markFailed`; `restored_watch.go` `failRestored` |
 | The checkpoint could not be fetched | The placeholder is deleted so its replacement tries again; not blocked | `criu_auto_restore.go` (`errCheckpointUnavailable`) |
 | A group restore fails | The group's members are deleted. A restore that failed blocks the group's checkpoints and lets the next Ready instance capture anew; a restore that never ran keeps them | `criu_group.go` `failGroup`, `endGroup` (`TestFailGroup_RestoreFailureBlocksAndAllowsRecapture`, `TestFailGroup_StallKeepsCheckpointsAndDeletesEveryRank`) |
-| A member ends before the freeze, or a release is not taken | Every member's capture is aborted; the instance runs on | `group_freeze.go` `driveGroupFreeze` |
+| A member ends before the freeze, or a release is not taken | Every member's capture is aborted. Before gpushare's quiesce vote has passed, the instance runs on; after it, the instance's pods are deleted and their replacements start cold | `group_freeze.go` `driveGroupFreeze`; `criu_group.go` `checkpointInstance` (`stopped`), `captureGroup` |
 | A liveness probe would restart a pod during a capture | The webhook widens probes too tight to survive the freeze, on pods a capture may freeze; an instance with a tighter probe is not captured | `internal/webhook/liveness.go` `livenessBudgetPatches`; `criu_group_guard.go` `freezeTolerated` |
 | The captured pod's model volume is missing at restore | The instance starts cold | `internal/webhook/model_volume.go` `placeholderModelPatches` |
 | An agent rollout during a capture | Captures do not start until every agent runs one revision; an agent that restarts mid-capture fails it (section 8) | `criu_group_guard.go` `agentsSettled`; `criu_group_recover.go` `recoverInterruptedCaptures` |
@@ -386,4 +403,4 @@ In the order they matter for multi-node instances:
 |---|---|---|
 | Cross-cluster replication is "Proposed" | [design/cross-cluster-replication.md](design/cross-cluster-replication.md) | `internal/agent/replication*.go` and `POST /v1/replicate/{hash}` implement it, opt-in |
 | Storage-agnostic L2 promotion is a "proposal" | [design/STORAGE-AGNOSTIC-L2-PROMOTION.md](design/STORAGE-AGNOSTIC-L2-PROMOTION.md) | `internal/checkpointstore/promoter*.go` implement snapshot and shared promoters |
-| gpushare's nvsnap integration as of 2026-10-10 | [design/GPUSHARE.md](design/GPUSHARE.md) | Since then: the rootfs diff is one archive; placeholders get only the model landing; no cachedir machinery under CRIU |
+| gpushare runs when the pod is annotated `nvsnap.io/gpushare: "true"` | [design/GPUSHARE.md](design/GPUSHARE.md) "Use through nvsnap" | Under `captureMethod: criu` it runs on every GPU pod that does not run to completion, unless annotated `"false"` (`internal/webhook/gpushare.go` `gpushareMode`) |

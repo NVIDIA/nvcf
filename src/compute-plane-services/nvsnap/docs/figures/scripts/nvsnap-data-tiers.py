@@ -23,7 +23,7 @@ f = Fig(
     "A capture writes the checkpoint to its node's disk, registers the node as the checkpoint's first source, and "
     "copies it in the background to an rwx volume that is promoted to a read-only rox volume. A restore takes the "
     "first copy it finds: its own disk, a shared filesystem when one is configured, the rox volume, then the "
-    "agents that hold it, over HTTP, least-loaded first. Every node that fetches becomes a source.",
+    "agents that hold it, over HTTP, those it has the fewest fetches in flight from first. Every node that fetches becomes a source.",
     "Numbers 1-4 are the order a restore tries. Dashed: only when configured.",
 )
 
@@ -46,7 +46,7 @@ f.card("card-rdisk", 860, 290, 320, 110, "icon-hardware", "Node disk (L1)", "a c
 # Cluster storage.
 f.group(440, 480, 760, 190, "Cluster storage", "the chart's storage class", kind="partner")
 f.card("card-rwx", 460, 530, 240, 112, "icon-data", "rwx-<hash>", "written once, after the capture")
-f.card("card-rox", 890, 530, 240, 112, "icon-data", "rox-<hash> (L2)", "read-only in every namespace;", "by snapshot or shared attach")
+f.card("card-rox", 890, 530, 240, 112, "icon-data", "rox-<hash> (L2)", "read-only, promoted from rwx", "by snapshot or shared attach")
 
 # Capture side.
 f.path("M220 400 L220 586 L460 586")
@@ -69,7 +69,7 @@ f.callout(4, 830, 263)
 y = f.legend(40, 720, [
     (1, "A copy on the restoring node's own disk is used as is. 2 Then a shared filesystem, when the cluster has one. "
         "3 Then a copy from the checkpoint's rox volume."),
-    (4, "Then the agents the catalog lists as sources, least-loaded first; when several hold the checkpoint, its large "
+    (4, "Then the agents the catalog lists as sources, those this agent has the fewest fetches in flight from first; when several hold the checkpoint, its large "
         "files are fetched from all of them at once. A node that fetched registers itself as a source."),
 ])
 f.note(40, y + 4, "Not in this order: an object-store bucket shared between clusters (L4), which opt-in replication fills "

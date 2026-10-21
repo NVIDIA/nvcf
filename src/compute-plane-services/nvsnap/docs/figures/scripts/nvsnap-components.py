@@ -22,7 +22,7 @@ f = Fig(
     "nvsnap on One Cluster",
     "NVCA or another controller creates GPU pods; the Kubernetes API sends each to the nvsnap webhook, which "
     "the agent on every GPU node serves. The agent captures and restores pods on its node, keeps checkpoints on "
-    "the node's disk, records them in the server's catalog, copies them to an L2 volume pair in cluster storage, "
+    "the node's disk, registers them in the server's catalog, copies them to an L2 volume pair in cluster storage, "
     "and serves them to other nodes' agents. Model volumes hold one copy of each model for the cluster. An "
     "object-store bucket shared between clusters is optional.",
     "One agent per GPU node; one server per cluster. Dashed: optional.",
@@ -80,7 +80,7 @@ y = f.legend(40, 760, [
         "it covers: the node bundle, gpushare, the model landing, or a restore placeholder."),
     (3, "The agent captures a warm pod, or restores a placeholder, on its node; 4 the bundle it staged is mounted "
         "read-only in the pods it prepares."),
-    (5, "Every capture is recorded in the catalog with its tenant scope and its sources. 6 After a capture the "
+    (5, "Every checkpoint is registered in the catalog with its sources; its capture record carries its tenant scope. 6 After a capture the "
         "checkpoint is copied in the background to the L2 pair. 7 Agents fetch checkpoints from each other over HTTP, "
         "and every node that fetches becomes a source. 8 Cross-cluster replication through a bucket is opt-in."),
 ])

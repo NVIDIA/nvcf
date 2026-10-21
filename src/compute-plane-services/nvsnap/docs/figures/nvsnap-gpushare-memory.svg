@@ -58,14 +58,14 @@
 <rect id="card-r3" x="430" y="356" width="330" height="62" rx="8" class="card"/>
 <text x="444" y="391" class="label" data-fit="card-r3" data-fit-padding="4">Unmap and release, as imports</text>
 <rect id="card-s3" x="820" y="356" width="380" height="62" rx="8" class="card"/>
-<text x="834" y="384" class="label" data-fit="card-s3" data-fit-padding="4">Fabmap: new handles exchanged between</text>
-<text x="834" y="398" class="small" data-fit="card-s3" data-fit-padding="4">nodes; remap re-imports by new handle</text>
+<text x="834" y="384" class="label" data-fit="card-s3" data-fit-padding="4">Handle exchange (--fabric-map): new</text>
+<text x="834" y="398" class="small" data-fit="card-s3" data-fit-padding="4">handles between nodes; remap re-imports</text>
 <path class="path" d="M370 387 L430 387" marker-end="url(#arrow)"/>
 <path class="path" d="M760 387 L820 387" marker-end="url(#arrow)"/>
 <rect id="card-k4" x="40" y="432" width="330" height="62" rx="8" class="card"/>
 <use href="#icon-hardware" x="50" y="439" width="48" height="48"/>
 <text x="108" y="460" class="label" data-fit="card-k4" data-fit-padding="4">Page-locked host memory</text>
-<text x="108" y="474" class="small" data-fit="card-k4" data-fit-padding="4">Grace: the driver restores none</text>
+<text x="108" y="474" class="small" data-fit="card-k4" data-fit-padding="4">Grace, driver 580: the driver restores none</text>
 <rect id="card-r4" x="430" y="432" width="330" height="62" rx="8" class="card"/>
 <text x="444" y="467" class="label" data-fit="card-r4" data-fit-padding="4">Unregister</text>
 <rect id="card-s4" x="820" y="432" width="380" height="62" rx="8" class="card"/>
