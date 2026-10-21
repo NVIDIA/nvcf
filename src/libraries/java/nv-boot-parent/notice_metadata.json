@@ -486,7 +486,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-commons",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-core:1.16.6": {
       "licenses": [
@@ -500,7 +500,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-core",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-jakarta9:1.16.6": {
       "licenses": [
@@ -514,7 +514,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-jakarta9",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-observation:1.16.6": {
       "licenses": [
@@ -528,7 +528,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-observation",
-      "url": "https://github.com/micrometer-metrics/micrometer"
+      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
     },
     "io.micrometer:micrometer-tracing-bridge-otel:1.6.6": {
       "licenses": [
@@ -542,7 +542,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-tracing-bridge-otel",
-      "url": "https://github.com/micrometer-metrics/tracing"
+      "url": "https://github.com/micrometer-metrics/tracing-commercial"
     },
     "io.micrometer:micrometer-tracing:1.6.6": {
       "licenses": [
@@ -556,7 +556,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-tracing",
-      "url": "https://github.com/micrometer-metrics/tracing"
+      "url": "https://github.com/micrometer-metrics/tracing-commercial"
     },
     "io.nats:jnats:2.23.0": {
       "licenses": [
@@ -1330,6 +1330,13 @@
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
     "org.bouncycastle:bcprov-lts8on:2.73.10": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider (LTS Distribution)",
+      "url": "https://www.bouncycastle.org/lts-java"
+    },
+    "org.bouncycastle:bcprov-lts8on:2.73.13": {
       "licenses": [
         "Bouncy Castle Licence"
       ],
