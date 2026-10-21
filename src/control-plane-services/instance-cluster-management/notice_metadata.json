@@ -201,7 +201,7 @@
         "The Apache Software License, Version 2.0"
       ],
       "name": "micrometer-registry-prometheus",
-      "url": "https://github.com/micrometer-metrics/micrometer-commercial"
+      "url": "https://github.com/micrometer-metrics/micrometer"
     },
     "io.nats:jnats-json:2.0.1": {
       "licenses": [
