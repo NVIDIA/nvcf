@@ -1,5 +1,8 @@
 # NvSnap Architecture
 
+> **History.** Replaced by [ARCHITECTURE.md](../ARCHITECTURE.md) on 2026-10-21.
+> Kept as a record; not maintained.
+
 Transparent GPU checkpoint/restore for Kubernetes. NvSnap snapshots a
 running GPU workload's process + GPU state (or its on-disk rootfs cache),
 stores it across a tiered fabric, and restores it onto N pods — turning a

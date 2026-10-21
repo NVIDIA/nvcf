@@ -11,7 +11,7 @@ design history (why paths were taken or abandoned, spike outcomes, where
 the library forks came from) that indexes everything else here.
 
 Anything still relevant has been folded into the canonical set at
-`docs/` (entry point: `docs/architecture/NVSNAP-ARCHITECTURE.md`). If you
+`docs/` (entry point: `docs/ARCHITECTURE.md`; index: `docs/README.md`). If you
 find yourself needing one of these files in current code, lift its
 content into the appropriate canonical doc and update the canonical doc
 in the same PR.

@@ -32,9 +32,9 @@ was not re-checked against the code.
 
 | You are | Read, in order |
 |---|---|
-| New to nvsnap | [README](../README.md), [glossary](GLOSSARY.md), [architecture](architecture/NVSNAP-ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
+| New to nvsnap | [README](../README.md), [glossary](GLOSSARY.md), [architecture](ARCHITECTURE.md), [gpushare](design/GPUSHARE.md) |
 | Installing or operating it | [Install](operate/INSTALL.md), [pull secrets](operate/PULL-SECRETS.md), the chart's [values](../deploy/helm/nvsnap/values.yaml), [reference](REFERENCE.md) |
-| Changing the code | [Developing](operate/DEVELOPING.md), [architecture](architecture/NVSNAP-ARCHITECTURE.md), the design note for the area you touch, [CONTRIBUTING](../CONTRIBUTING.md) |
+| Changing the code | [Developing](operate/DEVELOPING.md), [architecture](ARCHITECTURE.md), the design note for the area you touch, [CONTRIBUTING](../CONTRIBUTING.md) |
 | Reviewing a claim or a number | [Results](#results); each number there names its date and hardware |
 
 ## Reference
@@ -48,9 +48,10 @@ was not re-checked against the code.
 
 | Page | Answers | Status |
 |---|---|---|
-| [NVSNAP-ARCHITECTURE.md](architecture/NVSNAP-ARCHITECTURE.md) | How capture and restore flow through NVCA, the agent and the L2 volumes; how the capture method is chosen | Partly stale, 2026-10-21: §7 is current; it does not cover gpushare, CRIU group (instance) capture, model volumes or the election, and its L1–L4 tiers differ from TRANSPORT-ARCHITECTURE's |
-| [nvsnap-arch.md](architecture/diagrams/nvsnap-arch.md) | The same diagrams as rendered images | Partly stale: duplicates NVSNAP-ARCHITECTURE |
-| [TRANSPORT-ARCHITECTURE.md](TRANSPORT-ARCHITECTURE.md) | The proposed three-leg data transport | Proposal, partly built (as the doc states); uses L1/L2/L3 for different tiers than NVSNAP-ARCHITECTURE |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | What nvsnap does, how each mechanism works, the code that enforces each rule, how it fails, what is not done, and where other docs disagree with the code | Current, 2026-10-21 |
+
+The previous architecture and transport documents are in
+[history/](history/NVSNAP-ARCHITECTURE.md), replaced by ARCHITECTURE.md.
 
 ## Operate
 

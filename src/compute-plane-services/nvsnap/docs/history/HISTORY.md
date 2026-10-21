@@ -6,15 +6,8 @@ was taken or abandoned, what a spike measured, where a fork came from —
 readable in one place, so the individual time-capsule files can be skimmed
 rather than excavated.
 
-**Canonical current-state docs live in `docs/`**, not here:
-
-- `docs/architecture/NVSNAP-ARCHITECTURE.md` — current system architecture
-- `docs/design/RUNTIME-AGNOSTIC.md` — `/proc`+cgroup discovery mechanics (still as-built)
-- `docs/design/CUDA-CHECKPOINT-CALL-FLOW.md` — the two cuda-checkpoint invocation paths (as-built; debugging reference)
-- `docs/history/VLLM-DEEP-DIVE.md`, `docs/design/QUIESCENCE-ARCHITECTURE.md`
-- `docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md` — current L2 promotion design
-- `docs/TRANSPORT-ARCHITECTURE.md` — 3-leg data-movement design (under review)
-- `docs/results/BENCHMARK.md`, `docs/results/PDF-BENCH-RESULTS.md`, `docs/BENCH-NVCA-2026-06.md` — bench methodology + current results
+**Canonical current-state docs live in `docs/`**, not here: start at
+`docs/ARCHITECTURE.md`; `docs/README.md` lists every maintained page.
 
 **Naming note.** These docs span the `nvsnap → cryo → nvSnap` naming churn.
 Treat `nvsnap-lib` ≈ `cryo-lib`, `NVSNAP_RESTORED` ≈ `CRYO_RESTORED`,

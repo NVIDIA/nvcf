@@ -1,5 +1,8 @@
 # NVSNAP Data Transport Architecture
 
+> **History.** Replaced by [ARCHITECTURE.md](../ARCHITECTURE.md) on 2026-10-21.
+> Kept as a record; not maintained.
+
 **Status:** design proposal, partially implemented
 **Audience:** engineering, product, customer engineering
 **Date:** 2026-05-17
@@ -218,7 +221,7 @@ flowchart LR
     style S3 stroke:#f00,stroke-width:2px
 ```
 
-An object-storage replicator now ships (`internal/agent/replication_push.go` / `replication_pull.go`): captures push to a per-cluster bucket and restores pull through it lazily. The cross-cluster design is documented in [design/cross-cluster-replication.md](design/cross-cluster-replication.md). The remaining items below (s3-rdma transport, eager cross-cluster mirroring) are designed but not yet implemented.
+An object-storage replicator now ships (`internal/agent/replication_push.go` / `replication_pull.go`): captures push to a per-cluster bucket and restores pull through it lazily. The cross-cluster design is documented in [design/cross-cluster-replication.md](../design/cross-cluster-replication.md). The remaining items below (s3-rdma transport, eager cross-cluster mirroring) are designed but not yet implemented.
 
 ### What we propose for L2
 

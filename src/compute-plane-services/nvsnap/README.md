@@ -55,7 +55,8 @@ catalog. An optional **admission webhook** injects restore plumbing
 into workload pods.
 
 Deeper design docs:
-[architecture](docs/architecture/NVSNAP-ARCHITECTURE.md) ·
+[architecture](docs/ARCHITECTURE.md) ·
+[gpushare](docs/design/GPUSHARE.md) ·
 [quiescence / io_uring](docs/design/QUIESCENCE-ARCHITECTURE.md) ·
 [runtime-agnostic discovery](docs/design/RUNTIME-AGNOSTIC.md) ·
 [cuda-checkpoint call flow](docs/design/CUDA-CHECKPOINT-CALL-FLOW.md) ·
@@ -106,7 +107,8 @@ origin node.
 ### Process checkpoint/restore (CRIU + cuda-checkpoint, single GPU)
 
 The full process-restore path resumes a live, already-serving engine
-(no engine re-init at all). Currently single-GPU only.
+(no engine re-init at all). The numbers below are single-GPU; multi-GPU
+workloads restore this way under [gpushare](docs/design/GPUSHARE.md#validation).
 
 | Engine | Model | Ckpt size | Cold start | Capture | Restore | Speedup |
 |---|---|---|---|---|---|---|
@@ -182,13 +184,13 @@ optional webhook). Full guide, options, and troubleshooting:
                          │   └─ NIM / vLLM / SGLang / TRT-LLM    │
                          └───────────────────────────────────────┘
                                         │
-              L1 same-node ─► L2 shared PVC ─► L3 object store
+              L1 node ─► L2 cluster storage ─► L3 peers ─► L4 object store
 ```
 
-Checkpoints are fetched through a tiered path (same-node → shared
-filesystem → peer cascade → object store); cluster config decides which
-tiers are present. See
-[docs/TRANSPORT-ARCHITECTURE.md](docs/TRANSPORT-ARCHITECTURE.md).
+Checkpoints are fetched through a tiered path (the node's own copy →
+cluster storage → peer agents → a cross-cluster object store); cluster
+config decides which tiers are present. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#6-where-bytes-live-and-how-they-move).
 
 **Why the moving parts exist** (details in
 [docs/architecture/](docs/design/)):
@@ -276,7 +278,7 @@ terraform/              example GKE cluster provisioning
 - [docs/](docs/README.md) — documentation index (operator + developer)
 - [docs/operate/DEVELOPING.md](docs/operate/DEVELOPING.md) — build → capture → validate → merge
 - [docs/operate/INSTALL.md](docs/operate/INSTALL.md) — full install guide + troubleshooting
-- [docs/architecture/NVSNAP-ARCHITECTURE.md](docs/architecture/NVSNAP-ARCHITECTURE.md) — system architecture
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
 - [docs/results/BENCHMARK.md](docs/results/BENCHMARK.md) — benchmark methodology + results
 - [docs/design/THIRD-PARTY-FORKS.md](docs/design/THIRD-PARTY-FORKS.md) — forked dependencies + patch policy
 - [CONTRIBUTING.md](CONTRIBUTING.md) — developer setup + build-from-source
