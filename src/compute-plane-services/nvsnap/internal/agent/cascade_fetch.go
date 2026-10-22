@@ -40,9 +40,11 @@ import (
 // Phase 5d.1 restore-side cascading peer fetch.
 //
 // EnsureLocal makes a checkpoint locally available on this agent's
-// node before the in-namespace restore runs. Three priority tiers:
+// node before the in-namespace restore runs. Priority tiers:
 //
 //	1. Same-node hostPath — already there, zero transit.
+//	   Then, when configured: the rails (bedrock-peer over the nodes'
+//	   RDMA NICs, rails_fetch.go), a shared filesystem, the L2 volume.
 //	2. Peer agent HTTP — any node in the catalog's peer list serves
 //	   it; we try most-recently-seen first. Each successful fetch
 //	   registers THIS agent as a new peer for future fanouts.
@@ -179,6 +181,34 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		}
 	}()
 
+	// Rails tier: copy from nodes that hold the checkpoint over their RDMA
+	// NICs (rails_fetch.go). Any failure falls through to the tiers below.
+	var sources *catalogSources
+	if a.railsEnabled() && a.config.CatalogURL != "" {
+		railsStart := time.Now()
+		var err error
+		if sources, err = a.fetchCheckpointSources(ctx, checkpointID); err != nil {
+			a.log.WithError(err).WithField("checkpoint_id", checkpointID).Warn("EnsureLocal: cannot list the sources for the rails tier; trying the next tier")
+		} else if err := a.fetchOverRails(ctx, checkpointID, localDir, sources.Peers); err == nil {
+			fetched = true
+			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "rails"))
+			a.log.WithFields(map[string]interface{}{"checkpoint_id": checkpointID, "elapsed": time.Since(railsStart).String()}).
+				Info("EnsureLocal: fetched over the rails")
+			if err := a.registerAsPeer(ctx, checkpointID); err != nil {
+				a.log.WithError(err).Warn("peer-add to catalog failed (non-fatal)")
+			}
+			return nil
+		} else {
+			entry := a.log.WithError(err).WithField("checkpoint_id", checkpointID)
+			if errors.Is(err, errRailsUnavailable) {
+				entry.Info("EnsureLocal: rails tier not available; trying the next tier")
+			} else {
+				entry.Warn("EnsureLocal: rails fetch failed; trying the next tier")
+			}
+			_ = clearFiles(localDir)
+		}
+	}
+
 	if a.fsStore.hasCheckpoint(checkpointID) {
 		fsCtx, fsSpan := tracing.Tracer().Start(ctx, "cascade.fsstore_fetch")
 		fsSpan.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-fsstore"))
@@ -230,9 +260,11 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return fmt.Errorf("checkpoint %s not local and CatalogURL unset; cannot cascade", checkpointID)
 	}
 
-	sources, err := a.fetchCheckpointSources(ctx, checkpointID)
-	if err != nil {
-		return fmt.Errorf("query catalog sources: %w", err)
+	if sources == nil {
+		var err error
+		if sources, err = a.fetchCheckpointSources(ctx, checkpointID); err != nil {
+			return fmt.Errorf("query catalog sources: %w", err)
+		}
 	}
 
 	a.log.WithFields(map[string]interface{}{
@@ -316,7 +348,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return nil
 	}
 
-	err = fmt.Errorf("all %d peers failed for checkpoint %s", len(sources.Peers), checkpointID)
+	err := fmt.Errorf("all %d peers failed for checkpoint %s", len(sources.Peers), checkpointID)
 	span.RecordError(err)
 	span.SetStatus(codes.Error, "all tiers failed")
 	return err
@@ -373,23 +405,9 @@ type peerManifest struct {
 //   - Size mismatch on a downloaded file: bytes truncated mid-stream;
 //     count as a peer failure.
 func (a *Agent) fetchFromPeer(ctx context.Context, peerURL string, alternateURLs []string, checkpointID, destDir string) error {
-	manifestURL := fmt.Sprintf("%s/v1/checkpoints/%s/manifest", peerURL, url.PathEscape(checkpointID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, http.NoBody)
+	m, err := getPeerManifest(ctx, peerURL, checkpointID)
 	if err != nil {
 		return err
-	}
-	resp, err := peerHTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("manifest GET: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("manifest GET %d: %s", resp.StatusCode, body)
-	}
-	var m peerManifest
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		return fmt.Errorf("decode manifest: %w", err)
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -434,6 +452,29 @@ func (a *Agent) fetchFromPeer(ctx context.Context, peerURL string, alternateURLs
 		return firstErr
 	}
 	return nil
+}
+
+// getPeerManifest asks a peer agent for its file list of checkpointID.
+func getPeerManifest(ctx context.Context, peerURL, checkpointID string) (*peerManifest, error) {
+	manifestURL := fmt.Sprintf("%s/v1/checkpoints/%s/manifest", peerURL, url.PathEscape(checkpointID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := peerHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("manifest GET: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("manifest GET %d: %s", resp.StatusCode, body)
+	}
+	var m peerManifest
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return nil, fmt.Errorf("decode manifest: %w", err)
+	}
+	return &m, nil
 }
 
 func (a *Agent) fetchOneFile(ctx context.Context, peerURL string, alternateURLs []string, checkpointID, relPath string, expectedSize int64, destDir string) error {

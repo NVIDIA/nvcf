@@ -161,6 +161,8 @@ binary.
 | `NVSNAP_PREP_POLL` |  | cmd/nvsnap-mount-prep/main.go |
 | `NVSNAP_PREWARM` |  | cmd/agent/main.go, cmd/nvsnap-helper/main.go, cmd/nvsnap-rootfs-restore/prewarm.go |
 | `NVSNAP_PREWARM_DIR` |  | cmd/nvsnap-rootfs-restore/main.go |
+| `NVSNAP_RAILS_IMAGE` |  | cmd/agent/main.go |
+| `NVSNAP_RAILS_NAMESPACE` |  | cmd/agent/main.go |
 | `NVSNAP_REPLAY_EMPTYDIR_MAX_BYTES` |  | internal/agent/replay_mounts.go |
 | `NVSNAP_REPLAY_MOUNTS` |  | internal/agent/replay_mounts.go |
 | `NVSNAP_REPLICATION_HOME_BUCKET` | yes | cmd/agent/main.go |

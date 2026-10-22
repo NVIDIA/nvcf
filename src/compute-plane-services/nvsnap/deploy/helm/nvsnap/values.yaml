@@ -463,6 +463,39 @@ agent:
       pollInterval: 30s   # auto-pull poller cadence; 0 disables the poller
       serviceAccount: ""  # GCP Workload-Identity SA email (gcs provider)
 
+  # Rails tier of the restore fetch: a node that lacks a checkpoint copies
+  # it from nodes that hold it over their RDMA NICs with bedrock-peer,
+  # before the shared-filesystem, L2 and HTTP peer tiers. For each copy
+  # the agent creates a serve pod on each source node and a fetch pod on
+  # its own node, in the release namespace; each claims every RDMA NIC of
+  # its node through DRA for the length of the copy. A copy whose pods
+  # cannot start (no NIC free) falls through to the next tier. Needs the
+  # resource.k8s.io/v1 API and a DRA driver that publishes the NICs.
+  # See internal/agent/rails_fetch.go.
+  rails:
+    enabled: false
+    # bedrock-peer image, pinned by digest.
+    image: nvcr.io/0651155215864979/ncp-dev/bedrock-peer@sha256:5246153dbda46047c1986444bfc7a329ccfb300bb4d9d1af7a031bcd2a2c190f
+    # DeviceClass of the RDMA NICs; the claim takes every one on the node.
+    deviceClass: roce.networking.k8s.aws
+    # Shared secret both ends present. Leave empty to have the chart
+    # generate one and keep it across upgrades.
+    secret: ""
+    port: 9890
+    connections: 32
+    # Most source nodes one copy reads from.
+    maxSources: 2
+    # Requests and limits. The serve pod runs beside the workload on a
+    # source node, so it is capped.
+    serve:
+      cpu: "16"
+      memory: 32Gi
+    fetch:
+      cpu: "32"
+      memory: 64Gi
+    # Share of the checkpoint filesystem a copy must leave free.
+    keepFreePercent: 10
+
 # ─── NvSnap Server (REST API + UI) ───────────────────────────────────────
 
 server:

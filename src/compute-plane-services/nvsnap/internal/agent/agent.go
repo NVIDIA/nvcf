@@ -167,6 +167,11 @@ type Config struct {
 	// ModelVolume enables the write-once model volume for Helm functions.
 	ModelVolume ModelVolumeConfig
 
+	// Rails is the rails tier of EnsureLocal: checkpoint copies between
+	// nodes over their RDMA NICs with bedrock-peer (rails_fetch.go). Off
+	// unless Rails.Image is set.
+	Rails RailsConfig
+
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
 	// Replication.ObjectStore.Provider AND HomeBucket are both non-empty,
@@ -722,6 +727,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
 	}
 	a.startGPUShareStoreReaper(ctx)
+	a.sweepRailsPods(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/design/helm-shared-model-volume.md).

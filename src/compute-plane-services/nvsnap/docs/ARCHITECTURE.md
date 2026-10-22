@@ -66,7 +66,7 @@ built. Anything not listed here is not claimed.
 | Tenant scope on restore | Exercised | `TestCRIURestore_SameScopeInAnotherNamespace`, `TestRecordCRIUCapture_RecordsTheTenantScope`, `TestCRIUGroupKey_ScopedByTenant` |
 | Agent API authentication | Exercised | `internal/agent/auth_test.go` (`TestTokenGuard*`) |
 | Fetched node-bundle verification | Exercised | `internal/agent/bundle_digest_test.go` (`TestFetchedBundleIsVerified`) |
-| Checkpoint transfer over RDMA | Open | not built |
+| Checkpoint transfer over RDMA (rails tier) | Exercised | `internal/agent/rails_fetch_test.go`; no restore through the agent on hardware yet. A manual bedrock-peer copy of a 1.06 TB checkpoint between GB300 nodes ran at 13.2 GiB/s, 97 % of the destination disk's write rate (2026-10-21) |
 
 ## 1. What nvsnap is and what a deployment runs
 
@@ -287,6 +287,7 @@ A restore takes the first copy of a checkpoint it finds, in this order
 | Tier | Where | Code |
 |---|---|---|
 | L1 | The node's own disk | `localCheckpointComplete` |
+| Rails | Another node that holds it, over the nodes' RDMA NICs (opt-in, `agent.rails`): short-lived bedrock-peer pods claim the NICs through DRA for the copy | `internal/agent/rails_fetch.go` `fetchOverRails`; the node registers as a peer after the copy |
 | L2 | A shared filesystem, when configured; then the checkpoint's `rox-<hash>` read-only volume | `EnsureLocal` (FSStore), `fetchFromL2`; `internal/checkpointstore` |
 | L3 | Another agent that holds it, over HTTP; the agent tries first the peers it has the fewest fetches in flight from, and spreads large files over every peer that holds them | `sortPeersByLoad`, `fetchFromPeer`; every node that fetches registers as a peer (`registerAsPeer`) |
 | L4 | An object-store bucket shared between clusters (opt-in) | `internal/objectstore`, `internal/agent/replication*.go` |
