@@ -69,6 +69,10 @@ logic into `dsl/`.
   OpenAI-compatible sample that replies with the request it received when
   `x_load_tester_echo` is true. Do not point it at the `:local` sample, which
   returns a fixed reply other scenarios assert.
+- The BYOO feature reads its task sample from `SAMPLE_BYOO_TASK_IMAGE` and its
+  pending function sample from `SAMPLE_BYOO_FUNCTION_IMAGE`. Tag every BYOO
+  scenario that installs, upgrades, or removes a release with `@stack-change`
+  so `TestBYOOExistingInstall` never changes an existing install.
 - Gateway API route readiness tables expose each route's kind, name,
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but

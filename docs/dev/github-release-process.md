@@ -744,6 +744,13 @@ replays the branch onto `main`, oldest commit first:
 - Any other commit that conflicts stops the run, and nothing is pushed.
   A person wrote it, so a person decides how it applies.
 
+Each run pushes the branch with the `NV_GITHUB_TOKEN` secret, so the push
+starts the Pull Request checks. A push made with the default
+`GITHUB_TOKEN` starts no workflow, which left bump Pull Requests without
+CI until a person pushed to them. Without the secret, for example on a
+fork, the push falls back to `GITHUB_TOKEN`. The checkout keeps no
+credential, and only the push and Pull Request steps hold a token.
+
 A `release` event runs the workflow file from the released commit. A tag
 cut from a branch that predates a workflow change runs the older
 workflow. A run dispatched from `main` uses the current one.
