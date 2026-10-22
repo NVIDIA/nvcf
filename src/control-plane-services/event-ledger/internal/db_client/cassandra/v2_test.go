@@ -207,3 +207,62 @@ func TestBulkUpsertStatsV3(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestUpsertEventsIfNewerV3KeepsTheNewestEvent(t *testing.T) {
+	session := getTestSession(t)
+	if session == nil {
+		t.Skip("Cassandra not available for testing")
+	}
+
+	handler := &CassandraHandler{session: session}
+	logger := otelzap.New(zap.NewNop())
+	ctx := logging.AttachLoggerToContext(context.Background(), logger)
+
+	_ = session.Query("TRUNCATE events_v3").Exec()
+	t.Cleanup(func() { _ = session.Query("TRUNCATE events_v3").Exec() })
+
+	first := time.Now().Add(-3 * time.Minute).Truncate(time.Millisecond)
+	second := first.Add(time.Minute)
+	third := first.Add(2 * time.Minute)
+	record := func(source string, timestamp time.Time) data_access.EventV3UpsertRecord {
+		return data_access.EventV3UpsertRecord{
+			Namespace: "ns-guarded", Context: "ctx-1", EventName: "downloading",
+			Source: source, Details: []byte(`{"from":"` + source + `"}`), Timestamp: timestamp,
+		}
+	}
+
+	require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, []data_access.EventV3UpsertRecord{record("first", first)}))
+	require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, []data_access.EventV3UpsertRecord{record("third", third)}))
+	// A delayed write of an older event must not replace the newer row.
+	require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, []data_access.EventV3UpsertRecord{record("second", second)}))
+	// Writing the newest event again is harmless.
+	require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, []data_access.EventV3UpsertRecord{record("third", third)}))
+
+	var source string
+	var details []byte
+	var storedTimestamp, storedCreatedAt time.Time
+	err := session.Query(
+		`SELECT source, details, timestamp, created_at FROM events_v3 WHERE namespace = ? AND context = ? AND event_name = ?`,
+		"ns-guarded", "ctx-1", "downloading",
+	).Scan(&source, &details, &storedTimestamp, &storedCreatedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "third", source)
+	assert.JSONEq(t, `{"from":"third"}`, string(details))
+	assert.Equal(t, third.UTC(), storedTimestamp.UTC().Truncate(time.Millisecond))
+	assert.Equal(t, first.UTC(), storedCreatedAt.UTC().Truncate(time.Millisecond), "created_at keeps the first event's time")
+
+	t.Run("many events across contexts and an empty batch", func(t *testing.T) {
+		require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, nil))
+
+		batch := []data_access.EventV3UpsertRecord{
+			{Namespace: "ns-guarded", Context: "ctx-a", EventName: "e1", Source: "s", Details: []byte(`{}`), Timestamp: first},
+			{Namespace: "ns-guarded", Context: "ctx-b", EventName: "e1", Source: "s", Details: []byte(`{}`), Timestamp: first},
+			{Namespace: "ns-guarded", Context: "ctx-a", EventName: "e2", Source: "s", Details: []byte(`{}`), Timestamp: first},
+		}
+		require.NoError(t, handler.UpsertEventsIfNewerV3(ctx, batch))
+
+		var count int
+		require.NoError(t, session.Query(`SELECT COUNT(*) FROM events_v3 WHERE namespace = ? AND context = ?`, "ns-guarded", "ctx-a").Scan(&count))
+		assert.Equal(t, 2, count)
+	})
+}

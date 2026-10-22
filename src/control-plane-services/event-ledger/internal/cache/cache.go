@@ -16,7 +16,7 @@ limitations under the License.
 */
 
 // Package cache provides a local write cache that collapses high-frequency
-// stats events per key before they reach the database.
+// writes to the events table per key before they reach the database.
 package cache
 
 import (
@@ -29,10 +29,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
-	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 )
 
 const (
@@ -40,9 +38,21 @@ const (
 	// inactivity TTL, so an entry outlives its scheduled flush.
 	inactiveTTLBufferPercent = 10
 
-	// evictionFlushTimeout bounds the database writes, with their retries, made for
-	// the entries one eviction pass removes, or for one cache miss.
-	evictionFlushTimeout = 10 * time.Second
+	// flushTimeout bounds one database write of pending entries, with its retries:
+	// those a timing wheel slot makes due, those one eviction pass removes, one
+	// batch of cache misses, or one batch of a drain.
+	flushTimeout = 10 * time.Second
+
+	// maxCachedDetailsBytes is the largest event payload the cache holds. Larger
+	// events are written to the database at once and are not cached, so a few big
+	// payloads cannot use up the memory that MaxSize is meant to bound.
+	maxCachedDetailsBytes = 4 << 10
+
+	// drainBatchSize is how many pending entries one write of a drain carries.
+	drainBatchSize = 500
+
+	// closeDrainTimeout bounds how long Close spends writing pending entries.
+	closeDrainTimeout = 30 * time.Second
 
 	// evictionFlushAttempts is how many times the write of an evicted entry is
 	// tried before the entry is dropped.
@@ -84,8 +94,11 @@ type scheduler interface {
 	stop()
 }
 
-// FlushFunc writes one pending event to the database.
-type FlushFunc func(ctx context.Context, rec data_access.EventV3UpsertRecord) error
+// FlushFunc writes pending events to the database. It must be safe to call again
+// with events it has already written, because a failed flush is retried, and it
+// should write an event only if it is newer than what the database holds, since
+// flushes can overlap with each other and with later writes.
+type FlushFunc func(ctx context.Context, recs []data_access.EventV3UpsertRecord) error
 
 // key identifies one cached event stream.
 type key struct {
@@ -233,21 +246,6 @@ func (handler *CachingDBHandler) Start() {
 	handler.wheel.start()
 }
 
-// Close stops the timing wheel and then closes the wrapped handler. Pending
-// entries are not written; what to do with them at shutdown is decided when the
-// cache is wired into the service.
-func (handler *CachingDBHandler) Close() error {
-	handler.wheel.stop()
-	return handler.DBHandlerV2.Close()
-}
-
-// flushDue receives the keys whose scheduled flush has come due. Writing them to
-// the database is added when the cache is wired into the service, so for now a due
-// key only leaves the wheel, and its entry stays pending without a scheduled flush.
-// The entry may also be gone by the time this runs, because eviction can remove it
-// between the wheel handing over the key and this call.
-func (handler *CachingDBHandler) flushDue(dueKeys []key) {}
-
 // lookup returns a copy of the entry for cachedKey, and whether it exists. It returns
 // a copy because the read lock is released on return; a pointer would let the
 // caller read fields while a writer mutates them, which is a data race. The
@@ -269,7 +267,7 @@ type outcome int
 
 const (
 	// outcomeMiss means no entry existed. The event was stored as clean, so the
-	// caller must write it to the database now, with writeMiss.
+	// caller must write it to the database now, with writeMisses.
 	outcomeMiss outcome = iota
 	// outcomeBecamePending means a newer event replaced a clean entry. A flush
 	// has been scheduled on the timing wheel.
@@ -420,125 +418,4 @@ func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReaso
 		return data_access.EventV3UpsertRecord{}, false
 	}
 	return cachedEntry.record, true
-}
-
-// flushEvicted writes recs to the database, retrying a failed write with
-// exponential backoff. The entries are already gone from the cache, so an entry
-// whose writes all fail is dropped, and that is counted as a failed flush and
-// logged. The records share one timeout, so when the database is down or slow the
-// later records get fewer tries, and none once the timeout has ended.
-//
-// The write is made without the lock held, so a newer event for the same key can
-// reach the database before it, and a retry widens that window to the length of
-// the timeout. The database upsert must therefore apply an event only if it is
-// newer than the stored one.
-func (handler *CachingDBHandler) flushEvicted(recs []data_access.EventV3UpsertRecord) {
-	if len(recs) == 0 {
-		return
-	}
-	// The write flushes another key's data, so it must not be tied to the
-	// context of the request that triggered the eviction.
-	ctx, cancel := context.WithTimeout(context.Background(), evictionFlushTimeout)
-	defer cancel()
-	logger := logging.GetLogger(ctx)
-	for _, rec := range recs {
-		attempts, err := handler.flushWithRetry(ctx, rec)
-		if err != nil {
-			handler.metrics.recordFlush(flushFailed)
-			message := "dropped an evicted cache entry that could not be written"
-			if attempts == 0 {
-				message = "dropped an evicted cache entry because the flush timeout ended before its write"
-			}
-			logger.ErrorContext(ctx, message,
-				zap.Error(err),
-				zap.Int("attempts", attempts),
-				zap.String("namespace", rec.Namespace),
-				zap.String("context", rec.Context),
-				zap.String("event_name", rec.EventName))
-			continue
-		}
-		handler.metrics.recordFlush(flushSucceeded)
-	}
-}
-
-// flushWithRetry writes rec up to evictionFlushAttempts times, waiting twice as
-// long after each failure. It returns how many writes it made, and the last error
-// if none succeeded. It makes no write once ctx has ended, since the write would
-// fail at once.
-func (handler *CachingDBHandler) flushWithRetry(ctx context.Context, rec data_access.EventV3UpsertRecord) (int, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	for attempts := 1; ; attempts++ {
-		err := handler.flush(ctx, rec)
-		if err == nil || attempts == evictionFlushAttempts || ctx.Err() != nil {
-			return attempts, err
-		}
-		delay := evictionRetryBaseDelay << (attempts - 1)
-		logging.GetLogger(ctx).WarnContext(ctx, "failed to write an evicted cache entry, waiting to retry",
-			zap.Error(err),
-			zap.Int("attempt", attempts),
-			zap.Duration("retry_in", delay),
-			zap.String("namespace", rec.Namespace),
-			zap.String("context", rec.Context),
-			zap.String("event_name", rec.EventName))
-		if !waitOrDone(ctx, delay) {
-			return attempts, err
-		}
-	}
-}
-
-// waitOrDone waits for delay and reports false if ctx ended first.
-func waitOrDone(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-// writeMiss writes the event of a cache miss, which the cache stored as clean, so
-// a failed write that is not dealt with would hide the event: a redelivery with
-// the same timestamp is discarded as stale. The write is retried like an
-// eviction write. If every try fails, the event is kept as a pending entry and
-// scheduled for a later flush, so it is written even if the source never sends it
-// again, and the write error is returned for the caller to report.
-func (handler *CachingDBHandler) writeMiss(ctx context.Context, record data_access.EventV3UpsertRecord) error {
-	ctx, cancel := context.WithTimeout(ctx, evictionFlushTimeout)
-	defer cancel()
-	attempts, err := handler.flushWithRetry(ctx, record)
-	if err == nil {
-		return nil
-	}
-	handler.flushEvicted(handler.keepPending(record, time.Now()))
-	logging.GetLogger(ctx).WarnContext(ctx, "kept a cache miss for a later flush after its write failed",
-		zap.Int("attempts", attempts),
-		zap.String("namespace", record.Namespace),
-		zap.String("context", record.Context),
-		zap.String("event_name", record.EventName))
-	return err
-}
-
-// keepPending makes record the pending entry for its key and schedules its flush,
-// unless a newer event is already stored, which is pending or is written by its
-// own caller. The entry may be gone, evicted while the write was in flight, so it
-// is created again, and the pending entries that makes room by evicting are
-// returned for the caller to write once the lock is released.
-func (handler *CachingDBHandler) keepPending(record data_access.EventV3UpsertRecord, now time.Time) []data_access.EventV3UpsertRecord {
-	cachedKey := keyOf(record)
-	handler.entriesMu.Lock()
-	defer handler.entriesMu.Unlock()
-
-	cachedEntry, exists := handler.entries[cachedKey]
-	if !exists {
-		handler.addEntry(cachedKey, record, now, true)
-		return handler.evictOverflow()
-	}
-	if !record.Timestamp.Before(cachedEntry.record.Timestamp) {
-		handler.replaceEntry(cachedKey, cachedEntry, record, now)
-	}
-	return nil
 }

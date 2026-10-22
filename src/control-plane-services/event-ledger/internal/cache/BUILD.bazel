@@ -4,6 +4,8 @@ go_library(
     name = "cache",
     srcs = [
         "cache.go",
+        "events.go",
+        "flush.go",
         "metrics.go",
         "timing_wheel.go",
     ],
@@ -28,6 +30,8 @@ go_test(
     name = "cache_test",
     srcs = [
         "cache_test.go",
+        "events_test.go",
+        "flush_test.go",
         "handler_wheel_test.go",
         "metrics_test.go",
         "timing_wheel_test.go",
