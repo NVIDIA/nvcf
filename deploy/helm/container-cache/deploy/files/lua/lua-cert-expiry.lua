@@ -26,17 +26,24 @@ local bundle_path = "/etc/certs/ssl-bundle.crt"
 -- sets until they are removed, so without this a bundle that shrank, changed
 -- a CN, or failed to read would keep exporting values that look current.
 tls_cert_not_after:reset()
+-- Pessimistic until the bundle is parsed: an error raised below is caught by
+-- the metrics handler, and the flag must not keep last scrape's 1.
+tls_bundle_read_ok:set(0)
 
 local fd, open_err = io.open(bundle_path, "rb")
 if not fd then
     ngx.log(ngx.WARN, "cert expiry metrics: cannot open ", bundle_path, ": ", open_err)
-    tls_bundle_read_ok:set(0)
     return
 end
 local pem = fd:read("*all")
 fd:close()
+if not pem then
+    ngx.log(ngx.WARN, "cert expiry metrics: cannot read ", bundle_path)
+    return
+end
 
 local depth = 0
+local parsed = 0
 for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CERTIFICATE%-%-%-%-%-") do
     local crt, err = x509.new(block, "PEM")
     if crt then
@@ -49,9 +56,10 @@ for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CE
             end
         end
         tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
+        parsed = parsed + 1
     else
         ngx.log(ngx.WARN, "cert expiry metrics: cannot parse certificate at depth ", depth, ": ", err)
     end
     depth = depth + 1
 end
-tls_bundle_read_ok:set(depth > 0 and 1 or 0)
+tls_bundle_read_ok:set(parsed > 0 and 1 or 0)
