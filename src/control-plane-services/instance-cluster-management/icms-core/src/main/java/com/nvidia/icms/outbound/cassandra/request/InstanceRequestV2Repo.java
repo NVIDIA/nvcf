@@ -16,6 +16,7 @@
  */
 package com.nvidia.icms.outbound.cassandra.request;
 
+import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import java.util.UUID;
@@ -31,4 +32,18 @@ public interface InstanceRequestV2Repo extends
     Stream<InstanceRequestV2Entity> findAllByDeploymentId(UUID deploymentId);
 
     Stream<InstanceRequestV2Entity> findAllByNcaId(String ncaId);
+
+    /**
+     * Backed by the {@code idx_requests_by_creation_day} storage-attached index.
+     * Used only when {@code icms.creation-bucket-reads-enabled} is on.
+     */
+    @Query("SELECT request_id FROM requests WHERE creation_bucket = :creationBucket")
+    ResultSet findRequestIdsByCreationBucket(@Param("creationBucket") Instant creationBucket);
+
+    @Query("UPDATE requests USING TIMESTAMP :writeTimestamp "
+            + "SET creation_bucket = :creationBucket WHERE request_id = :requestId")
+    void updateCreationBucket(
+            @Param("requestId") String requestId,
+            @Param("creationBucket") Instant creationBucket,
+            @Param("writeTimestamp") long writeTimestamp);
 }
