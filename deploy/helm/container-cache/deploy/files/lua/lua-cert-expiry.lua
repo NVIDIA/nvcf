@@ -66,4 +66,12 @@ for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CE
     tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
     depth = depth + 1
 end
+-- The matcher silently skips a block with no END marker, so a truncated
+-- bundle would otherwise look complete. Every BEGIN must have parsed.
+local begins = select(2, pem:gsub("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-", ""))
+if begins ~= depth then
+    ngx.log(ngx.WARN, "cert expiry metrics: ", bundle_path, " has ", begins, " BEGIN markers but ", depth, " complete certificates")
+    tls_cert_not_after:reset()
+    return
+end
 tls_bundle_read_ok:set(depth > 0 and 1 or 0)
