@@ -399,10 +399,13 @@ The `/cache_metrics` endpoint also exports
 `container_cache_tls_cert_not_after_seconds{depth, subject_cn}`, the notAfter
 of every certificate in the served TLS bundle. Depth `0` is the signing
 intermediate that leaf certificates are minted from; higher depths are the CA
-chain above it. The series are rebuilt on every scrape, so a certificate that
-leaves the bundle disappears rather than lingering with a stale value, and
-`container_cache_tls_bundle_read_ok` is `0` when the bundle could not be read
-or parsed. Example alert expressions:
+chain above it. Depth is the certificate's position in `ssl-bundle.crt`,
+which the producer always writes intermediate first. The series are rebuilt
+on every scrape, so a certificate that leaves the bundle disappears rather
+than lingering with a stale value. If any block in the bundle fails to parse,
+no series are published for that scrape and
+`container_cache_tls_bundle_read_ok` is `0`; the same flag is `0` when the
+bundle cannot be read or is empty. Example alert expressions:
 
 ```promql
 # Signing intermediate not rotated (expected before 2 days remain on a 14 day TTL).

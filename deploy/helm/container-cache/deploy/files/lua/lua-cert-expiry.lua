@@ -42,26 +42,28 @@ if not pem then
     return
 end
 
--- depth counts parsed certificates, not PEM blocks, so a malformed block
--- cannot shift the signing intermediate away from depth 0.
+-- depth is the certificate's position in the bundle. The producer writes the
+-- signing intermediate first, so position 0 is the intermediate by
+-- construction; nothing in the parse loop may renumber it. A block that does
+-- not parse therefore makes the whole bundle untrustworthy: publish nothing
+-- for this scrape and report read_ok=0 rather than a partial, shifted view.
 local depth = 0
-local block_no = 0
 for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CERTIFICATE%-%-%-%-%-") do
-    block_no = block_no + 1
     local crt, err = x509.new(block, "PEM")
-    if crt then
-        local cn = ""
-        local name = crt:get_subject_name()
-        if name then
-            local entry = name:find("CN")
-            if entry and entry.blob then
-                cn = entry.blob
-            end
-        end
-        tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
-        depth = depth + 1
-    else
-        ngx.log(ngx.WARN, "cert expiry metrics: cannot parse PEM block ", block_no, " of ", bundle_path, ": ", err)
+    if not crt then
+        ngx.log(ngx.WARN, "cert expiry metrics: cannot parse certificate at position ", depth, " of ", bundle_path, ": ", err)
+        tls_cert_not_after:reset()
+        return
     end
+    local cn = ""
+    local name = crt:get_subject_name()
+    if name then
+        local entry = name:find("CN")
+        if entry and entry.blob then
+            cn = entry.blob
+        end
+    end
+    tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
+    depth = depth + 1
 end
 tls_bundle_read_ok:set(depth > 0 and 1 or 0)
