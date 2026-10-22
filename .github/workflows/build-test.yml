@@ -189,6 +189,12 @@ jobs:
       - name: Test NVCT API sidecar release artifacts
         run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
 
+      - name: Test worker callback proxy chart rendering
+        run: bash deploy/helm/worker-callback-proxy/tests/chart-render/verify-render.sh
+
+      - name: Validate worker callback proxy Envoy configuration
+        run: bash deploy/helm/worker-callback-proxy/tests/chart-render/validate-envoy.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail

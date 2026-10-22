@@ -355,6 +355,12 @@
       "deploys": []
     },
     {
+      "id": "worker-callback-proxy-helm",
+      "path": "deploy/helm/worker-callback-proxy",
+      "service_name": "helm-nvcf-worker-callback-proxy",
+      "deploys": []
+    },
+    {
       "id": "llm-request-router",
       "path": "deploy/helm/llm-request-router",
       "service_name": "helm-nvcf-llm-request-router",

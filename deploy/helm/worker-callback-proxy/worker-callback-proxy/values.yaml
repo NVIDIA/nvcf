@@ -1,0 +1,218 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+workerCallbackProxy:
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 2
+
+  image:
+    registry: ""
+    repository: envoyproxy/envoy
+    # Defaults to v<appVersion>.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # Worker callback hostnames are <dashed-pod-ip>.<workerDomain>, for example
+  # 10-42-0-5.grpc-worker.example.com. Required.
+  workerDomain: ""
+  clusterDomain: cluster.local
+
+  # grpc-proxy worker tunnels: HTTP/3 from the worker, TLS terminated here and
+  # re-encrypted to the grpc-proxy pod whose IP is in the hostname.
+  grpcProxy:
+    enabled: true
+    # grpc-proxy HTTP/3 port on the pod.
+    port: 10084
+    # SNI sent to grpc-proxy and the only SAN accepted from it. Defaults to
+    # *.grpc-headless.<release namespace>.svc.<clusterDomain>, the name the
+    # grpc-proxy chart's grpcproxy.http3 certificate covers.
+    tlsServerName: ""
+    # CA bundle that signed the grpc-proxy pod certificate. The grpc-proxy
+    # chart issues that certificate (grpcproxy.http3.tls); the default is its
+    # Secret when the release is named grpc-proxy. Envoy reloads the file when
+    # the Secret changes.
+    caSecret:
+      name: grpc-proxy-worker-tls
+      key: ca.crt
+
+  # invocation-service worker tunnels: HTTP/1 CONNECT and forward-proxy
+  # requests, allowed only to <dashed-pod-ip>.<serviceName>.<namespace>.svc.
+  invocation:
+    enabled: true
+    serviceName: invocation
+    # Defaults to the release namespace.
+    namespace: ""
+    port: 8080
+
+  tls:
+    frontend:
+      # Use a pre-created kubernetes.io/tls Secret for *.<workerDomain>, for
+      # example a publicly trusted certificate. Takes precedence over
+      # certificate.create.
+      existingSecret: ""
+      certificate:
+        # Issue *.<workerDomain> with cert-manager.
+        create: true
+        # Required when create is true.
+        issuerRef:
+          kind: ClusterIssuer
+          name: ""
+          group: cert-manager.io
+        duration: 2160h
+        renewBefore: 720h
+        privateKey:
+          algorithm: RSA
+          size: 2048
+
+  ports:
+    grpcQuic: 10443
+    invocationTcp: 10084
+    # Serves only /ready, for the kubelet probes. Not exposed by any Service.
+    health: 8081
+    # Serves only /stats/prometheus, through the separate metrics Service.
+    metrics: 9902
+    # Admin API. Bound to 127.0.0.1 only: it can drain or stop Envoy and dump
+    # its config. Probes, metrics and preStop reach it inside the pod.
+    admin: 9901
+
+  service:
+    create: true
+    # Workers reach Envoy through this Service. Keep the name stable: DNS rules
+    # and PROXY_ADDRESS point at it.
+    name: ""
+    # ClusterIP, NodePort or LoadBalancer.
+    type: ClusterIP
+    annotations: {}
+    labels: {}
+    # Only with type LoadBalancer.
+    loadBalancerClass: ""
+    # Cluster or Local; only with type NodePort or LoadBalancer.
+    externalTrafficPolicy: ""
+    ports:
+      grpcQuic: 443
+      invocationTcp: 10084
+
+  metrics:
+    # ClusterIP Service <fullname>-metrics for /stats/prometheus. Kept apart
+    # from the worker Service, which may be exposed outside the cluster.
+    service:
+      enabled: true
+      port: 9902
+    serviceMonitor:
+      # Requires the Prometheus Operator CRDs.
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+
+  # OpenTelemetry tracing of worker callback requests. Off when endpoint is
+  # empty.
+  tracing:
+    # OTLP/gRPC collector as host:port, for example
+    # otel-collector.observability.svc.cluster.local:4317.
+    endpoint: ""
+    # Percentage of requests traced, 0 to 100.
+    samplingPercentage: 1
+    serviceName: worker-callback-proxy
+
+  # Envoy log level. Application and access logs are JSON lines on stdout;
+  # access logs carry x_request_id and connection_id for correlation.
+  logLevel: info
+
+  # Seconds Envoy spends draining listeners. The preStop hook starts the drain
+  # and then waits preStopSleepSeconds before Kubernetes sends SIGTERM, which
+  # ends Envoy at once. Render fails unless
+  # drainTimeSeconds <= preStopSleepSeconds < terminationGracePeriodSeconds.
+  drainTimeSeconds: 30
+  preStopSleepSeconds: 30
+  terminationGracePeriodSeconds: 60
+
+  timeouts:
+    connect: 2s
+    quicIdle: 60s
+    grpcIdle: 1800s
+    grpcMaxConnectionDuration: 1700s
+    invocationIdle: 3605s
+    invocationMaxConnectionDuration: 3400s
+
+  connectionLimits:
+    maxActiveDownstreamConnections: 20000
+    maxUpstreamConnections: 20000
+    maxPendingRequests: 1000000
+    maxRequests: 1000000
+    perConnectionBufferLimitBytes: 4194304
+
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: health
+    periodSeconds: 5
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+  nodeSelector: {}
+  tolerations: []
+
+  # Pod affinity. When affinity is empty, defaultPodAntiAffinity renders a
+  # soft hostname anti-affinity; set it to false to render no affinity.
+  defaultPodAntiAffinity: true
+  affinity: {}
+
+  # Zone spread. When topologySpreadConstraints is empty, defaultZoneSpread
+  # renders a soft zone spread; set it to false to render none.
+  defaultZoneSpread: true
+  topologySpreadConstraints: []
