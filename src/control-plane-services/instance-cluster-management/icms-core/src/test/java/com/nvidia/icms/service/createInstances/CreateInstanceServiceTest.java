@@ -18,6 +18,7 @@ package com.nvidia.icms.service.createInstances;
 
 import com.amazonaws.services.sqs.model.QueueAttributeName;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
+import com.nvidia.icms.service.gating.ClusterGatingService;
 import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
@@ -240,7 +241,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 reservationProcessor,
                 computePlatformService,
                 instanceValidationService,
-                new GpuGatingService(icmsConfigurationProperties, unifiedErrorReporter));
+                new GpuGatingService(icmsConfigurationProperties, unifiedErrorReporter),
+                new ClusterGatingService(icmsConfigurationProperties, unifiedErrorReporter, null));
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
