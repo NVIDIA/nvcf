@@ -216,9 +216,31 @@ func mergeGoSumVersions(goModuleRoots []string) map[string]map[string]struct{} {
 	return out
 }
 
+// goLookupResult distinguishes a successful lookup from an unavailable source,
+// even when the successful lookup did not identify a license.
+type goLookupResult struct {
+	succeeded bool
+	failure   string
+}
+
+// goLookupResults preserves successful module lookups across roots and sources.
+type goLookupResults map[string]goLookupResult
+
+// recordFailure retains diagnostics only while no source has succeeded.
+func (r goLookupResults) recordFailure(module, failure string) {
+	if !r[module].succeeded {
+		r[module] = goLookupResult{failure: failure}
+	}
+}
+
+// recordSuccess clears earlier failures without implying a recognized license.
+func (r goLookupResults) recordSuccess(module string) {
+	r[module] = goLookupResult{succeeded: true}
+}
+
 // enrichGoLicensesFromGoModuleList reads licenses from listed module directories
 // without changing module files, retaining safe diagnostics for failed lookups.
-func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, failures map[string]string) {
+func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, lookups goLookupResults) {
 	if envBool("COLLECT_DEPS_NO_GO_LIST") {
 		return
 	}
@@ -235,7 +257,7 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "collect-dependencies: go list in %s: %v\n", root, err)
 			for mod := range missing {
-				failures[mod] = "go list: " + err.Error()
+				lookups.recordFailure(mod, "go list: "+err.Error())
 			}
 			var execErr *exec.Error
 			if errors.As(err, &execErr) {
@@ -250,7 +272,7 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 			}
 			dir, _ := obj["Dir"].(string)
 			if dir != "" {
-				delete(failures, path)
+				lookups.recordSuccess(path)
 			}
 			if lic := licenseFromPlainDir(dir); lic != "" {
 				addLicense(goLicenses, path, lic)
@@ -265,7 +287,7 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 
 // enrichGoLicensesFromGoModDownload tries recorded versions for missing licenses.
 // A successful lookup clears prior errors even if no license is recognized.
-func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, failures map[string]string) {
+func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, lookups goLookupResults) {
 	if envBool("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD") {
 		return
 	}
@@ -283,7 +305,6 @@ func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicense
 	}
 	for _, mod := range sortedKeys(missing) {
 		versions := sortedKeys(versionsByMod[mod])
-		lookupSucceeded := false
 		for _, ver := range versions {
 			if goLicenseForModule(goLicenses, mod) != nil {
 				break
@@ -292,9 +313,7 @@ func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicense
 			stdout, err := runGoLicenseCommand("", 2*time.Minute, "mod", "download", "-json", spec)
 			if err != nil {
 				failure := "go mod download " + spec + ": " + err.Error()
-				if !lookupSucceeded {
-					failures[mod] = failure
-				}
+				lookups.recordFailure(mod, failure)
 				fmt.Fprintf(os.Stderr, "collect-dependencies: %s\n", failure)
 				var execErr *exec.Error
 				if errors.As(err, &execErr) {
@@ -304,21 +323,16 @@ func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicense
 			}
 			var obj map[string]any
 			if json.Unmarshal([]byte(stdout), &obj) != nil {
-				if !lookupSucceeded {
-					failures[mod] = "go mod download " + spec + ": invalid JSON response"
-				}
+				lookups.recordFailure(mod, "go mod download "+spec+": invalid JSON response")
 				continue
 			}
 			if failure, _ := obj["Error"].(string); failure != "" {
-				if !lookupSucceeded {
-					failures[mod] = "go mod download " + spec + ": " + goLookupError(errors.New("module error"), failure).Error()
-				}
+				lookups.recordFailure(mod, "go mod download "+spec+": "+goLookupError(errors.New("module error"), failure).Error())
 				continue
 			}
-			delete(failures, mod)
 			// Keep trying versions for a license, but preserve a successful lookup
 			// with no license even if a later version cannot be inspected.
-			lookupSucceeded = true
+			lookups.recordSuccess(mod)
 			dir, _ := obj["Dir"].(string)
 			if lic := licenseFromPlainDir(dir); lic != "" {
 				addLicense(goLicenses, mod, lic)
@@ -377,11 +391,11 @@ func formatGoLicense(goLicenses map[string]map[string]struct{}, mod string) stri
 }
 
 // buildGoRows distinguishes unavailable lookups from unresolved license metadata.
-func buildGoRows(allGo map[string]struct{}, goLicenses map[string]map[string]struct{}, failures map[string]string) []dependencyRow {
+func buildGoRows(allGo map[string]struct{}, goLicenses map[string]map[string]struct{}, lookups goLookupResults) []dependencyRow {
 	rows := make([]dependencyRow, 0, len(allGo))
 	for _, mod := range sortedKeys(allGo) {
 		license := formatGoLicense(goLicenses, mod)
-		if failure := failures[mod]; failure != "" && len(goLicenseForModule(goLicenses, mod)) == 0 {
+		if failure := lookups[mod].failure; failure != "" && len(goLicenseForModule(goLicenses, mod)) == 0 {
 			license = "_(license lookup unavailable: " + failure + ")_"
 		}
 		rows = append(rows, dependencyRow{

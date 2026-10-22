@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -65,6 +67,38 @@ func TestHTTPRegistryRetries(t *testing.T) {
 			}
 			if !tt.wantError && (body != `{"license":"MIT"}` || status != 200) {
 				t.Fatalf("body=%q status=%d", body, status)
+			}
+		})
+	}
+}
+
+// lookupTransport supplies deterministic responses without a live registry.
+type lookupTransport func(*http.Request) (*http.Response, error)
+
+// RoundTrip delegates to the test's response sequence.
+func (f lookupTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+// TestHTTPRetryClearsPriorResponse verifies that a transport failure does not
+// return the status or partial body from an earlier attempt.
+func TestHTTPRetryClearsPriorResponse(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusOK} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			old := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: lookupTransport(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if calls > 1 {
+					return nil, errors.New("permanent transport failure")
+				}
+				body := io.NopCloser(io.MultiReader(strings.NewReader("partial response"), iotest.ErrReader(io.ErrUnexpectedEOF)))
+				return &http.Response{StatusCode: status, Body: body}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = old })
+			body, gotStatus, err := httpGetBytesWithStatus("https://registry.example.test", time.Second, nil)
+			if err == nil || calls != 2 || gotStatus != 0 || len(body) != 0 {
+				t.Fatalf("calls=%d status=%d body=%q err=%v", calls, gotStatus, body, err)
 			}
 		})
 	}
@@ -149,7 +183,7 @@ printf '%s\n' "$LOOKUP_METADATA"
 			t.Setenv("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD", "0")
 			all := map[string]struct{}{"example.test/dependency": {}}
 			licenses := map[string]map[string]struct{}{}
-			failures := map[string]string{}
+			failures := goLookupResults{}
 			enrichGoLicensesFromGoModDownload(all, licenses, []string{dir}, failures)
 			rows := buildGoRows(all, licenses, failures)
 			count, err := os.ReadFile(filepath.Join(dir, "count"))
@@ -246,7 +280,7 @@ esac
 			t.Setenv("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD", "0")
 			all := map[string]struct{}{"example.test/dependency": {}}
 			licenses := map[string]map[string]struct{}{}
-			failures := map[string]string{"example.test/dependency": "prior go list failure"}
+			failures := goLookupResults{"example.test/dependency": {failure: "prior go list failure"}}
 			enrichGoLicensesFromGoModDownload(all, licenses, []string{dir}, failures)
 			rows := buildGoRows(all, licenses, failures)
 			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
@@ -265,6 +299,85 @@ esac
 				}
 			} else if normalizeLicenseGroup(rows[0].License) != "Unresolved" {
 				t.Fatalf("missing license must remain unresolved: %v", rows)
+			}
+		})
+	}
+}
+
+// TestGoLookupPreservesSuccessAcrossSources checks successful absent-license
+// lookups across module roots and the list-to-download fallback boundary.
+func TestGoLookupPreservesSuccessAcrossSources(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		roots           []string
+		download        bool
+		wantUnavailable bool
+	}{
+		{"list success then download failure", []string{"good"}, true, false},
+		{"later root failure", []string{"good", "bad"}, false, false},
+		{"later root success", []string{"bad", "good"}, false, false},
+		{"all sources fail", []string{"bad"}, true, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			moduleDir := filepath.Join(dir, "module")
+			writeTestFile(t, filepath.Join(moduleDir, "go.mod"), "module example.test/dependency\n")
+			metadata, err := json.Marshal(map[string]string{"Path": "example.test/dependency", "Dir": moduleDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var roots []string
+			for _, root := range tt.roots {
+				path := filepath.Join(dir, root)
+				writeTestFile(t, filepath.Join(path, "go.sum"), "example.test/dependency v1.0.0 h1:fixture\nexample.test/other v1.0.0 h1:fixture\n")
+				roots = append(roots, path)
+			}
+			bin := filepath.Join(dir, "bin")
+			writeTestFile(t, filepath.Join(bin, "go"), `#!/bin/sh
+printf '%s\n' "$*" >> "$LOOKUP_COUNTER"
+if [ "$1" = list ]; then
+ case "$PWD" in
+  */good) printf '%s\n' "$LOOKUP_METADATA"; exit 0;;
+ esac
+ printf 'unknown revision\n' >&2
+ exit 1
+fi
+printf '401 Unauthorized\n' >&2
+exit 1
+`)
+			if err := os.Chmod(filepath.Join(bin, "go"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("LOOKUP_COUNTER", filepath.Join(dir, "calls"))
+			t.Setenv("LOOKUP_METADATA", string(metadata))
+			t.Setenv("COLLECT_DEPS_NO_GO_LIST", "0")
+			t.Setenv("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD", "0")
+			all := map[string]struct{}{"example.test/dependency": {}, "example.test/other": {}}
+			licenses := map[string]map[string]struct{}{}
+			lookups := goLookupResults{}
+			enrichGoLicensesFromGoModuleList(all, licenses, roots, lookups)
+			if tt.download {
+				enrichGoLicensesFromGoModDownload(all, licenses, roots, lookups)
+			}
+			rows := buildGoRows(all, licenses, lookups)
+			if got := strings.Contains(rows[0].License, "lookup unavailable"); got != tt.wantUnavailable {
+				t.Fatalf("unavailable=%t, want %t: %v", got, tt.wantUnavailable, rows)
+			}
+			if !strings.Contains(rows[1].License, "lookup unavailable") {
+				t.Fatalf("another module's success must not hide a failure: %v", rows)
+			}
+			for _, row := range rows {
+				if normalizeLicenseGroup(row.License) != "Unresolved" {
+					t.Fatalf("missing license must remain unresolved: %v", row)
+				}
+			}
+			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(calls), "mod download") != tt.download {
+				t.Fatalf("download=%t calls=%s", tt.download, calls)
 			}
 		})
 	}

@@ -91,7 +91,7 @@ func run() error {
 		mergeSet(all.Helm, helmDeps)
 	}
 
-	goLookupFailures := map[string]string{}
+	goLookups := goLookupResults{}
 	goLicenses := map[string]map[string]struct{}{}
 	if langs["go"] {
 		maybeVendorGoModules(importRoots)
@@ -99,8 +99,8 @@ func run() error {
 			mergeLicenseMap(goLicenses, collectGoLicensesFromVendor(root))
 		}
 		goModuleDirs := findGoModuleDirs(importRoots)
-		enrichGoLicensesFromGoModuleList(all.Go, goLicenses, goModuleDirs, goLookupFailures)
-		enrichGoLicensesFromGoModDownload(all.Go, goLicenses, goModuleDirs, goLookupFailures)
+		enrichGoLicensesFromGoModuleList(all.Go, goLicenses, goModuleDirs, goLookups)
+		enrichGoLicensesFromGoModDownload(all.Go, goLicenses, goModuleDirs, goLookups)
 		enrichGoLicensesFromGitHub(all.Go, goLicenses)
 	}
 
@@ -147,7 +147,7 @@ func run() error {
 	rows := []dependencyRow{}
 	rowSummary := []string{}
 	if langs["go"] {
-		languageRows := buildGoRows(all.Go, goLicenses, goLookupFailures)
+		languageRows := buildGoRows(all.Go, goLicenses, goLookups)
 		rows = append(rows, languageRows...)
 		rowSummary = append(rowSummary, fmt.Sprintf("Go %d modules", len(languageRows)))
 	}

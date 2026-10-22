@@ -619,6 +619,8 @@ func httpGetBytesWithStatus(rawURL string, timeout time.Duration, headers map[st
 	var body []byte
 	var status int
 	err := retryLookup(timeout, func(remaining time.Duration) error {
+		body = nil
+		status = 0
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
