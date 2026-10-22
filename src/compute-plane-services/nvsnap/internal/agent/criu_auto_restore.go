@@ -147,6 +147,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerGroupCapture(ctx, pod)
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
+	c.considerRestoredCondition(ctx, pod)
 	if !c.admitted(ctx, pod) {
 		return
 	}
@@ -410,8 +411,12 @@ func (c *criuAutoRestorer) recordLoneRestore(ctx context.Context, ns, pod, id, c
 }
 
 // markRestored annotates a restored placeholder so a restarted agent does
-// not restore into it again (and, refused, delete it).
+// not restore into it again (and, refused, delete it), and lets its
+// readiness pass (restored_condition.go).
 func (a *Agent) markRestored(ctx context.Context, ns, pod string, log *logrus.Entry) {
+	if err := a.setRestoredCondition(ctx, ns, pod); err != nil {
+		log.WithError(err).Warn("CRIU restore: could not set the pod's restored condition; the agent sets it on the pod's next event")
+	}
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, webhook.CRIURestoredAnnotation, time.Now().UTC().Format(time.RFC3339))
 	if _, err := a.kubeClient.CoreV1().Pods(ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU restore: could not mark the pod restored; an agent restart may try it again")

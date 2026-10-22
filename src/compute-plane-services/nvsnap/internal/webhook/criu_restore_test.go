@@ -455,3 +455,41 @@ func TestWithPIDReserve(t *testing.T) {
 		t.Errorf("a list another patch created must be joined, not replaced: %+v", got)
 	}
 }
+
+// A placeholder's readiness waits on the agent's restored condition, next
+// to any gate the pod already has, and the gate is added once.
+func TestCRIURestore_ReadinessWaitsOnTheRestore(t *testing.T) {
+	for name, gates := range map[string][]corev1.PodReadinessGate{
+		"no gates":   nil,
+		"own gate":   {{ConditionType: "example.com/ready"}},
+		"gate there": {{ConditionType: CRIURestoredCondition}},
+	} {
+		pod := criuFunctionPod()
+		pod.Spec.ReadinessGates = gates
+		got := applyPatches(t, pod, restoredGatePatches(pod)).Spec.ReadinessGates
+		n := 0
+		for _, g := range got {
+			if g.ConditionType == CRIURestoredCondition {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: %d restored gates in %v, want 1", name, n, got)
+		}
+		if len(gates) == 1 && gates[0].ConditionType != CRIURestoredCondition && (len(got) != 2 || got[0] != gates[0]) {
+			t.Errorf("%s: the pod's own gate was not kept: %v", name, got)
+		}
+	}
+	m := criuMutator(t, criuCaptureRecord())
+	patches, err := m.criuRestorePatches(criuFunctionPod(), "abc123__20261008-101010", criuCaptureRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range patches {
+		found = found || p.Path == "/spec/readinessGates"
+	}
+	if !found {
+		t.Error("the placeholder's readiness does not wait on the restore")
+	}
+}
