@@ -383,6 +383,54 @@ exit 1
 	}
 }
 
+// TestGoDownloadUnavailableToolReportsAllModules checks that an unavailable Go
+// executable is reported for every unresolved module without losing successes.
+func TestGoDownloadUnavailableToolReportsAllModules(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.sum"), "example.test/b-first v1.0.0 h1:fixture\nexample.test/c-second v1.0.0 h1:fixture\n")
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("COLLECT_DEPS_NO_GO_LIST", "1")
+	t.Setenv("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD", "0")
+	all := map[string]struct{}{
+		"example.test/a-no-version": {},
+		"example.test/b-first":      {},
+		"example.test/c-second":     {},
+		"example.test/d-inspected":  {},
+		"example.test/e-licensed":   {},
+	}
+	licenses := map[string]map[string]struct{}{}
+	addLicense(licenses, "example.test/e-licensed", "MIT")
+	lookups := goLookupResults{}
+	lookups.recordSuccess("example.test/d-inspected")
+	enrichGoLicensesFromGoModuleList(all, licenses, []string{dir}, lookups)
+	enrichGoLicensesFromGoModDownload(all, licenses, []string{dir}, lookups)
+	for _, row := range buildGoRows(all, licenses, lookups) {
+		switch row.SortKey {
+		case "example.test/e-licensed":
+			if row.License != "MIT" {
+				t.Errorf("recognized license changed: %v", row)
+			}
+		case "example.test/d-inspected":
+			if strings.Contains(row.License, "lookup unavailable") || normalizeLicenseGroup(row.License) != "Unresolved" {
+				t.Errorf("successful absent-license lookup changed: %v", row)
+			}
+		default:
+			if !strings.Contains(row.License, "lookup unavailable") || !strings.Contains(row.License, "Go executable unavailable; check PATH") {
+				t.Errorf("missing unavailable-tool diagnostic: %v", row)
+			}
+			if normalizeLicenseGroup(row.License) != "Unresolved" {
+				t.Errorf("failed lookup must remain unresolved: %v", row)
+			}
+		}
+	}
+	addLicense(licenses, "example.test/c-second", "Apache-2.0")
+	for _, row := range buildGoRows(all, licenses, lookups) {
+		if row.SortKey == "example.test/c-second" && row.License != "Apache-2.0" {
+			t.Fatalf("later fallback license ignored: %v", row)
+		}
+	}
+}
+
 // registryTransport redirects only the synthetic npm lookup to a local server.
 type registryTransport struct{ endpoint string }
 

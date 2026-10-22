@@ -317,6 +317,11 @@ func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicense
 				fmt.Fprintf(os.Stderr, "collect-dependencies: %s\n", failure)
 				var execErr *exec.Error
 				if errors.As(err, &execErr) {
+					for remaining := range missing {
+						if remaining != mod {
+							lookups.recordFailure(remaining, "go mod download: "+err.Error())
+						}
+					}
 					return
 				}
 				continue
