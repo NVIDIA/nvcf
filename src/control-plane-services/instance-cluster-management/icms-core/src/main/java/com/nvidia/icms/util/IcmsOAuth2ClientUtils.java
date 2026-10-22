@@ -27,6 +27,7 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 import static org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT;
 
 import com.nvidia.boot.exceptions.BadRequestException;
+import com.nvidia.boot.exceptions.BootResponseException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
@@ -130,7 +131,9 @@ public final class IcmsOAuth2ClientUtils {
                 .jitter(0.75)
                 .doBeforeRetry(retrySignal -> log.info("Before retrying {} call", svcName))
                 .doAfterRetry(retrySignal -> log.info("After retrying {} call", svcName))
-                .filter(throwable -> throwable instanceof UpstreamException
+                .filter(throwable -> throwable instanceof UpstreamException upstreamException
+                        && !(upstreamException.getCause() instanceof BootResponseException cause
+                             && cause.getStatusCode().is4xxClientError())
                         || isTokenServer5xx(throwable))
                 .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
                     log.error("{} failed to process after max retries", svcName);
@@ -226,7 +229,9 @@ public final class IcmsOAuth2ClientUtils {
                     var detail =
                             getDetailFromProblemDetailsResponse(JSON_MAPPER, serviceName, body);
                     if (status.isSameCodeAs(UNAUTHORIZED)) {
-                        return Mono.error(new UnauthorizedException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail,
+                                                      new UnauthorizedException(detail)));
                     }
                     if (status.isSameCodeAs(PAYMENT_REQUIRED)) {
                         return Mono.error(

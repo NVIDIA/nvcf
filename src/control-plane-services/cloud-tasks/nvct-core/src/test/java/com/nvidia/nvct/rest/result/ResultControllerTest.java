@@ -228,7 +228,7 @@ class ResultControllerTest {
                              TEST_NCA_ID,
                              TEST_TASK_ID_1,
                              Set.of(),
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Non-existent task.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                              List.of(SCOPE_LIST_EVENTS,

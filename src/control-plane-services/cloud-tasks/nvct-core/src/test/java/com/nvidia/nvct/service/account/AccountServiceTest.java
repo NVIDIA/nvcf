@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.nvidia.boot.exceptions.NotFoundException;
+import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
 import com.nvidia.nvct.grpc.TestTaskService;
@@ -128,14 +129,16 @@ class AccountServiceTest {
 
     @Test
     void shouldFailToGetAccount() {
-        assertThatExceptionOfType(NotFoundException.class).isThrownBy(
-                () -> accountService.getAccount("non-existent-account"));
+        assertThatExceptionOfType(UpstreamException.class).isThrownBy(
+                () -> accountService.getAccount("non-existent-account"))
+                .withCauseInstanceOf(NotFoundException.class);
     }
 
     @Test
     void shouldFailToLookupAccount() {
-        assertThatExceptionOfType(NotFoundException.class).isThrownBy(
-                () -> accountService.lookupAccountUsingNcaIdOrThrow("non-existent-account"));
+        assertThatExceptionOfType(UpstreamException.class).isThrownBy(
+                () -> accountService.lookupAccountUsingNcaIdOrThrow("non-existent-account"))
+                .withCauseInstanceOf(NotFoundException.class);
     }
 
     @Test
