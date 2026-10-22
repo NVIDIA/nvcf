@@ -418,7 +418,7 @@ go 1.26
 	}
 	allModules := map[string]struct{}{"example.com/dep": {}}
 	licenses := map[string]map[string]struct{}{}
-	enrichGoLicensesFromGoModuleList(allModules, licenses, []string{tmp})
+	enrichGoLicensesFromGoModuleList(allModules, licenses, []string{tmp}, map[string]string{})
 
 	if got := formatGoLicense(licenses, "example.com/dep"); got != "BSD-2-Clause" {
 		t.Fatalf("Go license = %q, want BSD-2-Clause", got)

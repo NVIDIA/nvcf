@@ -216,7 +216,7 @@ func mergeGoSumVersions(goModuleRoots []string) map[string]map[string]struct{} {
 	return out
 }
 
-func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string) {
+func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, failures map[string]string) {
 	if envBool("COLLECT_DEPS_NO_GO_LIST") {
 		return
 	}
@@ -229,14 +229,15 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 		fmt.Fprintln(os.Stderr, "collect-dependencies: resolving Go licenses via `go list -mod=readonly -m -json all` in each umbrella module (module-cache LICENSE; use COLLECT_DEPS_NO_GO_LIST=1 to skip).")
 	}
 	for _, root := range goModuleRoots {
-		stdout, _, err := runCommand(root, nil, 10*time.Minute, "go", "list", "-mod=readonly", "-m", "-json", "all")
+		stdout, err := runGoLicenseCommand(root, 10*time.Minute, "list", "-mod=readonly", "-m", "-json", "all")
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "collect-dependencies: go list in %s: %v\n", root, err)
+			for mod := range missing {
+				failures[mod] = "go list: " + err.Error()
+			}
 			var execErr *exec.Error
 			if errors.As(err, &execErr) {
 				return
-			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				fmt.Fprintf(os.Stderr, "collect-dependencies: go list timed out in %s\n", root)
 			}
 			continue
 		}
@@ -246,6 +247,9 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 				continue
 			}
 			dir, _ := obj["Dir"].(string)
+			if dir != "" {
+				delete(failures, path)
+			}
 			if lic := licenseFromPlainDir(dir); lic != "" {
 				addLicense(goLicenses, path, lic)
 				delete(missing, path)
@@ -257,7 +261,7 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 	}
 }
 
-func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string) {
+func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicenses map[string]map[string]struct{}, goModuleRoots []string, failures map[string]string) {
 	if envBool("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD") {
 		return
 	}
@@ -280,21 +284,26 @@ func enrichGoLicensesFromGoModDownload(allModules map[string]struct{}, goLicense
 				break
 			}
 			spec := mod + "@" + ver
-			stdout, _, err := runCommand("", nil, 2*time.Minute, "go", "mod", "download", "-json", spec)
+			stdout, err := runGoLicenseCommand("", 2*time.Minute, "mod", "download", "-json", spec)
 			if err != nil {
+				failures[mod] = "go mod download " + spec + ": " + err.Error()
+				fmt.Fprintf(os.Stderr, "collect-dependencies: %s\n", failures[mod])
 				var execErr *exec.Error
 				if errors.As(err, &execErr) {
 					return
-				}
-				if errors.Is(err, context.DeadlineExceeded) {
-					continue
 				}
 				continue
 			}
 			var obj map[string]any
 			if json.Unmarshal([]byte(stdout), &obj) != nil {
+				failures[mod] = "go mod download " + spec + ": invalid JSON response"
 				continue
 			}
+			if failure, _ := obj["Error"].(string); failure != "" {
+				failures[mod] = "go mod download " + spec + ": " + goLookupError(errors.New("module error"), failure).Error()
+				continue
+			}
+			delete(failures, mod)
 			dir, _ := obj["Dir"].(string)
 			if lic := licenseFromPlainDir(dir); lic != "" {
 				addLicense(goLicenses, mod, lic)
@@ -352,14 +361,18 @@ func formatGoLicense(goLicenses map[string]map[string]struct{}, mod string) stri
 	return strings.Join(parts, " / ") + " _(multiple vendor copies differ)_"
 }
 
-func buildGoRows(allGo map[string]struct{}, goLicenses map[string]map[string]struct{}) []dependencyRow {
+func buildGoRows(allGo map[string]struct{}, goLicenses map[string]map[string]struct{}, failures map[string]string) []dependencyRow {
 	rows := make([]dependencyRow, 0, len(allGo))
 	for _, mod := range sortedKeys(allGo) {
+		license := formatGoLicense(goLicenses, mod)
+		if failure := failures[mod]; failure != "" && len(goLicenseForModule(goLicenses, mod)) == 0 {
+			license = "_(license lookup unavailable: " + failure + ")_"
+		}
 		rows = append(rows, dependencyRow{
 			Language: "Go",
 			SortKey:  mod,
 			Spec:     "`" + mod + "`",
-			License:  formatGoLicense(goLicenses, mod),
+			License:  license,
 		})
 	}
 	return rows

@@ -80,34 +80,34 @@ func splitNodeDependency(key string) (nodeDependency, bool) {
 	return nodeDependency{Name: key[:separator], Version: key[separator+1:]}, true
 }
 
-func npmLicense(dep nodeDependency, cache map[string]*string) string {
+type npmLookupResult struct {
+	license string
+	err     error
+}
+
+func npmLicense(dep nodeDependency, cache map[string]npmLookupResult) npmLookupResult {
 	key := dep.Name + "@" + dep.Version
 	if cached, ok := cache[key]; ok {
-		if cached == nil {
-			return ""
-		}
-		return *cached
+		return cached
 	}
+	result := npmLookupResult{}
+	defer func() { cache[key] = result }()
 	u := "https://registry.npmjs.org/" + url.PathEscape(dep.Name) + "/" + url.PathEscape(dep.Version)
 	body, err := httpGetString(u, httpTimeoutShort, map[string]string{"User-Agent": httpUserAgent})
 	if err != nil {
-		cache[key] = nil
-		return ""
+		result.err = err
+		fmt.Fprintf(os.Stderr, "collect-dependencies: npm metadata %s: %v\n", key, err)
+		return result
 	}
 	var metadata struct {
 		License any `json:"license"`
 	}
 	if err := json.Unmarshal([]byte(body), &metadata); err != nil {
-		cache[key] = nil
-		return ""
+		result.err = fmt.Errorf("invalid npm metadata JSON")
+		return result
 	}
-	license := npmLicenseValue(metadata.License)
-	if license == "" {
-		cache[key] = nil
-		return ""
-	}
-	cache[key] = &license
-	return license
+	result.license = npmLicenseValue(metadata.License)
+	return result
 }
 
 func npmLicenseValue(value any) string {
@@ -122,7 +122,7 @@ func npmLicenseValue(value any) string {
 	return ""
 }
 
-func buildNodeRows(allNode map[string]struct{}, useNPM bool, cache map[string]*string) ([]dependencyRow, int) {
+func buildNodeRows(allNode map[string]struct{}, useNPM bool, cache map[string]npmLookupResult) ([]dependencyRow, int) {
 	rows := []dependencyRow{}
 	keys := sortedKeys(allNode)
 	for _, key := range keys {
@@ -132,10 +132,14 @@ func buildNodeRows(allNode map[string]struct{}, useNPM bool, cache map[string]*s
 		}
 		license := "_(npm registry lookup disabled)_"
 		if useNPM {
-			if resolved := npmLicense(dep, cache); resolved != "" {
-				license = resolved
-			} else {
-				license = "_(npm registry: unknown or unreachable - set COLLECT_DEPS_NO_NPM=1 to skip network)_"
+			result := npmLicense(dep, cache)
+			switch {
+			case result.license != "":
+				license = result.license
+			case result.err != nil:
+				license = "_(npm license lookup unavailable: " + result.err.Error() + ")_"
+			default:
+				license = "_(npm metadata contains no recognized license)_"
 			}
 		}
 		rows = append(rows, dependencyRow{
