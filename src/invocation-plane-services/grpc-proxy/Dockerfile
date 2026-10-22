@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Common builder stage (executes ONLY on the build platform)
-FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10 AS builder
 
 # ---- Build configuration -----------------------------------------------------
 ENV GOPROXY=https://proxy.golang.org,direct
@@ -43,7 +43,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # Final runtime image – one per requested TARGETPLATFORM
 # BuildKit will create a final image per platform and copy the pre-built
 # binary that matches the platform's architecture.
-FROM nvcr.io/nvidia/distroless/go:v4.1.6@sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929
+FROM nvcr.io/nvidia/distroless/go:v4.1.7@sha256:9ef7b9ac43cbf4c833fd5d98689dc09b06a29e5ec3451796b037aa27928fe532
 USER 1000:1000
 
 # The following build arg is automatically populated by BuildKit.

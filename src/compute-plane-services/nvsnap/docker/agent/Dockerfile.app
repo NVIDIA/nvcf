@@ -22,7 +22,7 @@ ARG LIBZMQ_IMAGE=nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
 # ============================================================================
 # Stage 1: Build Go binaries
 # ============================================================================
-FROM golang:1.25-bookworm AS go-builder
+FROM golang:1.26.10-bookworm AS go-builder
 
 WORKDIR /app
 COPY go.mod go.sum ./

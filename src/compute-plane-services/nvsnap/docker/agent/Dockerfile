@@ -124,7 +124,7 @@ RUN make clean && make ENABLE_LIBUV_INTERCEPT=${ENABLE_LIBUV_INTERCEPT} && \
 # =============================================================================
 # Stage 2b: Build Go binaries
 # =============================================================================
-FROM golang:1.25-bookworm AS go-builder
+FROM golang:1.26.10-bookworm AS go-builder
 
 WORKDIR /app
 

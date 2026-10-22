@@ -23,7 +23,7 @@
 #   docker tag ess-agent-ci:golang-1.25.6 urm.nvidia.com/sw-nvcf-docker/ess-agent-ci:golang-1.25.6
 #   docker push urm.nvidia.com/sw-nvcf-docker/ess-agent-ci:golang-1.25.6
 
-FROM golang:1.25.6-bookworm
+FROM golang:1.26.10-bookworm
 
 ARG VAULT_VERSION=1.17.2
 ARG CONSUL_VERSION=1.20.0

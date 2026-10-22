@@ -28,6 +28,10 @@ gazelle(
     name = "gazelle",
 )
 
+# go.work's go line selects the toolchain the otelcol genrule compiles with,
+# so the genrule declares it as an input.
+exports_files(["go.work"])
+
 # ============================================================================
 # Two multi-arch OCI images:
 #

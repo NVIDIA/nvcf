@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-ARG GO_VERSION=1.26.1
+ARG GO_VERSION=1.26.10
 FROM golang:${GO_VERSION} AS builder
 
 ENV CGO_ENABLED=0
