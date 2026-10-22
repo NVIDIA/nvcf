@@ -55,7 +55,9 @@ class IcmsClientOtlpEndpointTest {
             "http://bad host:4317",
             "not a uri",
             "otel-collector.example.invalid:4317",
-            "grpc://otel-collector.example.invalid:4317"
+            "grpc://otel-collector.example.invalid:4317",
+            "http:otel-collector.example.invalid",
+            "https:///v1/traces"
     })
     void malformedEndpointIsRejected(String endpoint) {
         assertThatIllegalArgumentException()

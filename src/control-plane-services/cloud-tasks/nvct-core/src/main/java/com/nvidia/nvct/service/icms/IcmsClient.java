@@ -534,9 +534,9 @@ public class IcmsClient {
 
     // Workers and the BYOO collector run with tracing disabled when
     // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
-    // A configured endpoint must be an http or https URL, the same rule the OpenTelemetry SDK
-    // applies. Anything else is a configuration error, and throwing here stops startup because
-    // the refresh scope creates this bean eagerly.
+    // A configured endpoint must be an http or https URL with a host, as the OpenTelemetry SDK
+    // and workers expect. Anything else is a configuration error, and throwing here stops startup
+    // because the refresh scope creates this bean eagerly.
     static URI parseTracingUrl(String endpoint) {
         if (isBlank(endpoint)) {
             return null;
@@ -548,7 +548,9 @@ public class IcmsClient {
         } catch (URISyntaxException e) {
             throw invalidTracingEndpoint(trimmed, e);
         }
-        if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) {
+        var scheme = uri.getScheme();
+        var httpScheme = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+        if (!httpScheme || isBlank(uri.getRawAuthority())) {
             throw invalidTracingEndpoint(trimmed, null);
         }
         return uri;
