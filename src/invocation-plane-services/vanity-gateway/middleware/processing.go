@@ -78,7 +78,20 @@ func ShadowTelemetryContext(ctx context.Context) context.Context {
 
 func shadowMetricAttributes(r *http.Request) []attribute.KeyValue {
 	shadow, _ := r.Context().Value(shadowContextKey{}).(bool)
-	return []attribute.KeyValue{attribute.Bool("nvcf.shadow", shadow)}
+	callKind := "inference"
+	if health, _ := r.Context().Value(healthCallKey{}).(bool); health {
+		callKind = "health"
+	}
+	attrs := []attribute.KeyValue{attribute.Bool("nvcf.shadow", shadow), attribute.String("gateway_call_kind", callKind)}
+	if outcome, _ := r.Context().Value(upstreamOutcomeKey{}).(*upstreamOutcome); outcome != nil {
+		if outcome.errorSource != "" {
+			attrs = append(attrs, attribute.String("error_source", outcome.errorSource))
+		}
+		if outcome.errorType != "" {
+			attrs = append(attrs, attribute.String("error.type", outcome.errorType))
+		}
+	}
+	return attrs
 }
 
 func processingMiddleware(next http.Handler) http.Handler {

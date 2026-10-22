@@ -19,6 +19,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -68,13 +69,56 @@ func ServerTelemetryMiddleware(opts ...otelhttp.Option) func(http.Handler) http.
 }
 
 func TracedRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	traced := otelhttp.NewTransport(rt, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
+	traced := otelhttp.NewTransport(upstreamOutcomeRoundTripper{rt}, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
 	return dispatchRoundTripper{traced}
+}
+
+type upstreamOutcomeKey struct{}
+
+type healthCallKey struct{}
+
+// upstreamOutcome is filled by upstreamOutcomeRoundTripper and read when
+// otelhttp records the client metric, after the response status is known.
+type upstreamOutcome struct{ errorSource, errorType string }
+
+// WithHealthCall marks outbound requests made by health probes so client
+// metrics can tell them apart from proxied inference traffic.
+func WithHealthCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, healthCallKey{}, true)
+}
+
+// upstreamOutcomeRoundTripper sits below otelhttp. It records a bounded
+// error_source from the upstream header on non-2xx responses and an
+// error.type when no response was received.
+type upstreamOutcomeRoundTripper struct{ http.RoundTripper }
+
+func (rt upstreamOutcomeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := rt.RoundTripper.RoundTrip(r)
+	outcome, _ := r.Context().Value(upstreamOutcomeKey{}).(*upstreamOutcome)
+	if outcome == nil {
+		return resp, err
+	}
+	switch {
+	case err != nil:
+		outcome.errorType = "transport_error"
+		if errors.Is(err, context.Canceled) {
+			outcome.errorType = "canceled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			outcome.errorType = "timeout"
+		}
+	case resp.StatusCode >= http.StatusMultipleChoices:
+		outcome.errorSource = "unknown"
+		if source := resp.Header.Get(ErrorSourceHeader); source == "invocation_service" || source == "worker" {
+			outcome.errorSource = source
+		}
+	}
+	return resp, err
 }
 
 type dispatchRoundTripper struct{ http.RoundTripper }
 
 func (rt dispatchRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.WithContext(context.WithValue(r.Context(), upstreamOutcomeKey{}, &upstreamOutcome{}))
 	if state := processingFromContext(r.Context()); state != nil {
 		outcome := "dispatched"
 		if r.Context().Err() != nil {

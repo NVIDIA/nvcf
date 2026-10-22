@@ -19,6 +19,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -111,4 +112,73 @@ func TestPreUpstreamPrometheusName(t *testing.T) {
 		}
 	}
 	t.Fatal("documented Prometheus histogram not found")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestClientMetricCallLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		status                         int
+		source                         string
+		err                            error
+		health                         bool
+		wantKind, wantSource, wantType string
+	}{
+		{name: "ok", status: 200, wantKind: "inference"},
+		{name: "worker error", status: 503, source: "worker", wantKind: "inference", wantSource: "worker"},
+		{name: "service error", status: 504, source: "invocation_service", wantKind: "inference", wantSource: "invocation_service"},
+		{name: "unbounded source", status: 500, source: "arbitrary", wantKind: "inference", wantSource: "unknown"},
+		{name: "no header", status: 502, wantKind: "inference", wantSource: "unknown"},
+		{name: "health probe", status: 200, health: true, wantKind: "health"},
+		{name: "canceled", err: context.Canceled, wantKind: "inference", wantType: "canceled"},
+		{name: "timeout", err: context.DeadlineExceeded, wantKind: "inference", wantType: "timeout"},
+		{name: "transport", err: errors.New("connection refused"), wantKind: "inference", wantType: "transport_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			provider := newHTTPMeterProvider(reader)
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(provider)
+			t.Cleanup(func() { otel.SetMeterProvider(previous); require.NoError(t, provider.Shutdown(context.Background())) })
+			rt := TracedRoundTripper(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if tc.err != nil {
+					return nil, tc.err
+				}
+				header := http.Header{}
+				if tc.source != "" {
+					header.Set(ErrorSourceHeader, tc.source)
+				}
+				return &http.Response{StatusCode: tc.status, Header: header, Body: http.NoBody, Request: r}, nil
+			}))
+			req := httptest.NewRequest(http.MethodGet, "http://upstream.example/x", nil)
+			if tc.health {
+				req = req.WithContext(WithHealthCall(req.Context()))
+			}
+			resp, err := rt.RoundTrip(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			require.Equal(t, tc.err != nil, err != nil)
+			found := false
+			for _, metric := range collectMetrics(t, reader) {
+				if metric.Name != "http.client.request.duration" {
+					continue
+				}
+				points := metric.Data.(metricdata.Histogram[float64]).DataPoints
+				require.Len(t, points, 1)
+				found = true
+				kind, _ := points[0].Attributes.Value("gateway_call_kind")
+				require.Equal(t, tc.wantKind, kind.AsString())
+				source, hasSource := points[0].Attributes.Value("error_source")
+				require.Equal(t, tc.wantSource != "", hasSource)
+				require.Equal(t, tc.wantSource, source.AsString())
+				typ, _ := points[0].Attributes.Value("error.type")
+				require.Equal(t, tc.wantType, typ.AsString())
+			}
+			require.True(t, found)
+		})
+	}
 }
