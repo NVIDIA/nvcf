@@ -550,6 +550,7 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | --inference-port       | 8000                              |
         | --health-uri           | /health                           |
         | --health-port          | 8000                              |
+        | --health-timeout       | PT30S                             |
         | --metrics-telemetry-id | ${BDD_BYOO_GATE_OFF_TELEMETRY_ID} |
       And the function selected by NVCF CLI is deleted at scenario teardown
       And the function selected by NVCF CLI is undeployed at scenario teardown
