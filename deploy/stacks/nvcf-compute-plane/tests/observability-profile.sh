@@ -94,10 +94,15 @@ done
 expected_nvca_version="$(yq -r '.global.nvcaOperator.selfManaged.nvcaVersion' "$stack_dir/environments/base.yaml")"
 [[ -n "$expected_nvca_version" && "$expected_nvca_version" != "null" ]] ||
   fail "could not read the default NVCA version"
-test -z "$(operator_image_tag "$work_dir/default.yaml")" ||
-  fail "default operator image tag should be supplied by the chart appVersion"
+expected_operator_version="$(yq -r '.global.nvcaOperator.imageTag' "$stack_dir/environments/base.yaml")"
+[[ -n "$expected_operator_version" && "$expected_operator_version" != "null" ]] ||
+  fail "could not read the default NVCA Operator version"
+test "$(operator_image_tag "$work_dir/default.yaml")" = "$expected_operator_version" ||
+  fail "default NVCA Operator version is not $expected_operator_version"
 test "$(nvca_version "$work_dir/default.yaml")" = "$expected_nvca_version" ||
   fail "default NVCA version is not $expected_nvca_version"
+test "$expected_operator_version" = "$expected_nvca_version" ||
+  fail "default NVCA Operator and NVCA versions do not match"
 
 render_values compute "$work_dir/ncp-dev-default.yaml" \
   --state-values-set-string global.image.registry=nvcr.io \
