@@ -33,9 +33,9 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.10.2"
+    imageTag: "3.10.3"
     selfManaged:
-      nvcaVersion: "3.10.2"
+      nvcaVersion: "3.10.3"
       imageCredHelper:
         imageTag: "0.11.3"
       otelCollector:
