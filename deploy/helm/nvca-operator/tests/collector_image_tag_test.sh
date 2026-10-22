@@ -28,7 +28,7 @@ tag_pattern='[0-9]+\.[0-9]+\.[0-9]+-nv-[0-9]+\.[0-9]+\.[0-9]+|(byoo|nvcf)-otel-c
 legacy_override='nvcr\.io/nvidia/nvcf-byoc/byoo-otel-collector:0\.157\.11"'
 copies="$(
   grep -rEn --exclude=values.yaml "${tag_pattern}" "${chart}" |
-    sed -E "s|${legacy_override}||g" |
+    sed -E "/^[^:]*\/templates\/deployment\.yaml:/ s|${legacy_override}||g" |
     grep -E "${tag_pattern}" || true
 )"
 if [[ -n "${copies}" ]]; then
