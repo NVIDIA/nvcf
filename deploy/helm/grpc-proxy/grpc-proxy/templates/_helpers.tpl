@@ -156,6 +156,84 @@ Generate all pod annotations in one place
 {{- end }}
 
 {{/*
+HTTP/3 worker callback TLS Secret name.
+*/}}
+{{- define "grpc-proxy.http3SecretName" -}}
+{{- $tls := dig "http3" "tls" dict .Values.grpcproxy -}}
+{{- $certificate := dig "certificate" dict $tls -}}
+{{- if dig "enabled" false $certificate -}}
+{{- dig "secretName" "" $tls | default (printf "%s-worker-tls" (include "grpc-proxy.fullname" .)) -}}
+{{- else -}}
+{{- required "grpcproxy.http3.tls.secretName is required when grpcproxy.http3.enabled is true and grpcproxy.http3.tls.certificate.enabled is false" (dig "secretName" "" $tls) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+HTTP/3 callback base URL. Each pod advertises https://<dashed-pod-ip>.<host>.
+Without workerConnectBaseURL or env.SELF_WORKER_FQDN, workers reach each pod
+through the grpc-headless Service name.
+*/}}
+{{- define "grpc-proxy.http3BaseURL" -}}
+{{- $userEnv := .Values.grpcproxy.env | default dict -}}
+{{- .Values.grpcproxy.workerConnectBaseURL | default (get $userEnv "SELF_WORKER_FQDN") | default (printf "https://grpc-headless.%s.svc.cluster.local:10084" (include "grpc-proxy.namespace" .)) -}}
+{{- end }}
+
+{{/*
+Default Certificate DNS names: a wildcard over the HTTP/3 callback base host.
+*/}}
+{{- define "grpc-proxy.http3DefaultDnsNames" -}}
+{{- $base := include "grpc-proxy.http3BaseURL" . -}}
+{{- $host := (urlParse $base).hostname -}}
+{{- if not $host -}}
+{{- fail (printf "grpcproxy.http3.tls.certificate.dnsNames is required: cannot read a host from callback base URL %q" $base) -}}
+{{- end -}}
+{{- toJson (list (printf "*.%s" $host)) -}}
+{{- end }}
+
+{{/*
+Environment owned by grpcproxy.http3, as a YAML map. Empty when HTTP/3 is off.
+*/}}
+{{- define "grpc-proxy.http3Env" -}}
+{{- if dig "http3" "enabled" false .Values.grpcproxy -}}
+{{- $userEnv := .Values.grpcproxy.env | default dict -}}
+{{- range $key := list "PUBLIC_CERT_PATH" "PRIVATE_KEY_PATH" -}}
+{{- if hasKey $userEnv $key -}}
+{{- fail (printf "grpcproxy.env.%s cannot be set when grpcproxy.http3.enabled is true; the chart mounts the TLS Secret and sets it" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $env := dict
+  "ENABLE_HTTP3_CONNECT" "true"
+  "ENABLE_HTTP1_CONNECT" "false"
+  "PUBLIC_CERT_PATH" "/etc/grpc-proxy-tls/tls.crt"
+  "PRIVATE_KEY_PATH" "/etc/grpc-proxy-tls/tls.key" -}}
+{{- if not (or .Values.grpcproxy.workerConnectBaseURL (hasKey $userEnv "SELF_WORKER_FQDN")) -}}
+{{- $_ := set $env "SELF_WORKER_FQDN" (include "grpc-proxy.http3BaseURL" .) -}}
+{{- end -}}
+{{- toYaml $env -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Container and Service ports as a JSON list. HTTP/3 adds UDP 10084 unless
+grpcproxy.ports already lists it.
+*/}}
+{{- define "grpc-proxy.ports" -}}
+{{- $ports := .Values.grpcproxy.ports -}}
+{{- if dig "http3" "enabled" false .Values.grpcproxy -}}
+{{- $listed := false -}}
+{{- range $ports -}}
+{{- if and (eq (int .containerPort) 10084) (eq (upper (toString .protocol)) "UDP") -}}
+{{- $listed = true -}}
+{{- end -}}
+{{- end -}}
+{{- if not $listed -}}
+{{- $ports = append $ports (dict "name" "worker-quic" "containerPort" 10084 "protocol" "UDP") -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $ports -}}
+{{- end }}
+
+{{/*
 Validate deploymentType value
 */}}
 {{- define "grpc-proxy.validateDeploymentType" -}}

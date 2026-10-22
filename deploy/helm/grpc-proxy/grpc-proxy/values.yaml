@@ -125,6 +125,40 @@ grpcproxy:
   # Leave empty to preserve the pod-IP fallback.
   workerConnectBaseURL: ""
 
+  # HTTP/3 worker callbacks over TLS on UDP 10084. When enabled, the chart
+  # opens the port, mounts the TLS Secret, sets ENABLE_HTTP3_CONNECT=true and
+  # ENABLE_HTTP1_CONNECT=false, and each pod advertises
+  # https://<dashed-pod-ip>.<base host>. The base is workerConnectBaseURL when
+  # set, otherwise https://grpc-headless.<namespace>.svc.cluster.local:10084,
+  # which in-cluster workers resolve straight to the pod. That relies on the
+  # cluster DNS default of naming headless Service endpoints by dashed pod IP;
+  # CoreDNS endpoint_pod_names breaks it, so set workerConnectBaseURL to a
+  # domain that resolves those names instead. A custom base host needs DNS
+  # for every <dashed-pod-ip>.<base host> name, for example a wildcard
+  # record, not only the base host. Workers must trust the certificate's CA,
+  # for example through NVCF_PROXY_CA_PEM.
+  http3:
+    enabled: false
+    tls:
+      # kubernetes.io/tls Secret holding tls.crt and tls.key. Required unless
+      # certificate.enabled; with it, names the issued Secret
+      # (default <fullname>-worker-tls).
+      secretName: ""
+      # Issue the Secret with cert-manager. grpc-proxy reloads the files when
+      # cert-manager renews them, without a restart.
+      certificate:
+        enabled: false
+        issuerRef:
+          kind: ClusterIssuer
+          # Required when certificate.enabled.
+          name: ""
+          group: cert-manager.io
+        # Must cover the advertised hostnames. Defaults to *.<base host>, for
+        # example *.grpc-headless.<namespace>.svc.cluster.local.
+        dnsNames: []
+        duration: 2160h
+        renewBefore: 720h
+
   # Additional volumes on the output Deployment definition.
   volumes: []
 

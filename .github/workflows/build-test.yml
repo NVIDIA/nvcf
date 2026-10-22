@@ -171,6 +171,9 @@ jobs:
       - name: Test LLM request router chart rendering
         run: make -C deploy/helm/llm-request-router test
 
+      - name: Test grpc-proxy HTTP/3 chart rendering
+        run: bash deploy/helm/grpc-proxy/tests/http3-render.sh
+
       - name: Run Stargate dev stack render tests
         run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
 

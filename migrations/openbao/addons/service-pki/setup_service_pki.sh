@@ -50,6 +50,15 @@ ROOT_PKI_PATH="${ROOT_PKI_PATH:-${VAULT_SECRET_BASE_PATH}/pki/root}"
 NVCF_SERVICE_PKI_PATH="${NVCF_SERVICE_PKI_PATH:-${VAULT_SECRET_BASE_PATH}/pki/nvcf-service-issuing}"
 NVCF_SERVICE_PKI_ROLE_NAME="${NVCF_SERVICE_PKI_ROLE_NAME:-nvcf-service-server}"
 
+# Worker callback certificates (grpc-proxy HTTP/3) get their own role so the
+# self-managed stack owns its allowed domains. The llm-request-router hook
+# also runs this addon and rewrites NVCF_SERVICE_PKI_ROLE_NAME from its own
+# values; it does not set NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS, so it
+# leaves this role alone. The role name is fixed so every run grants the same
+# sign path in the shared cert-manager policy.
+NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS="${NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS:-}"
+NVCF_WORKER_CALLBACK_PKI_ROLE_NAME="nvcf-worker-callback"
+
 # TTL hierarchy: root TTL > intermediate max TTL > leaf max TTL. Leaf max TTL
 # defaults to 2160h (90 days) per the canonical PKI plan; cert-manager
 # Certificate resources set duration=2160h with renewBefore=720h (30 days),
@@ -132,8 +141,31 @@ bao write "${NVCF_SERVICE_PKI_PATH}/roles/${NVCF_SERVICE_PKI_ROLE_NAME}" \
   key_bits=2048 \
   max_ttl="${NVCF_SERVICE_PKI_LEAF_MAX_TTL}"
 
+if [ -n "${NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS}" ]; then
+  log_step "Writing worker callback signing role ${NVCF_WORKER_CALLBACK_PKI_ROLE_NAME}"
+  bao write "${NVCF_SERVICE_PKI_PATH}/roles/${NVCF_WORKER_CALLBACK_PKI_ROLE_NAME}" \
+    allowed_domains="${NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS}" \
+    allow_subdomains=true \
+    allow_bare_domains=false \
+    allow_wildcard_certificates=true \
+    allow_ip_sans=false \
+    require_cn=false \
+    server_flag=true \
+    client_flag=false \
+    key_type=rsa \
+    key_bits=2048 \
+    max_ttl="${NVCF_SERVICE_PKI_LEAF_MAX_TTL}"
+fi
+
+# Both roles' sign paths are always granted: every run of this addon writes the
+# same policy, so the LLM hook cannot drop the worker callback grant. Signing
+# against a role that was never created fails in OpenBao.
 cert_manager_policy=$(cat <<EOF
 path "${NVCF_SERVICE_PKI_PATH}/sign/${NVCF_SERVICE_PKI_ROLE_NAME}" {
+  capabilities = ["create", "update"]
+}
+
+path "${NVCF_SERVICE_PKI_PATH}/sign/${NVCF_WORKER_CALLBACK_PKI_ROLE_NAME}" {
   capabilities = ["create", "update"]
 }
 

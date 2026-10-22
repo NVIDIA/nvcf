@@ -15,6 +15,7 @@
 
 {{- include "grpc-proxy.validateDeploymentType" . -}}
 {{- if eq .Values.grpcproxy.deploymentType "daemonset" }}
+{{- $http3Env := include "grpc-proxy.http3Env" . | fromYaml }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -71,6 +72,12 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- range $key, $value := .Values.grpcproxy.env }}
+            {{- if not (hasKey $http3Env $key) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range $key, $value := $http3Env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
@@ -80,7 +87,7 @@ spec:
                 name: {{ include "grpc-proxy.fullname" . }}-env
           {{- end }}
           ports:
-            {{- range .Values.grpcproxy.ports }}
+            {{- range include "grpc-proxy.ports" . | fromJsonArray }}
             - name: {{ .name }}
               containerPort: {{ .containerPort }}
               protocol: {{ .protocol }}
@@ -106,6 +113,11 @@ spec:
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
+            {{- if $http3Env }}
+            - name: worker-tls
+              mountPath: /etc/grpc-proxy-tls
+              readOnly: true
+            {{- end }}
             {{- with .Values.grpcproxy.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -123,6 +135,11 @@ spec:
             items:
               - key: secrets.json.tmpl
                 path: secrets.json.tmpl
+        {{- if $http3Env }}
+        - name: worker-tls
+          secret:
+            secretName: {{ include "grpc-proxy.http3SecretName" . | quote }}
+        {{- end }}
         {{- with .Values.grpcproxy.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
