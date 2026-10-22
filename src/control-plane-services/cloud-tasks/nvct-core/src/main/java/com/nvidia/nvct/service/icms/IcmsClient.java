@@ -146,7 +146,7 @@ public class IcmsClient {
             @Value("${nvct.sidecars.utils-container}") String utilsContainer,
             @Value("${nvct.sidecars.ess-agent-container}") String essAgentContainer,
             @Value("${nvct.ess.base-url}") String essFqdn,
-            @Value("${nvct.sidecars.otel-collector-container}") String otelCollectorContainer,
+            @Value("${nvct.sidecars.otel-collector-container:}") String otelCollectorContainer,
             @Value("${nvct.fqdn}") String selfFqdn,
             @Value("${nvct.global-fqdn-grpc}") String globalFqdnGrpc,
             @Value("${spring.security.oauth2.client.registration.icms.client-id}") String clientId,
@@ -449,13 +449,13 @@ public class IcmsClient {
                         Pair.of("TERMINATION_GRACE_PERIOD", terminalGracePeriodDuration),
                         Pair.of("RESULTS_LOCATION", getResultsLocation(task)),
                         Pair.of("TRACING_ACCESS_TOKEN", tracingAccessToken),
-                        Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer),
                         Pair.of("TASK_SECRETS_PRESENT", taskSecretsPresent),
                         Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                         Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
                         Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
                         Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded));
-        var env = Stream.concat(envStream, otlpEndpointEnv(tracingUrl))
+        var env = Stream.concat(Stream.concat(envStream, otlpEndpointEnv(tracingUrl)),
+                        byooOtelCollectorContainerEnv(otelCollectorContainer))
                 .map(pair -> pair.getFirst() + "=" + pair.getSecond())
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
@@ -584,5 +584,13 @@ public class IcmsClient {
         return tracingUrl == null
                 ? Stream.empty()
                 : Stream.of(Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()));
+    }
+
+    // An empty collector image means the compute plane supplies it. The NVCA operator chart
+    // sets BYOO_OTEL_COLLECTOR_CONTAINER through its function and task env overrides.
+    static Stream<Pair<String, Object>> byooOtelCollectorContainerEnv(String image) {
+        return isBlank(image)
+                ? Stream.empty()
+                : Stream.of(Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", image));
     }
 }

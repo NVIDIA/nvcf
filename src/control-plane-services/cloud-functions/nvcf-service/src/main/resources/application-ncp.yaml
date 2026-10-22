@@ -98,7 +98,7 @@ nvcf:
     otel-container: dummy
     niclls-container: dummy
     ess-agent-container: dummy
-    otel-collector-container: dummy
+    otel-collector-container: ""
     llm-credential-manager-image: dummy
     llm-router-client-image: dummy
   ess:

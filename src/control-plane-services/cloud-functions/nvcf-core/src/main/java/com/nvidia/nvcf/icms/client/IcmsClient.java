@@ -209,7 +209,7 @@ public class IcmsClient {
             @Value("${nvcf.sidecars.utils-container-image.go}") String goUtilsContainer,
             @Value("${nvcf.sidecars.niclls-container}") String nicllsContainer,
             @Value("${nvcf.sidecars.ess-agent-container}") String essAgentContainer,
-            @Value("${nvcf.sidecars.otel-collector-container}") String otelCollectorContainer,
+            @Value("${nvcf.sidecars.otel-collector-container:}") String otelCollectorContainer,
             @Value("${nvcf.sidecars.llm-credential-manager-image}") String llmCredentialManagerImage,
             @Value("${nvcf.sidecars.llm-router-client-image}") String llmRouterClientImage,
             @Value("${nvcf.llm-request-router.worker-address}") String llmRequestRouterAddress,
@@ -474,7 +474,6 @@ public class IcmsClient {
                 Pair.of("HELM_CHART_INFERENCE_SERVICE_NAME", helmChartServiceName),
                 Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
                 Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
-                Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", otelCollectorContainer),
                 Pair.of("FUNCTION_SECRETS_PRESENT", functionSecretsPresent),
                 Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                 Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
@@ -495,6 +494,7 @@ public class IcmsClient {
                                       Stream.of(Pair.of("NKEY_SEED", workerNKeySeed.get())));
         }
         envStream = Stream.concat(envStream, otlpEndpointEnv(tracingUrl));
+        envStream = Stream.concat(envStream, byooOtelCollectorContainerEnv(otelCollectorContainer));
 
         // ### Keep the option to send legacy properties in case we need to troubleshoot.
         //     By default, sendLegacyCredProps is false. When sending legacy properties, we are
@@ -892,5 +892,13 @@ public class IcmsClient {
         return tracingUrl == null
                 ? Stream.empty()
                 : Stream.of(Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()));
+    }
+
+    // An empty collector image means the compute plane supplies it. The NVCA operator chart
+    // sets BYOO_OTEL_COLLECTOR_CONTAINER through its function and task env overrides.
+    static Stream<Pair<String, Object>> byooOtelCollectorContainerEnv(String image) {
+        return isBlank(image)
+                ? Stream.empty()
+                : Stream.of(Pair.of("BYOO_OTEL_COLLECTOR_CONTAINER", image));
     }
 }

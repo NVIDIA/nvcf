@@ -89,7 +89,7 @@ nvct:
     utils-container: dummy
     otel-container: dummy
     ess-agent-container: dummy
-    otel-collector-container: dummy
+    otel-collector-container: ""
   scheduled-routines:
     lock-consistency: LOCAL_QUORUM
   ess:
