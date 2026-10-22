@@ -194,14 +194,14 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
         | clusterGroupID             |
         | selfManaged.identitySource |
 
-  Rule: Operators can opt into API connection idle retirement with Envoy Gateway
+  Rule: Operators configure API connection idle retirement for their Gateway controller
 
     @gateway-api-idle-contract
-    Scenario: Render the API connection policy for an Envoy Gateway install
+    Scenario: Inspect the standalone API connection policy example for Envoy Gateway
       Given environment variable "REPO_ROOT" is set
       When I run command:
         """
-        helm template ingress ${REPO_ROOT}/deploy/helm/gateway-routes/chart --set nvcfGatewayRoutes.routes.nvcfApi.envoyBackendTrafficPolicy.enabled=true --set nvcfGatewayRoutes.gateways.shared.namespace=envoy-gateway-system --show-only templates/backendtrafficpolicy-nvcf-api.yaml
+        cat ${REPO_ROOT}/docs/overview/samples/configs/envoy-api-connection-idle.yaml
         """
       Then the command exit code should be 0
       And the command output should contain "kind: BackendTrafficPolicy"

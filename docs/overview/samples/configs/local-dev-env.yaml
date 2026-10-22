@@ -67,8 +67,6 @@ ingress:
     controllerNamespace: envoy-gateway-system
     routes:
       nvcfApi:
-        envoyBackendTrafficPolicy:
-          enabled: true
         routeAnnotations: {}
       apiKeys:
         routeAnnotations: {}

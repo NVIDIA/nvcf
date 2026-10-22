@@ -124,10 +124,6 @@ global:
 ingress:
   gatewayApi:
     routes:
-      nvcfApi:
-        envoyBackendTrafficPolicy:
-          enabled: true
-          connectionIdleTimeout: 20s
       apiKeys:
         enabled: false
       sis:
@@ -141,10 +137,5 @@ render_ingress_values "$off_values"
 assert_route_enabled apiKeys false "$off_values"
 assert_route_enabled sis false "$off_values"
 assert_route_enabled reval false "$off_values"
-
-yq -e '.nvcfGatewayRoutes.routes.nvcfApi.envoyBackendTrafficPolicy.enabled == false' "$default_values" >/dev/null ||
-  fail "Envoy API policy must be opt-in"
-yq -e '.nvcfGatewayRoutes.routes.nvcfApi.envoyBackendTrafficPolicy.enabled == true and .nvcfGatewayRoutes.routes.nvcfApi.envoyBackendTrafficPolicy.connectionIdleTimeout == "20s"' "$off_values" >/dev/null ||
-  fail "Envoy API policy overrides did not reach the chart"
 
 echo "gateway-routes-enable-wiring: all checks passed"

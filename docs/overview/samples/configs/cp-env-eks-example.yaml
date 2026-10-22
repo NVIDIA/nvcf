@@ -105,8 +105,6 @@ ingress:
     controllerNamespace: "envoy-gateway-system" # must be set by the environment
     routes:
       nvcfApi:
-        envoyBackendTrafficPolicy:
-          enabled: true
         routeAnnotations: {}
       apiKeys:
         routeAnnotations: {}
