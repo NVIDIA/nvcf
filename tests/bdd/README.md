@@ -145,11 +145,13 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 `byoo.feature` registers a telemetry endpoint that points at an in-cluster
 OpenTelemetry Collector Contrib sink, runs a task, a container function, and
 the BYOO sample function with telemetries, and checks the sink's counters. The
-BYOO collector also forwards its own metrics, so the sample checks read
-`otelcol_exporter_sent_*` counters from sink pipelines that keep only each
-sample's `service.name`. The last scenario reinstalls NVCA with the gate off
-and checks that a function with telemetries moves to `ERROR` with a reason
-that names the missing NVCA feature flags. It has two entry points:
+BYOO collector also forwards its own metrics, so the task metrics check and
+all three sample-function signal checks read `otelcol_exporter_sent_*`
+counters from sink pipelines that keep only that sample's `service.name`. The
+task span and log checks read the sink's receiver counters. The last scenario
+reinstalls NVCA with the gate off and checks that a function with telemetries
+moves to `ERROR` with a reason that names the missing NVCA feature flags. It
+has two entry points:
 
 - `TestBYOO` brings up the single-cluster topology, installs the stack with
   the `compute` observability profile, runs the workload scenarios, then runs
