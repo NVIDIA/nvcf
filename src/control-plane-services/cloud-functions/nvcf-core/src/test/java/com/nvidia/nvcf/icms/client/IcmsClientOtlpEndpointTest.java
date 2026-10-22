@@ -52,12 +52,28 @@ class IcmsClientOtlpEndpointTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
+            "http://otel-collector.example.invalid:4318",
+            "http://otel_collector:4318",
+            "http://otel-collector.example.invalid:",
+            "https://otel-collector.example.invalid",
+            "http://[::1]:4317"
+    })
+    void validEndpointIsAccepted(String endpoint) {
+        assertThat(IcmsClient.parseTracingUrl(endpoint)).isEqualTo(URI.create(endpoint));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
             "http://bad host:4317",
             "not a uri",
             "otel-collector.example.invalid:4317",
             "grpc://otel-collector.example.invalid:4317",
             "http:otel-collector.example.invalid",
-            "https:///v1/traces"
+            "https:///v1/traces",
+            "http://otel-collector.example.invalid:notaport",
+            "http://otel_collector:notaport",
+            "http://otel-collector.example.invalid:65536",
+            "http://otel-collector.example.invalid:99999999999"
     })
     void malformedEndpointIsRejected(String endpoint) {
         assertThatIllegalArgumentException()

@@ -79,6 +79,9 @@ public class IcmsClient {
 
     private static final String OTLP_ENDPOINT_PROPERTY =
             "management.opentelemetry.tracing.export.otlp.endpoint";
+    private static final String MESG_INVALID_OTLP_ENDPOINT =
+            "Invalid %s '%s': expected an http:// or https:// URL with a host and an optional numeric"
+                    + " port, or an empty value to disable tracing";
 
     private static final String MESG_NO_REQUEST_ID_FROM_ICMS =
             "Task id '%s': No request-id returned from ICMS";
@@ -534,9 +537,9 @@ public class IcmsClient {
 
     // Workers and the BYOO collector run with tracing disabled when
     // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
-    // A configured endpoint must be an http or https URL with a host, as the OpenTelemetry SDK
-    // and workers expect. Anything else is a configuration error, and throwing here stops startup
-    // because the refresh scope creates this bean eagerly.
+    // A configured endpoint must be an http or https URL with a host and an optional numeric port,
+    // as the OpenTelemetry SDK and workers expect. Anything else is a configuration error, and
+    // throwing here stops startup because the refresh scope creates this bean eagerly.
     static URI parseTracingUrl(String endpoint) {
         if (isBlank(endpoint)) {
             return null;
@@ -550,17 +553,29 @@ public class IcmsClient {
         }
         var scheme = uri.getScheme();
         var httpScheme = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
-        if (!httpScheme || isBlank(uri.getRawAuthority())) {
+        var authority = uri.getRawAuthority();
+        if (!httpScheme || isBlank(authority) || !hasValidPort(authority)) {
             throw invalidTracingEndpoint(trimmed, null);
         }
         return uri;
     }
 
+    // java.net.URI falls back to a registry-based authority, with no host or port, when the port
+    // is not a number, so check the port text directly. Registry-style host names, such as names
+    // with underscores, and an empty port stay valid.
+    private static boolean hasValidPort(String authority) {
+        var hostPort = authority.substring(authority.lastIndexOf('@') + 1);
+        var colon = hostPort.lastIndexOf(':');
+        if (colon < 0 || colon < hostPort.lastIndexOf(']')) {
+            return true;
+        }
+        var port = hostPort.substring(colon + 1);
+        return port.isEmpty() || port.matches("\\d{1,5}") && Integer.parseInt(port) <= 65535;
+    }
+
     private static IllegalArgumentException invalidTracingEndpoint(String endpoint, Throwable cause) {
         return new IllegalArgumentException(
-                "Invalid " + OTLP_ENDPOINT_PROPERTY + " '" + endpoint
-                        + "': expected an http:// or https:// URL, or an empty value to disable tracing",
-                cause);
+                String.format(MESG_INVALID_OTLP_ENDPOINT, OTLP_ENDPOINT_PROPERTY, endpoint), cause);
     }
 
     static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {
