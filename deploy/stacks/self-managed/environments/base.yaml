@@ -182,6 +182,8 @@ functionAutoscaler:
 # the LLM addon is enabled, the stack defaults the Pylon image from
 # global.sidecars (or global.image) at the selected request-router image version.
 api:
+  image:
+    tag: "1.18.1"
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -203,6 +205,8 @@ api:
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
 nvctApi:
+  image:
+    tag: "1.66.1"
   essBaseURL: ""
   remoteConfig:
     configData:
@@ -341,7 +345,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      tag: 0.17.6
+      tag: 0.17.7
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.

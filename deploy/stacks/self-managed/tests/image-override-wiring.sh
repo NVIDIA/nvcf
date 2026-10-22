@@ -162,7 +162,7 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
-for component in ess notary sis; do
+for component in api nvctApi ess notary sis; do
   expected="$(yq -r ".$component.image.tag" "$stack_dir/environments/base.yaml")"
   test -n "$expected" && test "$expected" != null ||
     fail "$component must select its maintained image in the stack defaults"
@@ -499,6 +499,9 @@ assert_yaml_path_absent "$work_dir/security-context-values.yaml" .nats.reloader.
 
 # Maintenance images must be selectable without taking unrelated chart changes.
 write_env <<'EOF'
+api:
+  image:
+    tag: 9.8.7-maintenance
 ess:
   image:
     tag: 9.8.7-maintenance
@@ -539,6 +542,8 @@ nats:
       repository: maintenance/nats
       tag: 9.8.7-maintenance
 nvctApi:
+  image:
+    tag: 9.8.7-maintenance
   remoteConfig:
     configData:
       nvct:
@@ -548,7 +553,7 @@ nvctApi:
         retained-option: true
 EOF
 render_values "$work_dir/maintenance-values.yaml"
-for component in ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
+for component in api nvctApi ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
   test "$(yq -r ".$component.image.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
     fail "$component image tag override was not forwarded"
 done
@@ -576,6 +581,9 @@ global:
   image:
     registry: nvcr.io
     repository: test/nvcf
+api:
+  image:
+    tag: ""
 ess:
   image:
     tag: ""
@@ -616,11 +624,13 @@ nats:
       repository: ""
       tag: ""
 nvctApi:
+  image:
+    tag: ""
   remoteConfig:
     configData: {}
 EOF
 render_values "$work_dir/empty-maintenance-values.yaml"
-for component in ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
+for component in api nvctApi ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
   assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" ".$component.image.tag" "$component empty override"
 done
 for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage; do
