@@ -66,8 +66,7 @@
                 },
                 "imageTag": {
                     "type": "string",
-                    "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.160.0-nv-0.2.5"
+                    "description": "Image tag of OpenTelemetry Collector sidecar."
                 },
                 "resources": {
                     "type": "object",
@@ -787,8 +786,7 @@
                         },
                         "imageTag": {
                             "type": "string",
-                            "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.160.0-nv-0.2.5"
+                            "description": "BYOO OpenTelemetry Collector image tag."
                         }
                     }
                 },
@@ -1113,8 +1111,7 @@
                         },
                         "imageTag": {
                             "type": "string",
-                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.160.0-nv-0.2.5"
+                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing."
                         }
                     }
                 }
@@ -1184,8 +1181,7 @@
                         },
                         "imageTag": {
                             "type": "string",
-                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.160.0-nv-0.2.5"
+                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing."
                         }
                     }
                 },
