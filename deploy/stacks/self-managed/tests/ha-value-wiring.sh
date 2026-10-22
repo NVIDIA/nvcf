@@ -107,6 +107,15 @@ render_chart_values invocation-service "$work_dir/invocation-off.yaml" "$core" |
 if grep -q "NATS_PROPERTIES__REPLICAS:" "$work_dir/invocation-off.yaml"; then
   fail "invocation: JetStream RF env leaked while highAvailability.mode=none"
 fi
+for comp in invocation grpcproxy; do
+  sub="$(awk -v k="^$comp:" '$0~k{p=1;next} p&&/^[a-zA-Z]/{p=0} p' "$work_dir/invocation-off.yaml")"
+  if grep -q "replicaCount:" <<<"$sub"; then
+    fail "$comp: HA replicaCount leaked while highAvailability.mode=none"
+  fi
+  if grep -A3 "^  podDisruptionBudget:" <<<"$sub" | grep -q "enabled: true"; then
+    fail "$comp: HA PDB leaked while highAvailability.mode=none"
+  fi
+done
 
 # HA off keeps base.yaml's disabled OpenBao server budget.
 render_chart_values openbao-server "$work_dir/openbao-off.yaml" "$deps" || fail "render openbao (ha none)"
@@ -267,28 +276,90 @@ for comp in nvctApi notary sis apikeys reval ess; do
     fail "$comp: expected rollout strategy when highAvailability.mode=preferred"
 done
 
-# invocation-service + grpc-proxy stay single-replica until Envoy and get no PDB
-# (minAvailable 1 on a singleton blocks drains). Placement may still render but
-# is a no-op at one replica.
+# invocation-service + grpc-proxy scale like the other replica-safe services:
+# each pod advertises its own callback address, so no proxy is involved.
 render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" ||
   fail "render invocation-service (preferred)"
-if awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then
-  fail "invocation-service: must stay single-replica under HA (deferred until Envoy)"
+invocation_on="$(awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml")"
+grep -Eq "^  replicaCount:[[:space:]]*2$" <<<"$invocation_on" ||
+  fail "invocation-service: expected replicaCount 2 when highAvailability.mode=preferred"
+invocation_pdb="$(grep -A3 "^  podDisruptionBudget:" <<<"$invocation_on")"
+grep -q "enabled: true" <<<"$invocation_pdb" && grep -q "minAvailable: 1" <<<"$invocation_pdb" ||
+  fail "invocation-service: expected HA PDB (enabled, minAvailable 1) when highAvailability.mode=preferred"
+grep -q "preferredDuringSchedulingIgnoredDuringExecution:" <<<"$invocation_on" ||
+  fail "invocation-service: expected preferred anti-affinity when highAvailability.mode=preferred"
+grep -q "topology.kubernetes.io/zone" <<<"$invocation_on" ||
+  fail "invocation-service: expected zone topology spread when highAvailability.mode=preferred"
+if grep -q "WORKER_STREAM_PROPERTIES__SELF_ADDRESS:" <<<"$invocation_on"; then
+  fail "invocation-service: a fixed SELF_ADDRESS must not render by default"
 fi
-# The chart's own PDB knob may render (enabled: false); the HA PDB (enabled:
-# true / minAvailable on a singleton) must NOT.
-if awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml" | grep -A3 "podDisruptionBudget:" | grep -q "enabled: true"; then
-  fail "invocation-service: HA PDB must not be enabled while single-replica (deferred until Envoy)"
+if grep -q "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS:" <<<"$invocation_on"; then
+  fail "invocation-service: no callback proxy address may render by default"
 fi
 
 render_chart_values grpc-proxy "$work_dir/grpcproxy-on.yaml" "$core" ||
   fail "render grpc-proxy (preferred)"
-if awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then
-  fail "grpc-proxy: must stay single-replica under HA (deferred until Envoy)"
+grpcproxy_on="$(awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml")"
+grep -Eq "^  replicaCount:[[:space:]]*2$" <<<"$grpcproxy_on" ||
+  fail "grpc-proxy: expected replicaCount 2 when highAvailability.mode=preferred"
+grpcproxy_pdb="$(grep -A3 "^  podDisruptionBudget:" <<<"$grpcproxy_on")"
+grep -q "enabled: true" <<<"$grpcproxy_pdb" && grep -q "minAvailable: 1" <<<"$grpcproxy_pdb" ||
+  fail "grpc-proxy: expected HA PDB (enabled, minAvailable 1) when highAvailability.mode=preferred"
+if grep -q "maxUnavailable:" <<<"$grpcproxy_pdb"; then
+  fail "grpc-proxy: HA PDB must not also carry base.yaml's maxUnavailable (the chart rejects both)"
 fi
-if awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml" | grep -A3 "podDisruptionBudget:" | grep -q "enabled: true"; then
-  fail "grpc-proxy: HA PDB must not be enabled while single-replica (deferred until Envoy)"
+grep -q "preferredDuringSchedulingIgnoredDuringExecution:" <<<"$grpcproxy_on" ||
+  fail "grpc-proxy: expected preferred anti-affinity when highAvailability.mode=preferred"
+if grep -q "workerConnectBaseURL:" <<<"$grpcproxy_on"; then
+  fail "grpc-proxy: a fixed workerConnectBaseURL must not render by default"
 fi
+
+# A fixed worker callback URL is shared by every replica, so the affected
+# service stays single-replica without the HA PDB. The other one still scales.
+render_chart_values invocation-service "$work_dir/invocation-fixed.yaml" "$core" \
+  --state-values-set global.workerEndpoints.invocationServiceURL=https://invocation.example.com ||
+  fail "render invocation-service (fixed invocationServiceURL)"
+invocation_fixed="$(awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-fixed.yaml")"
+grep -Eq "^  replicaCount:[[:space:]]*1$" <<<"$invocation_fixed" ||
+  fail "invocation-service: expected replicaCount 1 with a fixed invocationServiceURL"
+if grep -A3 "^  podDisruptionBudget:" <<<"$invocation_fixed" | grep -q "enabled: true"; then
+  fail "invocation-service: HA PDB must not be enabled with a fixed invocationServiceURL"
+fi
+grep -q "WORKER_STREAM_PROPERTIES__SELF_ADDRESS: https://invocation.example.com" <<<"$invocation_fixed" ||
+  fail "invocation-service: expected the fixed invocationServiceURL as SELF_ADDRESS"
+awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-fixed.yaml" | grep -Eq "^  replicaCount:[[:space:]]*2$" ||
+  fail "grpc-proxy: a fixed invocationServiceURL must not hold grpc-proxy at one replica"
+
+# The same holds when the address comes from invocation.env instead.
+write_env <<'EOF'
+highAvailability:
+  mode: preferred
+invocation:
+  env:
+    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: https://invocation-env.example.com
+EOF
+render_chart_values invocation-service "$work_dir/invocation-fixed-env.yaml" "$core" ||
+  fail "render invocation-service (fixed SELF_ADDRESS env)"
+awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-fixed-env.yaml" | grep -Eq "^  replicaCount:[[:space:]]*1$" ||
+  fail "invocation-service: expected replicaCount 1 with SELF_ADDRESS set through invocation.env"
+
+for fixed in global.workerEndpoints.grpcProxyWorkerConnectURL grpcproxy.workerConnectBaseURL; do
+  write_env <<'EOF'
+highAvailability:
+  mode: preferred
+EOF
+  render_chart_values grpc-proxy "$work_dir/grpcproxy-fixed.yaml" "$core" \
+    --state-values-set "$fixed=https://grpc-worker.example.com" ||
+    fail "render grpc-proxy (fixed $fixed)"
+  grpcproxy_fixed="$(awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-fixed.yaml")"
+  grep -Eq "^  replicaCount:[[:space:]]*1$" <<<"$grpcproxy_fixed" ||
+    fail "grpc-proxy: expected replicaCount 1 with a fixed $fixed"
+  if grep -A3 "^  podDisruptionBudget:" <<<"$grpcproxy_fixed" | grep -q "enabled: true"; then
+    fail "grpc-proxy: HA PDB must not be enabled with a fixed $fixed"
+  fi
+  awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-fixed.yaml" | grep -Eq "^  replicaCount:[[:space:]]*2$" ||
+    fail "invocation-service: a fixed $fixed must not hold invocation-service at one replica"
+done
 
 echo "== global.affinity / global.topologySpreadConstraints fallback (class -> all -> convention) =="
 
@@ -400,6 +471,8 @@ cassandra:
   replicaCount: 5
 api:
   replicaCount: 4
+grpcproxy:
+  replicaCount: 3
 nats:
   config:
     cluster:
@@ -421,6 +494,8 @@ awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-floor.yaml
 render_chart_values api "$work_dir/api-floor.yaml" "$core" || fail "render api (floor)"
 awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-floor.yaml" | grep -E "replicaCount:[[:space:]]*4" >/dev/null ||
   fail "api: HA must floor (not replace) a higher configured replicaCount (expected 4)"
+awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-floor.yaml" | grep -Eq "^  replicaCount:[[:space:]]*3$" ||
+  fail "grpc-proxy: HA must floor (not replace) a higher configured replicaCount (expected 3)"
 # JetStream RF follows the NATS server count, capped at 3.
 grep -q 'NVCF_NATS_REPLICAS: "3"' "$work_dir/api-floor.yaml" ||
   fail "api: expected JetStream RF capped at 3 with 5 NATS servers"

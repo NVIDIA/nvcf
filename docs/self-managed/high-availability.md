@@ -32,8 +32,7 @@ For the replicated services, `preferred` guarantees continuity after a single
 **pod** failure but provides only best-effort node/zone separation — under
 capacity pressure, replicas can still end up co-located. `enforced` guarantees
 continuity after a single pod **or node** failure when the prerequisites below
-are met. `invocation-service` and `grpc-proxy` are still single-replica in both
-modes, so they are briefly unavailable while their Pod is rescheduled. Neither mode alone
+are met. Neither mode alone
 claims arbitrary availability-zone or site-loss tolerance; see
 [Zone spread for the quorum services](#zone-spread-for-the-quorum-services)
 and [Recovery objectives](#recovery-objectives-and-failure-behavior) for what
@@ -166,20 +165,31 @@ silently disable HA.
 
 Active-active Deployments with no leader election: `api`, `rateLimiter`,
 `natsAuthCalloutService`, `adminIssuerProxy`, `llmApiGateway` (when the LLM
-addon is enabled), and the control-plane services `nvctApi`, `notary`, `sis`,
-`apiKeys`, `reval`, and `ess` all follow the same convention. (`nvctApi` and
-`sis` run scheduled jobs but coordinate them with a distributed lock; `ess` runs
-its scheduled crypto jobs only in a separate worker that is not part of this
-stack, so the in-stack ESS API scales safely.)
+addon is enabled), `invocation-service`, `grpc-proxy`, and the control-plane
+services `nvctApi`, `notary`, `sis`, `apiKeys`, `reval`, and `ess` all follow
+the same convention. (`nvctApi` and `sis` run scheduled jobs but coordinate
+them with a distributed lock; `ess` runs its scheduled crypto jobs only in a
+separate worker that is not part of this stack, so the in-stack ESS API scales
+safely.)
 
-> **Note — `invocation-service` and `grpc-proxy` are deferred.** These two are
-> stateless too, but their multi-replica scaling is intentionally **held at a
-> single replica for now**, pending Envoy support in the self-hosted stack.
-> Worker callbacks are host-bound to the specific pod that accepted the request
-> (per-pod pod-IP / DNS addressing), which is safe in a single cluster; the
-> Envoy dependency is for the cross-cluster case. Until then they keep hostname
-> anti-affinity and zone spread (no-ops at one replica) and get **no HA PDB**
+> **Note — worker callbacks for `invocation-service` and `grpc-proxy`.** A
+> worker calls back to the specific pod that accepted the request. Each pod
+> advertises its own address in the work message: grpc-proxy its Pod IP, and
+> invocation-service `<dashed-pod-ip>.invocation.nvcf.svc.cluster.local`, which
+> cluster DNS resolves to that pod. Workers in the same cluster reach that
+> address directly, so no proxy and no DNS change are needed.
+>
+> A fixed callback URL (`global.workerEndpoints.invocationServiceURL`,
+> `global.workerEndpoints.grpcProxyWorkerConnectURL`, or
+> `grpcproxy.workerConnectBaseURL`) is advertised by every replica, so a
+> callback could reach a pod that does not hold the request. When one is set,
+> the affected service stays at **a single replica** under HA, keeps hostname
+> anti-affinity and zone spread (no-ops at one replica), and gets **no HA PDB**
 > (a `minAvailable: 1` PDB on a singleton would block node drains).
+>
+> These two charts have no rollout-strategy hook. The Kubernetes default
+> (25% `maxUnavailable` and `maxSurge`) rounds to `maxUnavailable: 0` and
+> `maxSurge: 1` at 2 replicas.
 
 Under HA each of these gets:
 
@@ -379,7 +389,7 @@ Confirm the replica-safe Deployments scaled and spread:
 kubectl -n nvcf get deploy nvcf-api -o wide
 kubectl -n nvcf get pods -o wide -l 'app.kubernetes.io/instance=api,!app.kubernetes.io/component'
 kubectl -n api-keys get deploy admin-token-issuer-proxy -o wide
-# invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
+# invocation-service and grpc-proxy: 2 replicas, unless a fixed worker callback URL is set
 kubectl -n nvcf get deploy invocation-service grpc-proxy-deployment -o wide
 # ess-api scales to 2 (its scheduled crypto jobs run only in a separate worker, not in-stack)
 kubectl -n ess get deploy ess-api-deployment -o wide
@@ -419,8 +429,11 @@ With HA enabled and capacity in at least two AZs:
 - **Single node loss:** Multi-replica replica-safe Deployments keep
   serving from their surviving replica; the scheduler recreates the lost pod on
   another node (and the PDB prevents drains from removing the last one).
-  `invocation-service` and `grpc-proxy` (single replica until Envoy) are briefly
-  unavailable while the scheduler restarts the pod on another node. Quorum
+  In-flight requests on a lost `invocation-service` or `grpc-proxy` pod fail
+  and must be retried. With per-pod callback addresses (the default), new
+  requests go to the surviving replica. A service with a fixed worker callback
+  URL runs one replica, so it serves no new requests until its replacement pod
+  is Ready. Quorum
   services (Cassandra RF=3/`LOCAL_QUORUM`, NATS RF=3, OpenBao 3-node Raft)
   retain quorum with 2 of 3 members and continue serving reads and writes.
   For Cassandra this assumes the keyspaces are at RF=3, which an upgraded
