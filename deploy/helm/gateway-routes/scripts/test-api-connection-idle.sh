@@ -30,7 +30,7 @@ route_name="$(yq '.nvcfGatewayRoutes.routes.nvcfApi.name' "$chart_root/chart/val
 test "$(yq '.spec.targetRefs[0].name' "$policy")" = "$route_name"
 helm template ingress "$chart_root/chart" \
   --set "nvcfGatewayRoutes.gateways.shared.namespace=$policy_namespace" > "$work_dir/rendered.yaml"
-API_IDLE_ROUTE_NAME="$route_name" yq ea -e '[select(.kind == "HTTPRoute" and .metadata.name == strenv(API_IDLE_ROUTE_NAME))] | length == 1' "$work_dir/rendered.yaml" >/dev/null
+API_IDLE_ROUTE_NAME="$route_name" API_IDLE_POLICY_NAMESPACE="$policy_namespace" yq ea -e '[select(.kind == "HTTPRoute" and .metadata.name == strenv(API_IDLE_ROUTE_NAME) and .metadata.namespace == strenv(API_IDLE_POLICY_NAMESPACE))] | length == 1' "$work_dir/rendered.yaml" >/dev/null
 API_IDLE_ROUTE_NAME="$route_name" yq ea -e '[select(.kind == "BackendTrafficPolicy") | .spec.targetRefs[] | select(.kind == "HTTPRoute" and .name == strenv(API_IDLE_ROUTE_NAME))] | length == 0' "$work_dir/rendered.yaml" >/dev/null
 
 # Preserve a safety margin against the backend default; derive both values.
