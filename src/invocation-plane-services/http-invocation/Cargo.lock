@@ -3138,6 +3138,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tikv-jemallocator",
  "tokio",
+ "tokio-rustls 0.26.2",
  "tokio-stream",
  "tonic",
  "tonic-health",
