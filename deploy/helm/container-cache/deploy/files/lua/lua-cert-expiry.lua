@@ -42,9 +42,12 @@ if not pem then
     return
 end
 
+-- depth counts parsed certificates, not PEM blocks, so a malformed block
+-- cannot shift the signing intermediate away from depth 0.
 local depth = 0
-local parsed = 0
+local block_no = 0
 for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CERTIFICATE%-%-%-%-%-") do
+    block_no = block_no + 1
     local crt, err = x509.new(block, "PEM")
     if crt then
         local cn = ""
@@ -56,10 +59,9 @@ for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CE
             end
         end
         tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
-        parsed = parsed + 1
+        depth = depth + 1
     else
-        ngx.log(ngx.WARN, "cert expiry metrics: cannot parse certificate at depth ", depth, ": ", err)
+        ngx.log(ngx.WARN, "cert expiry metrics: cannot parse PEM block ", block_no, " of ", bundle_path, ": ", err)
     end
-    depth = depth + 1
 end
-tls_bundle_read_ok:set(parsed > 0 and 1 or 0)
+tls_bundle_read_ok:set(depth > 0 and 1 or 0)
