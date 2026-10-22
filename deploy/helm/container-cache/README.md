@@ -369,12 +369,22 @@ stays in `Init:2/3` and never serves. `trunc_by_ca_not_after` is not used
 because it would silently tie the certificate's life to the CA's expiry
 instead of a predictable rotation period.
 
-If a re-sign or reload fails, the sidecar logs the error and retries while the
-files on disk keep their previous contents, so nginx continues to serve with
-the previous intermediate until it expires. That failure mode is silent at the
-nginx level, so alert on `container_cache_tls_cert_not_after_seconds` (see
-Observability). With a 14 day TTL and rotation at about day 11, a depth 0
-certificate with less than 2 days left means rotation has stalled.
+Two failures look different on disk:
+
+- A failed re-sign leaves `nginx-intermediate.pem` and `ssl-bundle.crt`
+  unchanged. The agent logs the error and retries, and nginx keeps serving
+  with the previous intermediate until it expires.
+- A failed `/reload` after a successful re-sign leaves the new
+  `ssl-bundle.crt` already on disk. Newly minted leaves use it anyway, because
+  the signer reads the file per leaf; only the static fallback certificate
+  that nginx loaded at its last (re)start stays old, and that one is used
+  only when the Lua signer fails.
+
+Both are silent at the nginx level, so alert on
+`container_cache_tls_cert_not_after_seconds` and
+`container_cache_tls_bundle_read_ok` (see Observability). With a 14 day TTL
+and rotation at about day 11, a depth 0 certificate with less than 2 days
+left means rotation has stalled.
 
 ### Observability
 
@@ -389,7 +399,10 @@ The `/cache_metrics` endpoint also exports
 `container_cache_tls_cert_not_after_seconds{depth, subject_cn}`, the notAfter
 of every certificate in the served TLS bundle. Depth `0` is the signing
 intermediate that leaf certificates are minted from; higher depths are the CA
-chain above it. Example alert expressions:
+chain above it. The series are rebuilt on every scrape, so a certificate that
+leaves the bundle disappears rather than lingering with a stale value, and
+`container_cache_tls_bundle_read_ok` is `0` when the bundle could not be read
+or parsed. Example alert expressions:
 
 ```promql
 # Signing intermediate not rotated (expected before 2 days remain on a 14 day TTL).
@@ -397,6 +410,9 @@ container_cache_tls_cert_not_after_seconds{depth="0"} - time() < 2 * 86400
 
 # The CA chain itself is approaching expiry; the mount needs re-provisioning.
 container_cache_tls_cert_not_after_seconds{depth!="0"} - time() < 90 * 86400
+
+# Bundle unreadable, or the expiry series vanished.
+container_cache_tls_bundle_read_ok == 0 or absent(container_cache_tls_cert_not_after_seconds{depth="0"})
 ```
 
 ---

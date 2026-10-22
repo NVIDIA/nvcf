@@ -22,9 +22,15 @@ local x509 = require "resty.openssl.x509"
 
 local bundle_path = "/etc/certs/ssl-bundle.crt"
 
+-- Drop every series from the previous scrape first. A gauge keeps old label
+-- sets until they are removed, so without this a bundle that shrank, changed
+-- a CN, or failed to read would keep exporting values that look current.
+tls_cert_not_after:reset()
+
 local fd, open_err = io.open(bundle_path, "rb")
 if not fd then
     ngx.log(ngx.WARN, "cert expiry metrics: cannot open ", bundle_path, ": ", open_err)
+    tls_bundle_read_ok:set(0)
     return
 end
 local pem = fd:read("*all")
@@ -48,3 +54,4 @@ for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CE
     end
     depth = depth + 1
 end
+tls_bundle_read_ok:set(depth > 0 and 1 or 0)
