@@ -148,6 +148,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
 	c.considerRestoredCondition(ctx, pod)
+	c.considerRestoredStacks(ctx, pod)
 	if !c.admitted(ctx, pod) {
 		return
 	}
