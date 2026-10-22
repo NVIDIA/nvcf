@@ -45,6 +45,7 @@ import com.nvidia.nvct.util.NvctOAuth2ClientUtils;
 import com.nvidia.nvct.util.NvctOAuth2ClientUtils.ManagedHttpResources;
 import jakarta.validation.constraints.NotNull;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
@@ -75,6 +76,12 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 @Service
 @RefreshScope
 public class IcmsClient {
+
+    private static final String OTLP_ENDPOINT_PROPERTY =
+            "management.opentelemetry.tracing.export.otlp.endpoint";
+    private static final String MESG_INVALID_OTLP_ENDPOINT =
+            "Invalid %s '%s': expected an http:// or https:// URL with a host and an optional numeric"
+                    + " port, or an empty value to disable tracing";
 
     private static final String MESG_NO_REQUEST_ID_FROM_ICMS =
             "Task id '%s': No request-id returned from ICMS";
@@ -147,7 +154,7 @@ public class IcmsClient {
             String clientSecret,
             @Value("${spring.security.oauth2.client.registration.icms.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.icms.token-uri}") String tokenUri,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint}") String otlpTracingEndpoint,
+            @Value("${" + OTLP_ENDPOINT_PROPERTY + ":}") String otlpTracingEndpoint,
             AccountService accountService,
             TokenService tokenService,
             TelemetryService telemetryService,
@@ -184,7 +191,7 @@ public class IcmsClient {
         var adapter = WebClientAdapter.create(webClient);
         var factory = HttpServiceProxyFactory.builderFor(adapter).build();
         this.icmsStubService = factory.createClient(IcmsStubService.class);
-        this.tracingUrl = URI.create(otlpTracingEndpoint);
+        this.tracingUrl = parseTracingUrl(otlpTracingEndpoint);
         this.clustersCache = Caffeine.newBuilder()
                 .maximumSize(64)
                 .expireAfterWrite(Duration.ofMinutes(15))
@@ -422,7 +429,7 @@ public class IcmsClient {
                 validateAndGetContainerRegistryImagePullSecrets(task);
         var helmRegistryCredentialsEncoded =
                 validateAndGetHelmRegistryImagePullSecrets(task);
-        var env = Stream.of(
+        Stream<Pair<String, Object>> envStream = Stream.of(
                         Pair.of("NCA_ID", task.getNcaId()),
                         Pair.of("ACCOUNT_NAME", accountService.getAccountName(ncaId)),
                         Pair.of("NVCT_WORKER_TOKEN", nvctWorkerToken),
@@ -433,7 +440,6 @@ public class IcmsClient {
                         Pair.of("UTILS_CONTAINER", utilsContainer),
                         Pair.of("ESS_AGENT_CONTAINER", essAgentContainer),
                         Pair.of("ESS_FQDN", essFqdn),
-                        Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()),
                         Pair.of("TASK_TAGS", getTaskTags(task)),
                         Pair.of("TASK_ID", task.getTaskId()),
                         Pair.of("TASK_NAME", task.getName()),
@@ -448,7 +454,8 @@ public class IcmsClient {
                         Pair.of("CONTAINER_REGISTRIES_CREDENTIALS", containerRegistryCredentialsEncoded),
                         Pair.of("HELM_REGISTRIES_CREDENTIALS", helmRegistryCredentialsEncoded),
                         Pair.of("SECRETS_ASSERTION_TOKEN", secretsAssertionToken),
-                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded))
+                        Pair.of("SIDECAR_REGISTRY_CREDENTIAL", sidecarRegistryCredentialEncoded));
+        var env = Stream.concat(envStream, otlpEndpointEnv(tracingUrl))
                 .map(pair -> pair.getFirst() + "=" + pair.getSecond())
                 .collect(Collectors.joining("\n"));
         return Base64.getEncoder().encodeToString(env.getBytes(StandardCharsets.UTF_8));
@@ -526,5 +533,56 @@ public class IcmsClient {
         }
 
         return null;
+    }
+
+    // Workers and the BYOO collector run with tracing disabled when
+    // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
+    // A configured endpoint must be an http or https URL with a host and an optional numeric port,
+    // as the OpenTelemetry SDK and workers expect. Anything else is a configuration error, and
+    // throwing here stops startup because the refresh scope creates this bean eagerly.
+    static URI parseTracingUrl(String endpoint) {
+        if (isBlank(endpoint)) {
+            return null;
+        }
+        var trimmed = endpoint.trim();
+        URI uri;
+        try {
+            uri = new URI(trimmed);
+        } catch (URISyntaxException e) {
+            throw invalidTracingEndpoint(trimmed, e);
+        }
+        var scheme = uri.getScheme();
+        var httpScheme = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+        var authority = uri.getRawAuthority();
+        if (!httpScheme || isBlank(authority) || !hasValidPort(authority)) {
+            throw invalidTracingEndpoint(trimmed, null);
+        }
+        return uri;
+    }
+
+    // java.net.URI falls back to a registry-based authority, with no host or port, when the port
+    // is not a number, so check the port text directly. Everything after the first colon outside
+    // an IPv6 literal must be the port, which rejects extra colons. Registry-style host names,
+    // such as names with underscores, and an empty port stay valid.
+    private static boolean hasValidPort(String authority) {
+        var hostPort = authority.substring(authority.lastIndexOf('@') + 1);
+        var hostEnd = hostPort.startsWith("[") ? Math.max(hostPort.indexOf(']'), 0) : 0;
+        var colon = hostPort.indexOf(':', hostEnd);
+        if (colon < 0) {
+            return true;
+        }
+        var port = hostPort.substring(colon + 1);
+        return port.isEmpty() || port.matches("\\d{1,5}") && Integer.parseInt(port) <= 65535;
+    }
+
+    private static IllegalArgumentException invalidTracingEndpoint(String endpoint, Throwable cause) {
+        return new IllegalArgumentException(
+                String.format(MESG_INVALID_OTLP_ENDPOINT, OTLP_ENDPOINT_PROPERTY, endpoint), cause);
+    }
+
+    static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {
+        return tracingUrl == null
+                ? Stream.empty()
+                : Stream.of(Pair.of("OTEL_EXPORTER_OTLP_ENDPOINT", tracingUrl.toString()));
     }
 }
