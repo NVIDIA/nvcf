@@ -98,6 +98,36 @@ Configure approved browser origins before deploying the preparation release.
 The transparent load-balancer routes continue to forward CORS requests to the
 workload, which owns their browser policy.
 
+## Worker callback TLS
+
+`worker_tls` adds a second listener that serves the same routes over TLS, so
+workers can verify this pod end to end through a CONNECT proxy. It is off by
+default.
+
+```yaml
+worker_tls:
+  enabled: true
+  port: 8443
+  cert_path: /etc/invocation-service/worker-tls/tls.crt
+  key_path: /etc/invocation-service/worker-tls/tls.key
+  reload_interval_seconds: 30
+```
+
+The environment equivalents are `WORKER_TLS__ENABLED`, `WORKER_TLS__PORT`,
+`WORKER_TLS__CERT_PATH`, `WORKER_TLS__KEY_PATH` and
+`WORKER_TLS__RELOAD_INTERVAL_SECONDS`.
+
+- The certificate must cover the per-pod callback names, for example
+  `*.invocation.<namespace>.svc.cluster.local`.
+- To advertise this listener, set `WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS`
+  to `https://invocation.<namespace>.svc.cluster.local:8443`. Workers then call
+  `https://<dashed-pod-ip>.invocation.<namespace>.svc.cluster.local:8443` and
+  trust the CA from `NVCF_PROXY_CA_PEM` or `NVCF_PROXY_CA_FILE`.
+- The files are re-read every `reload_interval_seconds`. A renewed pair is
+  served without a restart. If the new pair can't be read or the key doesn't
+  match, the current certificate stays in use and a warning is logged.
+- A missing or invalid certificate at startup stops the service.
+
 ## Cargo development (still supported)
 
 ```shell
