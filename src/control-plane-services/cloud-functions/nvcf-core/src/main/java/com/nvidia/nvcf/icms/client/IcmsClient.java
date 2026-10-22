@@ -66,6 +66,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
@@ -99,6 +100,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class IcmsClient {
     public static final int BATCH_SIZE = 32;
     public static final String CLIENT_REGISTRATION_ID = "icms";
+    private static final String OTLP_ENDPOINT_PROPERTY =
+            "management.opentelemetry.tracing.export.otlp.endpoint";
 
     private static final String MESG_INVALID_GPU =
             "Cluster Group '%s': Invalid GPU '%s' specified";
@@ -209,7 +212,7 @@ public class IcmsClient {
             @Value("${nvcf.llm-request-router.worker-address}") String llmRequestRouterAddress,
             @Value("${nvcf.fqdn}") String selfFqdn,
             @Value("${nvcf.global-fqdn-grpc}") String globalFqdnGrpc,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String tracingEndpoint,
+            @Value("${" + OTLP_ENDPOINT_PROPERTY + ":}") String tracingEndpoint,
             // ESS_FQDN advertised to the LLM worker is the worker-facing ESS address,
             // which differs from EssClient's in-cluster base-url when the compute plane
             // is external. Defaults to nvcf.ess.base-url (colocated); split deployments
@@ -839,8 +842,31 @@ public class IcmsClient {
 
     // Workers and the BYOO collector run with tracing disabled when
     // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
+    // A configured endpoint must be an http or https URL, the same rule the OpenTelemetry SDK
+    // applies. Anything else is a configuration error, and throwing here stops startup because
+    // the refresh scope creates this bean eagerly.
     static URI parseTracingUrl(String endpoint) {
-        return isBlank(endpoint) ? null : URI.create(endpoint.trim());
+        if (isBlank(endpoint)) {
+            return null;
+        }
+        var trimmed = endpoint.trim();
+        URI uri;
+        try {
+            uri = new URI(trimmed);
+        } catch (URISyntaxException e) {
+            throw invalidTracingEndpoint(trimmed, e);
+        }
+        if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) {
+            throw invalidTracingEndpoint(trimmed, null);
+        }
+        return uri;
+    }
+
+    private static IllegalArgumentException invalidTracingEndpoint(String endpoint, Throwable cause) {
+        return new IllegalArgumentException(
+                "Invalid " + OTLP_ENDPOINT_PROPERTY + " '" + endpoint
+                        + "': expected an http:// or https:// URL, or an empty value to disable tracing",
+                cause);
     }
 
     static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {

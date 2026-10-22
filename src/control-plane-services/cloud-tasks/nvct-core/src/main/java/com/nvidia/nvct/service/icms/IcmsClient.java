@@ -45,6 +45,7 @@ import com.nvidia.nvct.util.NvctOAuth2ClientUtils;
 import com.nvidia.nvct.util.NvctOAuth2ClientUtils.ManagedHttpResources;
 import jakarta.validation.constraints.NotNull;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
@@ -75,6 +76,9 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 @Service
 @RefreshScope
 public class IcmsClient {
+
+    private static final String OTLP_ENDPOINT_PROPERTY =
+            "management.opentelemetry.tracing.export.otlp.endpoint";
 
     private static final String MESG_NO_REQUEST_ID_FROM_ICMS =
             "Task id '%s': No request-id returned from ICMS";
@@ -147,7 +151,7 @@ public class IcmsClient {
             String clientSecret,
             @Value("${spring.security.oauth2.client.registration.icms.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.icms.token-uri}") String tokenUri,
-            @Value("${management.opentelemetry.tracing.export.otlp.endpoint:}") String otlpTracingEndpoint,
+            @Value("${" + OTLP_ENDPOINT_PROPERTY + ":}") String otlpTracingEndpoint,
             AccountService accountService,
             TokenService tokenService,
             TelemetryService telemetryService,
@@ -530,8 +534,31 @@ public class IcmsClient {
 
     // Workers and the BYOO collector run with tracing disabled when
     // OTEL_EXPORTER_OTLP_ENDPOINT is missing, so send it only when an endpoint is configured.
+    // A configured endpoint must be an http or https URL, the same rule the OpenTelemetry SDK
+    // applies. Anything else is a configuration error, and throwing here stops startup because
+    // the refresh scope creates this bean eagerly.
     static URI parseTracingUrl(String endpoint) {
-        return isBlank(endpoint) ? null : URI.create(endpoint.trim());
+        if (isBlank(endpoint)) {
+            return null;
+        }
+        var trimmed = endpoint.trim();
+        URI uri;
+        try {
+            uri = new URI(trimmed);
+        } catch (URISyntaxException e) {
+            throw invalidTracingEndpoint(trimmed, e);
+        }
+        if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) {
+            throw invalidTracingEndpoint(trimmed, null);
+        }
+        return uri;
+    }
+
+    private static IllegalArgumentException invalidTracingEndpoint(String endpoint, Throwable cause) {
+        return new IllegalArgumentException(
+                "Invalid " + OTLP_ENDPOINT_PROPERTY + " '" + endpoint
+                        + "': expected an http:// or https:// URL, or an empty value to disable tracing",
+                cause);
     }
 
     static Stream<Pair<String, Object>> otlpEndpointEnv(URI tracingUrl) {

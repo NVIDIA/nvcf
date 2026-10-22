@@ -18,6 +18,7 @@
 package com.nvidia.nvcf.icms.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import java.net.URI;
 import org.junit.jupiter.api.Test;
@@ -47,5 +48,19 @@ class IcmsClientOtlpEndpointTest {
                 .extracting("first", "second")
                 .containsExactly("OTEL_EXPORTER_OTLP_ENDPOINT",
                                  "https://otel-collector.example.invalid:4317");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "http://bad host:4317",
+            "not a uri",
+            "otel-collector.example.invalid:4317",
+            "grpc://otel-collector.example.invalid:4317"
+    })
+    void malformedEndpointIsRejected(String endpoint) {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> IcmsClient.parseTracingUrl(endpoint))
+                .withMessageContaining("management.opentelemetry.tracing.export.otlp.endpoint")
+                .withMessageContaining("'" + endpoint + "'");
     }
 }
