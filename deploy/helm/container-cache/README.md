@@ -335,8 +335,46 @@ CRI-O requires a separate listening port per registry (unlike containerd which u
 | `vault.enabled` | `false` | Enable HashiCorp Vault for cert management |
 | `vault.vaultAddress` | `https://vault.example.com` | Vault server URL |
 | `vault.certLocation` | `""` | URL to download CA cert (vault mode) |
+| `vault.intermediateCertTTL` | `336h` | Lifetime requested for the Vault-issued signing intermediate (Vault duration format; 336h is 14 days) |
 
 When `vault.enabled=false`, the bundled TLS certificates from the `images.certificates` image are used. The proxy dynamically generates leaf certificates signed by the bundled intermediate CA.
+
+#### Vault certificate lifecycle
+
+With `vault.enabled=true` each pod owns one signing key for its whole life and
+Vault signs a short-lived intermediate for it:
+
+1. The `certs` init container generates `leaf-ca.key` and a CSR once. The key
+   is never rotated while the pod runs.
+2. The vault-agent init container sends the CSR to the PKI mount's
+   `sign-intermediate` endpoint with `ttl=<vault.intermediateCertTTL>`, writes
+   the result to `nginx-intermediate.pem`, and assembles `ssl-bundle.crt` from
+   it and the mount's CA chain. The pod cannot start until this succeeds.
+3. The vault-agent sidecar repeats the same request on start and then again at
+   about 80 percent of the certificate's lifetime. Each time it rewrites
+   `ssl-bundle.crt` and calls the nginx `/reload` endpoint on port 13129.
+   No pod restart is involved.
+4. nginx reads `ssl-bundle.crt` from disk every time it mints a leaf
+   certificate, so new connections are signed with the new intermediate as
+   soon as the file changes. Minted leaves are cached in shared memory for one
+   hour and are valid for two, so a client can be handed a chain containing the
+   previous intermediate for up to one hour after a rotation. The previous
+   intermediate is still valid then, and both intermediates carry the same
+   subject and public key, so the chain verifies either way.
+
+The TTL is always sent explicitly. A request without one takes the PKI
+mount's default, and Vault rejects the request when that default is longer
+than the signing CA's remaining life. A pod that restarts into that rejection
+stays in `Init:2/3` and never serves. `trunc_by_ca_not_after` is not used
+because it would silently tie the certificate's life to the CA's expiry
+instead of a predictable rotation period.
+
+If a re-sign or reload fails, the sidecar logs the error and retries while the
+files on disk keep their previous contents, so nginx continues to serve with
+the previous intermediate until it expires. That failure mode is silent at the
+nginx level, so alert on `container_cache_tls_cert_not_after_seconds` (see
+Observability). With a 14 day TTL and rotation at about day 11, a depth 0
+certificate with less than 2 days left means rotation has stalled.
 
 ### Observability
 
@@ -346,6 +384,20 @@ When `vault.enabled=false`, the bundled TLS certificates from the `images.certif
 | `metrics.cacheMetricsStorageSize` | `300m` | Shared memory for Prometheus metrics |
 | `traces.enabled` | `false` | Enable OpenTelemetry tracing |
 | `nucleus.enabled` | `false` | Enable nucleus proxy integration |
+
+The `/cache_metrics` endpoint also exports
+`container_cache_tls_cert_not_after_seconds{depth, subject_cn}`, the notAfter
+of every certificate in the served TLS bundle. Depth `0` is the signing
+intermediate that leaf certificates are minted from; higher depths are the CA
+chain above it. Example alert expressions:
+
+```promql
+# Signing intermediate not rotated (expected before 2 days remain on a 14 day TTL).
+container_cache_tls_cert_not_after_seconds{depth="0"} - time() < 2 * 86400
+
+# The CA chain itself is approaching expiry; the mount needs re-provisioning.
+container_cache_tls_cert_not_after_seconds{depth!="0"} - time() < 90 * 86400
+```
 
 ---
 
@@ -506,6 +558,15 @@ kubectl delete namespace container-caching
 ### TLS errors: `certificate is valid for X, not Y`
 
 This means the proxy's dynamically-generated certificate SAN doesn't match the IP the client connected to. This is expected with NodePort traffic (kube-proxy NATs the destination IP). The `skip_verify = true` in `hosts.toml` resolves this for containerd. For CRI-O, `insecure = true` is set when using the service hostname.
+
+### Pod stuck in `Init:2/3` with `vault.enabled=true`
+
+The vault-agent init container is retrying the `sign-intermediate` request.
+Its logs show the Vault error. A message such as `ttl must be set to Nd or
+less` means the requested lifetime (or, if none was sent, the mount default)
+exceeds the signing CA's remaining life; check `vault.intermediateCertTTL`
+and the deployed ConfigMap. Deleting the pod does not help until the request
+succeeds, because the proxy cannot start without a signed intermediate.
 
 ### Connection refused on NodePort
 
