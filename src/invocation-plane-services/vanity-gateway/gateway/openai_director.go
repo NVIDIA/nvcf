@@ -101,12 +101,13 @@ type OpenAIError struct {
 	Error CustomOpenAIError `json:"error"`
 }
 
-func writeOpenAIError(writer http.ResponseWriter, status int, message, code string) {
+func writeOpenAIError(writer http.ResponseWriter, status int, message, code string, param any) {
 	writer.Header().Set(contentTypeHeader, contentTypeApplicationJSON)
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(OpenAIError{Error: CustomOpenAIError{
 		Message: message,
 		Type:    "invalid_request_error",
+		Param:   param,
 		Code:    code,
 	}})
 }
@@ -733,8 +734,13 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 			}
 			return resolvedOpenAIRequest{}, true
 		}
+		var invalidFieldTypeErr *openAIFieldTypeError
+		if errors.As(err, &invalidFieldTypeErr) {
+			writeOpenAIError(writer, http.StatusBadRequest, invalidFieldTypeErr.Error(), "invalid_type", invalidFieldTypeErr.param)
+			return resolvedOpenAIRequest{}, true
+		}
 		if errors.Is(err, errInvalidJSONBody) {
-			writeOpenAIError(writer, http.StatusBadRequest, "request body is not valid JSON", "invalid_json")
+			writeOpenAIError(writer, http.StatusBadRequest, "request body is not valid JSON", "invalid_json", nil)
 			return resolvedOpenAIRequest{}, true
 		}
 		if errors.Is(err, errModelFieldMissing) {
@@ -1030,6 +1036,51 @@ var errModelFieldMissing = errors.New("model field is required")
 // object with the expected field types. Callers render this as HTTP 400.
 var errInvalidJSONBody = errors.New("invalid json body")
 
+type openAIFieldTypeError struct {
+	param    string
+	expected string
+}
+
+func (e *openAIFieldTypeError) Error() string {
+	return fmt.Sprintf("field '%s' must be %s", e.param, e.expected)
+}
+
+func (e *openAIFieldTypeError) Unwrap() error {
+	return errInvalidJSONBody
+}
+
+// decodeOpenAIRequestFields validates the fields this gateway reads before
+// forwarding a request. RawMessage lets it distinguish explicit null values
+// and avoids relying on decoder-specific errors for scalar type mismatches.
+func decodeOpenAIRequestFields(body []byte) (openAIRequestBody, error) {
+	var fields struct {
+		Model  json.RawMessage `json:"model"`
+		Stream json.RawMessage `json:"stream"`
+	}
+	if err := json.UnmarshalWithOption(body, &fields, json.DecodeFieldPriorityFirstWin()); err != nil {
+		return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
+	}
+
+	request := openAIRequestBody{}
+	if value := bytes.TrimSpace(fields.Model); len(value) > 0 {
+		if value[0] != '"' {
+			return openAIRequestBody{}, &openAIFieldTypeError{param: "model", expected: "a string"}
+		}
+		if err := json.Unmarshal(value, &request.Model); err != nil {
+			return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
+		}
+	}
+	if value := bytes.TrimSpace(fields.Stream); len(value) > 0 {
+		if value[0] != 't' && value[0] != 'f' {
+			return openAIRequestBody{}, &openAIFieldTypeError{param: "stream", expected: "a boolean"}
+		}
+		if err := json.Unmarshal(value, &request.Stream); err != nil {
+			return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
+		}
+	}
+	return request, nil
+}
+
 // extractOpenAIRequestBody dispatches on Content-Type: multipart/form-data requests
 // (image edits, image variations) read the model from a form field; everything
 // else parses the OpenAI JSON body.
@@ -1126,11 +1177,10 @@ func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
 		_ = bodyBytes.Close()
 		return openAIRequestBody{}, fmt.Errorf("%w: body is null", errInvalidJSONBody)
 	}
-	body := openAIRequestBody{}
-	err = json.UnmarshalWithOption(bodyBytes.peek(), &body, json.DecodeFieldPriorityFirstWin())
+	body, err := decodeOpenAIRequestFields(bodyBytes.peek())
 	if err != nil {
 		_ = bodyBytes.Close()
-		return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
+		return openAIRequestBody{}, err
 	}
 	if body.Model == "" {
 		_ = bodyBytes.Close()
