@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2823,19 +2824,17 @@ func TestBYOORenderFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
-// byooPendingTags excludes the BYOO scenarios that wait on product work.
-// byooExistingInstallTags also skips every scenario that changes the stack, so
-// the workload scenarios run against an existing local install.
-const (
-	byooPendingTags         = "~@pending-2601 && ~@pending-2673"
-	byooExistingInstallTags = "~@stack-change && " + byooPendingTags
-)
+// byooExistingInstallTags skips every scenario that changes the stack, so the
+// workload scenarios run against an existing local install.
+const byooExistingInstallTags = "~@stack-change"
 
 const (
-	byooGateCommand = `kubectl --context k3d-ncp-local --namespace nvca-operator get nvcfbackend ncp-local -o 'jsonpath={range .status.featureGate.values[*]}{@}{"\n"}{end}'`
-	byooTelemetries = "http://api.localhost:8080/v2/nvcf/telemetries"
-	byooCLIConfig   = "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
-	byooTaskImage   = "registry.example.com/samples/task-byoo-sample:test"
+	byooGateCommand   = `kubectl --context k3d-ncp-local --namespace nvca-operator get nvcfbackend ncp-local -o 'jsonpath={range .status.featureGate.values[*]}{@}{"\n"}{end}'`
+	byooTelemetries   = "http://api.localhost:8080/v2/nvcf/telemetries"
+	byooDeployment    = "http://api.localhost:8080/v2/nvcf/deployments/functions/function-1/versions/version-1"
+	byooCLIConfig     = "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+	byooTaskImage     = "registry.example.com/samples/task-byoo-sample:test"
+	byooFunctionImage = "registry.example.com/samples/byoo-telemetry-sample:test"
 )
 
 // byooTaskLifecycle is the BYOO task the workload scenario launches through
@@ -2855,8 +2854,15 @@ var byooTaskLifecycle = taskLifecycleExpectation{
 	deleted: true,
 }
 
-// byooHTTPFake answers telemetry registration and deletion for the admin
-// token and records every request and body.
+// byooGateOffDeployment is the deployment NVCF reports after NVCA rejects a
+// function with telemetries on a cluster without the BYOObservability gate.
+const byooGateOffDeployment = `{"deployment":{"functionStatus":"ERROR","healthInfo":[{"error":` +
+	`"Bring Your Own Observability (BYOO) is disabled on this cluster: the function requests telemetries, ` +
+	`but these NVCA feature flags are not enabled: BYOObservability. ` +
+	`Enable them on the cluster, or deploy without telemetries."}]}}`
+
+// byooHTTPFake answers telemetry registration and deletion and the gate-off
+// deployment read for the admin token, and records every request and body.
 type byooHTTPFake struct {
 	requests []string
 	bodies   []string
@@ -2872,6 +2878,8 @@ func (f *byooHTTPFake) Do(_ context.Context, method, rawURL string, headers map[
 		return harness.HTTPResponse{Status: http.StatusOK, Body: `{"telemetry":{"telemetryId":"telemetry-1"}}`}, nil
 	case method == http.MethodDelete && rawURL == byooTelemetries+"/telemetry-1":
 		return harness.HTTPResponse{Status: http.StatusNoContent}, nil
+	case method == http.MethodGet && rawURL == byooDeployment:
+		return harness.HTTPResponse{Status: http.StatusOK, Body: byooGateOffDeployment}, nil
 	default:
 		return harness.HTTPResponse{Status: http.StatusNotFound}, nil
 	}
@@ -2895,7 +2903,7 @@ func runBYOOWiring(t *testing.T, tags string) ([]string, *byooHTTPFake) {
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("SAMPLE_BYOO_TASK_IMAGE", byooTaskImage)
-	t.Setenv("SAMPLE_BYOO_FUNCTION_IMAGE", "registry.example.com/samples/byoo-function-sample:test")
+	t.Setenv("SAMPLE_BYOO_FUNCTION_IMAGE", byooFunctionImage)
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -2914,10 +2922,6 @@ func runBYOOWiring(t *testing.T, tags string) ([]string, *byooHTTPFake) {
 		cli + " function deploy create --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 600": {
 			ExitCode: 1,
 			Stderr:   "function deployment failed",
-		},
-		cli + " --json function deploy get": {
-			ExitCode: 0,
-			Stdout:   `{"deployment":{"functionStatus":"ERROR","error":"BYOObservability is disabled on cluster ncp-local"}}`,
 		},
 	})
 	runner.onRun = func(command string) error {
@@ -2963,14 +2967,14 @@ func runBYOOWiring(t *testing.T, tags string) ([]string, *byooHTTPFake) {
 	return runs, httpFake
 }
 
-// TestBYOOFeatureFileWiresToSteps runs every BYOO scenario, including the
-// pending ones, so their steps stay resolvable before they are enabled.
+// TestBYOOFeatureFileWiresToSteps runs every BYOO scenario, as TestBYOO does.
 func TestBYOOFeatureFileWiresToSteps(t *testing.T) {
 	runs, httpFake := runBYOOWiring(t, "")
 	for _, command := range []string{
 		"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-byoo",
 		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo ",
 		" function deploy create ",
+		"--image " + byooFunctionImage + " ",
 		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-gate-off",
 	} {
 		if !commandRanThatContains(runs, command) {
@@ -2990,15 +2994,16 @@ func TestBYOOFeatureFileWiresToSteps(t *testing.T) {
 	if deletes != 4 {
 		t.Fatalf("telemetry endpoints deleted at teardown = %d, want 4", deletes)
 	}
+	if !slices.Contains(httpFake.requests, "GET "+byooDeployment) {
+		t.Fatalf("gate-off deployment status was never read: %v", httpFake.requests)
+	}
 }
 
 // TestBYOOExistingInstallTagsLeaveTheStackAlone guards the existing-install
 // entry point: it runs the workload scenarios without bootstrapping the
-// cluster or installing, upgrading, or removing a Helm release. The pending
-// tags are left out of the filter so the check still holds once those
-// scenarios are enabled.
+// cluster or installing, upgrading, or removing a Helm release.
 func TestBYOOExistingInstallTagsLeaveTheStackAlone(t *testing.T) {
-	runs, _ := runBYOOWiring(t, "~@stack-change")
+	runs, _ := runBYOOWiring(t, byooExistingInstallTags)
 	for _, command := range runs {
 		for _, forbidden := range []string{"make ", "helm ", "k3d "} {
 			if strings.HasPrefix(command, forbidden) || strings.Contains(command, " "+forbidden) {
@@ -3008,6 +3013,7 @@ func TestBYOOExistingInstallTagsLeaveTheStackAlone(t *testing.T) {
 	}
 	for _, command := range []string{
 		" function deploy create ",
+		"--image " + byooFunctionImage + " ",
 		"rollout restart deployment/otlp-sink-task",
 	} {
 		if !commandRanThatContains(runs, command) {
@@ -3140,14 +3146,15 @@ func TestBYOORender(t *testing.T) {
 }
 
 // TestBYOO is the live entry point for the BYOO feature. It installs the
-// local single-cluster stack with the BYOObservability gate on, then checks
-// task and function telemetry against an in-cluster OTLP sink. Scenarios that
-// wait on product work are excluded. Skipped under -short.
+// local single-cluster stack with the BYOObservability gate on, checks task
+// and function telemetry against an in-cluster OTLP sink, then reinstalls NVCA
+// with the gate off and checks that a function with telemetries fails with an
+// actionable reason. Skipped under -short.
 func TestBYOO(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeatureTags(t, "byoo.feature", byooPendingTags)
+	runLiveFeature(t, "byoo.feature")
 }
 
 // TestBYOOExistingInstall runs the BYOO workload scenarios against the

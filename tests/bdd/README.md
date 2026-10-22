@@ -143,16 +143,18 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 ```
 
 `byoo.feature` registers a telemetry endpoint that points at an in-cluster
-OpenTelemetry Collector Contrib sink, runs a task and a container function
-with telemetries, and checks the sink's `otelcol_receiver_accepted_*`
-counters. The BYOO collector also forwards its own metrics, so the task
-metrics check reads `otelcol_exporter_sent_metric_points_total` from a sink
-pipeline that keeps only the task sample's `service.name`. It has two entry
-points:
+OpenTelemetry Collector Contrib sink, runs a task, a container function, and
+the BYOO sample function with telemetries, and checks the sink's counters. The
+BYOO collector also forwards its own metrics, so the sample checks read
+`otelcol_exporter_sent_*` counters from sink pipelines that keep only each
+sample's `service.name`. The last scenario reinstalls NVCA with the gate off
+and checks that a function with telemetries moves to `ERROR` with a reason
+that names the missing NVCA feature flags. It has two entry points:
 
 - `TestBYOO` brings up the single-cluster topology, installs the stack with
-  the `compute` observability profile, then runs the workload scenarios. Use
-  `BDD_CLEANUP_MODE=stack-single` to switch from another install.
+  the `compute` observability profile, runs the workload scenarios, then runs
+  the gate-off scenario. Use `BDD_CLEANUP_MODE=stack-single` to switch from
+  another install. Rerun the install to turn the gate back on.
 - `TestBYOOExistingInstall` skips the `@stack-change` scenarios and runs only
   the workload scenarios against the current `ncp-local` install. It does not
   bring up the cluster or install, upgrade, or remove the stack. It runs
@@ -161,21 +163,19 @@ points:
   example a `nvcf-cli self-hosted up` install with the default compute-plane
   observability profile.
 
-Both entry points skip the scenarios tagged `@pending-2601` (function signals
-need an OTLP-emitting function sample) and `@pending-2673` (NVCA does not yet
-fail a deployment that requests BYOO when the gate is off).
-
 Preconditions:
 
-- `SAMPLE_BYOO_TASK_IMAGE` names `examples/task-samples/task-byoo-sample` in
-  a registry the cluster can pull. The tasks API checks that the image exists
+- `SAMPLE_BYOO_TASK_IMAGE` names `examples/task-samples/task-byoo-sample` and
+  `SAMPLE_BYOO_FUNCTION_IMAGE` names
+  `examples/function-samples/byoo-telemetry-sample`, each in a registry the
+  cluster can pull. The tasks and functions APIs check that the image exists
   in its registry, so a locally imported image is not enough on a default
-  install. Publish it the same way as `task-simple-sample:local`.
-- The cluster can pull the BYOO collector sidecar image. The nvca-operator
-  chart defaults to `nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector`, and the
-  stack cannot route it from its own values until #2597 lands. Use an NGC key
-  that can pull that image, or an existing install whose nvca-operator release
-  overrides `agent.byooOtelCollector.imageRepository`.
+  install. Publish them the same way as `task-simple-sample:local`.
+- The cluster can pull the BYOO collector sidecar image. The compute-plane
+  stack resolves it as `byoo-otel-collector` under `global.image.registry` and
+  `global.image.repository`, with the tag pinned in its base values. Mirror
+  that image to the sample NGC repository, or override
+  `global.nvcaOperator.byooOtelCollector.imageRepository`.
 - The cluster can pull `otel/opentelemetry-collector-contrib` from Docker Hub
   for the reference sink.
 
@@ -185,12 +185,14 @@ cd tests/bdd
 # Fresh install
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
-  go test -run '^TestBYOO$' -timeout 90m -v
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOO$' -timeout 120m -v
 
 # Existing local install
 SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
-  go test -run '^TestBYOOExistingInstall$' -timeout 45m -v
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOOExistingInstall$' -timeout 60m -v
 ```
 
 The workload scenarios leave the `bdd-byoo-sink` namespace in place and
