@@ -41,8 +41,13 @@ global.affinity / global.topologySpreadConstraints override placement per class
 for that class. Component values remain the final escape hatch.
 
 Replica-safe Deployments get 2 replicas, anti-affinity, zone spread, and a PDB
-with minAvailable 1. invocation-service and grpc-proxy stay single-replica for
-now (placement still applied, no-op at 1 replica, no PDB).
+with minAvailable 1. invocation-service and grpc-proxy follow the same
+convention: each pod advertises its own callback address, so workers reach the
+pod that holds the request. A fixed worker callback URL
+(global.workerEndpoints.invocationServiceURL, grpcProxyWorkerConnectURL, or
+grpcproxy.workerConnectBaseURL) is shared by every replica, so the affected
+service stays single-replica (placement still applied, no-op at 1 replica, no
+PDB).
 
 Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
 spread, and a PDB tolerating one disruption at any replica count.
@@ -1071,9 +1076,13 @@ invocation:
   {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
+  {{- $invocationScaled := and $haEnabled (not (index $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS")) }}
   fullnameOverride: invocation-service
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- if $invocationScaled }}
+  replicaCount: {{ max 2 (dig "invocation" "replicaCount" 1 .Values | int) }}
+  {{- else if $haEnabled }}
+  {{- /* Every replica would advertise the same SELF_ADDRESS, so a worker
+         callback could land on a pod that does not hold the request. */}}
   replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
@@ -1109,10 +1118,17 @@ invocation:
     baggageAttributeAllowlist:
     {{- toYaml . | nindent 6 }}
   {{- end }}
+  {{- if $invocationScaled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 {{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
@@ -1198,10 +1214,14 @@ eventLedger:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}
 
+{{- $grpcProxyScaled := and $haEnabled (not $grpcProxyWorkerConnectBaseURL) }}
 grpcproxy:
   fullnameOverride: grpc-proxy
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- if $grpcProxyScaled }}
+  replicaCount: {{ max 2 (dig "grpcproxy" "replicaCount" 1 .Values | int) }}
+  {{- else if $haEnabled }}
+  {{- /* Every replica would advertise the same workerConnectBaseURL, so a
+         worker callback could land on a pod that does not hold the request. */}}
   replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
@@ -1254,10 +1274,17 @@ grpcproxy:
     {{- if dig "addons" "eventLedger" "enabled" false .Values }}
     EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
     {{- end }}
+  {{- if $grpcProxyScaled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 rateLimiter:
