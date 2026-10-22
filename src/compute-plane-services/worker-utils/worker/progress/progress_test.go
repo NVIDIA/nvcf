@@ -45,12 +45,16 @@ func TestMonitor(t *testing.T) {
 	testDir := t.TempDir()
 	monitor := New(testDir)
 	require.NoError(t, monitor.Start())
+	responseChan := make(chan *http.Response, 3)
 	t.Cleanup(func() {
 		// Close without holding monitor.lock so an in-flight event can finish.
 		// Stop's lifecycle behavior is covered separately.
 		require.NoError(t, monitor.watcher.Close())
 		select {
 		case <-monitor.monitorClosed:
+			if extra := len(responseChan); extra != 0 {
+				t.Errorf("received %d unexpected extra progress messages", extra)
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("progress monitor did not stop after closing its watcher")
 		}
@@ -67,7 +71,6 @@ func TestMonitor(t *testing.T) {
 	}
 	meteringEvent := metering.New(&meteringConfig, requestId, "sub-abc-123", "invoker-nca-id", nil)
 
-	responseChan := make(chan *http.Response, 3)
 	monitoredWork := &MonitoredWork{
 		Context:       context.Background(),
 		MeteringEvent: meteringEvent,
