@@ -6,20 +6,19 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
 
   # Preconditions beyond the shared local BDD inputs:
   # - The cluster must be able to pull the BYOO collector sidecar image. The
-  #   nvca-operator chart defaults it to
-  #   nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector, and the stack cannot route
-  #   it until #2597 lands. Use an NGC key that can pull that image, or run the
-  #   existing-install entry point against an install whose nvca-operator
-  #   release overrides agent.byooOtelCollector.imageRepository.
-  # - SAMPLE_BYOO_TASK_IMAGE names examples/task-samples/task-byoo-sample in a
-  #   registry the tasks API can validate and the cluster can pull.
+  #   compute-plane stack resolves it as byoo-otel-collector under
+  #   global.image.registry and global.image.repository, with the tag pinned
+  #   in the stack's base values.
+  # - SAMPLE_BYOO_TASK_IMAGE names examples/task-samples/task-byoo-sample and
+  #   SAMPLE_BYOO_FUNCTION_IMAGE names
+  #   examples/function-samples/byoo-telemetry-sample, each in a registry the
+  #   NVCF APIs can validate and the cluster can pull.
   # - The cluster pulls the reference sink image from Docker Hub.
   #
-  # TestBYOO runs every scenario except @pending-2601 and @pending-2673.
-  # TestBYOOExistingInstall also skips @stack-change and runs the workload
-  # scenarios against the current local install without changing the stack.
-  # Tag every scenario that installs, upgrades, or removes a release with
-  # @stack-change.
+  # TestBYOO runs every scenario. TestBYOOExistingInstall skips @stack-change
+  # and runs the workload scenarios against the current local install without
+  # changing the stack. Tag every scenario that installs, upgrades, or removes
+  # a release with @stack-change.
 
   Rule: Helmfile installs local NVCF with the BYOObservability gate on
 
@@ -128,7 +127,10 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
       # receiver counters include. The metrics/task-sample pipeline keeps only
       # metrics whose service.name is byoo-task-test, the resource that
       # examples/task-samples/task-byoo-sample sets, so its exporter counter
-      # proves the task's own metrics arrived.
+      # proves the task's own metrics arrived. The function-sample pipelines
+      # do the same for every signal of
+      # examples/function-samples/byoo-telemetry-sample, whose service.name is
+      # byoo-telemetry-sample.
       And Kubernetes manifest "byoo-otlp-sinks" is:
         """
         apiVersion: v1
@@ -154,10 +156,23 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
                 metrics:
                   metric:
                     - resource.attributes["service.name"] != "byoo-task-test"
+              filter/function-sample:
+                error_mode: ignore
+                logs:
+                  log_record:
+                    - resource.attributes["service.name"] != "byoo-telemetry-sample"
+                metrics:
+                  metric:
+                    - resource.attributes["service.name"] != "byoo-telemetry-sample"
+                traces:
+                  span:
+                    - resource.attributes["service.name"] != "byoo-telemetry-sample"
             exporters:
               debug:
                 verbosity: basic
               debug/task-sample:
+                verbosity: basic
+              debug/function-sample:
                 verbosity: basic
             extensions:
               health_check:
@@ -183,6 +198,18 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
                   receivers: [otlp]
                   processors: [filter/task-sample]
                   exporters: [debug/task-sample]
+                logs/function-sample:
+                  receivers: [otlp]
+                  processors: [filter/function-sample]
+                  exporters: [debug/function-sample]
+                metrics/function-sample:
+                  receivers: [otlp]
+                  processors: [filter/function-sample]
+                  exporters: [debug/function-sample]
+                traces/function-sample:
+                  receivers: [otlp]
+                  processors: [filter/function-sample]
+                  exporters: [debug/function-sample]
                 traces:
                   receivers: [otlp]
                   exporters: [debug]
@@ -403,11 +430,10 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | metric                                        | labels        | comparison | total |
         | otelcol_receiver_accepted_metric_points_total | receiver=otlp | at least   | 1     |
 
-    # Waits on #2601 for a container function sample that emits OTLP logs,
-    # metrics, and traces. SAMPLE_BYOO_FUNCTION_IMAGE names that sample. The
-    # inference and health options assume the load_tester_supreme contract;
-    # align them with the sample when it lands.
-    @function-lifecycle @pending-2601
+    # examples/function-samples/byoo-telemetry-sample answers GET /health and
+    # POST /echo on port 8000. Every /echo call exports one span, one log
+    # record, and two metric points.
+    @function-lifecycle
     Scenario: A BYOO sample function exports logs, metrics, and traces
       Given environment variable "SAMPLE_BYOO_FUNCTION_IMAGE" is set
       When I successfully run command "kubectl --context k3d-ncp-local --namespace bdd-byoo-sink rollout restart deployment/otlp-sink-function"
@@ -415,10 +441,10 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | kind       | name               | namespace     |
         | Deployment | otlp-sink-function | bdd-byoo-sink |
       And Prometheus metrics on port "8888" of pods selected by "app=otlp-sink-function" in namespace "bdd-byoo-sink" using context "k3d-ncp-local" should total within "2m":
-        | metric                                        | labels        | comparison | total |
-        | otelcol_receiver_accepted_spans_total         | receiver=otlp | exactly    | 0     |
-        | otelcol_receiver_accepted_metric_points_total | receiver=otlp | exactly    | 0     |
-        | otelcol_receiver_accepted_log_records_total   | receiver=otlp | exactly    | 0     |
+        | metric                                    | labels                         | comparison | total |
+        | otelcol_exporter_sent_spans_total         | exporter=debug/function-sample | exactly    | 0     |
+        | otelcol_exporter_sent_metric_points_total | exporter=debug/function-sample | exactly    | 0     |
+        | otelcol_exporter_sent_log_records_total   | exporter=debug/function-sample | exactly    | 0     |
 
       Given the HTTP request header "Content-Type" is "application/json"
       And the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
@@ -458,13 +484,14 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
       And I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
-        {"message":"bdd-byoo-sample","repeats":1}
+        {"message":"bdd-byoo-sample"}
         """
+      # Only the sample's own signals reach the debug/function-sample exporter.
       Then Prometheus metrics on port "8888" of pods selected by "app=otlp-sink-function" in namespace "bdd-byoo-sink" using context "k3d-ncp-local" should total within "5m":
-        | metric                                        | labels        | comparison | total |
-        | otelcol_receiver_accepted_spans_total         | receiver=otlp | at least   | 1     |
-        | otelcol_receiver_accepted_metric_points_total | receiver=otlp | at least   | 1     |
-        | otelcol_receiver_accepted_log_records_total   | receiver=otlp | at least   | 1     |
+        | metric                                    | labels                         | comparison | total |
+        | otelcol_exporter_sent_spans_total         | exporter=debug/function-sample | at least   | 1     |
+        | otelcol_exporter_sent_metric_points_total | exporter=debug/function-sample | at least   | 2     |
+        | otelcol_exporter_sent_log_records_total   | exporter=debug/function-sample | at least   | 1     |
 
   Rule: A workload that asks for BYOO on a cluster without the gate fails with an actionable error
 
@@ -491,11 +518,9 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
       And I successfully run command "date +%s"
       And I export command output to environment variable "BDD_BYOO_RUN_ID"
 
-    # Waits on #2673. Today NVCA requeues the rejected creation message and the
-    # deployment stays in DEPLOYING with no reason. This scenario runs last
-    # because it reinstalls NVCA with the gate off; rerun the install scenario
-    # to turn the gate back on.
-    @function-lifecycle @stack-change @pending-2673
+    # This scenario runs last because it reinstalls NVCA with the gate off;
+    # rerun the install scenario to turn the gate back on.
+    @function-lifecycle @stack-change
     Scenario: A function with telemetries fails with an actionable error when BYOO is off
       When I successfully run command:
         """
@@ -525,13 +550,21 @@ Feature: Export workload telemetry to an operator-owned OTLP endpoint
         | --inference-port       | 8000                              |
         | --health-uri           | /health                           |
         | --health-port          | 8000                              |
+        | --health-timeout       | PT30S                             |
         | --metrics-telemetry-id | ${BDD_BYOO_GATE_OFF_TELEMETRY_ID} |
       And the function selected by NVCF CLI is deleted at scenario teardown
       And the function selected by NVCF CLI is undeployed at scenario teardown
+      And I export the function selected by NVCF CLI to environment variables "BDD_BYOO_GATE_OFF_FUNCTION_ID" and "BDD_BYOO_GATE_OFF_VERSION_ID"
+      # NVCA rejects the creation message and reports the instance as failed,
+      # so the deployment moves to ERROR instead of staying in DEPLOYING.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 600
         """
       Then the command should fail
-      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml --json function deploy get"
-      Then the command output should contain "BYOObservability"
+      # NVCF copies the reason NVCA reports into the deployment health info.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      When I poll "GET" "http://api.localhost:8080/v2/nvcf/deployments/functions/${BDD_BYOO_GATE_OFF_FUNCTION_ID}/versions/${BDD_BYOO_GATE_OFF_VERSION_ID}" for up to 120 seconds until the HTTP response body contains "Bring Your Own Observability (BYOO) is disabled on this cluster"
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "deployment.functionStatus" should equal "ERROR"
+      And the HTTP response body should contain "the function requests telemetries, but these NVCA feature flags are not enabled: BYOObservability"
