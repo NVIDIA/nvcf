@@ -71,6 +71,7 @@ Important settings to review before deployment:
 - `invocation.env.*` for the NVCF API address, NATS connection settings, and Rate Limiter address
 - `invocation.cors.allowedOrigins` for browser access to legacy exec/pexec routes
 - `invocation.polling.enforceOwnership` for the staged polling ownership rollout
+- `invocation.workerTls.*` for the optional HTTPS listener for worker callbacks
 - `invocation.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
@@ -114,6 +115,45 @@ Validate the chart wiring locally with:
 
 ```bash
 bash tests/access_policy_test.sh
+```
+
+### Worker callback TLS
+
+Workers connect back to an individual invocation pod to stream responses. By
+default that callback is plain HTTP on port 8080. Set
+`invocation.workerTls.enabled: true` to also serve HTTPS on a separate port
+(8443 by default) for worker callbacks:
+
+```yaml
+invocation:
+  workerTls:
+    enabled: true
+    tls:
+      certificate:
+        enabled: true
+        issuerRef:
+          name: nvcf-worker-callback
+```
+
+With `tls.certificate.enabled`, the chart creates a cert-manager Certificate
+for `*.invocation.<namespace>.svc.cluster.local`, which covers the per-pod
+callback names. To use an existing `kubernetes.io/tls` Secret instead, leave the
+certificate disabled and set `invocation.workerTls.tls.secretName`. The
+service reloads the certificate from the mounted Secret without a restart.
+
+While `invocation.workerTls.advertise` is true (the default), the chart sets
+`WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS` to
+`https://invocation.<namespace>.svc.cluster.local:<port>`, so workers call back
+over TLS. Workers must trust the issuing CA through `NVCF_PROXY_CA_FILE` or
+`NVCF_PROXY_CA_PEM`. Set `advertise: false` to serve the listener before you
+switch workers to it. An explicit `invocation.env` value for the callback
+address takes precedence. The `WORKER_TLS__*` keys are reserved for this
+setting.
+
+Validate the chart wiring locally with:
+
+```bash
+bash tests/worker_tls_test.sh
 ```
 
 ## Notes

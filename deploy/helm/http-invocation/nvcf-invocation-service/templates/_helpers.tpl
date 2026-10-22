@@ -104,6 +104,59 @@ Create the Docker config JSON for image pull secret
 {{- end }}
 
 {{/*
+Secret mounted for the worker TLS listener.
+*/}}
+{{- define "nvcf-invocation-service.workerTlsSecretName" -}}
+{{- $tls := .Values.invocation.workerTls.tls -}}
+{{- if $tls.certificate.enabled -}}
+{{- default (printf "%s-worker-tls" (include "nvcf-invocation-service.fullname" .)) $tls.secretName -}}
+{{- else -}}
+{{- required "invocation.workerTls.tls.secretName is required when invocation.workerTls.enabled is true and invocation.workerTls.tls.certificate.enabled is false" $tls.secretName -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Service name suffix of the per-pod callback names.
+*/}}
+{{- define "nvcf-invocation-service.serviceHost" -}}
+{{- printf "invocation.%s.svc.cluster.local" (include "nvcf-invocation-service.namespace" .) -}}
+{{- end -}}
+
+{{/*
+Environment owned by invocation.workerTls, as a YAML map. Empty when it is off.
+*/}}
+{{- define "nvcf-invocation-service.workerTlsEnv" -}}
+{{- $w := .Values.invocation.workerTls -}}
+{{- if $w.enabled -}}
+WORKER_TLS__ENABLED: "true"
+WORKER_TLS__PORT: {{ $w.port | toString | quote }}
+WORKER_TLS__CERT_PATH: "/etc/invocation-service/worker-tls/tls.crt"
+WORKER_TLS__KEY_PATH: "/etc/invocation-service/worker-tls/tls.key"
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether the env ConfigMap is rendered and loaded.
+*/}}
+{{- define "nvcf-invocation-service.hasEnvConfig" -}}
+{{- if or .Values.invocation.env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership .Values.invocation.workerTls.enabled -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Checksum of the values rendered into the env ConfigMap. workerTls joins the
+input only when enabled, so existing releases keep their checksum.
+*/}}
+{{- define "nvcf-invocation-service.configEnvChecksum" -}}
+{{- $inputs := dict "env" .Values.invocation.env "metrics" .Values.invocation.metrics "tracing" .Values.invocation.tracing "cors" .Values.invocation.cors "polling" .Values.invocation.polling -}}
+{{- if .Values.invocation.workerTls.enabled -}}
+{{- $_ := set $inputs "workerTls" .Values.invocation.workerTls -}}
+{{- end -}}
+{{- $inputs | toYaml | sha256sum -}}
+{{- end -}}
+
+{{/*
 Vault Agent Injector Annotations for JWT Auth
 */}}
 {{- define "nvcf-invocation-service.vaultAnnotations" -}}
