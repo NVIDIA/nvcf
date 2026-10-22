@@ -81,6 +81,54 @@ func TestNewContextMiddlewareExtractsRoutingKeyFromModelPrefix(t *testing.T) {
 	}
 }
 
+func TestNewContextMiddlewareValidatesRequestID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		inboundID string
+		wantKept  bool
+	}{
+		{"maximum length and allowed characters", strings.Repeat("a", 122) + "._:-Z9", true},
+		{"too long", strings.Repeat("a", 129), false},
+		{"space", "caller id", false},
+		{"disallowed character", "caller+id", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			req.Header.Set(HeaderRequestID, tc.inboundID)
+			rec := httptest.NewRecorder()
+			ec := e.NewContext(req, rec)
+
+			handler := NewContextMiddleware(config.Default())(func(ec echo.Context) error {
+				gc := ec.(*GatewayContext)
+				id := gc.RequestID()
+				if tc.wantKept && id != tc.inboundID {
+					t.Fatalf("request id = %q, want caller value %q", id, tc.inboundID)
+				}
+				if !tc.wantKept && id == tc.inboundID {
+					t.Fatalf("invalid caller request id was kept: %q", id)
+				}
+				if !tc.wantKept && len(id) != 36 {
+					t.Fatalf("regenerated request id length = %d, want UUID length 36", len(id))
+				}
+				if got := gc.Request().Header.Get(HeaderRequestID); got != id {
+					t.Fatalf("request header = %q, want validated id %q", got, id)
+				}
+				if got := gc.Response().Header().Get(HeaderRequestID); got != id {
+					t.Fatalf("response header = %q, want %q", got, id)
+				}
+				return gc.NoContent(http.StatusNoContent)
+			})
+			if err := handler(ec); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+		})
+	}
+}
+
 func TestNewContextMiddlewareAcceptsLegacyTargetRegionHeader(t *testing.T) {
 	t.Parallel()
 
