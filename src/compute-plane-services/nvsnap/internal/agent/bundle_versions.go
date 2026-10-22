@@ -254,7 +254,13 @@ func readBundleTar(r io.Reader, dir string) error {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			// Chmod after the create: the create's mode passes through the
+			// agent's umask, and a version must arrive with the modes its
+			// recorded digest covers.
 			if err := root.MkdirAll(name, tarPerm(hdr.Mode)|0o700); err != nil {
+				return err
+			}
+			if err := root.Chmod(name, tarPerm(hdr.Mode)|0o700); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -276,6 +282,9 @@ func readBundleTar(r io.Reader, dir string) error {
 				return err
 			}
 			_, err = io.CopyN(f, tr, hdr.Size)
+			if err == nil {
+				err = f.Chmod(tarPerm(hdr.Mode)) // past the umask, as for a directory
+			}
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
