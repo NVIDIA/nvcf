@@ -1,0 +1,10 @@
+# CI-only values for helm lint/template validation.
+workerCallbackProxy:
+  image:
+    registry: example.com
+  workerDomain: grpc-worker.example.com
+  tls:
+    frontend:
+      certificate:
+        issuerRef:
+          name: nvcf-worker-callback
