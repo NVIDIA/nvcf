@@ -561,12 +561,14 @@ public class IcmsClient {
     }
 
     // java.net.URI falls back to a registry-based authority, with no host or port, when the port
-    // is not a number, so check the port text directly. Registry-style host names, such as names
-    // with underscores, and an empty port stay valid.
+    // is not a number, so check the port text directly. Everything after the first colon outside
+    // an IPv6 literal must be the port, which rejects extra colons. Registry-style host names,
+    // such as names with underscores, and an empty port stay valid.
     private static boolean hasValidPort(String authority) {
         var hostPort = authority.substring(authority.lastIndexOf('@') + 1);
-        var colon = hostPort.lastIndexOf(':');
-        if (colon < 0 || colon < hostPort.lastIndexOf(']')) {
+        var hostEnd = hostPort.startsWith("[") ? Math.max(hostPort.indexOf(']'), 0) : 0;
+        var colon = hostPort.indexOf(':', hostEnd);
+        if (colon < 0) {
             return true;
         }
         var port = hostPort.substring(colon + 1);

@@ -56,7 +56,8 @@ class IcmsClientOtlpEndpointTest {
             "http://otel_collector:4318",
             "http://otel-collector.example.invalid:",
             "https://otel-collector.example.invalid",
-            "http://[::1]:4317"
+            "http://[::1]:4317",
+            "http://[::1]"
     })
     void validEndpointIsAccepted(String endpoint) {
         assertThat(IcmsClient.parseTracingUrl(endpoint)).isEqualTo(URI.create(endpoint));
@@ -73,7 +74,9 @@ class IcmsClientOtlpEndpointTest {
             "http://otel-collector.example.invalid:notaport",
             "http://otel_collector:notaport",
             "http://otel-collector.example.invalid:65536",
-            "http://otel-collector.example.invalid:99999999999"
+            "http://otel-collector.example.invalid:99999999999",
+            "http://otel-collector.example.invalid:4317:4318",
+            "http://otel_collector:4317:4318"
     })
     void malformedEndpointIsRejected(String endpoint) {
         assertThatIllegalArgumentException()
