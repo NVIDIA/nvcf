@@ -36,9 +36,13 @@ type lookupError struct {
 	cause     error
 }
 
+// Error returns the safe diagnostic without remote output or credentials.
 func (e *lookupError) Error() string { return e.reason }
+
+// Unwrap preserves the original cause for errors.Is and errors.As.
 func (e *lookupError) Unwrap() error { return e.cause }
 
+// retryLookup retries temporary failures at most three times within one timeout.
 func retryLookup(timeout time.Duration, lookup func(time.Duration) error) error {
 	deadline := time.Now().Add(timeout)
 	for attempt := 1; ; attempt++ {
@@ -55,6 +59,7 @@ func retryLookup(timeout time.Duration, lookup func(time.Duration) error) error 
 	}
 }
 
+// networkLookupError classifies transport failures without exposing request URLs.
 func networkLookupError(err error) *lookupError {
 	var networkError net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
@@ -75,6 +80,7 @@ func networkLookupError(err error) *lookupError {
 
 var transientGoStatus = regexp.MustCompile(`\b(?:429|500|502|503|504)\s+(?:too many requests|internal server error|bad gateway|service unavailable|gateway timeout)\b`)
 
+// goLookupError classifies Go command output but returns only safe diagnostics.
 func goLookupError(err error, output string) *lookupError {
 	var missingTool *exec.Error
 	if errors.As(err, &missingTool) {
@@ -99,6 +105,7 @@ func goLookupError(err error, output string) *lookupError {
 	return &lookupError{reason: "Go command failed; check module graph, proxy access and toolchain", cause: err}
 }
 
+// runGoLicenseCommand retries transient Go command failures within the caller's timeout.
 func runGoLicenseCommand(dir string, timeout time.Duration, args ...string) (string, error) {
 	var stdout string
 	err := retryLookup(timeout, func(remaining time.Duration) error {

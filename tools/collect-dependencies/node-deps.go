@@ -85,6 +85,7 @@ type npmLookupResult struct {
 	err     error
 }
 
+// npmLicense caches both license metadata and safe lookup failures for a version.
 func npmLicense(dep nodeDependency, cache map[string]npmLookupResult) npmLookupResult {
 	key := dep.Name + "@" + dep.Version
 	if cached, ok := cache[key]; ok {
@@ -122,6 +123,7 @@ func npmLicenseValue(value any) string {
 	return ""
 }
 
+// buildNodeRows distinguishes disabled or failed lookups from missing npm licenses.
 func buildNodeRows(allNode map[string]struct{}, useNPM bool, cache map[string]npmLookupResult) ([]dependencyRow, int) {
 	rows := []dependencyRow{}
 	keys := sortedKeys(allNode)

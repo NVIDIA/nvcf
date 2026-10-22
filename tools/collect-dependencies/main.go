@@ -31,6 +31,7 @@ func main() {
 	}
 }
 
+// run collects the requested dependency inventories and writes the license report.
 func run() error {
 	parsed, err := parseArgs(os.Args[1:])
 	if err != nil {

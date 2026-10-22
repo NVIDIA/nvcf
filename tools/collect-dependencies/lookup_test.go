@@ -183,6 +183,93 @@ printf '%s\n' "$LOOKUP_METADATA"
 	}
 }
 
+// TestGoDownloadPreservesSuccessfulVersion checks that version order cannot
+// replace a successful absent-license lookup with an unavailable result.
+func TestGoDownloadPreservesSuccessfulVersion(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		first           string
+		second          string
+		wantLicense     string
+		wantUnavailable bool
+	}{
+		{"command failure after success", "missing", "command-error", "", false},
+		{"JSON failure after success", "missing", "invalid-json", "", false},
+		{"module failure after success", "missing", "module-error", "", false},
+		{"success after command failure", "command-error", "missing", "", false},
+		{"success after JSON failure", "invalid-json", "missing", "", false},
+		{"success after module failure", "module-error", "missing", "", false},
+		{"all versions fail", "command-error", "module-error", "", true},
+		{"later version has license", "missing", "licensed", "MIT", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestFile(t, filepath.Join(dir, "go.sum"), "example.test/dependency v1.0.0 h1:fixture\nexample.test/dependency v1.1.0 h1:fixture\n")
+			missingDir := filepath.Join(dir, "missing")
+			writeTestFile(t, filepath.Join(missingDir, "go.mod"), "module example.test/dependency\n")
+			licensedDir := filepath.Join(dir, "licensed")
+			writeTestFile(t, filepath.Join(licensedDir, "LICENSE"), "MIT License\n")
+			bin := filepath.Join(dir, "bin")
+			writeTestFile(t, filepath.Join(bin, "go"), `#!/bin/sh
+printf '%s\n' "$4" >> "$LOOKUP_COUNTER"
+case "$4" in
+ example.test/dependency@v1.0.0) mode="$LOOKUP_FIRST";;
+ example.test/dependency@v1.1.0) mode="$LOOKUP_SECOND";;
+ *) exit 2;;
+esac
+case "$mode" in
+ command-error) printf '401 Unauthorized\n' >&2; exit 1;;
+ invalid-json) printf '{\n';;
+ module-error) printf '{"Error":"unknown revision"}\n';;
+ missing) printf '%s\n' "$LOOKUP_MISSING_METADATA";;
+ licensed) printf '%s\n' "$LOOKUP_LICENSED_METADATA";;
+ *) exit 2;;
+esac
+`)
+			if err := os.Chmod(filepath.Join(bin, "go"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			missingMetadata, err := json.Marshal(map[string]string{"Dir": missingDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			licensedMetadata, err := json.Marshal(map[string]string{"Dir": licensedDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("LOOKUP_COUNTER", filepath.Join(dir, "calls"))
+			t.Setenv("LOOKUP_FIRST", tt.first)
+			t.Setenv("LOOKUP_SECOND", tt.second)
+			t.Setenv("LOOKUP_MISSING_METADATA", string(missingMetadata))
+			t.Setenv("LOOKUP_LICENSED_METADATA", string(licensedMetadata))
+			t.Setenv("COLLECT_DEPS_NO_GO_MOD_DOWNLOAD", "0")
+			all := map[string]struct{}{"example.test/dependency": {}}
+			licenses := map[string]map[string]struct{}{}
+			failures := map[string]string{"example.test/dependency": "prior go list failure"}
+			enrichGoLicensesFromGoModDownload(all, licenses, []string{dir}, failures)
+			rows := buildGoRows(all, licenses, failures)
+			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(calls) != "example.test/dependency@v1.0.0\nexample.test/dependency@v1.1.0\n" {
+				t.Fatalf("unexpected lookup order: %s", calls)
+			}
+			if got := strings.Contains(rows[0].License, "lookup unavailable"); got != tt.wantUnavailable {
+				t.Fatalf("unavailable=%t, want %t: %v", got, tt.wantUnavailable, rows)
+			}
+			if tt.wantLicense != "" {
+				if rows[0].License != tt.wantLicense {
+					t.Fatalf("license=%q, want %q", rows[0].License, tt.wantLicense)
+				}
+			} else if normalizeLicenseGroup(rows[0].License) != "Unresolved" {
+				t.Fatalf("missing license must remain unresolved: %v", rows)
+			}
+		})
+	}
+}
+
 // registryTransport redirects only the synthetic npm lookup to a local server.
 type registryTransport struct{ endpoint string }
 

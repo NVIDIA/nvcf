@@ -613,6 +613,8 @@ func httpGetString(rawURL string, timeout time.Duration, headers map[string]stri
 	return body, err
 }
 
+// httpGetBytesWithStatus retries temporary HTTP failures within one timeout and
+// returns safe diagnostics instead of remote error bodies or request URLs.
 func httpGetBytesWithStatus(rawURL string, timeout time.Duration, headers map[string]string) ([]byte, int, error) {
 	var body []byte
 	var status int

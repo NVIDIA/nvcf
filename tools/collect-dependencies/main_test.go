@@ -395,6 +395,7 @@ require github.com/pkg/errors v0.9.1
 	)
 }
 
+// TestGoListLicenseEnrichmentDoesNotModifyModuleFiles verifies read-only resolution.
 func TestGoListLicenseEnrichmentDoesNotModifyModuleFiles(t *testing.T) {
 	tmp := t.TempDir()
 	moduleFile := filepath.Join(tmp, "go.mod")
