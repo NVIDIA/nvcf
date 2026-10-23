@@ -924,6 +924,7 @@ mod tests {
     use super::*;
     use crate::process::Process;
     use crate::test_support::FakeCommand;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn pod(identity: &str) -> Value {
@@ -942,7 +943,10 @@ mod tests {
         let directory = fake.executable().parent().unwrap().to_owned();
         fs::write(directory.join("pod-fixture"), "")?;
         fs::write(directory.join("pod.json"), pod("container-a").to_string())?;
-        std::os::unix::fs::symlink("/bin/sleep", directory.join("spark"))?;
+        // Multicall sleep implementations reject an argv[0] named "spark".
+        let spark = directory.join("spark");
+        fs::write(&spark, "#!/bin/sh\nexec /bin/sleep \"$@\"\n")?;
+        fs::set_permissions(&spark, fs::Permissions::from_mode(0o755))?;
         let topology = Topology::load("us-west-2", &[])?.with_executable(fake.executable());
         Ok((fake, topology, directory))
     }
