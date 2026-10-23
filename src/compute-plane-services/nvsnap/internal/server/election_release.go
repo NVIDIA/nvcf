@@ -351,7 +351,7 @@ func (r *electionReleaser) reconcile(ctx context.Context) {
 			r.evictLogged(ctx, hash, "deadline passed", l)
 			continue
 		}
-		if !r.leaderAlive(ctx, l.Annotations[election.LeaderNamespaceAnnotation], l.Annotations[election.LeaderIDAnnotation], hash) {
+		if !r.leaderAlive(ctx, l, hash) {
 			r.evictLogged(ctx, hash, "leader pod gone or terminated", l)
 		}
 	}
@@ -425,10 +425,13 @@ func (r *electionReleaser) reconcileOrphans(ctx context.Context) {
 	}
 }
 
-// leaderAlive finds the leader by its election id among the pods stamped
-// with the hash in its namespace and reports whether it can still capture.
-func (r *electionReleaser) leaderAlive(ctx context.Context, ns, id, hash string) bool {
-	pods, err := r.kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+// leaderAlive finds the leader of lease among the pods stamped with the
+// hash in its namespace (election.ResolveLeader: the UID the Lease bound,
+// or before that the earliest pod carrying the election id) and reports
+// whether it can still capture. Pods that cannot be told apart cannot be
+// verified as the leader, so their election is as good as failed.
+func (r *electionReleaser) leaderAlive(ctx context.Context, lease *coordinationv1.Lease, hash string) bool {
+	pods, err := r.kube.CoreV1().Pods(lease.Annotations[election.LeaderNamespaceAnnotation]).List(ctx, metav1.ListOptions{
 		LabelSelector: election.HashLabel + "=" + checkpointstore.ShortHash(hash),
 	})
 	if err != nil {
@@ -436,12 +439,10 @@ func (r *electionReleaser) leaderAlive(ctx context.Context, ns, id, hash string)
 		r.log.WithError(err).Warn("election: list leader candidates failed")
 		return true
 	}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Annotations[election.ElectionIDAnnotation] != id {
-			continue
-		}
-		return p.Status.Phase != corev1.PodFailed && p.Status.Phase != corev1.PodSucceeded && p.DeletionTimestamp == nil
+	p, err := election.ResolveLeader(lease, pods.Items)
+	if err != nil {
+		r.log.WithError(err).WithField("hash", checkpointstore.ShortHash(hash)).Warn("election: leader pod ambiguous")
+		return false
 	}
-	return false
+	return p != nil && p.Status.Phase != corev1.PodFailed && p.Status.Phase != corev1.PodSucceeded && p.DeletionTimestamp == nil
 }
