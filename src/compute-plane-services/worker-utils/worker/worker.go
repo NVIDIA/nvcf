@@ -552,16 +552,18 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 			return nil
 		}
 
-		connectedRegion := *w.nvcfClient.ConnectedRegions.Load()
-		globalNatsConsumer, err := consumer.NewNatsConsumer(ctx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
-			_, err := w.nvcfClient.Client.ProvisionRegionalWorker(ctx, &pb.ProvisionWorkerRequest{
-				InstanceId:        w.config.InstanceId,
-				FunctionId:        w.config.FunctionId,
-				FunctionVersionId: w.config.FunctionVersionId,
-				RegionToProvision: region,
-			}, auth.GrpcTokenFromSource(w.nvcfClient.NvcfTokenProvider))
-			return err
-		}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
+		globalNatsConsumer, err := newNatsConsumerWithRetry(ctx, natsConsumerSetupTimeout, func() (*consumer.GlobalNatsConsumer, error) {
+			connectedRegion := *w.nvcfClient.ConnectedRegions.Load()
+			return consumer.NewNatsConsumer(ctx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
+				_, err := w.nvcfClient.Client.ProvisionRegionalWorker(ctx, &pb.ProvisionWorkerRequest{
+					InstanceId:        w.config.InstanceId,
+					FunctionId:        w.config.FunctionId,
+					FunctionVersionId: w.config.FunctionVersionId,
+					RegionToProvision: region,
+				}, auth.GrpcTokenFromSource(w.nvcfClient.NvcfTokenProvider))
+				return err
+			}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
+		})
 		if err != nil {
 			return types.NewInternalError(err)
 		}
@@ -630,6 +632,25 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 
 		zap.L().Debug("finished processing work stream")
 	}
+}
+
+// natsConsumerSetupTimeout bounds how long the worker waits for NATS to come
+// back before giving up on consumer setup and exiting. It covers a rolling
+// restart of the NATS cluster, where a member can be unreachable for tens of
+// seconds, and roughly matches how long the NATS client keeps reconnecting.
+const natsConsumerSetupTimeout = 2 * time.Minute
+
+// newNatsConsumerWithRetry retries consumer setup until it succeeds, ctx ends,
+// or maxElapsed passes. Without it, a NATS disconnect longer than the
+// consumer lookup's own short retry window exits the worker process.
+func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, create func() (*consumer.GlobalNatsConsumer, error)) (*consumer.GlobalNatsConsumer, error) {
+	b := backoff.NewExponentialBackOff(
+		backoff.WithMaxInterval(5*time.Second),
+		backoff.WithMaxElapsedTime(maxElapsed),
+	)
+	return backoff.RetryNotifyWithData(create, backoff.WithContext(b, ctx), func(err error, next time.Duration) {
+		zap.L().Warn("failed to set up nats consumer, retrying", zap.Error(err), zap.Duration("retryIn", next))
+	})
 }
 
 // Shutdown triggers a graceful shutdown of the worker -- This is only used by tests
