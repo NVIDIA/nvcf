@@ -76,3 +76,16 @@ At runtime the image provides:
 - Apache Cassandra at the version pinned by the `Dockerfile`'s `FROM cassandra:<version>` line, using the official image's runtime layout (`/opt/cassandra/`)
 - A Prometheus exporter agent, when supplied at build time, loaded via `-javaagent` and exposed on port `9500`
 - `scripts/cassandra-env.sh`, copied over the official image's `/etc/cassandra/cassandra-env.sh`, which derives `CASSANDRA_RACK` from the pod's hostname suffix (`-0`/`-3`/`-6` -> `r1`, `-1`/`-4`/`-7` -> `r2`, `-2`/`-5`/`-8` -> `r3`) and writes it directly into `cassandra-rackdc.properties`
+
+## Runtime dependency compatibility
+
+Java runtime replacements are checksum-pinned in `java-libraries.lock`.
+Logback core and classic use the same patch version. Logback 1.5.37 and later
+remove Janino-based `<if condition="...">` expressions. The shipped Cassandra
+logging configurations do not use them. Migrate custom logging configurations
+to the [Logback condition syntax](https://logback.qos.ch/manual/configuration.html#conditional)
+before upgrading.
+
+The image smoke checks exercise Jackson time values, LZ4 native and Java
+compression, and both shipped Logback configurations. They require Docker and
+a host JDK 11 or newer.

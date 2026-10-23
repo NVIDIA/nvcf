@@ -153,3 +153,16 @@ For a brand-new keyspace, the conventional sequence is:
 Subsequent files (`04_*` and later) are incremental migrations applied as the schema evolves. Most are DDL; `ess_api/04_*` is a data seed.
 
 The `03_init_tables.up.sql` follows a clean-slate model: it is updated in place when the canonical schema changes rather than accumulating `ALTER TABLE` history. Existing clusters apply only the deltas that postdate their last applied migration.
+
+## Runtime dependency compatibility
+
+Java runtime replacements are checksum-pinned in `java-libraries.lock`.
+Logback core and classic use the same patch version. Logback 1.5.37 and later
+remove Janino-based `<if condition="...">` expressions. The shipped Cassandra
+logging configurations do not use them. Migrate custom logging configurations
+to the [Logback condition syntax](https://logback.qos.ch/manual/configuration.html#conditional)
+before upgrading.
+
+The image smoke checks exercise Jackson time values, LZ4 native and Java
+compression, and both shipped Logback configurations. They require Docker and
+a host JDK 11 or newer.
