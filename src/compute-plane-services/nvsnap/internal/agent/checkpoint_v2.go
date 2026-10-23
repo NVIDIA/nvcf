@@ -292,7 +292,7 @@ type dumpV2Opts struct {
 	Snapshot func(criuSaves map[string]bool) error
 }
 
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (_ *GPUShareInfo, retErr error) {
 	leaveRunning, fabricSession := o.LeaveRunning, o.FabricSession
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
@@ -364,6 +364,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	var gsInfo *GPUShareInfo
 	var gpuMap string
+	var guard suspendGuard
 	if fabricSession != "" && !gsOn {
 		return nil, fmt.Errorf("gpushare: fabric session %s, but no process of this pod runs on the GPU under %s", fabricSession, gpushareLibName)
 	}
@@ -398,6 +399,16 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		if err != nil {
 			return nil, fmt.Errorf("gpushare suspend: %w", err)
 		}
+		// The source is stopped with its GPU memory released from here.
+		// The dump settles it (settleSource); any return before the dump
+		// brings it back through the guard. Deferred after the fabric
+		// session's close, so it runs while the session is still open.
+		guard.arm(func() error { return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log) }, func() {
+			if o.PostDumpDir != "" {
+				markPostDumpFailed(o.PostDumpDir, log)
+			}
+		})
+		defer func() { retErr = guard.settle(retErr) }()
 		gpuMap = gm
 		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
 	}
@@ -462,6 +473,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			// resume, which needs them, can proceed.
 			markPostDumpFailed(o.PostDumpDir, log)
 		}
+		guard.handOff()
 		resumeErr := settleSource(gsOn, leaveRunning, err != nil, func() error {
 			return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log)
 		})
@@ -586,6 +598,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			tail = tailOfFile(filepath.Join(imgsHost, "dump.log"), 6)
 		}
 	}
+	guard.handOff()
 	if err := finishDump(runErr, moveErr, out, tail, gsOn, leaveRunning, func() error {
 		return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log)
 	}); err != nil {
@@ -620,6 +633,43 @@ func settleSource(suspended, leaveRunning, dumpFailed bool, resume func() error)
 		return fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
 	}
 	return nil
+}
+
+// suspendGuard settles a source the capture suspended when the capture
+// returns before its dump could: a preparation step between the suspend
+// and the dump that fails (no space for the snapshot hook, an action
+// script that cannot be written) would otherwise leave the workload
+// stopped with its GPU memory released, and its pod still Ready. Armed
+// right after the suspend and handed off to the dump's own settlement
+// (settleSource) once the dump has run.
+type suspendGuard struct {
+	resume func() error
+	// abort tells a group capture's driver this member failed, so the
+	// other members stop waiting for it (and a fabric resume can run).
+	abort func()
+}
+
+func (g *suspendGuard) arm(resume func() error, abort func()) { g.resume, g.abort = resume, abort }
+
+// handOff disarms the guard: the dump settles the source from here.
+func (g *suspendGuard) handOff() { g.resume, g.abort = nil, nil }
+
+// settle resumes a source no dump settled and returns the capture's err,
+// joined with a failed resume as errSourceLeftSuspended for the caller to
+// replace the workload.
+func (g *suspendGuard) settle(err error) error {
+	if g.resume == nil {
+		return err
+	}
+	resume, abort := g.resume, g.abort
+	g.handOff()
+	if abort != nil {
+		abort()
+	}
+	if rerr := resume(); rerr != nil {
+		return errors.Join(err, fmt.Errorf("%w: resume after the capture failed before its dump: %w", errSourceLeftSuspended, rerr))
+	}
+	return err
 }
 
 // finishDump settles the source after an in-namespace dump and reports how

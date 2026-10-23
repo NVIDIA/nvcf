@@ -105,6 +105,7 @@ go_library(
         "@io_k8s_apimachinery//pkg/api/resource",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_apimachinery//pkg/util/validation",
         "@io_k8s_client_go//dynamic",
         "@io_k8s_client_go//informers",
         "@io_k8s_client_go//kubernetes",
