@@ -260,6 +260,88 @@ func TestGPUSharePatches_ReusesMountedBundle(t *testing.T) {
 	}
 }
 
+// The store volume is the node's directory of every pod's saved GPU
+// memory; only the per-pod mount gpushare places may reach it. A pod that
+// brings its own reference to it (a sidecar or init mounting the volume
+// name without the per-pod subPath, its own volume under that name, a
+// second pod-uid variable that would win over the placed one) is not
+// given the store at all.
+func TestGPUSharePatches_ConfinesTheStoreToThePod(t *testing.T) {
+	ownUID := corev1.EnvVar{Name: gpusharePodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}
+	perPod := corev1.VolumeMount{Name: gpushareStoreVolume, MountPath: GPUShareStorePath, SubPathExpr: "$(" + gpusharePodUIDEnv + ")"}
+	cases := map[string]func(*corev1.Pod){
+		"a sidecar mounting the store root": func(p *corev1.Pod) {
+			p.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/all-pods"}}
+		},
+		"a sidecar mounting another pod's directory": func(p *corev1.Pod) {
+			p.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/other", SubPath: "another-pod-uid"}}
+		},
+		"the GPU container mounting the store root": func(p *corev1.Pod) {
+			p.Spec.Containers[1].VolumeMounts = []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/all-pods"}}
+		},
+		"an init container mounting the store": func(p *corev1.Pod) {
+			p.Spec.InitContainers = []corev1.Container{{Name: "copy", Image: "busybox", VolumeMounts: []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/all-pods"}}}}
+		},
+		"an ephemeral container mounting the store": func(p *corev1.Pod) {
+			p.Spec.EphemeralContainers = []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+				Name: "debug", Image: "busybox", VolumeMounts: []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/all-pods"}}}}}
+		},
+		"the pod's own volume under the store name": func(p *corev1.Pod) {
+			p.Spec.Volumes = []corev1.Volume{{Name: gpushareStoreVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+		},
+		"a placed-looking mount whose pod uid is another pod's": func(p *corev1.Pod) {
+			dirOrCreate := corev1.HostPathDirectoryOrCreate
+			p.Spec.Volumes = []corev1.Volume{{Name: gpushareStoreVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: DefaultGPUShareHostRoot, Type: &dirOrCreate}}}}
+			p.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{perPod}
+			p.Spec.Containers[0].Env = []corev1.EnvVar{{Name: gpusharePodUIDEnv, Value: "another-pod-uid"}}
+		},
+		"the pod uid variable set twice": func(p *corev1.Pod) {
+			p.Spec.Containers[1].Env = []corev1.EnvVar{{Name: gpusharePodUIDEnv, Value: "x"}, {Name: gpusharePodUIDEnv, Value: "another-pod-uid"}}
+		},
+	}
+	for name, mutate := range cases {
+		pod := gpushareTestPod(true, nil)
+		mutate(pod)
+		if p := (&Mutator{}).gpusharePatches(context.Background(), pod); p != nil {
+			got := applyPatches(t, pod, p)
+			t.Errorf("%s: the store was placed: volumes=%+v", name, got.Spec.Volumes)
+		}
+	}
+
+	// A manifest written from an admitted pod carries the placement itself,
+	// a sidecar's own per-pod mount included: nothing is placed twice.
+	placed := applyPatches(t, gpushareTestPod(true, nil), (&Mutator{}).gpusharePatches(context.Background(), gpushareTestPod(true, nil)))
+	placed.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{perPod}
+	placed.Spec.Containers[0].Env = []corev1.EnvVar{ownUID}
+	if p := (&Mutator{}).gpusharePatches(context.Background(), placed); p != nil {
+		t.Errorf("an intact placement must be left as it is, got %v", p)
+	}
+	// One pod-uid variable of the pod's own is replaced in place, as before.
+	pod := gpushareTestPod(true, []corev1.EnvVar{{Name: gpusharePodUIDEnv, Value: "x"}})
+	got := applyPatches(t, pod, (&Mutator{}).gpusharePatches(context.Background(), pod))
+	if !podUIDFromDownwardAPI(got.Spec.Containers[1].Env) || mountAt(got.Spec.Containers[1], GPUShareStorePath) == nil {
+		t.Errorf("a single pod-uid variable must become the pod's own: env=%+v", got.Spec.Containers[1].Env)
+	}
+}
+
+// Through Mutate, a sidecar mount of the store root brought by the pod
+// does not end up beside an injected store volume.
+func TestMutate_GPUShareSidecarCannotReachTheStoreRoot(t *testing.T) {
+	m := &Mutator{Backend: newBackend(t)}
+	pod := gpushareTestPod(true, nil)
+	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: gpushareStoreVolume, MountPath: "/all-pods"}}
+	ops, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, ops)
+	for _, v := range got.Spec.Volumes {
+		if v.Name == gpushareStoreVolume {
+			t.Fatalf("the store volume was injected beside the sidecar's root mount: %+v", v)
+		}
+	}
+}
+
 // Through Mutate: gpushare placement rides along with an otherwise plain
 // admission (no restore, no model volume, no election).
 func TestMutate_GPUShareOnly(t *testing.T) {
