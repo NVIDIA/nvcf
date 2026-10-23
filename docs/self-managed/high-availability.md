@@ -180,12 +180,23 @@ safely.)
 > address directly, so no proxy and no DNS change are needed.
 >
 > A fixed callback URL (`global.workerEndpoints.invocationServiceURL`,
-> `global.workerEndpoints.grpcProxyWorkerConnectURL`, or
-> `grpcproxy.workerConnectBaseURL`) is advertised by every replica, so a
-> callback could reach a pod that does not hold the request. When one is set,
-> the affected service stays at **a single replica** under HA, keeps hostname
-> anti-affinity and zone spread (no-ops at one replica), and gets **no HA PDB**
-> (a `minAvailable: 1` PDB on a singleton would block node drains).
+> `global.workerEndpoints.grpcProxyWorkerConnectURL`,
+> `grpcproxy.workerConnectBaseURL`, or
+> `WORKER_STREAM_PROPERTIES__SELF_ADDRESS` in `invocation.env`) is advertised
+> by every replica, so a callback could reach a pod that does not hold the
+> request. When one is set, the affected service stays at **a single replica**
+> under HA with its HPA disabled, keeps hostname anti-affinity and zone spread
+> (no-ops at one replica), and gets **no HA PDB** (a `minAvailable: 1` PDB on a
+> singleton would block node drains).
+>
+> If you enable the HPA (`invocation.autoscaling.enabled` or
+> `grpcproxy.deployment.autoscaling.enabled`), HA raises its `minReplicas` to 2
+> and `maxReplicas` to at least that, because the HPA, not `replicaCount`,
+> then sets the pod count.
+>
+> These rules also read `secrets/<env>-secrets.yaml`, which the releases apply
+> last. A callback URL set there counts. A replica count or HPA bound set there
+> that conflicts with the HA sizing fails the render instead of being applied.
 >
 > These two charts have no rollout-strategy hook. The Kubernetes default
 > (25% `maxUnavailable` and `maxSurge`) rounds to `maxUnavailable: 0` and
