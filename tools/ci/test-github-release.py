@@ -878,6 +878,23 @@ class GithubReleaseTest(unittest.TestCase):
                 self.assertIn(f"since {path}/v{version}", text)
                 self.assertNotIn("backport a fix", text)
 
+    def test_a_version_tagged_in_two_formats_bumps_from_the_nearer_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            service_id, path, version, _base = self.GO_SERVICES[0]
+            service = {**self.go_service_metadata(service_id, path), "legacy_tag_prefix": f"{service_id}-v"}
+            patch = self.github_release.next_patch_version(version)
+            # The legacy tag predates the SDK fix; the current-format tag of the
+            # same version shipped it.
+            git(root, "tag", f"{service_id}-v{patch}")
+            self.commit_go_sdk_bump(root)
+            git(root, "tag", f"{path}/v{patch}")
+
+            created, text = self.go_fanout_dry_run(root, service)
+            self.assertFalse(created)
+            self.assertIn(f"no release-worthy Go SDK or base image commits since {path}/v{patch}", text)
+
     def test_semantic_release_no_release_falls_through_to_go_dependency_fanout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

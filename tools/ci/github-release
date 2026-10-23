@@ -576,11 +576,22 @@ def release_baseline(root, service):
     a service can carry hundreds of prerelease tags and a stable line that lives
     entirely on a maintenance branch, and neither is a baseline for a release cut from
     the default branch.
+
+    One version can carry tags in two formats on different commits. The nearer tag,
+    with the fewest commits since it, wins: whatever landed between the two already
+    shipped in that version and must not be counted again.
     """
     versions = stable_reachable_versions(root, service)
     if not versions:
         return "", ""
-    return sorted(versions, key=lambda item: semverish_sort_key(item[0]))[-1]
+    newest = max(semverish_sort_key(version) for version, _tag in versions)
+    tied = [item for item in versions if semverish_sort_key(item[0]) == newest]
+    if len(tied) == 1:
+        return tied[0]
+    return min(
+        tied,
+        key=lambda item: int(run(["git", "rev-list", "--count", f"{item[1]}..HEAD"], cwd=root, capture=True)),
+    )
 
 
 def release_baseline_version(root, service):
