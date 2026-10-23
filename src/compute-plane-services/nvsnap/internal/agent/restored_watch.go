@@ -80,6 +80,7 @@ func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod
 		reason, sure := c.restoredEngineGone(ctx, pod, ref.container)
 		if reason == "" {
 			c.goneSince.Delete(pod.UID)
+			c.considerVerify(ctx, pod, ref)
 			return
 		}
 		if !sure {

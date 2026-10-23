@@ -59,8 +59,10 @@ const (
 	criuGroupStateComplete  = "complete"
 	// criuGroupStateVerifying is a capture whose instance was stopped for
 	// it and is being restored from it. Only that instance's namespace
-	// (data "sourceNamespace") restores from it; its first restore makes
-	// it complete, for every instance of the configuration.
+	// (data "sourceNamespace") restores from it. It becomes complete, for
+	// every instance of the configuration, once the pods of a restore of
+	// it have served (restored_verify.go); processes that restore but
+	// never serve do not verify it.
 	criuGroupStateVerifying = "verifying"
 	criuGroupStateFailed    = "failed"
 	// criuGroupStateRestoreFailed is a capture whose restore failed: its
@@ -907,13 +909,9 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		id := leader.Annotations[webhook.CRIURestoreAnnotation]
 		if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
-			changed := recordRestored(d, id)
 			// The pods this restore made: the restored-pod watch acts on a
 			// rank only when its group record names it.
-			if pods := strings.Join(uids, ","); d[groupRestoredPodsKey] != pods {
-				d[groupRestoredPodsKey], changed = pods, true
-			}
-			return changed
+			return recordRestored(d, id, strings.Join(uids, ","))
 		}); uerr != nil && !apierrors.IsNotFound(uerr) {
 			log.WithError(uerr).Warn("CRIU group restore: cannot record the restored pods; their engines are not watched")
 		}
@@ -1088,17 +1086,16 @@ func recordFailure(d map[string]string, id string, restoreFailed bool, cause err
 }
 
 // recordRestored records a restore of the capture checkpoint id belongs
-// to: a capture being verified is verified, for every instance of its
-// configuration, and its stalls are cleared, as its restores run.
-func recordRestored(d map[string]string, id string) bool {
+// to, which made pods (groupRestoredPodsKey entries, uid/container): its
+// stalls are cleared as its restores run. A capture being verified stays
+// so until those pods serve (restored_verify.go).
+func recordRestored(d map[string]string, id, pods string) bool {
 	if !recordOf(d, id) {
 		return false
 	}
 	changed := false
-	if d["state"] == criuGroupStateVerifying {
-		d["state"], d["verifiedAt"] = criuGroupStateComplete, time.Now().UTC().Format(time.RFC3339)
-		delete(d, "sourceNamespace")
-		changed = true
+	if d[groupRestoredPodsKey] != pods {
+		d[groupRestoredPodsKey], changed = pods, true
 	}
 	if d["stalls"] != "" || d["replacements"] != "" {
 		delete(d, "stalls")

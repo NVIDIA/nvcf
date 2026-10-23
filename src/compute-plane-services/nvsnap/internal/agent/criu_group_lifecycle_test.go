@@ -202,26 +202,31 @@ func TestFailGroup_RecordOfAnotherCapture(t *testing.T) {
 
 func TestRecordRestored_ClearsStallsOfItsCapture(t *testing.T) {
 	d := map[string]string{"state": "complete", "checkpoint.0": "c0", "stalls": "2"}
-	if recordRestored(d, "other") || d["stalls"] != "2" {
+	if recordRestored(d, "other", "u0/main") || d["stalls"] != "2" {
 		t.Error("a restore of another capture cleared the stalls")
 	}
-	if !recordRestored(d, "c0") || d["stalls"] != "" {
+	if !recordRestored(d, "c0", "u0/main") || d["stalls"] != "" {
 		t.Error("a restore did not clear its capture's stalls")
 	}
 }
 
-// The first restore of a capture being verified makes it complete, for
-// every instance; a restore of another capture changes nothing.
-func TestRecordRestored_VerifiesItsCapture(t *testing.T) {
+// A restore of a capture being verified records its pods and leaves the
+// capture being verified: restored processes do not verify it, served
+// pods do (restored_verify.go). A restore of another capture changes
+// nothing.
+func TestRecordRestored_LeavesItsCaptureBeingVerified(t *testing.T) {
 	d := map[string]string{"state": "verifying", "sourceNamespace": "fn", "checkpoint.0": "c0", "checkpoint.1": "c1"}
-	if recordRestored(d, "other") || d["state"] != "verifying" {
-		t.Fatal("a restore of another capture verified this one")
+	if recordRestored(d, "other", "u0/main,u1/main") || d[groupRestoredPodsKey] != "" {
+		t.Fatal("a restore of another capture changed this one")
 	}
-	if !recordRestored(d, "c0") || d["state"] != "complete" || d["sourceNamespace"] != "" || d["verifiedAt"] == "" {
-		t.Fatalf("record = %v, want complete and verified", d)
+	if !recordRestored(d, "c0", "u0/main,u1/main") || d[groupRestoredPodsKey] != "u0/main,u1/main" {
+		t.Fatalf("record = %v, want the restore's pods", d)
 	}
-	if recordRestored(d, "c0") {
-		t.Error("a later restore changed a verified record with nothing to clear")
+	if d["state"] != "verifying" || d["sourceNamespace"] != "fn" || d["verifiedAt"] != "" {
+		t.Fatalf("record = %v, want it still being verified", d)
+	}
+	if recordRestored(d, "c0", "u0/main,u1/main") {
+		t.Error("the same restore recorded again changed the record")
 	}
 }
 
@@ -368,7 +373,7 @@ func TestReplaceColliding(t *testing.T) {
 	if d := record(); d["state"] != "complete" || d["stalls"] != "1" {
 		t.Errorf("record = %v, want the capture kept and one stall", d)
 	}
-	if !recordRestored(record(), "c0") {
+	if !recordRestored(record(), "c0", "u0/main") {
 		t.Error("a restore did not clear the replacements")
 	}
 }

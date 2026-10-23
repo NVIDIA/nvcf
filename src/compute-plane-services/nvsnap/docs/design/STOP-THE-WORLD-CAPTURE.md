@@ -45,13 +45,18 @@ An instance resumed after a failed capture was left half dead.
    and the webhook admits the replacements as the restore's placeholders: the
    instance comes back by restoring from its own capture. The restore's time
    namespace hides the gap, as for any restore.
-3. **A capture is published only once it has restored.** The group record is
-   `verifying` (with `sourceNamespace`) until its first restore succeeds: only
-   the replacement pods of the captured instance restore from it. The first
-   successful restore makes it `complete`, for every instance of the
-   configuration. A failed verification blocks the checkpoints and the
+3. **A capture is published only once it has served.** The group record is
+   `verifying` (with `sourceNamespace`) until a restore of it serves: only the
+   replacement pods of the captured instance restore from it. Restored
+   processes are not enough, since an engine can restore and never finish its
+   first step. The capture becomes `complete`, for every instance of the
+   configuration, once every pod of a restore has been Ready for 6 minutes,
+   longer than a hung engine takes to drop its readiness or to give up on its
+   step and exit. A restore that has not served within 20 minutes, or whose
+   engine exits, fails the verification: the checkpoints are blocked and the
    configuration starts cold (and may be captured again); a bad checkpoint
-   never reaches scale-out.
+   never reaches scale-out. A restore whose pods are deleted before it serves
+   leaves the capture `verifying`, for the namespace's next restore.
 4. **A capture that fails after the instance stopped replaces it cold.** No
    instance is ever resumed from a stopped state.
 5. **Defense in depth.** The kubelet still probes during the freeze, so the

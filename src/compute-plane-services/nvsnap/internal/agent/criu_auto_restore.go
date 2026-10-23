@@ -164,7 +164,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	if _, done := c.attempted.LoadOrStore(pod.UID, struct{}{}); done {
 		return
 	}
-	go c.restore(ctx, pod.Namespace, pod.Name, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
+	go c.restore(ctx, pod.Namespace, pod.Name, pod.UID, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
 }
 
 // admitted reports whether the restorer may act on pod's restore
@@ -224,7 +224,7 @@ func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
 	}()
 }
 
-func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, groupKey string) {
+func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid types.UID, id, container, groupKey string) {
 	a := c.a
 	log := a.log.WithFields(logrus.Fields{"pod": ns + "/" + pod, "checkpoint": id, "container": container})
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
@@ -251,7 +251,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, 
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
 		c.recordLoneRestore(ctx, ns, pod, id, container, log)
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
-		record(func(d map[string]string) bool { return recordRestored(d, id) })
+		record(func(d map[string]string) bool { return recordRestored(d, id, string(uid)+"/"+container) })
 		return
 	}
 	if ctx.Err() != nil {
