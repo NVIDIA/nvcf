@@ -103,6 +103,14 @@ $ docker run -it --rm --net=host \
     nvcf-worker-task:local
 ```
 
+## Build information
+
+`GET /info` returns the service name, version, and commit as JSON on the admin port (`HEALTH_PORT`, default `8080`).
+
+```bash
+curl http://localhost:8080/info
+```
+
 ## Interaction
 
 Once everything is running, write results to `~/nvct-shared-dir` for
