@@ -1,0 +1,84 @@
+metadata_defaults: &metadata_defaults
+  custom_flag: true
+  context_window: 1048576
+  max_output_tokens: 32768
+  nullable: null
+  nested: {items: [true, false, null, 'text', 42], detail: {enabled: true}}
+  capabilities: [text, tools]
+  displayLabel: Example model
+  'on': 'yes'
+  legacy_flag: yes
+  large_integer: 18446744073709551615
+  precise_decimal: 0.12345678901234567890123456789
+  scalar_forms:
+    mixed_case_text: yEs
+    exponent_text: 1e3
+    octal_text: 0o42
+    invalid_octal_text: 08
+    signed_fraction_text: -.5
+    base60_integer: 1:20
+    base60_float: 1:20.5
+    large_exponent_text: 1e400
+    explicit_bool: !!bool yEs
+    explicit_false: !!bool OFF
+    explicit_exponent: !!float 1e3
+    explicit_base60: !!int 1:20
+    metadata_keys: {1e3: exponent, 0o42: octal, yEs: mixed}
+entry_defaults: &entry_defaults
+  modelName: example/shared
+  modelInfoFields: *metadata_defaults
+first_entries: &first_entries
+  z-first:
+    <<: *entry_defaults
+    modelInfoFields:
+      <<: *metadata_defaults
+      winner: first
+      custom_flag: false
+second_entries: &second_entries
+  a-second:
+    modelName: example/shared
+    modelInfoFields: {winner: second, nullable: null, second_only: true}
+v2config:
+  openai:
+    host: api.test
+    chatCompletions:
+      <<: [*first_entries, *second_entries]
+      middle:
+        modelName: example/shared
+        modelInfoFields: {winner: middle, nullable: replaced, middle_only: true, nested: {replace: false}}
+      plain:
+        modelName: example/plain
+      yes:
+        modelName: example/yaml-key
+        modelInfoFields: {custom_flag: true}
+      0x2:
+        modelName: example/yaml-number
+        modelInfoFields: {custom_flag: false}
+    completions:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: completion, completion_only: true, section_winner: completion}
+    embeddings:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: embedding, embedding_only: true, section_winner: embedding}
+    responses:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: response, response_only: true, image_winner: response}
+    imageGenerations:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: generation, generation_only: true, image_winner: generation, final_winner: generation}
+    imageEdits:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: edit, edit_only: true, final_winner: edit}
+    imageVariations:
+      entry:
+        modelName: example/shared
+        modelInfoFields: {winner: variation, variation_only: true, final_winner: variation}
+  anthropicMessages:
+    entry:
+      modelName: example/shared
+      modelInfoFields: {winner: message, message_only: true, final_winner: message}
