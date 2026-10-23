@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -40,9 +41,22 @@ JAVA_CI_DESCRIPTOR = "bazel-java-ci.json"
 JAVA_FRAMEWORK_KIND = "java-framework"
 JAVA_SERVICE_KIND = "java-service"
 JAVA_COMPONENT_KINDS = (JAVA_FRAMEWORK_KIND, JAVA_SERVICE_KIND)
-# Framework commits quoted in dependency-triggered release notes. A service that
-# is many framework commits behind should still get readable notes.
-MAX_QUOTED_FRAMEWORK_COMMITS = 20
+# Shared Go build inputs. rules_go compiles every go_binary with the SDK that
+# GO_SDK_FILE names (go_sdk.from_file in MODULE.bazel), and an image target
+# names its base as "@<name>" of an oci.pull in MODULE.bazel. Both reach a Go
+# service's image without touching the service's directory. Which services
+# they reach is read from each service's own BUILD files, the files Bazel
+# builds it from.
+GO_SDK_FILE = "tools/go-toolchain/go.mod"
+MODULE_FILE = "MODULE.bazel"
+BUILD_FILE_NAMES = ("BUILD.bazel", "BUILD")
+# Vendored trees carry BUILD files that describe someone else's build.
+BUILD_SCAN_SKIPPED_DIRS = ("vendor", "node_modules")
+GO_BINARY_RULE = re.compile(r"^\s*go_binary\(", re.MULTILINE)
+REPOSITORY_LABEL = re.compile(r"[\"']@([A-Za-z0-9_.-]+)")
+# Commits quoted in dependency-triggered release notes. A service that is many
+# dependency commits behind should still get readable notes.
+MAX_QUOTED_DEPENDENCY_COMMITS = 20
 # Commits resolved to pull requests when commenting a published release. Each one
 # costs an API call, so an unexpectedly wide range is truncated rather than left
 # to fan out. The cap is reported when it is hit.
@@ -1044,13 +1058,18 @@ def pull_requests_for_commit(slug, sha):
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
-def comment_release_on_pull_requests(root, service, tag, version, since_tag):
+def comment_release_on_pull_requests(root, service, tag, version, since_tag, commits=None):
     """Post the "included in version" note on the pull requests a release shipped.
 
     Services that publish from a VERSION file never run semantic-release, so nothing
     posted the note that @semantic-release/github posts for the services it manages.
     Release branches publish exclusively through this path, so without it a backport
     merge gets no version feedback at all.
+
+    `commits` replaces the range since `since_tag` when the release is not made
+    of that range. A dependency-triggered release ships the dependency commits
+    only; every other pull request merged since the previous tag left the
+    service unchanged and must not be told it shipped.
 
     A failure here never fails the job. The tag, the push, and the GitHub release
     have already succeeded; losing a courtesy comment must not mark a shipped
@@ -1067,7 +1086,7 @@ def comment_release_on_pull_requests(root, service, tag, version, since_tag):
         f"The release is available on [GitHub release]({release_url(slug, tag)})."
     )
     commented = []
-    for sha in released_commits(root, since_tag):
+    for sha in released_commits(root, since_tag) if commits is None else commits:
         for number in pull_requests_for_commit(slug, sha):
             if number in commented:
                 continue
@@ -1091,13 +1110,17 @@ def comment_release_on_pull_requests(root, service, tag, version, since_tag):
     return commented
 
 
-def publish_tag_for_version(root, service, version, dry_run, draft, reason, at_commit=None):
+def publish_tag_for_version(root, service, version, dry_run, draft, reason, at_commit=None, included_commits=None):
     """Create and publish a release tag.
 
     `at_commit` pins the tag to a specific commit instead of HEAD. A follower tag
     must land on the commit its leader tag already points at: the default branch
     can advance between the two, and tagging HEAD would put them on different
     trees for the same release.
+
+    `included_commits` names the commits whose pull requests are told about the
+    release, in place of everything since the previous tag (see
+    comment_release_on_pull_requests).
     """
     tag = tag_for_version(service, version, root)
     head = at_commit or run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()
@@ -1131,7 +1154,7 @@ def publish_tag_for_version(root, service, version, dry_run, draft, reason, at_c
     # twice, and only for a stable version: a prerelease is an internal
     # checkpoint, not something to announce on a pull request.
     if created and not draft and re.fullmatch(STABLE_SEMVER_PATTERN, version):
-        comment_release_on_pull_requests(root, service, tag, version, since_tag)
+        comment_release_on_pull_requests(root, service, tag, version, since_tag, commits=included_commits)
 
 
 def java_ci_components(root):
@@ -1317,7 +1340,7 @@ def release_worthy_framework_commits_since(root, framework_paths, since_tag):
 
 
 def framework_dependency_reason(service, framework_paths, since_tag, commits):
-    quoted = commits[:MAX_QUOTED_FRAMEWORK_COMMITS]
+    quoted = commits[:MAX_QUOTED_DEPENDENCY_COMMITS]
     lines = [
         "dependency-triggered release. This service has no release-worthy commits of its own "
         f"under {service['path']} since {since_tag}.",
@@ -1392,8 +1415,198 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         dry_run,
         draft,
         framework_dependency_reason(service, framework_paths, last_tag, commits),
+        included_commits=[commit.partition(" ")[0] for commit in commits],
     )
     return True
+
+
+def service_build_text(root, service):
+    """The service's own BUILD files, concatenated. Vendored trees are skipped."""
+    texts = []
+    for dirpath, dirnames, filenames in os.walk(root / service["path"]):
+        dirnames[:] = sorted(name for name in dirnames if name not in BUILD_SCAN_SKIPPED_DIRS)
+        texts.extend(
+            (Path(dirpath) / name).read_text(errors="replace")
+            for name in sorted(filenames)
+            if name in BUILD_FILE_NAMES
+        )
+    return "\n".join(texts)
+
+
+def oci_pull_pins(root, rev):
+    """The oci.pull declarations in MODULE.bazel at `rev`, keyed by name.
+
+    MODULE.bazel is Starlark, which Python's parser reads. A pin is its keyword
+    arguments as parsed syntax, so a comment or formatting edit compares equal
+    and a new digest, tag, image or platform list does not.
+
+    An unreadable revision is fatal rather than an empty set of pins: this
+    decides whether to publish, and must not cut a release off an error.
+    """
+    result = subprocess.run(
+        ["git", "show", f"{rev}:{MODULE_FILE}"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"cannot read {MODULE_FILE} at {rev} (git show exited {result.returncode}): "
+            f"{(result.stderr or '').strip()}"
+        )
+    pins = {}
+    for node in ast.walk(ast.parse(result.stdout, filename=f"{rev}:{MODULE_FILE}")):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "pull"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "oci"
+        ):
+            continue
+        arguments = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        try:
+            name = ast.literal_eval(arguments["name"])
+        except (KeyError, ValueError):
+            continue
+        pins[name] = {key: ast.dump(value) for key, value in arguments.items()}
+    return pins
+
+
+def release_worthy_go_dependency_commits_since(root, bases, since_tag):
+    """Release-worthy commits since a tag that changed the Go SDK or one of `bases`.
+
+    Returns (commits, inputs): the commits as "sha subject" lines, newest first,
+    and the inputs they changed, for the release notes. A MODULE.bazel commit
+    counts only when it changed one of these base pins. The file also declares
+    every other module and extension, and an unrelated edit there must not
+    release every Go service.
+    """
+    raw = run(
+        ["git", "log", "--format=%x1e%h %s", "--name-only", f"{since_tag}..HEAD", "--", GO_SDK_FILE, MODULE_FILE],
+        cwd=root,
+        capture=True,
+    )
+    commits = []
+    inputs = []
+    for record in raw.split("\x1e")[1:]:
+        header, _, names = record.partition("\n")
+        commit = header.strip()
+        sha, _, subject = commit.partition(" ")
+        if not releases_a_version(subject):
+            continue
+        paths = set(names.split())
+        changed = []
+        if GO_SDK_FILE in paths:
+            changed.append(f"{GO_SDK_FILE} (Go SDK)")
+        if MODULE_FILE in paths and bases:
+            before = oci_pull_pins(root, f"{sha}^")
+            after = oci_pull_pins(root, sha)
+            changed.extend(
+                f"{MODULE_FILE} oci.pull {name} (base image)"
+                for name in sorted(bases)
+                if before.get(name) != after.get(name)
+            )
+        if not changed:
+            continue
+        commits.append(commit)
+        for item in changed:
+            if item not in inputs:
+                inputs.append(item)
+    return commits, inputs
+
+
+def go_dependency_reason(service, since_tag, commits, inputs):
+    quoted = commits[:MAX_QUOTED_DEPENDENCY_COMMITS]
+    lines = [
+        "dependency-triggered release. This service has no release-worthy commits of its own "
+        f"under {service['path']} since {since_tag}.",
+        "",
+        "It is released because a shared Go build input it is built from changed:",
+    ]
+    lines.extend(f"  - {item}" for item in inputs)
+    lines.append("")
+    lines.append(f"Commits since {since_tag}:")
+    lines.extend(f"  - {commit}" for commit in quoted)
+    if len(commits) > len(quoted):
+        lines.append(f"  - ... and {len(commits) - len(quoted)} more")
+    lines.append("")
+    lines.append(
+        "The service source is unchanged; this release ships it rebuilt with the updated "
+        "Go SDK or base image."
+    )
+    return "\n".join(lines)
+
+
+def publish_go_dependency_release(root, service, dry_run, draft):
+    """Cut a patch release for a Go service that a shared Go build input rebuilt.
+
+    The Go counterpart of publish_framework_dependency_release, under the same
+    rules: it fires only when the service would otherwise cut nothing, counts
+    only release-worthy commits, and is always a patch. A service qualifies when
+    one of its BUILD files declares a go_binary, since rules_go builds every one
+    of those with the SDK in GO_SDK_FILE. Its base images are the oci.pull names
+    its BUILD files reference, so a base bump releases only the services built
+    on that base.
+    """
+    build_text = service_build_text(root, service)
+    if not GO_BINARY_RULE.search(build_text):
+        return False
+
+    last_tag = latest_service_tag(service, root)
+    if not last_tag:
+        print(
+            f"[github-release] {service['id']}: no existing release tag to bump from; "
+            "skipping Go dependency release"
+        )
+        return False
+
+    current_version = version_from_tag(service, last_tag, root)
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, current_version):
+        print(
+            f"[github-release] {service['id']}: last tag {last_tag} is not a stable X.Y.Z; "
+            "skipping Go dependency release"
+        )
+        return False
+
+    bases = set(REPOSITORY_LABEL.findall(build_text)) & set(oci_pull_pins(root, "HEAD"))
+    commits, inputs = release_worthy_go_dependency_commits_since(root, bases, last_tag)
+    if not commits:
+        print(
+            f"[github-release] {service['id']}: no release-worthy Go SDK or base image commits "
+            f"since {last_tag}; nothing to release"
+        )
+        return False
+
+    version = next_patch_version(current_version)
+    print(
+        f"[github-release] {service['id']}: {len(commits)} release-worthy Go SDK or base image "
+        f"commit(s) since {last_tag} with no service release; cutting dependency patch "
+        f"release {version}"
+    )
+    publish_tag_for_version(
+        root,
+        service,
+        version,
+        dry_run,
+        draft,
+        go_dependency_reason(service, last_tag, commits, inputs),
+        included_commits=[commit.partition(" ")[0] for commit in commits],
+    )
+    return True
+
+
+def publish_dependency_release(root, service, components, dry_run, draft):
+    """Cut a dependency-triggered patch release for a service that released nothing.
+
+    Java and Go services are disjoint, so at most one edge applies. Trying them
+    in turn keeps a service to one dependency release per run regardless.
+    """
+    return publish_framework_dependency_release(
+        root, service, components, dry_run=dry_run, draft=draft
+    ) or publish_go_dependency_release(root, service, dry_run=dry_run, draft=draft)
 
 
 def multi_path_release_version(root, service, owned, semantic_version):
@@ -1428,7 +1641,7 @@ def multi_path_release_version(root, service, owned, semantic_version):
             f"[github-release] {service['id']}: owned paths require a {owned_level} "
             f"release that semantic-release did not cut; {len(reasons)} commit(s)"
         )
-        for reason in reasons[:MAX_QUOTED_FRAMEWORK_COMMITS]:
+        for reason in reasons[:MAX_QUOTED_DEPENDENCY_COMMITS]:
             print(f"[github-release]   {reason}")
         return owned_version, "owned-paths"
 
@@ -1644,7 +1857,7 @@ def finish_semantic_release(root, service, components, exit_code, output, dry_ru
         return outcome
     if outcome == "no-release":
         print(f"[github-release] {service['id']}: no release-worthy commits")
-        publish_framework_dependency_release(root, service, components, dry_run=dry_run, draft=draft)
+        publish_dependency_release(root, service, components, dry_run=dry_run, draft=draft)
     return outcome
 
 
@@ -1999,11 +2212,11 @@ def auto_release(args):
                 continue
 
             if only_generated_changes(root, service, generated_paths):
-                # A shared Java framework change lands outside every service
-                # directory, so semantic-release (scoped to the service path by
-                # semantic-release-monorepo) would see nothing and ship nothing.
-                # Fan the framework change out here instead.
-                publish_framework_dependency_release(
+                # A shared Java framework, Go SDK or base image change lands
+                # outside every service directory, so semantic-release (scoped
+                # to the service path by semantic-release-monorepo) would see
+                # nothing and ship nothing. Fan the change out here instead.
+                publish_dependency_release(
                     root, service, java_components, dry_run=dry_run, draft=draft
                 )
                 continue

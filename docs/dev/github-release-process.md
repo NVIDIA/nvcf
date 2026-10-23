@@ -132,7 +132,10 @@ branch rather than the highest-sorting tag, because the highest tag can
 sit on a maintenance branch this history never contained. It covers
 every commit since that tag rather than only the tagged commit, because
 the workflow's concurrency group cancels queued runs and a superseded
-push is first tagged by the next run to finish.
+push is first tagged by the next run to finish. A dependency-triggered
+release, described below, comments only on the pull requests of the
+dependency commits it lists. The rest of the range did not change what
+it ships.
 
 For `nvcf-compute-plane-stack`, GitHub-created
 `deploy/stacks/nvcf-compute-plane/v*` tags are mirrored. The scheduled
@@ -192,6 +195,39 @@ changes in the service directory can see why the version moved.
 
 Dry-run mode prints the tag and notes it would create and creates
 nothing, the same as every other release path in this script.
+
+## Go SDK and base image dependency releases
+
+Go services have the same gap. Two shared inputs reach every Go service
+image without touching the service directory:
+
+- The Bazel Go SDK, declared once in `tools/go-toolchain/go.mod`.
+  `rules_go` compiles every `go_binary` with it.
+- The base images pinned by `oci.pull` in `MODULE.bazel`. An image
+  target names its base as `@<name>`, for example `@distroless_go`.
+
+`tools/ci/github-release auto` fans these out as well. It reads the edge
+from each service's own `BUILD.bazel` files, so there is no second list
+to keep in sync:
+
+- A registered subproject is a Go service when a `BUILD.bazel` file
+  under its path declares a `go_binary`. Files under `vendor/` and
+  `node_modules/` are ignored.
+- Its base images are the `oci.pull` names those files reference.
+
+A Go service gets a dependency-triggered release under the same
+conditions as a Java service: semantic-release computed no version for
+it on this run, it already has a release tag, and at least one
+release-worthy commit since that tag changed one of its inputs. A commit
+counts when it touched `tools/go-toolchain/go.mod`, or when it changed
+the `oci.pull` declaration of one of the service's own bases. Other
+`MODULE.bazel` edits release nothing, including comment and formatting
+edits inside a pin. A base image bump releases only the services built
+on that base.
+
+The bump is always a patch. Use `fix:` for a Go SDK or base image
+update that must ship, such as a security fix. Use `build:` or `chore:`
+when the services can wait for their next release.
 
 ## Release notes for pushed tags
 

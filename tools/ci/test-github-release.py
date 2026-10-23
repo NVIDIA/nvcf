@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -524,6 +525,324 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertEqual(outcome, "unknown")
             self.assertNotIn("would create", output.getvalue())
             self.assertNotIn("dependency-triggered", output.getvalue())
+
+    def test_framework_fanout_comments_only_on_the_framework_pull_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            remote = Path(tmp) / "remote.git"
+            root.mkdir()
+            init_bare_remote(remote)
+            self.init_java_repo(root)
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+            self.commit_framework_change(root)
+            framework_commit = git_out(root, "log", "-1", "--format=%h").strip()
+            unrelated_commit = self.commit_unrelated_change(root)
+
+            posted = self.stub_gh_comments({framework_commit: ["2801"], unrelated_commit: ["2802"]})
+            self.github_release.create_release = lambda *a, **k: True
+            components = self.github_release.java_ci_components(root)
+            service_id, path, _version = self.JAVA_SERVICES[0]
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                created = self.github_release.publish_framework_dependency_release(
+                    root, self.java_service_metadata(service_id, path), components, dry_run=False, draft=False
+                )
+
+            self.assertTrue(created)
+            # The unrelated pull request also merged after the previous tag, but
+            # it did not change what this release ships.
+            self.assertEqual([number for number, _body in posted], ["2801"])
+
+    GO_SERVICES = (
+        ("grpc-proxy", "src/invocation-plane-services/grpc-proxy", "1.34.3", "distroless_go"),
+        (
+            "admin-token-issuer-proxy-app",
+            "src/control-plane-services/admin-token-issuer-proxy",
+            "1.1.3",
+            "distroless_static",
+        ),
+    )
+    RUST_SERVICE = ("http-invocation", "src/invocation-plane-services/http-invocation", "0.6.1", "distroless_cc")
+    BASE_DIGESTS = {"distroless_cc": "c" * 64, "distroless_go": "a" * 64, "distroless_static": "b" * 64}
+    GO_SDK_BUMP = "fix(security): build Go services with Go 1.26.10"
+
+    def go_service_metadata(self, service_id, path):
+        return {"id": service_id, "path": path, "service_name": f"nvcf-{service_id}"}
+
+    def write_go_sdk(self, root, toolchain):
+        sdk = root / "tools/go-toolchain/go.mod"
+        sdk.parent.mkdir(parents=True, exist_ok=True)
+        sdk.write_text(f"module github.com/NVIDIA/nvcf/tools/go-toolchain\n\ngo 1.26.5\n\ntoolchain {toolchain}\n")
+
+    def write_module_bazel(self, root, digests):
+        """MODULE.bazel in the shape of the real one: one digest-pinned oci.pull per base."""
+        pulls = "".join(
+            "oci.pull(\n"
+            f'    name = "{name}",\n'
+            f'    digest = "sha256:{digest}",\n'
+            f'    image = "registry.example.com/{name}",\n'
+            "    platforms = [\n"
+            '        "linux/amd64",\n'
+            '        "linux/arm64/v8",\n'
+            "    ],\n"
+            ")\n"
+            for name, digest in sorted(digests.items())
+        )
+        (root / "MODULE.bazel").write_text(
+            'module(name = "nvcf")\n\noci = use_extension("@rules_oci//oci:extensions.bzl", "oci")\n' + pulls
+        )
+
+    def write_image_service(self, root, path, binary_rule, image_rule, base):
+        service_dir = root / path
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "BUILD.bazel").write_text(
+            f"{binary_rule}(\n"
+            '    name = "server",\n'
+            '    srcs = ["main"],\n'
+            ")\n"
+            "\n"
+            f"{image_rule}(\n"
+            '    name = "image",\n'
+            f'    base = "@{base}",\n'
+            '    binary = ":server",\n'
+            ")\n"
+        )
+
+    def init_go_repo(self, root):
+        """Repo with the Go SDK, three pinned bases, two Go services and a Rust one, each tagged."""
+        self.init_repo(root)
+        self.write_go_sdk(root, "go1.26.9")
+        self.write_module_bazel(root, self.BASE_DIGESTS)
+        for _service_id, path, _version, base in self.GO_SERVICES:
+            self.write_image_service(root, path, "go_binary", "go_oci_image", base)
+        _service_id, path, _version, base = self.RUST_SERVICE
+        self.write_image_service(root, path, "rust_binary", "rust_oci_image", base)
+        self.commit_all(root, "seed go services")
+        for _service_id, path, version, _base in (*self.GO_SERVICES, self.RUST_SERVICE):
+            git(root, "tag", f"{path}/v{version}")
+
+    def commit_go_sdk_bump(self, root, message=GO_SDK_BUMP, toolchain="go1.26.10"):
+        self.write_go_sdk(root, toolchain)
+        self.commit_all(root, message)
+
+    def commit_base_repin(self, root, name, digest, message):
+        module = root / "MODULE.bazel"
+        module.write_text(
+            re.sub(rf'(name = "{name}",\n    digest = "sha256:)[0-9a-f]+', rf"\g<1>{digest}", module.read_text())
+        )
+        self.commit_all(root, message)
+
+    def commit_unrelated_change(self, root, message="fix(docs): unrelated change"):
+        notes = root / "docs/notes.md"
+        notes.parent.mkdir(parents=True, exist_ok=True)
+        notes.write_text(f"{message}\n")
+        self.commit_all(root, message)
+        return git_out(root, "log", "-1", "--format=%h").strip()
+
+    def go_fanout_dry_run(self, root, service):
+        output = io.StringIO()
+        with chdir(root), contextlib.redirect_stdout(output):
+            created = self.github_release.publish_go_dependency_release(root, service, dry_run=True, draft=False)
+        return created, output.getvalue()
+
+    def test_go_services_and_bases_are_read_from_the_real_build_files(self):
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        services = {service["id"]: service for service in metadata["services"]}
+        pins = self.github_release.oci_pull_pins(root, "HEAD")
+
+        def build_text(service_id):
+            return self.github_release.service_build_text(root, services[service_id])
+
+        for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui", "nvcf-cli"):
+            with self.subTest(service=service_id):
+                self.assertTrue(self.github_release.GO_BINARY_RULE.search(build_text(service_id)))
+        for service_id in ("http-invocation", "cloud-tasks", "grpc-proxy-helm", "nvcf-self-managed-stack"):
+            with self.subTest(service=service_id):
+                self.assertIsNone(self.github_release.GO_BINARY_RULE.search(build_text(service_id)))
+        # A Go service image names its base by a pin MODULE.bazel declares. If
+        # the parse or the reference scan drifts, base bumps stop fanning out.
+        for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui"):
+            with self.subTest(service=service_id):
+                labels = set(self.github_release.REPOSITORY_LABEL.findall(build_text(service_id)))
+                self.assertTrue(labels & set(pins))
+
+    def test_go_sdk_change_fans_out_a_patch_release_to_every_go_service(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.commit_go_sdk_bump(root)
+
+            for service_id, path, version, _base in self.GO_SERVICES:
+                with self.subTest(service=service_id):
+                    created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                    self.assertTrue(created)
+                    expected = self.github_release.next_patch_version(version)
+                    self.assertIn(f"would create {path}/v{expected}", text)
+                    self.assertIn("dependency-triggered release", text)
+                    self.assertIn("tools/go-toolchain/go.mod (Go SDK)", text)
+                    self.assertIn(self.GO_SDK_BUMP, text)
+
+            service_id, path, _version, _base = self.RUST_SERVICE
+            created, _text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+            self.assertFalse(created)
+
+    def test_base_image_change_releases_only_the_go_services_built_on_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.commit_base_repin(root, "distroless_go", "d" * 64, "fix(security): repin distroless go")
+
+            (go_id, go_path, go_version, _base), (static_id, static_path, _version, _base) = self.GO_SERVICES
+            created, text = self.go_fanout_dry_run(root, self.go_service_metadata(go_id, go_path))
+            self.assertTrue(created)
+            self.assertIn(f"would create {go_path}/v{self.github_release.next_patch_version(go_version)}", text)
+            self.assertIn("MODULE.bazel oci.pull distroless_go (base image)", text)
+            self.assertNotIn("Go SDK)", text)
+
+            created, text = self.go_fanout_dry_run(root, self.go_service_metadata(static_id, static_path))
+            self.assertFalse(created)
+            self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+    def test_module_edits_that_leave_a_go_service_base_alone_release_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            # Every commit here is release-worthy, so only the content check
+            # can hold the fan-out back.
+            self.commit_base_repin(root, "distroless_cc", "e" * 64, "fix(http-invocation): repin the Rust base")
+            module = root / "MODULE.bazel"
+            module.write_text(module.read_text() + 'bazel_dep(name = "rules_go", version = "0.59.0")\n')
+            self.commit_all(root, "fix(build): add a module dependency")
+            module.write_text(
+                module.read_text()
+                .replace('    name = "distroless_go",\n', '    # The Go service base.\n    name = "distroless_go",\n')
+                .replace(
+                    '    image = "registry.example.com/distroless_go",\n',
+                    '    image = "registry.example.com/distroless_go",  # public mirror\n',
+                )
+            )
+            self.commit_all(root, "fix(build): document the Go base pin")
+
+            for service_id, path, _version, _base in self.GO_SERVICES:
+                with self.subTest(service=service_id):
+                    created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                    self.assertFalse(created)
+                    self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+    def test_non_release_worthy_go_input_commits_release_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.commit_go_sdk_bump(root, "build(go): bump the Go SDK")
+            self.commit_base_repin(root, "distroless_go", "d" * 64, "chore(deps): repin distroless go")
+
+            service_id, path, version, _base = self.GO_SERVICES[0]
+            service = self.go_service_metadata(service_id, path)
+            created, text = self.go_fanout_dry_run(root, service)
+            self.assertFalse(created)
+            self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+            # One release-worthy commit is enough, and the notes quote only it.
+            self.commit_go_sdk_bump(root, "fix(security): bump the Go SDK again", toolchain="go1.26.11")
+            created, text = self.go_fanout_dry_run(root, service)
+            self.assertTrue(created)
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertIn("fix(security): bump the Go SDK again", text)
+            self.assertNotIn("chore(deps): repin distroless go", text)
+            self.assertNotIn("build(go): bump the Go SDK", text)
+
+    def test_no_go_input_change_since_the_last_service_tag_releases_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.commit_go_sdk_bump(root)
+            for _service_id, path, version, _base in self.GO_SERVICES:
+                git(root, "tag", f"{path}/v{self.github_release.next_patch_version(version)}")
+
+            for service_id, path, _version, _base in self.GO_SERVICES:
+                with self.subTest(service=service_id):
+                    created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                    self.assertFalse(created)
+                    self.assertIn("no release-worthy Go SDK or base image commits since", text)
+                    self.assertNotIn("would create", text)
+
+    def test_go_fanout_skips_services_that_do_not_build_go_themselves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            # A go_binary inside a vendored tree is someone else's build.
+            vendored = root / "src/compute-plane-services/vendored-only"
+            (vendored / "vendor/example.com/tool").mkdir(parents=True)
+            (vendored / "BUILD.bazel").write_text('sh_binary(\n    name = "run",\n    srcs = ["run.sh"],\n)\n')
+            (vendored / "vendor/example.com/tool/BUILD.bazel").write_text('go_binary(\n    name = "tool",\n)\n')
+            self.commit_all(root, "seed a service that only vendors Go")
+            git(root, "tag", "src/compute-plane-services/vendored-only/v1.0.0")
+            self.commit_go_sdk_bump(root)
+
+            rust_id, rust_path, _version, _base = self.RUST_SERVICE
+            for service_id, path in ((rust_id, rust_path), ("vendored-only", "src/compute-plane-services/vendored-only")):
+                with self.subTest(service=service_id):
+                    created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                    self.assertFalse(created)
+                    self.assertEqual(text, "")
+
+    def test_go_fanout_needs_an_existing_service_release_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            path = "src/control-plane-services/event-ledger"
+            self.write_image_service(root, path, "go_binary", "go_oci_image", "distroless_go")
+            self.commit_all(root, "seed an unreleased go service")
+            self.commit_go_sdk_bump(root)
+
+            created, text = self.go_fanout_dry_run(root, self.go_service_metadata("event-ledger", path))
+            self.assertFalse(created)
+            self.assertIn("no existing release tag to bump from", text)
+
+    def test_semantic_release_no_release_falls_through_to_go_dependency_fanout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.commit_go_sdk_bump(root)
+            service_id, path, version, _base = self.GO_SERVICES[0]
+            no_release_output = "[semantic-release] > There are no relevant changes, so no new version is released.\n"
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                outcome = self.github_release.finish_semantic_release(
+                    root, self.go_service_metadata(service_id, path), [], 0, no_release_output, dry_run=True, draft=False
+                )
+
+            text = output.getvalue()
+            self.assertEqual(outcome, "no-release")
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertIn("tools/go-toolchain/go.mod (Go SDK)", text)
+
+    def test_go_dependency_release_comments_only_on_the_dependency_pull_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            remote = Path(tmp) / "remote.git"
+            root.mkdir()
+            init_bare_remote(remote)
+            self.init_go_repo(root)
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+            self.commit_go_sdk_bump(root)
+            sdk_commit = git_out(root, "log", "-1", "--format=%h").strip()
+            unrelated_commit = self.commit_unrelated_change(root)
+
+            posted = self.stub_gh_comments({sdk_commit: ["2806"], unrelated_commit: ["2805"]})
+            self.github_release.create_release = lambda *a, **k: True
+            service_id, path, version, _base = self.GO_SERVICES[0]
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                created = self.github_release.publish_go_dependency_release(
+                    root, self.go_service_metadata(service_id, path), dry_run=False, draft=False
+                )
+
+            self.assertTrue(created)
+            self.assertIn(f"{path}/v{self.github_release.next_patch_version(version)}", self.list_tags(remote))
+            self.assertEqual([number for number, _body in posted], ["2806"])
 
     def list_tags(self, root):
         result = subprocess.run(
@@ -2172,7 +2491,9 @@ class GithubReleaseTest(unittest.TestCase):
             comments = []
             self.github_release.create_release = lambda *a, **k: True
             self.github_release.comment_release_on_pull_requests = (
-                lambda root, service, tag, version, since_tag: comments.append((tag, version, since_tag))
+                lambda root, service, tag, version, since_tag, commits=None: comments.append(
+                    (tag, version, since_tag, commits)
+                )
             )
             with chdir(root), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.publish_tag_for_version(
@@ -2184,7 +2505,7 @@ class GithubReleaseTest(unittest.TestCase):
         comments = self.publish_and_capture_comments("3.2.1")
         self.assertEqual(
             comments,
-            [("src/compute-plane-services/nvca/v3.2.1", "3.2.1", "src/compute-plane-services/nvca/v3.2.0")],
+            [("src/compute-plane-services/nvca/v3.2.1", "3.2.1", "src/compute-plane-services/nvca/v3.2.0", None)],
             "the range must be bounded by the newest tag on this branch, not the highest tag overall",
         )
 
