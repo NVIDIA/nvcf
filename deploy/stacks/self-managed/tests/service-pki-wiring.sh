@@ -101,7 +101,7 @@ actual="$(migration_env NVCF_SERVICE_PKI_ALLOWED_DOMAINS "$work_dir/partial.yaml
 test "$actual" = "example.com,grpc-headless.nvcf.svc.cluster.local" ||
   fail "expected only the uncovered grpc-proxy pod domain added, got $actual"
 
-echo "== LLM and the proxy share the signing role =="
+echo "== LLM and the proxy: the OpenBao migration is the only role writer =="
 write_env <<'EOF'
 addons:
   llm:
@@ -111,12 +111,14 @@ workerCallbackProxy:
   workerDomain: grpc-worker.example.com
 EOF
 render_values 02-core.yaml.gotmpl llm-request-router "$work_dir/llm-proxy.yaml"
-actual="$(yq -r '.llmRequestRouter.pki.allowedDomains' "$work_dir/llm-proxy.yaml")"
-test "$actual" = "cluster.local,grpc-worker.example.com" ||
-  fail "the llm-request-router PKI hook must keep the worker domain, got $actual"
+test "$(yq -r '.llmRequestRouter.pki.enabled' "$work_dir/llm-proxy.yaml")" = "false" ||
+  fail "the stack must disable the llm-request-router PKI hook"
 render_values 01-dependencies.yaml.gotmpl openbao-server "$work_dir/llm-proxy-openbao.yaml"
 test "$(migration_env ADDONS_LLM_ENABLED "$work_dir/llm-proxy-openbao.yaml")" = "true" ||
   fail "ADDONS_LLM_ENABLED must stay true with LLM"
+actual="$(migration_env NVCF_SERVICE_PKI_ALLOWED_DOMAINS "$work_dir/llm-proxy-openbao.yaml")"
+test "$actual" = "cluster.local,grpc-worker.example.com" ||
+  fail "the OpenBao migration must keep the worker domain, got $actual"
 
 echo "== LLM without the proxy is unchanged =="
 write_env <<'EOF'
@@ -131,8 +133,8 @@ test -z "$(migration_env NVCF_SERVICE_PKI_ENABLED "$work_dir/llm.yaml")" ||
 test "$(migration_env NVCF_SERVICE_PKI_ALLOWED_DOMAINS "$work_dir/llm.yaml")" = "cluster.local" ||
   fail "LLM allowed domains must be unchanged"
 render_values 02-core.yaml.gotmpl llm-request-router "$work_dir/llm-router.yaml"
-test "$(yq -r '.llmRequestRouter.pki.allowedDomains' "$work_dir/llm-router.yaml")" = "cluster.local" ||
-  fail "llm-request-router allowed domains must be unchanged"
+test "$(yq -r '.llmRequestRouter.pki.enabled' "$work_dir/llm-router.yaml")" = "false" ||
+  fail "the stack must disable the llm-request-router PKI hook without the proxy"
 
 echo "== proxy needs OpenBao =="
 write_env <<'EOF'

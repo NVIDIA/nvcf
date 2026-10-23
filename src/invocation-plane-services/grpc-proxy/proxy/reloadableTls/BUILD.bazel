@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "reloadableTls",
@@ -24,6 +24,17 @@ go_library(
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_samber_lo//:lo",
         "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "reloadableTls_test",
+    srcs = ["reload_test.go"],
+    embed = [":reloadableTls"],
+    deps = [
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 
