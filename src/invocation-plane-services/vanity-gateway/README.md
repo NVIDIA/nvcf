@@ -192,6 +192,7 @@ v2config:
 | `outgoingPathOverride` | No | Upstream path to use instead of the incoming OpenAI-compatible path. Ignored when `usePexec` is true. |
 | `usePexec` | No | When `true`, route to `/v2/nvcf/pexec/functions/{functionID}` and append `/versions/{functionVersionID}` when set. |
 | `sessionTimeout` | No | Integer seconds used as the default `NVCF-POLL-SECONDS` value for this model. Missing or `0` uses `300`; caller-provided headers take precedence. |
+| `modelInfoFields` | No | Map of static JSON-compatible fields flattened into OpenAI-shaped model discovery responses. See Models below. |
 | `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
@@ -473,6 +474,48 @@ curl -si -H "Host: api.example.com" http://localhost:10081/v1/models
 ```shell
 curl -si -H "Host: api.example.com" http://localhost:10081/v1/models/facebook/opt-125m
 ```
+
+Model entries can advertise static metadata with `modelInfoFields`:
+
+```yaml
+modelInfoFields:
+  context_window: 1048576
+  max_output_tokens: 32768
+  custom_flag: true
+  description: Example model
+  capabilities: [text, tools]
+  details: {revision: 2, preview: false}
+  optional_value: null
+```
+
+These fields appear at the top level of each OpenAI-shaped `/v1/models` entry
+and `/v1/models/{model}` response. Keys are arbitrary strings. Values can be
+strings, booleans, finite numbers, null, arrays, or nested objects with string
+keys. Numeric tokens retain their precision where supported by YAML decoding.
+Implicit metadata scalars follow YAML 1.1 forms. Quote values intended as
+strings; use decimal numbers such as `1048576` or `1.25e+3` for numeric values.
+The gateway rejects non-JSON values and reserves `id`, `object`, `created`,
+`owned_by`, `supported_endpoints`, `visibility`, and `routes` case-insensitively;
+metadata cannot replace those fields.
+Omitted, null, and empty mappings keep existing responses. Duplicate metadata
+fields, explicit duplicate YAML keys, nonstring object keys, and cycles fail
+validation. Explicit duplicate YAML keys are rejected throughout the mapping
+file, including files without metadata. Remove duplicate keys before upgrading.
+YAML merge defaults and explicit overrides are supported.
+
+For a repeated `modelName`, disjoint metadata keys merge. A conflicting key
+keeps its first value, including null, in this section order:
+`chatCompletions`, `completions`, `embeddings`, `responses`, `imageGenerations`,
+`imageEdits`, `imageVariations`, then `anthropicMessages`. Within each section,
+YAML entry order decides precedence. Programmatically constructed configs
+without source order use alphabetical entry keys. Nested objects are whole
+values; their contents do not merge. Both OpenAI discovery endpoints use the
+same merged metadata. Routing and visibility rules remain unchanged.
+
+Config reloads refresh metadata. Invalid configuration keeps the last accepted
+snapshot. Metadata advertises configured values only; it adds no upstream
+lookup or limit enforcement. Anthropic-shaped discovery keeps its existing
+schema, including for aliases shared with OpenAI sections.
 
 ## Invoking the Anthropic Messages Endpoint
 
