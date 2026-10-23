@@ -42,8 +42,8 @@ NVCF provides the control plane. The operator owns everything customer-facing ab
 
 | Tier | Components | Serving model | Target behavior |
 | :--- | :--- | :--- | :--- |
-| Tier-1 Stateless | All replica-safe serving services (nvcf-api, admin-token-issuer-proxy, llm-api-gateway, rateLimiter, nats-auth-callout, api-keys, icms, notary, reval, nvct-api and ess) | Active–active | ≥2 Ready replicas spread across nodes/AZs. On single pod/node loss: no sustained outage — surviving replicas keep serving; connections on the lost pod may reset and clients retry.<br /><br />ESS's scheduled crypto jobs (rotation, re-encryption, promotion) are `@ConditionalOnProperty(encryption.*.scheduled.enabled=true)` and default off. They run only in a separate ESS worker deployment that is not part of the self-hosted stack; the in-stack ESS API runs none of them, so it scales safely to 2. |
-| Named exceptions (single replica) | grpc-proxy, invocation-service (Envoy-gated) | Single replica for now | Held at 1 with documented limitations; join the convention once Envoy lands (grpc-proxy/IS) |
+| Tier-1 Stateless | All replica-safe serving services (nvcf-api, admin-token-issuer-proxy, llm-api-gateway, rateLimiter, nats-auth-callout, api-keys, icms, notary, reval, nvct-api, ess, grpc-proxy and invocation-service) | Active–active | ≥2 Ready replicas spread across nodes/AZs. On single pod/node loss: no sustained outage — surviving replicas keep serving; connections on the lost pod may reset and clients retry.<br /><br />ESS's scheduled crypto jobs (rotation, re-encryption, promotion) are `@ConditionalOnProperty(encryption.*.scheduled.enabled=true)` and default off. They run only in a separate ESS worker deployment that is not part of the self-hosted stack; the in-stack ESS API runs none of them, so it scales safely to 2. |
+| Named exceptions (single replica) | grpc-proxy, invocation-service with a fixed worker callback URL | Single replica | Held at 1 while every replica would advertise the same callback URL |
 | Tier-2 Quorum | NATS JetStream, OpenBao (Raft), Cassandra | Quorum (NATS/OpenBao leader-elected; Cassandra masterless) | 3 members on distinct nodes and AZs |
 | Ops contract | All of the above | One Helmfile knob (`highAvailability.mode`) | zero-downtime Tier-1 upgrades; testable failure scenarios |
 
@@ -114,21 +114,19 @@ One Kubernetes cluster spanning one site, two AZs, multiple nodes in each AZ.
 
 Active-active, no leader election. Under HA the entire replica-safe serving set gets the convention together (2 replicas, PDB, surge rollout, mode-derived hostname anti-affinity and zone spread); a service is either in the convention or a named exception. The set:
 
-*nvcf-api, admin-token-issuer-proxy, llm-api-gateway (LLM addon), rateLimiter, nats-auth-callout, api-keys, icms, notary, reval, nvct-api*
+*nvcf-api, admin-token-issuer-proxy, llm-api-gateway (LLM addon), rateLimiter, nats-auth-callout, api-keys, icms, notary, reval, nvct-api, grpc-proxy, invocation-service*
 
-Named exceptions — held at `replicaCount: 1`:
+#### Worker callbacks: grpc-proxy and invocation-service
 
-- *grpc-proxy* and *invocation-service* — Envoy-gated (worker-callback host binding / cross-cluster routing)
+*grpc-proxy* and *invocation-service* join the convention with direct worker callbacks. HA controls their replicas and placement; callback routing is a separate concern.
 
-#### Envoy-gated exception: grpc-proxy and invocation-service
+- Both advertise a per-pod worker-callback address — *invocation-service* a per-pod DNS name (`<dashed-pod-ip>.invocation.<ns>.svc`, resolved by cluster DNS to the exact pod even on a plain ClusterIP Service), *grpc-proxy* a raw pod IP (`$POD_IP:10086`). In a single cluster the worker reaches the exact originating pod, so per-pod host binding works without a proxy or DNS changes.
+- A fixed worker callback URL (`global.workerEndpoints.invocationServiceURL`, `grpcProxyWorkerConnectURL`, or `grpcproxy.workerConnectBaseURL`) is advertised by every replica. With one set, the affected service is a named exception held at `replicaCount: 1` with its HPA disabled: hostname anti-affinity and zone spread still render but are no-ops at one replica, and no HA PDB is set (a `minAvailable: 1` PDB on a singleton would block node drains).
+- With the HPA enabled, the HPA sets the pod count, so HA floors its `minReplicas` at 2 (and `maxReplicas` at that minimum), keeping the `minAvailable: 1` PDB consistent.
+- The decision reads the fully merged values, including `secrets/<env>-secrets.yaml`, which the releases apply after `global.yaml.gotmpl`. Sizing there that conflicts with the HA sizing fails render.
+- Workers in another cluster cannot reach in-cluster pod IPs or `*.svc.cluster.local`. Scaling for that topology needs a callback proxy that delivers each worker tunnel to the correct pod, with its own DNS and exposure. That is a multi-cluster topology profile, not part of single-cluster HA.
 
-*grpc-proxy* and *invocation-service* are replica-safe but are held at `replicaCount: 1` until Envoy is enabled in the self-hosted stack, and this is recorded here as a named exception with its limitation.
-
-- Both advertise a per-pod worker-callback address — *invocation-service* a per-pod DNS name (`<dashed-pod-ip>.invocation.<ns>.svc`, resolved by CoreDNS to the exact pod even on a plain ClusterIP Service), *grpc-proxy* a raw pod IP (`$POD_IP:10086`). In a single cluster the worker therefore reaches the exact originating pod, so per-pod host binding already works without Envoy.
-- Envoy is the prerequisite for the cross-cluster case (a worker in a different cluster cannot reach in-cluster pod IPs / `*.svc.cluster.local`), where a router must deliver each worker tunnel to the correct pod. Scaling these two to ≥2 is gated on Envoy enablement.
-- While deferred, hostname anti-affinity/zone spread still render but are no-ops at one replica, and no HA PDB is set (a `minAvailable: 1` PDB on a singleton would block node drains).
-
-**Caveat:** scaling to ≥2 does not make in-flight requests resilient. The callback is host-bound to the pod that accepted the request. If that pod dies after pushing work to NATS but before the worker callback completes, the callback state dies with it, the in-flight request fails and the client retries. A second replica serves new requests but cannot resume the dead pod's in-flight request. Reroutable callbacks (Envoy/router) are required for safe scaling and cross-cluster routing, but surviving an origin-pod death mid-request would additionally require replicated per-request state. In practice this remains a client-retry gap, not something scaling or rerouting alone closes.
+**Caveat:** scaling to ≥2 does not make in-flight requests resilient. The callback is host-bound to the pod that accepted the request. If that pod dies after pushing work to NATS but before the worker callback completes, the callback state dies with it, the in-flight request fails and the client retries. A second replica serves new requests but cannot resume the dead pod's in-flight request. Surviving an origin-pod death mid-request would require replicated per-request state. In practice this remains a client-retry gap, not something scaling or rerouting alone closes.
 
 #### Tier-2 Built-in quorum
 
@@ -299,7 +297,7 @@ The stack validates the effective rendered result, not the presence of the top-l
 
 | Test | Pass criteria |
 | :--- | :--- |
-| HA install, `mode: preferred` / `enforced` | Each in-convention Tier-1 Deployment ≥2 Ready; named exceptions (grpc-proxy, invocation-service) = 1 Ready; Tier-2 = 3 Ready |
+| HA install, `mode: preferred` / `enforced` | Each in-convention Tier-1 Deployment ≥2 Ready, including grpc-proxy and invocation-service with per-pod callback addresses; a service with a fixed worker callback URL = 1 Ready; Tier-2 = 3 Ready |
 | Anti-affinity / zone spread (test under `enforced`) | No two Tier-2 peers on one node; Tier-1 replicas not confined to one AZ (best-effort under `preferred`) |
 | Tier-1 pod kill in AZ-A | Invocations continue on the surviving replica (AZ-B) |
 | `kubectl drain` | PDB blocks eviction of the last Ready pod; service stays available |
@@ -314,7 +312,7 @@ Confirms the live cluster actually meets the HA guarantee for the intended mode.
 
 The invariants:
 
-- **Minimum replicas per role:** in-convention Tier-1 Deployments have `spec.replicas` ≥ 2 and Ready ≥ 2; the named exceptions (grpc-proxy, invocation-service) are exactly 1; Tier-2 StatefulSets are 3 Ready.
+- **Minimum replicas per role:** in-convention Tier-1 Deployments have `spec.replicas` ≥ 2 and Ready ≥ 2, including grpc-proxy and invocation-service when they use per-pod callback addresses; either of them with a fixed worker callback URL is exactly 1; Tier-2 StatefulSets are 3 Ready.
 - **PDBs:** present with the correct floor (`minAvailable: 1` stateless; one-disruption for quorum).
 - **Effective placement:** hostname anti-affinity present; zone `topologySpreadConstraints` present (and hard under `enforced`); nodes labelled `topology.kubernetes.io/zone`.
 - **Degraded-guarantee reporting:** flags any workload whose effective objects fall below what the intended mode requires (e.g. `mode: enforced` but `api` effective `replicaCount: 1`, a missing PDB, or anti-affinity removed by an escape hatch).
@@ -330,7 +328,7 @@ Run the check after initial install, after `highAvailability.mode` is enabled or
 | `enforced` zone spread leaves stateful pods Pending | Requires `WaitForFirstConsumer` SC + ≥3 AZs; `preferred` (soft) otherwise; preflight checks |
 | Cassandra data not zone-diverse despite pod spread | Document rack = AZ requirement; NATS/OpenBao unaffected |
 | Cassandra RF change (keyspace migration) | Explicit migration runbook |
-| grpc-proxy / invocation-service scaling needs Envoy | Named exception at `replicaCount: 1`; per-pod binding works in-cluster; Envoy for cross-cluster |
+| grpc-proxy / invocation-service callbacks from another cluster | Per-pod binding works in-cluster; a fixed callback URL holds the service at `replicaCount: 1`; cross-cluster scaling needs a callback proxy profile |
 | In-flight request tied to its originating pod | Client-retry gap; scaling adds availability for new requests, not in-flight survivability |
 | NATS JetStream write availability | RF=3 (odd); losing a majority pauses writes; prefer ≥3 AZs for zone spread |
 | Two-AZ topology only | Document residual AZ-loss risk; neither mode claims AZ-loss tolerance |
@@ -341,7 +339,7 @@ What this design does not do, stated so an operator can plan around it.
 
 - **Losing an entire AZ is not guaranteed to be survivable.** With only two AZs, three quorum members split 2+1, so the majority may sit in the AZ that failed. Surviving loss of the whole site (both AZs) needs a second site / DR — out of scope.
 - **Under `preferred`, replicas can end up packed onto one node.** Anti-affinity and zone spread are soft in that mode. A capacity preflight covers this; `enforced` makes both hard where the node pool supports it.
-- **The gRPC worker callback path is single-replica.** grpc-proxy and invocation-service are not covered by the Tier-1 active-active model.
+- **Worker callbacks from another cluster stay single-replica.** With a fixed worker callback URL, grpc-proxy and invocation-service are held at one replica until a multi-cluster callback proxy profile exists.
 
 ## Looking Ahead
 
