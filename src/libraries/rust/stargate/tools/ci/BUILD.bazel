@@ -1,7 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_python//python:defs.bzl", "py_test")
+
 exports_files(
     ["image_entrypoint_mode_test.sh"],
     visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "runtime_packaging_test",
+    size = "small",
+    srcs = ["runtime_packaging_test.py"],
+    args = ["$(location //src/libraries/rust/stargate:Dockerfile)"],
+    data = ["//src/libraries/rust/stargate:Dockerfile"],
+    python_version = "3.11",
 )

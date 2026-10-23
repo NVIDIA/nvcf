@@ -6,6 +6,7 @@
 exports_files([
     "Cargo.lock",
     "Cargo.toml",
+    "Dockerfile",
 ])
 
 # The routing method manifest: every algorithm name, alias, and

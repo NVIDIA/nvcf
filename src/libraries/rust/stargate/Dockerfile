@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GRPC_HEALTH_PROBE_VERSION=v0.4.53
+ARG GRPC_HEALTH_PROBE_VERSION=v0.4.60
 
 ##########################################
 ##### COMMON BUILDER STAGE (BUILDPLATFORM)
@@ -151,8 +151,8 @@ CMD []
 FROM runtime-base AS pylon-runtime
 ARG TARGETARCH
 
-# Health probe changes less often than the binary, so copy it first for layer caching.
-COPY --from=health-probe-downloader /usr/local/bin/grpc_health_probe /usr/local/bin/grpc_health_probe
+# Pylon probes upstream HTTP health endpoints itself. Keep this runtime
+# binary-only, matching crates/pylon/BUILD.bazel.
 COPY --from=binary-builder /out/pylon /usr/local/bin/pylon
 
 ENTRYPOINT ["pylon"]
