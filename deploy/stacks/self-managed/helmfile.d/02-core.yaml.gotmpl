@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.31.1
+    version: 1.32.0
     namespace: nvcf
     inherit:
       - template: service
@@ -129,7 +129,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.10.1
+    version: 1.11.0
     namespace: nvcf
     inherit:
       - template: service
@@ -149,7 +149,7 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.10.0
+    version: 1.11.0
     namespace: ess
     inherit:
       - template: service
@@ -162,7 +162,7 @@ releases:
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
-    version: 1.6.0
+    version: 1.7.0
     namespace: api-keys
     condition: adminIssuerProxy.enabled
     values:
@@ -271,7 +271,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.9.1
+    version: 0.10.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
