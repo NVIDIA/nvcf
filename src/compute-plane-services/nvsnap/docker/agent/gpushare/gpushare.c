@@ -941,6 +941,8 @@ static void gate_open(void)
     pthread_mutex_unlock(&gate_mu);
 }
 
+static int held;  /* "resume hold" left the gates closed for "open" */
+
 /* ── Control commands ─────────────────────────────────────────────────── */
 
 /* Is the import still in use by the app (mu held)? NCCL imports its own
@@ -1101,6 +1103,7 @@ static void do_quiesce(char *reply, size_t n)
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     /* Busy: GPU work waits on work a gated thread has not launched yet
      * (e.g. a peer's NCCL kernel). Reopen the gate; the tool retries. */
+    held = 0;  /* an "open" from a restore is no longer due */
     CUresult r;
     if (gate_close(&lgate, 2000) < 0 || timed_sync(2000, &r) < 0 ||
         gate_close(&mgate, 2000) < 0 || timed_sync(2000, &r) < 0) {
@@ -1557,8 +1560,12 @@ out:
 }
 
 /* Bind multicast memory and map multicast objects again, then let the
- * app's launches through. */
-static void do_resume(char *reply, size_t n)
+ * app's launches through. hold ("resume hold"): keep them held until
+ * "open". Across nodes, a process that launches before another node has
+ * bound its memory to a multicast object they share loses its writes to
+ * that node, and the kernels waiting for them spin: the caller opens once
+ * every node has resumed. */
+static void do_resume(char *reply, size_t n, int hold)
 {
     CUresult r = CUDA_SUCCESS;
     int nb = 0, nm = 0;
@@ -1591,10 +1598,24 @@ static void do_resume(char *reply, size_t n)
     }
     if (r == CUDA_SUCCESS) {
         verify_log("resume");
-        snprintf(reply, n, "ok resumed (%d multicast bind(s), %d multicast mapping(s))", nb, nm);
-        gate_open();
+        snprintf(reply, n, "ok resumed (%d multicast bind(s), %d multicast mapping(s))%s", nb, nm,
+                 hold ? "; launches held until open" : "");
+        held = hold;
+        if (!hold) gate_open();
     }
     pop_ctx(dev);
+    pthread_mutex_unlock(&mu);
+}
+
+/* After "resume hold": let the app's launches through. */
+static void do_open(char *reply, size_t n)
+{
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    if (held) {
+        held = 0;
+        gate_open();
+        snprintf(reply, n, "ok opened");
+    } else snprintf(reply, n, "ok not held");
     pthread_mutex_unlock(&mu);
 }
 
@@ -1813,7 +1834,9 @@ static void serve(int s)
     else if (!strncmp(buf, "remap ", 6)) { do_remap(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "fabmap ", 7)) { do_fabmap(rep, sizeof(rep), buf + 7); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "touch ", 6)) { do_touch(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
-    else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep)); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep), 0); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "resume hold")) { do_resume(rep, sizeof(rep), 1); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "open")) { do_open(rep, sizeof(rep)); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "export ", 7)) do_export(strtoull(buf + 7, NULL, 10), 0, s);
     else if (!strncmp(buf, "exportfab ", 10)) do_export(strtoull(buf + 10, NULL, 10), 1, s);
     else if (!strcmp(buf, "whose") && fd >= 0) do_whose(fd, s);
