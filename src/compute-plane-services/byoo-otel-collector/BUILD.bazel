@@ -30,7 +30,9 @@ gazelle(
 
 # The otelcol genrule builds inside this workspace: go.work's go line selects
 # its toolchain and this module's go.mod takes part in version selection, so
-# the genrule declares these files as inputs.
+# the genrule declares these files as inputs. go.work.sum holds the checksums
+# the workspace needs beyond both go.sum files. It is committed so a clean
+# checkout has it; refresh it with scripts/update-go-work-sum.sh.
 exports_files([
     "go.mod",
     "go.sum",
