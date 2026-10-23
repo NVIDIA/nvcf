@@ -95,7 +95,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: "0.160.0-nv-0.4.6"
+          value: "0.160.0-nv-0.4.7"
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
         - name: OPERATOR_NAMESPACE
@@ -127,9 +127,9 @@ spec:
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
           - --function-env-overrides-b64
-          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjYifQ=="
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjcifQ=="
           - --task-env-overrides-b64
-          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjYifQ=="
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjcifQ=="
         image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.18.5
         imagePullPolicy: IfNotPresent
         securityContext:
