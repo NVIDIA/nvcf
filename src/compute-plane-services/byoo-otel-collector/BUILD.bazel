@@ -28,9 +28,15 @@ gazelle(
     name = "gazelle",
 )
 
-# go.work's go line selects the toolchain the otelcol genrule compiles with,
-# so the genrule declares it as an input.
-exports_files(["go.work"])
+# The otelcol genrule builds inside this workspace: go.work's go line selects
+# its toolchain and this module's go.mod takes part in version selection, so
+# the genrule declares these files as inputs.
+exports_files([
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+])
 
 # ============================================================================
 # Two multi-arch OCI images:

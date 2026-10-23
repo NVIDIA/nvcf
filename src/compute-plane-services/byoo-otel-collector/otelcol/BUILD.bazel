@@ -17,7 +17,8 @@
 # and the source-side release manifest job.
 #
 # Cache invalidation contract: Bazel rebuilds the genrule when any of
-# the inputs (otelcol/**/*.go, go.mod, go.sum, ../go.work) change. Pinned
+# the inputs (otelcol/**/*.go, go.mod, go.sum, and the parent workspace's
+# go.work, go.work.sum, go.mod and go.sum) change. Pinned
 # module versions in go.sum mean transitive deps are content-addressed;
 # silent upstream changes cannot bypass the cache.
 #
@@ -44,8 +45,8 @@
 # GOTOOLCHAIN=auto, an older host `go` switches to exactly that release.
 #
 # Cache contract: Bazel rebuilds when any input (*.go, go.mod, go.sum,
-# ../go.work) changes. go.sum's content-addressed hashes mean transitive
-# dep changes cannot bypass the cache silently.
+# and the parent workspace files) changes. go.sum's content-addressed
+# hashes mean transitive dep changes cannot bypass the cache silently.
 #
 # GOARCH is selected from the target platform's @platforms//cpu
 # constraint so the multi_arch transition (//:byoo-otel-collector-image
@@ -135,9 +136,14 @@ genrule(
         "go.mod",
         "go.sum",
     ]) + [
-        # Selects the toolchain (see above), so a go line bump must miss the
-        # cache instead of serving a binary from the previous compiler.
+        # The parent workspace is part of the build: go.work selects the
+        # toolchain (see above) and the wrapper's go.mod takes part in
+        # version selection. A change to any of them must miss the cache
+        # instead of serving a binary built from the previous inputs.
+        "//src/compute-plane-services/byoo-otel-collector:go.mod",
+        "//src/compute-plane-services/byoo-otel-collector:go.sum",
         "//src/compute-plane-services/byoo-otel-collector:go.work",
+        "//src/compute-plane-services/byoo-otel-collector:go.work.sum",
     ],
     outs = ["otelcol-contrib"],
     # GO_BIN can be overridden via env when the host installs go at a
