@@ -465,11 +465,12 @@ agent:
 
   # Rails tier of the restore fetch: a node that lacks a checkpoint copies
   # it from nodes that hold it over their RDMA NICs with bedrock-peer,
-  # before the shared-filesystem, L2 and HTTP peer tiers. For each copy
-  # the agent creates a serve pod on each source node and a fetch pod on
-  # its own node, in the release namespace; each claims every RDMA NIC of
-  # its node through DRA for the length of the copy. A copy whose pods
-  # cannot start (no NIC free) falls through to the next tier. Needs the
+  # before the shared-filesystem, L2 and HTTP peer tiers. A source node
+  # gets one serve pod, shared by every copy from it and deleted once none
+  # needs it; each copy gets a fetch pod on its own node, in the release
+  # namespace. Each pod claims every RDMA NIC of its node through DRA. A
+  # copy whose pods cannot start (no NIC free) falls through to the next
+  # tier. Needs the
   # resource.k8s.io/v1 API and a DRA driver that publishes the NICs.
   # See internal/agent/rails_fetch.go.
   rails:
@@ -485,6 +486,12 @@ agent:
     connections: 32
     # Most source nodes one copy reads from.
     maxSources: 2
+    # Smallest checkpoint copied over the rails. A smaller one goes to the
+    # HTTP peers, which move it before a rails pod would have started.
+    minSize: 16Gi
+    # Fetches one node's serve pod serves at once. Each adds about 115 MB
+    # to the serve pod's ~9 GB of registered buffers.
+    serveMaxFetchers: 4
     # Requests and limits. The serve pod runs beside the workload on a
     # source node, so it is capped.
     serve:

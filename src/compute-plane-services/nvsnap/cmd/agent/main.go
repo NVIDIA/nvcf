@@ -263,6 +263,10 @@ func main() {
 	flag.IntVar(&config.Rails.Port, "rails-port", 0, "Bootstrap port of the rails serve pods (0: 9890).")
 	flag.IntVar(&config.Rails.Connections, "rails-connections", 0, "Parallel connections of a rails fetch (0: 32).")
 	flag.IntVar(&config.Rails.MaxSources, "rails-max-sources", 0, "Most source nodes one rails fetch reads from (0: 2).")
+	flag.StringVar(&config.Rails.MinSize, "rails-min-size", "",
+		"Smallest checkpoint copied over the rails, as a quantity (empty: 16Gi); a smaller one goes to the HTTP peers.")
+	flag.IntVar(&config.Rails.ServeMaxFetchers, "rails-serve-max-fetchers", 0,
+		"Fetches a node's rails serve pod serves at once (0: 4).")
 	flag.StringVar(&config.Rails.ServeCPU, "rails-serve-cpu", "16", "CPU request and limit of a rails serve pod.")
 	flag.StringVar(&config.Rails.ServeMemory, "rails-serve-memory", "32Gi", "Memory request and limit of a rails serve pod.")
 	flag.StringVar(&config.Rails.FetchCPU, "rails-fetch-cpu", "32", "CPU request and limit of a rails fetch pod.")

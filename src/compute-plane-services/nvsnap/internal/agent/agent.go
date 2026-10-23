@@ -728,6 +728,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	a.startGPUShareStoreReaper(ctx)
 	a.sweepRailsPods(ctx)
+	a.startRailsServeReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/design/helm-shared-model-volume.md).

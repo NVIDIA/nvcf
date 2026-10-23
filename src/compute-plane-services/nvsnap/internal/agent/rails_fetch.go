@@ -21,16 +21,21 @@ package agent
 // over the nodes' RDMA NICs with bedrock-peer, before the shared filesystem,
 // L2 and HTTP peer tiers.
 //
-// The agent DaemonSet never holds the NICs. For each fetch it creates
-// short-lived pods that claim every RDMA NIC of their node through DRA: a
-// serve pod on each source node, which serves that node's copy read-only,
-// and a fetch pod on this node, which writes into the checkpoint directory
-// under the fetch marker EnsureLocal already set. The copy lands file by
-// file in the existing directory, never by renaming the directory, because
-// a placeholder may hold its subdirectories bind-mounted.
+// The agent DaemonSet never holds the NICs. Rails pods claim every RDMA
+// NIC of their node through DRA: a serve pod on each source node, shared by
+// every fetch from it (rails_serve.go), and a fetch pod on this node, which
+// writes into the checkpoint directory under the fetch marker EnsureLocal
+// already set. The copy lands file by file in the existing directory, never
+// by renaming the directory, because a placeholder may hold its
+// subdirectories bind-mounted.
+//
+// A checkpoint under MinSize is left to the HTTP peers, which move it
+// before a rails pod would have started; it then holds no NICs a large copy
+// waits for. Sources that are not fetching themselves come first: a node
+// runs one rails pod at a time, so serving would hold up its own fetch.
 //
 // Any failure (no source pod scheduled, no NICs free, bedrock-peer exiting
-// non-zero) deletes the pods and falls through to the next tier.
+// non-zero) deletes the fetch pod and falls through to the next tier.
 
 import (
 	"context"
@@ -41,10 +46,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sirupsen/logrus"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -75,6 +83,11 @@ type RailsConfig struct {
 	Connections int
 	// MaxSources caps the source nodes one fetch reads from.
 	MaxSources int
+	// MinSize is the smallest checkpoint fetched over the rails, as a
+	// quantity ("16Gi"); a smaller one goes to the next tier. Empty: 16 GiB.
+	MinSize string
+	// ServeMaxFetchers is how many fetches a serve pod serves at once.
+	ServeMaxFetchers int
 	// ServeCPU and ServeMemory are the serve pod's requests and limits,
 	// so a copy cannot starve the workload on a source node.
 	ServeCPU, ServeMemory string
@@ -90,6 +103,11 @@ const (
 	railsDefaultConnections = 32
 	railsDefaultMaxSources  = 2
 	railsDefaultKeepFree    = 10
+	// railsDefaultMinBytes: the HTTP peers move 16 GiB in about 3 s; a
+	// rails pod takes 10 s or more to start (docs/design/
+	// RAILS-FETCH-CONCURRENCY.md, step 1).
+	railsDefaultMinBytes    = 16 << 30
+	railsDefaultMaxFetchers = 4
 
 	// railsFetchFloorRate is the slowest copy the tier waits for: well
 	// under a disk's write rate, so only a stuck copy reaches it.
@@ -128,7 +146,7 @@ func (c RailsConfig) Validate() error {
 	if c.Image == "" {
 		return nil
 	}
-	for name, v := range map[string]string{"serve CPU": c.ServeCPU, "serve memory": c.ServeMemory, "fetch CPU": c.FetchCPU, "fetch memory": c.FetchMemory} {
+	for name, v := range map[string]string{"serve CPU": c.ServeCPU, "serve memory": c.ServeMemory, "fetch CPU": c.FetchCPU, "fetch memory": c.FetchMemory, "min size": c.MinSize} {
 		if v == "" {
 			continue
 		}
@@ -167,6 +185,20 @@ func (c RailsConfig) maxSources() int {
 	return railsDefaultMaxSources
 }
 
+func (c RailsConfig) minBytes() int64 {
+	if q, err := resource.ParseQuantity(c.MinSize); err == nil && q.Value() > 0 {
+		return q.Value()
+	}
+	return railsDefaultMinBytes
+}
+
+func (c RailsConfig) serveMaxFetchers() int {
+	if c.ServeMaxFetchers > 0 {
+		return c.ServeMaxFetchers
+	}
+	return railsDefaultMaxFetchers
+}
+
 func (c RailsConfig) keepFreePercent() int {
 	if c.KeepFreePercent > 0 && c.KeepFreePercent < 100 {
 		return c.KeepFreePercent
@@ -197,81 +229,70 @@ func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir strin
 	cfg := a.config.Rails
 	log := a.log.WithField("checkpoint_id", checkpointID)
 
-	// Sources: other nodes whose agent lists the checkpoint. The listing
-	// also gives the size the free-space check needs.
-	var sources []string
-	var size int64
-	seen := map[string]bool{a.config.NodeName: true}
-	for _, p := range peers {
-		if p.NodeName == "" || seen[p.NodeName] || p.AgentURL == a.selfAgentURL() {
-			continue
-		}
-		seen[p.NodeName] = true
-		m, err := railsPeerManifest(ctx, p.AgentURL, checkpointID)
-		if err != nil {
-			log.WithError(err).WithField("peer_node", p.NodeName).Info("rails: peer does not list the checkpoint; not a source")
-			continue
-		}
-		sources = append(sources, p.NodeName)
-		size = m.TotalSize
-		if len(sources) == cfg.maxSources() {
-			break
-		}
-	}
+	sources, size := a.railsSources(ctx, checkpointID, peers, log)
 	if len(sources) == 0 {
 		return fmt.Errorf("%w: no other node lists %s", errRailsUnavailable, checkpointID)
+	}
+	if size < cfg.minBytes() {
+		return fmt.Errorf("%w: %d bytes is under the rails minimum of %d; the peers move it sooner", errRailsUnavailable, size, cfg.minBytes())
 	}
 	if err := checkFreeSpace(localDir, size, cfg.keepFreePercent()); err != nil {
 		return fmt.Errorf("%w: %w", errRailsUnavailable, err)
 	}
 
-	owner := a.railsOwner(ctx)
 	run := railsRun{
 		cfg:          cfg,
 		forNode:      a.config.NodeName,
 		checkpointID: checkpointID,
 		hostDir:      filepath.Join(a.checkpointHostDir(), checkpointID),
-		owner:        owner,
+		owner:        a.railsOwnerOn(ctx, a.config.NodeName),
 	}
-	var created []string
+	created := make([]string, 0, 1)
 	defer func() {
-		// The pods hold every RDMA NIC of their nodes: free them even when
-		// the restore's context is gone.
+		// The fetch pod holds every RDMA NIC of this node: free them even
+		// when the restore's context is gone. Serve pods are shared; their
+		// nodes' agents reap them (rails_serve.go).
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		a.deleteRailsPods(dctx, created)
 		removeRailsEntries(localDir)
 	}()
 
-	pods := a.kubeClient.CoreV1().Pods(cfg.Namespace)
-	var serving []string
+	// The claim covers the wait for the serve pods; the fetch pod keeps
+	// them from then on.
+	until := time.Now().Add(railsServeReadyTimeout + railsServeClaimSlack)
+	var serving, servingNodes []string
 	for _, node := range sources {
-		pod, err := pods.Create(ctx, run.servePod(node), metav1.CreateOptions{})
+		name, err := a.acquireServePod(ctx, node, until)
 		if err != nil {
-			log.WithError(err).WithField("source_node", node).Warn("rails: cannot create the serve pod")
+			log.WithError(err).WithField("source_node", node).Warn("rails: cannot get the serve pod; dropping that source")
 			continue
 		}
-		created = append(created, pod.Name)
-		serving = append(serving, pod.Name)
+		serving = append(serving, name)
+		servingNodes = append(servingNodes, node)
 	}
 	// One deadline for all serve pods: they start in parallel.
 	readyCtx, cancelReady := context.WithTimeout(ctx, railsServeReadyTimeout)
 	defer cancelReady()
-	var addrs []string
-	for _, name := range serving {
+	var addrs, sourceLabels []string
+	for i, name := range serving {
 		ip, err := a.waitRailsServeReady(readyCtx, name)
 		if err != nil {
 			log.WithError(err).WithField("pod", name).Warn("rails: serve pod not ready; dropping that source")
 			continue
 		}
 		addrs = append(addrs, fmt.Sprintf("%s:%d", ip, cfg.port()))
+		sourceLabels = append(sourceLabels, railsLabelValue(servingNodes[i]))
 	}
 	if len(addrs) == 0 {
 		return fmt.Errorf("%w: no serve pod became ready", errRailsUnavailable)
 	}
 
+	// This node's own serve pod, idle, would hold the NICs the fetch pod
+	// needs.
+	a.reapServePod(ctx, time.Now())
 	timeout := railsFetchTimeout(size)
-	pod, err := pods.Create(ctx, run.fetchPod(addrs, timeout), metav1.CreateOptions{})
+	pod, err := a.kubeClient.CoreV1().Pods(cfg.Namespace).Create(ctx, run.fetchPod(addrs, sourceLabels, timeout), metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: create the fetch pod: %w", errRailsUnavailable, err)
 	}
@@ -301,6 +322,53 @@ func (a *Agent) checkpointHostDir() string {
 		return a.config.CheckpointHostDir
 	}
 	return a.config.CheckpointDir
+}
+
+// railsSources picks the nodes to fetch checkpointID from, at most
+// MaxSources, and its size. Candidates are the peers other than this node
+// whose agent lists the checkpoint. A node running a fetch of its own is
+// taken only when no other node lists it: its one rails pod at a time is
+// busy, and serving would hold up its fetch. Among the rest, a node whose
+// serve pod is Ready comes first.
+func (a *Agent) railsSources(ctx context.Context, checkpointID string, peers []peerInfo, log *logrus.Entry) (sources []string, size int64) {
+	fetching, serving, err := a.railsNodeStates(ctx)
+	if err != nil {
+		log.WithError(err).Info("rails: cannot read the nodes' rails pods; taking the sources in catalog order")
+	}
+	seen := map[string]bool{a.config.NodeName: true}
+	var candidates []peerInfo
+	for _, p := range peers {
+		if p.NodeName == "" || seen[p.NodeName] || p.AgentURL == a.selfAgentURL() {
+			continue
+		}
+		seen[p.NodeName] = true
+		candidates = append(candidates, p)
+	}
+	rank := func(p peerInfo) int {
+		switch v := railsLabelValue(p.NodeName); {
+		case fetching[v]:
+			return 2
+		case serving[v]:
+			return 0
+		default:
+			return 1
+		}
+	}
+	slices.SortStableFunc(candidates, func(x, y peerInfo) int { return rank(x) - rank(y) })
+	limit := a.config.Rails.maxSources()
+	for _, p := range candidates {
+		if len(sources) == limit || (len(sources) > 0 && rank(p) == 2) {
+			break
+		}
+		m, err := railsPeerManifest(ctx, p.AgentURL, checkpointID)
+		if err != nil {
+			log.WithError(err).WithField("peer_node", p.NodeName).Info("rails: peer does not list the checkpoint; not a source")
+			continue
+		}
+		sources = append(sources, p.NodeName)
+		size = m.TotalSize
+	}
+	return sources, size
 }
 
 // railsPeerManifest is getPeerManifest with a deadline, refusing an empty
@@ -372,12 +440,12 @@ func removeRailsEntries(dir string) {
 	}
 }
 
-// railsOwner is this node's agent pod, set as the owner of the rails pods
-// so they go with it; nil when it cannot be found.
-func (a *Agent) railsOwner(ctx context.Context) *metav1.OwnerReference {
+// railsOwnerOn is node's agent pod, set as the owner of the rails pods on
+// that node so they go with it; nil when it cannot be found.
+func (a *Agent) railsOwnerOn(ctx context.Context, node string) *metav1.OwnerReference {
 	pods, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: agentLabelSelector,
-		FieldSelector: "spec.nodeName=" + a.config.NodeName,
+		FieldSelector: "spec.nodeName=" + node,
 	})
 	if err != nil || len(pods.Items) != 1 {
 		return nil
@@ -388,7 +456,7 @@ func (a *Agent) railsOwner(ctx context.Context) *metav1.OwnerReference {
 
 func (a *Agent) waitRailsServeReady(ctx context.Context, name string) (string, error) {
 	var ip string
-	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, railsServeReadyTimeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, time.Second, railsServeReadyTimeout, true, func(ctx context.Context) (bool, error) {
 		pod, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -396,16 +464,14 @@ func (a *Agent) waitRailsServeReady(ctx context.Context, name string) (string, e
 			}
 			return false, nil
 		}
-		if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+		if podEnded(pod) {
 			return false, fmt.Errorf("serve pod %s ended: %s", name, terminationSummary(pod))
 		}
-		if pod.Status.Phase != corev1.PodRunning || pod.Status.PodIP == "" {
-			return false, nil
+		if pod.DeletionTimestamp != nil {
+			return false, fmt.Errorf("serve pod %s is being deleted", name)
 		}
-		for i := range pod.Status.ContainerStatuses {
-			if !pod.Status.ContainerStatuses[i].Ready {
-				return false, nil
-			}
+		if !podReady(pod) || pod.Status.PodIP == "" {
+			return false, nil
 		}
 		ip = pod.Status.PodIP
 		return true, nil
@@ -499,21 +565,23 @@ func (a *Agent) deleteRailsPods(ctx context.Context, names []string) {
 }
 
 // sweepRailsPods deletes rails pods an earlier run of this node's agent
-// left: the fetch that created them is gone with it.
+// left: its fetch pods, whose fetch is gone with it, and this node's serve
+// pod, whose fetches fall over to their other sources or tiers.
 func (a *Agent) sweepRailsPods(ctx context.Context) {
 	if !a.railsEnabled() {
 		return
 	}
-	pods, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: railsLabelFor + "=" + railsLabelValue(a.config.NodeName),
-	})
-	if err != nil {
-		a.log.WithError(err).Warn("rails: cannot list rails pods left by an earlier run")
-		return
-	}
-	names := make([]string, 0, len(pods.Items))
-	for i := range pods.Items {
-		names = append(names, pods.Items[i].Name)
+	self := railsLabelValue(a.config.NodeName)
+	var names []string
+	for _, sel := range []string{railsLabelFor + "=" + self, railsLabelServes + "=" + self} {
+		pods, err := a.kubeClient.CoreV1().Pods(a.config.Rails.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil {
+			a.log.WithError(err).Warn("rails: cannot list rails pods left by an earlier run")
+			return
+		}
+		for i := range pods.Items {
+			names = append(names, pods.Items[i].Name)
+		}
 	}
 	if len(names) > 0 {
 		a.log.WithField("pods", names).Info("rails: deleting rails pods left by an earlier run")
@@ -530,7 +598,7 @@ func railsLabelValue(node string) string {
 	return node[:46] + "-" + hex.EncodeToString(sum[:8])
 }
 
-// railsRun builds the pods of one rails fetch.
+// railsRun builds the fetch pod of one rails fetch.
 type railsRun struct {
 	cfg          RailsConfig
 	forNode      string // the fetching node
@@ -539,31 +607,35 @@ type railsRun struct {
 	owner        *metav1.OwnerReference
 }
 
-func (r railsRun) servePod(node string) *corev1.Pod {
-	const ready = "/tmp/serve.ready"
-	pod := r.pod("nvsnap-rails-serve-", "rails-serve", node, r.cfg.ServeCPU, r.cfg.ServeMemory, true, 4*time.Hour)
-	c := &pod.Spec.Containers[0]
-	c.Name = "serve"
-	c.Command = []string{"/bin/sh", "-c", `ulimit -l unlimited 2>/dev/null; exec "$0" "$@"`, "bedrock-peer"}
-	c.Args = []string{"serve", "--root", railsMountPath, "--devices", "all",
-		"--port", strconv.Itoa(r.cfg.port()), "--ready-file", ready}
-	c.ReadinessProbe = &corev1.Probe{
-		ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"test", "-f", ready}}},
-		PeriodSeconds: 1,
-	}
-	return pod
-}
-
-func (r railsRun) fetchPod(sources []string, timeout time.Duration) *corev1.Pod {
-	pod := r.pod("nvsnap-rails-fetch-", "rails-fetch", r.forNode, r.cfg.FetchCPU, r.cfg.FetchMemory, false, timeout+railsFetchStartTimeout)
+// fetchPod copies the checkpoint from sources (serve pod addresses) into
+// its directory. sourceNodes (railsLabelValue of each source's node) keep
+// those nodes' serve pods while it runs.
+func (r railsRun) fetchPod(sources, sourceNodes []string, timeout time.Duration) *corev1.Pod {
+	pod := railsPod(r.cfg, railsPodSpec{
+		generateName: "nvsnap-rails-fetch-",
+		component:    "rails-fetch",
+		node:         r.forNode,
+		hostDir:      r.hostDir,
+		cpu:          r.cfg.FetchCPU,
+		memory:       r.cfg.FetchMemory,
+		deadline:     timeout + railsFetchStartTimeout,
+		owner:        r.owner,
+		labels:       map[string]string{railsLabelFor: railsLabelValue(r.forNode)},
+		annotations: map[string]string{
+			railsAnnoCheckpoint: r.checkpointID,
+			railsAnnoSources:    strings.Join(sourceNodes, ","),
+		},
+	})
 	c := &pod.Spec.Containers[0]
 	c.Name = "fetch"
-	args := make([]string, 0, 2*len(sources)+8)
+	args := make([]string, 0, 2*len(sources)+10)
 	args = append(args, "fetch")
 	for _, s := range sources {
 		args = append(args, "--source", s)
 	}
-	args = append(args, "--devices", "all", "--dest", railsMountPath,
+	// The serve pods serve every checkpoint of their node; the prefix
+	// picks this one, whose files land at the top of --dest.
+	args = append(args, "--prefix", r.checkpointID, "--devices", "all", "--dest", railsMountPath,
 		"--connections", strconv.Itoa(r.cfg.connections()), "--json")
 	// The --json line becomes the termination message; the human summary
 	// and logs stay in the container log.
@@ -574,43 +646,59 @@ func (r railsRun) fetchPod(sources []string, timeout time.Duration) *corev1.Pod 
 	return pod
 }
 
-func (r railsRun) pod(prefix, component, node, cpu, mem string, readOnly bool, deadline time.Duration) *corev1.Pod {
-	secs := int64(deadline / time.Second)
+// railsPodSpec is what differs between a serve pod and a fetch pod.
+type railsPodSpec struct {
+	name, generateName  string
+	component, node     string
+	hostDir             string
+	readOnly            bool
+	cpu, memory         string
+	deadline            time.Duration
+	owner               *metav1.OwnerReference
+	labels, annotations map[string]string
+}
+
+func railsPod(cfg RailsConfig, spec railsPodSpec) *corev1.Pod {
+	secs := int64(spec.deadline / time.Second)
 	zero := int64(0)
 	noEscalate := false
 	dirType := corev1.HostPathDirectory
 	res := corev1.ResourceList{}
-	if cpu != "" {
-		res[corev1.ResourceCPU] = resource.MustParse(cpu)
+	if spec.cpu != "" {
+		res[corev1.ResourceCPU] = resource.MustParse(spec.cpu)
 	}
-	if mem != "" {
-		res[corev1.ResourceMemory] = resource.MustParse(mem)
+	if spec.memory != "" {
+		res[corev1.ResourceMemory] = resource.MustParse(spec.memory)
 	}
-	pullSecrets := make([]corev1.LocalObjectReference, 0, len(r.cfg.PullSecrets))
-	for _, s := range r.cfg.PullSecrets {
+	pullSecrets := make([]corev1.LocalObjectReference, 0, len(cfg.PullSecrets))
+	for _, s := range cfg.PullSecrets {
 		if s != "" {
 			pullSecrets = append(pullSecrets, corev1.LocalObjectReference{Name: s})
 		}
 	}
-	meta := metav1.ObjectMeta{
-		GenerateName: prefix,
-		Namespace:    r.cfg.Namespace,
-		Labels: map[string]string{
-			"app.kubernetes.io/managed-by": "nvsnap-agent",
-			railsLabelComponent:            component,
-			railsLabelFor:                  railsLabelValue(r.forNode),
-		},
-		Annotations: map[string]string{railsAnnoCheckpoint: r.checkpointID},
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by": "nvsnap-agent",
+		railsLabelComponent:            spec.component,
 	}
-	if r.owner != nil {
-		meta.OwnerReferences = []metav1.OwnerReference{*r.owner}
+	for k, v := range spec.labels {
+		labels[k] = v
+	}
+	meta := metav1.ObjectMeta{
+		Name:         spec.name,
+		GenerateName: spec.generateName,
+		Namespace:    cfg.Namespace,
+		Labels:       labels,
+		Annotations:  spec.annotations,
+	}
+	if spec.owner != nil {
+		meta.OwnerReferences = []metav1.OwnerReference{*spec.owner}
 	}
 	return &corev1.Pod{
 		ObjectMeta: meta,
 		Spec: corev1.PodSpec{
 			// nodeSelector, not nodeName: the scheduler allocates the DRA
 			// claim, and a pod bound with nodeName never gets its NICs.
-			NodeSelector: map[string]string{"kubernetes.io/hostname": node},
+			NodeSelector: map[string]string{"kubernetes.io/hostname": spec.node},
 			// GPU nodes carry taints, and a source node may be cordoned.
 			Tolerations:                   []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 			RestartPolicy:                 corev1.RestartPolicyNever,
@@ -619,20 +707,20 @@ func (r railsRun) pod(prefix, component, node, cpu, mem string, readOnly bool, d
 			ImagePullSecrets:              pullSecrets,
 			ResourceClaims: []corev1.PodResourceClaim{{
 				Name:                      "rails",
-				ResourceClaimTemplateName: &r.cfg.ClaimTemplate,
+				ResourceClaimTemplateName: &cfg.ClaimTemplate,
 			}},
 			Volumes: []corev1.Volume{{
 				Name: "checkpoint",
 				VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-					Path: r.hostDir, Type: &dirType,
+					Path: spec.hostDir, Type: &dirType,
 				}},
 			}},
 			Containers: []corev1.Container{{
-				Image: r.cfg.Image,
+				Image: cfg.Image,
 				Env: []corev1.EnvVar{{
 					Name: "BEDROCK_PEER_SECRET",
 					ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: r.cfg.SecretName},
+						LocalObjectReference: corev1.LocalObjectReference{Name: cfg.SecretName},
 						Key:                  "secret",
 					}},
 				}},
@@ -654,7 +742,7 @@ func (r railsRun) pod(prefix, component, node, cpu, mem string, readOnly bool, d
 					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 				},
 				VolumeMounts: []corev1.VolumeMount{{
-					Name: "checkpoint", MountPath: railsMountPath, ReadOnly: readOnly,
+					Name: "checkpoint", MountPath: railsMountPath, ReadOnly: spec.readOnly,
 				}},
 			}},
 		},

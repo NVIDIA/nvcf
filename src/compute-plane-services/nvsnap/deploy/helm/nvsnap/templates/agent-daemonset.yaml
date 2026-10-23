@@ -109,6 +109,8 @@ spec:
             - --rails-port={{ .port }}
             - --rails-connections={{ .connections }}
             - --rails-max-sources={{ .maxSources }}
+            - --rails-min-size={{ .minSize }}
+            - --rails-serve-max-fetchers={{ .serveMaxFetchers }}
             - --rails-serve-cpu={{ .serve.cpu }}
             - --rails-serve-memory={{ .serve.memory }}
             - --rails-fetch-cpu={{ .fetch.cpu }}
