@@ -23,5 +23,10 @@ states:
       - observability.profile=control
   - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/04-upgrade-receipt.yaml.gotmpl
-# Render the selected published chart packages and report their public destination.
+# Render NATS from its selected immutable chart tag to inventory upstream images.
+sourceCharts:
+  helm-nvcf-nats:
+    tagPrefix: deploy/helm/nats/v
+    path: deploy/helm/nats
+# Render the other selected published chart packages and report their public destination.
 publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

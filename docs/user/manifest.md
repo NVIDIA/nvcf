@@ -59,21 +59,25 @@ See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
 ### Supporting images that ship from Docker Hub
 
-The NATS configuration reloader and the account-bootstrap Kubernetes
-utilities are not republished under the public `nvidia/nvcf` catalog, so they
-default to their upstream Docker Hub source:
+NATS server, NATS box, the configuration reloader, and the account-bootstrap
+Kubernetes utilities use upstream Docker Hub images. They are not NVCF
+customer-image publication requirements. The default `global.image` registry
+does not redirect these dependencies. See the generated inventory below for
+the selected versions and the NATS box index digest.
 
 | Value | Default image |
 | --- | --- |
+| `nats.container.image` | `docker.io/synadia/nats-server` (version below) |
+| `nats.natsBox.container.image` | `docker.io/natsio/nats-box` (nonroot version and digest below) |
 | `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.24.0` |
 | `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.37.0` |
 
-A public-catalog install needs no configuration for these two images. Verify
+A public-catalog install needs no configuration for these images. Verify
 that your cluster can reach Docker Hub. If your egress to Docker Hub is
 authenticated or rate-limited, add the pull secret to
 `global.imagePullSecrets`.
 
-If you have mirrored both images into your own registry, redirect them from
+If you have mirrored these images into your own registry, redirect them from
 your environment file
 (`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
 and `repository` together, because each key falls back to its own Docker Hub
@@ -82,6 +86,15 @@ default rather than to `global.image`. You do not need to edit
 
 ```yaml
 nats:
+  container:
+    image:
+      registry: <your-registry>
+      repository: <your-repository>/nats-server
+  natsBox:
+    container:
+      image:
+        registry: <your-registry>
+        repository: <your-repository>/nats-box
   reloader:
     image:
       registry: <your-registry>
@@ -95,6 +108,12 @@ api:
       repository: <your-repository>/alpine-k8s
       tag: "1.37.0"
 ```
+
+The box `tag` contains both the nonroot version and the multi-platform digest
+(`version-nonroot@sha256:...`). Omit `tag` when copying the same image without
+changing its digest. To select different bytes, set the complete `tag` pin.
+Use the [multi-platform mirror procedure](./image-mirroring.md#mirror-nats-images)
+to retain AMD64 and ARM64 support.
 
 ### Override the Cassandra images
 
@@ -197,7 +216,7 @@ Documentation: `dev` (development)
 | `icms-service-oss` | `0.7.2` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `nvcr.io/nvidia/nvcf/icms-service-oss:0.7.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
 | `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `llm-api-gateway` | `0.14.2` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `nats-box` | `0.19.7-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
+| `nats-box` | `0.20.1-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `docker.io/natsio/nats-box:0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvcf-ai-api-gateway-service` | `1.35.1` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
 | `nvcf-api-keys-service` | `1.9.1` | `self-managed` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.1` |  |

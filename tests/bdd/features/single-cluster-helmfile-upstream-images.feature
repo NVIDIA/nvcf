@@ -47,6 +47,9 @@ Feature: Install a local single-cluster stack with upstream supporting images
     # the same rendered release.
     Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
       | text                                                               |
+      | docker.io/synadia/nats-server:                                    |
+      | docker.io/natsio/nats-box:                                        |
+      | -nonroot@sha256:                                                 |
       | docker.io/natsio/nats-server-config-reloader:                       |
       | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
@@ -90,3 +93,24 @@ Feature: Install a local single-cluster stack with upstream supporting images
       """
     Then the command exit code should be 0
     And the command output should contain "docker.io/natsio/nats-server-config-reloader:"
+
+    When I run command:
+      """
+      kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'
+      """
+    Then the command exit code should be 0
+    And the command output should contain "docker.io/synadia/nats-server:"
+
+    When I run command:
+      """
+      kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'
+      """
+    Then the command exit code should be 0
+    And the command output should contain "docker.io/natsio/nats-box:"
+    And the command output should contain "-nonroot@sha256:"
+
+    # Exercise the shipped tools as the nonroot user without logging key material.
+    When I successfully run command:
+      """
+      kubectl --context k3d-ncp-local exec -n nats-system deployment/nats-box -- sh -ec 'test "$(id -u):$(id -g)" = "1000:1000"; test -r /etc/nats-nkeys/default/user.key; test -d /etc/nats-contexts; nsc generate nkey --user >/dev/null; nats --version; nats context info; nats --context default --timeout 10s rtt'
+      """
