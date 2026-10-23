@@ -203,3 +203,27 @@ func TestEnsureNonEmptyEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestBenchPodSuppliesOptionalTracingEndpoint(t *testing.T) {
+	for _, shape := range []spec.Shape{spec.ShapeContainer, spec.ShapeHelm} {
+		t.Run(string(shape), func(t *testing.T) {
+			res, err := Render(shape, spec.DefaultOptions())
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			const endpoint = common.OTelExporterEndpointEnv
+			if _, ok := envValue(res.Collector.Env, endpoint); ok {
+				t.Fatal("translated collector should omit an unconfigured tracing endpoint")
+			}
+
+			pod := res.BenchPod("byoo-perf")
+			got, ok := envValue(pod.Spec.Containers[0].Env, endpoint)
+			if !ok || got.Value == "" {
+				t.Fatal("benchmark pod must supply a non-empty tracing fallback")
+			}
+			if _, ok := envValue(res.Collector.Env, endpoint); ok {
+				t.Fatal("benchmark fallback mutated the translated collector")
+			}
+		})
+	}
+}
