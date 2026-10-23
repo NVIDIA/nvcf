@@ -1093,7 +1093,15 @@ mod tests {
                 Duration::from_secs(35),
             )
             .await?;
-        let pid = wait_for_pid(&runner, &launch).await?;
+        let pid = wait_for_pid(&runner, &launch).await.with_context(|| {
+            let remote = local_remote(&root, &launch);
+            format!(
+                "wait for fixture launch: pid={:?}, exit={:?}, log={:?}",
+                fs::read_to_string(remote.join("spark.pid")),
+                fs::read_to_string(remote.join("spark.exit")),
+                fs::read_to_string(remote.join("spark.log")),
+            )
+        })?;
         fs::write(root.join("pod.json"), pod("container-b").to_string())?;
         runner.cancel(&mut launch, &path).await?;
         assert_eq!(launch.phase, Phase::Cancelled);
