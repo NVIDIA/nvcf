@@ -11,3 +11,8 @@ under the Apache License, Version 2.0.
 
 This NOTICE file is provided for attribution and informational purposes only
 and does not modify the terms of the Apache License, Version 2.0.
+
+The default NATS box container is distributed by the NATS project:
+https://github.com/nats-io/nats-box
+NATS box is licensed under the Apache License, Version 2.0. Its container
+includes additional tools and base-image packages with their own licenses.
