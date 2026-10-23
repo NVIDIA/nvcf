@@ -23,13 +23,17 @@ import (
 	"errors"
 	"fmt"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/configs"
@@ -93,6 +97,12 @@ func TestMain(m *testing.M) {
 }
 
 func TestE2E(t *testing.T) {
+	originalVersion, originalCommit := version.Version, version.GitHash
+	version.Version, version.GitHash = "1.2.3", "0123456789abcdef0123456789abcdef01234567"
+	t.Cleanup(func() {
+		version.Version, version.GitHash = originalVersion, originalCommit
+	})
+
 	testDir := t.TempDir()
 	curWorkerConfig := workerConfig
 	curWorkerConfig.ResultsDir = testDir
@@ -111,8 +121,38 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("failed to setup worker: %s", err)
 	}
 
+	type infoResponse struct {
+		status      int
+		contentType string
+		body        []byte
+		err         error
+	}
+	infoResult := make(chan infoResponse, 1)
+	progressDone := make(chan struct{})
 	go func() {
+		defer close(progressDone)
 		time.Sleep(1 * time.Second)
+		client := &http.Client{Timeout: time.Second}
+		infoURL := fmt.Sprintf("http://127.0.0.1:%d/info", curWorkerConfig.HealthPort)
+		deadline := time.Now().Add(5 * time.Second)
+		var result infoResponse
+		for {
+			response, requestErr := client.Get(infoURL)
+			result.err = requestErr
+			if requestErr == nil {
+				result.status = response.StatusCode
+				result.contentType = response.Header.Get("Content-Type")
+				result.body, result.err = io.ReadAll(response.Body)
+				response.Body.Close()
+				break
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		infoResult <- result
+
 		progressToSend := []uint32{25, 50, 75, 100}
 		for _, p := range progressToSend {
 			progressData := progress.Progress{
@@ -133,9 +173,20 @@ func TestE2E(t *testing.T) {
 		}
 	}()
 
-	if err = nvctWorker.Run(ctx, withHttpServer); err != nil {
-		t.Fatalf("failed to run nvct worker: %s", err)
-	}
+	err = nvctWorker.Run(ctx, withHttpServer)
+	<-progressDone
+	require.NoError(t, err, "failed to run nvct worker")
+	result := <-infoResult
+	require.NoError(t, result.err, "request /info on the production admin listener")
+	require.Equal(t, http.StatusOK, result.status)
+	require.Equal(t, "application/json", result.contentType)
+	var info map[string]string
+	require.NoError(t, json.Unmarshal(result.body, &info))
+	require.Equal(t, map[string]string{
+		"service": "nvcf-worker-task",
+		"version": version.Version,
+		"commit":  version.GitHash,
+	}, info)
 }
 
 func TestPollingE2E(t *testing.T) {
