@@ -22,13 +22,10 @@ import com.nvidia.icms.inbound.rest.model.byoc.ClusterProviderEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAccountEntity;
 import org.junit.jupiter.api.Test;
 
 /**
- * Smoke coverage for {@link NvcaConverter} fan-out. OIDC/PSAT fields
- * (jwks, oidcIssuer, jwksFingerprint) live only on the canonical
- * cluster_by_cluster_id row, so secondary views remain OIDC-free.
+ * Smoke coverage for {@link NvcaConverter} response projections.
  */
 class NvcaConverterTest {
 
@@ -55,13 +52,4 @@ class NvcaConverterTest {
         assertEquals("nca-789", out.getNcaId());
     }
 
-    @Test
-    void toClustersByAccountEntity_propagatesCoreIdentity() {
-        ClustersByAccountEntity out =
-                NvcaConverter.toClustersByAccountEntity(baseClusterEntity());
-
-        assertEquals("cluster-123", out.getClusterId());
-        assertEquals("test-cluster", out.getKey().getClusterName());
-        assertEquals("nca-789", out.getKey().getNcaId());
-    }
 }
