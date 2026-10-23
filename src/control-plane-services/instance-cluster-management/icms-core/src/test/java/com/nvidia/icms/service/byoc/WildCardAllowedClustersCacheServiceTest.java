@@ -85,7 +85,7 @@ class WildCardAllowedClustersCacheServiceTest {
                 DUMMY_BYOC_NCA_ID, Set.of(getDummyGpuV5(DUMMY_BYOC_INSTANCE_TYPE, DUMMY_BYOC_INSTANCE_TYPE_VALUE, 8,
                                             DUMMY_GPU_NAME)));
 
-        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(NvcaClusterRepository.WILDCARD)).thenReturn(
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD)).thenReturn(
                 List.of(clustersByAuthorizedAccountsEntity));
 
         when(clusterRepository.getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
@@ -97,7 +97,7 @@ class WildCardAllowedClustersCacheServiceTest {
 
         // Assert
         assertEquals(Set.of(clusterByGroupIdAndIdEntity), resp);
-        verify(nvcaClusterRepository).getAllClustersInAuthorizedAccount(NvcaClusterRepository.WILDCARD);
+        verify(nvcaClusterRepository).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         verify(telemetryEventClient).triggerEvent(Mockito.any());
     }
@@ -119,7 +119,7 @@ class WildCardAllowedClustersCacheServiceTest {
                 DUMMY_BYOC_NCA_ID, Set.of(getDummyGpuV5(DUMMY_BYOC_INSTANCE_TYPE, DUMMY_BYOC_INSTANCE_TYPE_VALUE, 8,
                                                         DUMMY_GPU_NAME)));
 
-        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(NvcaClusterRepository.WILDCARD)).thenReturn(
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD)).thenReturn(
                 List.of(clustersByAuthorizedAccountsEntity));
 
         when(clusterRepository.getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
@@ -134,7 +134,7 @@ class WildCardAllowedClustersCacheServiceTest {
 
         // Assert
         assertEquals(Set.of(clusterByGroupIdAndIdEntity), resp);
-        verify(nvcaClusterRepository).getAllClustersInAuthorizedAccount(NvcaClusterRepository.WILDCARD);
+        verify(nvcaClusterRepository).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository).getClustersFromClusterGroup(DUMMY_CLUSTER_GROUP_ID);
         verify(telemetryEventClient, times(0)).triggerEvent(Mockito.any());
     }
