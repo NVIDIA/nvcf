@@ -197,22 +197,22 @@ v2config:
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. |
 | `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
-| `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
+| `shadows[].modelName` | Yes | Target model name in the same mapping section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
-| `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions and Responses also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
+| `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions, Responses, and Messages also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
 | `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
-| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions and Responses. Omitted defaults to `x-multi-turn-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
+| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions, Responses, and Messages. Omitted defaults to `x-multi-turn-session-id`, and for Messages to `x-multi-turn-session-id` then `x-claude-code-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
-| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
+| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same mapping section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
 | `shadowSamplingMethod` | No | Legacy admission method or ordered method list applied to every legacy target. It supports the same methods and fallback behavior as `shadows[].samplingMethod`. Missing, empty, or `null` defaults to `random`. |
 | `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. When `true`, cancels shadow work if the primary request context is canceled. Defaults to `false`. |
 
 ### Shadow Traffic Support
 
-Shadow traffic is supported for OpenAI-compatible mapping sections with JSON
-request bodies: `chatCompletions`, `completions`, `embeddings`, `responses`, and
-`imageGenerations`. Shadow targets must be model names in the same OpenAI
+Shadow traffic is supported for mapping sections with JSON request bodies:
+`chatCompletions`, `completions`, `embeddings`, `responses`, `imageGenerations`,
+and `anthropicMessages`. Shadow targets must be model names in the same mapping
 section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
@@ -270,10 +270,17 @@ cannot land in different buckets depending on where it was sent. The first usabl
 body or header value makes the final admission decision. A valid rejection does
 not try another source or method. Only the resolved value is hashed, so the same
 value has the same bucket across the body, different header names, Chat
-Completions, and Responses. Header names must be valid HTTP field names and
+Completions, Responses, and Messages. Header names must be valid HTTP field names and
 cannot repeat case-insensitively. `Authorization` and `Proxy-Authorization` are
 rejected case-insensitively so credentials cannot be used as prompt cache keys.
 Set `promptCacheKeyHeaders: []` to disable header lookup.
+
+Anthropic Messages has no `prompt_cache_key` body field, so `promptCacheKey`
+on a Messages route reads only `promptCacheKeyHeaders`. When the list is
+omitted, Messages checks `x-multi-turn-session-id`, then
+`x-claude-code-session-id`, the same order the LLM Gateway uses for Messages
+session affinity. Claude Code sends `x-claude-code-session-id` on every request,
+so its sessions are sticky without client changes.
 
 The `firstMessageHash` method hashes a versioned, endpoint-specific canonical
 JSON envelope. It preserves roles, full content values, array order, and content
@@ -282,11 +289,13 @@ includes leading `system` and `developer` messages in request order and the
 first `user` message. Other preceding roles and all later messages are ignored.
 For Responses, it includes nonempty `instructions` and the first user input. A
 string `input` is user content; an array is scanned to its first `role: user`
-item. A null, empty string, empty array, or empty object first-user content makes
-the method unavailable.
+item. For Messages, it includes a nonempty top-level `system` and the first
+`user` message, with every `cache_control` key removed, because clients move
+cache breakpoints between turns. A null, empty string, empty array, or empty
+object first-user content makes the method unavailable.
 
-`promptCacheKey` and `firstMessageHash` are only valid in the `chatCompletions`
-and `responses` mapping sections. Sampling is stateless. The gateway does not
+`promptCacheKey` and `firstMessageHash` are only valid in the `chatCompletions`,
+`responses`, and `anthropicMessages` mapping sections. Sampling is stateless. The gateway does not
 resolve conversations, `previous_response_id`, or streamed deltas to recover
 earlier input. If a request does not carry the required material, evaluation
 continues to the next method.
@@ -508,11 +517,22 @@ Errors generated by the Vanity Gateway use the Anthropic error envelope,
 missing `model` return `400`, an unknown model returns `404`, an offline model
 returns `503` with `Retry-After`, an end-of-life model returns `410`, and a
 failed upstream request returns `502`. Upstream status codes and bodies are
-passed through unchanged.
+passed through unchanged. Every Messages response, including these errors,
+carries `request-id` with the same value as `X-Request-Id`.
 
 `/v1/models` on the shared host lists Messages models and adds
 `supported_endpoints` to them, so OpenAI clients can tell which models accept
 only Messages.
+
+A request that carries `anthropic-version`, as Anthropic SDKs and Claude Code
+send, gets the Anthropic Models API instead. `GET /v1/models` lists only
+`anthropicMessages` models, with `type`, `id`, `display_name` and `created_at`,
+plus `has_more`, `first_id` and `last_id`. Models are ordered by ID. `limit`
+defaults to 20 and accepts 1 to 1000. `after_id` returns the page after that ID
+and `before_id` the page before it; the two cannot be combined. `display_name`
+is the model name. `GET /v1/models/{model}` returns one entry, or a `404`
+`not_found_error` for a model not served on Messages. Hidden and expired models
+are left out as in the OpenAI list. These responses also carry `request-id`.
 
 The Messages path requires compatible LLM Gateway, Stargate router, and Pylon
 worker builds. See `docs/overview/llm-gateway.md` for upgrade order, token
@@ -589,12 +609,21 @@ or `concurrency_limit`.
 decisions, one per shadow target below 100 percent on each request. It shows
 which sampling method made the final decision, so a rollout can measure how
 much traffic is sticky and how often sampling falls back to `random`. The
-`sampling_endpoint` label is `chatCompletions`, `responses`, or `other`. The
-`method` label is `promptCacheKey`, `firstMessageHash`, `perBearerKey`, or
+`sampling_endpoint` label is `chatCompletions`, `responses`, `messages`, or
+`other`. Messages decisions were labeled `other` before Messages supported
+sticky methods. The `method` label is `promptCacheKey`, `firstMessageHash`, `perBearerKey`, or
 `random`. The `outcome` label is `admitted` or `rejected`. All label
 combinations are emitted at zero on startup. The primary request span records
 the deciding methods in the `shadow.sampling_methods` attribute. Neither
 records cache keys, credentials, or message content.
+
+Every response on the model API host (`openai.host`) carries one
+`X-Request-Id`. The gateway keeps the caller's value or creates a UUID and sends
+the same value upstream, so the LLM Gateway logs the request under the same ID.
+An ID the upstream returns is replaced. Each shadow copy gets its own ID. The
+request log line includes the ID. Pass-through vanity hosts do not add or
+replace request IDs; the caller's and the function's headers pass through
+unchanged.
 
 `gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
 Gateway server metric (`http_server_request_duration_seconds`) and as the

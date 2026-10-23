@@ -24,6 +24,7 @@ environments:
   Input is a dict:
     values:                 operator-supplied featureGateValues list
     byooEnabled:            also enable BYOObservability
+    byooFluentBitEnabled:   also enable BYOOFluentBit (global.nvcaOperator.byooFluentBit.enabled)
     kaiSchedulerEnabled:    also enable KAIScheduler (addons.kaiScheduler.enabled)
     dynamoOperatorEnabled:  also enable DynamoOperatorSupport (addons.dynamoOperator.enabled)
   Output is the normalized list as YAML.
@@ -40,6 +41,9 @@ environments:
 -}}
 {{- if dig "byooEnabled" false . -}}
 {{- $defaultFeatureGates = append $defaultFeatureGates "BYOObservability" -}}
+{{- end -}}
+{{- if dig "byooFluentBitEnabled" false . -}}
+{{- $defaultFeatureGates = append $defaultFeatureGates "BYOOFluentBit" -}}
 {{- end -}}
 {{- if dig "kaiSchedulerEnabled" false . -}}
 {{- $defaultFeatureGates = append $defaultFeatureGates "KAIScheduler" -}}
@@ -117,7 +121,38 @@ helmDefaults:
 {{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
 {{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 
+{{- $byooOtelCollector := dig "byooOtelCollector" dict $nvcaOp }}
+{{- $defaultByooOtelCollectorImageRepository := printf "%s/%s/byoo-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $byooOtelCollectorImageRepository := dig "imageRepository" "" $byooOtelCollector | default $defaultByooOtelCollectorImageRepository }}
+{{- $byooOtelCollectorImageTag := dig "imageTag" "" $byooOtelCollector }}
+{{- $byooFluentBit := dig "byooFluentBit" dict $nvcaOp }}
+{{- $byooFluentBitEnabled := dig "enabled" false $byooFluentBit }}
+{{- $byooFluentBitImage := dig "image" dict $byooFluentBit }}
+{{- $byooFluentBitImageRepository := "" }}
+{{- $byooFluentBitImageTag := dig "tag" "" $byooFluentBitImage }}
+{{- with dig "repository" "" $byooFluentBitImage }}
+{{-   $byooFluentBitImageRepository = . }}
+{{-   with dig "registry" "" $byooFluentBitImage }}
+{{-     $byooFluentBitImageRepository = printf "%s/%s" . $byooFluentBitImageRepository }}
+{{-   end }}
+{{-   if not $byooFluentBitImageTag }}
+{{-     fail "global.nvcaOperator.byooFluentBit.image.tag is required when global.nvcaOperator.byooFluentBit.image.repository is set" }}
+{{-   end }}
+{{- end }}
+
 {{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
+
+{{- /*
+  NVCA adds the Fluent Bit sidecar only to BYOO workloads, but it counts the
+  sidecar in its infra resource overhead whenever BYOOFluentBit is on. Fail
+  when the stack would turn on BYOOFluentBit without BYOObservability.
+*/}}
+{{- if and $byooFluentBitEnabled (not (has "-BYOOFluentBit" $featureGateValues)) }}
+{{-   $byooGateEnabled := or (has "BYOObservability" $featureGateValues) (and $computeObservabilityEnabled (not (has "-BYOObservability" $featureGateValues))) }}
+{{-   if not $byooGateEnabled }}
+{{-     fail (printf "global.nvcaOperator.byooFluentBit.enabled requires the BYOObservability NVCA feature gate, which is off (observability.profile is %q). Set observability.profile to compute or all without -BYOObservability in global.nvcaOperator.selfManaged.featureGateValues, add BYOObservability to that list, or set global.nvcaOperator.byooFluentBit.enabled to false." $observabilityProfile) }}
+{{-   end }}
+{{- end }}
 {{- $kaiSchedulerEnabled := dig "addons" "kaiScheduler" "enabled" false .Values }}
 {{- $dynamoOperatorEnabled := dig "addons" "dynamoOperator" "enabled" false .Values }}
 
@@ -183,7 +218,7 @@ releases:
     # versions. The chart appVersion remains the operator image fallback when
     # no imageTag override is set.
     chart: nvcf/helm-nvca-operator
-    version: 1.28.0
+    version: 1.36.4
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -255,6 +290,7 @@ releases:
           {{- include "nvca-operator.featureGateValues" (dict
                 "values" $featureGateValues
                 "byooEnabled" $computeObservabilityEnabled
+                "byooFluentBitEnabled" $byooFluentBitEnabled
                 "kaiSchedulerEnabled" $kaiSchedulerEnabled
                 "dynamoOperatorEnabled" $dynamoOperatorEnabled) | nindent 10 }}
           otelCollector:
@@ -281,6 +317,15 @@ releases:
         # this stack and a direct nvca-operator install produce the same objects.
         nameOverride: nvca-operator
         fullnameOverride: nvca-operator
+        {{- with dig "byoo" dict $nvcaOp }}
+        byoo:
+{{ toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with dig "utils" "resources" dict $nvcaOp }}
+        utils:
+          resources:
+{{ toYaml . | nindent 12 }}
+        {{- end }}
         {{- if $agentMergeConfig }}
         agentConfig:
           mergeConfig: |
@@ -303,8 +348,17 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
-        {{- if or $agentTolerations $workloadTolerations }}
         agent:
+          byooOtelCollector:
+            imageRepository: {{ $byooOtelCollectorImageRepository | quote }}
+            {{- with $byooOtelCollectorImageTag }}
+            imageTag: {{ . | quote }}
+            {{- end }}
+          {{- if $byooFluentBitImageRepository }}
+          byooFluentBit:
+            imageRepository: {{ $byooFluentBitImageRepository | quote }}
+            imageTag: {{ $byooFluentBitImageTag | quote }}
+          {{- end }}
           {{- with $agentTolerations }}
           tolerations:
 {{ toYaml . | nindent 12 }}
@@ -314,7 +368,6 @@ releases:
             tolerations:
 {{ toYaml . | nindent 14 }}
           {{- end }}
-        {{- end }}
     labels:
       release-group: workers
     wait: true

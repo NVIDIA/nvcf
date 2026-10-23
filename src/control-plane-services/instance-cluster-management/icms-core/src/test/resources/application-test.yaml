@@ -457,7 +457,6 @@ icms:
 
   byoc:
     env: default
-    queue-name-format: "q_gdn_spot_byoc_%s.fifo"
     # todo: update batch account as per requirement, setting initial value as 10
     instance-batch-count: 10
     cloud-health-ttl-for-byoc-in-sec: 900
@@ -476,7 +475,6 @@ icms:
       - dummy-static-zone-nca-id: STATIC-ZONE
       - static-on-prem-cluster-nca-id: dummy-on-prem-cluster-id
     model-caching-enabled: false
-    authorized-nca-id-update-enabled: false
     # 1000 * 1000 * 1000
     cache-byte-division-factor: 1000000000
     # 1Gi

@@ -56,6 +56,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
+	helmutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/helm"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
@@ -1429,15 +1430,13 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig) 
 	}
 	if initConditionTrue {
 		for _, containerStatus := range podStatus.ContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedContainerRestartLoop
 			}
 		}
 	} else {
 		for _, containerStatus := range podStatus.InitContainerStatuses {
-			if containerStatus.RestartCount >= k8sutil.RestartCountToFailInstance &&
-				k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if k8sutil.IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				return true, types.ICMSInstanceFailedInitContainerRestartLoop
 			}
 		}
@@ -1616,6 +1615,10 @@ var badICMSInstanceStates = map[types.ICMSInstanceState]struct{}{
 func (c K8sComputeBackend) GetICMSRequestUpdatesForCreateRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) []types.ICMSRequestUpdateInfo {
 	log := core.GetLogger(ctx)
 
+	if reason := GetCreationRejectionReason(req); reason != "" {
+		return c.getICMSRequestUpdatesForRejectedCreateRequest(ctx, req, reason)
+	}
+
 	var icmsRequestUpdates []types.ICMSRequestUpdateInfo
 	for id, st := range req.Status.Instances {
 		switch st.Type {
@@ -1641,6 +1644,46 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreateRequest(ctx context.Con
 	}
 	log.Debugf("ICMSRequestStatusUpdate: %v updates for CreationRequest", len(icmsRequestUpdates))
 	return icmsRequestUpdates
+}
+
+// getICMSRequestUpdatesForRejectedCreateRequest reports every instance of a
+// request whose creation message NVCA rejected as terminated, with the
+// rejection reason as the error log.
+func (c K8sComputeBackend) getICMSRequestUpdatesForRejectedCreateRequest(ctx context.Context,
+	req *nvcav2beta1.ICMSRequest, reason string,
+) []types.ICMSRequestUpdateInfo {
+	workloadType := workloadtypes.WorkloadTypeContainer
+	if helmutil.IsMiniServiceCreateRequest(req) {
+		workloadType = workloadtypes.WorkloadTypeHelm
+	}
+	failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(types.ICMSInstanceTerminatedTerminalError)
+
+	var updates []types.ICMSRequestUpdateInfo
+	for _, st := range req.Status.Instances {
+		if !c.bk8s.shouldReportInstanceStatusHeartbeat(ctx, req, st.ID,
+			string(types.ICMSInstanceTerminated), st.LastReportedStatus, st.LastReportedTimestamp) {
+			continue
+		}
+		updates = append(updates, types.ICMSRequestUpdateInfo{
+			RequestID:  req.Spec.RequestID,
+			InstanceID: st.ID,
+			Payload: types.ICMSInstanceStatusUpdateRequest{
+				Status:           types.ICMSRequestInstanceTerminatedByService,
+				InstanceState:    types.ICMSInstanceTerminated,
+				Action:           common.TerminationAction,
+				RequestState:     types.ICMSInstanceRequestClosed,
+				TerminationCause: types.ICMSInstanceTerminatedTerminalError,
+				SystemFailure:    string(types.ICMSInstanceTerminatedTerminalError),
+				HealthInfo:       types.HealthInfo{ErrorLog: reason},
+				FailureCategory:  string(failureCategory),
+			},
+		})
+		if m := nvcametrics.FromContext(ctx); m != nil {
+			m.RecordWorkloadStatus(workloadType, nvcametrics.ActionToWorkloadKind(req.Spec.Action),
+				workloadtypes.WorkloadStatusFailure, failureCategory)
+		}
+	}
+	return updates
 }
 
 func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.Context, st nvcav2beta1.InstanceStatus,

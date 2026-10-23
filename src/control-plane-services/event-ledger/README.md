@@ -58,7 +58,9 @@ curl -X POST http://localhost:8080/v3/ledger/cloudevents \
   }'
 ```
 
-`namespace` is required. The optional context fields are `instanceId`,
+`namespace` is required. Producers keyed by function version can send
+`functionVersionId` instead, and it is stored as the namespace. If both are
+set, they must match. The optional context fields are `instanceId`,
 `deploymentId`, `gpuSpecificationId`, `clusterId`, and `resourceId`.
 
 ### Send OTLP log records

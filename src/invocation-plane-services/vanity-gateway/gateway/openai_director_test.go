@@ -31,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -471,7 +472,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 			ShadowSamplingMethod:           config.ShadowSamplingMethods{config.ShadowSamplingMethodPerBearerKey},
 			ShadowCancelOnClientDisconnect: true,
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
@@ -510,7 +511,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2PreservesPerShadow
 				{ModelName: "private/facebook/opt-125m-shadow-b"},
 			},
 		},
-	})
+	}, "openai.chatCompletions")
 
 	expected, ok := result["facebook/opt-125m"]
 	require.True(t, ok)
@@ -1244,4 +1245,60 @@ func TestIsModelExpired(t *testing.T) {
 			assert.Equal(t, tc.expected, isModelExpired(tc.eolDate))
 		})
 	}
+}
+
+func TestOpenAIRoutesRejectInvalidJSONAsClientError(t *testing.T) {
+	routes := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/responses",
+		"/v1/images/generations",
+		"/v1/images/edits",
+		"/v1/images/variations",
+	}
+	bodies := []struct{ name, body string }{
+		{"malformed", `{not json`},
+		{"truncated", `{"model":`},
+		{"array", `[{"model":"m"}]`},
+		{"empty", ``},
+		{"model wrong type", `{"model":1}`},
+		{"null", `null`},
+		{"null with whitespace", " null\n"},
+	}
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", "http://llm.invalid")
+	for _, route := range routes {
+		for _, tc := range bodies {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				req := openAIRequest(t, route, tc.body)
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+				require.Equal(t, "gateway_rejected", rec.Header().Get("NVCF-Error-Source"))
+				var payload OpenAIError
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+				require.Equal(t, "invalid_request_error", payload.Error.Type)
+				require.Equal(t, "invalid_json", payload.Error.Code)
+				require.NotEmpty(t, payload.Error.Message)
+			})
+		}
+	}
+}
+
+func TestOpenAIRouteBodyReadFailureStaysServerError(t *testing.T) {
+	director := &OpenAIDirector{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", io.MultiReader(
+		bytes.NewBufferString(`{"model":`),
+		iotest.ErrReader(errors.New("connection reset")),
+	))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	_, handled := director.resolveModelMappedRequest(rec, req, map[string]FunctionInfo{})
+
+	require.True(t, handled)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }

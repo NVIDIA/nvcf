@@ -5,53 +5,289 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+helper="${script_dir}/prepare-stack-pin-branch"
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "${work_dir}"' EXIT
 
-remote="${work_dir}/remote.git"
-seed="${work_dir}/seed"
-runner="${work_dir}/runner"
+fail() { echo "test-prepare-stack-pin-branch: $*" >&2; exit 1; }
 
-git init --bare --initial-branch=main "${remote}" >/dev/null
-git clone "${remote}" "${seed}" >/dev/null 2>&1
-git -C "${seed}" config user.name "Test User"
-git -C "${seed}" config user.email "test@example.com"
-git -C "${seed}" switch -c main >/dev/null 2>&1
-printf 'metadata=old\n' > "${seed}/metadata"
-git -C "${seed}" add metadata
-git -C "${seed}" commit -m "ci: seed release metadata" >/dev/null
-git -C "${seed}" push -u origin main >/dev/null 2>&1
+# Both workflows hand the helper the tool that regenerates their bump commits,
+# and record the release tag in the line the helper reads it back from.
+workflow_has() {
+  local workflow=$1 line=$2
+  grep -Fq -- "${line}" "${repo_root}/.github/workflows/${workflow}" \
+    || fail "${workflow} no longer contains: ${line}"
+}
+# The lines are workflow text, so their ${...} stay literal.
+# shellcheck disable=SC2016
+{
+  workflow_has chart-version-bump.yml \
+    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper'
+  workflow_has stack-pin-bump.yml \
+    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver'
+  workflow_has chart-version-bump.yml \
+    '-m "Opened by the chart version bump workflow on release of ${TAG}."'
+  workflow_has stack-pin-bump.yml \
+    '-m "Opened by the stack pin bump workflow on release of ${TAG}."'
+}
 
-git -C "${seed}" switch -c chore/stack-pin-bumps >/dev/null 2>&1
-printf 'pin=nats-0.8.1\n' > "${seed}/pins"
-git -C "${seed}" add pins
-git -C "${seed}" commit -m "fix(stack): accumulate first pin" >/dev/null
-git -C "${seed}" push -u origin chore/stack-pin-bumps >/dev/null 2>&1
+# A stand-in for chart-version-bumper and stack-pin-resolver with the same
+# contract: --tag <path>/<name>/v<x.y.z> [--write] moves pins/<name> forward,
+# skips an older release, and reports the step as "bump: <level>".
+fake_bump="${work_dir}/fake-bump"
+cat > "${fake_bump}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+tag="" write=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tag) tag=$2; shift 2 ;;
+    --write) write=1; shift ;;
+    *) echo "unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+name="${tag%/v*}"
+name="${name##*/}"
+version="${tag##*/v}"
+file="pins/${name}"
+if [ ! -f "${file}" ]; then
+  echo "no pin for ${name}" >&2
+  exit 1
+fi
+current="$(cat "${file}")"
+if [ "${current}" = "${version}" ]; then
+  echo "${name}: already ${version}"
+  exit 0
+fi
+IFS=. read -r a b c <<<"${current}"
+IFS=. read -r x y z <<<"${version}"
+if (( x < a || (x == a && (y < b || (y == b && z < c))) )); then
+  echo "${name}: skipped older release ${version}; keeping ${current}"
+  exit 0
+fi
+if (( x != a )); then level=major; elif (( y != b )); then level=minor; else level=patch; fi
+echo "${name}: ${current} -> ${version}"
+if [ "${write}" -eq 1 ]; then
+  printf '%s\n' "${version}" > "${file}"
+fi
+echo "bump: ${level}"
+EOF
+chmod +x "${fake_bump}"
 
-git -C "${seed}" switch main >/dev/null 2>&1
-printf 'metadata=current\n' > "${seed}/metadata"
-git -C "${seed}" add metadata
-git -C "${seed}" commit -m "ci: register another chart" >/dev/null
-git -C "${seed}" push origin main >/dev/null 2>&1
+# Creates <dir>/remote.git with main holding the given pins, and a seed clone
+# at <dir>/seed to build history in.
+new_remote() {
+  local dir=$1
+  shift
+  mkdir -p "${dir}"
+  git init --quiet --bare --initial-branch=main "${dir}/remote.git"
+  git clone --quiet "${dir}/remote.git" "${dir}/seed" 2>/dev/null
+  git -C "${dir}/seed" config user.name "Test User"
+  git -C "${dir}/seed" config user.email "test@example.com"
+  git -C "${dir}/seed" switch --quiet -c main 2>/dev/null
+  mkdir -p "${dir}/seed/pins"
+  local pin
+  for pin in "$@"; do
+    printf '%s\n' "${pin#*=}" > "${dir}/seed/pins/${pin%%=*}"
+  done
+  printf 'metadata=old\n' > "${dir}/seed/metadata"
+  git -C "${dir}/seed" add .
+  git -C "${dir}/seed" commit --quiet -m "ci: seed release metadata"
+  git -C "${dir}/seed" push --quiet -u origin main 2>/dev/null
+}
 
-git clone --branch main "${remote}" "${runner}" >/dev/null 2>&1
-git -C "${runner}" config user.name "Test User"
-git -C "${runner}" config user.email "test@example.com"
+# Commits pins/<name>=<version> in <seed> the way the chart workflow does.
+bot_bump() {
+  local seed=$1 type=$2 name=$3 version=$4
+  shift 4
+  local tag="src/${name}/v${version}"
+  printf '%s\n' "${version}" > "${seed}/pins/${name}"
+  git -C "${seed}" add pins
+  git -C "${seed}" \
+    -c user.name="github-actions[bot]" \
+    -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+    commit --quiet \
+    -m "${type}(charts): bump for ${tag}" \
+    -m "Opened by the chart version bump workflow on release of ${tag}." \
+    "$@"
+}
 
+hand_edit() {
+  local seed=$1 file=$2 value=$3 subject=$4
+  printf '%s\n' "${value}" > "${seed}/${file}"
+  git -C "${seed}" add "${file}"
+  git -C "${seed}" -c user.name="Human Dev" -c user.email="human@example.com" \
+    commit --quiet -m "${subject}"
+}
+
+runner_for() {
+  local dir=$1
+  git clone --quiet --branch main "${dir}/remote.git" "${dir}/runner" 2>/dev/null
+  git -C "${dir}/runner" config user.name "github-actions[bot]"
+  git -C "${dir}/runner" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+}
+
+assert_clean_stop() {
+  test -z "$(git status --porcelain --untracked-files=no)" || fail "a stopped run left changes behind"
+  if git rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null; then
+    fail "a stopped run left a cherry-pick in progress"
+  fi
+}
+
+# 1. A branch whose commits still apply moves onto main unchanged, and a
+# missing branch starts from main.
+t="${work_dir}/clean"
+new_remote "${t}" nats=0.8.0
+git -C "${t}/seed" switch --quiet -c chore/stack-pin-bumps
+printf 'pin=nats-0.8.1\n' > "${t}/seed/pins/nats"
+git -C "${t}/seed" add pins
+git -C "${t}/seed" commit --quiet -m "fix(stack): accumulate first pin"
+git -C "${t}/seed" push --quiet -u origin chore/stack-pin-bumps 2>/dev/null
+git -C "${t}/seed" switch --quiet main
+printf 'metadata=current\n' > "${t}/seed/metadata"
+git -C "${t}/seed" add metadata
+git -C "${t}/seed" commit --quiet -m "ci: register another chart"
+git -C "${t}/seed" push --quiet origin main 2>/dev/null
+runner_for "${t}"
 (
-  cd "${runner}"
-  "${script_dir}/prepare-stack-pin-branch" chore/stack-pin-bumps main >/dev/null
+  cd "${t}/runner"
+  "${helper}" chore/stack-pin-bumps main >/dev/null
 
-  test "$(git branch --show-current)" = "chore/stack-pin-bumps"
-  test "$(tr -d '\n' < metadata)" = "metadata=current"
-  test "$(tr -d '\n' < pins)" = "pin=nats-0.8.1"
-  git merge-base --is-ancestor origin/main HEAD
-  test -z "$(git rev-list --merges origin/main..HEAD)"
-  git log --format=%s origin/main..HEAD | grep -Fx "fix(stack): accumulate first pin" >/dev/null
+  test "$(git branch --show-current)" = "chore/stack-pin-bumps" || fail "wrong branch"
+  test "$(tr -d '\n' < metadata)" = "metadata=current" || fail "main's metadata is missing"
+  test "$(tr -d '\n' < pins/nats)" = "pin=nats-0.8.1" || fail "the accumulated pin is missing"
+  git merge-base --is-ancestor origin/main HEAD || fail "branch is not on main"
+  test -z "$(git rev-list --merges origin/main..HEAD)" || fail "branch has merges"
+  test "$(git log --format=%s origin/main..HEAD)" = "fix(stack): accumulate first pin" \
+    || fail "the accumulated commit was not kept as it is"
 
-  "${script_dir}/prepare-stack-pin-branch" chore/new-stack-pin-bumps main >/dev/null
-  test "$(git branch --show-current)" = "chore/new-stack-pin-bumps"
-  test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+  "${helper}" chore/new-stack-pin-bumps main >/dev/null
+  test "$(git branch --show-current)" = "chore/new-stack-pin-bumps" || fail "wrong new branch"
+  test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || fail "a new branch does not start at main"
+)
+
+# 2. Concurrent releases: main moved pins the branch also moved. The conflicting
+# bump commits are regenerated from their tags against main, superseded ones
+# drop out, and every other commit is kept.
+t="${work_dir}/concurrent"
+new_remote "${t}" alpha=1.0.0 beta=2.0.0 gamma=3.0.0 epsilon=5.0.0
+seed="${t}/seed"
+git -C "${seed}" switch --quiet -c chore/chart-version-bumps
+bot_bump "${seed}" fix epsilon 5.0.1
+bot_bump "${seed}" fix alpha 1.0.1
+bot_bump "${seed}" feat beta 2.1.1
+bot_bump "${seed}" feat alpha 1.1.0
+bot_bump "${seed}" feat gamma 4.0.0 \
+  -m "BREAKING CHANGE: src/gamma/v4.0.0 is a major release of the service this chart deploys."
+hand_edit "${seed}" metadata "metadata=delta" "ci: register delta"
+git -C "${seed}" push --quiet -u origin chore/chart-version-bumps 2>/dev/null
+git -C "${seed}" switch --quiet main
+hand_edit "${seed}" pins/alpha 1.0.5 "chore(charts): bump alpha by hand"
+hand_edit "${seed}" pins/beta 2.1.0 "chore(charts): bump beta by hand"
+hand_edit "${seed}" pins/gamma 3.5.0 "chore(charts): bump gamma by hand"
+hand_edit "${seed}" pins/epsilon 5.0.1 "chore(charts): bump epsilon by hand"
+git -C "${seed}" push --quiet origin main 2>/dev/null
+runner_for "${t}"
+(
+  cd "${t}/runner"
+  "${helper}" chore/chart-version-bumps main "${fake_bump}" > "${t}/first.log"
+
+  test "$(git branch --show-current)" = "chore/chart-version-bumps" || fail "wrong branch"
+  git merge-base --is-ancestor origin/main HEAD || fail "branch is not on main"
+  test -z "$(git rev-list --merges origin/main..HEAD)" || fail "branch has merges"
+  test "$(cat pins/alpha)" = "1.1.0" || fail "alpha: $(cat pins/alpha)"
+  test "$(cat pins/beta)" = "2.1.1" || fail "beta: $(cat pins/beta)"
+  test "$(cat pins/gamma)" = "4.0.0" || fail "gamma: $(cat pins/gamma)"
+  test "$(cat pins/epsilon)" = "5.0.1" || fail "epsilon: $(cat pins/epsilon)"
+  test "$(cat metadata)" = "metadata=delta" || fail "the hand-written commit was lost"
+  if grep -rq '^<<<<<<<\|^>>>>>>>' pins metadata; then fail "conflict markers committed"; fi
+
+  # epsilon landed on main and alpha 1.0.1 is older than main's 1.0.5, so both
+  # drop out. beta's step from main's 2.1.0 is now a patch, not a minor.
+  want="$(printf '%s\n' \
+    "fix(charts): bump for src/beta/v2.1.1" \
+    "feat(charts): bump for src/alpha/v1.1.0" \
+    "feat(charts)!: bump for src/gamma/v4.0.0" \
+    "ci: register delta")"
+  got="$(git log --reverse --format=%s origin/main..HEAD)"
+  test "${got}" = "${want}" || fail "unexpected commits: ${got}"
+
+  test "$(git log -1 --format=%an HEAD)" = "Human Dev" || fail "the hand-written commit lost its author"
+  gamma="$(git log -1 --format=%B HEAD~1)"
+  grep -Fxq "Opened by the chart version bump workflow on release of src/gamma/v4.0.0." <<<"${gamma}" \
+    || fail "a regenerated commit no longer records its tag"
+  grep -Fxq "BREAKING CHANGE: src/gamma/v4.0.0 is a major release of the service this chart deploys." <<<"${gamma}" \
+    || fail "a regenerated major bump lost its BREAKING CHANGE footer"
+  if git log -1 --format=%B HEAD~3 | grep -q '^BREAKING CHANGE:'; then
+    fail "a regenerated patch bump carries a BREAKING CHANGE footer"
+  fi
+  test "$("${script_dir}/release-bump-type" for-branch origin/main)" = 'feat!' \
+    || fail "the pull request type no longer reflects the regenerated commits"
+  grep -Fq "1 kept, 3 regenerated, 2 dropped" "${t}/first.log" \
+    || fail "unexpected summary: $(tail -n 1 "${t}/first.log")"
+
+  # Rerunning on the reconciled branch changes nothing, and replaying a release
+  # it already carries moves nothing.
+  git push --quiet --force origin chore/chart-version-bumps 2>/dev/null
+  tree="$(git rev-parse "HEAD^{tree}")"
+  "${helper}" chore/chart-version-bumps main "${fake_bump}" > "${t}/second.log"
+  test "$(git rev-parse "HEAD^{tree}")" = "${tree}" || fail "a rerun changed the tree"
+  test "$(git log --reverse --format=%s origin/main..HEAD)" = "${want}" || fail "a rerun changed the commits"
+  grep -Fq "4 kept, 0 regenerated, 0 dropped" "${t}/second.log" \
+    || fail "a rerun did not keep every commit: $(tail -n 1 "${t}/second.log")"
+  replay="$("${fake_bump}" --tag src/alpha/v1.1.0 --write)"
+  test "${replay}" = "alpha: already 1.1.0" || fail "replaying a carried release was not a no-op"
+  test -z "$(git status --porcelain --untracked-files=no)" || fail "replaying a carried release changed the tree"
+)
+
+# 3. A hand-written commit that conflicts stops the run, and a bump commit that
+# conflicts stops it too when there is no tool to regenerate it with or the
+# tool cannot resolve its tag.
+t="${work_dir}/stops"
+new_remote "${t}" alpha=1.0.0
+seed="${t}/seed"
+git -C "${seed}" switch --quiet -c chore/human
+hand_edit "${seed}" pins/alpha 1.2.0 "chore(charts): move alpha by hand on the bump branch"
+git -C "${seed}" push --quiet -u origin chore/human 2>/dev/null
+git -C "${seed}" switch --quiet -c chore/bot main
+bot_bump "${seed}" fix alpha 1.0.1
+git -C "${seed}" push --quiet -u origin chore/bot 2>/dev/null
+git -C "${seed}" switch --quiet -c chore/unknown main
+printf '1.0.9\n' > "${seed}/pins/alpha"
+git -C "${seed}" add pins
+git -C "${seed}" commit --quiet -m "fix(charts): bump for src/zeta/v9.0.0" \
+  -m "Opened by the chart version bump workflow on release of src/zeta/v9.0.0."
+git -C "${seed}" push --quiet -u origin chore/unknown 2>/dev/null
+git -C "${seed}" switch --quiet main
+hand_edit "${seed}" pins/alpha 1.0.5 "chore(charts): bump alpha by hand"
+git -C "${seed}" push --quiet origin main 2>/dev/null
+runner_for "${t}"
+(
+  cd "${t}/runner"
+  if "${helper}" chore/human main "${fake_bump}" >/dev/null 2>"${t}/human.err"; then
+    fail "a conflicting hand-written commit did not stop the run"
+  fi
+  grep -Fq "move alpha by hand on the bump branch" "${t}/human.err" || fail "the stop does not name the commit"
+  assert_clean_stop
+
+  if "${helper}" chore/bot main >/dev/null 2>"${t}/bot.err"; then
+    fail "a conflicting bump commit was resolved without a bump command"
+  fi
+  grep -Fq "no bump command" "${t}/bot.err" || fail "the stop does not say why: $(cat "${t}/bot.err")"
+  assert_clean_stop
+
+  if "${helper}" chore/unknown main "${fake_bump}" >/dev/null 2>"${t}/unknown.err"; then
+    fail "a bump the tool could not regenerate did not stop the run"
+  fi
+  grep -Fq "failed (exit 1)" "${t}/unknown.err" || fail "the stop does not report the tool failure"
+  assert_clean_stop
+
+  printf 'dirty\n' > metadata
+  if "${helper}" chore/bot main "${fake_bump}" >/dev/null 2>&1; then
+    fail "the helper ran over uncommitted changes"
+  fi
+  test "$(cat metadata)" = "dirty" || fail "the helper discarded uncommitted changes"
 )
 
 echo "prepare-stack-pin-branch tests passed"

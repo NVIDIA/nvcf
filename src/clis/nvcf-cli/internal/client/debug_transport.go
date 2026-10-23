@@ -18,11 +18,16 @@ limitations under the License.
 package client
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"strings"
 )
+
+const redactedValue = "[REDACTED]"
 
 // debugTransport is an HTTP transport that logs requests and responses
 type debugTransport struct {
@@ -59,15 +64,15 @@ func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// Log request body if present
+	// Log request body if present, with credential values masked
 	if req.Body != nil {
 		reqDump, err := httputil.DumpRequestOut(req, true)
 		if err == nil {
-			bodyStart := strings.Index(string(reqDump), "\r\n\r\n")
+			bodyStart := bytes.Index(reqDump, []byte("\r\n\r\n"))
 			if bodyStart != -1 && bodyStart+4 < len(reqDump) {
-				body := string(reqDump[bodyStart+4:])
-				if strings.TrimSpace(body) != "" {
-					log.Printf("Request Body:\n%s", body)
+				body := reqDump[bodyStart+4:]
+				if len(bytes.TrimSpace(body)) != 0 {
+					log.Printf("Request Body:\n%s", redactRequestBody(body))
 				}
 			}
 		}
@@ -140,6 +145,83 @@ func isSensitiveHeader(name string) bool {
 		}
 	}
 	return false
+}
+
+// redactRequestBody returns a request body that is safe to log. Every value
+// under a "secret" or "secrets" key is masked; only string "name" fields are
+// kept so the log still shows which secret a request sets. A body that is not
+// JSON cannot be inspected for credentials, so only its size is returned.
+func redactRequestBody(body []byte) string {
+	if !json.Valid(body) {
+		return fmt.Sprintf("[%d bytes, not JSON, omitted]", len(body))
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var parsed interface{}
+	if err := dec.Decode(&parsed); err != nil {
+		return fmt.Sprintf("[%d bytes, omitted]", len(body))
+	}
+	redacted, changed := redactSecretFields(parsed)
+	if !changed {
+		return string(body)
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(redacted); err != nil {
+		return fmt.Sprintf("[%d bytes, omitted]", len(body))
+	}
+	return strings.TrimSuffix(out.String(), "\n")
+}
+
+// redactSecretFields walks a decoded JSON value and masks the subtree of each
+// "secret" or "secrets" key. It reports whether any such key was found.
+func redactSecretFields(v interface{}) (interface{}, bool) {
+	changed := false
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, child := range t {
+			if strings.EqualFold(k, "secret") || strings.EqualFold(k, "secrets") {
+				t[k] = maskSecretValue(child)
+				changed = true
+				continue
+			}
+			if masked, c := redactSecretFields(child); c {
+				t[k] = masked
+				changed = true
+			}
+		}
+	case []interface{}:
+		for i, child := range t {
+			if masked, c := redactSecretFields(child); c {
+				t[i] = masked
+				changed = true
+			}
+		}
+	}
+	return v, changed
+}
+
+// maskSecretValue masks a secret subtree, keeping only string "name" fields
+// of objects. Arrays are masked element by element.
+func maskSecretValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, child := range t {
+			if _, isString := child.(string); isString && strings.EqualFold(k, "name") {
+				continue
+			}
+			t[k] = redactedValue
+		}
+		return t
+	case []interface{}:
+		for i, child := range t {
+			t[i] = maskSecretValue(child)
+		}
+		return t
+	default:
+		return redactedValue
+	}
 }
 
 // newDebugTransport creates a new debug transport wrapper

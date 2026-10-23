@@ -236,6 +236,12 @@ value.
 Values without parameters use the same response for `unknown_method` and
 `unavailable`.
 
+Through the LLM API Gateway, clients receive the message in the endpoint's
+error format, not the router body. The gateway removes the
+`x-stargate-error-code` header. It returns the code in `error.code` only when
+`llmApiGateway.config.exposeRouterErrorCodes` is `true`. See
+[Error Responses](llm-function-enablement.md#error-responses).
+
 ### How updates apply
 
 - An update needs no router restart or ConfigMap change.
@@ -446,7 +452,7 @@ metric names, labels, and scrape configuration.
 | Symptom | Check |
 | --- | --- |
 | Pod does not start after a configuration change | Inspect request-router logs for file read, JSON parse, unknown field, or algorithm factory errors. |
-| HTTP `400` before backend selection | Read the `code` in the response body or the `x-stargate-error-code` header; see [Rejections](#rejections). Chat completions through the gateway return only the message; request-router logs record the code as `rejection_reason`. Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
+| HTTP `400` before backend selection | Read `error.message` in the response body; see [Rejections](#rejections). Request-router logs record the code as `rejection_reason`, and the gateway returns it in `error.code` when `exposeRouterErrorCodes` is enabled. Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
 | HTTP `400` for affinity-aware routing | Confirm the gateway generated a nonblank affinity key when `require_cache_affinity_key` is enabled. |
 | HTTP `503` with no eligible candidates | Confirm pylons are registered and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. |
 | New ConfigMap value has no effect | Confirm the pod creation time. Restart the selected Deployment or StatefulSet because Stargate does not reload the file. |

@@ -242,6 +242,17 @@ Use `global.nvcaOperator.nodeSelector`, `global.nvcaOperator.tolerations`, and
 `global.nvcaOperator.agent.*` in the compute-plane environment when you need to
 place the operator, agent, or workloads on specific nodes.
 
+Registering a compute plane does not enable the NVCA OTel collector, even when
+the control plane runs the Event Ledger. A control plane can have many
+registered compute planes, and some are registered through GitOps rather than
+the CLI, so set `global.nvcaOperator.selfManaged.otelCollector.enabled: true`
+explicitly in `environments/<environment-name>.yaml` for each compute plane
+that should send its events to the Event Ledger. Also set
+`global.nvcaOperator.selfManaged.eventLedgerServiceURL` there when the compute
+plane is in a different cluster than the control plane; leave it empty when
+they share a cluster, since the collector then defaults to the in-cluster
+Event Ledger Service.
+
 <Warning>
 The `KAIScheduler` feature flag is optional. Enable it only if the
 [KAI Scheduler](./kai-scheduler.md) is installed on the GPU cluster. The flag has no effect,
@@ -745,6 +756,31 @@ Cleanup Script appendix in the self-hosted troubleshooting guide.
   ```bash
   kubectl describe nvcfbackends -n nvca-operator
   ```
+
+- Functions stuck in DEPLOYING with `failed calling webhook` and
+  `x509: certificate signed by unknown authority` in events: The NVCA webhook
+  serving certificate is not signed by the CA in the webhook `caBundle`. Check
+  each webhook configuration against the stored serving certificate:
+
+  ```bash
+  kubectl get secret nvca-webhook-tls-server-certs -n nvca-system \
+    -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/nvca-tls.crt
+  for kind in validatingwebhookconfiguration mutatingwebhookconfiguration; do
+    kubectl get "$kind" nvca -o jsonpath='{.webhooks[0].clientConfig.caBundle}' \
+      | base64 -d > /tmp/nvca-ca.pem
+    echo "$kind: $(openssl verify -CAfile /tmp/nvca-ca.pem /tmp/nvca-tls.crt 2>&1 | tail -1)"
+  done
+  ```
+
+  If either line does not end in `OK`, force a rollout. The operator rewrites the
+  certificate Secrets and both webhook configurations from one certificate and CA:
+
+  ```bash
+  kubectl annotate -n nvca-operator --overwrite --all nvcfbackends \
+    nvca.nvcf.nvidia.io/forcedRolloutAt="$(date)"
+  ```
+
+  Run the check again to confirm both lines end in `OK`.
 
 - Agent fails to register with SIS (HTTP 401): The control plane could not
   validate the agent's PSAT against the recorded issuer and JWKS. Re-run

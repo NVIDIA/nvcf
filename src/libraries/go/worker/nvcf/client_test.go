@@ -23,15 +23,85 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/oauth2"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
 )
+
+func TestNatsConnectionLogging(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	t.Cleanup(zap.ReplaceGlobals(zap.New(core)))
+	tp := auth.NewSettableTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}))
+	conn, err := newNatsConnection(startEmbeddedNats(t), nil, "", tp, "inst-1", "fnv-1")
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	opts := conn.Opts
+
+	t.Run("clean shutdown", func(t *testing.T) {
+		conn.Close()
+		require.Eventually(t, func() bool {
+			return logs.FilterMessage("nats connection closed.").Len() == 1
+		}, 5*time.Second, time.Millisecond)
+		entry := logs.FilterMessage("nats connection closed.").All()[0]
+		assert.Equal(t, zap.InfoLevel, entry.Level)
+		assert.Equal(t, "fnv-1", entry.ContextMap()["function version id"])
+		assert.Equal(t, "inst-1", entry.ContextMap()["instance id"])
+		assert.NotContains(t, entry.ContextMap(), "error")
+		assert.Zero(t, logs.FilterLevelExact(zap.ErrorLevel).Len())
+	})
+
+	t.Run("reconnect delay", func(t *testing.T) {
+		delay := opts.CustomReconnectDelayCB(2)
+		require.Positive(t, delay)
+		entries := logs.FilterMessage("waiting to reconnect to nats").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, zap.WarnLevel, entries[0].Level)
+		assert.Equal(t, int64(2), entries[0].ContextMap()["reconnect_round"])
+		assert.Equal(t, delay, entries[0].ContextMap()["delay"])
+	})
+
+	t.Run("reconnect failure and terminal closure", func(t *testing.T) {
+		closed := make(chan struct{})
+		closedCB := opts.ClosedCB
+		opts.ClosedCB = func(conn *nats.Conn) {
+			closedCB(conn)
+			close(closed)
+		}
+		opts.Url = "nats://127.0.0.1:0"
+		opts.Servers = nil
+		opts.MaxReconnect = 1
+		opts.CustomReconnectDelayCB = func(int) time.Duration { return 0 }
+		failedConn, err := opts.Connect()
+		require.NoError(t, err)
+		t.Cleanup(failedConn.Close)
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("NATS connection did not close after exhausting reconnects")
+		}
+		failures := logs.FilterMessage("nats reconnect attempt failed").All()
+		require.NotEmpty(t, failures)
+		for _, failure := range failures {
+			assert.Equal(t, zap.WarnLevel, failure.Level)
+			assert.NotEmpty(t, failure.ContextMap()["error"])
+			assert.Equal(t, "fnv-1", failure.ContextMap()["function version id"])
+			assert.Equal(t, "inst-1", failure.ContextMap()["instance id"])
+		}
+		entries := logs.FilterMessage("nats connection permanently closed").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, zap.ErrorLevel, entries[0].Level)
+		require.Error(t, failedConn.LastError())
+		assert.Equal(t, failedConn.LastError().Error(), entries[0].ContextMap()["error"])
+	})
+}
 
 // mockTokenSource is a mock implementation of oauth2.TokenSource
 type mockTokenSource struct {

@@ -68,6 +68,10 @@ jobs:
           DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
         run: ./tools/ci/check-doc-version-current-release
 
+  # "go-lib codegen" is a required status check on main. It also runs the
+  # vendored go-lib drift guard so that drift blocks merges. Keep the check
+  # name and keep this job unfiltered by paths: a skipped required check
+  # counts as passing.
   go-lib-codegen:
     name: go-lib codegen
     runs-on: ubuntu-latest
@@ -78,7 +82,16 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
+      # Runs before codegen, which may leave the library tree modified when
+      # it fails.
+      - name: Test the vendored go-lib drift guard
+        run: bash tools/ci/test-check-go-vendored-lib
+
+      - name: Check vendored copies of the shared Go library match its source
+        run: bash tools/ci/check-go-vendored-lib
+
       - name: Run go-lib codegen freshness check
+        if: ${{ !cancelled() }}
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
 
   helm-charts:
@@ -132,13 +145,26 @@ jobs:
       - name: Test NVCA chart schema and defaults
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
+          make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
+          make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
+          make -C deploy/helm/nvca-operator test-render-values
           make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Verify bundled receipt release inventory
+        env:
+          NVCF_RECEIPT_INVENTORY_E2E: "1"
+        run: go test -C tools/docs-version-sync -run '^TestReceiptInventoryIncludesBundledChartAndDefaultHookImage$' -count=1
 
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
@@ -271,6 +297,9 @@ jobs:
 
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
+
+      - name: Test bump workflow push credentials
+        run: bash tools/ci/test-bump-workflow-push
 
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version

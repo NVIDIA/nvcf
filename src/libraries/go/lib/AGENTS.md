@@ -125,6 +125,30 @@ vendored license files change, run from the repository root:
 go run ./tools/collect-dependencies
 ```
 
+## Downstream Vendored Copies
+
+NVCA replaces this module with the in-tree path but compiles its own copy under
+`src/compute-plane-services/nvca/vendor/`. A change to a file NVCA vendors does
+not reach NVCA until NVCA re-vendors, so re-vendor in the same Pull Request.
+`tools/ci/check-go-vendored-lib` fails when the copies differ and prints the
+commands. CI runs it in the required `go-lib codegen` check, so a Pull
+Request with drift cannot merge. From the repository root:
+
+```bash
+(cd src/compute-plane-services/nvca && GOWORK=off go mod vendor)
+git -C src/compute-plane-services/nvca checkout -- ':(glob)vendor/**/BUILD.bazel'
+tools/ci/check-go-vendored-lib
+```
+
+`go mod vendor` deletes or overwrites the BUILD.bazel files committed under
+NVCA's `vendor/`; the `git checkout` restores them. If a vendored file is
+added or removed, update that package's vendor BUILD.bazel `srcs` or
+`embedsrcs` too.
+
+The check does not see a file added to an embedded subdirectory, such as a
+new template under `templates/`. When you add one, re-vendor NVCA and confirm
+the file appears under its `vendor/` tree.
+
 ## Style and Testing
 
 - Use `GOWORK=off` and `GOFLAGS=-mod=vendor` when running module-scoped Go commands that need to match this module's vendored dependency set.

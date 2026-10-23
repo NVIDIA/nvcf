@@ -33,14 +33,12 @@ import (
 	"strings"
 	"time"
 
-	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
@@ -52,6 +50,7 @@ const (
 
 	headerAuthorization      = "Authorization"
 	headerContentType        = "Content-Type"
+	headerContentEncoding    = "Content-Encoding"
 	headerAccept             = "Accept"
 	headerRequestID          = "X-Request-Id"
 	headerTargetRegion       = "X-NVCF-Target-Region"
@@ -514,16 +513,13 @@ func outboundChatRequest(
 		streamOptions.IncludeUsage = ptr.To(true)
 		outbound.StreamOptions = &streamOptions
 	}
-	if !outbound.ServiceTier.IsValid() {
-		outbound.ServiceTier = servicetier.Auto
-	}
 
 	return &outbound
 }
 
 // gatewayOwnedChatFields are replaced or removed in the forwarded client body.
 // Keys are matched case-insensitively because encoding/json binds them that way.
-var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "service_tier", "debug"}
+var gatewayOwnedChatFields = []string{"model", "stream", "stream_options", "debug"}
 
 func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, error) {
 	outbound := outboundChatRequest(request, stream)
@@ -564,9 +560,6 @@ func outboundChatRequestBody(request *NormalizedRequest, stream bool) ([]byte, e
 		return nil, err
 	}
 	if err := setJSONField(payload, "stream", outbound.Stream); err != nil {
-		return nil, err
-	}
-	if err := setJSONField(payload, "service_tier", outbound.ServiceTier); err != nil {
 		return nil, err
 	}
 
@@ -642,60 +635,8 @@ func checkHTTPError(resp *http.Response) error {
 		return nil
 	}
 
-	statusCode := clientStatusCode(resp)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-	message := string(body)
-
-	var errorResponse models.ErrorResponse
-	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
-		if statusCode == statusOverloaded && errorResponse.Error.Code == overloadErrorCode {
-			return echo.NewHTTPError(statusCode, errorResponse)
-		}
-		message = errorResponse.Error.Message
-	} else if decoded := upstreamErrorMessage(body); decoded != "" {
-		message = decoded
-	}
-	if message == "" {
-		message = http.StatusText(resp.StatusCode)
-	}
-
-	httpErr := echo.NewHTTPError(statusCode, message)
-	if codes := resp.Header.Values(headerStargateErrorCode); len(codes) > 0 {
-		// The router error code is internal; keep it for the request log only.
-		httpErr = httpErr.SetInternal(fmt.Errorf("stargate error code %s", strings.Join(codes, ",")))
-	}
-	return httpErr
-}
-
-// upstreamErrorMessage returns the message from error bodies that do not
-// decode as models.ErrorResponse: Stargate rejections
-// ({"error":"no eligible candidates","code":"no_eligible_candidates"}),
-// OpenAI-style errors with a numeric code, and pylon problem details
-// ({"title":"Service Unavailable","detail":"..."}). It returns "" for any
-// other body.
-func upstreamErrorMessage(body []byte) string {
-	var fields struct {
-		Error  json.RawMessage `json:"error"`
-		Detail json.RawMessage `json:"detail"`
-		Title  json.RawMessage `json:"title"`
-	}
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return ""
-	}
-
-	var openAIError struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(fields.Error, &openAIError); err == nil && openAIError.Message != "" {
-		return openAIError.Message
-	}
-	for _, field := range []json.RawMessage{fields.Error, fields.Detail, fields.Title} {
-		var message string
-		if err := json.Unmarshal(field, &message); err == nil && message != "" {
-			return message
-		}
-	}
-	return ""
+	body := ReadUpstreamErrorBody(resp.Body, resp.Header.Get(headerContentEncoding))
+	return NewUpstreamHTTPError(clientStatusCode(resp), resp.Header, body)
 }
 
 type chatCompletionChoiceAccumulator struct {
@@ -745,8 +686,10 @@ func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompl
 			response.CreatedAt = chunk.CreatedAt
 			response.Model = chunk.Model
 			response.SystemFingerprint = chunk.SystemFingerprint
-			response.ServiceTier = chunk.ServiceTier
 			seenChunk = true
+		}
+		if response.ServiceTier == "" {
+			response.ServiceTier = chunk.ServiceTier
 		}
 		if chunk.Usage != nil {
 			response.Usage = *chunk.Usage

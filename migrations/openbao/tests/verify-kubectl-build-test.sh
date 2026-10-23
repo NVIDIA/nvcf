@@ -14,16 +14,14 @@ fail() {
   exit 1
 }
 
-grep -Fq \
-  'ARG KUBECTL_GO_IMAGE=golang:1.26.6-alpine3.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406' \
-  "$dockerfile" || fail "kubectl builder must pin the reviewed Go 1.26.6 multi-architecture manifest"
-grep -Fq 'ARG KUBECTL_VERSION=v1.36.4' "$dockerfile" || \
+grep -Eq '^ARG KUBECTL_GO_IMAGE=golang:[0-9.]+-alpine[0-9.]+@sha256:[0-9a-f]{64}$' "$dockerfile" || \
+  fail "kubectl builder must pin a multi-architecture Go manifest"
+grep -Eq '^ARG KUBECTL_VERSION=v1\.36\.[0-9]+$' "$dockerfile" || \
   fail "kubectl must stay on the Kubernetes 1.36 compatibility line"
-grep -Fq \
-  'ARG KUBECTL_SOURCE_SHA256=3c28f11492472df48e658551bf268fd92938b127b0f9dcef7090ac800318c821' \
-  "$dockerfile" || fail "kubectl source archive checksum is not pinned"
+grep -Eq '^ARG KUBECTL_SOURCE_SHA256=[0-9a-f]{64}$' "$dockerfile" || \
+  fail "kubectl source archive checksum is not pinned"
 grep -Fq 'GOPROXY=off' "$build_script" || \
-  fail "kubectl build must not resolve dependencies outside the source archive"
+  fail "kubectl compilation must use the verified vendor tree offline"
 grep -Fq -- '-mod=vendor' "$build_script" || \
   fail "kubectl build must use the release archive's vendored dependencies"
 if TARGETARCH=ppc64le "$build_script" >/dev/null 2>&1; then

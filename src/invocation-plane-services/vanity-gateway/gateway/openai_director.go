@@ -63,6 +63,7 @@ const (
 	shadowSamplingEndpointNone            shadowSamplingEndpoint = ""
 	shadowSamplingEndpointChatCompletions shadowSamplingEndpoint = "chatCompletions"
 	shadowSamplingEndpointResponses       shadowSamplingEndpoint = "responses"
+	shadowSamplingEndpointMessages        shadowSamplingEndpoint = "messages"
 )
 
 // ModelDirector shares model routing across native OpenAI and Anthropic endpoints.
@@ -98,6 +99,16 @@ type CustomOpenAIError struct {
 // OpenAIError represents the structure of the custom error message.
 type OpenAIError struct {
 	Error CustomOpenAIError `json:"error"`
+}
+
+func writeOpenAIError(writer http.ResponseWriter, status int, message, code string) {
+	writer.Header().Set(contentTypeHeader, contentTypeApplicationJSON)
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(OpenAIError{Error: CustomOpenAIError{
+		Message: message,
+		Type:    "invalid_request_error",
+		Code:    code,
+	}})
 }
 
 type FunctionInfo struct {
@@ -297,42 +308,42 @@ func buildModelMapping(
 }
 
 func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*ModelDirector, error) {
-	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions), privateModelMatcher)
+	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions, "openai.chatCompletions"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	completions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Completions), privateModelMatcher)
+	completions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Completions, "openai.completions"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	embeddings, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Embeddings), privateModelMatcher)
+	embeddings, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Embeddings, "openai.embeddings"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	responses, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Responses), privateModelMatcher)
+	responses, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.Responses, "openai.responses"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.AnthropicMessages), privateModelMatcher)
+	messages, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.AnthropicMessages, "anthropicMessages"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageGenerations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageGenerations), privateModelMatcher)
+	imageGenerations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageGenerations, "openai.imageGenerations"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageEdits, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageEdits), privateModelMatcher)
+	imageEdits, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageEdits, "openai.imageEdits"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
 
-	imageVariations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageVariations), privateModelMatcher)
+	imageVariations, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ImageVariations, "openai.imageVariations"), privateModelMatcher)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +473,7 @@ func (d *ModelDirector) getFilteredModels() []ModelInfo {
 	return d.filteredModelsCache
 }
 
-func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]config.ModelFunctionDetails) map[string]ModelNameToFunctionIdVersionId {
+func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]config.ModelFunctionDetails, sectionName string) map[string]ModelNameToFunctionIdVersionId {
 	modelNameToFunctionIdVersionId := make(map[string]ModelNameToFunctionIdVersionId)
 	for _, entry := range mapping {
 		modelNameToFunctionIdVersionId[entry.ModelName] = ModelNameToFunctionIdVersionId{
@@ -476,7 +487,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			OfflineMessage:         entry.OfflineMessage,
 			TooManyRequestsMessage: entry.TooManyRequestsMessage,
 			Shadows:                normalizeShadowConfigs(entry.EffectiveShadows()),
-			PromptCacheKeyHeaders:  entry.EffectivePromptCacheKeyHeaders(),
+			PromptCacheKeyHeaders:  entry.EffectivePromptCacheKeyHeadersForSection(sectionName),
 			FunctionType:           entry.FunctionType,
 		}
 	}
@@ -543,7 +554,7 @@ func (d *ModelDirector) ServeResponses(writer http.ResponseWriter, request *http
 }
 
 func (d *ModelDirector) ServeMessages(writer http.ResponseWriter, request *http.Request) {
-	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl, shadowSamplingEndpointNone)
+	d.proxyModelMappedRequest(writer, request, d.messages.modelNameToNVCFUrl, shadowSamplingEndpointMessages)
 }
 
 func (d *ModelDirector) ServeImageGenerations(writer http.ResponseWriter, request *http.Request) {
@@ -558,7 +569,14 @@ func (d *ModelDirector) ServeImageVariations(writer http.ResponseWriter, request
 	d.proxyModelMappedRequest(writer, request, d.imageVariations.modelNameToNVCFUrl, shadowSamplingEndpointNone)
 }
 
-func (d *ModelDirector) ListModels(writer http.ResponseWriter, _ *http.Request) {
+// ListModels answers in the caller's API: Anthropic clients get the Messages
+// models in the Anthropic shape, everyone else the shared OpenAI list.
+func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Request) {
+	if middleware.IsAnthropicRequest(request) {
+		d.listAnthropicModels(writer, request)
+		return
+	}
+
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
 
@@ -588,6 +606,10 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	} else {
 		markGatewayRejected(writer, request)
 		http.Error(writer, "model name was undefined", http.StatusInternalServerError)
+		return
+	}
+	if middleware.IsAnthropicRequest(request) {
+		d.getAnthropicModel(writer, request, modelName)
 		return
 	}
 
@@ -681,9 +703,7 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		markGatewayRejected(writer, request)
 		if request.URL.Path == "/v1/messages" {
 			status, message := http.StatusInternalServerError, "failed to read Messages request"
-			var syntaxErr *json.SyntaxError
-			var typeErr *json.UnmarshalTypeError
-			if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, errModelFieldMissing) {
+			if errors.Is(err, errInvalidJSONBody) || errors.Is(err, errModelFieldMissing) {
 				status, message = http.StatusBadRequest, "invalid Messages request JSON"
 			}
 			var maxBytesErr *http.MaxBytesError
@@ -711,6 +731,10 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 			if err := json.NewEncoder(writer).Encode(errorMessage); err != nil {
 				http.Error(writer, err.Error(), http.StatusInternalServerError)
 			}
+			return resolvedOpenAIRequest{}, true
+		}
+		if errors.Is(err, errInvalidJSONBody) {
+			writeOpenAIError(writer, http.StatusBadRequest, "request body is not valid JSON", "invalid_json")
 			return resolvedOpenAIRequest{}, true
 		}
 		if errors.Is(err, errModelFieldMissing) {
@@ -1002,6 +1026,10 @@ func rewriteShadowRequestModel(body []byte, modelName string) ([]byte, error) {
 // than letting it fall through to a misleading 404 "model not found".
 var errModelFieldMissing = errors.New("model field is required")
 
+// errInvalidJSONBody signals that the client sent a body that is not a JSON
+// object with the expected field types. Callers render this as HTTP 400.
+var errInvalidJSONBody = errors.New("invalid json body")
+
 // extractOpenAIRequestBody dispatches on Content-Type: multipart/form-data requests
 // (image edits, image variations) read the model from a form field; everything
 // else parses the OpenAI JSON body.
@@ -1093,11 +1121,16 @@ func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
 		return openAIRequestBody{}, err
 	}
 
+	// A top-level null decodes without error, but the body must be a JSON object.
+	if bytes.Equal(bytes.TrimSpace(bodyBytes.peek()), []byte("null")) {
+		_ = bodyBytes.Close()
+		return openAIRequestBody{}, fmt.Errorf("%w: body is null", errInvalidJSONBody)
+	}
 	body := openAIRequestBody{}
 	err = json.UnmarshalWithOption(bodyBytes.peek(), &body, json.DecodeFieldPriorityFirstWin())
 	if err != nil {
 		_ = bodyBytes.Close()
-		return openAIRequestBody{}, fmt.Errorf("failed to decode json body: %w", err)
+		return openAIRequestBody{}, fmt.Errorf("%w: %w", errInvalidJSONBody, err)
 	}
 	if body.Model == "" {
 		_ = bodyBytes.Close()

@@ -201,7 +201,7 @@ llmRequestRouter:
   # chart's sis/templates/hook-lls-migrations.yaml pattern. When enabled,
   # the Job runs pre-install/pre-upgrade using the nvcf-openbao-migrations
   # image with CORE_MIGRATIONS_ENABLED=false + ADDONS_LLM_ENABLED=true so
-  # it executes only the LLM addon (addons/llm/setup_llm.sh).
+  # it executes only the service PKI addon (addons/service-pki/setup_service_pki.sh).
   pki:
     enabled: false
     # Namespace for the hook Job. Should match the openbao-server install

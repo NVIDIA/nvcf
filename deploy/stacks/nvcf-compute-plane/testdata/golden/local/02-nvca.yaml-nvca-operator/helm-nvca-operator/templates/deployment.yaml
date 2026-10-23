@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.28.0
+    helm.sh/chart: helm-nvca-operator-1.36.4
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.8.0"
+    app.kubernetes.io/version: "3.16.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   
@@ -95,7 +95,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: "0.160.0-nv-0.2.5"
+          value: "0.160.0-nv-0.4.3"
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
         - name: OPERATOR_NAMESPACE
@@ -127,10 +127,10 @@ spec:
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
           - --function-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC4yLjUifQ=="
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjMifQ=="
           - --task-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC4yLjUifQ=="
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.10.0
+          - "eyJCWU9PX0ZMVUVOVEJJVF9DT05UQUlORVIiOiJkb2NrZXIuaW8vZmx1ZW50L2ZsdWVudC1iaXQ6My4yIiwiQllPT19PVEVMX0NPTExFQ1RPUl9DT05UQUlORVIiOiJudmNyLmlvLzA2NTExNTUyMTU4NjQ5NzkvbmNwLWRldi9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC40LjMifQ=="
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.18.2
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -176,7 +176,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.10.0
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.18.2
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000
