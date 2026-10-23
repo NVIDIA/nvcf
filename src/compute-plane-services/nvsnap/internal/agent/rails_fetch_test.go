@@ -326,6 +326,10 @@ func railsAgent(t *testing.T, catalogURL string, c *railsCluster) (a *Agent, dir
 	t.Helper()
 	a, dir = receiverAgent(t, catalogURL)
 	a.config.Rails = testRailsConfig()
+	// A roomy disk, whatever the one the test runs on holds.
+	orig := diskSpace
+	t.Cleanup(func() { diskSpace = orig })
+	diskSpace = func(string) (uint64, uint64, error) { return 900 << 30, 1000 << 30, nil }
 	a.kubeClient = c.kube
 	return a, dir
 }

@@ -321,11 +321,21 @@ func railsPeerManifest(ctx context.Context, peerURL, checkpointID string) (*peer
 // checkFreeSpace refuses a copy of size bytes that would leave less than
 // keepPercent of dir's filesystem free.
 func checkFreeSpace(dir string, size int64, keepPercent int) error {
+	avail, total, err := diskSpace(dir)
+	if err != nil {
+		return err
+	}
+	return freeSpaceAllows(avail, total, size, keepPercent, dir)
+}
+
+// diskSpace returns the available and total bytes of dir's filesystem; a
+// variable for tests, which must not depend on the disk they run on.
+var diskSpace = func(dir string) (avail, total uint64, err error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {
-		return fmt.Errorf("statfs %s: %w", dir, err)
+		return 0, 0, fmt.Errorf("statfs %s: %w", dir, err)
 	}
-	return freeSpaceAllows(st.Bavail*uint64(st.Bsize), st.Blocks*uint64(st.Bsize), size, keepPercent, dir) //nolint:gosec // block size is positive
+	return st.Bavail * uint64(st.Bsize), st.Blocks * uint64(st.Bsize), nil //nolint:gosec // block size is positive
 }
 
 func freeSpaceAllows(avail, total uint64, size int64, keepPercent int, dir string) error {
