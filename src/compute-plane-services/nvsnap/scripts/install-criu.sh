@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Install the complete CRIU bundle to all cluster nodes
-# This includes: CRIU + libs, CUDA plugin, cuda-checkpoint, restore-entrypoint
+# This includes: CRIU + libs, CUDA plugin, cuda-checkpoint
 #
 # Required environment variables:
 #   KUBECONFIG - Path to kubeconfig file
@@ -88,10 +88,6 @@ if [ -f /usr/local/nvsnap/cuda-checkpoint ]; then
     sudo ln -sf /usr/local/nvsnap/cuda-checkpoint /usr/local/bin/cuda-checkpoint
 fi
 
-# restore-entrypoint symlink
-if [ -f /usr/local/nvsnap/restore-entrypoint ]; then
-    sudo ln -sf /usr/local/nvsnap/restore-entrypoint /usr/local/bin/restore-entrypoint
-fi
 
 # Verify installation
 echo "  Verifying..."
@@ -105,9 +101,6 @@ else
     echo "    cuda-checkpoint: NOT FOUND"
 fi
 
-if [ -f /usr/local/bin/restore-entrypoint ]; then
-    echo "    restore-entrypoint: installed"
-fi
 
 # Show bundle contents
 echo "    Bundle contents:"
@@ -122,5 +115,4 @@ echo ""
 echo "Tools available on all nodes:"
 echo "  - /usr/local/sbin/criu (wrapper using bundled libs)"
 echo "  - /usr/local/bin/cuda-checkpoint"
-echo "  - /usr/local/bin/restore-entrypoint"
 echo "  - /usr/local/nvsnap/ (full bundle directory)"

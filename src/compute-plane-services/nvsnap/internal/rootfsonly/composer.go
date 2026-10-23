@@ -43,6 +43,14 @@ type HashInputComposer struct {
 	// compatible on a 555.x node because the rootfs upperdir contains
 	// driver-versioned firmware paths.
 	CUDADriverMajor int
+
+	// Salt is the cluster operator's counterpart of CacheSaltAnnotation:
+	// folded into every identity this composer produces, so bumping it
+	// (a Helm value) starts fresh captures cluster-wide. Needed when the
+	// cache contents must change for a reason the identity cannot see,
+	// such as a new cachedir env template whose effect only exists on a
+	// fresh capture (warm pods replay the env stamped at capture).
+	Salt string
 }
 
 // Compose returns the HashInput for the given pod. mainContainer is the
@@ -63,8 +71,24 @@ func (c *HashInputComposer) Compose(pod *corev1.Pod, mainContainer int) checkpoi
 	out.ImageDigest = resolvedImageDigest(pod, mainContainer)
 	out.ModelID = inferModelID(main)
 	out.EngineCompatFlags = composeEngineCompatFlags(main)
+	if c.Salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "cluster-salt:"+c.Salt)
+	}
+	if salt := pod.Annotations[CacheSaltAnnotation]; salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "salt:"+salt)
+	}
 	return out
 }
+
+// CacheSaltAnnotation lets a chart or operator fold an arbitrary value
+// into the capture and cache identity. The identity already covers the
+// image reference, model, arguments, cache-relevant env, driver and GPU
+// class; it cannot see a change made inside an unchanged image, such as
+// a wheel installed at start-up from a mounted volume or a floating tag
+// re-pointed at a new build. Bumping the salt on such an upgrade starts a
+// fresh cache instead of seeding the old one. Absent, the identity is
+// unchanged, so existing captures stay valid.
+const CacheSaltAnnotation = "nvsnap.io/cache-salt"
 
 // resolvedImageDigest prefers status.containerStatuses[].imageID (the
 // post-pull resolved digest like "nvcr.io/nim/...@sha256:abc..." or

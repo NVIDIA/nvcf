@@ -90,6 +90,8 @@ var unauthenticatedPaths = map[string]bool{
 	"/metrics": true,
 }
 
+func bypassesTokenGuard(path string) bool { return unauthenticatedPaths[path] }
+
 // tokenGuard returns middleware enforcing mode against token.
 //
 // Returns nil only for AuthDisabled, where there is genuinely nothing to
@@ -115,7 +117,7 @@ func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handl
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if unauthenticatedPaths[r.URL.Path] {
+			if bypassesTokenGuard(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -149,7 +151,7 @@ func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handl
 // open.
 func denyAll(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if unauthenticatedPaths[r.URL.Path] {
+		if bypassesTokenGuard(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -71,8 +71,6 @@ func TestOpenAPIEmbedded(t *testing.T) {
 		"/api/v1/retention-policies",
 		"/api/v1/audit",
 		// Storage
-		"/api/v1/blobstore/stats",
-		"/api/v1/blobstore/captures",
 		// Realtime
 		"/api/v1/ws",
 		// Internal — documented so operators can debug, may change.

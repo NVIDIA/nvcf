@@ -64,18 +64,6 @@ cleanup_checkpoint_storage() {
     done
 }
 
-cleanup_blobstore() {
-    # Wipe nvsnap-blobstore data. Blobstore is a single-replica Deployment;
-    # the data dir is at /data inside the pod (PVC-backed). We rm the
-    # contents (not the dir itself or the PVC).
-    local pod
-    pod=$(kubectl get pods -n "$NAMESPACE" -l app=nvsnap-blobstore -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    if [ -z "$pod" ]; then return; fi
-    kubectl exec -n "$NAMESPACE" "$pod" -- sh -c '
-        find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-    ' 2>/dev/null || true
-}
-
 full_cleanup() {
     if [ "${KEEP_CHECKPOINTS:-0}" = "1" ]; then
         echo "  (KEEP_CHECKPOINTS=1, skipping)"
@@ -85,8 +73,6 @@ full_cleanup() {
     cleanup_workload_pods
     echo "  wiping checkpoint storage on $(kubectl get pods -n "$NAMESPACE" -l app=nvsnap-agent --no-headers 2>/dev/null | wc -l) agent(s)..."
     cleanup_checkpoint_storage
-    echo "  wiping blobstore data..."
-    cleanup_blobstore
 }
 
 # ─── Pre-flight ────────────────────────────────────────────────────────

@@ -107,13 +107,14 @@ func cacheDirPod() *corev1.Pod {
 // side re-emits (path consistency is the whole mechanism).
 func TestCacheDirEnvVars(t *testing.T) {
 	want := map[string]string{
-		"HOME":                    "/opt/nvsnap/cache",
-		"TORCHINDUCTOR_CACHE_DIR": "/opt/nvsnap/cache/torchinductor",
-		"NIM_CACHE_PATH":          "/opt/nvsnap/model",
-		"TRITON_CACHE_DIR":        "/opt/nvsnap/cache/.triton/cache",
-		"VLLM_CACHE_ROOT":         "/opt/nvsnap/cache/.cache/vllm",
-		"CUDA_CACHE_PATH":         "/opt/nvsnap/cache/.nv/ComputeCache",
-		"HF_HOME":                 "/opt/nvsnap/model",
+		"HOME":                     "/opt/nvsnap/cache",
+		"TORCHINDUCTOR_CACHE_DIR":  "/opt/nvsnap/cache/torchinductor",
+		"NIM_CACHE_PATH":           "/opt/nvsnap/model",
+		"TRITON_CACHE_DIR":         "/opt/nvsnap/cache/.triton/cache",
+		"VLLM_CACHE_ROOT":          "/opt/nvsnap/cache/.cache/vllm",
+		"VLLM_ENABLE_STARTUP_PLAN": "1",
+		"CUDA_CACHE_PATH":          "/opt/nvsnap/cache/.nv/ComputeCache",
+		"HF_HOME":                  "/opt/nvsnap/model",
 	}
 	got := map[string]string{}
 	for _, e := range cacheDirEnvVars("/opt/nvsnap") {
@@ -166,6 +167,32 @@ func TestCacheDirCapturePatches(t *testing.T) {
 	if !sawHome {
 		t.Error("missing HOME=/opt/nvsnap/cache env")
 	}
+	// The emptyDir starts empty; NIM refuses to start when NIM_CACHE_PATH
+	// does not exist, so an init creates both subtrees before the engine.
+	var init *corev1.Container
+	for _, p := range patches {
+		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
+			cc := c
+			init = &cc
+		}
+	}
+	if init == nil {
+		t.Fatal("missing nvsnap-cachedir-init")
+	}
+	if init.Image != cacheDirPod().Spec.Containers[0].Image || !strings.Contains(init.Args[0], "mkdir -p /opt/nvsnap/cache /opt/nvsnap/model") || !strings.Contains(init.Args[0], "chmod 1777") {
+		t.Errorf("init must mkdir cache and model on the workload image: %s %q", init.Image, init.Args)
+	}
+	if len(init.VolumeMounts) != 1 || init.VolumeMounts[0].MountPath != "/opt/nvsnap" || init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
+		t.Errorf("init mounts the cachedir and is hardened: %+v %+v", init.VolumeMounts, init.Resources)
+	}
+	// Re-admission with the init already present adds nothing.
+	pod := cacheDirPod()
+	pod.Spec.InitContainers = []corev1.Container{*init}
+	for _, p := range m.cacheDirCapturePatches(pod) {
+		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
+			t.Error("cachedir init injected twice")
+		}
+	}
 }
 
 // Off by default: no CacheDir → no patches (standard rootfs path).
@@ -203,5 +230,27 @@ func TestCacheDirCapturePatches_Idempotent(t *testing.T) {
 	}
 	if p := m.cacheDirCapturePatches(pod); p != nil {
 		t.Errorf("expected no re-inject when cache mount present, got %d patches", len(p))
+	}
+}
+
+// A container function whose model is already on the NVCA model cache
+// claim keeps its pod untouched even when labelled for capture: the
+// cachedir env would make the engine download the model again and the
+// capture would duplicate it next to the cache claim.
+func TestCacheDir_ModelFromClusterCacheNotInjected(t *testing.T) {
+	m := &Mutator{Backend: newBackend(t), CacheDir: "/opt/nvsnap"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fn", Name: "w-0", Labels: map[string]string{CaptureLabel: "true"}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "nim", Image: "nvcr.io/nim/x:1", VolumeMounts: []corev1.VolumeMount{{Name: "model-data", MountPath: "/model-store", ReadOnly: true}}}},
+			Volumes:    []corev1.Volume{{Name: "model-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "abc-ro", ReadOnly: true}}}},
+		},
+	}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) != 0 {
+		t.Errorf("no cachedir injection for a cluster-cached model, got %d patches", len(patches))
+	}
+	pod.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) == 0 {
+		t.Error("an emptyDir model volume is still captured")
 	}
 }

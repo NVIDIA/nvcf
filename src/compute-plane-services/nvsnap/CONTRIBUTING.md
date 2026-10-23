@@ -12,7 +12,7 @@ at `github.com/balajinvda/criu` (branch `io-uring-cr`).
 
 The criu-v2 engine builds from public inputs only:
 
-- The CRIU fork (`github.com/balajinvda/criu`, `io-uring-cr`): one `make`
+- The CRIU fork (`github.com/balajinvda/criu`, `criu-dev`): one `make`
   produces both the `criu` binary and `cuda_plugin.so`.
 - `cuda-checkpoint`: built from source (`docker/agent/nvsnap-cuda-checkpoint.c`)
   in the base image's `cuda-cli-builder` stage, on the public CUDA driver
@@ -20,14 +20,14 @@ The criu-v2 engine builds from public inputs only:
   x86-64 and arm64 - no committed binaries.
 - The Go agent and `nvsnap_cr.so`: this repository.
 
-The legacy LD_PRELOAD injection stack (patched uvloop/libuv/libzmq) is not used
-by criu-v2 and is not required to build.
+There is no LD_PRELOAD injection stack any more: criu-v2 restores io_uring and
+epoll state inside CRIU, and the patched uvloop/libuv/libzmq forks were retired.
 
 ## Build
 
 ```bash
 # 1. Clone the CRIU fork as a sibling (scripts auto-discover ../criu).
-git clone -b io-uring-cr https://github.com/balajinvda/criu ../criu
+git clone -b criu-dev https://github.com/balajinvda/criu ../criu
 
 # 2. Build the base image: CRIU + cuda_plugin on ubuntu:22.04. ~5 min.
 BASE_VERSION=dev ./scripts/build-agent.sh base

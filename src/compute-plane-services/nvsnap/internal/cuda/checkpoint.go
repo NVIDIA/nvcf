@@ -21,6 +21,7 @@ package cuda
 import (
 	"context"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/hostlibs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -352,18 +353,18 @@ func (m *Manager) findHostNvidiaLibs() string {
 		paths = []pathPair{
 			// GKE: NVIDIA driver is under /run/nvidia/driver on host
 			// Agent has /host/run mounted as /host/run
-			{"/host/run/nvidia/driver/usr/lib/x86_64-linux-gnu", "/run/nvidia/driver/usr/lib/x86_64-linux-gnu"},
+			{hostlibs.DriverDir("/host/run/nvidia/driver"), hostlibs.DriverDir("/run/nvidia/driver")},
 			{"/host/run/nvidia/driver/usr/lib64", "/run/nvidia/driver/usr/lib64"},
 			// Standard paths on bare-metal (mounted at /host/usr)
 			{"/host/usr/local/nvidia/lib64", "/usr/local/nvidia/lib64"},
-			{"/host/usr/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu"},
+			{"/host" + hostlibs.Dir(), hostlibs.Dir()},
 		}
 	} else {
 		// Not in container - paths are direct
 		paths = []pathPair{
-			{"/run/nvidia/driver/usr/lib/x86_64-linux-gnu", "/run/nvidia/driver/usr/lib/x86_64-linux-gnu"},
+			{hostlibs.DriverDir("/run/nvidia/driver"), hostlibs.DriverDir("/run/nvidia/driver")},
 			{"/usr/local/nvidia/lib64", "/usr/local/nvidia/lib64"},
-			{"/usr/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu"},
+			{hostlibs.Dir(), hostlibs.Dir()},
 		}
 	}
 

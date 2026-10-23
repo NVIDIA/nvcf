@@ -192,7 +192,7 @@ type Manifest struct {
 	// manifest shape. Empty on pre-v0.0.56 manifests — callers fall
 	// back to the shape heuristic (RootfsExtractPaths / Volume Type)
 	// in that case. Prevents "crossing paths" (a rootfs capture sent
-	// to the CRIU restore-entrypoint, or vice versa).
+	// to the CRIU restore path, or vice versa).
 	CaptureMethod string `json:"capture_method,omitempty"`
 
 	// CacheDir is set only for CaptureMethod=="cachedir": the in-pod

@@ -15,27 +15,26 @@ For install/operations (not building from source), see
 ## Prerequisites
 
 - **Build host**: Go 1.24+, Docker (with `DOCKER_HOST` *unset* — never `sudo`),
-  `make`, `git`. C toolchain for `lib/nvsnap_intercept`.
+  `make`, `git`.
 - **A GPU cluster to validate on**: Kubernetes 1.25+, NVIDIA driver **555+**
   (required by `cuda-checkpoint`), containerd 1.7+/2.x or CRI-O, `kubectl` +
   `helm` 3.13+. A CPU-only cluster runs the unit tests but not the e2e.
 
-nvsnap depends on forked CRIU, go-criu, and a few patched libraries. Prebuilt
-images are the fast path; only changes to the C library or CRIU itself need the
-forks built from source. See [CONTRIBUTING.md](../../CONTRIBUTING.md) and
+nvsnap depends on a forked CRIU. Prebuilt images are the fast path; only
+changes to CRIU itself need the fork built from source. See [CONTRIBUTING.md](../../CONTRIBUTING.md) and
 [docs/THIRD-PARTY-FORKS.md](../THIRD-PARTY-FORKS.md).
 
 ## 1. Build
 
 ```bash
-make build          # agent + restore-entrypoint + server + blobstore binaries
+make build          # agent + server binaries
 make test           # Go unit tests (no GPU needed)
 ```
 
 Container images are built by `scripts/build-agent.sh` (agent base + app) and
 `ci/build-image.sh` (every shipped image, tagged from `scripts/versions.sh`).
 The `base` image carries forked CRIU and rarely changes; the `app` image is the
-Go binaries + `libnvsnap_intercept.so` and is what you rebuild most often:
+Go binaries and is what you rebuild most often:
 
 ```bash
 ./scripts/build-agent.sh app && ./scripts/build-agent.sh push-app
@@ -47,7 +46,7 @@ Bump the image tag on every rebuild — Kubernetes caches by tag
 ## 2. Deploy to a cluster
 
 ```bash
-./scripts/install-nvsnap.sh                    # agent + server + blobstore (+ webhook)
+./scripts/install-nvsnap.sh                    # agent + server (+ webhook)
 kubectl -n nvsnap-system rollout status ds/nvsnap-agent
 ```
 
@@ -79,8 +78,8 @@ capture volume for pods that carry it when admitted.
 
 ## 4. Validate
 
-Every change that touches `lib/nvsnap_intercept/`, `cmd/restore-entrypoint/`,
-the patched libraries, or K8s manifests **must** pass an end-to-end run on a
+Every change that touches the agent's capture or restore code, the CRIU
+fork, or K8s manifests **must** pass an end-to-end run on a
 real GPU cluster before merge (`CLAUDE.md` rule 10):
 
 ```bash

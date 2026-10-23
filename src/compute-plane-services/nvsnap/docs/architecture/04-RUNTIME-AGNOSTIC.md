@@ -1,5 +1,9 @@
 # Container Runtime Agnostic Design
 
+Status note: the LD_PRELOAD pod-mutation examples below describe the
+retired legacy engine. criu-v2 injects nothing into workloads; the runtime
+abstraction (containerd and CRI-O backends) is still current.
+
 ## Why Runtime Agnosticism Matters
 
 NVSNAP must work with any CRI-compliant container runtime:
