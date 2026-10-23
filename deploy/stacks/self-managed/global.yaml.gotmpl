@@ -494,10 +494,18 @@ nats:
         {{- end }}
   {{- end }}
   container:
-    {{- with dig "nats" "container" "merge" "securityContext" dict .Values }}
+    {{- $natsSecurityContext := dig "nats" "container" "merge" "securityContext" dict .Values }}
+    {{- $natsResources := dig "nats" "container" "merge" "resources" dict .Values }}
+    {{- if or $natsSecurityContext $natsResources }}
     merge:
+      {{- with $natsSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $natsResources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}

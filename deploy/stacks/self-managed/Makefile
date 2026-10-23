@@ -37,6 +37,7 @@ test:
 	@tests/admin-issuer-proxy-wiring.sh
 	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
+	@tests/nats-container-resources.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
 	@tests/nats-worker-auth-wiring.sh
