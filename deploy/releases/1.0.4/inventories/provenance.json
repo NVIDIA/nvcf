@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "self_managed": {
+    "generated_image_count": 40,
+    "inventory_supplements": [
+      {
+        "name": "tritonserver",
+        "version": "23.04-py3",
+        "reference": "nvcr.io/nvidia/tritonserver:23.04-py3",
+        "requirement": "optional",
+        "reason": "The selected helm-nvcf-api1.27.2 chart retains a literal remoteConfig nvcf.sidecars.inference-container default. The API uses this image when the function containerImage is blank. The inventory helper annotates only references containing sidecar placeholders, so omitted this literal fallback. Tagged stack overrides do not change inference-container.",
+        "source_chart_digest": "sha256:a39d75d43996437e33d50ac11f90f34b5503a3fc270c4b57eebc674c008ecf2d",
+        "evidence": [
+          "https://github.com/NVIDIA/nvcf/blob/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/helm/cloud-functions/nvcf-api/values.yaml#L239",
+          "https://github.com/NVIDIA/nvcf/blob/6133572633b5d37ef6b935854971fc024acc1b0a/src/control-plane-services/cloud-functions/nvcf-core/src/main/java/com/nvidia/nvcf/icms/client/IcmsClient.java#L568",
+          "https://github.com/NVIDIA/nvcf/blob/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/helm/cloud-functions/nvcf-api/templates/_helpers.tpl#L139"
+        ],
+        "upstream_status": "verified_available",
+        "root_digest": "sha256:ab1113741fc7ed5127a6b16bbcc70cee05f5ced285cd9f9a9fb0f42bc6d9daaa",
+        "platform_digests": [
+          {
+            "platform": "linux/amd64",
+            "digest": "sha256:85ccf993b96e793bbb9065ee772981575d4668b7ab6291d62606201475da95c0"
+          },
+          {
+            "platform": "linux/arm64",
+            "digest": "sha256:f49fbaaf8b109c2eace65c112503acbc31957fcafcac1ce0c6c9ee0746005824"
+          }
+        ],
+        "inventory_before_sha256": "06cb8a7df067f9af3455a177cb68580276e70b7c33f1ca788f11121c5d05b712",
+        "inventory_after_sha256": "a6297837ac813bf67a93b7ecdfcf1f9160572a68bd13487772f8403979cbec3c",
+        "chart_name": "helm-nvcf-api",
+        "chart_version": "1.27.2"
+      }
+    ]
+  },
+  "compute_plane": {
+    "source": {
+      "version": "1.0.1",
+      "tag": "deploy/stacks/nvcf-compute-plane/v1.0.1",
+      "commit": "6133572633b5d37ef6b935854971fc024acc1b0a"
+    },
+    "generator": "tools/docs-version-sync at source commit; two identical successful renders using isolated Helmfile cache",
+    "raw_image_count": 11,
+    "supplemental_images": [
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/binder:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.binder.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/resourcereservation:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.binder.resourceReservation.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/podgrouper:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.podGrouper.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/podgroupcontroller:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.podGroupController.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/queuecontroller:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.queueController.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/admission:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.admission.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/nodescaleadjuster:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.nodeScaleAdjuster.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/scalingpod:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.nodeScaleAdjuster.args.scalingPodImage"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/scheduler:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.scheduler.service.image"
+      },
+      {
+        "reference": "ghcr.io/kai-scheduler/kai-scheduler/numa-placement-exporter:v0.17.1",
+        "rendered_file": "00/kai-scheduler/kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml",
+        "field": "data.kai-config.yaml.spec.numaPlacementExporter.service.image"
+      },
+      {
+        "reference": "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.160.0-nv-0.2.5",
+        "rendered_file": "01/nvca-operator/helm-nvca-operator/templates/deployment.yaml",
+        "field": "--function-env-overrides-b64.BYOO_OTEL_COLLECTOR_CONTAINER"
+      },
+      {
+        "reference": "nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.157.0-nv-0.2.1",
+        "rendered_file": "01/nvca-operator/helm-nvca-operator/templates/deployment.yaml",
+        "field": "env.OTEL_COLLECTOR_IMAGE_REPO+OTEL_COLLECTOR_IMAGE_TAG"
+      }
+    ],
+    "notes": [
+      "KAI operator-created image mappings were decoded from the rendered hook ConfigMap.",
+      "BYOO image was decoded from rendered base64 function/task overrides; its QA-pinned nvidia/nvcf-byoc repository is preserved.",
+      "Ordinary collector is configured but disabled by the default stack; included as optional.",
+      "No source pins or tags changed."
+    ]
+  },
+  "observability": {
+    "original_inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/observability/v1.0.0/nvcf-observability-stack-inventory.json",
+    "original_inventory_sha256": "28ff55447c9223be0472ce9157fa9f4eb6dc7c5092a7c4281e29826e9f3df6de",
+    "original_image_count": 3,
+    "inventory_supplements": [
+      {
+        "name": "target-allocator",
+        "version": "0.158.0",
+        "reason": "The source chart enables Target Allocator without an image override. Operator 0.158.0 resolves this runtime image from its compiled defaults, which the released three-image inventory omitted. No runtime pin or release artifact was changed.",
+        "evidence": [
+          "https://github.com/NVIDIA/nvcf/blob/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts/nvcf-otel-collector/values.yaml",
+          "https://github.com/open-telemetry/opentelemetry-operator/blob/v0.158.0/internal/config/config.go#L196",
+          "https://github.com/open-telemetry/opentelemetry-operator/blob/v0.158.0/versions.txt#L11"
+        ]
+      }
+    ]
+  }
+}

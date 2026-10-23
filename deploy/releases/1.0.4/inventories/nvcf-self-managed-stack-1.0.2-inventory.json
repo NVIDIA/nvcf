@@ -1,0 +1,1161 @@
+{
+  "schema_version": 1,
+  "source": {
+    "version": "1.0.2",
+    "tag": "deploy/stacks/self-managed/v1.0.2",
+    "commit": "6133572633b5d37ef6b935854971fc024acc1b0a"
+  },
+  "releases": [
+    {
+      "plane": "control-plane",
+      "name": "admin-issuer-proxy",
+      "namespace": "api-keys",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-admin-token-issuer-proxy",
+      "version": "1.5.3"
+    },
+    {
+      "plane": "control-plane",
+      "name": "api",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api",
+      "version": "1.27.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "api-keys",
+      "namespace": "api-keys",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api-keys",
+      "version": "1.8.1"
+    },
+    {
+      "plane": "control-plane",
+      "name": "cassandra",
+      "namespace": "cassandra-system",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cassandra",
+      "version": "0.21.3"
+    },
+    {
+      "plane": "control-plane",
+      "name": "cert-manager",
+      "namespace": "cert-manager",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cert-manager",
+      "version": "0.1.0"
+    },
+    {
+      "plane": "control-plane",
+      "name": "ess-api",
+      "namespace": "ess",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ess-api",
+      "version": "1.8.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "function-autoscaler",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-function-autoscaler",
+      "version": "0.5.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "grpc-proxy",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy",
+      "version": "1.7.4"
+    },
+    {
+      "plane": "control-plane",
+      "name": "ingress",
+      "namespace": "gateway-system",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes",
+      "version": "1.18.3"
+    },
+    {
+      "plane": "control-plane",
+      "name": "invocation-service",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service",
+      "version": "1.6.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "llm-api-gateway",
+      "namespace": "nvcf",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-api-gateway",
+      "version": "1.4.3"
+    },
+    {
+      "plane": "control-plane",
+      "name": "llm-request-router",
+      "namespace": "nvcf",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router",
+      "version": "1.14.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "nats",
+      "namespace": "nats-system",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats",
+      "version": "0.8.4"
+    },
+    {
+      "plane": "control-plane",
+      "name": "nats-auth-callout-service",
+      "namespace": "nats-system",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats-auth-callout-service",
+      "version": "1.2.1"
+    },
+    {
+      "plane": "control-plane",
+      "name": "notary-service",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-notary-service",
+      "version": "1.6.0"
+    },
+    {
+      "plane": "control-plane",
+      "name": "nvcf-pki",
+      "namespace": "cert-manager",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-pki",
+      "version": "0.1.0"
+    },
+    {
+      "plane": "control-plane",
+      "name": "nvcf-ui",
+      "namespace": "nvcf-ui",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ui",
+      "version": "1.1.3"
+    },
+    {
+      "plane": "control-plane",
+      "name": "nvct-api",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nvct-api",
+      "version": "1.6.0"
+    },
+    {
+      "plane": "control-plane",
+      "name": "openbao-server",
+      "namespace": "vault-system",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-openbao-server",
+      "version": "0.32.7"
+    },
+    {
+      "plane": "control-plane",
+      "name": "ratelimiter",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter",
+      "version": "1.2.1"
+    },
+    {
+      "plane": "control-plane",
+      "name": "reval",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval",
+      "version": "1.4.1"
+    },
+    {
+      "plane": "control-plane",
+      "name": "sis",
+      "namespace": "sis",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis",
+      "version": "2.4.1"
+    },
+    {
+      "plane": "control-plane",
+      "name": "state-metrics",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics",
+      "version": "1.0.2"
+    },
+    {
+      "plane": "control-plane",
+      "name": "upgrade-receipt",
+      "namespace": "nvcf",
+      "required": true,
+      "chart": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/self-managed/charts/nvcf-upgrade-receipt",
+      "version": "0.1.0"
+    },
+    {
+      "plane": "control-plane",
+      "name": "vanity-gateway",
+      "namespace": "nvcf",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway",
+      "version": "0.5.0"
+    }
+  ],
+  "artifacts": [
+    {
+      "type": "container-image",
+      "name": "k8s",
+      "repository": "docker.io/alpine/k8s",
+      "version": "1.33.1",
+      "reference": "docker.io/alpine/k8s:1.33.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "upgrade-receipt",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "k8s",
+      "repository": "docker.io/alpine/k8s",
+      "version": "1.37.0",
+      "reference": "docker.io/alpine/k8s:1.37.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nats-server-config-reloader",
+      "repository": "docker.io/natsio/nats-server-config-reloader",
+      "version": "0.24.0",
+      "reference": "docker.io/natsio/nats-server-config-reloader:0.24.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nats-server",
+      "repository": "docker.io/synadia/nats-server",
+      "version": "2.14.6-alpine3.22",
+      "reference": "docker.io/synadia/nats-server:2.14.6-alpine3.22",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "admin-token-issuer-proxy",
+      "repository": "nvcr.io/nvidia/nvcf/admin-token-issuer-proxy",
+      "version": "1.1.2",
+      "reference": "nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.1.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "admin-issuer-proxy",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cassandra",
+      "repository": "nvcr.io/nvidia/nvcf/cassandra",
+      "version": "5.0.9-nv-2.0.5",
+      "reference": "nvcr.io/nvidia/nvcf/cassandra:5.0.9-nv-2.0.5",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cassandra",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cert-manager-cainjector",
+      "repository": "nvcr.io/nvidia/nvcf/cert-manager-cainjector",
+      "version": "v1.20.2",
+      "reference": "nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cert-manager-controller",
+      "repository": "nvcr.io/nvidia/nvcf/cert-manager-controller",
+      "version": "v1.20.2",
+      "reference": "nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cert-manager-startupapicheck",
+      "repository": "nvcr.io/nvidia/nvcf/cert-manager-startupapicheck",
+      "version": "v1.20.2",
+      "reference": "nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cert-manager-webhook",
+      "repository": "nvcr.io/nvidia/nvcf/cert-manager-webhook",
+      "version": "v1.20.2",
+      "reference": "nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "ess-agent",
+      "repository": "nvcr.io/nvidia/nvcf/ess-agent",
+      "version": "1.4.4",
+      "reference": "nvcr.io/nvidia/nvcf/ess-agent:1.4.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        },
+        {
+          "plane": "control-plane",
+          "release": "nvct-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "icms-service-oss",
+      "repository": "nvcr.io/nvidia/nvcf/icms-service-oss",
+      "version": "0.7.6",
+      "reference": "nvcr.io/nvidia/nvcf/icms-service-oss:0.7.6",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "sis",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "llm-api-gateway",
+      "repository": "nvcr.io/nvidia/nvcf/llm-api-gateway",
+      "version": "0.14.11",
+      "reference": "nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.11",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-api-gateway",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nats-box",
+      "repository": "nvcr.io/nvidia/nvcf/nats-box",
+      "version": "0.19.7-nonroot",
+      "reference": "nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-ai-api-gateway-service",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service",
+      "version": "1.35.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "vanity-gateway",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-api-keys-service",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-api-keys-service",
+      "version": "1.9.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api-keys",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-cassandra-migrations",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations",
+      "version": "0.17.7",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.7",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cassandra",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-ess",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-ess",
+      "version": "0.5.4",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-ess:0.5.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "ess-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-function-autoscaler",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-function-autoscaler",
+      "version": "1.21.10",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-function-autoscaler:1.21.10",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "function-autoscaler",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-grpc-proxy",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-grpc-proxy",
+      "version": "1.33.7",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.33.7",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "grpc-proxy",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-invocation-service",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-invocation-service",
+      "version": "0.12.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.12.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "invocation-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-nats-auth-callout-service",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service",
+      "version": "0.8.6",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.8.6",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats-auth-callout-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-notary",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-notary",
+      "version": "1.14.5",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-notary:1.14.5",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "notary-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-openbao-migrations",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-openbao-migrations",
+      "version": "0.19.9",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.19.9",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-request-router",
+          "requirement": "optional"
+        },
+        {
+          "plane": "control-plane",
+          "release": "nvcf-ui",
+          "requirement": "optional"
+        },
+        {
+          "plane": "control-plane",
+          "release": "openbao-server",
+          "requirement": "required"
+        },
+        {
+          "plane": "control-plane",
+          "release": "sis",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-openbao",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-openbao",
+      "version": "2.6.2-nv-1.3.4",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.2-nv-1.3.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "openbao-server",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-ratelimiter",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-ratelimiter",
+      "version": "1.17.5",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-ratelimiter:1.17.5",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "ratelimiter",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-service-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-service-oss",
+      "version": "1.18.1",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-service-oss:1.18.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-state-metrics-service",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-state-metrics-service",
+      "version": "1.23.7",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-state-metrics-service:1.23.7",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "state-metrics",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-ui",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-ui",
+      "version": "1.1.2",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-ui:1.1.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvcf-ui",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-worker-init-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-worker-init-oss",
+      "version": "1.2.4",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        },
+        {
+          "plane": "control-plane",
+          "release": "nvct-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-worker-llm-credentials-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-worker-llm-credentials-oss",
+      "version": "1.1.5",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-worker-llm-credentials-oss:1.1.5",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-worker-task-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-worker-task-oss",
+      "version": "1.1.6",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-worker-task-oss:1.1.6",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvct-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-worker-utils-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss",
+      "version": "1.2.6",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss:1.2.6",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf_worker_niclls",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf_worker_niclls",
+      "version": "2.110.0",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.110.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvct-service-oss",
+      "repository": "nvcr.io/nvidia/nvcf/nvct-service-oss",
+      "version": "1.66.1",
+      "reference": "nvcr.io/nvidia/nvcf/nvct-service-oss:1.66.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvct-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "oss-vault-k8s",
+      "repository": "nvcr.io/nvidia/nvcf/oss-vault-k8s",
+      "version": "1.7.4",
+      "reference": "nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "openbao-server",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "pylon",
+      "repository": "nvcr.io/nvidia/nvcf/pylon",
+      "version": "0.18.3",
+      "reference": "nvcr.io/nvidia/nvcf/pylon:0.18.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-request-router",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "reval-server",
+      "repository": "nvcr.io/nvidia/nvcf/reval-server",
+      "version": "0.20.3",
+      "reference": "nvcr.io/nvidia/nvcf/reval-server:0.20.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "reval",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "stargate",
+      "repository": "nvcr.io/nvidia/nvcf/stargate",
+      "version": "0.18.3",
+      "reference": "nvcr.io/nvidia/nvcf/stargate:0.18.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-request-router",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "tritonserver",
+      "repository": "nvcr.io/nvidia/tritonserver",
+      "version": "23.04-py3",
+      "reference": "nvcr.io/nvidia/tritonserver:23.04-py3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "cert-manager-acmesolver",
+      "repository": "quay.io/jetstack/cert-manager-acmesolver",
+      "version": "v1.20.2",
+      "reference": "quay.io/jetstack/cert-manager-acmesolver:v1.20.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "nvcf-upgrade-receipt",
+      "repository": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/self-managed/charts",
+      "version": "0.1.0",
+      "reference": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/self-managed/charts/nvcf-upgrade-receipt@0.1.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "upgrade-receipt",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-admin-token-issuer-proxy",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.5.3",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-admin-token-issuer-proxy@1.5.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "admin-issuer-proxy",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-api-keys",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.8.1",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api-keys@1.8.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api-keys",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-api",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.27.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api@1.27.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-cassandra",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.21.3",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cassandra@0.21.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cassandra",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-cert-manager",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.1.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cert-manager@0.1.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "cert-manager",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-ess-api",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.8.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ess-api@1.8.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "ess-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-function-autoscaler",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.5.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-function-autoscaler@0.5.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "function-autoscaler",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-grpc-proxy",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.7.4",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy@1.7.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "grpc-proxy",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-invocation-service",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.6.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service@1.6.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "invocation-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-llm-api-gateway",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.4.3",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-api-gateway@1.4.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-api-gateway",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-llm-request-router",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.14.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router@1.14.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "llm-request-router",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-nats-auth-callout-service",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.2.1",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats-auth-callout-service@1.2.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats-auth-callout-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-nats",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.8.4",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats@0.8.4",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nats",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-notary-service",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.6.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-notary-service@1.6.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "notary-service",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-nvct-api",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.6.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nvct-api@1.6.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvct-api",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-openbao-server",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.32.7",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-openbao-server@0.32.7",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "openbao-server",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-pki",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.1.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-pki@0.1.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvcf-pki",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-rate-limiter",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.2.1",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter@1.2.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "ratelimiter",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-sis",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "2.4.1",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis@2.4.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "sis",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-state-metrics",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.0.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics@1.0.2",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "state-metrics",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-ui",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.1.3",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ui@1.1.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "nvcf-ui",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvcf-vanity-gateway",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "0.5.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway@0.5.0",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "vanity-gateway",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-reval",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.4.1",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval@1.4.1",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "reval",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "nvcf-gateway-routes",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.18.3",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes@1.18.3",
+      "sources": [
+        {
+          "plane": "control-plane",
+          "release": "ingress",
+          "requirement": "required"
+        }
+      ]
+    }
+  ]
+}

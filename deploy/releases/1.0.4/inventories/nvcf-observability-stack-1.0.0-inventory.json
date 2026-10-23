@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "source": {
+    "version": "1.0.0",
+    "tag": "deploy/stacks/observability/v1.0.0",
+    "commit": "b77e96a3f8c18e9318b93e697e33e596c4ede7d7"
+  },
+  "releases": [
+    {
+      "plane": "observability",
+      "name": "default-monitors",
+      "namespace": "monitoring",
+      "required": true,
+      "chart": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts/nvcf-default-monitors",
+      "version": "0.2.0"
+    },
+    {
+      "plane": "observability",
+      "name": "opentelemetry-operator",
+      "namespace": "monitoring",
+      "required": true,
+      "chart": "https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator",
+      "version": "0.122.0"
+    },
+    {
+      "plane": "observability",
+      "name": "otel-collector",
+      "namespace": "monitoring",
+      "required": true,
+      "chart": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts/nvcf-otel-collector",
+      "version": "0.2.0"
+    },
+    {
+      "plane": "observability",
+      "name": "prometheus-operator-crds",
+      "namespace": "monitoring",
+      "required": true,
+      "chart": "https://prometheus-community.github.io/helm-charts/prometheus-operator-crds",
+      "version": "31.0.1"
+    },
+    {
+      "plane": "observability",
+      "name": "victoria-metrics",
+      "namespace": "monitoring",
+      "required": true,
+      "chart": "https://victoriametrics.github.io/helm-charts/victoria-metrics-single",
+      "version": "0.45.0"
+    }
+  ],
+  "artifacts": [
+    {
+      "type": "container-image",
+      "name": "opentelemetry-collector-contrib",
+      "repository": "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib",
+      "version": "0.160.0",
+      "reference": "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "opentelemetry-operator",
+          "requirement": "optional"
+        },
+        {
+          "plane": "observability",
+          "release": "otel-collector",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "opentelemetry-operator",
+      "repository": "ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator",
+      "version": "0.158.0",
+      "reference": "ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.158.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "opentelemetry-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "target-allocator",
+      "repository": "ghcr.io/open-telemetry/opentelemetry-operator/target-allocator",
+      "version": "0.158.0",
+      "reference": "ghcr.io/open-telemetry/opentelemetry-operator/target-allocator:0.158.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "otel-collector",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "victoria-metrics",
+      "repository": "victoriametrics/victoria-metrics",
+      "version": "v1.150.0",
+      "reference": "victoriametrics/victoria-metrics:v1.150.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "victoria-metrics",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "nvcf-default-monitors",
+      "repository": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts",
+      "version": "0.2.0",
+      "reference": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts/nvcf-default-monitors@0.2.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "default-monitors",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "nvcf-otel-collector",
+      "repository": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts",
+      "version": "0.2.0",
+      "reference": "https://github.com/NVIDIA/nvcf/tree/b77e96a3f8c18e9318b93e697e33e596c4ede7d7/deploy/stacks/observability/charts/nvcf-otel-collector@0.2.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "otel-collector",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "opentelemetry-operator",
+      "repository": "https://open-telemetry.github.io/opentelemetry-helm-charts",
+      "version": "0.122.0",
+      "reference": "https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator@0.122.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "opentelemetry-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "prometheus-operator-crds",
+      "repository": "https://prometheus-community.github.io/helm-charts",
+      "version": "31.0.1",
+      "reference": "https://prometheus-community.github.io/helm-charts/prometheus-operator-crds@31.0.1",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "prometheus-operator-crds",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "victoria-metrics-single",
+      "repository": "https://victoriametrics.github.io/helm-charts",
+      "version": "0.45.0",
+      "reference": "https://victoriametrics.github.io/helm-charts/victoria-metrics-single@0.45.0",
+      "sources": [
+        {
+          "plane": "observability",
+          "release": "victoria-metrics",
+          "requirement": "required"
+        }
+      ]
+    }
+  ]
+}
