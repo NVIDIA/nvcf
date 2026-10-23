@@ -18,10 +18,14 @@ IMAGE="envoyproxy/envoy:v$(yq -r .appVersion "${CHART}/Chart.yaml")"
 work_dir="$(mktemp -d)"
 suffix="$$"
 container="worker-callback-proxy-validate-${suffix}"
+idle_container="worker-callback-proxy-idle-${suffix}"
+upstream="worker-callback-proxy-upstream-${suffix}"
+network="worker-callback-proxy-${suffix}"
 ca_volume="worker-callback-proxy-ca-${suffix}"
 
 cleanup() {
-  docker rm -f "${container}" >/dev/null 2>&1 || true
+  docker rm -f "${container}" "${idle_container}" "${upstream}" >/dev/null 2>&1 || true
+  docker network rm "${network}" >/dev/null 2>&1 || true
   docker volume rm -f "${ca_volume}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
 }
@@ -152,3 +156,49 @@ pod_host="10-0-0-1.invocation.nvcf.svc.cluster.local:8080"
 [[ "$(invocation_status "http://other.example.com/x" "other.example.com")" == "404" ]] ||
   fail "absolute-form request to another host was not rejected"
 echo "ok: absolute-form invocation requests are routed by host"
+
+# The stream idle timeout closes a CONNECT tunnel that carries no data, and
+# only that one. A short timeout keeps the check fast; the default is checked
+# in verify-render.sh.
+docker network create "${network}" >/dev/null
+# An echo server: one cat per tunnel, so a quiet tunnel stays quiet.
+docker run -d --name "${upstream}" --network "${network}" busybox \
+  nc -lk -p 8080 -e cat >/dev/null
+upstream_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"${network}\").IPAddress}}" "${upstream}")"
+pod_name="10-0-0-2.invocation.nvcf.svc.cluster.local"
+extract_config stream-idle --set-string workerCallbackProxy.timeouts.invocationStreamIdle=3s
+run_envoy "${work_dir}/stream-idle" \
+  "-d --name ${idle_container} --network ${network} --add-host ${pod_name}:${upstream_ip}" >/dev/null
+for _ in $(seq 1 30); do
+  docker exec "${idle_container}" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null && break
+  sleep 1
+done
+
+# connect_tunnel SECONDS SEND opens a CONNECT tunnel and holds it for SECONDS,
+# writing a byte every second when SEND is 1. Prints open or closed.
+connect_tunnel() {
+  docker exec "${idle_container}" bash -c "exec 3<>/dev/tcp/127.0.0.1/10084
+    printf 'CONNECT ${pod_name}:8080 HTTP/1.1\r\nHost: ${pod_name}:8080\r\n\r\n' >&3
+    read -r _ status _ <&3
+    [ \"\$status\" = 200 ] || { echo \"status \$status\"; exit; }
+    while read -r line <&3 && [ \${#line} -gt 1 ]; do :; done
+    for _ in \$(seq 1 $1); do
+      if [ $2 = 1 ]; then printf x >&3 2>/dev/null || { echo closed; exit; }; fi
+      read -r -t 1 _ <&3
+      [ \$? -gt 128 ] || { echo closed; exit; }
+    done
+    echo open"
+}
+[[ "$(connect_tunnel 8 0)" == "closed" ]] ||
+  fail "a quiet CONNECT tunnel outlived invocationStreamIdle"
+for _ in $(seq 1 10); do
+  docker logs "${idle_container}" 2>/dev/null |
+    jq -R -e 'fromjson? | select(.method == "CONNECT" and .response_flags == "SI")' >/dev/null && break
+  sleep 1
+done
+docker logs "${idle_container}" 2>/dev/null |
+  jq -R -e 'fromjson? | select(.method == "CONNECT" and .response_flags == "SI")' >/dev/null ||
+  fail "the quiet CONNECT tunnel was not closed by the stream idle timeout"
+[[ "$(connect_tunnel 8 1)" == "open" ]] ||
+  fail "a CONNECT tunnel carrying data was closed by invocationStreamIdle"
+echo "ok: invocationStreamIdle closes only quiet CONNECT tunnels"

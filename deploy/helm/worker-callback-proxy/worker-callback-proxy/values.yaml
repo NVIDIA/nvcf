@@ -149,6 +149,11 @@ workerCallbackProxy:
     grpcMaxConnectionDuration: 1700s
     invocationIdle: 3605s
     invocationMaxConnectionDuration: 3400s
+    # Close a stream that carries no data in either direction for this long.
+    # Envoy otherwise applies a 5m default that route timeouts do not lift,
+    # which cuts quiet but valid tunnels and inference requests. 0s disables.
+    grpcStreamIdle: 1800s
+    invocationStreamIdle: 3605s
 
   connectionLimits:
     maxActiveDownstreamConnections: 20000
