@@ -2131,6 +2131,12 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 			ExitCode: 0,
 			Stdout:   upstreamReloader,
 		},
+		`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'`: {
+			Stdout: "docker.io/synadia/nats-server:fixture-tag",
+		},
+		`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'`: {
+			Stdout: "docker.io/natsio/nats-box:fixture-nonroot@sha256:" + strings.Repeat("a", 64),
+		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
@@ -2341,6 +2347,8 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
 image: docker.io/natsio/nats-server-config-reloader:fixture-tag
+image: docker.io/synadia/nats-server:fixture-tag
+image: docker.io/natsio/nats-box:fixture-nonroot@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",

@@ -291,16 +291,23 @@ nats:
   #         memory: <memory>
   #       limits:
   #         cpu: <cores>
-  # Image overrides for the NATS config reloader. The reloader is not
-  # republished under the public nvidia/nvcf catalog, so it defaults to its
-  # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
-  # Leave these unset unless you have mirrored the image into your own
-  # registry, in which case set registry and repository together:
+  # NATS server, box, and reloader use upstream images independently of
+  # global.image. For a private mirror, set registry and repository together.
+  # Copy the box image with all platforms and preserve its index digest.
+  # A tag override replaces the complete version@sha256 pin.
+  # container:
+  #   image:
+  #     registry: <your-registry>
+  #     repository: <your-repository>/nats-server
+  # natsBox:
+  #   container:
+  #     image:
+  #       registry: <your-registry>
+  #       repository: <your-repository>/nats-box
   # reloader:
   #   image:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
-  #     tag: "0.24.0"
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:

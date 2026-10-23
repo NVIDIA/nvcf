@@ -23,7 +23,7 @@ type: application
 version: 0.7.0
 
 # NATS Server version
-appVersion: "2.11.10"
+appVersion: "2.14.6"
 
 dependencies:
   - name: nats
