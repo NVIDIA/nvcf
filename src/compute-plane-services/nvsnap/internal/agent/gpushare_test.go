@@ -277,6 +277,17 @@ func TestCUDAVisibleEnv(t *testing.T) {
 	}
 }
 
+func TestResumeDiagEnv(t *testing.T) {
+	t.Setenv(gpushareResumeDiagVar, "")
+	if got := resumeDiagEnv(); got != nil {
+		t.Errorf("unset: got %q, want nil", got)
+	}
+	t.Setenv(gpushareResumeDiagVar, "delay:20")
+	if got := resumeDiagEnv(); len(got) != 1 || got[0] != "NVSNAP_GPUSHARE_RESUME_DIAG=delay:20" {
+		t.Errorf("set: got %q", got)
+	}
+}
+
 // Collecting the store moves the pod's chunks and chunk lists into the
 // checkpoint and writes the GPU map there. The pod's own directory stays
 // (the workload's mount points at it) but is left empty, so a later capture

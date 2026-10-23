@@ -285,6 +285,7 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		}
 		env = cudaVisibleEnv(gpus)
 	}
+	env = append(env, resumeDiagEnv()...)
 	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
@@ -412,6 +413,20 @@ func podGPUEnv(hostPID int) []string {
 	}
 	if v := visibleGPUUUIDs(filepath.Join(procBase, strconv.Itoa(hostPID), "environ")); v != "" {
 		return []string{"CUDA_VISIBLE_DEVICES=" + v}
+	}
+	return nil
+}
+
+// gpushareResumeDiagVar selects a diagnostic the tool runs at resume
+// (see docker/agent/gpushare). The tool runs with an empty environment, so
+// the agent passes it on from its own, when it is set.
+const gpushareResumeDiagVar = "NVSNAP_GPUSHARE_RESUME_DIAG"
+
+// resumeDiagEnv returns the agent's gpushareResumeDiagVar for the tool, or
+// nil when it is not set.
+func resumeDiagEnv() []string {
+	if v := os.Getenv(gpushareResumeDiagVar); v != "" {
+		return []string{gpushareResumeDiagVar + "=" + v}
 	}
 	return nil
 }
