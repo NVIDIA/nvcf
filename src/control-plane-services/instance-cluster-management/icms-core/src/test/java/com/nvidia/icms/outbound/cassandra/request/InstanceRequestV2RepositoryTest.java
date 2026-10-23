@@ -17,6 +17,7 @@
 package com.nvidia.icms.outbound.cassandra.request;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.datastax.oss.driver.api.core.cql.SyncCqlSession;
@@ -390,6 +391,42 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
         assertEquals(0, instanceRequestV2Entities.size());
     }
 
+
+    @Test
+    void findRequestsPerPeriod_creationBucketReads_findRecordsAndSkipDeleted() {
+
+        //Arrange
+        Mockito.when(icmsConfigurationProperties.isCreationBucketReadsEnabled()).thenReturn(true);
+
+        List<String> requestIds = RandomFactory.getRandomStringList(5, "requestId");
+
+        Instant createTimeNow = Instant.now();
+        Instant createTimeBefore1 = createTimeNow.minus(1, ChronoUnit.DAYS);
+        Instant createTimeBefore2 = createTimeNow.minus(2, ChronoUnit.DAYS);
+        Instant createTimeAfter1 = createTimeNow.plus(1, ChronoUnit.DAYS);
+        Instant createTimeAfter2 = createTimeNow.plus(2, ChronoUnit.DAYS);
+
+        insertRequestsInDb(requestIds.get(0), 1, createTimeNow, "cust", null);
+        insertRequestsInDb(requestIds.get(1), 1, createTimeBefore1, "cust", null);
+        insertRequestsInDb(requestIds.get(2), 1, createTimeBefore2, "cust", null);
+        List<InstanceRequestV2Entity> toDelete =
+                insertRequestsInDb(requestIds.get(3), 1, createTimeAfter1, "cust", null);
+        insertRequestsInDb(requestIds.get(4), 1, createTimeAfter2, "cust", null);
+        toDelete.forEach(r -> instanceRequestV2Repository.delete(r));
+
+        //Act
+        Set<String> ids = instanceRequestV2Repository.findRequestIdsPerPeriod(
+                createTimeBefore1, createTimeAfter1);
+        List<InstanceRequestV2Entity> entities = instanceRequestV2Repository.findRequestsPerPeriod(
+                createTimeBefore1, createTimeAfter1);
+
+        //Assert
+        // before2 and after2 are out of range, after1 is deleted
+        assertEquals(Set.of(requestIds.get(0), requestIds.get(1)), ids);
+        assertEquals(2, entities.size());
+        assertNotNull(findInstanceRequestV2EntityInList(entities, requestIds.get(0)));
+        assertNotNull(findInstanceRequestV2EntityInList(entities, requestIds.get(1)));
+    }
 
     @Test
     void findRequestsInRange_findRecords() {

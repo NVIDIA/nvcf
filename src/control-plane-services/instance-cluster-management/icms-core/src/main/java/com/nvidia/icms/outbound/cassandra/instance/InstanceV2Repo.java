@@ -16,6 +16,7 @@
  */
 package com.nvidia.icms.outbound.cassandra.instance;
 
+import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import java.util.UUID;
@@ -39,6 +40,20 @@ public interface InstanceV2Repo extends
 
     Stream<InstanceV2Entity> findAllByDeploymentIdAndGpuSpecificationId(
             UUID deploymentId, UUID gpuSpecificationId);
+
+    /**
+     * Backed by the {@code idx_instances_by_creation_day} storage-attached index.
+     * Used only when {@code icms.creation-bucket-reads-enabled} is on.
+     */
+    @Query("SELECT instance_id FROM instances WHERE creation_bucket = :creationBucket")
+    ResultSet findInstanceIdsByCreationBucket(@Param("creationBucket") Instant creationBucket);
+
+    @Query("UPDATE instances USING TIMESTAMP :writeTimestamp "
+            + "SET creation_bucket = :creationBucket WHERE instance_id = :instanceId")
+    void updateCreationBucket(
+            @Param("instanceId") String instanceId,
+            @Param("creationBucket") Instant creationBucket,
+            @Param("writeTimestamp") long writeTimestamp);
 
     /* This index presents in DB, but before use it chat with BradV
     Stream<InstanceV2Entity> findAllByZone(String zone); */
