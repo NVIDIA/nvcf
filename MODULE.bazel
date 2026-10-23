@@ -393,7 +393,7 @@ oci.pull(
 # restores that cache, which made a dead pin look healthy.
 oci.pull(
     name = "distroless_static",
-    digest = "sha256:9197324ba51d9cd071af8505989365c006adf9d6d2067eada25aef00abbb5278",
+    digest = "sha256:034df5c1737e8241f6ed6423a12e720ee0f6d6f088609ee172f98f6f2166ef5d",
     image = "gcr.io/distroless/static",
     platforms = [
         "linux/amd64",
@@ -461,7 +461,7 @@ oci.pull(
 # rather than an internal-only path.
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:570f30c4fecbf23ed8312c654a6e50ea1720ede0acca62493455b2ca121c9929",
+    digest = "sha256:9ef7b9ac43cbf4c833fd5d98689dc09b06a29e5ec3451796b037aa27928fe532",
     image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
@@ -486,10 +486,10 @@ oci.pull(
 # NVIDIA distroless static: the base for the BYOO collector images. Both
 # collector binaries are pure Go built with CGO disabled, so they need no libc.
 # Unlike distroless_go, this base ships no libc6 or zlib1g. It keeps the same
-# nvs user (1000:1000), CA certificates, and tzdata. v4.1.4.
+# nvs user (1000:1000), CA certificates, and tzdata. v4.1.5.
 oci.pull(
     name = "nvidia_distroless_static",
-    digest = "sha256:d9bff7801f2963231e01e567ab73d70f443b80c62306cec77d9f973a544db776",
+    digest = "sha256:2bfab5f3736a9968ab6a5bc64392d389eedd10ff42c88b36b35d8d256a97dcd1",
     image = "nvcr.io/nvidia/distroless/static",
     platforms = [
         "linux/amd64",

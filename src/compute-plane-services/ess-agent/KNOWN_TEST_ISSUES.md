@@ -110,7 +110,7 @@ require a privileged runner or the custom CI image). Remove the
 syslog_test.go: err: Unix syslog delivery error
 ```
 
-**Root cause:** The CI container (`golang:1.25.6`) does not run a syslog
+**Root cause:** The CI container (`golang:1.26.10`) does not run a syslog
 daemon. The test tries to connect to `/dev/log` which does not exist.
 
 **Skip mechanism:** The test checks for `GITLAB_CI` (and `TRAVIS`,
@@ -178,5 +178,5 @@ upstream to address it. Once fixed, drop the `-skip` flag from subproject CI con
 
 The root `Dockerfile` was converted from a single-stage image (expecting
 pre-built binaries in `./dist/`) to a multi-stage build that compiles the
-Go binary in a `golang:1.25.6-alpine` builder stage. The `docker-build` CI
+Go binary in a `golang:1.26.10-alpine` builder stage. The `docker-build` CI
 job now works without a separate build step. See issue #3.
