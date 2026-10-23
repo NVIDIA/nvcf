@@ -125,3 +125,52 @@ func TestWriteRestoredStacksBounded(t *testing.T) {
 		t.Errorf("covered %d processes with %d py-spy runs, want %d", n, calls, restoredStacksMax)
 	}
 }
+
+// pidNS links pid's ns/pid to namespace id in a fake proc tree.
+func pidNS(t *testing.T, root string, pid int, id string) {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid), "ns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("pid:["+id+"]", filepath.Join(dir, "pid")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The restored processes are the placeholder's descendants and every
+// process in its pid namespace: in a pod sharing one pid namespace, the
+// restored engine hangs off the pod's pause process, not the placeholder
+// (seen on ct1, Kimi-K3 Dynamo, 2026-10-23).
+func TestRestoredProcesses(t *testing.T) {
+	root := fakeProcTree(t, map[int][2]string{
+		50:  {"1", "pause"},
+		100: {"40", "nvsnap-idle"},      // the placeholder, the container's pid 1
+		101: {"100", "sleep"},           // its child
+		102: {"100", "python3"},         // a descendant in a nested pid namespace
+		200: {"50", "python3"},          // the restored engine, under pause
+		201: {"200", "VLLM::EngineCor"}, // and its child
+		300: {"1", "python3"},           // another pod's
+	})
+	for pid, ns := range map[int]string{50: "A", 100: "A", 101: "A", 102: "C", 200: "A", 201: "A", 300: "B"} {
+		pidNS(t, root, pid, ns)
+	}
+	got := map[int]bool{}
+	for _, p := range restoredProcesses(root, 100) {
+		got[p] = true
+	}
+	for _, want := range []int{100, 101, 102, 200, 201} {
+		if !got[want] {
+			t.Errorf("pid %d missing from %v", want, got)
+		}
+	}
+	if got[300] {
+		t.Error("another pod's process was included")
+	}
+	if !engineRuns(root, []int{100, 101, 200}) {
+		t.Error("the engine under pause was not seen running")
+	}
+	if engineRuns(root, []int{100, 101}) {
+		t.Error("the placeholder alone was taken for a running engine")
+	}
+}

@@ -63,14 +63,17 @@ func (c *criuAutoRestorer) considerRestoredStacks(ctx context.Context, pod *core
 		}
 		info, err := c.a.runtime.FindContainerByPod(ctx, pod.Namespace, pod.Name, ref.container)
 		if err != nil || info == nil || info.PID == 0 {
+			log.WithError(err).Warn("CRIU restore: restored pod not Ready after the restore; cannot find its container, so its stacks are not saved")
 			return
 		}
 		procBase := "/proc"
 		if _, serr := os.Stat("/host/proc"); serr == nil {
 			procBase = "/host/proc"
 		}
-		if onlyPlaceholderLeft(procBase, int(info.PID)) {
-			return // the engine is gone: nothing left to show
+		pids := restoredProcesses(procBase, int(info.PID))
+		if !engineRuns(procBase, pids) {
+			log.Warn("CRIU restore: restored pod not Ready after the restore; its engine is already gone, so no stacks are saved")
+			return
 		}
 		dir := filepath.Join(c.a.config.CheckpointDir, diagnosticsDir)
 		if err = os.MkdirAll(dir, 0o700); err != nil {
@@ -83,7 +86,6 @@ func (c *criuAutoRestorer) considerRestoredStacks(ctx context.Context, pod *core
 			log.WithError(err).Warn("CRIU restore: cannot save the stacks of a restored pod that is not Ready")
 			return
 		}
-		pids := processTree(procBase, int(info.PID))
 		n := writeRestoredStacks(f, procBase, pids, func(pid int) ([]byte, error) { return pySpyDump(ctx, pid) })
 		if err := f.Close(); err != nil {
 			log.WithError(err).Warn("CRIU restore: cannot save the stacks of a restored pod that is not Ready")
@@ -92,6 +94,52 @@ func (c *criuAutoRestorer) considerRestoredStacks(ctx context.Context, pod *core
 		log.WithFields(map[string]interface{}{"file": path, "processes": n, "restoredAt": restoredAt(pod).UTC().Format(time.RFC3339)}).
 			Warn("CRIU restore: restored pod not Ready after the restore; saved its processes' stacks")
 	}()
+}
+
+// restoredProcesses returns the processes of the restored container whose
+// pid 1 is hostPID: its descendants, and every process in its pid
+// namespace. A restored tree need not hang off the placeholder: in a pod
+// whose containers share one pid namespace it is reparented to the pod's
+// pause process.
+func restoredProcesses(procBase string, hostPID int) []int {
+	seen := map[int]bool{}
+	var out []int
+	add := func(p int) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range processTree(procBase, hostPID) {
+		add(p)
+	}
+	ns, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "pid"))
+	if err != nil {
+		return out
+	}
+	ents, _ := os.ReadDir(procBase)
+	for _, e := range ents {
+		p, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		if pns, err := os.Readlink(filepath.Join(procBase, e.Name(), "ns", "pid")); err == nil && pns == ns {
+			add(p)
+		}
+	}
+	return out
+}
+
+// engineRuns reports whether pids hold a process other than the
+// placeholder's own (placeholderComms).
+func engineRuns(procBase string, pids []int) bool {
+	for _, p := range pids {
+		comm, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(p), "comm")) //nolint:gosec // a pid under the proc root
+		if err == nil && !placeholderComms[strings.TrimSpace(string(comm))] {
+			return true
+		}
+	}
+	return false
 }
 
 // stacksDue reports whether pod is a restored pod, running and not Ready
