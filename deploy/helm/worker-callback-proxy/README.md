@@ -36,6 +36,76 @@ same namespace: Secret `grpc-proxy-worker-tls`, key `ca.crt`, and SAN
 Envoy reads the CA through file-based SDS and watches the mounted Secret
 directory, so a rotated CA is applied without a restart.
 
+## Destination trust boundary
+
+Envoy checks the identity of the upstream, not its address. On the grpc-proxy
+path the Lua filter turns `<dashed-ip>.<workerDomain>` into that IP, and Envoy
+dials it on `grpcProxy.port` without checking that the IP is a grpc-proxy
+endpoint. The upstream TLS handshake fails unless the peer presents the
+grpc-proxy certificate, so callback data never reaches another host, but
+Envoy still starts a QUIC handshake with any IP a caller names. The
+invocation path only accepts
+`<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`,
+resolved through cluster DNS, and has no upstream TLS yet.
+
+Where the cluster's CNI enforces NetworkPolicy, add an egress policy that
+limits the proxy to the backend pods and callback ports, plus cluster DNS.
+Enforcement depends on the CNI: a cluster without NetworkPolicy support
+accepts the policy and ignores it. The example matches the self-managed stack,
+with grpc-proxy and invocation-service releases of those names in `nvcf`.
+Adjust the selectors to your pod labels, drop the rule for a disabled tunnel,
+and add one for the collector when `tracing.endpoint` is set.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-callback-proxy-egress
+  namespace: nvcf
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: worker-callback-proxy
+      app.kubernetes.io/instance: worker-callback-proxy
+  policyTypes: [Egress]
+  egress:
+    # grpc-proxy HTTP/3 (grpcProxy.port)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: helm-nvcf-grpc-proxy
+              app.kubernetes.io/instance: grpc-proxy
+      ports:
+        - { protocol: UDP, port: 10084 }
+    # invocation-service (invocation.port)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: helm-nvcf-invocation-service
+              app.kubernetes.io/instance: invocation-service
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Cluster DNS, for the invocation hostnames
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+```
+
+## Timeouts
+
+`timeouts.grpcStreamIdle` and `timeouts.invocationStreamIdle` close a stream
+that carries no data in either direction for that long. Without them Envoy
+closes quiet streams after 5 minutes, and a route timeout of `0s` does not
+lift that limit. The defaults match the connection idle timeouts; `0s`
+disables the limit.
+
 ## Frontend certificate
 
 With the defaults the chart creates a cert-manager `Certificate`,

@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: "1.35.0"
+appVersion: "1.40.1"
 description: Envoy proxy that routes NVCF worker callbacks to the grpc-proxy or invocation-service pod holding the request
 name: helm-nvcf-worker-callback-proxy
 type: application

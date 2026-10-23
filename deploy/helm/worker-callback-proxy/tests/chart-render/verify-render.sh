@@ -157,6 +157,14 @@ expect_eq "affinity default" "$(pod "${m}" '.affinity.podAntiAffinity.preferredD
   "kubernetes.io/hostname"
 expect_eq "spread default" "$(pod "${m}" '.topologySpreadConstraints[0].topologyKey')" "topology.kubernetes.io/zone"
 expect_eq "no tracing by default" "$(envoy "${m}" '[.. | select(has("tracing"))] | length')" "0"
+# Without an explicit value Envoy closes quiet streams after 5m.
+stream_idle() {
+  envoy "$1" "[.static_resources.listeners[] | {\"n\": .name, \"t\": .filter_chains[0].filters[0].typed_config.stream_idle_timeout} | select(.t) | .n + \"=\" + .t] | join(\",\")"
+}
+expect_eq "stream idle defaults" "$(stream_idle "${m}")" "grpc_worker_quic=1800s,invocation_worker_tcp=3605s"
+render --set-string workerCallbackProxy.timeouts.grpcStreamIdle=0s \
+  --set-string workerCallbackProxy.timeouts.invocationStreamIdle=7200s > "${tmp_dir}/stream-idle.yaml"
+expect_eq "stream idle overrides" "$(stream_idle "${tmp_dir}/stream-idle.yaml")" "grpc_worker_quic=0s,invocation_worker_tcp=7200s"
 
 # The config checksum follows the ConfigMap, so a config change rolls the pods.
 checksum() { pod "$1" '.' >/dev/null; q "$1" 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/config"]'; }
@@ -245,5 +253,6 @@ assert_render_fails "additional properties 'admin' not allowed" --set-string wor
 assert_render_fails "/workerCallbackProxy/tracing/endpoint" --set-string workerCallbackProxy.tracing.endpoint=http://collector
 assert_render_fails "/workerCallbackProxy/timeouts/grpcIdle" --set-string workerCallbackProxy.timeouts.grpcIdle=30m
 assert_render_fails "/workerCallbackProxy/timeouts/connect" --set-string workerCallbackProxy.timeouts.connect=500ms
+assert_render_fails "/workerCallbackProxy/timeouts/invocationStreamIdle" --set-string workerCallbackProxy.timeouts.invocationStreamIdle=1h
 
 echo "ok: worker-callback-proxy render checks passed"
