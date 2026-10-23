@@ -18,7 +18,6 @@ require (
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/go-retryablehttp v0.7.8
-	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/imdario/mergo v0.3.16
 	github.com/nats-io/nats-server/v2 v2.12.12
 	github.com/nats-io/nats.go v1.51.0

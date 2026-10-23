@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
@@ -126,21 +125,18 @@ func TestDoStatus_WorkerTerminalBadStateForImagePullBackOff(t *testing.T) {
 		imagePullBackOffPod,
 	)
 
-	cache := chartcache.New(t.TempDir())
-	require.NoError(t, cache.Start(ctx))
-
 	r := &Reconciler{
 		ControllerOptions: ControllerOptions{
-			K8sTimeConfig: (&nvcak8sutil.TimeConfig{}).Complete(),
+			SystemNamespace: updateSystemNamespace,
+			K8sTimeConfig:   (&nvcak8sutil.TimeConfig{}).Complete(),
 		},
 		Client:                c,
 		Decoder:               serializer.NewCodecFactory(mgrScheme).UniversalDeserializer(),
-		chartCache:            cache,
 		newPermissionsChecker: newFakePermissionsChecker,
 		now:                   time.Now,
 	}
 
-	require.NoError(t, r.saveRenderedData(ctx, ms, []byte("[]")))
+	saveAndPersistRenderedData(t, ctx, r, ms, icmsReq, []byte("[]"))
 
 	_, err := r.doStatus(ctx, ms, icmsReq)
 
