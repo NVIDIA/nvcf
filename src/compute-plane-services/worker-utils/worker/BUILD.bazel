@@ -62,6 +62,7 @@ go_test(
     name = "worker_test",
     srcs = [
         "cancel_test.go",
+        "consumer_setup_test.go",
         "embedded_nats_test.go",
         "fixedports_test.go",
         "integration_test.go",

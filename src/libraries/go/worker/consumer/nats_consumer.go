@@ -41,6 +41,12 @@ import (
 
 var tracer = otel.Tracer("nats-consumer")
 
+// fetchHeartbeat is the idle heartbeat requested for each pull. Fetch does not
+// re-issue its pull request after a reconnect, so if the server loses it the
+// worker only notices after two missed heartbeats. Keep this short so a lost
+// pull stalls requests for seconds, not most of a client timeout.
+const fetchHeartbeat = 2 * time.Second
+
 type GlobalNatsConsumer struct {
 	primaryRegion     string
 	functionVersionId string
@@ -327,7 +333,7 @@ func (c *GlobalNatsConsumer) releaseWork() {
 func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<-chan jetstream.Msg, <-chan error, error) {
 	zap.L().Debug("sending nats fetch request", zap.Int64("maxReq", maxReq), zap.String("consumer", consumer.CachedInfo().Name))
 	ctx, fetchSpan := tracer.Start(ctx, "Fetch", trace.WithSpanKind(trace.SpanKindClient), trace.WithNewRoot(), trace.WithAttributes(attribute.Int64("maxReq", maxReq), attribute.String("consumer", consumer.CachedInfo().Name)))
-	activeFetch, err := consumer.Fetch(int(maxReq), jetstream.FetchHeartbeat(5*time.Second), jetstream.FetchMaxWait(5*time.Minute))
+	activeFetch, err := consumer.Fetch(int(maxReq), jetstream.FetchHeartbeat(fetchHeartbeat), jetstream.FetchMaxWait(5*time.Minute))
 	if err != nil {
 		return nil, nil, err
 	}
