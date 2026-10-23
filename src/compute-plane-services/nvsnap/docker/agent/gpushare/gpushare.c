@@ -1028,31 +1028,69 @@ static unsigned long long fh_prefix(const CUmemFabricHandle *fh)
     return v;
 }
 
-/* Log the hashes (mu held, gates closed). */
-static void verify_log(const char *phase)
+/* Read every mapping of another process's allocation, and with own every
+ * allocation this process shares, through this process's mappings; with
+ * log, log their hashes (mu held, gates closed). Returns how many were
+ * read, -1 without a context; *bytes the total. */
+static int scan_shared(const char *phase, int own, int log, size_t *bytes)
 {
-    if (!verify_on()) return;
-    int dev = push_any_ctx();
-    if (dev < 0) { logf_("verify %s: no context", phase); return; }
+    int dev = push_any_ctx(), nr = 0;
+    *bytes = 0;
+    if (dev < 0) { logf_("verify %s: no context", phase); return -1; }
     uint64_t h;
     for (int j = 0; j < n_maps; j++) {
         const struct map *m = &maps[j];
         if (m->down || m->gone) continue;
         const struct imp *im = &imps[m->imp];
         if (dev_hash(m->va, m->size, &h) < 0) { logf_("verify %s imp va=%#llx: unreadable", phase, (unsigned long long)m->va); continue; }
-        logf_("verify %s imp peer=%d key=%llu fab=%d fh=%016llx off=%zu size=%zu hash=%016llx", phase, im->peer, im->key,
-              im->fab, im->fab ? fh_prefix(&im->fh) : 0ULL, m->offset, m->size, (unsigned long long)h);
+        nr++, *bytes += m->size;
+        if (log)
+            logf_("verify %s imp peer=%d key=%llu fab=%d fh=%016llx off=%zu size=%zu hash=%016llx", phase, im->peer, im->key,
+                  im->fab, im->fab ? fh_prefix(&im->fh) : 0ULL, m->offset, m->size, (unsigned long long)h);
     }
-    for (int j = 0; j < n_lmaps; j++) {
+    for (int j = 0; own && j < n_lmaps; j++) {
         const struct lmap *l = &lmaps[j];
         unsigned long long fh = 0, id = xreg_id(l->va, l->h);
         for (int k = 0; k < n_fexps; k++) if (fexps[k].h == l->h) fh = fh_prefix(&fexps[k].fh);
         if (!id && !fh) continue;  /* not shared */
         if (dev_hash(l->va, l->size, &h) < 0) { logf_("verify %s own va=%#llx: unreadable", phase, (unsigned long long)l->va); continue; }
-        logf_("verify %s own id=%llu fh=%016llx off=%zu size=%zu hash=%016llx", phase, id, fh, l->off, l->size,
-              (unsigned long long)h);
+        nr++, *bytes += l->size;
+        if (log)
+            logf_("verify %s own id=%llu fh=%016llx off=%zu size=%zu hash=%016llx", phase, id, fh, l->off, l->size,
+                  (unsigned long long)h);
     }
     pop_ctx(dev);
+    return nr;
+}
+
+static void verify_log(const char *phase)
+{
+    size_t b;
+    if (verify_on()) scan_shared(phase, 1, 1, &b);
+}
+
+/* Diagnostic, between "remap" and "resume" (see NVSNAP_GPUSHARE_RESUME_DIAG
+ * in nvsnap-gpu-suspend.c): args "none", "imp" (read every mapping of
+ * another process's allocation) or "all" (those and every allocation this
+ * process shares: what verify mode reads at resume, without the log). The
+ * reply gives the wall-clock time, to order the nodes' resumes. */
+static void do_touch(char *reply, size_t n, const char *args)
+{
+    int imp = !strcmp(args, "imp"), all = !strcmp(args, "all");
+    if (!imp && !all && strcmp(args, "none")) { snprintf(reply, n, "err usage: touch none|imp|all"); return; }
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    struct timespec t0, t1, w;
+    size_t bytes = 0;
+    int nr = 0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (imp || all) nr = scan_shared("touch", all, 0, &bytes);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    clock_gettime(CLOCK_REALTIME, &w);
+    pthread_mutex_unlock(&mu);
+    double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    if (nr < 0) snprintf(reply, n, "err no context");
+    else snprintf(reply, n, "ok read %d mapping(s) (%zu MiB) in %.2fs; at %lld.%03ld", nr, bytes >> 20, dt,
+                  (long long)w.tv_sec, w.tv_nsec / 1000000);
 }
 
 /* Hold launches, drain GPU work, and check that "release" can drop every
@@ -1774,6 +1812,7 @@ static void serve(int s)
     else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "remap ", 6)) { do_remap(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "fabmap ", 7)) { do_fabmap(rep, sizeof(rep), buf + 7); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "touch ", 6)) { do_touch(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep)); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "export ", 7)) do_export(strtoull(buf + 7, NULL, 10), 0, s);
     else if (!strncmp(buf, "exportfab ", 10)) do_export(strtoull(buf + 10, NULL, 10), 1, s);

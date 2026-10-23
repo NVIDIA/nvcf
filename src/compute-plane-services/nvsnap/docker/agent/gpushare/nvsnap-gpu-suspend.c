@@ -52,6 +52,14 @@ SPDX-License-Identifier: Apache-2.0
  * from where the checkpoint was taken; GPU i in FILE is restored onto the
  * i-th GPU visible here (e.g. a new pod got different physical GPUs).
  *
+ * NVSNAP_GPUSHARE_RESUME_DIAG (resume; diagnostic): after "resume", before
+ * the threads run, "delay:S" waits S seconds, "imp" makes every process read
+ * every mapping of another process's allocation, "all" those and every
+ * allocation it shares (what NVSNAP_GPUSHARE_VERIFY=1 reads at resume),
+ * "none" nothing. Each process logs the wall-clock time ("touch"), to order
+ * the nodes' resumes. Read from this tool's environment, so one capture can
+ * be restored under each.
+ *
  * Why suspend: a CHECKPOINTED process has its pinned host buffers unmapped
  * too, but its CPU threads still run. Any CPU access to those buffers
  * (e.g. vLLM staging the next request) segfaults the process. Only CUDA
@@ -680,6 +688,22 @@ static void send_numa(const int *pids, int n)
     }
 }
 
+/* NVSNAP_GPUSHARE_RESUME_DIAG (see the top). Best effort: an older
+ * libnvsnap_gpushare answers "err unknown command" and resumes as before. */
+static void resume_diag(const int *pids, int n)
+{
+    const char *d = getenv("NVSNAP_GPUSHARE_RESUME_DIAG");
+    if (!d || !*d) return;
+    int is_delay = !strncmp(d, "delay:", 6), delay = is_delay ? atoi(d + 6) : 0;
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "touch %.16s", is_delay ? "none" : d);
+    for (int i = 0; i < n; i++) ctl(pids[i], cmd);
+    if (delay > 0) {
+        printf("resume diag: waiting %d s before the threads run\n", delay);
+        sleep(delay);
+    }
+}
+
 static int remap_all(const int *pids, int n)
 {
     char load[512] = "load", remap[600] = "remap";
@@ -695,7 +719,9 @@ static int remap_all(const int *pids, int n)
     int r = ctl_all_par(pids, n, load);
     if (r >= 0 && fabric_dir) r = fabric_exchange(pids, n, remap, sizeof(remap));
     if (r >= 0) r = ctl_all(pids, n, remap);
-    return r < 0 ? r : ctl_all(pids, n, "resume");
+    if (r >= 0) r = ctl_all(pids, n, "resume");
+    if (r >= 0) resume_diag(pids, n);
+    return r;
 }
 
 /* Multi-node NVLink: memory shared across nodes is imported by fabric
