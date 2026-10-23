@@ -787,6 +787,23 @@ class GithubReleaseTest(unittest.TestCase):
                     self.assertFalse(created)
                     self.assertIn("no release-worthy Go SDK or base image commits since", text)
 
+    def test_go_sdk_file_edits_that_keep_the_sdk_version_release_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            sdk = root / "tools/go-toolchain/go.mod"
+            sdk.write_text("// The hermetic Bazel Go SDK version, declared once.\n" + sdk.read_text())
+            self.commit_all(root, "fix(go): document the SDK anchor")
+            # rules_go builds with the toolchain directive, so the go line selects nothing here.
+            sdk.write_text(sdk.read_text().replace("go 1.26.5", "go 1.26.6"))
+            self.commit_all(root, "fix(go): raise the anchor module's go line")
+
+            for service_id, path, _version, _base in self.GO_SERVICES:
+                with self.subTest(service=service_id):
+                    created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                    self.assertFalse(created)
+                    self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
     def test_non_release_worthy_go_input_commits_release_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

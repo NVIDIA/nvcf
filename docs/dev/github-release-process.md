@@ -227,11 +227,13 @@ A Go service gets a dependency-triggered release under the same
 conditions as a Java service: semantic-release computed no version for
 it on this run, it has a stable release tag reachable from the branch,
 and at least one release-worthy commit since that tag changed one of
-its inputs. A commit counts when it touched
-`tools/go-toolchain/go.mod`, or when it changed the `oci.pull`
-declaration of one of the service's own bases. Other `MODULE.bazel`
-edits release nothing, including comment and formatting edits inside a
-pin. A base image bump releases only the services built on that base.
+its inputs. A commit counts when it changed the SDK version that
+`tools/go-toolchain/go.mod` selects, which is its `toolchain` line, or
+its `go` line when there is no `toolchain` line. It also counts when it
+changed the `oci.pull` declaration of one of the service's own bases.
+Other edits to either file release nothing, including comment and
+formatting edits. A base image bump releases only the services built on
+that base.
 
 The bump is always a patch. Use `fix:` for a Go SDK or base image
 update that must ship, such as a security fix. Use `build:` or `chore:`

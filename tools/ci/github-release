@@ -1480,18 +1480,14 @@ def image_base_repositories(calls):
     return names
 
 
-def oci_pull_pins(root, rev):
-    """The oci.pull declarations in MODULE.bazel at `rev`, keyed by name.
+def file_at_revision(root, rev, path):
+    """The contents of `path` at `rev`.
 
-    MODULE.bazel is Starlark, which Python's parser reads. A pin is its keyword
-    arguments as parsed syntax, so a comment or formatting edit compares equal
-    and a new digest, tag, image or platform list does not.
-
-    An unreadable revision is fatal rather than an empty set of pins: this
-    decides whether to publish, and must not cut a release off an error.
+    An unreadable file is fatal rather than empty: callers compare it across a
+    commit to decide whether to publish, and must not cut a release off an error.
     """
     result = subprocess.run(
-        ["git", "show", f"{rev}:{MODULE_FILE}"],
+        ["git", "show", f"{rev}:{path}"],
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
@@ -1500,11 +1496,38 @@ def oci_pull_pins(root, rev):
     )
     if result.returncode != 0:
         raise SystemExit(
-            f"cannot read {MODULE_FILE} at {rev} (git show exited {result.returncode}): "
+            f"cannot read {path} at {rev} (git show exited {result.returncode}): "
             f"{(result.stderr or '').strip()}"
         )
+    return result.stdout
+
+
+def go_sdk_version(root, rev):
+    """The Go SDK version go_sdk.from_file reads from GO_SDK_FILE at `rev`.
+
+    Mirrors rules_go's version_from_go_mod: the toolchain directive, else the
+    go directive. Nothing else in the file selects the SDK, so an edit to its
+    comments or formatting leaves the version as it was.
+    """
+    directives = {}
+    for line in file_at_revision(root, rev, GO_SDK_FILE).splitlines():
+        tokens = line.split("//", 1)[0].split()
+        if len(tokens) > 1 and tokens[0] in ("go", "toolchain"):
+            directives[tokens[0]] = tokens[1]
+    toolchain = directives.get("toolchain", "")
+    return toolchain[len("go") :] if toolchain else directives.get("go")
+
+
+def oci_pull_pins(root, rev):
+    """The oci.pull declarations in MODULE.bazel at `rev`, keyed by name.
+
+    MODULE.bazel is Starlark, which Python's parser reads. A pin is its keyword
+    arguments as parsed syntax, so a comment or formatting edit compares equal
+    and a new digest, tag, image or platform list does not.
+    """
+    module = file_at_revision(root, rev, MODULE_FILE)
     pins = {}
-    for node in ast.walk(ast.parse(result.stdout, filename=f"{rev}:{MODULE_FILE}")):
+    for node in ast.walk(ast.parse(module, filename=f"{rev}:{MODULE_FILE}")):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -1526,10 +1549,10 @@ def release_worthy_go_dependency_commits_since(root, bases, since_tag):
     """Release-worthy commits since a tag that changed the Go SDK or one of `bases`.
 
     Returns (commits, inputs): the commits as "sha subject" lines, newest first,
-    and the inputs they changed, for the release notes. A MODULE.bazel commit
-    counts only when it changed one of these base pins. The file also declares
-    every other module and extension, and an unrelated edit there must not
-    release every Go service.
+    and the inputs they changed, for the release notes. A commit counts only
+    when it changed the SDK version or one of these base pins. GO_SDK_FILE is
+    mostly comment, and MODULE.bazel also declares every other module and
+    extension; an edit to the rest of either must not release every Go service.
     """
     raw = run(
         ["git", "log", "--format=%x1e%h %s", "--name-only", f"{since_tag}..HEAD", "--", GO_SDK_FILE, MODULE_FILE],
@@ -1546,7 +1569,7 @@ def release_worthy_go_dependency_commits_since(root, bases, since_tag):
             continue
         paths = set(names.split())
         changed = []
-        if GO_SDK_FILE in paths:
+        if GO_SDK_FILE in paths and go_sdk_version(root, f"{sha}^") != go_sdk_version(root, sha):
             changed.append(f"{GO_SDK_FILE} (Go SDK)")
         if MODULE_FILE in paths and bases:
             before = oci_pull_pins(root, f"{sha}^")
