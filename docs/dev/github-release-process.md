@@ -174,7 +174,10 @@ the following hold:
 - semantic-release computed no version for that service on this run. If
   the same push also touched the service, semantic-release owns the
   version and nothing extra is tagged.
-- The service already has a release tag to bump from.
+- The service already has a stable release tag, reachable from the
+  branch, to bump from. This is the baseline semantic-release uses, so
+  a prerelease, or a higher tag on a maintenance branch this history
+  never contained, is never bumped.
 - At least one release-worthy commit touching a framework path landed
   since that tag. Release-worthiness uses the same rules listed above: a
   framework `feat:`, `fix:`, `perf:`, or breaking `!` commit fans out; a
@@ -204,26 +207,31 @@ image without touching the service directory:
 - The Bazel Go SDK, declared once in `tools/go-toolchain/go.mod`.
   `rules_go` compiles every `go_binary` with it.
 - The base images pinned by `oci.pull` in `MODULE.bazel`. An image
-  target names its base as `@<name>`, for example `@distroless_go`.
+  target takes one as its `base`, for example
+  `base = "@distroless_go"`.
 
-`tools/ci/github-release auto` fans these out as well. It reads the edge
-from each service's own `BUILD.bazel` files, so there is no second list
-to keep in sync:
+`tools/ci/github-release auto` fans these out as well. It parses each
+service's own `BUILD.bazel` files for the edge, so there is no second
+list to keep in sync:
 
 - A registered subproject is a Go service when a `BUILD.bazel` file
   under its path declares a `go_binary`. Files under `vendor/` and
   `node_modules/` are ignored.
-- Its base images are the `oci.pull` names those files reference.
+- Its base images are the `oci.pull` repositories its image targets
+  take as `base`. A repository named only in a comment or in another
+  attribute does not count.
+- A `BUILD.bazel` file that does not parse stops the run with an error
+  naming the file.
 
 A Go service gets a dependency-triggered release under the same
 conditions as a Java service: semantic-release computed no version for
-it on this run, it already has a release tag, and at least one
-release-worthy commit since that tag changed one of its inputs. A commit
-counts when it touched `tools/go-toolchain/go.mod`, or when it changed
-the `oci.pull` declaration of one of the service's own bases. Other
-`MODULE.bazel` edits release nothing, including comment and formatting
-edits inside a pin. A base image bump releases only the services built
-on that base.
+it on this run, it has a stable release tag reachable from the branch,
+and at least one release-worthy commit since that tag changed one of
+its inputs. A commit counts when it touched
+`tools/go-toolchain/go.mod`, or when it changed the `oci.pull`
+declaration of one of the service's own bases. Other `MODULE.bazel`
+edits release nothing, including comment and formatting edits inside a
+pin. A base image bump releases only the services built on that base.
 
 The bump is always a patch. Use `fix:` for a Go SDK or base image
 update that must ship, such as a security fix. Use `build:` or `chore:`

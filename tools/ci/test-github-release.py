@@ -323,7 +323,30 @@ class GithubReleaseTest(unittest.TestCase):
             service = self.java_service_metadata("notary", "src/control-plane-services/notary")
             created, text = self.fanout_dry_run(root, service)
             self.assertFalse(created)
-            self.assertIn("no existing release tag to bump from", text)
+            self.assertIn("no stable release tag reachable from HEAD to bump from", text)
+
+    def tag_on_maintenance_branch(self, root, tag):
+        """Tag a release on a branch this one never merges, as a maintenance train does."""
+        branch = git_out(root, "branch", "--show-current").strip()
+        git(root, "switch", "-c", "release-maintenance")
+        self.commit_unrelated_change(root, "fix(maintenance): backport a fix")
+        git(root, "tag", tag)
+        git(root, "switch", branch)
+
+    def test_framework_fanout_bumps_the_stable_baseline_reachable_from_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            service_id, path, version = self.JAVA_SERVICES[0]
+            # Highest by version, but not in this branch's history.
+            self.tag_on_maintenance_branch(root, f"{path}/v1.7.0")
+            self.commit_framework_change(root)
+
+            created, text = self.fanout_dry_run(root, self.java_service_metadata(service_id, path))
+            self.assertTrue(created)
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertIn(f"since {path}/v{version}", text)
+            self.assertNotIn("backport a fix", text)
 
     def test_framework_fanout_dry_run_creates_no_tag_and_no_release(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -651,21 +674,24 @@ class GithubReleaseTest(unittest.TestCase):
         services = {service["id"]: service for service in metadata["services"]}
         pins = self.github_release.oci_pull_pins(root, "HEAD")
 
-        def build_text(service_id):
-            return self.github_release.service_build_text(root, services[service_id])
+        # Every no-release run parses these, so one that Python cannot read
+        # would stop the release job.
+        calls = {
+            service_id: self.github_release.service_build_calls(root, service)
+            for service_id, service in services.items()
+        }
 
         for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui", "nvcf-cli"):
             with self.subTest(service=service_id):
-                self.assertTrue(self.github_release.GO_BINARY_RULE.search(build_text(service_id)))
+                self.assertTrue(self.github_release.builds_go_binary(calls[service_id]))
         for service_id in ("http-invocation", "cloud-tasks", "grpc-proxy-helm", "nvcf-self-managed-stack"):
             with self.subTest(service=service_id):
-                self.assertIsNone(self.github_release.GO_BINARY_RULE.search(build_text(service_id)))
-        # A Go service image names its base by a pin MODULE.bazel declares. If
-        # the parse or the reference scan drifts, base bumps stop fanning out.
+                self.assertFalse(self.github_release.builds_go_binary(calls[service_id]))
+        # A Go service image takes as its base a pin MODULE.bazel declares. If
+        # the parse or the base lookup drifts, base bumps stop fanning out.
         for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui"):
             with self.subTest(service=service_id):
-                labels = set(self.github_release.REPOSITORY_LABEL.findall(build_text(service_id)))
-                self.assertTrue(labels & set(pins))
+                self.assertTrue(self.github_release.image_base_repositories(calls[service_id]) & set(pins))
 
     def test_go_sdk_change_fans_out_a_patch_release_to_every_go_service(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -703,6 +729,37 @@ class GithubReleaseTest(unittest.TestCase):
             created, text = self.go_fanout_dry_run(root, self.go_service_metadata(static_id, static_path))
             self.assertFalse(created)
             self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+    def test_only_an_image_base_ties_a_go_service_to_a_base_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            static_id, static_path, _version, _base = self.GO_SERVICES[1]
+            build = root / static_path / "BUILD.bazel"
+            build.write_text(
+                '# Moved off base = "@distroless_go" once the binary was static.\n'
+                + build.read_text()
+                + 'filegroup(\n    name = "base_notes",\n    srcs = ["@distroless_go//:README"],\n)\n'
+            )
+            self.commit_all(root, "docs(admin-token-issuer-proxy): record the old base")
+            self.commit_base_repin(root, "distroless_go", "d" * 64, "fix(security): repin distroless go")
+
+            created, text = self.go_fanout_dry_run(root, self.go_service_metadata(static_id, static_path))
+            self.assertFalse(created)
+            self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+    def test_an_unparseable_build_file_stops_the_go_fanout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            service_id, path, _version, _base = self.GO_SERVICES[0]
+            (root / path / "BUILD.bazel").write_text('go_binary(\n    name = "server",\n')
+            self.commit_all(root, "fix(grpc-proxy): truncate the BUILD file")
+            self.commit_go_sdk_bump(root)
+
+            with self.assertRaises(SystemExit) as raised:
+                self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+            self.assertIn(f"{path}/BUILD.bazel: cannot parse BUILD file", str(raised.exception))
 
     def test_module_edits_that_leave_a_go_service_base_alone_release_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -798,7 +855,28 @@ class GithubReleaseTest(unittest.TestCase):
 
             created, text = self.go_fanout_dry_run(root, self.go_service_metadata("event-ledger", path))
             self.assertFalse(created)
-            self.assertIn("no existing release tag to bump from", text)
+            self.assertIn("no stable release tag reachable from HEAD to bump from", text)
+
+    def test_go_fanout_bumps_the_stable_baseline_reachable_from_head(self):
+        service_id, path, version, _base = self.GO_SERVICES[0]
+        for case in ("maintenance branch", "prerelease"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.init_go_repo(root)
+                if case == "maintenance branch":
+                    # Highest by version, but not in this branch's history.
+                    self.tag_on_maintenance_branch(root, f"{path}/v1.35.0")
+                else:
+                    # Reachable, but semantic-release skips prereleases when it
+                    # picks the baseline on the default branch.
+                    git(root, "tag", f"{path}/v1.35.0-rc.1")
+                self.commit_go_sdk_bump(root)
+
+                created, text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
+                self.assertTrue(created)
+                self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+                self.assertIn(f"since {path}/v{version}", text)
+                self.assertNotIn("backport a fix", text)
 
     def test_semantic_release_no_release_falls_through_to_go_dependency_fanout(self):
         with tempfile.TemporaryDirectory() as tmp:
