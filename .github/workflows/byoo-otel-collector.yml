@@ -5,9 +5,9 @@ name: byoo-otel-collector
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -135,6 +135,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
