@@ -74,9 +74,11 @@ spec:
             {{- if and .Values.grpcproxy.workerConnectBaseURL (hasKey .Values.grpcproxy.env "SELF_WORKER_FQDN") }}
             {{- fail "set either grpcproxy.workerConnectBaseURL or grpcproxy.env.SELF_WORKER_FQDN, not both" }}
             {{- end }}
+            {{- if not (hasKey $http3Env "SELF_WORKER_FQDN") }}
             {{- with .Values.grpcproxy.workerConnectBaseURL }}
             - name: SELF_WORKER_FQDN
               value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- range $key, $value := .Values.grpcproxy.env }}
             {{- if not (hasKey $http3Env $key) }}

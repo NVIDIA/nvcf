@@ -61,6 +61,8 @@ check_http3_workload() {
   expect_eq "${kind} ENABLE_HTTP1_CONNECT" "$(workload_env "${manifest}" "${kind}" ENABLE_HTTP1_CONNECT)" "false"
   expect_eq "${kind} ENABLE_HTTP1_CONNECT count" \
     "$(workload_env "${manifest}" "${kind}" ENABLE_HTTP1_CONNECT | wc -l | tr -d ' ')" "1"
+  expect_eq "${kind} SELF_WORKER_FQDN count" \
+    "$(workload_env "${manifest}" "${kind}" SELF_WORKER_FQDN | wc -l | tr -d ' ')" "1"
   expect_eq "${kind} PUBLIC_CERT_PATH" "$(workload_env "${manifest}" "${kind}" PUBLIC_CERT_PATH)" "/etc/grpc-proxy-tls/tls.crt"
   expect_eq "${kind} PRIVATE_KEY_PATH" "$(workload_env "${manifest}" "${kind}" PRIVATE_KEY_PATH)" "/etc/grpc-proxy-tls/tls.key"
   expect_eq "${kind} POD_IP" \
@@ -131,9 +133,31 @@ render "${tmp_dir}/explicit-names.yaml" \
   --set grpcproxy.http3.tls.certificate.enabled=true \
   --set grpcproxy.http3.tls.certificate.issuerRef.name=nvcf-worker-callback \
   --set grpcproxy.workerConnectBaseURL=https://grpc.example.com:10084 \
-  --set 'grpcproxy.http3.tls.certificate.dnsNames[0]=*.custom.example.org'
+  --set 'grpcproxy.http3.tls.certificate.dnsNames[0]=*.custom.example.org' \
+  --set 'grpcproxy.http3.tls.certificate.dnsNames[1]=*.grpc.example.com'
 expect_eq "explicit Certificate dnsNames" "$(yq -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "${tmp_dir}/explicit-names.yaml")" \
-  "*.custom.example.org"
+  "*.custom.example.org,*.grpc.example.com"
+assert_render_fails 'dnsNames must include "*.grpc.example.com"' \
+  --set grpcproxy.http3.enabled=true \
+  --set grpcproxy.http3.tls.certificate.enabled=true \
+  --set grpcproxy.http3.tls.certificate.issuerRef.name=nvcf-worker-callback \
+  --set grpcproxy.workerConnectBaseURL=https://grpc.example.com:10084 \
+  --set 'grpcproxy.http3.tls.certificate.dnsNames[0]=*.custom.example.org'
+
+# One effective callback URL: invalid combinations fail instead of rendering
+# an address that HTTP/3-only pods do not serve.
+http3_secret=(--set grpcproxy.http3.enabled=true --set grpcproxy.http3.tls.secretName=x)
+assert_render_fails 'grpcproxy.workerConnectBaseURL "http://grpc.example.com:10086" is not a valid HTTP/3 callback URL: it must use https' \
+  "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=http://grpc.example.com:10086
+assert_render_fails "grpcproxy.env.SELF_WORKER_FQDN is empty" \
+  "${http3_secret[@]}" --set grpcproxy.env.SELF_WORKER_FQDN=
+assert_render_fails "its host is an IP address" \
+  "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=https://10.0.0.1:10084
+assert_render_fails "must not have a path" \
+  "${http3_secret[@]}" --set grpcproxy.env.SELF_WORKER_FQDN=https://grpc.example.com/v1/proxy
+assert_render_fails "set either grpcproxy.workerConnectBaseURL or grpcproxy.env.SELF_WORKER_FQDN, not both" \
+  "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=https://a.example.com \
+  --set grpcproxy.env.SELF_WORKER_FQDN=https://b.example.com
 
 assert_render_fails "grpcproxy.http3.tls.secretName is required" \
   --set grpcproxy.http3.enabled=true

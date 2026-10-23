@@ -136,7 +136,9 @@ grpcproxy:
   # domain that resolves those names instead. A custom base host needs DNS
   # for every <dashed-pod-ip>.<base host> name, for example a wildcard
   # record, not only the base host. Workers must trust the certificate's CA,
-  # for example through NVCF_PROXY_CA_PEM.
+  # for example through NVCF_PROXY_CA_PEM. The base (workerConnectBaseURL or
+  # env.SELF_WORKER_FQDN) must be an https URL with a DNS host and no path;
+  # other values, including an empty SELF_WORKER_FQDN, fail render.
   http3:
     enabled: false
     tls:
@@ -153,8 +155,9 @@ grpcproxy:
           # Required when certificate.enabled.
           name: ""
           group: cert-manager.io
-        # Must cover the advertised hostnames. Defaults to *.<base host>, for
-        # example *.grpc-headless.<namespace>.svc.cluster.local.
+        # Defaults to *.<base host>, for example
+        # *.grpc-headless.<namespace>.svc.cluster.local. Explicit names must
+        # include *.<base host>, which covers the advertised per-pod names.
         dnsNames: []
         duration: 2160h
         renewBefore: 720h

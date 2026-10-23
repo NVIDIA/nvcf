@@ -50,12 +50,12 @@ ROOT_PKI_PATH="${ROOT_PKI_PATH:-${VAULT_SECRET_BASE_PATH}/pki/root}"
 NVCF_SERVICE_PKI_PATH="${NVCF_SERVICE_PKI_PATH:-${VAULT_SECRET_BASE_PATH}/pki/nvcf-service-issuing}"
 NVCF_SERVICE_PKI_ROLE_NAME="${NVCF_SERVICE_PKI_ROLE_NAME:-nvcf-service-server}"
 
-# Worker callback certificates (grpc-proxy HTTP/3) get their own role so the
-# self-managed stack owns its allowed domains. The llm-request-router hook
-# also runs this addon and rewrites NVCF_SERVICE_PKI_ROLE_NAME from its own
-# values; it does not set NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS, so it
-# leaves this role alone. The role name is fixed so every run grants the same
-# sign path in the shared cert-manager policy.
+# Worker callback certificates (grpc-proxy HTTP/3) get their own role. In the
+# self-managed stack the openbao-server migration is the only writer of both
+# roles. A standalone llm-request-router install runs this addon from its hook,
+# which does not set NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS and so leaves this
+# role alone. The role name is fixed so every run grants the same sign path in
+# the shared cert-manager policy.
 NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS="${NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS:-}"
 NVCF_WORKER_CALLBACK_PKI_ROLE_NAME="nvcf-worker-callback"
 

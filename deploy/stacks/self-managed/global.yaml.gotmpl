@@ -1929,28 +1929,32 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
-  {{- /* This hook rewrites the same OpenBao role as the stack migration, so
-       it must keep the worker callback proxy domains too. */ -}}
   {{- if eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" }}
   {{- $allowedDomains = include "nvcf.servicePki.allowedDomains" .Values }}
   {{- end }}
-  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
-       PKI tag, then the OpenBao migrations tag, and finally the compatible
-       stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
+  {{- /* The chart only runs this check with its hook enabled, so run it here
+       against the domains the stack migration writes. Same coverage rule as
+       llm-request-router.validatePkiAllowedDomains: the role allows
+       subdomains and wildcards but refuses bare domains. */ -}}
+  {{- range $dnsName := $dnsNames }}
+  {{- $name := $dnsName | toString | lower | trim }}
+  {{- $base := trimPrefix "*." $name }}
+  {{- $covered := false }}
+  {{- range $allowed := splitList "," ($allowedDomains | toString) }}
+  {{- $allowed = trim $allowed | lower }}
+  {{- if and $allowed (or (hasSuffix (printf ".%s" $allowed) $base) (and (hasPrefix "*." $name) (eq $base $allowed))) }}
+  {{- $covered = true }}
+  {{- end }}
+  {{- end }}
+  {{- if not $covered }}
+  {{- fail (printf "addons.llm.pki.dnsNames entry %q is not covered by addons.llm.pki.allowedDomains %q. The OpenBao signing role allows subdomains but not bare domains, so cert-manager issuance would be rejected." $dnsName $allowedDomains) }}
+  {{- end }}
+  {{- end }}
+  {{- /* The openbao-server migration owns the nvcf-service-server role and the
+       cert-manager policy. The chart's hook runs the same addon from its own
+       values, so the two writers would overwrite each other's role. */}}
   pki:
-    enabled: true
-    namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
-    allowedDomains: {{ $allowedDomains | quote }}
-    image:
-      registry: {{ dig "addons" "llm" "pki" "image" "registry" .Values.global.image.registry .Values | quote }}
-      repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
-      tag: {{ $pkiImageTag | quote }}
-      pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
-    {{- if .Values.global.imagePullSecrets }}
-    imagePullSecrets:
-      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
-    {{- end }}
+    enabled: false
   {{- end }}
   {{- end }}
   {{- end }}

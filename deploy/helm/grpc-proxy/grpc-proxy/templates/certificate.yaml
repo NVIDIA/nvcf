@@ -15,10 +15,7 @@
 {{- $certificate := dig "http3" "tls" "certificate" dict .Values.grpcproxy }}
 {{- if and (dig "http3" "enabled" false .Values.grpcproxy) (dig "enabled" false $certificate) }}
 {{- $issuerRef := dig "issuerRef" dict $certificate }}
-{{- $dnsNames := dig "dnsNames" list $certificate }}
-{{- if not $dnsNames }}
-{{- $dnsNames = include "grpc-proxy.http3DefaultDnsNames" . | fromJsonArray }}
-{{- end }}
+{{- $dnsNames := include "grpc-proxy.http3DnsNames" . | fromJsonArray }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
