@@ -301,8 +301,11 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	if sess != nil {
 		fabricDir = sess.containerDir
 	}
-	// resumeGPU reloads the restored processes' GPU memory (gpushare).
-	resumeGPU := func() error {
+	// resumeGPU reloads the restored processes' GPU memory (gpushare);
+	// holdGate keeps their GPU launches waiting until openGPU. toolPID is
+	// the pid the resume tool entered, once it ran, for openGPU.
+	toolPID := 0
+	resumeGPU := func(holdGate bool) error {
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
 		resumePID := hostPID
@@ -332,7 +335,8 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
 			}
 		}
-		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+		toolPID = resumePID
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, holdGate, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
@@ -348,8 +352,26 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		// without GPU state are restored only once every rank has, so an
 		// etcd among them does not count the reload against its leases
 		// (gpushare_group_restore.go).
+		//
+		// Its GPU launches are held until every pod of the instance has
+		// resumed (gpushareOpen). The unlock below is that point: a pod
+		// reports restored only after its resume, and the unlock comes once
+		// every pod has. Once held, the gate is opened on every path, or
+		// the workload never launches again.
+		held := false
+		openGPU := func() error {
+			if !held || toolPID == 0 {
+				return nil
+			}
+			held = false
+			return gpushareOpen(context.WithoutCancel(ctx), toolPID, gs.PIDs, log)
+		}
 		if gs != nil {
-			if err := resumeGPU(); err != nil {
+			held = true
+			if err := resumeGPU(true); err != nil {
+				if oerr := openGPU(); oerr != nil {
+					log.WithError(oerr).Warn("gpushare: could not open the GPU launches of a failed resume")
+				}
 				return nil, err
 			}
 		}
@@ -357,6 +379,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		// sends: hold the lock until the driver says so, then release it in
 		// this pod's network namespace.
 		verdict, err := sess.awaitUnlock(ctx, log)
+		if oerr := openGPU(); oerr != nil {
+			if err == nil && verdict == "unlock" {
+				return nil, fmt.Errorf("gpushare open: %w", oerr)
+			}
+			log.WithError(oerr).Warn("gpushare: could not open the GPU launches of an aborted group restore")
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -369,7 +397,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			}
 		}
 	} else if gs != nil {
-		if err := resumeGPU(); err != nil {
+		if err := resumeGPU(false); err != nil {
 			return nil, err
 		}
 	}

@@ -266,13 +266,16 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir str
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
 func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
-	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, log)
+	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, log)
 }
 
 // gpushareResumeWithGPUsOf resumes pids, entered through hostPID, on the
 // GPUs of gpusPID's pod. They differ for a tree restored into a nested pid
 // namespace: its processes still carry the source pod's GPU environment.
-func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
+// holdGate keeps their GPU launches waiting until gpushareOpen: the pods of
+// a group open only once every one of them has resumed, so no node launches
+// into memory another node is still rebinding (see gpushareOpen).
+func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, log *logrus.Entry) error {
 	env := podGPUEnv(gpusPID)
 	if env == nil && gpusPID != hostPID {
 		// No UUIDs in NVIDIA_VISIBLE_DEVICES (GPUs given as device nodes,
@@ -286,7 +289,7 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		env = cudaVisibleEnv(gpus)
 	}
 	env = append(env, resumeDiagEnv()...)
-	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
+	args := gpushareResumeArgs(gpuMap, fabricDir, holdGate, pids)
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
 	if err != nil {
@@ -308,8 +311,11 @@ func gpushareSuspendArgs(store, fabricDir string, pids []int) []string {
 }
 
 // gpushareResumeArgs builds the resume command line.
-func gpushareResumeArgs(gpuMap, fabricDir string, pids []int) []string {
+func gpushareResumeArgs(gpuMap, fabricDir string, holdGate bool, pids []int) []string {
 	var args []string
+	if holdGate {
+		args = append(args, "--hold-gate")
+	}
 	if gpuMap != "" {
 		args = append(args, "--gpu-map", gpuMap)
 	}
@@ -317,6 +323,23 @@ func gpushareResumeArgs(gpuMap, fabricDir string, pids []int) []string {
 		args = append(args, "--fabric-map", fabricDir)
 	}
 	return append(append(args, "resume"), intsToStrings(pids)...)
+}
+
+// gpushareOpen lets the GPU launches of pids, resumed with holdGate,
+// through. A group's pods resume on their own nodes, each rebinding its
+// share of the memory multicast across nodes; one that launched first
+// could write to a GPU not bound yet, and the kernel waiting on that write
+// would spin for good (2026-10-23, TP=8 over 2 GB300 nodes). Processes of
+// a capture made before the hold opened at resume, which open accepts.
+func gpushareOpen(ctx context.Context, hostPID int, pids []int, log *logrus.Entry) error {
+	t0 := time.Now()
+	out, err := gpushareTool(ctx, hostPID, 2*time.Minute, append([]string{"open"}, intsToStrings(pids)...)...)
+	if err != nil {
+		return err
+	}
+	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
+		Info("gpushare: opened " + lastLines(out, 1))
+	return nil
 }
 
 func intsToStrings(v []int) []string {
