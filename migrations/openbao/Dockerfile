@@ -1,12 +1,12 @@
 ARG ALPINE_VERSION=3.23
-ARG GO_IMAGE=golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
-ARG KUBECTL_GO_IMAGE=golang:1.26.9-alpine3.23@sha256:6750308561953d451210ed1a8086d36c8c8bdcbf672d38d9d0d424b8a7a0216c
+ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:754d5200fc3edae76d3b6598a9a3fac7e74981ee6a5413ab955025f185753ef2
+ARG KUBECTL_GO_IMAGE=golang:1.26.10-alpine3.23@sha256:0525c952defebc693cdaf62cdf43afa32be5a7f377e99260642ea19c240c708e
 ARG BAO_VERSION=2.6.3
 ARG BAO_RUNTIME_SHA256=sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
 ARG BAO_SOURCE_COMMIT=63a65e6b907589dbb952c371a70260a065bf8bd7
 ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69
 ARG KUBECTL_VERSION=v1.36.5
-ARG KUBECTL_GO_VERSION=go1.26.9
+ARG KUBECTL_GO_VERSION=go1.26.10
 ARG KUBECTL_SOURCE_COMMIT=ad950d1cc78b0183c476bd4d3f1934c104229727
 ARG KUBECTL_SOURCE_SHA256=168162db6254cf3c453798de09a3a65f3d11673e0d3e1705fe061d960b05d137
 ARG KUBECTL_BUILD_DATE=2026-09-23T17:07:00Z
@@ -66,7 +66,7 @@ ARG KUBECTL_SOURCE_DATE_EPOCH
 # Rebuild the 1.36 client with the patched toolchain while preserving coverage
 # across the repository's latest-and-N-2 Kubernetes support window.
 RUN apk add --no-cache curl
-COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
+COPY scripts/build-kubectl.sh /usr/local/bin/
 RUN KUBECTL_VERSION="${KUBECTL_VERSION}" \
     KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
     KUBECTL_SOURCE_COMMIT="${KUBECTL_SOURCE_COMMIT}" \
@@ -75,8 +75,9 @@ RUN KUBECTL_VERSION="${KUBECTL_VERSION}" \
     KUBECTL_SOURCE_DATE_EPOCH="${KUBECTL_SOURCE_DATE_EPOCH}" \
     TARGETARCH="${TARGETARCH}" \
     OUTPUT_DIR=/out \
-    /usr/local/bin/build-kubectl.sh && \
-    KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
+    /usr/local/bin/build-kubectl.sh
+COPY scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
+RUN KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
     TARGETARCH="${TARGETARCH}" \
     /usr/local/bin/verify-kubectl.sh
 
@@ -100,19 +101,21 @@ RUN KUBECTL_METADATA="$(/out/kubectl version --client -o json)" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"goVersion\": \"${KUBECTL_GO_VERSION}\"" && \
     printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"platform\": \"linux/${TARGETARCH}\""
 
-FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
-ARG TARGETARCH
+FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256} AS runtime
 ARG GIT_SHA
 RUN test -n "${GIT_SHA}"
 LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
 # Upgrade inherited packages before installing runtime dependencies so the
-# image receives fixes published after the upstream OpenBao release.
+# image receives fixes published after the upstream OpenBao release. Require
+# the zlib fix for CVE-2026-85091 even when using a cached upstream base.
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache openssl uuidgen curl bash jq
+    apk add --no-cache 'zlib>=1.3.2-r1' openssl uuidgen curl bash jq
 
+FROM runtime
+ARG TARGETARCH
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
 COPY --from=kubectl-runtime-verifier /out/kubectl /usr/local/bin/kubectl

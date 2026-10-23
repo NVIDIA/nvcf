@@ -12,7 +12,7 @@ repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 go_bin=${GO:-go}
 bao_dir=${BAO_DIR:-"$repo_root/files/openbao"}
 arches=${ARCHES:-"amd64 arm64"}
-required_go_version=${REQUIRED_GO_VERSION:-v1.27.0}
+required_go_version=${REQUIRED_GO_VERSION:-v1.27.3}
 required_x_crypto_version=${REQUIRED_X_CRYPTO_VERSION:-v0.56.0}
 required_grpc_version=${REQUIRED_GRPC_VERSION:-v1.83.2}
 required_go_archive_version=${REQUIRED_GO_ARCHIVE_VERSION:-v0.3.0}
