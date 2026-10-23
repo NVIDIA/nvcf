@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "worker-callback-proxy values",
+  "type": "object",
+  "definitions": {
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "nonNegativeInt": { "type": "integer", "minimum": 0 },
+    "positiveInt": { "type": "integer", "minimum": 1 },
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"
+    },
+    "envoyDuration": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?s$"
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "object": { "type": "object" }
+  },
+  "properties": {
+    "global": { "type": "object" },
+    "workerCallbackProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workerDomain", "grpcProxy", "invocation", "tls", "ports", "service", "metrics"],
+      "properties": {
+        "nameOverride": { "type": "string" },
+        "fullnameOverride": { "type": "string" },
+        "replicaCount": { "$ref": "#/definitions/nonNegativeInt" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "registry": { "type": "string" },
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "imagePullSecrets": { "type": "array" },
+        "workerDomain": {
+          "type": "string",
+          "description": "Callback hostnames are <dashed-pod-ip>.<workerDomain>."
+        },
+        "clusterDomain": { "type": "string", "minLength": 1 },
+        "grpcProxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "port": { "$ref": "#/definitions/port" },
+            "tlsServerName": { "type": "string" },
+            "caSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "key"],
+              "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "invocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "serviceName": { "type": "string", "minLength": 1 },
+            "namespace": { "type": "string" },
+            "port": { "$ref": "#/definitions/port" }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "frontend": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingSecret": { "type": "string" },
+                "certificate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "create": { "type": "boolean" },
+                    "issuerRef": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": { "enum": ["Issuer", "ClusterIssuer"] },
+                        "name": { "type": "string" },
+                        "group": { "type": "string" }
+                      }
+                    },
+                    "duration": { "$ref": "#/definitions/duration" },
+                    "renewBefore": { "$ref": "#/definitions/duration" },
+                    "privateKey": {
+                      "type": "object",
+                      "properties": {
+                        "algorithm": { "enum": ["RSA", "ECDSA", "Ed25519"] },
+                        "size": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ports": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "grpcQuic": { "$ref": "#/definitions/port" },
+            "invocationTcp": { "$ref": "#/definitions/port" },
+            "health": { "$ref": "#/definitions/port" },
+            "metrics": { "$ref": "#/definitions/port" },
+            "admin": { "$ref": "#/definitions/port" }
+          }
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string" },
+            "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "annotations": { "$ref": "#/definitions/stringMap" },
+            "labels": { "$ref": "#/definitions/stringMap" },
+            "loadBalancerClass": { "type": "string" },
+            "externalTrafficPolicy": { "enum": ["", "Cluster", "Local"] },
+            "ports": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "grpcQuic": { "$ref": "#/definitions/port" },
+                "invocationTcp": { "$ref": "#/definitions/port" }
+              }
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "port": { "$ref": "#/definitions/port" }
+              }
+            },
+            "serviceMonitor": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "interval": { "$ref": "#/definitions/duration" },
+                "scrapeTimeout": { "$ref": "#/definitions/duration" },
+                "labels": { "$ref": "#/definitions/stringMap" }
+              }
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": { "type": "string", "pattern": "^$|^[^:/\\s]+:[0-9]+$" },
+            "samplingPercentage": { "type": "number", "minimum": 0, "maximum": 100 },
+            "serviceName": { "type": "string", "minLength": 1 }
+          }
+        },
+        "logLevel": { "enum": ["trace", "debug", "info", "warning", "warn", "error", "critical", "off"] },
+        "drainTimeSeconds": { "$ref": "#/definitions/nonNegativeInt" },
+        "preStopSleepSeconds": { "$ref": "#/definitions/nonNegativeInt" },
+        "terminationGracePeriodSeconds": { "$ref": "#/definitions/positiveInt" },
+        "timeouts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "connect": { "$ref": "#/definitions/envoyDuration" },
+            "quicIdle": { "$ref": "#/definitions/envoyDuration" },
+            "grpcIdle": { "$ref": "#/definitions/envoyDuration" },
+            "grpcMaxConnectionDuration": { "$ref": "#/definitions/envoyDuration" },
+            "invocationIdle": { "$ref": "#/definitions/envoyDuration" },
+            "invocationMaxConnectionDuration": { "$ref": "#/definitions/envoyDuration" },
+            "grpcStreamIdle": { "$ref": "#/definitions/envoyDuration" },
+            "invocationStreamIdle": { "$ref": "#/definitions/envoyDuration" }
+          }
+        },
+        "connectionLimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxActiveDownstreamConnections": { "$ref": "#/definitions/positiveInt" },
+            "maxUpstreamConnections": { "$ref": "#/definitions/positiveInt" },
+            "maxPendingRequests": { "$ref": "#/definitions/positiveInt" },
+            "maxRequests": { "$ref": "#/definitions/positiveInt" },
+            "perConnectionBufferLimitBytes": { "$ref": "#/definitions/positiveInt" }
+          }
+        },
+        "podDisruptionBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxUnavailable": { "type": ["integer", "string"] }
+          }
+        },
+        "strategy": { "$ref": "#/definitions/object" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "podLabels": { "$ref": "#/definitions/stringMap" },
+        "podSecurityContext": { "$ref": "#/definitions/object" },
+        "securityContext": { "$ref": "#/definitions/object" },
+        "resources": { "$ref": "#/definitions/object" },
+        "readinessProbe": { "$ref": "#/definitions/object" },
+        "livenessProbe": { "$ref": "#/definitions/object" },
+        "nodeSelector": { "$ref": "#/definitions/stringMap" },
+        "tolerations": { "type": "array" },
+        "defaultPodAntiAffinity": { "type": "boolean" },
+        "affinity": { "$ref": "#/definitions/object" },
+        "defaultZoneSpread": { "type": "boolean" },
+        "topologySpreadConstraints": { "type": "array" }
+      }
+    }
+  }
+}
