@@ -262,8 +262,9 @@ credentials from skipping the target to using the implicit random fallback.
 `perBearerKey` reads only `Authorization: Bearer`. It never reads `x-api-key`,
 including on `anthropicMessages` routes. A Messages request that authenticates
 only with `x-api-key` has no `perBearerKey` bucket, so evaluation continues to
-the next configured method, ending at the implicit `random` fallback. Use
-`promptCacheKey` or `firstMessageHash` to keep such clients sticky.
+the next configured method. It reaches the implicit `random` fallback only if no
+later method can provide a bucket. Use `promptCacheKey` or `firstMessageHash` to
+keep such clients sticky.
 
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
