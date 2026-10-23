@@ -126,6 +126,41 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 		MaxRequestConcurrency:    20,
 	}
 
+	t.Run("isolated work directories", func(t *testing.T) {
+		dirs := make(chan [2]string, 2)
+		inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health" {
+				dirs <- [2]string{r.Header.Get("NVCF-ASSET-DIR"), r.Header.Get("NVCF-LARGE-OUTPUT-DIR")}
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer inference.Close()
+
+		cfg := workerConfig
+		cfg.InferencePort = inference.Listener.Addr().(*net.TCPAddr).Port
+		seen := make(map[string]bool)
+		for range 2 {
+			request := defaultInferenceRequest(ncaId, assetServerHost)
+			runWorkerTest(t, natsSuperCluster, serial(cfg.FunctionVersionId, request), zapLogger, cfg)
+
+			select {
+			case paths := <-dirs:
+				for _, path := range paths {
+					if path == "" {
+						t.Fatal("inference request has no work directory")
+					}
+					base := filepath.Dir(path)
+					if base == cfg.BaseAssetDir || base == cfg.BaseResponseDir || seen[base] {
+						t.Errorf("worker run reused work directory %q", base)
+					}
+					seen[base] = true
+				}
+			default:
+				t.Fatal("worker did not reach inference")
+			}
+		}
+	})
+
 	t.Run("single work request", func(t *testing.T) {
 		invokeFunctionRequest := defaultInferenceRequest(ncaId, assetServerHost)
 		workFunc := serial(workerConfig.FunctionVersionId, invokeFunctionRequest)
@@ -270,7 +305,7 @@ func TestSuccessfulEndToEnd(t *testing.T) {
 		defer workerServer.Shutdown()
 		runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
 			func(ctx context.Context) error {
-				return runTestWorker(ctx, zapLogger, workerConfig)
+				return runTestWorker(t, ctx, zapLogger, workerConfig)
 			},
 			func(ctx context.Context) error {
 				return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
@@ -711,7 +746,7 @@ func runWorkerTest(t *testing.T, natsSuperCluster *testutils.SuperCluster, workF
 	defer workerServer.Shutdown()
 	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
 		func(ctx context.Context) error {
-			return runTestWorker(ctx, zapLogger, workerConfig)
+			return runTestWorker(t, ctx, zapLogger, workerConfig)
 		},
 		func(ctx context.Context) error {
 			return testsupport.WaitForTrackedCallback(ctx, workerServer.Wait, callbacks)
@@ -736,7 +771,12 @@ func contextWithCancelAndTimeout(ctx context.Context, duration time.Duration) (c
 }
 
 // runTestWorker skips running the nvkit framework as it makes assumptions about global state that don't let us run multiple workers within the same test binary
-func runTestWorker(ctx context.Context, zapLogger *logs.ZapLogger, workerConfig worker.Config) error {
+func runTestWorker(t *testing.T, ctx context.Context, zapLogger *logs.ZapLogger, workerConfig worker.Config) error {
+	t.Helper()
+	// Request cleanup may outlive Run. A later worker must not watch directories
+	// that a previous worker is still deleting, especially with macOS kqueue.
+	workerConfig.BaseAssetDir = t.TempDir()
+	workerConfig.BaseResponseDir = t.TempDir()
 	nvcfWorker, err := worker.NewNVCFWorker(ctx, zapLogger, workerConfig)
 	if err != nil {
 		return err

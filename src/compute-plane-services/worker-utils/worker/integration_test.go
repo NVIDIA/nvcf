@@ -48,6 +48,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,11 @@ func newIntegrationEnv(t *testing.T, mutate func(*Config)) *itEnv {
 // work function completes or the context times out.
 func (e *itEnv) runWorker(t *testing.T, workFunc testutils.DoWorkFunc) {
 	t.Helper()
+	// Request cleanup may outlive Run. Keep each worker's watched directories
+	// separate from earlier runs without changing the shared environment config.
+	cfg := e.cfg
+	cfg.BaseAssetDir = t.TempDir()
+	cfg.BaseResponseDir = t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -180,7 +186,7 @@ func (e *itEnv) runWorker(t *testing.T, workFunc testutils.DoWorkFunc) {
 
 	runErr, waitErr := testsupport.RunWithWait(ctx, cancel,
 		func(ctx context.Context) error {
-			nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, e.cfg)
+			nvcfWorker, err := NewNVCFWorker(ctx, e.zapLogger, cfg)
 			if err != nil {
 				return fmt.Errorf("NewNVCFWorker: %w", err)
 			}
@@ -215,6 +221,45 @@ func defaultITRequest() *pb.WorkerInvokeFunctionRequest {
 		RequestMethod:              http.MethodPost,
 		RequestPath:                "/echo",
 		RequestTime:                timestamppb.Now(),
+	}
+}
+
+func TestIntegrationWorkDirsAreIsolated(t *testing.T) {
+	env := newIntegrationEnv(t, nil)
+	dirs := make(chan [2]string, 2)
+	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			dirs <- [2]string{r.Header.Get("NVCF-ASSET-DIR"), r.Header.Get("NVCF-LARGE-OUTPUT-DIR")}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer inference.Close()
+	env.cfg.InferencePort = inference.Listener.Addr().(*net.TCPAddr).Port
+
+	sharedAssetDir, sharedResponseDir := env.cfg.BaseAssetDir, env.cfg.BaseResponseDir
+	seen := make(map[string]bool)
+	for range 2 {
+		req := defaultITRequest()
+		env.runWorker(t, itSerial(env.cfg.FunctionVersionId, itScenario{Region: "region-1", WorkerInvokeFunctionRequest: req}))
+
+		select {
+		case paths := <-dirs:
+			for _, path := range paths {
+				if path == "" {
+					t.Fatal("inference request has no work directory")
+				}
+				base := filepath.Dir(path)
+				if base == sharedAssetDir || base == sharedResponseDir || seen[base] {
+					t.Errorf("worker run reused work directory %q", base)
+				}
+				seen[base] = true
+			}
+		default:
+			t.Fatal("worker did not reach inference")
+		}
+	}
+	if env.cfg.BaseAssetDir != sharedAssetDir || env.cfg.BaseResponseDir != sharedResponseDir {
+		t.Fatal("worker run changed the shared environment config")
 	}
 }
 
