@@ -28,5 +28,5 @@ assets. They are publication inputs for human review and tracking, not evidence
 that every image, chart, or stack bundle is available through its final catalog
 route. Component publication status and remaining gates are tracked in
 [#2843](https://github.com/NVIDIA/nvcf/issues/2843) and its stack subissues.
-Upstream registry URLs remain the qualified runtime references even when a
-separate NGC mirror is requested.
+Upstream registry URLs remain the qualified runtime references. NGC image
+publication covers the NVCF images; upstream mirrors are outside this request.
