@@ -31,6 +31,19 @@ write_values() {
 render() {
   helm template nats "$render_chart_dir" --namespace nats-system "$@"
 }
+prepare_chart() {
+  local source="$1" destination="$2"
+  mkdir -p "$destination"
+  cp -R "$source"/. "$destination"
+  # Build from the lock even when the developer checkout has cached charts.
+  rm -rf "$destination/charts"
+  (
+    export HELM_REPOSITORY_CONFIG="$work_dir/repositories.yaml"
+    export HELM_REPOSITORY_CACHE="$work_dir/repository-cache"
+    helm repo add nats "$(yq -r '.dependencies[] | select(.name == "nats") | .repository' "$destination/Chart.yaml")" >/dev/null
+    helm dependency build "$destination" --skip-refresh >/dev/null
+  )
+}
 image_ref() {
   local file="$1" name="$2"
   yq -r "select(.kind == \"StatefulSet\" or .kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"$name\") | .image" "$file"
@@ -51,9 +64,14 @@ for ref in "$server_ref" "$box_ref" "$reloader_ref"; do
   grep -Fq "$ref" "$manifest" || fail "generated manifest is missing $ref"
 done
 
+prepare_chart "$chart_dir" "$work_dir/chart"
+render_chart_dir="$work_dir/chart"
 render --set nats.global.image.registry=global.example.com > "$work_dir/chart.yaml"
 # Optionally validate the exact chart source selected by the release lane.
-render_chart_dir="${NATS_STACK_CHART_DIR:-$chart_dir}"
+if test -n "${NATS_STACK_CHART_DIR:-}"; then
+  prepare_chart "$NATS_STACK_CHART_DIR" "$work_dir/stack-chart"
+  render_chart_dir="$work_dir/stack-chart"
+fi
 cat > "$environment_file" <<'YAML'
 global:
   image:

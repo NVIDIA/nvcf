@@ -7,6 +7,7 @@ cached dependencies under `charts/`.
 Run from the repository root:
 
 ```sh
+helm repo add nats https://nats-io.github.io/k8s/helm/charts/
 helm dependency build deploy/helm/nats --skip-refresh
 make -C deploy/helm/nats test
 bash deploy/stacks/self-managed/tests/nats-upstream-images.sh
