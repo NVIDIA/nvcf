@@ -35,6 +35,7 @@ but authenticated service traffic requires those downstream components.
 1. Build Dependencies:
     <!-- markdownlint-disable-next-line MD013 -->
     ```bash
+    helm repo add nats https://nats-io.github.io/k8s/helm/charts/
     helm dependency build .
     ```
 
