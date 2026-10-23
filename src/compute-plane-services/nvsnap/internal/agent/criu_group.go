@@ -515,6 +515,12 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(uerr).Error("CRIU group capture: cannot update the group record")
 	} else if data["state"] == criuGroupStateVerifying {
 		c.writeGroupAliases(context.WithoutCancel(ctx), key, scope, uris, len(ranks), log)
+		nodes := make([]string, len(members))
+		for i, m := range members {
+			nodes[i] = m.Spec.NodeName
+		}
+		// Off the capture's path: the replacements' restore starts now.
+		go c.a.spreadSmallCheckpoints(context.WithoutCancel(ctx), results, nodes, log)
 	}
 	if err == nil && data["state"] == criuGroupStateVerifying {
 		// Its pods were dumped and are gone; their replacements are

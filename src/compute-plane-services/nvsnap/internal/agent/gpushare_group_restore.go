@@ -408,21 +408,30 @@ func (a *Agent) awaitTargetPods(ctx context.Context, members []GroupRestoreMembe
 	}
 }
 
-// fetchCheckpointMetadata makes a checkpoint local on the agent at base and
-// reads its metadata there.
-func fetchCheckpointMetadata(ctx context.Context, client *http.Client, base, id string) (*CheckpointMetadata, error) {
+// ensureLocalOn asks the agent at base to make checkpoint id local on its
+// node, and waits for it.
+func ensureLocalOn(ctx context.Context, client *http.Client, base, id string) error {
 	ereq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/checkpoints/"+url.PathEscape(id)+"/ensure-local", http.NoBody)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	eresp, err := client.Do(ereq)
 	if err != nil {
-		return nil, fmt.Errorf("ensure-local: %w", err)
+		return fmt.Errorf("ensure-local: %w", err)
 	}
 	b, _ := io.ReadAll(io.LimitReader(eresp.Body, 512))
-	eresp.Body.Close()
+	_ = eresp.Body.Close()
 	if eresp.StatusCode != http.StatusNoContent && eresp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ensure-local: %s: %s", eresp.Status, strings.TrimSpace(string(b)))
+		return fmt.Errorf("ensure-local: %s: %s", eresp.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// fetchCheckpointMetadata makes a checkpoint local on the agent at base and
+// reads its metadata there.
+func fetchCheckpointMetadata(ctx context.Context, client *http.Client, base, id string) (*CheckpointMetadata, error) {
+	if err := ensureLocalOn(ctx, client, base, id); err != nil {
+		return nil, err
 	}
 	mreq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/checkpoints/"+url.PathEscape(id)+"/file?path=metadata.json", http.NoBody)
 	if err != nil {
