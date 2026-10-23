@@ -190,7 +190,9 @@
             "grpcIdle": { "$ref": "#/definitions/envoyDuration" },
             "grpcMaxConnectionDuration": { "$ref": "#/definitions/envoyDuration" },
             "invocationIdle": { "$ref": "#/definitions/envoyDuration" },
-            "invocationMaxConnectionDuration": { "$ref": "#/definitions/envoyDuration" }
+            "invocationMaxConnectionDuration": { "$ref": "#/definitions/envoyDuration" },
+            "grpcStreamIdle": { "$ref": "#/definitions/envoyDuration" },
+            "invocationStreamIdle": { "$ref": "#/definitions/envoyDuration" }
           }
         },
         "connectionLimits": {

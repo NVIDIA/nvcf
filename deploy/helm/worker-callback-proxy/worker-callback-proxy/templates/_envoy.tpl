@@ -157,6 +157,7 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 codec_type: HTTP3
                 stat_prefix: grpc_worker_quic
+                stream_idle_timeout: {{ $t.grpcStreamIdle }}
                 {{- include "workerCallbackProxy.accessLog" "grpc_worker_quic" | nindent 16 }}
                 {{- with include "workerCallbackProxy.tracing" . }}
                 {{- . | nindent 16 }}
@@ -216,6 +217,7 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: invocation_worker_tcp
+                stream_idle_timeout: {{ $t.invocationStreamIdle }}
                 {{- include "workerCallbackProxy.accessLog" "invocation_worker_tcp" | nindent 16 }}
                 {{- with include "workerCallbackProxy.tracing" . }}
                 {{- . | nindent 16 }}
