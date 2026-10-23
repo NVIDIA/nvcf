@@ -127,7 +127,7 @@ type Result struct {
 	QueuedToWorkStream bool
 }
 
-func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (Result, context.CancelFunc, error) {
+func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (Result, context.CancelFunc, error) {
 	ctx, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "InvokeStatefulFunction",
 		trace.WithAttributes(
 			attribute.String("function_id", functionId),
@@ -166,7 +166,7 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, err
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, proxyAuthResponse.FunctionId, functionVersion.FunctionVersionId)
+		onWorkerAuthSet(workerAuthToken, requestId, proxyAuthResponse.FunctionId, functionVersion.FunctionVersionId, proxyAuthResponse.ClientNcaId)
 
 		cancelInvokingWorker, queued, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
 		if err != nil {
@@ -202,7 +202,7 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 			return Result{}, nil, fmt.Errorf("existing session invoker NCA ID mismatch for request id %s", requestId)
 		}
 
-		onWorkerAuthSet(workerAuthToken, requestId, existingSession.FunctionId, existingSession.FunctionVersionId)
+		onWorkerAuthSet(workerAuthToken, requestId, existingSession.FunctionId, existingSession.FunctionVersionId, proxyAuthResponse.ClientNcaId)
 
 		err = f.joinExistingSession(ctx, requestId, proxyAuthResponse, workerAuthToken)
 		if err != nil {

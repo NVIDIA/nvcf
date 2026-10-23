@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"nvcf-grpc-proxy/proxy/consts"
+	"nvcf-grpc-proxy/proxy/eventledger"
 	"nvcf-grpc-proxy/proxy/invocation"
 	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/middleware"
@@ -50,13 +51,19 @@ import (
 )
 
 type FunctionInvoker interface {
-	InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error)
+	InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string, ncaId string)) (invocation.Result, context.CancelFunc, error)
 }
 
 type workerAuthInfo struct {
 	requestId         uuid.UUID
 	functionId        string
 	functionVersionId string
+	// ncaId is the caller authenticated when the session was set up or rejoined.
+	ncaId    string
+	isRejoin bool
+	// setupStartedAt is when the client's request began setting up the
+	// session, before authentication and dispatch.
+	setupStartedAt time.Time
 	// mintedAt lets a CONNECT report how old the token was when it arrived,
 	// which is the headroom against consts.Timeout.
 	mintedAt time.Time
@@ -110,6 +117,7 @@ type StreamDirector struct {
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
+	eventLedger     *eventledger.Publisher
 }
 
 // workerConnectionKey
@@ -563,21 +571,26 @@ func (s *StreamDirector) Close() error {
 	return nil
 }
 
-func (s *StreamDirector) RegisterWorker(requestId uuid.UUID, workerAuthToken string, functionId string, functionVersionId string, workerLink net.Conn) error {
-	zap.L().Info("registering new worker connection", zap.Stringer("request id", requestId))
+func (s *StreamDirector) RegisterWorker(workerAuthToken string, info workerAuthInfo, workerLink net.Conn) error {
+	zap.L().Info("registering new worker connection", zap.Stringer("request id", info.requestId))
 
 	key := workerConnectionKey{
-		requestId:         requestId,
+		requestId:         info.requestId,
 		workerAuthToken:   workerAuthToken,
-		functionId:        functionId,
-		functionVersionId: functionVersionId,
+		functionId:        info.functionId,
+		functionVersionId: info.functionVersionId,
 	}
 
 	w := s.workers.Get(key)
 	if w == nil {
-		return fmt.Errorf("worker connection not found for request id %s", requestId)
+		return fmt.Errorf("worker connection not found for request id %s", info.requestId)
 	}
-	return w.Value().SetConnection(workerLink)
+	connectedAt := time.Now()
+	if err := w.Value().SetConnection(workerLink); err != nil {
+		return err
+	}
+	s.eventLedger.Publish(context.Background(), newAttachmentEstablished(w.Value(), info, connectedAt))
+	return nil
 }
 
 func (s *StreamDirector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -741,19 +754,24 @@ func spanError(span trace.Span, err error) error {
 
 func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *worker.ConnectionTrackingConn, auth, functionId, functionVersionId string, requestId *uuid.UUID) (*worker.WorkerConnection, error) {
 	return conn.InitWorkerConn(functionId, functionVersionId, func() (*worker.WorkerConnection, error) {
+		setupStartedAt := time.Now()
+		isRejoin := requestId != nil
 		// one connection + function routing gets one work request so we don't request more than
 		// one worker if multiple RPCs are sent on the connection before the first worker appears.
 
 		// Capture API-provided function info in closure
 		var apiFunctionId, apiFunctionVersionId string
 
-		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
+		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string, ncaId string) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
 			now := time.Now()
 			s.workerAuth.Set(workerAuthToken, workerAuthInfo{
 				requestId:         requestId,
 				functionId:        apiFunc,
 				functionVersionId: apiFuncVersion,
+				ncaId:             ncaId,
+				isRejoin:          isRejoin,
+				setupStartedAt:    setupStartedAt,
 				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
 			// Diagnostic shadow record, longer lived than the auth entry, so a
