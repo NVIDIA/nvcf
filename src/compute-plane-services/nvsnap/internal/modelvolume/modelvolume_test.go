@@ -612,3 +612,51 @@ func TestClaimDownload_OneOwnerAcrossNamespaces(t *testing.T) {
 		t.Errorf("failure must release the owner record: %v", err)
 	}
 }
+
+// A volume is shared within a tenant only. The tenant is the namespace's
+// TenantLabel value, or the namespace itself when no label is configured
+// or the namespace lacks it; a namespace that cannot be read has no
+// tenant at all.
+func TestProvisioner_Scope(t *testing.T) {
+	ctx := context.Background()
+	ns := func(name string, labels map[string]string) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	}
+	kc := fake.NewSimpleClientset(
+		ns("a-1", map[string]string{"tenant": "acme"}),
+		ns("a-2", map[string]string{"tenant": "acme"}),
+		ns("b-1", map[string]string{"tenant": "beta"}),
+		ns("bare", nil),
+	)
+	scope := func(cfg Config, name string) string {
+		t.Helper()
+		s, err := (&Provisioner{Kube: kc, Cfg: cfg}).Scope(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	labelled := Config{TenantLabel: "tenant"}
+	if scope(labelled, "a-1") != scope(labelled, "a-2") {
+		t.Error("two namespaces of one tenant must share a scope")
+	}
+	if scope(labelled, "a-1") == scope(labelled, "b-1") {
+		t.Error("two tenants must not share a scope")
+	}
+	if got := scope(labelled, "bare"); got != "namespace:bare" {
+		t.Errorf("a namespace without the label is its own tenant, got %q", got)
+	}
+	if scope(Config{}, "a-1") == scope(Config{}, "a-2") {
+		t.Error("with no tenant label every namespace is its own tenant")
+	}
+	// A tenant label value equal to a namespace name is still another scope.
+	if scope(Config{TenantLabel: "tenant"}, "a-1") == scope(Config{}, "acme") {
+		t.Error("a tenant scope must not collide with a namespace scope")
+	}
+	if ScopedURI(scope(labelled, "a-1"), uri) == ScopedURI(scope(labelled, "b-1"), uri) || Key(ScopedURI(scope(labelled, "a-1"), uri)) == Key(ScopedURI(scope(labelled, "b-1"), uri)) {
+		t.Error("one artifact in two tenants must be two volume identities")
+	}
+	if _, err := (&Provisioner{Kube: kc, Cfg: labelled}).Scope(ctx, "missing"); err == nil {
+		t.Error("an unreadable namespace must not be given a tenant")
+	}
+}

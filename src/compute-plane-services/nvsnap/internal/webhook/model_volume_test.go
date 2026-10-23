@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	appsv1 "k8s.io/api/apps/v1"
 	"strings"
 	"testing"
@@ -32,6 +33,28 @@ const (
 	ngcFunctionKey = "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed#init-ngc:."
 	kimiScriptKey  = "ngc://org/llm_nim/kimi-k3:hf#engine-ngc:."
 )
+
+// testTenantLabel is the namespace label the tests name a tenant with.
+const testTenantLabel = "example.com/tenant"
+
+// scoped is the volume identity of key for a pod in namespace ns when no
+// tenant label is configured and each namespace is its own tenant.
+func scoped(ns, key string) string { return modelvolume.ScopedURI("namespace:"+ns, key) }
+
+// oneTenant creates the namespaces nss as one tenant, has m share model
+// volumes by testTenantLabel, and returns the volume identity of key in
+// that tenant.
+func oneTenant(t *testing.T, kc *fake.Clientset, m *Mutator, tenant, key string, nss ...string) string {
+	t.Helper()
+	m.ModelVolume.Cfg.TenantLabel = testTenantLabel
+	for _, ns := range nss {
+		n := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: map[string]string{testTenantLabel: tenant}}}
+		if _, err := kc.CoreV1().Namespaces().Create(context.Background(), n, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return modelvolume.ScopedURI("tenant:"+testTenantLabel+"="+tenant, key)
+}
 
 func mvMutator(t *testing.T, mode modelvolume.Mode, role election.Role, kc *fake.Clientset) (*Mutator, *fakeElector) {
 	t.Helper()
@@ -203,7 +226,7 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	if el.called != 0 {
 		t.Error("the download step is a Job; no election runs")
 	}
@@ -281,7 +304,7 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 		t.Errorf("Block reader stamp: %v %v", v.labels, v.annotations)
 	}
 	vol, replaced := v.volumes["ngc-models"]
-	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-models/"+modelvolume.Key(ngcFunctionKey) || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+	if !replaced || vol.HostPath == nil || vol.HostPath.Path != "/var/lib/containerd/nvsnap-models/"+modelvolume.Key(scoped("sr-fn", ngcFunctionKey)) || *vol.HostPath.Type != corev1.HostPathDirectoryOrCreate {
 		t.Errorf("Block reader lands on a hostPath under the model host root for the agent to bind into, got %+v", vol)
 	}
 	var propagations int
@@ -316,7 +339,7 @@ func TestModelVolume_ReaderBlockPVC_ReferencesReadOnlyClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	if v.labels[modelvolume.RoleLabel] != "reader" || v.labels[modelvolume.PendingLabel] != "true" {
 		t.Errorf("PVC reader is pending until the agent mints its claim: %v", v.labels)
 	}
@@ -371,7 +394,7 @@ func TestModelVolume_ReaderBlockPVC_InjectedInitHardened(t *testing.T) {
 	if init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
 		t.Errorf("injected init must carry limits and a security context: %+v %+v", init.Resources, init.SecurityContext)
 	}
-	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	uri := scoped("fn", "hf://Qwen/Qwen2.5-32B-Instruct")
 	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("download Job: %v", err)
@@ -400,7 +423,7 @@ func TestModelVolume_InheritsChartUserPosture(t *testing.T) {
 	if isc.RunAsNonRoot == nil || !*isc.RunAsNonRoot || isc.RunAsUser == nil || *isc.RunAsUser != uid || isc.SeccompProfile == nil {
 		t.Errorf("injected init inherits the engine's user posture: %+v", isc)
 	}
-	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName("hf://Qwen/Qwen2.5-32B-Instruct"), metav1.GetOptions{})
+	job, err := kc.BatchV1().Jobs(pod.Namespace).Get(context.Background(), modelvolume.JobName(scoped("fn", "hf://Qwen/Qwen2.5-32B-Instruct")), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +445,10 @@ func TestModelVolume_InheritsChartUserPosture(t *testing.T) {
 }
 
 func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
-	uri := ngcFunctionKey
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	// Another namespace of the tenant that downloaded the model.
+	uri := oneTenant(t, kc, m, "acme", ngcFunctionKey, "sr-fn", "sr-other")
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
 		Spec: corev1.PersistentVolumeSpec{
@@ -431,8 +457,9 @@ func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
 			PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "nvmesh-csi.excelero.com", VolumeHandle: "cluster:csi-done:vol:sr-fn"}},
 		},
 	}
-	kc := fake.NewSimpleClientset(pv)
-	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	if _, err := kc.CoreV1().PersistentVolumes().Create(context.Background(), pv, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	pod := ngcFunctionPod()
 	pod.Namespace = "sr-other"
 	patches, err := m.Mutate(context.Background(), pod)
@@ -456,11 +483,73 @@ func TestModelVolume_ReaderBlockPVC_CompleteMintsAtAdmission(t *testing.T) {
 	}
 }
 
+// A complete volume is never handed to another tenant: the downloader's
+// credentials filled it, and a reader of a complete volume skips the
+// download, so it would read a private model without presenting any. The
+// other tenant downloads its own copy with its own credentials; with no
+// tenant label every namespace is a tenant of its own.
+func TestModelVolume_CompleteVolumeNotSharedAcrossTenants(t *testing.T) {
+	for _, labelled := range []bool{true, false} {
+		kc := fake.NewSimpleClientset()
+		m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+		owner := scoped("sr-fn", ngcFunctionKey)
+		if labelled {
+			owner = oneTenant(t, kc, m, "owner", ngcFunctionKey, "sr-fn")
+			oneTenant(t, kc, m, "other", ngcFunctionKey, "sr-other")
+		}
+		completePrimary(t, kc, owner, "nvmesh-csi.excelero.com")
+		pod := ngcFunctionPod()
+		pod.Namespace = "sr-other"
+		patches, err := m.Mutate(context.Background(), pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := viewMV(pod, patches)
+		if got := v.annotations[modelvolume.IdentityAnnotation]; got == owner || got == "" {
+			t.Errorf("labelled=%v: the other tenant's pod must get its own identity, got %q", labelled, got)
+		}
+		if _, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(context.Background(), modelvolume.ReadOnlyClaimName(owner), metav1.GetOptions{}); err == nil {
+			t.Errorf("labelled=%v: a view of the owner's volume was minted in another tenant's namespace", labelled)
+		}
+		ros, _ := kc.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+		for _, pv := range ros.Items {
+			if pv.Labels[modelvolume.IdentityLabel] == modelvolume.Key(owner) && pv.Spec.ClaimRef != nil && pv.Spec.ClaimRef.Namespace == "sr-other" {
+				t.Errorf("labelled=%v: read-only PV %s of the owner's volume bound into the other tenant", labelled, pv.Name)
+			}
+		}
+		if _, err := kc.BatchV1().Jobs("sr-other").Get(context.Background(), modelvolume.JobName(v.annotations[modelvolume.IdentityAnnotation]), metav1.GetOptions{}); err != nil {
+			t.Errorf("labelled=%v: the other tenant downloads with its own credentials: %v", labelled, err)
+		}
+	}
+}
+
+// The tenant of a namespace that cannot be read is unknown: the pod is
+// admitted unchanged rather than guessed into a tenant.
+func TestModelVolume_UnreadableTenantLeavesPodAlone(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	m.ModelVolume.Cfg.TenantLabel = testTenantLabel
+	kc.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	pod := ngcFunctionPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewMV(pod, patches); v.annotations[modelvolume.IdentityAnnotation] != "" {
+		t.Errorf("no model volume without a tenant, got identity %q", v.annotations[modelvolume.IdentityAnnotation])
+	}
+	if jobs, _ := kc.BatchV1().Jobs("").List(context.Background(), metav1.ListOptions{}); len(jobs.Items) != 0 {
+		t.Errorf("no download Job without a tenant, got %d", len(jobs.Items))
+	}
+}
+
 // A reader of a complete block volume gets the page-cache sweep before the
 // engine starts; NVSNAP_PREWARM=0 on the engine container turns it off, and
 // a volume that is not complete yet gets none (nothing to sweep).
 func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
-	uri := ngcFunctionKey
+	uri := scoped("sr-other", ngcFunctionKey)
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
 		Spec: corev1.PersistentVolumeSpec{
@@ -570,7 +659,7 @@ func TestModelVolume_SharedFilesystem_FirstPodWritesThroughView(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	ctx := context.Background()
 	primary, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, modelvolume.ClaimName(uri), metav1.GetOptions{})
 	if err != nil || primary.Spec.AccessModes[0] != corev1.ReadWriteMany {
@@ -629,7 +718,7 @@ func TestModelVolume_SharedFilesystem_OneWriterAcrossNamespaces(t *testing.T) {
 	bindClaims(kc, "fss.csi.oraclecloud.com")
 	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
 	ctx := context.Background()
-	uri := ngcFunctionKey
+	uri := oneTenant(t, kc, m, "acme", ngcFunctionKey, "sr-fn", "sr-other")
 	cfg := m.ModelVolume.Cfg
 	for _, ns := range []string{"sr-fn", "sr-other"} {
 		pod := ngcFunctionPod()
@@ -650,7 +739,7 @@ func TestModelVolume_SharedFilesystem_OneWriterAcrossNamespaces(t *testing.T) {
 		}
 	}
 	if jobs != 1 {
-		t.Errorf("exactly one download Job cluster-wide, got %d", jobs)
+		t.Errorf("exactly one download Job for the tenant, got %d", jobs)
 	}
 	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{}); err == nil {
 		t.Error("the second namespace must not get a read-write view of the primary")
@@ -667,7 +756,7 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	uri := scoped("fn", "hf://Qwen/Qwen2.5-32B-Instruct")
 	job, err := kc.BatchV1().Jobs("fn").Get(context.Background(), modelvolume.JobName(uri), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("engine-download needs a download Job: %v", err)
@@ -732,7 +821,7 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 func TestModelVolume_CompleteCreatesNoJob(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, el := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
-	uri := "hf://Qwen/Qwen2.5-32B-Instruct"
+	uri := scoped("fn", "hf://Qwen/Qwen2.5-32B-Instruct")
 	completePrimary(t, kc, uri, "fss.csi.oraclecloud.com")
 	patches, err := m.Mutate(context.Background(), stockVLLMPod())
 	if err != nil {
@@ -777,7 +866,7 @@ func TestModelVolume_LeavesOthersAlone(t *testing.T) {
 func TestModelVolume_RecentFailureLeavesPodAlone(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	if err := m.ModelVolume.RecordFailure(context.Background(), uri, "copy failed"); err != nil {
 		t.Fatal(err)
 	}
@@ -822,7 +911,7 @@ func completeModelPV(t *testing.T, kc *fake.Clientset, uri string) {
 // identity (config hash + ordinal) and the emptyDir location stamped.
 func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
 	kc := fake.NewSimpleClientset()
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	completeModelPV(t, kc, uri)
 	m := cacheMutator(t, kc)
 	two := int32(2)
@@ -869,7 +958,7 @@ func TestCacheVolume_FirstPodMarkedForCapture(t *testing.T) {
 // seed init copies it into the pod's cachedir before the engine starts.
 func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {
 	kc := fake.NewSimpleClientset()
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	completeModelPV(t, kc, uri)
 	m := cacheMutator(t, kc)
 	pod := ngcFunctionPod()
@@ -972,7 +1061,7 @@ func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) 
 		t.Fatal(err)
 	}
 	v := viewMV(pod, patches)
-	uri := kimiScriptKey
+	uri := scoped("sr-fn", kimiScriptKey)
 	if v.annotations[modelvolume.IdentityAnnotation] != uri || v.labels[modelvolume.CaptureLabel] != "true" || v.annotations[modelvolume.CaptureVolumeAnnotation] != "ngc-models" {
 		t.Errorf("first pod is stamped for capture of its landing volume: labels=%v annotations=%v", v.labels, v.annotations)
 	}
@@ -1003,7 +1092,7 @@ func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) 
 func TestModelVolume_EngineNGCDownload_LaterPodReadsCapturedVolume(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
-	uri := kimiScriptKey
+	uri := scoped("sr-fn", kimiScriptKey)
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-kimi-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
 		Spec: corev1.PersistentVolumeSpec{
@@ -1141,7 +1230,7 @@ func TestModelVolume_NoPrewarmForParallelLoader(t *testing.T) {
 			t.Errorf("parallelLoader(%v) = %q, want %q", tc.args, got, tc.want)
 		}
 	}
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-done", Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(uri), modelvolume.CompleteLabel: "true", "app.kubernetes.io/managed-by": "nvsnap"}},
 		Spec: corev1.PersistentVolumeSpec{
@@ -1171,8 +1260,8 @@ func TestModelVolume_NoPrewarmForParallelLoader(t *testing.T) {
 // identical, and this test is where a branch that exists in one mode and
 // not the other fails.
 func TestModelVolume_SameFlowOnEveryStorage(t *testing.T) {
-	uri := ngcFunctionKey
-	kimi := kimiScriptKey
+	uri := scoped("sr-fn", ngcFunctionKey)
+	kimi := scoped("sr-fn", kimiScriptKey)
 	for _, tc := range []struct {
 		name   string
 		mode   modelvolume.Mode
@@ -1316,7 +1405,7 @@ func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
 		t.Fatalf("an unbound primary must not fail admission: %v", err)
 	}
 	v := viewMV(pod, patches)
-	uri := ngcFunctionKey
+	uri := scoped("sr-fn", ngcFunctionKey)
 	cfg := m.ModelVolume.Cfg
 	ctx := context.Background()
 	if _, err := kc.CoreV1().PersistentVolumeClaims("nvsnap-system").Get(ctx, cfg.ClaimName(uri), metav1.GetOptions{}); err != nil {
@@ -1451,6 +1540,7 @@ func TestModelVolume_AnyChartReadsAnyDownloadOfTheRepo(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	bindClaims(kc, "fss.csi.oraclecloud.com")
 	m, _ := mvMutator(t, modelvolume.ModeRWX, election.RoleLeader, kc)
+	uri := oneTenant(t, kc, m, "acme", "hf://Qwen/Qwen2.5-32B-Instruct", "fn", "fn2", "fn3")
 	hubChart := stockVLLMPod()
 	hubChart.Spec.Volumes = []corev1.Volume{{Name: "hub", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 	hubChart.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{Name: "hub", MountPath: "/data/hub"}}
@@ -1475,7 +1565,7 @@ func TestModelVolume_AnyChartReadsAnyDownloadOfTheRepo(t *testing.T) {
 			t.Errorf("%s: reader HF_HUB_CACHE=%q offline=%q, want %q", pod.Namespace, v.env["HF_HUB_CACHE"], v.env["HF_HUB_OFFLINE"], want[pod])
 		}
 	}
-	if len(keys) != 1 || !keys["hf://Qwen/Qwen2.5-32B-Instruct"] {
+	if len(keys) != 1 || !keys[uri] {
 		t.Errorf("one volume for the repo, got keys %v", keys)
 	}
 	jobs, _ := kc.BatchV1().Jobs("").List(context.Background(), metav1.ListOptions{})
@@ -1516,7 +1606,7 @@ func TestModelVolume_ChartLayoutsKeySeparateVolumes(t *testing.T) {
 		}
 		keys = append(keys, viewMV(pod, patches).annotations[modelvolume.IdentityAnnotation])
 	}
-	if keys[0] != "hf://Qwen/Qwen2.5-32B-Instruct#init-hf-local-dir:qwen" || keys[1] != "hf://Qwen/Qwen2.5-32B-Instruct" {
+	if keys[0] != scoped("fn", "hf://Qwen/Qwen2.5-32B-Instruct#init-hf-local-dir:qwen") || keys[1] != scoped("fn2", "hf://Qwen/Qwen2.5-32B-Instruct") {
 		t.Errorf("keys = %v, want the init's layout in its key and the canonical one plain", keys)
 	}
 }
@@ -1537,7 +1627,7 @@ func TestModelVolume_InitMountsLandingElsewhere_JobMountsItOnce(t *testing.T) {
 	}
 	v := viewMV(pod, patches)
 	uri := v.annotations[modelvolume.IdentityAnnotation]
-	if !strings.HasPrefix(uri, ngcFunctionKey) {
+	if !strings.HasPrefix(uri, scoped("sr-fn", "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed")) {
 		t.Fatalf("identity = %q", uri)
 	}
 	if vol, ok := v.volumes["ngc-models"]; !ok || vol.PersistentVolumeClaim == nil && vol.HostPath == nil {

@@ -59,6 +59,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/election",
+        "//src/compute-plane-services/nvsnap/internal/modelid",
         "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/rootfsonly",
         "@com_github_sirupsen_logrus//:logrus",

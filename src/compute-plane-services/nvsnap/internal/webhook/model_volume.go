@@ -58,8 +58,15 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 	}
 	// Pods share a volume by artifact and, where the chart decides it, by
 	// the tree's layout: a pod never reads a tree laid out for another
-	// chart (modelid.Result.ShareKey).
-	uri := res.ShareKey()
+	// chart (modelid.Result.ShareKey). And only within the tenant whose
+	// credentials downloaded it: nothing at admission tells a public
+	// artifact from a private one, and a reader of a complete volume
+	// skips the download, so it never shows it may read the artifact.
+	scope, err := m.ModelVolume.Scope(ctx, pod.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	uri := modelvolume.ScopedURI(scope, res.ShareKey())
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri, "source": res.Source})
 	if !res.Landing.Substitutable() {
 		log.WithField("kind", res.Landing.Kind).Info("model volume: landing volume is the customer's; leaving pod alone")
@@ -158,8 +165,9 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // it is already bound, so readers admitted now can view it.
 func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri string, step modelvolume.DownloadStep, log logrus.FieldLogger) (string, error) {
 	cfg := m.ModelVolume.Cfg
-	// One namespace downloads a model, cluster-wide. Every other namespace
-	// is a reader of the same primary: two Jobs writing one volume through
+	// One namespace downloads a model for its tenant (uri carries the
+	// tenant). Every other namespace of the tenant is a reader of the same
+	// primary: two Jobs writing one volume through
 	// separate views could leave the marker beside a file the slower
 	// writer is still truncating.
 	owner, err := m.ModelVolume.ClaimDownload(ctx, uri, pod.Namespace)
