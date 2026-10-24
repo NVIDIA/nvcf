@@ -104,6 +104,10 @@ BDD_CLEANUP_MODE=topology-multi \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestSingleClusterHelmfileUpstreamImages$' -timeout 90m -v
 
+# Focused upstream OpenBao injector (prepared isolated fixture):
+# See tests/bdd/injector-upstream.md for required environment and backend.
+go test -run '^TestOpenBaoInjectorUpstream$' -count=1 -timeout=10m .
+
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
 # on k3d-ncp-local-compute-1. Same secrets and charts as the single-cluster
