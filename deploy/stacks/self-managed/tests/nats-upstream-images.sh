@@ -87,12 +87,11 @@ for file in "$work_dir/chart.yaml" "$work_dir/default.yaml"; do
   grep -Fq 'secretName: nats-nkeys' "$file" || fail 'NKeys secret mount missing'
   grep -Fq '/etc/nats-nkeys/default' "$file" || fail 'NKey context path missing'
   grep -Fq '/etc/nats-contexts' "$file" || fail 'NATS contexts mount missing'
-done
-
-  assert_equal "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "$work_dir/chart.yaml")" true 'box nonroot'
+  assert_equal "$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot' "$file")" true 'box nonroot'
   for field in runAsUser runAsGroup fsGroup; do
-    assert_equal "$(yq -r "select(.kind == \"Deployment\") | .spec.template.spec.securityContext.$field" "$work_dir/chart.yaml")" 1000 "box $field"
+    assert_equal "$(yq -r "select(.kind == \"Deployment\") | .spec.template.spec.securityContext.$field" "$file")" 1000 "box $field"
   done
+done
 
 # Registry/repository overrides preserve the immutable pin without requiring a tag.
 cat > "$environment_file" <<'YAML'

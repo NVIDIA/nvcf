@@ -1758,12 +1758,16 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 			ExitCode: 0,
 			Stdout:   helmListAllNamespacesJSON(),
 		},
-		`kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
+		`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
 			ExitCode: 0,
 			Stdout:   upstreamReloader,
 		},
 		`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'`: {
 			Stdout: "docker.io/synadia/nats-server:fixture-tag",
+		},
+		`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.securityContext.runAsNonRoot}:` +
+			`{.spec.template.spec.securityContext.runAsUser}:{.spec.template.spec.securityContext.runAsGroup}:{.spec.template.spec.securityContext.fsGroup}'`: {
+			Stdout: "true:1000:1000:1000",
 		},
 		`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'`: {
 			Stdout: "docker.io/natsio/nats-box:fixture-nonroot@sha256:" + strings.Repeat("a", 64),

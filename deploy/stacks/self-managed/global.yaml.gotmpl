@@ -268,6 +268,14 @@ nats:
     {{- end }}
   {{- end }}
   natsBox:
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
     container:
       image:
         registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default "docker.io" }}

@@ -89,7 +89,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
 
     When I run command:
       """
-      kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'
+      kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'
       """
     Then the command exit code should be 0
     And the command output should contain "docker.io/natsio/nats-server-config-reloader:"
@@ -108,6 +108,13 @@ Feature: Install a local single-cluster stack with upstream supporting images
     Then the command exit code should be 0
     And the command output should contain "docker.io/natsio/nats-box:"
     And the command output should contain "-nonroot@sha256:"
+
+    When I run command:
+      """
+      kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.securityContext.runAsNonRoot}:{.spec.template.spec.securityContext.runAsUser}:{.spec.template.spec.securityContext.runAsGroup}:{.spec.template.spec.securityContext.fsGroup}'
+      """
+    Then the command exit code should be 0
+    And the command output should contain "true:1000:1000:1000"
 
     # Exercise the shipped tools as the nonroot user without logging key material.
     When I successfully run command:
