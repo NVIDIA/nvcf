@@ -48,6 +48,9 @@ type Reconciler struct {
 	Namespace  string        // nvsnap-system; where capture CMs live
 	Interval   time.Duration // default 30s
 	Log        logrus.FieldLogger
+	// Elections, when set, is checked every tick for leaders that died or
+	// overran their deadline (election_release.go).
+	Elections *electionReleaser
 }
 
 // Run blocks reconciling on every Interval until ctx is cancelled. Errors
@@ -81,6 +84,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 // Idempotent: existing rows by ID are skipped (CreateCheckpoint returns
 // an error for duplicates; we treat it as no-op).
 func (r *Reconciler) reconcileOnce(ctx context.Context) {
+	r.Elections.reconcile(ctx)
 	selector := fmt.Sprintf("%s=%s", checkpointstore.CMLabelKind, checkpointstore.CMLabelKindCapture)
 	cms, err := r.KubeClient.CoreV1().ConfigMaps(r.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {

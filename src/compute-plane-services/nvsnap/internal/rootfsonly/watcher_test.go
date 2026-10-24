@@ -19,6 +19,7 @@ package rootfsonly
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -502,5 +503,83 @@ func TestWatcher_CommittedCaptureStaysDeduped(t *testing.T) {
 	}
 	if _, ok := w.captured.Load(pod.UID); !ok {
 		t.Fatal("a committed capture released its dedup mark; the pod would be recaptured on every resync")
+	}
+}
+
+// stampVerifier vouches for every stamp, or for none, and counts the asks.
+type stampVerifier struct {
+	err   error
+	calls int
+	cc    string
+}
+
+func (v *stampVerifier) VerifyStamp(_ context.Context, _ *corev1.Pod, _, cc string) error {
+	v.calls++
+	v.cc = cc
+	return v.err
+}
+
+// captureStamped runs one capture of a pod stamped with stamped and
+// reports whether it landed under the stamp and under the hash composed
+// from what the pod runs.
+func captureStamped(t *testing.T, stamps StampVerifier, stamped string) (underStamp, underComposed bool) {
+	t.Helper()
+	env := newWatcherEnv(t)
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+	count := &countingBackend{Backend: env.backend}
+	capturer := env.capturer()
+	capturer.Backend = count
+	w := env.watcher()
+	w.Capturer = capturer
+	w.Stamps = stamps
+	w.sem = make(chan struct{}, w.concurrency())
+
+	pod := fakePod(types.UID(env.podUID), "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	pod.Annotations = map[string]string{stampedHashAnnotation: stamped}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	composed := checkpointstore.ComputeHash(w.Composer.Compose(pod, 0))
+	w.HandlePodEvent(ctx, pod)
+	waitFor(t, 3*time.Second, func() bool {
+		_, e1 := count.Stat(ctx, stamped)
+		_, e2 := count.Stat(ctx, composed)
+		return e1 == nil || e2 == nil
+	})
+	_, e1 := count.Stat(ctx, stamped)
+	_, e2 := count.Stat(ctx, composed)
+	return e1 == nil, e2 == nil
+}
+
+const testStamp = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+
+// A pod whose election vouches for its stamped hash is captured under it,
+// so the followers decorated against that hash find the capture.
+func TestWatcher_CapturesUnderVerifiedStamp(t *testing.T) {
+	v := &stampVerifier{}
+	underStamp, underComposed := captureStamped(t, v, testStamp)
+	if !underStamp || underComposed || v.calls != 1 {
+		t.Errorf("under stamp=%v composed=%v asked=%d; want the stamp alone, asked once", underStamp, underComposed, v.calls)
+	}
+}
+
+// A stamp nothing vouches for is the pod author's word only: a tenant pod
+// naming another model's hash must not publish its bytes under it. It is
+// captured under the hash composed from what it runs, as before the
+// election; so is every stamped pod when the election is off.
+func TestWatcher_UnverifiedStampCapturesUnderComposedHash(t *testing.T) {
+	cases := map[string]struct {
+		stamps StampVerifier
+		stamp  string
+	}{
+		"election refuses":  {&stampVerifier{err: errors.New("not the leader")}, testStamp},
+		"election off":      {nil, testStamp},
+		"not a hash at all": {&stampVerifier{}, "short"},
+	}
+	for name, c := range cases {
+		underStamp, underComposed := captureStamped(t, c.stamps, c.stamp)
+		if underStamp || !underComposed {
+			t.Errorf("%s: under stamp=%v composed=%v; want the composed hash alone", name, underStamp, underComposed)
+		}
 	}
 }

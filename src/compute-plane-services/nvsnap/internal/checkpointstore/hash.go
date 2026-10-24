@@ -99,6 +99,20 @@ func ComputeHash(in HashInput) string {
 // that horizon out past anything we'd plausibly accumulate.
 const ShortHashLen = 32
 
+// IsHash reports whether h has the form ComputeHash gives: 64 lowercase
+// hex digits.
+func IsHash(h string) bool {
+	if len(h) != 64 {
+		return false
+	}
+	for _, c := range h {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // ShortHash returns the first ShortHashLen hex characters of a hash,
 // suitable for K8s resource names, label values, and human display.
 func ShortHash(h string) string {

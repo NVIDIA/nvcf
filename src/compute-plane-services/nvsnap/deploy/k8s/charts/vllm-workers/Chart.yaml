@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v2
+name: vllm-workers
+version: 0.1.0
+description: >-
+  Stock vLLM Deployment with N identical GPU workers and no nvsnap markers.
+  Test chart for the one-downloader election (docs/proposals/helm-chart-cache-election.md).

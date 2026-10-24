@@ -257,16 +257,27 @@ func (c *ConfigMapBackend) Stat(ctx context.Context, hash string) (Manifest, err
 	return innerM, nil
 }
 
-// Delete removes the manifest ConfigMap (best-effort) and then the inner data.
+// Delete removes the manifest ConfigMap and then the inner data. A failed
+// ConfigMap delete is returned, not only logged: a manifest left behind
+// tells the webhook the hash was captured, and the hash never gets another
+// election.
 func (c *ConfigMapBackend) Delete(ctx context.Context, hash string) error {
-	// Best-effort delete the CM first; if it succeeds and the inner
-	// Delete fails we'll have orphan data, but the metadata is gone
-	// so the webhook treats the hash as not-found (correct outcome).
-	if err := c.deleteManifestCM(ctx, hash); err != nil && !errors.Is(err, ErrNotFound) {
-		c.log.WithError(err).WithField("hash", ShortHash(hash)).
-			Warn("CM delete failed; continuing with data delete")
+	cmErr := c.deleteManifestCM(ctx, hash)
+	if errors.Is(cmErr, ErrNotFound) {
+		cmErr = nil
 	}
-	return c.inner.Delete(ctx, hash)
+	innerErr := c.inner.Delete(ctx, hash)
+	if cmErr == nil {
+		return innerErr
+	}
+	cmErr = fmt.Errorf("delete manifest ConfigMap: %w", cmErr)
+	// Missing inner data must not turn a failed manifest delete into
+	// ErrNotFound: callers stop retrying on ErrNotFound, and the stale
+	// manifest would stay behind.
+	if errors.Is(innerErr, ErrNotFound) {
+		return cmErr
+	}
+	return errors.Join(cmErr, innerErr)
 }
 
 // Mount delegates to the inner Backend.

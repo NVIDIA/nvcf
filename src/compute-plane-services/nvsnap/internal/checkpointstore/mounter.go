@@ -19,6 +19,7 @@ package checkpointstore
 
 import (
 	"context"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -83,4 +84,19 @@ type Mounter interface {
 type Backend interface {
 	Store
 	Mounter
+}
+
+// ErrUnsupported means the storage strategy cannot provide what was asked
+// (for example a namespace-local shared claim on per-pod-clone storage).
+var ErrUnsupported = errors.New("checkpointstore: unsupported by this storage strategy")
+
+// PendingMounter is implemented by backends that can name the restore
+// claim for a hash before it exists. The election decorates follower pods
+// against that name and gates their scheduling until the promote binds
+// it, so the mount spec has to be known ahead of the artifact.
+type PendingMounter interface {
+	// PendingMountSpec returns the mount a restore pod will use once the
+	// artifact for hash is promoted, and false when the storage cannot
+	// name one ahead of time (per-pod clone strategies).
+	PendingMountSpec(hash string, vol VolumeMeta) (PodMount, bool)
 }
