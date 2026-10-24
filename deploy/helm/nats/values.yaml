@@ -39,9 +39,9 @@ nats:
         capabilities:
           drop: [ALL]
     image:
-      registry: docker.io
-      repository: synadia/nats-server
-      tag: 2.14.6-alpine3.22
+      registry: ""
+      repository: ""
+      tag: 2.11.17-alpine3.22
       pullPolicy: IfNotPresent
     env:
       NKEY_USER_KEY:
@@ -49,7 +49,7 @@ nats:
           secretKeyRef:
             name: nats-nkeys
             key: user.pub
-      # Auth callout public NKeys, resolved by NATS server config via $ENV substitution.
+      # Auth callout public NKeys — resolved by NATS server config via $ENV substitution.
       # Read from nats.authCallout.secretName, provisioned at deploy time.
       # The OpenBao migration reads the same Secret to store the private seeds.
       AUTH_CALLOUT_USER_NKEY:
@@ -102,19 +102,10 @@ nats:
     enabled: true
     container:
       image:
-        registry: docker.io
-        repository: natsio/nats-box
-        # The upstream chart accepts tag@digest; retain both in inventories.
-        tag: 0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+        registry: ""
+        repository: ""
+        tag: 0.19.5-nonroot
         pullPolicy: IfNotPresent
-    podTemplate:
-      merge:
-        spec:
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
     # Add contexts configuration to mount the nkeys secret
     contexts:
       default:

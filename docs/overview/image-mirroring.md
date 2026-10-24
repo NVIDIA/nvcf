@@ -84,8 +84,7 @@ Failing to specify the correct platform will result in `exec format error` when 
 
 </Warning>
 
-1. For images hosted on NGC, log in using your Personal API key.
-   The upstream NATS examples below use Docker Hub and do not need NGC login:
+1. Login using the Personal API key you have generated in the previous step:
 
    ```bash
    docker login nvcr.io -u '$oauthtoken' -p <NGC_API_KEY>
@@ -95,64 +94,11 @@ Failing to specify the correct platform will result in `exec format error` when 
 
    ```bash
    # For amd64 clusters (most EKS, GKE, AKS clusters)
-   docker pull --platform linux/amd64 docker.io/natsio/nats-box:0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+   docker pull --platform linux/amd64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
 
    # For arm64 clusters (Graviton-based EKS, etc.)
-   docker pull --platform linux/arm64 docker.io/natsio/nats-box:0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+   docker pull --platform linux/arm64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
    ```
-
-### Mirror NATS images
-
-NATS server (`docker.io/synadia/nats-server`), box (`docker.io/natsio/nats-box`),
-and reloader (`docker.io/natsio/nats-server-config-reloader`) come from upstream,
-independently of `global.image`. NGC login is not required to pull them.
-Use the exact references in the [manifest](./manifest.md).
-
-Copy all platforms and preserve digests. A local `docker pull`, `tag`, and
-`push` sequence can copy only one platform and change the index digest.
-For NATS box, use the qualified index directly:
-
-```bash
-NATS_BOX_VERSION=0.20.1-nonroot
-NATS_BOX_DIGEST=sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
-MIRROR_REPOSITORY=<your-registry>/<your-repository>/nats-box
-skopeo copy --all --preserve-digests \
-  "docker://docker.io/natsio/nats-box@${NATS_BOX_DIGEST}" \
-  "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}"
-skopeo inspect --raw "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}" > nats-box-index.json
-skopeo manifest-digest nats-box-index.json
-```
-
-The result must match `NATS_BOX_DIGEST`. The index must retain `linux/amd64`
-and `linux/arm64`. The upstream image runs as UID/GID `1000:1000` on both.
-Authenticate to your destination with `skopeo login` before copying.
-Use the same copy procedure for the server and reloader versions in the manifest.
-
-Set the per-image `registry` and `repository` keys shown in the
-[manifest override example](./manifest.md#supporting-images-that-ship-from-docker-hub).
-Leave the box `tag` unset to retain the selected version and digest. A custom
-`tag` replaces the complete `version-nonroot@sha256:...` pin; use the digest
-of your mirrored index if the destination cannot preserve the original.
-
-If the destination requires a different manifest representation,
-`--preserve-digests` fails. Use a separate copy without that flag, still copying
-all platforms, then inspect and pin the destination index:
-
-```bash
-skopeo copy --all \
-  "docker://docker.io/natsio/nats-box@${NATS_BOX_DIGEST}" \
-  "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}"
-skopeo inspect --raw "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}" > nats-box-mirror-index.json
-MIRROR_DIGEST="$(skopeo manifest-digest nats-box-mirror-index.json)"
-jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] |
-  index("amd64") != null and index("arm64") != null' nats-box-mirror-index.json
-printf '%s@%s\n' "$NATS_BOX_VERSION" "$MIRROR_DIGEST"
-```
-
-Set `nats.natsBox.container.image.tag` to the complete printed
-`version-nonroot@sha256:...` value, along with the destination `registry` and
-`repository`. This pins the mirrored index instead of the upstream index.
-The NKeys and contexts mounts do not change.
 
 ### Pulling Helm Charts
 
@@ -472,9 +418,7 @@ global:
     repository: nvcf-self-hosted
 ```
 
-For NATS box, also set `nats.natsBox.container.image.registry` and
-`repository` to this destination. `global.image` alone does not redirect NATS.
-The mirrored image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nats-box:0.20.1-nonroot`
+The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
 In ECR, you must create repositories with the full path including the prefix, e.g., `nvcf-self-hosted/notary-service`, `nvcf-self-hosted/nats-box`, etc.
 
@@ -497,10 +441,12 @@ Push an Image to ECR
 # Create ECR repository with the full path (including prefix)
 aws ecr create-repository --repository-name ${REPO_PREFIX}/nats-box --region us-east-1
 
-# Copy the multi-platform index, preserving the digest used by the stack
-skopeo copy --all --preserve-digests \
-  docker://docker.io/natsio/nats-box@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44 \
-  docker://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.20.1-nonroot
+# Tag the image for ECR (include repository prefix in path)
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
+
+# Push to ECR
+docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 ```
 
 Push a Helm Chart to ECR
@@ -548,9 +494,7 @@ global:
     repository: nvcf-self-hosted
 ```
 
-For NATS box, also set `nats.natsBox.container.image.registry` and
-`repository` to this destination. `global.image` alone does not redirect NATS.
-The mirrored image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nats-box:0.20.1-nonroot`
+The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
 </Info>
 
@@ -580,10 +524,12 @@ Push an Image to Volcano Engine CR
 CR_ENDPOINT="cr-example-cn-beijing.cr.volces.com"
 NAMESPACE="nvcf-self-hosted"
 
-# Copy the multi-platform index, preserving the digest used by the stack
-skopeo copy --all --preserve-digests \
-  docker://docker.io/natsio/nats-box@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44 \
-  docker://${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.20.1-nonroot
+# Tag the image for Volcano Engine CR
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
+
+# Push to Volcano Engine CR
+docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 ```
 
 Push a Helm Chart to Volcano Engine CR

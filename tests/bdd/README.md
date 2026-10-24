@@ -96,7 +96,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestSingleClusterHA$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub
-# NATS server, nonroot box, reloader, and API bootstrap utility images. The feature
+# NATS reloader and API bootstrap Alpine Kubernetes utility image. The feature
 # installs the dependency group, ESS API, NATS auth callout, and API rather
 # than unrelated services. The broad cleanup mode
 # removes any stale single- or multi-cluster ncp-local topology first.
@@ -279,10 +279,7 @@ If a new step is genuinely needed:
 - For the Helmfile feature: `NGC_API_KEY`, `SAMPLE_NGC_ORG`,
   `SAMPLE_NGC_TEAM` env vars set.
 - For the upstream-image feature: outbound cluster access to
-  `docker.io/synadia`, `docker.io/natsio`, and `docker.io/alpine`.
-  NATS box checks cover the digest-bearing image reference, UID/GID, mounted
-  NKeys/context, `nsc` key generation, and authenticated NATS CLI access.
-  Run on both AMD64 and ARM64 environments to qualify both platforms.
+  `docker.io/natsio` and `docker.io/alpine`.
 
 The focused upstream-image feature also requires the gitignored
 `tools/ncp-local-cluster/secrets/docker-config.json` used by the kubelet
