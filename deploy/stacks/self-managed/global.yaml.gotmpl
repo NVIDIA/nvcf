@@ -268,28 +268,40 @@ nats:
     {{- end }}
   {{- end }}
   natsBox:
+    {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+    {{- end }}
     container:
       image:
-        registry: {{ .Values.global.image.registry }}
-        repository: {{ .Values.global.image.repository }}/nats-box
-        tag: 0.19.7-nonroot
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
-  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
+  {{- $natsPodSecurityContext := dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+  {{- if or $natsNs $natsTol $natsPodSecurityContext }}
   podTemplate:
     merge:
       spec:
+        {{- with $natsPodSecurityContext }}
         securityContext:
-          {{- dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values | toYaml | nindent 10 }}
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}
         {{- with $natsTol }}
         {{- . | nindent 8 }}
         {{- end }}
+  {{- end }}
 
   # One merged config: block -- a second config: key under nats: would be
   # silently collapsed. Surfaces server TLS for split-plane workers that reach
@@ -347,6 +359,10 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "resources" dict .Values }}
+  resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}

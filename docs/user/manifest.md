@@ -96,6 +96,93 @@ api:
       tag: "1.37.0"
 ```
 
+### Use upstream NATS images
+
+To use upstream images, merge these values into
+`deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
+these settings to the selected NATS chart; no chart or release-definition
+changes are needed. This example uses NATS server 2.14.6, reloader 0.24.0, and
+NATS box 0.20.1. The box pin identifies the upstream multi-platform index for
+Linux AMD64 and ARM64.
+
+```yaml
+nats:
+  container:
+    image:
+      registry: docker.io
+      repository: synadia/nats-server
+      tag: "2.14.6-alpine3.22"
+  reloader:
+    image:
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: "0.24.0"
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+  natsBox:
+    container:
+      image:
+        registry: docker.io
+        repository: natsio/nats-box
+        tag: "0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44"
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+```
+
+The box image declares user/group `1000:1000`. `runAsNonRoot` adds Kubernetes
+enforcement; `runAsUser` and `runAsGroup` make the identity explicit. The server
+pod settings also cover its reloader; neither image declares a nonroot user.
+Server `fsGroup` assigns group 1000 to the JetStream and shared PID volumes.
+The box image provides writable directories for CLI state and `nsc` keys.
+Its default context links to read-only mounted Secrets;
+use a separate `XDG_CONFIG_HOME` to save additional contexts. The box needs no
+additional volume or `fsGroup` for this example.
+
+For a private mirror, set each image's `registry` and `repository` together and
+use the mirrored `tag` or `tag@sha256:...`. Preserve the multi-platform index
+when copying the box image and verify the destination digest. Unset or empty
+keys retain the stack's existing defaults; this example does not change them.
+Configure `global.imagePullSecrets` if the destination requires authentication.
+
+Render before installing, using your normal chart source and secrets file:
+
+```bash
+cd deploy/stacks/self-managed
+export HELMFILE_ENV=<environment>
+helmfile -f helmfile.d/01-dependencies.yaml.gotmpl --selector name=nats template
+```
+
+Check the StatefulSet's server and reloader images and the box Deployment's
+full `tag@digest` reference and security context. Install with the normal
+stack workflow, then verify in the intended Kubernetes context:
+
+```bash
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status statefulset/nats
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status deployment/nats-box
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c nats -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c reloader -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- \
+  nats --context default rtt
+```
+
+The identities should report UID/GID 1000. The CLI check uses the mounted NKey
+and requires the stack's authentication service to be ready. Expect latency
+output; `failed` or an authorization error is a failure even if `rtt` exits
+successfully. Check the reloader logs after a configuration update to confirm
+it reloads successfully.
+
 ### Override the Cassandra images
 
 The Cassandra server and its dynamic seed discovery container take the same
