@@ -142,7 +142,8 @@ nats:
 
 The box image declares user/group `1000:1000`. `runAsNonRoot` adds Kubernetes
 enforcement; `runAsUser` and `runAsGroup` make the identity explicit. The server
-pod settings also cover its reloader. Server `fsGroup` allows UID 1000 to write
+pod settings also cover its reloader; neither image declares a nonroot user.
+Server `fsGroup` allows UID 1000 to write
 the JetStream and shared PID volumes. The box uses its writable home for CLI
 state and `nsc` keys. Its default context links to read-only mounted Secrets;
 use a separate `XDG_CONFIG_HOME` to save additional contexts. The box needs no
@@ -177,8 +178,10 @@ kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- \
 ```
 
 The identities should report UID/GID 1000. The CLI check uses the mounted NKey
-and requires the stack's authentication service to be ready. Check the
-reloader logs after a configuration update to confirm it reloads successfully.
+and requires the stack's authentication service to be ready. Expect latency
+output; `failed` or an authorization error is a failure even if `rtt` exits
+successfully. Check the reloader logs after a configuration update to confirm
+it reloads successfully.
 
 ### Override the Cassandra images
 
