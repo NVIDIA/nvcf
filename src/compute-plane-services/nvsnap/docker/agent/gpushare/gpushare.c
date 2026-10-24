@@ -1434,8 +1434,12 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
 {
     char rep[256] = "no reply";
     int nm = 0, ngone = 0, nh = 0;
+    size_t hb = 0;
     CUresult r = CUDA_SUCCESS;
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    /* Where the time goes: host register, imports from this node's
+     * processes and from other nodes, map + set access, multicast. */
+    double t0 = secs(), t, th = 0, tl = 0, tr = 0, tm = 0, tmc = 0;
     int dev = push_any_ctx();
     if (fabmap_path && read_fabmap(fabmap_path, reply, n) < 0) goto out;
     for (int i = 0; i < n_vallocs; i++)
@@ -1444,9 +1448,11 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
                      vallocs[i].size, errstr(r));
             goto out;
         }
+    t = secs();
     for (int i = 0; i < n_hregs; i++) {
         CUdeviceptr d = 0;
         if (!hregs[i].down) continue;
+        hb += hregs[i].size;
         r = REAL(r_host_reg, "cuMemHostRegister_v2")(hregs[i].p, hregs[i].size, hregs[i].flags);
         if (r == CUDA_SUCCESS) r = CU(cuMemHostGetDevicePointer_v2, &d, hregs[i].p, 0);
         if (r == CUDA_SUCCESS && d != hregs[i].dptr) r = CUDA_ERROR_INVALID_VALUE;
@@ -1458,6 +1464,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         hregs[i].down = 0;
         nh++;
     }
+    th = secs() - t;
     for (int i = 0; r == CUDA_SUCCESS && i < n_imps; i++) {
         struct imp *im = &imps[i];
         if (!im->released) continue;
@@ -1466,8 +1473,11 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         if (im->app_released && !mapped) { im->released = 0; continue; }  /* nothing to restore */
         CUmemGenericAllocationHandle h;
         const char *what = "import";
+        t = secs();
         r = im->peer > 0 ? refetch(im->peer, im->key, im->fab, &h, rep, sizeof(rep))
                          : remote_fetch(&im->fh, &h, rep, sizeof(rep));
+        *(im->peer > 0 ? &tl : &tr) += secs() - t;
+        t = secs();
         if (r != CUDA_SUCCESS && !strncmp(rep, "err gone", 8)) {
             /* The exporter freed it: like CUDA IPC after the exporter's
              * cuMemFree, the memory is undefined. Keep the VA reserved
@@ -1497,6 +1507,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
             else maps[j].down = 0;
             nm++;
         }
+        tm += secs() - t;
         if (r != CUDA_SUCCESS) {
             if (!strcmp(what, "import"))
                 snprintf(reply, n, "err remap id %llu from pid %d: import: %s", im->key, im->peer, errstr(r));
@@ -1523,6 +1534,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
     /* Multicast objects: rejoin now, bind in "resume" (binding blocks until
      * every device of the group has been added, in every process). */
     int nmc = 0;
+    t = secs();
     for (int i = 0; i < n_mcs; i++) {
         struct mcobj *m = &mcs[i];
         if (m->dead || !m->released) continue;  /* a creator may be re-created by a peer's request */
@@ -1551,8 +1563,11 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         m->cur_h = h;
         m->released = 0;
     }
+    tmc = secs() - t;
     snprintf(reply, n, "ok remapped %d mapping(s), %d freed by their exporter, %d multicast object(s), "
-             "%d host buffer(s)", nm, ngone, nmc, nh);
+             "%d host buffer(s) in %.2fs: host register %.2fs (%zu MiB), import %.2fs from this node + "
+             "%.2fs from others, map %.2fs, multicast %.2fs", nm, ngone, nmc, nh, secs() - t0, th, hb >> 20,
+             tl, tr, tm, tmc);
 out:
     stage_put();
     pop_ctx(dev);
