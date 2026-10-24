@@ -96,6 +96,11 @@ done
 # Exercise the authored example rather than duplicating its pins in the test.
 awk '/^### Use upstream cert-manager images/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"
 test -s "$environment_file" || fail 'missing documented environment example'
+for component in controller webhook cainjector startupapicheck acmesolver; do
+  path="$(image_path "$component")"
+  digest="$(yq -r ".certManager.$path.digest // \"\"" "$environment_file")"
+  test -n "$digest" || fail "missing documented digest for $component"
+done
 # A global private mirror must not capture explicit upstream repositories.
 yq -i '.global.image = {"registry": "global.example.com", "repository": "private"}' "$environment_file"
 render
