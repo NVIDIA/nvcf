@@ -2686,3 +2686,39 @@ func mustResolveFeaturePath(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join("features", name)
 }
+
+// TestCertManagerUpstreamImages validates the published wrapper in a prepared
+// isolated environment. Cluster setup and cleanup belong to the operator.
+func TestCertManagerUpstreamImages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "cert-manager-upstream-images.feature")
+}
+
+func TestCertManagerUpstreamImagesFeatureFileWiresToSteps(t *testing.T) {
+	for name, value := range map[string]string{
+		"REPO_ROOT": "/repo", "KUBECONFIG": "/isolated/config",
+		"CERT_MANAGER_ENV": "cert-test", "CERT_CONTEXT": "isolated", "CMCTL": "cmctl",
+	} {
+		t.Setenv(name, value)
+	}
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	sc := steps.NewScenarioContext(suite)
+	status := godog.TestSuite{
+		Name: "cert-manager-upstream-images-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "progress", Strict: true, Output: io.Discard,
+			Paths: []string{mustResolveFeaturePath(t, "cert-manager-upstream-images.feature")},
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d", status)
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "--selector name=cert-manager sync") {
+		t.Fatal("published cert-manager Helmfile install was never invoked")
+	}
+}

@@ -183,6 +183,81 @@ output; `failed` or an authorization error is a failure even if `rtt` exits
 successfully. Check the reloader logs after a configuration update to confirm
 it reloads successfully.
 
+### Use upstream cert-manager images
+
+To use upstream images, merge these values into
+`deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile forwards
+all five images to the selected published wrapper. Wrapper 0.1.0 includes
+cert-manager v1.20.2; these pins match its chart and CRDs. This is an opt-in
+distribution change, not a security update or a new release qualification.
+
+```yaml
+certManager:
+  image:
+    repository: "quay.io/jetstack/cert-manager-controller"
+    tag: "v1.20.2"
+    digest: "sha256:fe0623d7d04a382c888f03343a3a2da716e0d96ad3d5d790c0ebcbcb2a4329a5"
+  webhook:
+    image:
+      repository: "quay.io/jetstack/cert-manager-webhook"
+      tag: "v1.20.2"
+      digest: "sha256:baf651128b9f05c426cbd5e60e2036bf382c99ca270f49d0757d6f7d2452f4e5"
+  cainjector:
+    image:
+      repository: "quay.io/jetstack/cert-manager-cainjector"
+      tag: "v1.20.2"
+      digest: "sha256:6f5a644135887b2aa7d5cc145072fa56421560e3586ff1f184358022d490f4e1"
+  startupapicheck:
+    image:
+      repository: "quay.io/jetstack/cert-manager-startupapicheck"
+      tag: "v1.20.2"
+      digest: "sha256:4e2a69b4a0cc9627905bbeecf720f95d5153ca39cacdab923d2748e73556792b"
+  acmesolver:
+    image:
+      repository: "quay.io/jetstack/cert-manager-acmesolver"
+      tag: "v1.20.2"
+      digest: "sha256:cfa55e9c3dcfc6a3cba97575748c1549b04a30fd14d88a2fcb9e2dddef415e2f"
+```
+
+Each digest identifies an upstream Linux AMD64/ARM64 image index, including the
+ACME HTTP-01 solver. The images declare UID 65532. The existing chart enforces
+`runAsNonRoot` for the controller, webhook, CA injector and startup check;
+cert-manager applies its nonroot policy to HTTP-01 solver pods. No extra
+security-context override is required.
+
+Keep all five image versions aligned with the selected chart and CRDs.
+[cert-manager 1.20 supports Kubernetes 1.32-1.35](https://cert-manager.io/docs/releases/).
+Changing image locations does not change that compatibility range. Do not use
+1.21 images with this chart or raise the Kubernetes floor through an image override.
+See the [v1.20.2 release](https://github.com/cert-manager/cert-manager/releases/tag/v1.20.2)
+and [upstream Helm guide](https://cert-manager.io/docs/installation/helm/).
+
+For a private mirror, replace each full `repository` above, preserving its tag
+and digest after copying the complete multi-platform index. Verify the digest
+at the destination. These repositories take precedence over `global.image`;
+configure `global.imagePullSecrets` if authentication is required. Without
+explicit repositories, the four controller components keep the global mirror
+and the solver keeps its upstream default. Unset or empty image keys retain
+chart/stack defaults. A tag and digest render as `repository:tag@digest`; a
+digest without a tag renders as `repository@digest`. A tag without a digest
+uses the tag alone. Remove both old fields when changing that choice.
+
+Render with your normal chart source and secrets file before installing:
+
+```bash
+cd deploy/stacks/self-managed
+export HELMFILE_ENV=<environment>
+helmfile -f helmfile.d/01-dependencies.yaml.gotmpl --selector name=cert-manager template
+```
+
+Check the three Deployments, startup check Job, and controller's
+`--acme-http01-solver-image` argument for the full pinned references. Install
+through the normal stack workflow. In the intended Kubernetes context, wait
+for the controller, webhook and CA injector Deployments, and check the Helm
+startup hook succeeded. Issue and renew a test Certificate with your issuer,
+then verify its Ready condition and increasing revision. For ACME HTTP-01,
+also check the generated solver pod's image and nonroot policy during a challenge.
+
 ### Override the Cassandra images
 
 The Cassandra server and its dynamic seed discovery container take the same

@@ -83,9 +83,8 @@ cassandra:
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
-# `cert-manager` key. The controller components use the nvcr.io mirror. The
-# ACME solver keeps the chart's quay.io/jetstack default unless an operator
-# supplies certManager.acmesolver.image for a private mirror.
+# `cert-manager` key. Explicit component repositories bypass global.image;
+# unset values retain the existing mirror and upstream solver defaults.
 cert-manager:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -93,13 +92,28 @@ cert-manager:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
   {{- end }}
   image:
-    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-controller
+    repository: {{ dig "certManager" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-controller" .Values.global.image.registry .Values.global.image.repository) | quote }}
+    {{- range $key := list "tag" "digest" "pullPolicy" }}
+    {{- with dig "certManager" "image" $key "" $.Values }}
+    {{ $key }}: {{ . | quote }}
+    {{- end }}
+    {{- end }}
   webhook:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-webhook
+      repository: {{ dig "certManager" "webhook" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-webhook" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "webhook" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
   cainjector:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+      repository: {{ dig "certManager" "cainjector" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-cainjector" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "cainjector" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
   {{- $acmeSolverRepository := dig "certManager" "acmesolver" "image" "repository" "" .Values }}
   {{- $acmeSolverTag := dig "certManager" "acmesolver" "image" "tag" "" .Values }}
   {{- $acmeSolverDigest := dig "certManager" "acmesolver" "image" "digest" "" .Values }}
@@ -122,7 +136,12 @@ cert-manager:
   {{- end }}
   startupapicheck:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
+      repository: {{ dig "certManager" "startupapicheck" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-startupapicheck" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "startupapicheck" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
 
 openbao:
   {{- if .Values.global.imagePullSecrets }}
