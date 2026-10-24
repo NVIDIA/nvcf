@@ -378,7 +378,9 @@ func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImag
 				if err != nil {
 					return fmt.Errorf("BYOO_OTEL_COLLECTOR_CONTAINER: %w", err)
 				}
-				images[image.Reference] = image
+				if existing, exists := images[image.Reference]; !exists || existing.Indirect {
+					images[image.Reference] = image
+				}
 			}
 		}
 	}
@@ -408,7 +410,7 @@ func collectResolvedCollectorEnvironment(node *yaml.Node, images map[string]pars
 	if node.Kind != yaml.SequenceNode {
 		return nil
 	}
-	var repository, tag string
+	var repository, tag, enabled string
 	for _, entry := range node.Content {
 		var variable struct {
 			Name  string `yaml:"name"`
@@ -422,12 +424,18 @@ func collectResolvedCollectorEnvironment(node *yaml.Node, images map[string]pars
 			repository = variable.Value
 		case "OTEL_COLLECTOR_IMAGE_TAG":
 			tag = variable.Value
+		case "OTEL_COLLECTOR_ENABLED":
+			enabled = variable.Value
 		}
 	}
 	if repository == "" && tag == "" {
 		return nil
 	}
 	if repository == "" || tag == "" {
+		// Disabled collectors may omit image defaults that are only needed at runtime.
+		if enabled == "false" {
+			return nil
+		}
 		return fmt.Errorf("OTEL_COLLECTOR_IMAGE_REPO and OTEL_COLLECTOR_IMAGE_TAG must both be resolved")
 	}
 	image, err := parseResolvedImageReference(repository + ":" + tag)

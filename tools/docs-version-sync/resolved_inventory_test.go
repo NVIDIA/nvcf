@@ -79,6 +79,61 @@ func TestResolvedCollectorEnvironmentPreservesDirectImageRequirement(t *testing.
 	}
 }
 
+// TestResolvedBYOOOverridesPreserveRequiredImages covers both workload flags and traversal orders.
+func TestResolvedBYOOOverridesPreserveRequiredImages(t *testing.T) {
+	reference := "mirror.example.com/byoo-otel-collector:fixture"
+	encoded := base64.StdEncoding.EncodeToString(mustJSON(t, map[string]string{
+		"BYOO_OTEL_COLLECTOR_CONTAINER": reference,
+	}))
+	for _, flag := range []string{"--function-env-overrides-b64", "--task-env-overrides-b64"} {
+		for name, other := range map[string]string{
+			"direct":   "image: " + reference + "\n",
+			"indirect": "command: [--collector-image=" + reference + "]\n",
+		} {
+			byoo := fmt.Sprintf("args: [%s, %s]\n", flag, encoded)
+			for order, manifest := range []string{other + byoo, byoo + other} {
+				t.Run(fmt.Sprintf("%s/%s/order-%d", flag, name, order), func(t *testing.T) {
+					inputs := resolvedInventoryTestInputs(t)
+					inputs[1].ManifestByRelease["resource-config"] = []byte(manifest)
+					inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+					if err != nil {
+						t.Fatal(err)
+					}
+					image := findResolvedInventoryArtifact(t, inventory, "container-image", reference)
+					if len(image.Sources) != 1 || image.Sources[0].Requirement != ManifestRequired {
+						t.Fatalf("required image precedence was lost: %+v", image)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestResolvedCollectorEnvironmentAllowsDisabledPartialImages keeps enabled inputs strict.
+func TestResolvedCollectorEnvironmentAllowsDisabledPartialImages(t *testing.T) {
+	for _, enabled := range []string{"false", "true", "unspecified"} {
+		for field, value := range map[string]string{
+			"OTEL_COLLECTOR_IMAGE_REPO": "registry.example.com/collector",
+			"OTEL_COLLECTOR_IMAGE_TAG":  "fixture",
+		} {
+			t.Run(enabled+"/"+field, func(t *testing.T) {
+				manifest := fmt.Sprintf("env:\n  - name: %s\n    value: %s\n", field, value)
+				if enabled != "unspecified" {
+					manifest += fmt.Sprintf("  - name: OTEL_COLLECTOR_ENABLED\n    value: %q\n", enabled)
+				}
+				images, err := extractResolvedImages([]byte(manifest))
+				if enabled == "false" {
+					if err != nil || len(images) != 0 {
+						t.Fatalf("disabled partial image: images=%+v, error=%v", images, err)
+					}
+				} else if err == nil {
+					t.Fatal("expected an unresolved enabled or unspecified collector image to fail")
+				}
+			})
+		}
+	}
+}
+
 func collectorEnvironmentFixture() string {
 	return `env:
   - name: OTEL_COLLECTOR_IMAGE_REPO
