@@ -941,6 +941,8 @@ static void gate_open(void)
     pthread_mutex_unlock(&gate_mu);
 }
 
+static int held;  /* "resume hold" left the gates closed for "open" */
+
 /* ── Control commands ─────────────────────────────────────────────────── */
 
 /* Is the import still in use by the app (mu held)? NCCL imports its own
@@ -1028,31 +1030,69 @@ static unsigned long long fh_prefix(const CUmemFabricHandle *fh)
     return v;
 }
 
-/* Log the hashes (mu held, gates closed). */
-static void verify_log(const char *phase)
+/* Read every mapping of another process's allocation, and with own every
+ * allocation this process shares, through this process's mappings; with
+ * log, log their hashes (mu held, gates closed). Returns how many were
+ * read, -1 without a context; *bytes the total. */
+static int scan_shared(const char *phase, int own, int log, size_t *bytes)
 {
-    if (!verify_on()) return;
-    int dev = push_any_ctx();
-    if (dev < 0) { logf_("verify %s: no context", phase); return; }
+    int dev = push_any_ctx(), nr = 0;
+    *bytes = 0;
+    if (dev < 0) { logf_("verify %s: no context", phase); return -1; }
     uint64_t h;
     for (int j = 0; j < n_maps; j++) {
         const struct map *m = &maps[j];
         if (m->down || m->gone) continue;
         const struct imp *im = &imps[m->imp];
         if (dev_hash(m->va, m->size, &h) < 0) { logf_("verify %s imp va=%#llx: unreadable", phase, (unsigned long long)m->va); continue; }
-        logf_("verify %s imp peer=%d key=%llu fab=%d fh=%016llx off=%zu size=%zu hash=%016llx", phase, im->peer, im->key,
-              im->fab, im->fab ? fh_prefix(&im->fh) : 0ULL, m->offset, m->size, (unsigned long long)h);
+        nr++, *bytes += m->size;
+        if (log)
+            logf_("verify %s imp peer=%d key=%llu fab=%d fh=%016llx off=%zu size=%zu hash=%016llx", phase, im->peer, im->key,
+                  im->fab, im->fab ? fh_prefix(&im->fh) : 0ULL, m->offset, m->size, (unsigned long long)h);
     }
-    for (int j = 0; j < n_lmaps; j++) {
+    for (int j = 0; own && j < n_lmaps; j++) {
         const struct lmap *l = &lmaps[j];
         unsigned long long fh = 0, id = xreg_id(l->va, l->h);
         for (int k = 0; k < n_fexps; k++) if (fexps[k].h == l->h) fh = fh_prefix(&fexps[k].fh);
         if (!id && !fh) continue;  /* not shared */
         if (dev_hash(l->va, l->size, &h) < 0) { logf_("verify %s own va=%#llx: unreadable", phase, (unsigned long long)l->va); continue; }
-        logf_("verify %s own id=%llu fh=%016llx off=%zu size=%zu hash=%016llx", phase, id, fh, l->off, l->size,
-              (unsigned long long)h);
+        nr++, *bytes += l->size;
+        if (log)
+            logf_("verify %s own id=%llu fh=%016llx off=%zu size=%zu hash=%016llx", phase, id, fh, l->off, l->size,
+                  (unsigned long long)h);
     }
     pop_ctx(dev);
+    return nr;
+}
+
+static void verify_log(const char *phase)
+{
+    size_t b;
+    if (verify_on()) scan_shared(phase, 1, 1, &b);
+}
+
+/* Diagnostic, between "remap" and "resume" (see NVSNAP_GPUSHARE_RESUME_DIAG
+ * in nvsnap-gpu-suspend.c): args "none", "imp" (read every mapping of
+ * another process's allocation) or "all" (those and every allocation this
+ * process shares: what verify mode reads at resume, without the log). The
+ * reply gives the wall-clock time, to order the nodes' resumes. */
+static void do_touch(char *reply, size_t n, const char *args)
+{
+    int imp = !strcmp(args, "imp"), all = !strcmp(args, "all");
+    if (!imp && !all && strcmp(args, "none")) { snprintf(reply, n, "err usage: touch none|imp|all"); return; }
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    struct timespec t0, t1, w;
+    size_t bytes = 0;
+    int nr = 0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (imp || all) nr = scan_shared("touch", all, 0, &bytes);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    clock_gettime(CLOCK_REALTIME, &w);
+    pthread_mutex_unlock(&mu);
+    double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    if (nr < 0) snprintf(reply, n, "err no context");
+    else snprintf(reply, n, "ok read %d mapping(s) (%zu MiB) in %.2fs; at %lld.%03ld", nr, bytes >> 20, dt,
+                  (long long)w.tv_sec, w.tv_nsec / 1000000);
 }
 
 /* Hold launches, drain GPU work, and check that "release" can drop every
@@ -1063,6 +1103,7 @@ static void do_quiesce(char *reply, size_t n)
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     /* Busy: GPU work waits on work a gated thread has not launched yet
      * (e.g. a peer's NCCL kernel). Reopen the gate; the tool retries. */
+    held = 0;  /* an "open" from a restore is no longer due */
     CUresult r;
     if (gate_close(&lgate, 2000) < 0 || timed_sync(2000, &r) < 0 ||
         gate_close(&mgate, 2000) < 0 || timed_sync(2000, &r) < 0) {
@@ -1277,11 +1318,95 @@ static void do_release(char *reply, size_t n, const char *args)
 /* cache: this node's cache of the store, NULL for none. */
 static CUresult replace_alloc(int k);
 
+/* Prefault: "remap" registers the host buffers "release" unregistered
+ * again, and the first process to register memory without pages (a large
+ * /dev/shm pool, e.g. ModelExpress's, comes back from a restore empty)
+ * allocates and zeroes them: 30-40 s for 600 GiB, while the other ranks
+ * wait. "load" is bound by the store's disk, so fault the pages in then,
+ * in the background; "remap" waits for it before registering. Chunks are
+ * taken from a different start in each process, so that the processes
+ * mapping one pool share the work. */
+#ifndef MADV_POPULATE_READ
+#define MADV_POPULATE_READ 22
+#define MADV_POPULATE_WRITE 23
+#endif
+#define PREFAULT_THREADS 2
+#define PREFAULT_CHUNK (64UL << 20)  /* each madvise holds the mmap lock: keep it short */
+struct pf_chunk { char *p; size_t len; int ro; };
+static struct pf_chunk *pf_chunks;
+static size_t pf_n, pf_start, pf_next;
+static int pf_err;
+static pthread_t pf_t[PREFAULT_THREADS];
+static int pf_nt;
+static double pf_t0, pf_done[PREFAULT_THREADS];
+
+static void *prefault_main(void *arg)
+{
+    for (size_t i; (i = __atomic_fetch_add(&pf_next, 1, __ATOMIC_RELAXED)) < pf_n; ) {
+        struct pf_chunk *c = &pf_chunks[(pf_start + i) % pf_n];
+        if (madvise(c->p, c->len, c->ro ? MADV_POPULATE_READ : MADV_POPULATE_WRITE) != 0)
+            __atomic_store_n(&pf_err, errno, __ATOMIC_RELAXED);
+    }
+    *(double *)arg = secs();
+    return NULL;
+}
+
+/* Split host buffer i into chunks (madvise wants page-aligned ranges);
+ * with out NULL, only count them. */
+static size_t pf_split(int i, struct pf_chunk *out)
+{
+    size_t pg = sysconf(_SC_PAGESIZE), k = 0;
+    char *b = (char *)((uintptr_t)hregs[i].p & ~(pg - 1)), *e = (char *)hregs[i].p + hregs[i].size;
+    for (char *c = b; c < e; c += PREFAULT_CHUNK, k++)
+        if (out)
+            out[k] = (struct pf_chunk){ c, (size_t)(e - c) < PREFAULT_CHUNK ? (size_t)(e - c) : PREFAULT_CHUNK,
+                                        !!(hregs[i].flags & CU_MEMHOSTREGISTER_READ_ONLY) };
+    return k;
+}
+
+/* Start faulting in the unregistered host buffers (mu held). */
+static void prefault_start(void)
+{
+    size_t n = 0;
+    for (int i = 0; i < n_hregs; i++)
+        if (hregs[i].down) n += pf_split(i, NULL);
+    if (!n || !(pf_chunks = calloc(n, sizeof(*pf_chunks)))) return;
+    pf_n = 0;
+    for (int i = 0; i < n_hregs; i++)
+        if (hregs[i].down) pf_n += pf_split(i, pf_chunks + pf_n);
+    pf_start = (size_t)getpid() * 7919 % pf_n;
+    pf_next = 0;
+    pf_err = 0;
+    pf_t0 = secs();
+    for (pf_nt = 0; pf_nt < PREFAULT_THREADS; pf_nt++)
+        if (pthread_create(&pf_t[pf_nt], NULL, prefault_main, &pf_done[pf_nt]) != 0) break;
+}
+
+/* Wait for the prefault ("remap", mu held): how long it ran (0 if it did
+ * not), and how long this waited for it. */
+static double prefault_wait(double *ran)
+{
+    double t = secs();
+    *ran = 0;
+    for (int i = 0; i < pf_nt; i++) {
+        pthread_join(pf_t[i], NULL);
+        if (pf_done[i] - pf_t0 > *ran) *ran = pf_done[i] - pf_t0;
+    }
+    if (pf_nt) {
+        if (pf_err) logf_("prefault host memory: %s (registering faults the rest in)", strerror(pf_err));
+    }
+    pf_nt = 0;
+    free(pf_chunks);
+    pf_chunks = NULL;
+    return secs() - t;
+}
+
 static void do_load(char *reply, size_t n, const char *cache_dir)
 {
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     snprintf(cache, sizeof(cache), "%s", cache_dir ? cache_dir : "");
     imex_resubscribe();  /* before any fabric use (see "IMEX channel") */
+    if (!pf_nt) prefault_start();
     st_hit = st_miss = 0;
     int dev = push_any_ctx(), nl = 0;
     size_t nb = 0;
@@ -1393,8 +1518,12 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
 {
     char rep[256] = "no reply";
     int nm = 0, ngone = 0, nh = 0;
+    size_t hb = 0;
     CUresult r = CUDA_SUCCESS;
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    /* Where the time goes: host register, imports from this node's
+     * processes and from other nodes, map + set access, multicast. */
+    double t0 = secs(), t, th = 0, tl = 0, tr = 0, tm = 0, tmc = 0, tpf, tpr;
     int dev = push_any_ctx();
     if (fabmap_path && read_fabmap(fabmap_path, reply, n) < 0) goto out;
     for (int i = 0; i < n_vallocs; i++)
@@ -1403,9 +1532,12 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
                      vallocs[i].size, errstr(r));
             goto out;
         }
+    tpf = prefault_wait(&tpr);
+    t = secs();
     for (int i = 0; i < n_hregs; i++) {
         CUdeviceptr d = 0;
         if (!hregs[i].down) continue;
+        hb += hregs[i].size;
         r = REAL(r_host_reg, "cuMemHostRegister_v2")(hregs[i].p, hregs[i].size, hregs[i].flags);
         if (r == CUDA_SUCCESS) r = CU(cuMemHostGetDevicePointer_v2, &d, hregs[i].p, 0);
         if (r == CUDA_SUCCESS && d != hregs[i].dptr) r = CUDA_ERROR_INVALID_VALUE;
@@ -1417,6 +1549,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         hregs[i].down = 0;
         nh++;
     }
+    th = secs() - t;
     for (int i = 0; r == CUDA_SUCCESS && i < n_imps; i++) {
         struct imp *im = &imps[i];
         if (!im->released) continue;
@@ -1425,8 +1558,11 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         if (im->app_released && !mapped) { im->released = 0; continue; }  /* nothing to restore */
         CUmemGenericAllocationHandle h;
         const char *what = "import";
+        t = secs();
         r = im->peer > 0 ? refetch(im->peer, im->key, im->fab, &h, rep, sizeof(rep))
                          : remote_fetch(&im->fh, &h, rep, sizeof(rep));
+        *(im->peer > 0 ? &tl : &tr) += secs() - t;
+        t = secs();
         if (r != CUDA_SUCCESS && !strncmp(rep, "err gone", 8)) {
             /* The exporter freed it: like CUDA IPC after the exporter's
              * cuMemFree, the memory is undefined. Keep the VA reserved
@@ -1456,6 +1592,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
             else maps[j].down = 0;
             nm++;
         }
+        tm += secs() - t;
         if (r != CUDA_SUCCESS) {
             if (!strcmp(what, "import"))
                 snprintf(reply, n, "err remap id %llu from pid %d: import: %s", im->key, im->peer, errstr(r));
@@ -1482,6 +1619,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
     /* Multicast objects: rejoin now, bind in "resume" (binding blocks until
      * every device of the group has been added, in every process). */
     int nmc = 0;
+    t = secs();
     for (int i = 0; i < n_mcs; i++) {
         struct mcobj *m = &mcs[i];
         if (m->dead || !m->released) continue;  /* a creator may be re-created by a peer's request */
@@ -1510,8 +1648,11 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         m->cur_h = h;
         m->released = 0;
     }
+    tmc = secs() - t;
     snprintf(reply, n, "ok remapped %d mapping(s), %d freed by their exporter, %d multicast object(s), "
-             "%d host buffer(s)", nm, ngone, nmc, nh);
+             "%d host buffer(s) in %.2fs: host register %.2fs (%zu MiB; prefault %.1fs, waited %.1fs), "
+             "import %.2fs here + %.2fs remote, map %.2fs, multicast %.2fs", nm, ngone, nmc, nh, secs() - t0, th,
+             hb >> 20, tpr, tpf, tl, tr, tm, tmc);
 out:
     stage_put();
     pop_ctx(dev);
@@ -1519,8 +1660,12 @@ out:
 }
 
 /* Bind multicast memory and map multicast objects again, then let the
- * app's launches through. */
-static void do_resume(char *reply, size_t n)
+ * app's launches through. hold ("resume hold"): keep them held until
+ * "open". Across nodes, a process that launches before another node has
+ * bound its memory to a multicast object they share loses its writes to
+ * that node, and the kernels waiting for them spin: the caller opens once
+ * every node has resumed. */
+static void do_resume(char *reply, size_t n, int hold)
 {
     CUresult r = CUDA_SUCCESS;
     int nb = 0, nm = 0;
@@ -1553,10 +1698,24 @@ static void do_resume(char *reply, size_t n)
     }
     if (r == CUDA_SUCCESS) {
         verify_log("resume");
-        snprintf(reply, n, "ok resumed (%d multicast bind(s), %d multicast mapping(s))", nb, nm);
-        gate_open();
+        snprintf(reply, n, "ok resumed (%d multicast bind(s), %d multicast mapping(s))%s", nb, nm,
+                 hold ? "; launches held until open" : "");
+        held = hold;
+        if (!hold) gate_open();
     }
     pop_ctx(dev);
+    pthread_mutex_unlock(&mu);
+}
+
+/* After "resume hold": let the app's launches through. */
+static void do_open(char *reply, size_t n)
+{
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    if (held) {
+        held = 0;
+        gate_open();
+        snprintf(reply, n, "ok opened");
+    } else snprintf(reply, n, "ok not held");
     pthread_mutex_unlock(&mu);
 }
 
@@ -1774,7 +1933,10 @@ static void serve(int s)
     else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "remap ", 6)) { do_remap(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "fabmap ", 7)) { do_fabmap(rep, sizeof(rep), buf + 7); msg_send(s, rep, -1); }
-    else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep)); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "touch ", 6)) { do_touch(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep), 0); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "resume hold")) { do_resume(rep, sizeof(rep), 1); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "open")) { do_open(rep, sizeof(rep)); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "export ", 7)) do_export(strtoull(buf + 7, NULL, 10), 0, s);
     else if (!strncmp(buf, "exportfab ", 10)) do_export(strtoull(buf + 10, NULL, 10), 1, s);
     else if (!strcmp(buf, "whose") && fd >= 0) do_whose(fd, s);

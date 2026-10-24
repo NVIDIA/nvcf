@@ -185,6 +185,13 @@ At admission, the webhook changes every container that requests GPUs:
   `/nvsnap-gpushare` (the chunk store), using the pod uid as the
   subdirectory so pods never see each other's saved memory.
 
+The store volume itself is the node's directory of every pod's store, so
+the webhook places it only when the pod references it nowhere else: a pod
+that brings a mount of `nvsnap-gpushare-store` in any container (init and
+ephemeral included) other than the per-pod one, a volume of its own under
+that name, or a second `NVSNAP_POD_UID` that would win over the placed one
+gets neither the library nor the store.
+
 At capture, the agent finds the processes of the dumped session that load the
 shim, runs `nvsnap-gpu-suspend gpus`, `suspend` and `stop` inside the pod's
 namespaces, and dumps with CRIU without the CUDA plugin and with

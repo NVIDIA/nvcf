@@ -152,18 +152,27 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 	if len(gpuContainers) == 0 {
 		return nil
 	}
-	for i := range pod.Spec.Volumes {
-		if pod.Spec.Volumes[i].Name == gpushareStoreVolume {
-			return nil // already placed (re-admission, or written into the manifest)
-		}
+	storeRoot := m.GPUShareHostRoot
+	if storeRoot == "" {
+		storeRoot = DefaultGPUShareHostRoot
+	}
+	placed, unsafe := gpushareStoreState(pod, storeRoot, gpuContainers)
+	if unsafe != "" {
+		// The store volume is every pod's saved GPU memory on the node; the
+		// per-pod subPathExpr confines only the mounts placed here. Placing
+		// it beside a reference the pod brought would hand that container
+		// the whole directory. The pod is left without the library (and a
+		// mount of a volume it does not declare is refused by the API).
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("reason", unsafe).
+			Warn("gpushare: the pod references the reserved store volume itself; not placing the library or the store")
+		return nil
+	}
+	if placed {
+		return nil // already placed (re-admission, or written into the manifest)
 	}
 	bundleRoot := m.HostBundleRoot
 	if bundleRoot == "" {
 		bundleRoot = DefaultHostBundleRoot
-	}
-	storeRoot := m.GPUShareHostRoot
-	if storeRoot == "" {
-		storeRoot = DefaultGPUShareHostRoot
 	}
 	dir, dirOrCreate := corev1.HostPathDirectory, corev1.HostPathDirectoryOrCreate
 
@@ -203,6 +212,97 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 		patches = append(patches, setContainerEnv(i, c, vars)...)
 	}
 	return patches
+}
+
+// gpushareStoreState checks the pod's own references to the reserved store
+// volume, which only gpusharePatches may make: a hostPath of storeRoot
+// mounted at GPUShareStorePath through the per-pod subPathExpr, in a
+// container whose pod-uid variable is the downward-API uid and nothing
+// else. placed reports a pod that already carries exactly that placement
+// (a manifest written from an admitted pod). unsafe names the first
+// reference that is not it, or a GPU container (gpuContainers) whose
+// pod-uid variable the placement could not make the pod's own.
+func gpushareStoreState(pod *corev1.Pod, storeRoot string, gpuContainers []int) (placed bool, unsafe string) {
+	declared := false
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name != gpushareStoreVolume {
+			continue
+		}
+		if v.HostPath == nil || v.HostPath.Path != storeRoot {
+			return false, "the pod declares a volume under the reserved store volume name"
+		}
+		declared = true
+	}
+	for i := range pod.Spec.InitContainers {
+		if c := &pod.Spec.InitContainers[i]; mountsVolume(c.VolumeMounts, gpushareStoreVolume) {
+			return false, "init container " + c.Name + " mounts the store volume"
+		}
+	}
+	for i := range pod.Spec.EphemeralContainers {
+		if c := &pod.Spec.EphemeralContainers[i]; mountsVolume(c.VolumeMounts, gpushareStoreVolume) {
+			return false, "ephemeral container " + c.Name + " mounts the store volume"
+		}
+	}
+	mounted := false
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		for _, vm := range c.VolumeMounts {
+			if vm.Name != gpushareStoreVolume {
+				continue
+			}
+			if !declared {
+				return false, "container " + c.Name + " mounts the store volume, which the pod does not declare"
+			}
+			if vm.MountPath != GPUShareStorePath || vm.SubPath != "" || vm.SubPathExpr != "$("+gpusharePodUIDEnv+")" || !podUIDFromDownwardAPI(c.Env) {
+				return false, "container " + c.Name + " mounts the store volume outside its own per-pod directory"
+			}
+			mounted = true
+		}
+	}
+	if declared {
+		if !mounted {
+			return false, "the pod declares the store volume without the per-pod mount"
+		}
+		return true, ""
+	}
+	for _, i := range gpuContainers {
+		n := 0
+		for _, e := range pod.Spec.Containers[i].Env {
+			if e.Name == gpusharePodUIDEnv {
+				n++
+			}
+		}
+		if n > 1 {
+			// The placement replaces one entry; the last of several is the
+			// one Kubernetes resolves the subPathExpr against.
+			return false, "container " + pod.Spec.Containers[i].Name + " sets " + gpusharePodUIDEnv + " more than once"
+		}
+	}
+	return false, ""
+}
+
+func mountsVolume(mounts []corev1.VolumeMount, name string) bool {
+	for _, vm := range mounts {
+		if vm.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// podUIDFromDownwardAPI reports env setting the pod-uid variable exactly
+// once, to the pod's own uid.
+func podUIDFromDownwardAPI(env []corev1.EnvVar) bool {
+	n, own := 0, false
+	for _, e := range env {
+		if e.Name != gpusharePodUIDEnv {
+			continue
+		}
+		n++
+		own = e.Value == "" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil && e.ValueFrom.FieldRef.FieldPath == "metadata.uid"
+	}
+	return n == 1 && own
 }
 
 // ldPreloadWith returns the container's LD_PRELOAD with lib appended. ok is
