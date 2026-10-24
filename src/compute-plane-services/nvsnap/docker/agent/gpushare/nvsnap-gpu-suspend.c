@@ -36,7 +36,9 @@ SPDX-License-Identifier: Apache-2.0
  *   mx-pause      Before suspend: ModelExpress in each pid stops serving its
  *                 weights to peers and drops its NIXL/RDMA state, which CRIU
  *                 cannot dump. Each reply counts the RDMA device files the
- *                 pid still has open or mapped: capture only at 0.
+ *                 pid still has open or mapped: capture only at 0. Needs
+ *                 ModelExpress >= 0.7: with an earlier one, mx-pause fails
+ *                 (the load context is gone, nothing to pause); upgrade it.
  *   mx-resume     After open (or resume without --hold-gate): ModelExpress
  *                 registers the weights again and republishes them.
  *   gpus [FILE]   Print (or write to FILE) the UUIDs of the GPUs visible here.

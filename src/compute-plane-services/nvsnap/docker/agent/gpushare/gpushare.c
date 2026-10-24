@@ -1929,7 +1929,8 @@ static void do_ipcget(unsigned long long base, int s)
  * worker id (resume_serving), but nothing in vLLM calls them. "mx pause"
  * (before quiesce) and "mx resume" (after open) do, in this process's own
  * Python. Not while launches are held: a Python thread waiting in the gate
- * holds the GIL. The reply counts the RDMA device files still open or
+ * holds the GIL. Needs ModelExpress >= 0.7: earlier releases keep no load
+ * context once loaded, so there is nothing to pause. The reply counts the RDMA device files still open or
  * mapped: CRIU fails on any. */
 static const char mx_py[] =
     "def _nvsnap_mx(op, fd):\n"
@@ -1939,6 +1940,9 @@ static const char mx_py[] =
     "        if L is None:\n"
     "            rep = 'ok no ModelExpress loader'\n"
     "        else:\n"
+    "            if not hasattr(L, '_loader_registry'):\n"
+    "                raise RuntimeError('needs ModelExpress >= 0.7 '\n"
+    "                                   '(earlier releases drop the load context after loading)')\n"
     "            from modelexpress import lifecycle\n"
     "            n = bad = 0\n"
     "            for dev, ld in list(L._loader_registry.items()):\n"
