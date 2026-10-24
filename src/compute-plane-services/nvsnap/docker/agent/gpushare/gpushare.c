@@ -1318,11 +1318,95 @@ static void do_release(char *reply, size_t n, const char *args)
 /* cache: this node's cache of the store, NULL for none. */
 static CUresult replace_alloc(int k);
 
+/* Prefault: "remap" registers the host buffers "release" unregistered
+ * again, and the first process to register memory without pages (a large
+ * /dev/shm pool, e.g. ModelExpress's, comes back from a restore empty)
+ * allocates and zeroes them: 30-40 s for 600 GiB, while the other ranks
+ * wait. "load" is bound by the store's disk, so fault the pages in then,
+ * in the background; "remap" waits for it before registering. Chunks are
+ * taken from a different start in each process, so that the processes
+ * mapping one pool share the work. */
+#ifndef MADV_POPULATE_READ
+#define MADV_POPULATE_READ 22
+#define MADV_POPULATE_WRITE 23
+#endif
+#define PREFAULT_THREADS 2
+#define PREFAULT_CHUNK (64UL << 20)  /* each madvise holds the mmap lock: keep it short */
+struct pf_chunk { char *p; size_t len; int ro; };
+static struct pf_chunk *pf_chunks;
+static size_t pf_n, pf_start, pf_next;
+static int pf_err;
+static pthread_t pf_t[PREFAULT_THREADS];
+static int pf_nt;
+static double pf_t0, pf_done[PREFAULT_THREADS];
+
+static void *prefault_main(void *arg)
+{
+    for (size_t i; (i = __atomic_fetch_add(&pf_next, 1, __ATOMIC_RELAXED)) < pf_n; ) {
+        struct pf_chunk *c = &pf_chunks[(pf_start + i) % pf_n];
+        if (madvise(c->p, c->len, c->ro ? MADV_POPULATE_READ : MADV_POPULATE_WRITE) != 0)
+            __atomic_store_n(&pf_err, errno, __ATOMIC_RELAXED);
+    }
+    *(double *)arg = secs();
+    return NULL;
+}
+
+/* Split host buffer i into chunks (madvise wants page-aligned ranges);
+ * with out NULL, only count them. */
+static size_t pf_split(int i, struct pf_chunk *out)
+{
+    size_t pg = sysconf(_SC_PAGESIZE), k = 0;
+    char *b = (char *)((uintptr_t)hregs[i].p & ~(pg - 1)), *e = (char *)hregs[i].p + hregs[i].size;
+    for (char *c = b; c < e; c += PREFAULT_CHUNK, k++)
+        if (out)
+            out[k] = (struct pf_chunk){ c, (size_t)(e - c) < PREFAULT_CHUNK ? (size_t)(e - c) : PREFAULT_CHUNK,
+                                        !!(hregs[i].flags & CU_MEMHOSTREGISTER_READ_ONLY) };
+    return k;
+}
+
+/* Start faulting in the unregistered host buffers (mu held). */
+static void prefault_start(void)
+{
+    size_t n = 0;
+    for (int i = 0; i < n_hregs; i++)
+        if (hregs[i].down) n += pf_split(i, NULL);
+    if (!n || !(pf_chunks = calloc(n, sizeof(*pf_chunks)))) return;
+    pf_n = 0;
+    for (int i = 0; i < n_hregs; i++)
+        if (hregs[i].down) pf_n += pf_split(i, pf_chunks + pf_n);
+    pf_start = (size_t)getpid() * 7919 % pf_n;
+    pf_next = 0;
+    pf_err = 0;
+    pf_t0 = secs();
+    for (pf_nt = 0; pf_nt < PREFAULT_THREADS; pf_nt++)
+        if (pthread_create(&pf_t[pf_nt], NULL, prefault_main, &pf_done[pf_nt]) != 0) break;
+}
+
+/* Wait for the prefault ("remap", mu held): how long it ran (0 if it did
+ * not), and how long this waited for it. */
+static double prefault_wait(double *ran)
+{
+    double t = secs();
+    *ran = 0;
+    for (int i = 0; i < pf_nt; i++) {
+        pthread_join(pf_t[i], NULL);
+        if (pf_done[i] - pf_t0 > *ran) *ran = pf_done[i] - pf_t0;
+    }
+    if (pf_nt) {
+        if (pf_err) logf_("prefault host memory: %s (registering faults the rest in)", strerror(pf_err));
+    }
+    pf_nt = 0;
+    free(pf_chunks);
+    pf_chunks = NULL;
+    return secs() - t;
+}
+
 static void do_load(char *reply, size_t n, const char *cache_dir)
 {
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     snprintf(cache, sizeof(cache), "%s", cache_dir ? cache_dir : "");
     imex_resubscribe();  /* before any fabric use (see "IMEX channel") */
+    if (!pf_nt) prefault_start();
     st_hit = st_miss = 0;
     int dev = push_any_ctx(), nl = 0;
     size_t nb = 0;
@@ -1439,7 +1523,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     /* Where the time goes: host register, imports from this node's
      * processes and from other nodes, map + set access, multicast. */
-    double t0 = secs(), t, th = 0, tl = 0, tr = 0, tm = 0, tmc = 0;
+    double t0 = secs(), t, th = 0, tl = 0, tr = 0, tm = 0, tmc = 0, tpf, tpr;
     int dev = push_any_ctx();
     if (fabmap_path && read_fabmap(fabmap_path, reply, n) < 0) goto out;
     for (int i = 0; i < n_vallocs; i++)
@@ -1448,6 +1532,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
                      vallocs[i].size, errstr(r));
             goto out;
         }
+    tpf = prefault_wait(&tpr);
     t = secs();
     for (int i = 0; i < n_hregs; i++) {
         CUdeviceptr d = 0;
@@ -1565,9 +1650,9 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
     }
     tmc = secs() - t;
     snprintf(reply, n, "ok remapped %d mapping(s), %d freed by their exporter, %d multicast object(s), "
-             "%d host buffer(s) in %.2fs: host register %.2fs (%zu MiB), import %.2fs from this node + "
-             "%.2fs from others, map %.2fs, multicast %.2fs", nm, ngone, nmc, nh, secs() - t0, th, hb >> 20,
-             tl, tr, tm, tmc);
+             "%d host buffer(s) in %.2fs: host register %.2fs (%zu MiB; prefault %.1fs, waited %.1fs), "
+             "import %.2fs here + %.2fs remote, map %.2fs, multicast %.2fs", nm, ngone, nmc, nh, secs() - t0, th,
+             hb >> 20, tpr, tpf, tl, tr, tm, tmc);
 out:
     stage_put();
     pop_ctx(dev);
