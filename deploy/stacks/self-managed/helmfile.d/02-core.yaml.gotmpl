@@ -60,20 +60,20 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.8.0
+    version: 1.8.1
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 2.4.0
+    version: 2.4.1
     namespace: sis
     inherit:
       - template: service
     condition: icms.enabled
 
   - name: api
-    version: 1.27.1
+    version: 1.27.2
     namespace: nvcf
     inherit:
       - template: service
@@ -114,7 +114,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.6.1
+    version: 1.6.2
     namespace: nvcf
     inherit:
       - template: service
@@ -202,6 +202,9 @@ releases:
       - ../global.yaml.gotmpl
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+          {{- with dig "natsAuthCalloutService" "image" "tag" "" .Values }}
+          tag: {{ . | quote }}
+          {{- end }}
       - serviceConfig:
           service:
             nats_url: "nats://nats.nats-system.svc.cluster.local:4222"
@@ -232,7 +235,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.14.1
+    version: 1.14.2
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -268,7 +271,7 @@ releases:
 
   - name: nvcf-ui
     chart: nvcf/helm-nvcf-ui
-    version: 1.1.2
+    version: 1.1.3
     namespace: nvcf-ui
     condition: addons.nvcfUi.enabled
     values:
@@ -281,7 +284,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.2
+    version: 1.18.3
     {{- end }}
     needs:
       - nvcf/notary-service

@@ -53,7 +53,8 @@ write_values() {
 
 write_values "$values_file"
 write_values "$custom_values_file" \
-  --state-values-set nats.authCallout.secretName=custom-auth-callout-nkeys
+  --state-values-set nats.authCallout.secretName=custom-auth-callout-nkeys \
+  --state-values-set natsAuthCalloutService.image.tag=9.8.7-maintenance
 
 expected_repository="registry.example.com/example/nvcf/nvcf-nats-auth-callout-service"
 actual_repository="$(yq -r '.image.repository // ""' "$values_file")"
@@ -90,9 +91,23 @@ helm template nats-auth-callout-service \
   fail "NATS auth-callout chart did not render"
 
 actual_image="$(yq -r '.spec.template.spec.containers[0].image // ""' "$manifest_file")"
-expected_image="$expected_repository:0.8.3"
+expected_tag="$(yq -r '.natsAuthCalloutService.image.tag // ""' "$stack_dir/environments/base.yaml")"
+if test -z "$expected_tag"; then
+  expected_tag="$(yq -r '.appVersion' "$stack_dir/../../helm/nats-auth-callout/Chart.yaml")"
+fi
+expected_image="$expected_repository:$expected_tag"
 test "$actual_image" = "$expected_image" ||
   fail "rendered image is $actual_image, expected $expected_image"
+
+helm template nats-auth-callout-service \
+  "$stack_dir/../../helm/nats-auth-callout" \
+  --namespace nats-system \
+  --values "$custom_values_file" \
+  --show-only templates/deployment.yaml >"$work_dir/custom-manifest.yaml" ||
+  fail "NATS auth-callout chart did not render with the image override"
+custom_image="$(yq -r '.spec.template.spec.containers[0].image' "$work_dir/custom-manifest.yaml")"
+test "$custom_image" = "$expected_repository:9.8.7-maintenance" ||
+  fail "the stack image override did not reach the NATS auth-callout Deployment"
 
 config_manifest_file="$work_dir/nats-auth-callout-config-manifest.yaml"
 helm template nats-auth-callout-service \

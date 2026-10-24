@@ -181,9 +181,15 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+      {{- with dig "openbao" "injector" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     agentImage:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
+      {{- with dig "openbao" "injector" "agentImage" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
@@ -214,6 +220,9 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
+      {{- with dig "openbao" "server" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
@@ -244,15 +253,27 @@ nats:
         {{- end }}
   {{- end }}
   container:
+    {{- with dig "nats" "container" "merge" "securityContext" dict .Values }}
+    merge:
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     image:
-      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default "synadia/nats-server" }}
       tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
-  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
+  {{- $natsReloaderSecurityContext := dig "nats" "reloader" "merge" "securityContext" dict .Values }}
+  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag $natsReloaderSecurityContext }}
   reloader:
+    {{- with $natsReloaderSecurityContext }}
+    merge:
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
     image:
       {{- with $natsReloaderRegistry }}
       registry: {{ . }}
@@ -263,6 +284,7 @@ nats:
       {{- with $natsReloaderTag }}
       tag: {{ . | quote }}
       {{- end }}
+    {{- end }}
   {{- end }}
   natsBox:
     {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
@@ -341,6 +363,9 @@ apikeys:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-api-keys-service
+    {{- with dig "apikeys" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -353,6 +378,10 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "resources" dict .Values }}
+  resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}
@@ -525,7 +554,8 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.18.0" $sidecarsHost $sidecarsRepo }}
+{{- $pylonImageTag := dig "addons" "llm" "requestRouter" "image" "tag" "" .Values | default "0.18.0" }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:%s" $sidecarsHost $sidecarsRepo $pylonImageTag }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -653,6 +683,17 @@ api:
   env:
     {{- toYaml $apiEnv | nindent 4 }}
 
+  {{- /* Pylon lives in remote config rather than a Kubernetes image field. */}}
+  {{- $apiPodAnnotations := deepCopy (dig "api" "podAnnotations" dict .Values) }}
+  {{- if and $effectivePylonImage (not $llmEnabled) }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $apiPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $apiPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 invocation:
   {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
   {{- if not (kindIs "map" $configuredInvocationEnv) }}
@@ -681,6 +722,9 @@ invocation:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-invocation-service
+    {{- with dig "invocation" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -706,6 +750,10 @@ invocation:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredNvctApiRemoteConfigData) }}
+{{- fail "nvctApi.remoteConfig.configData must be a map" }}
+{{- end }}
 nvctApi:
   fullnameOverride: nvct-api
   {{- if .Values.global.imagePullSecrets }}
@@ -718,6 +766,26 @@ nvctApi:
     {{- with dig "nvctApi" "image" "tag" nil .Values }}
     tag: {{ . | quote }}
     {{- end }}
+
+  {{- with $configuredNvctApiRemoteConfigData }}
+  remoteConfig:
+    configData:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+
+  {{- /* Task sidecars are created later by NVCT and must enter the inventory. */}}
+  {{- $nvctPodAnnotations := deepCopy (dig "nvctApi" "podAnnotations" dict .Values) }}
+  {{- $nvctSidecars := dig "nvct" "sidecars" dict $configuredNvctApiRemoteConfigData }}
+  {{- range $key := list "init-container" "utils-container" "ess-agent-container" }}
+  {{- with index $nvctSidecars $key }}
+  {{- $image := . | replace "${nvct.sidecars.hostname}" $sidecarsHost | replace "${nvct.sidecars.repository}" $sidecarsRepo }}
+  {{- $_ := set $nvctPodAnnotations (printf "release-artifact-%s-image" $key) $image }}
+  {{- end }}
+  {{- end }}
+  {{- with $nvctPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
   env:
     NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
@@ -759,6 +827,9 @@ grpcproxy:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-grpc-proxy
+    {{- with dig "grpcproxy" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -799,6 +870,9 @@ rateLimiter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}
+    {{- with dig "rateLimiter" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- if .Values.global.nodeSelectors.enabled }}
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
@@ -822,6 +896,9 @@ ess:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-ess
+    {{- with dig "ess" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -849,6 +926,9 @@ notary:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-notary
+    {{- with dig "notary" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1025,6 +1105,9 @@ reval:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/reval-server
+    {{- with dig "reval" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532
@@ -1121,6 +1204,16 @@ llmApiGateway:
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
+  {{- /* The router's optional release owns its dynamically created Pylon image. */}}
+  {{- $routerPodAnnotations := deepCopy (dig "addons" "llm" "requestRouter" "podAnnotations" dict .Values) }}
+  {{- if and $llmEnabled $effectivePylonImage }}
+  {{- $pylonArtifactImage := $effectivePylonImage | replace "${nvcf.sidecars.hostname}" $apiEnv.NVCF_SIDECARS_HOSTNAME | replace "${nvcf.sidecars.repository}" $apiEnv.NVCF_SIDECARS_REPOSITORY }}
+  {{- $_ := set $routerPodAnnotations "release-artifact-llm-router-client-image" $pylonArtifactImage }}
+  {{- end }}
+  {{- with $routerPodAnnotations }}
+  podAnnotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- $requestRouterValues := dig "addons" "llm" "requestRouter" dict .Values }}
   {{- if hasKey $requestRouterValues "replicaCount" }}
   replicaCount: {{ index $requestRouterValues "replicaCount" }}
@@ -1757,3 +1850,7 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
   podMonitors:
     enabled: {{ .Values.global.observability.metrics.enabled }}
+  {{- with dig "ingress" "gatewayApi" "hostnameConflictPolicy" dict .Values }}
+  hostnameConflictPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}

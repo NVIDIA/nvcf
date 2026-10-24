@@ -62,6 +62,12 @@ assert_tag() {
     fail "expected migrations image tag $expected"
 }
 
+write_env ""
+yq -i 'del(.addons.nvcfUi.openbaoMigrations)' "$environment_file"
+render_values "$work_dir/default-values.yaml" >/dev/null
+assert_tag "$work_dir/default-values.yaml" \
+  "$(yq -r '.openbao.migrations.image.tag' "$stack_dir/environments/base.yaml")"
+
 write_env "0.19.6"
 render_values "$work_dir/newer-values.yaml" >/dev/null
 assert_tag "$work_dir/newer-values.yaml" "0.19.6"
