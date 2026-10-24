@@ -4,6 +4,9 @@ This wrapper consumes the upstream NATS chart pinned in `Chart.lock`.
 Keep image defaults and nonroot settings in `values.yaml`. Do not edit
 cached dependencies under `charts/`.
 
+Use two-space YAML indentation. Preserve the upstream chart value nesting
+and follow the existing Go template whitespace conventions in Helm templates.
+
 Run from the repository root:
 
 ```sh
