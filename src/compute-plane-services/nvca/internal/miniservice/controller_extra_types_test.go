@@ -32,6 +32,7 @@ import (
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 
 	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
@@ -124,7 +125,8 @@ func TestPartitionInstalledGVKsNoTypes(t *testing.T) {
 // watch never synced, the controller timed out waiting for caches, and the manager exited, which
 // made the agent crash loop.
 func TestBuildControllerSkipsWatchOnAbsentAllowedExtraType(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, hook := core.WithTestingLogger(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
 	restConfig, _, cleanup, err := nvcaenvtest.SetupEnvtest()
@@ -175,6 +177,16 @@ func TestBuildControllerSkipsWatchOnAbsentAllowedExtraType(t *testing.T) {
 	}
 	require.NoError(t, BuildController(ctx, cfg, mgr, newFakeReValClient(t, []byte("[]"), new(error)),
 		&fakenodefeatures.Client{}, regITCache, featureflag.NewAttributes(nil), opts))
+
+	// Only the absent type is reported, as a warning that names it.
+	var warned []string
+	for _, e := range hook.AllEntries() {
+		if e.Level.String() == "warning" {
+			assert.Equal(t, "nvidia.com", e.Data["group"])
+			warned = append(warned, e.Data["kind"].(string))
+		}
+	}
+	assert.Equal(t, []string{"DynamoCheckpoint"}, warned)
 
 	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
 	require.NoError(t, err)

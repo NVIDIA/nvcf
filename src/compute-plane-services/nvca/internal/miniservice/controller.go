@@ -24,6 +24,7 @@ import (
 	"time"
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	kartav1alpha1 "github.com/run-ai/karta/pkg/api/runai/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -285,8 +286,11 @@ func BuildController(ctx context.Context,
 	// a cluster may run an operator release that no longer ships it.
 	watchGVKs, absentGVKs := partitionInstalledGVKs(mgr.GetRESTMapper(), extraGVKs)
 	for _, gvk := range absentGVKs {
-		logf.FromContext(ctx).Info("Skipping watch on allowed extra Kubernetes type: its API is not installed",
-			"group", gvk.Group, "version", gvk.Version, "kind", gvk.Kind)
+		core.GetLogger(ctx).
+			WithField("group", gvk.Group).
+			WithField("version", gvk.Version).
+			WithField("kind", gvk.Kind).
+			Warn("Skipping watch on allowed extra Kubernetes type: its API is not installed")
 	}
 	for _, gvk := range watchGVKs {
 		u := &unstructured.Unstructured{}
