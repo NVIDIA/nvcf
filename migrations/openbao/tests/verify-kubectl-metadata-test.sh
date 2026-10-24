@@ -14,6 +14,8 @@ cat "$METADATA"
 MOCK
 chmod +x "$work/go"
 
+# Write representative kubectl build metadata for the requested OTel version.
+# Argument: $1 is the stable OpenTelemetry module version.
 metadata() {
   version=$1
   printf 'kubectl: %s\n' "$go_version" >"$work/metadata"
@@ -25,6 +27,8 @@ metadata() {
   printf '\tbuild\tGOOS=linux\n\tbuild\tGOARCH=arm64\n\tbuild\tCGO_ENABLED=0\n' >>"$work/metadata"
 }
 
+# Run the real verifier against the current fixture and assert its result.
+# Argument: $1 is the expected result, pass or fail.
 check() {
   expected=$1
   if GO="$work/go" METADATA="$work/metadata" KUBECTL_GO_VERSION="$go_version" \
