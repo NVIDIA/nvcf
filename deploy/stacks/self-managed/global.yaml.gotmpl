@@ -226,9 +226,9 @@ nats:
   {{- end }}
   container:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server
-      tag: 2.14.6-alpine3.22
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
+      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
@@ -246,21 +246,33 @@ nats:
       {{- end }}
   {{- end }}
   natsBox:
+    {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+    {{- end }}
     container:
       image:
-        registry: {{ .Values.global.image.registry }}
-        repository: {{ .Values.global.image.repository }}/nats-box
-        tag: 0.19.7-nonroot
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- if or $natsNs $natsTol }}
+  {{- $natsPodSecurityContext := dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+  {{- if or $natsNs $natsTol $natsPodSecurityContext }}
   podTemplate:
     merge:
       spec:
+        {{- with $natsPodSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}
