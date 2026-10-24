@@ -268,11 +268,18 @@ nats:
     {{- end }}
   {{- end }}
   natsBox:
+    {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+    {{- end }}
     container:
       image:
-        registry: {{ .Values.global.image.registry }}
-        repository: {{ .Values.global.image.repository }}/nats-box
-        tag: 0.19.7-nonroot
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
