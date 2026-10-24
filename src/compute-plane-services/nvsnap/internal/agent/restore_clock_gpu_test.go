@@ -31,7 +31,7 @@ func writeSized(t *testing.T, path string, size int64) {
 
 // Before its first restore, a checkpoint's budget is its CRIU estimate, its
 // GPU memory at the reload rate, and the reload's fixed part; after, its
-// last whole restore with a quarter more; never past the bound.
+// last whole restore's work with a tenth more; never past the bound.
 func TestRestoreSpanBudget(t *testing.T) {
 	dir := t.TempDir()
 	writeSized(t, filepath.Join(dir, "pages-1.img"), 3<<30)              // 1 s of CRIU at 3 GiB/s
@@ -42,7 +42,7 @@ func TestRestoreSpanBudget(t *testing.T) {
 	if err := recordRestoreSpan(dir, 100*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := restoreSpanBudget(dir), 125*time.Second+restoreClockSlack; got != want {
+	if got, want := restoreSpanBudget(dir), 110*time.Second+restoreClockSlack; got != want {
 		t.Errorf("recorded = %s, want %s", got, want)
 	}
 	if err := recordRestoreSpan(dir, time.Hour); err != nil {
@@ -72,7 +72,7 @@ func TestRestoreClockArgs(t *testing.T) {
 	}
 	args, b = restoreClockArgs(dir, true, true)
 	want := "--timens-budget " + strconv.FormatInt(b.Milliseconds(), 10) + " --leave-stopped --timens-no-wait"
-	if b != 100*time.Second+restoreClockSlack || strings.Join(args, " ") != want {
+	if b != 88*time.Second+restoreClockSlack || strings.Join(args, " ") != want {
 		t.Errorf("through the GPU reload: %v %s, want %q", args, b, want)
 	}
 }
@@ -173,6 +173,22 @@ func TestClockThroughGPUSupported(t *testing.T) {
 	}
 	if clockThroughGPUSupported(criu, "--hold-gate: ...") {
 		t.Error("a tool without --clock-at")
+	}
+}
+
+// The wait a resume reports is its largest "behind"; a pid past the dump
+// waited for nothing.
+func TestClockWaited(t *testing.T) {
+	out := "pid=693 clock 16.250s behind the dump\npid=694 clock 0.001s behind the dump\n" +
+		"pid=695 clock 2.000s past the dump\nresumed thawed all pids\n"
+	if got := clockWaited(out); got != 16250*time.Millisecond {
+		t.Errorf("waited %s, want 16.25s", got)
+	}
+	if got := clockWaited("pid=7 clock 3.000s past the dump\n"); got != 0 {
+		t.Errorf("an overrun waited %s", got)
+	}
+	if got := clockWaited("resumed\n"); got != 0 {
+		t.Errorf("a resume without --clock-at waited %s", got)
 	}
 }
 

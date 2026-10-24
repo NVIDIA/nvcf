@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -266,7 +267,8 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir str
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
 func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
-	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, 0, log)
+	_, err := gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, 0, log)
+	return err
 }
 
 // gpushareResumeWithGPUsOf resumes pids, entered through hostPID, on the
@@ -276,8 +278,9 @@ func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabric
 // a group open only once every one of them has resumed, so no node launches
 // into memory another node is still rebinding (see gpushareOpen). clockAt,
 // when set, is the CLOCK_MONOTONIC their dump recorded: the tool thaws them
-// only once their clocks have reached it (restore_clock_gpu.go).
-func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, clockAt int64, log *logrus.Entry) error {
+// only once their clocks have reached it (restore_clock_gpu.go); it
+// returns how long the tool waited for that.
+func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, clockAt int64, log *logrus.Entry) (time.Duration, error) {
 	env := podGPUEnv(gpusPID)
 	if env == nil && gpusPID != hostPID {
 		// No UUIDs in NVIDIA_VISIBLE_DEVICES (GPUs given as device nodes,
@@ -286,7 +289,7 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		// the tool would map onto first and the pod may not open.
 		gpus, err := gpushareTool(ctx, gpusPID, time.Minute, "gpus")
 		if err != nil {
-			return err
+			return 0, err
 		}
 		env = cudaVisibleEnv(gpus)
 	}
@@ -295,21 +298,41 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
-	if clockAt > 0 {
-		// Each pid's distance from the dumped clock when it was thawed:
-		// "behind" means it waited for it, "past" that the restore overran
-		// its clock budget (restore_clock_gpu.go).
-		for _, l := range strings.Split(out, "\n") {
-			if strings.Contains(l, " the dump") && strings.Contains(l, "clock ") {
-				log.Info("gpushare: " + strings.TrimSpace(l))
-			}
+	if clockAt <= 0 {
+		return 0, nil
+	}
+	// Each pid's distance from the dumped clock when it was thawed:
+	// "behind" means it waited for it, "past" that the restore overran its
+	// clock budget (restore_clock_gpu.go).
+	for _, l := range strings.Split(out, "\n") {
+		if clockLine.MatchString(l) {
+			log.Info("gpushare: " + strings.TrimSpace(l))
 		}
 	}
-	return nil
+	return clockWaited(out), nil
+}
+
+// clockLine is the tool's report of a pid's clock at its thaw.
+var clockLine = regexp.MustCompile(`pid=\d+ clock ([0-9.]+)s (behind|past) the dump`)
+
+// clockWaited is how long a resume waited for the dumped clock: the
+// largest "behind" of its pids (they wait one after another, so the first
+// waits for all of them).
+func clockWaited(out string) time.Duration {
+	var w time.Duration
+	for _, m := range clockLine.FindAllStringSubmatch(out, -1) {
+		if m[2] != "behind" {
+			continue
+		}
+		if s, err := strconv.ParseFloat(m[1], 64); err == nil && time.Duration(s*float64(time.Second)) > w {
+			w = time.Duration(s * float64(time.Second))
+		}
+	}
+	return w
 }
 
 // gpushareSuspendArgs builds the suspend command line. fabricDir, when set,

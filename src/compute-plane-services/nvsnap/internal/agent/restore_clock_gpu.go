@@ -59,12 +59,15 @@ const (
 )
 
 // restoreSpanBudget is the --timens-budget for a restore of the checkpoint
-// in dir that reloads GPU memory: its last whole restore with a quarter
-// more, else an estimate.
+// in dir that reloads GPU memory: its last whole restore's work (without
+// its wait for the clocks) with a tenth more, else an estimate. Restores of
+// a checkpoint take about the same time (97-98 s for a 2-node Kimi-K3
+// rank); a budget too large is waited out at every resume, a restore
+// slower than its budget sees only its overrun.
 func restoreSpanBudget(dir string) time.Duration {
 	if b, err := os.ReadFile(filepath.Join(dir, restoreSpanFile)); err == nil {
 		if ms, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && ms >= 0 {
-			return min(time.Duration(ms)*time.Millisecond*5/4+restoreClockSlack, restoreClockMax)
+			return min(time.Duration(ms)*time.Millisecond*11/10+restoreClockSlack, restoreClockMax)
 		}
 	}
 	gpu := time.Duration(float64(gpuStoreBytes(dir)) / restoreGPULoadRate * float64(time.Second))
@@ -104,7 +107,8 @@ func gpuStoreBytes(dir string) int64 {
 }
 
 // recordRestoreSpan keeps what this restore of the checkpoint in dir took
-// up to its GPU resume, for the budget of its next one.
+// up to its GPU resume, without its wait for the clocks, for the budget of
+// its next one: with the wait, each budget would grow from the last.
 func recordRestoreSpan(dir string, d time.Duration) error {
 	return os.WriteFile(filepath.Join(dir, restoreSpanFile), []byte(strconv.FormatInt(d.Milliseconds(), 10)+"\n"), 0o644) //nolint:gosec // dir is the agent's own checkpoint directory
 }

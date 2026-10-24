@@ -315,6 +315,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// the pid the resume tool entered, once it ran, for openGPU.
 	toolPID := 0
 	var clockAt int64
+	// clockWait is how long the GPU resume waited for the dumped clock:
+	// not part of the restore's work, so not of the next one's budget.
+	var clockWait time.Duration
 	if clockThroughGPU {
 		var err error
 		if clockAt, err = dumpedMonotonic(ctx, checkpointDir); err != nil {
@@ -335,7 +338,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		if err != nil {
 			return fmt.Errorf("criu-v2: resume the restored tasks: %w", err)
 		}
-		spent := time.Since(criuStart)
+		spent := time.Since(criuStart) - clockWait
 		if err := recordRestoreSpan(checkpointDir, spent); err != nil {
 			log.WithError(err).Warn("criu-v2: cannot record the restore's length; the next one estimates its clock budget")
 		}
@@ -374,7 +377,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			}
 		}
 		toolPID = resumePID
-		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, holdGate, clockAt, log); err != nil {
+		waited, err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, holdGate, clockAt, log)
+		clockWait = waited
+		if err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
