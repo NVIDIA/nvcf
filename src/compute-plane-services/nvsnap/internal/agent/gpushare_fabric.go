@@ -139,7 +139,7 @@ func (s *fabricSessionDir) exists(name string) bool { return s.parent.exists(s.n
 
 // write writes name by rename, so the tool never reads a partial file.
 func (s *fabricSessionDir) write(name string, data []byte) error {
-	return s.parent.writeFileAtomic(s.name+"/"+name, data, 0o644) // read by the tool inside the workload
+	return s.parent.writeFileAtomic(s.name+"/"+name, data) // read by the tool inside the workload
 }
 
 // fabricSmallLimit bounds the files of a session other than the handle
@@ -290,7 +290,6 @@ func netUnlock(ctx context.Context, hostPID int, imagesDir string, log *logrus.E
 	log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("group restore: network unlocked")
 	return nil
 }
-
 
 func criuSupportsNetMigration(help string) bool {
 	return strings.Contains(help, "--inet-addr-map") && strings.Contains(help, "net-unlock")

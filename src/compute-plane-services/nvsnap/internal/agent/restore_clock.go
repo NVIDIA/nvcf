@@ -130,7 +130,6 @@ func recordRestoreClock(dir string) (time.Duration, bool) {
 	return d, true
 }
 
-
 func criuSupportsTimensBudget(help string) bool {
 	return strings.Contains(help, "--timens-budget")
 }

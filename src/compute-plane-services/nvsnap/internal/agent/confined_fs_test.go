@@ -12,10 +12,11 @@ import (
 	"time"
 )
 
-func confinedTestDir(t *testing.T) (*confinedDir, string, string) {
+func confinedTestDir(t *testing.T) (d *confinedDir, dir, outside string) {
 	t.Helper()
-	dir, outside := t.TempDir(), t.TempDir()
-	d, err := openConfinedDir(dir)
+	dir, outside = t.TempDir(), t.TempDir()
+	var err error
+	d, err = openConfinedDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestConfinedDirWriteFileAtomic(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, "in")); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.writeFileAtomic("in", []byte("handles\n"), 0o644); err != nil {
+	if err := d.writeFileAtomic("in", []byte("handles\n")); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
@@ -100,7 +101,7 @@ func TestConfinedDirWriteFileAtomic(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "s"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.writeFileAtomic("s/u", []byte("unlock\n"), 0o644); err != nil {
+	if err := d.writeFileAtomic("s/u", []byte("unlock\n")); err != nil {
 		t.Fatal(err)
 	}
 	if !d.exists("s/u") || d.exists("s/v") {
@@ -112,7 +113,7 @@ func TestConfinedDirWriteFileAtomic(t *testing.T) {
 			t.Errorf("temporary file left: %s", e.Name())
 		}
 	}
-	if err := d.writeFileAtomic("../"+filepath.Base(outside)+"/x", []byte("x"), 0o644); err == nil {
+	if err := d.writeFileAtomic("../"+filepath.Base(outside)+"/x", []byte("x")); err == nil {
 		t.Error("wrote outside the directory through ..")
 	}
 }

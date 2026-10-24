@@ -75,9 +75,12 @@ func (d *confinedDir) exists(name string) bool {
 	return err == nil
 }
 
-// writeFileAtomic writes name with mode perm through a rename, so a reader
-// never sees a partial file. The temporary file is created exclusively.
-func (d *confinedDir) writeFileAtomic(name string, data []byte, perm fs.FileMode) error {
+// writeFileAtomic writes name through a rename, so a reader never sees a
+// partial file. The temporary file is created exclusively. The file is
+// 0644: what the agent writes there is read by the tools inside the
+// workload.
+func (d *confinedDir) writeFileAtomic(name string, data []byte) error {
+	const perm fs.FileMode = 0o644
 	dir, base := path.Split(name)
 	var f *os.File
 	var tmp string
