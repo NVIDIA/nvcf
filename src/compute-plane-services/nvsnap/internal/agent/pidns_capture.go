@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
@@ -799,40 +801,45 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 	}
 	_, gpu := pidNSExternalMounts(parseMountinfo(string(mi)), nil)
 	src := filepath.Join(procBase, strconv.Itoa(placeholderPID), "root")
-	dst := filepath.Join(procBase, strconv.Itoa(nestedPID), "root")
+	// The restored tree runs, and its filesystem is its own to change:
+	// everything there goes through its root (confined_fs.go).
+	dst, err := openWorkloadDir(procBase, nestedPID, "/")
+	if err != nil {
+		return nil, fmt.Errorf("open the restored tree's root: %w", err)
+	}
+	defer func() { _ = dst.Close() }()
 	var made []string
 	for _, mp := range gpu {
 		var st syscall.Stat_t
 		if err := syscall.Stat(filepath.Join(src, mp), &st); err != nil {
 			return made, fmt.Errorf("stat the placeholder's %s: %w", mp, err)
 		}
-		target := filepath.Join(dst, mp)
+		rel := strings.TrimPrefix(filepath.Clean(mp), "/")
 		// Only the restored /dev (a tmpfs of the restored tree) is the
 		// tree's own: elsewhere the root is the placeholder's filesystem,
 		// whose entries are already there. Create what is missing; never
 		// replace anything outside /dev.
 		inDev := strings.HasPrefix(mp, "/dev/")
-		if _, err := os.Lstat(target); err == nil && !inDev {
+		if _, err := dst.root.Lstat(rel); err == nil && !inDev {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := dst.root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return made, err
 		}
 		switch st.Mode & syscall.S_IFMT {
 		case syscall.S_IFCHR:
-			_ = os.Remove(target)
-			if err := syscall.Mknod(target, st.Mode, int(st.Rdev)); err != nil {
+			if err := mknodIn(dst, rel, st.Mode, st.Rdev); err != nil {
 				return made, fmt.Errorf("create %s: %w", mp, err)
 			}
 		case syscall.S_IFDIR:
-			if err := os.MkdirAll(target, os.FileMode(st.Mode&0o7777)); err != nil {
+			if err := dst.root.MkdirAll(rel, os.FileMode(st.Mode&0o777)); err != nil {
 				return made, err
 			}
 		default:
-			if _, err := os.Stat(target); err == nil {
+			f, err := dst.root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, os.FileMode(st.Mode&0o777))
+			if errors.Is(err, os.ErrExist) {
 				continue
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(st.Mode&0o7777))
 			if err != nil {
 				return made, err
 			}
@@ -841,6 +848,25 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 		made = append(made, mp)
 	}
 	return made, nil
+}
+
+// mknodIn creates character device rel under d, replacing what is there:
+// the device node is made relative to its parent directory, opened under
+// d's root, so no component of rel resolves outside it.
+func mknodIn(d *confinedDir, rel string, mode uint32, rdev uint64) error {
+	parent, err := d.root.Open(filepath.Dir(rel))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	name := filepath.Base(rel)
+	if err := unix.Unlinkat(int(parent.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	if rdev > math.MaxInt {
+		return fmt.Errorf("device number %d out of range", rdev)
+	}
+	return unix.Mknodat(int(parent.Fd()), name, mode, int(rdev))
 }
 
 // deletedMount returns a mountpoint whose source was deleted on the node

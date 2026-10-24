@@ -261,3 +261,55 @@ func TestHarvestIntoAcrossFilesystems(t *testing.T) {
 		t.Errorf("source left after the copy: %v", err)
 	}
 }
+
+// gpuInstallFixture is a placeholder (pid 1) with a GPU identity file
+// bind-mounted at /run/nvidia-container-devices/GPU-a, and a restored tree
+// (pid 2) whose root is tree.
+func gpuInstallFixture(t *testing.T, tree string) string {
+	t.Helper()
+	proc, placeholder := t.TempDir(), t.TempDir()
+	for pid, root := range map[string]string{"1": placeholder, "2": tree} {
+		if err := os.MkdirAll(filepath.Join(proc, pid), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(root, filepath.Join(proc, pid, "root")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dev := filepath.Join(placeholder, "run", "nvidia-container-devices", "GPU-a")
+	if err := os.MkdirAll(filepath.Dir(dev), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dev, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mi := "22 1 0:1 / / rw - overlay overlay rw\n" +
+		"30 22 0:50 /GPU-a /run/nvidia-container-devices/GPU-a ro - tmpfs tmpfs rw\n"
+	if err := os.WriteFile(filepath.Join(proc, "1", "mountinfo"), []byte(mi), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return proc
+}
+
+// The GPU entries a placeholder has are created in the restored tree, under
+// its root: a symlinked directory in the tree does not take a creation
+// outside it.
+func TestInstallPlaceholderGPUsStaysInTheTree(t *testing.T) {
+	tree := t.TempDir()
+	made, err := installPlaceholderGPUs(gpuInstallFixture(t, tree), 1, 2)
+	if err != nil || len(made) != 1 {
+		t.Fatalf("a plain tree: made %v, %v", made, err)
+	}
+	if _, lerr := os.Lstat(filepath.Join(tree, "run", "nvidia-container-devices", "GPU-a")); lerr != nil {
+		t.Errorf("not created in the tree: %v", lerr)
+	}
+
+	tree, outside := t.TempDir(), t.TempDir()
+	if serr := os.Symlink(outside, filepath.Join(tree, "run")); serr != nil {
+		t.Fatal(serr)
+	}
+	made, err = installPlaceholderGPUs(gpuInstallFixture(t, tree), 1, 2)
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Errorf("created %v outside the restored tree (made %v, err %v)", ents, made, err)
+	}
+}
