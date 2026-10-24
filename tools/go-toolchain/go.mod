@@ -25,6 +25,6 @@
 
 module github.com/NVIDIA/nvcf/tools/go-toolchain
 
-go 1.26.5
+go 1.26.10
 
-toolchain go1.26.8
+toolchain go1.26.10

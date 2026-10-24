@@ -482,6 +482,20 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
+
+# NVIDIA distroless static: the base for the BYOO collector images. Both
+# collector binaries are pure Go built with CGO disabled, so they need no libc.
+# Unlike distroless_go, this base ships no libc6 or zlib1g. It keeps the same
+# nvs user (1000:1000), CA certificates, and tzdata. v4.1.5.
+oci.pull(
+    name = "nvidia_distroless_static",
+    digest = "sha256:2bfab5f3736a9968ab6a5bc64392d389eedd10ff42c88b36b35d8d256a97dcd1",
+    image = "nvcr.io/nvidia/distroless/static",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
 use_repo(
     oci,
     "distroless_cc",
@@ -493,6 +507,9 @@ use_repo(
     "distroless_java",
     "distroless_java_linux_amd64",
     "distroless_java_linux_arm64_v8",
+    "nvidia_distroless_static",
+    "nvidia_distroless_static_linux_amd64",
+    "nvidia_distroless_static_linux_arm64_v8",
     "temurin_jre",
     "temurin_jre_linux_amd64",
     "temurin_jre_linux_arm64_v8",
