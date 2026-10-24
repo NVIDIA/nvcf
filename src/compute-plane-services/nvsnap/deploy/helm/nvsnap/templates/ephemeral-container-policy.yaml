@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if and .Values.webhook.enabled .Values.webhook.ephemeralContainerPolicy.enabled (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+# The webhook places nvsnap volumes (node-wide directories: the node
+# bundle, checkpoints, GPU stores) in pods at creation, and checks every
+# mount the pod declares then. An ephemeral container is added later,
+# through pods/ephemeralcontainers, which the webhook does not see: this
+# policy keeps it from mounting an nvsnap volume.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: nvsnap-ephemeral-container-volumes
+  labels:
+    {{- include "nvsnap.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods/ephemeralcontainers"]
+  validations:
+    - expression: >-
+        !has(object.spec.ephemeralContainers) ||
+        object.spec.ephemeralContainers.all(c, !has(c.volumeMounts) ||
+        c.volumeMounts.all(m, !m.name.startsWith('nvsnap-')))
+      message: "an ephemeral container may not mount an nvsnap volume"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: nvsnap-ephemeral-container-volumes
+  labels:
+    {{- include "nvsnap.labels" . | nindent 4 }}
+spec:
+  policyName: nvsnap-ephemeral-container-volumes
+  validationActions: [Deny]
+{{- end }}

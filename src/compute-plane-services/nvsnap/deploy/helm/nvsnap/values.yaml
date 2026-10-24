@@ -519,6 +519,11 @@ webhook:
   #       env: {NVSNAP_GPUSHARE_DEBUG: "1", NCCL_DEBUG: INFO}
   # A variable the container already sets is left as it is.
   debugEnv: []
+  # Keeps an ephemeral container (added after admission, which the webhook
+  # does not see) from mounting the nvsnap volumes the webhook placed:
+  # a ValidatingAdmissionPolicy, on clusters that have the API (1.30+).
+  ephemeralContainerPolicy:
+    enabled: true
   # The webhook is served BY the agent DaemonSet, not by a separate Pod.
   # This block controls only the Service + MutatingWebhookConfiguration +
   # cert-manager Certificate that point the apiserver at the agent's
