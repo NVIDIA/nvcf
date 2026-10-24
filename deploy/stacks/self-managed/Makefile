@@ -16,6 +16,7 @@ test:
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/nats-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/openbao-injector-image-overrides.sh
 	@tests/service-pki-wiring.sh
 	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
