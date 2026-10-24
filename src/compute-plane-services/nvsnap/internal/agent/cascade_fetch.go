@@ -184,6 +184,10 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	// Rails tier: copy from nodes that hold the checkpoint over their RDMA
 	// NICs (rails_fetch.go). Any failure falls through to the tiers below.
 	var sources *catalogSources
+	// small: the rails tier found the checkpoint under its minimum. The
+	// HTTP peers then come before the L2 volume: they move it in about a
+	// second, where a volume takes its attach and mount first.
+	small := false
 	if a.railsEnabled() && a.config.CatalogURL != "" {
 		railsStart := time.Now()
 		var err error
@@ -200,6 +204,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			return nil
 		} else {
 			entry := a.log.WithError(err).WithField("checkpoint_id", checkpointID)
+			small = errors.Is(err, errRailsSmall)
 			if errors.Is(err, errRailsUnavailable) {
 				entry.Info("EnsureLocal: rails tier not available; trying the next tier")
 			} else {
@@ -207,6 +212,15 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			}
 			_ = clearFiles(localDir)
 		}
+	}
+	if small {
+		err := a.fetchFromPeers(ctx, checkpointID, localDir, sources)
+		if err == nil {
+			fetched = true
+			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
+			return nil
+		}
+		a.log.WithError(err).WithField("checkpoint_id", checkpointID).Warn("EnsureLocal: the peers could not deliver a small checkpoint; trying the shared tiers")
 	}
 
 	if a.fsStore.hasCheckpoint(checkpointID) {
@@ -260,13 +274,33 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return fmt.Errorf("checkpoint %s not local and CatalogURL unset; cannot cascade", checkpointID)
 	}
 
+	if small {
+		// The peers were tried first and failed; the shared tiers too.
+		err := fmt.Errorf("checkpoint %s: no tier delivered it", checkpointID)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "all tiers failed")
+		return err
+	}
+	if err := a.fetchFromPeers(ctx, checkpointID, localDir, sources); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "all tiers failed")
+		return err
+	}
+	fetched = true
+	span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
+	return nil
+}
+
+// fetchFromPeers copies checkpointID into localDir from the agents that
+// hold it (sources, from the catalog), and registers this node as a source
+// once it has it.
+func (a *Agent) fetchFromPeers(ctx context.Context, checkpointID, localDir string, sources *catalogSources) error {
 	if sources == nil {
 		var err error
 		if sources, err = a.fetchCheckpointSources(ctx, checkpointID); err != nil {
 			return fmt.Errorf("query catalog sources: %w", err)
 		}
 	}
-
 	a.log.WithFields(map[string]interface{}{
 		"checkpoint_id": checkpointID,
 		"peer_count":    len(sources.Peers),
@@ -338,8 +372,6 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			continue
 		}
 		peerSpan.End()
-		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
-		fetched = true
 		log.WithField("elapsed", time.Since(start).String()).Info("EnsureLocal: peer fetch complete")
 		// Register self as a new peer so future fanouts can use us.
 		if regErr := a.registerAsPeer(ctx, checkpointID); regErr != nil {
@@ -348,10 +380,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return nil
 	}
 
-	err := fmt.Errorf("all %d peers failed for checkpoint %s", len(sources.Peers), checkpointID)
-	span.RecordError(err)
-	span.SetStatus(codes.Error, "all tiers failed")
-	return err
+	return fmt.Errorf("all %d peers failed for checkpoint %s", len(sources.Peers), checkpointID)
 }
 
 // catalogSources mirrors the JSON returned by nvsnap-server's

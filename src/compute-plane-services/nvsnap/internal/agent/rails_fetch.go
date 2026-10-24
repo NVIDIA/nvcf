@@ -140,6 +140,10 @@ var railsFetchStartTimeout = 3 * time.Minute
 // falls through on any error; this one is logged at Info.
 var errRailsUnavailable = errors.New("rails tier unavailable")
 
+// errRailsSmall marks a checkpoint under the rails minimum: EnsureLocal
+// asks the HTTP peers for it first.
+var errRailsSmall = fmt.Errorf("%w: the checkpoint is under the rails minimum", errRailsUnavailable)
+
 // Validate checks the values the pods are built from, so a typo fails the
 // agent's start rather than a restore.
 func (c RailsConfig) Validate() error {
@@ -234,7 +238,7 @@ func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir strin
 		return fmt.Errorf("%w: no other node lists %s", errRailsUnavailable, checkpointID)
 	}
 	if size < cfg.minBytes() {
-		return fmt.Errorf("%w: %d bytes is under the rails minimum of %d; the peers move it sooner", errRailsUnavailable, size, cfg.minBytes())
+		return fmt.Errorf("%w (%d bytes, minimum %d); the peers move it sooner", errRailsSmall, size, cfg.minBytes())
 	}
 	if err := checkFreeSpace(localDir, size, cfg.keepFreePercent()); err != nil {
 		return fmt.Errorf("%w: %w", errRailsUnavailable, err)

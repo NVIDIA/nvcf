@@ -6,6 +6,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 var podsResource = schema.GroupResource{Resource: "pods"}
@@ -386,5 +389,82 @@ func TestFetchOverRails_ReapsOwnIdleServePod(t *testing.T) {
 	want := []string{"create rails-serve", "delete nvsnap-rails-serve-receiver-node", "create rails-fetch"}
 	if len(order) < 3 || strings.Join(order[:3], "|") != strings.Join(want, "|") {
 		t.Errorf("order %v, want %v first", order, want)
+	}
+}
+
+// countingCatalog serves a checkpoint's sources and peer-adds, and counts
+// the L2 tier's lookups of the checkpoint's row.
+func countingCatalog(t *testing.T, peers []map[string]string) (url string, l2Lookups *int32) {
+	t.Helper()
+	var lookups int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/sources"):
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"peers": peers})
+		case strings.HasSuffix(r.URL.Path, "/peer-add"):
+			w.WriteHeader(http.StatusNoContent)
+		default: // the L2 tier's row lookup
+			atomic.AddInt32(&lookups, 1)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &lookups
+}
+
+// On a cluster with an L2 volume, a small checkpoint still comes from the
+// peers first: the volume is not consulted.
+func TestEnsureLocal_SmallCheckpointPeersBeforeL2(t *testing.T) {
+	peerURL, id, _ := newPeerAgent(t)
+	catalogURL, l2Lookups := countingCatalog(t, []map[string]string{{"node_name": "node-A", "agent_url": peerURL}})
+	c := newRailsCluster(t)
+	a, dir := railsAgent(t, catalogURL, c)
+	a.config.Rails.MinSize = ""
+	a.l2Backend = &checkpointstore.PerCapturePVCBackend{KubeClient: c.kube, Namespace: "nvsnap-system"}
+	if err := a.EnsureLocal(t.Context(), id); err != nil {
+		t.Fatalf("EnsureLocal: %v", err)
+	}
+	if !localCheckpointComplete(dir, id) {
+		t.Error("checkpoint not complete")
+	}
+	if n := atomic.LoadInt32(l2Lookups); n != 0 {
+		t.Errorf("the L2 tier was consulted %d times for a small checkpoint the peers hold", n)
+	}
+}
+
+// The peers cannot deliver a small checkpoint: the L2 tier is tried after
+// them, and with nothing there the fetch fails.
+func TestEnsureLocal_SmallCheckpointFallsBackToL2(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(gone.Close)
+	peerURL, id, _ := newPeerAgent(t)
+	// The source lists it (the rails tier reads its size) but serves no
+	// file of it (the peer tier fails).
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/manifest") {
+			http.NotFound(w, r)
+			return
+		}
+		resp, err := http.Get(peerURL + r.URL.Path) //nolint:noctx,gosec // proxies to the test peer agent
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(flaky.Close)
+	catalogURL, l2Lookups := countingCatalog(t, []map[string]string{{"node_name": "node-A", "agent_url": flaky.URL}})
+	c := newRailsCluster(t)
+	a, _ := railsAgent(t, catalogURL, c)
+	a.config.Rails.MinSize = ""
+	a.l2Backend = &checkpointstore.PerCapturePVCBackend{KubeClient: c.kube, Namespace: "nvsnap-system"}
+	err := a.EnsureLocal(t.Context(), id)
+	if err == nil || !strings.Contains(err.Error(), "no tier delivered it") {
+		t.Fatalf("EnsureLocal: %v, want the small checkpoint's failure after the peers and L2", err)
+	}
+	if n := atomic.LoadInt32(l2Lookups); n == 0 {
+		t.Error("the L2 tier was not tried after the peers failed")
 	}
 }
