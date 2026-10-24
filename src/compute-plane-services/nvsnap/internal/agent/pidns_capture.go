@@ -35,8 +35,6 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // pidNSMarkerFile, in the checkpoint directory, marks a checkpoint that
@@ -460,20 +458,95 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 	return args
 }
 
+// PIDNSRestoreRoot is where the restore helper mounts the placeholder's
+// root in its private copy of the agent's mount namespace: CRIU's --root.
+const PIDNSRestoreRoot = "/mnt/nvsnap-restore/root"
+
+// PIDNSFDsEnv tells the restore helper which inherited descriptors are
+// the placeholder's root, its network namespace, the listening sockets and
+// the stdio: "root=3,net=4,listeners=5:2,stdio=7:2" (start:count).
+const PIDNSFDsEnv = "NVSNAP_PIDNS_FDS"
+
+// PIDNSFDs are the descriptors the agent passes the restore helper.
+type PIDNSFDs struct {
+	Root, Net        int
+	Listeners, Stdio []int
+}
+
+// String is the PIDNSFDsEnv value of f, whose descriptors run from 3 in
+// order: root, net, listeners, stdio.
+func (f PIDNSFDs) String() string {
+	span := func(fds []int) string {
+		if len(fds) == 0 {
+			return "0:0"
+		}
+		return fmt.Sprintf("%d:%d", fds[0], len(fds))
+	}
+	return fmt.Sprintf("root=%d,net=%d,listeners=%s,stdio=%s", f.Root, f.Net, span(f.Listeners), span(f.Stdio))
+}
+
+// ParsePIDNSFDs reads a PIDNSFDsEnv value.
+func ParsePIDNSFDs(v string) (PIDNSFDs, error) {
+	var f PIDNSFDs
+	seen := map[string]bool{}
+	for _, kv := range strings.Split(v, ",") {
+		k, val, ok := strings.Cut(kv, "=")
+		if !ok {
+			return f, fmt.Errorf("%s: bad entry %q", PIDNSFDsEnv, kv)
+		}
+		seen[k] = true
+		switch k {
+		case "root", "net":
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 3 {
+				return f, fmt.Errorf("%s: bad %s %q", PIDNSFDsEnv, k, val)
+			}
+			if k == "root" {
+				f.Root = n
+			} else {
+				f.Net = n
+			}
+		case "listeners", "stdio":
+			a, b, ok := strings.Cut(val, ":")
+			start, err1 := strconv.Atoi(a)
+			count, err2 := strconv.Atoi(b)
+			if !ok || err1 != nil || err2 != nil || count < 0 || (count > 0 && start < 3) {
+				return f, fmt.Errorf("%s: bad %s %q", PIDNSFDsEnv, k, val)
+			}
+			fds := make([]int, count)
+			for i := range fds {
+				fds[i] = start + i
+			}
+			if k == "listeners" {
+				f.Listeners = fds
+			} else {
+				f.Stdio = fds
+			}
+		default:
+			return f, fmt.Errorf("%s: unknown %q", PIDNSFDsEnv, k)
+		}
+	}
+	if !seen["root"] || !seen["net"] {
+		return f, fmt.Errorf("%s: root and net required, got %q", PIDNSFDsEnv, v)
+	}
+	return f, nil
+}
+
 // pidNSExtNetKey names the external network namespace in the images.
 const pidNSExtNetKey = "extNetNs"
 
 // pidNSRestoreArgs is the criu restore argv for a checkpoint that carries
-// its pid namespace, run inside the placeholder's mount and pid namespaces
-// (behind the pidns-restore-exec helper, which hands it the network
-// namespace on PIDNSNetFD).
-func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap, pluginDir string) []string {
+// its pid namespace, run by the agent's own CRIU behind the
+// pidns-restore-exec helper, in the placeholder's pid and network
+// namespaces: the images and the work directory are the agent's paths, and
+// the placeholder's root is mounted at root.
+func pidNSRestoreArgs(imgsDir, workDir, root string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap, pluginDir string) []string {
 	args := []string{
 		"restore",
-		"-D", imgsInContainer,
-		"-W", webhook.RestoreWorkMountPath,
+		"-D", imgsDir,
+		"-W", workDir,
 		"-o", "restore.log", "-v4",
-		"--root", "/",
+		"--root", root,
 		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
 		"--network-lock", "nftables",
 		"--manage-cgroups=ignore",
@@ -493,7 +566,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		args = append(args, "--inet-addr-map", inetAddrMap, "--keep-network-lock")
 	}
 	for _, mp := range mounts {
-		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
+		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, root+mp))
 	}
 	for i, l := range listeners {
 		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", PIDNSUnixListenerFD+i, l.Inode))
@@ -675,7 +748,8 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		// criu leaves the cgroup as it found it, frozen.
 		defer func() {
 			if err := setFrozen(cg, false); err != nil {
-				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container")
+				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container; retrying")
+				go retryThaw(record, []string{cg}, log)
 				return
 			}
 			_ = os.Remove(record)
@@ -798,40 +872,45 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 	}
 	_, gpu := pidNSExternalMounts(parseMountinfo(string(mi)), nil)
 	src := filepath.Join(procBase, strconv.Itoa(placeholderPID), "root")
-	dst := filepath.Join(procBase, strconv.Itoa(nestedPID), "root")
+	// The restored tree runs, and its filesystem is its own to change:
+	// everything there goes through its root (confined_fs.go).
+	dst, err := openWorkloadDir(procBase, nestedPID, "/")
+	if err != nil {
+		return nil, fmt.Errorf("open the restored tree's root: %w", err)
+	}
+	defer func() { _ = dst.Close() }()
 	var made []string
 	for _, mp := range gpu {
 		var st syscall.Stat_t
 		if err := syscall.Stat(filepath.Join(src, mp), &st); err != nil {
 			return made, fmt.Errorf("stat the placeholder's %s: %w", mp, err)
 		}
-		target := filepath.Join(dst, mp)
+		rel := strings.TrimPrefix(filepath.Clean(mp), "/")
 		// Only the restored /dev (a tmpfs of the restored tree) is the
 		// tree's own: elsewhere the root is the placeholder's filesystem,
 		// whose entries are already there. Create what is missing; never
 		// replace anything outside /dev.
 		inDev := strings.HasPrefix(mp, "/dev/")
-		if _, err := os.Lstat(target); err == nil && !inDev {
+		if _, err := dst.root.Lstat(rel); err == nil && !inDev {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := dst.root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return made, err
 		}
 		switch st.Mode & syscall.S_IFMT {
 		case syscall.S_IFCHR:
-			_ = os.Remove(target)
-			if err := syscall.Mknod(target, st.Mode, int(st.Rdev)); err != nil {
+			if err := mknodIn(dst, rel, st.Mode, st.Rdev); err != nil {
 				return made, fmt.Errorf("create %s: %w", mp, err)
 			}
 		case syscall.S_IFDIR:
-			if err := os.MkdirAll(target, os.FileMode(st.Mode&0o7777)); err != nil {
+			if err := dst.root.MkdirAll(rel, os.FileMode(st.Mode&0o777)); err != nil {
 				return made, err
 			}
 		default:
-			if _, err := os.Stat(target); err == nil {
+			f, err := dst.root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, os.FileMode(st.Mode&0o777))
+			if errors.Is(err, os.ErrExist) {
 				continue
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(st.Mode&0o7777))
 			if err != nil {
 				return made, err
 			}
@@ -840,6 +919,15 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 		made = append(made, mp)
 	}
 	return made, nil
+}
+
+// mknodIn creates character device rel under d, replacing what is there
+// (mknodAt, through its parent opened under d's root).
+func mknodIn(d *confinedDir, rel string, mode uint32, rdev uint64) error {
+	if err := d.root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return mknodAt(d, rel, mode, rdev)
 }
 
 // deletedMount returns a mountpoint whose source was deleted on the node

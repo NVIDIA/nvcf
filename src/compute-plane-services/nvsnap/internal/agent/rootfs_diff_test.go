@@ -133,7 +133,7 @@ func TestUntarIntoMntns_MissingTar(t *testing.T) {
 	// Missing tar → no-op, no error. Mirrors mirrorIntoMntns semantics for
 	// missing source diff.
 	tmp := t.TempDir()
-	if err := untarIntoMntns(t.Context(), os.Getpid(), "/dev/shm", filepath.Join(tmp, "nope.tar"), bundleTools{}, nil); err != nil {
+	if err := untarIntoMntns(os.Getpid(), "/dev/shm", filepath.Join(tmp, "nope.tar"), nil); err != nil {
 		t.Errorf("missing tar: got err %v, want nil", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestTarMount_ExcludesNestedMounts(t *testing.T) {
 // Extraction leaves out only the placeholder's nested mount at the top of
 // the replayed mount, not every directory deeper down that shares its name
 // (vLLM's inductor cache has an hf/ of its own).
-func TestReplayExtractArgs_ExcludesOnlyTheNestedMount(t *testing.T) {
+func TestReplayExtract_ExcludesOnlyTheNestedMount(t *testing.T) {
 	tmp := t.TempDir()
 	src := filepath.Join(tmp, "src")
 	files := map[string]string{
@@ -219,15 +219,13 @@ func TestReplayExtractArgs_ExcludesOnlyTheNestedMount(t *testing.T) {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.Open(out)
+	archive, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = f.Close() }()
-	cmd := exec.CommandContext(t.Context(), "tar", replayExtractArgs(dst, []string{"hf", "a/b"})...) //nolint:gosec // test: the args under test
-	cmd.Stdin = f
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("tar: %v: %s", err, b)
+	nested := []string{"hf", "a/b"}
+	if _, err := extractInto(t, archive, dst, tarExtractOpts{skip: func(name string) bool { return underAny(name, nested) }}); err != nil {
+		t.Fatalf("extract: %v", err)
 	}
 	for f := range files {
 		_, err := os.Lstat(filepath.Join(dst, f))
@@ -272,20 +270,25 @@ func TestVerifyReplayed(t *testing.T) {
 	if err := runHostTar("-C", dst, "-xf", out); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := verifyReplayed(os.Getpid(), dst, out, nil); err != nil || n == 0 {
-		t.Fatalf("complete replay: %d entries, %v", n, err)
+	d, err := openConfinedDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	if n, verr := verifyReplayed(d, dst, out, nil); verr != nil || n == 0 {
+		t.Fatalf("complete replay: %d entries, %v", n, verr)
 	}
 	if err := os.RemoveAll(filepath.Join(dst, "cache/.triton/C6")); err != nil {
 		t.Fatal(err)
 	}
-	_, err := verifyReplayed(os.Getpid(), dst, out, nil)
+	_, err = verifyReplayed(d, dst, out, nil)
 	if err == nil || !strings.Contains(err.Error(), "cache/.triton/C6") {
 		t.Fatalf("missing dir not reported: %v", err)
 	}
 	if err := os.RemoveAll(filepath.Join(dst, "hf")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyReplayed(os.Getpid(), dst, out, []string{"hf", "cache"}); err != nil {
+	if _, err := verifyReplayed(d, dst, out, []string{"hf", "cache"}); err != nil {
 		t.Errorf("skipped paths still checked: %v", err)
 	}
 }
@@ -372,15 +375,12 @@ func TestArchiveOverlayDir_SurvivesAContentOnlyCopy(t *testing.T) {
 	}
 
 	dst := t.TempDir()
-	f, err := os.Open(fetched)
+	fetchedData, err := os.ReadFile(fetched)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = f.Close() }()
-	cmd := exec.Command("tar", replayDiffExtractArgs(dst, nil)...) //nolint:gosec,noctx // test temp dir
-	cmd.Stdin = f
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("extract: %v: %s", err, out)
+	if _, err := extractInto(t, fetchedData, dst, replayDiffOpts(nil)); err != nil {
+		t.Fatalf("extract: %v", err)
 	}
 
 	for _, c := range []struct {
@@ -460,15 +460,23 @@ func TestArchiveOverlayDir_MissingSource(t *testing.T) {
 	}
 }
 
-// The extract leaves out the placeholder's own mountpoints and the agent's
-// directories, as the archiving of a diff tree did.
-func TestReplayDiffExtractArgs_LeavesOutMountpointsAndAgentDirs(t *testing.T) {
-	args := strings.Join(replayDiffExtractArgs("/", []string{"/usr/bin/nvidia-smi"}), " ")
-	for _, want := range []string{"-C / -xf -", "--preserve-permissions", "--numeric-owner", "--overwrite",
-		"--exclude=./usr/bin/nvidia-smi", "--exclude=./usr/bin/nvidia-smi/*",
-		"--exclude=." + v2BinDirInContainer, "--exclude=." + v2ImagesDirInContainer} {
-		if !strings.Contains(args, want) {
-			t.Errorf("args %q lack %q", args, want)
+// The replay of a diff leaves out the placeholder's own mountpoints, the
+// agent's directories and the overlay's private attributes.
+func TestReplayDiffOpts_LeavesOutMountpointsAndAgentDirs(t *testing.T) {
+	o := replayDiffOpts([]string{"/usr/bin/nvidia-smi"})
+	for name, want := range map[string]bool{
+		"usr/bin/nvidia-smi":   true,
+		"usr/bin/nvidia-smi/x": true,
+		"usr/bin/nvidia-smi-x": false,
+		strings.TrimPrefix(v2BinDirInContainer, "/") + "/criu": true,
+		strings.TrimPrefix(v2ImagesDirInContainer, "/"):        true,
+		"etc/hosts": false,
+	} {
+		if got := o.skip(name); got != want {
+			t.Errorf("skip(%s) = %v, want %v", name, got, want)
 		}
+	}
+	if !o.skipXattr("trusted.overlay.opaque") || o.skipXattr("user.x") {
+		t.Error("xattr skips")
 	}
 }

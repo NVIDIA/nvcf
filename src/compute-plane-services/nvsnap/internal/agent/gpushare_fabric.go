@@ -46,6 +46,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
@@ -818,6 +819,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 
 	members := make([]fabricMember, len(req.Members))
 	bases := make([]string, len(req.Members))
+	uids := make([]types.UID, len(req.Members))
 	for i, m := range req.Members {
 		if m.Namespace == "" || m.PodName == "" {
 			return nil, fmt.Errorf("member %d: namespace and podName required", i)
@@ -826,6 +828,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		if err != nil {
 			return nil, fmt.Errorf("member %s/%s: %w", m.Namespace, m.PodName, err)
 		}
+		uids[i] = pod.UID
 		if pod.Spec.NodeName == "" {
 			return nil, fmt.Errorf("member %s/%s is not scheduled", m.Namespace, m.PodName)
 		}
@@ -936,15 +939,35 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	<-freezeDone
 
 	var failed []string
+	replace := false
 	for _, m := range res.Members {
 		if m.Error != "" {
 			failed = append(failed, m.Namespace+"/"+m.PodName+": "+m.Error)
+			replace = replace || sourceMustBeReplacedText(m.Error)
 		}
+	}
+	if replace {
+		// A member left suspended or locked is one engine with the others:
+		// its controllers replace every pod of it, cold. (A member does not
+		// replace itself in a group: checkpoint.go.)
+		log.Error("group checkpoint: a member was left unusable; deleting every member's pod")
+		a.deleteMembers(context.WithoutCancel(ctx), req.Members, uids, log)
 	}
 	if len(failed) > 0 {
 		return res, fmt.Errorf("group checkpoint %s: %d of %d members failed: %s", session, len(failed), len(res.Members), strings.Join(failed, "; "))
 	}
 	return res, nil
+}
+
+// deleteMembers deletes the members' pods, each bound to the uid the
+// driver found: a pod since replaced under the same name is left alone.
+func (a *Agent) deleteMembers(ctx context.Context, members []CheckpointRequest, uids []types.UID, log *logrus.Entry) {
+	for i := range members {
+		m := &members[i]
+		if err := a.deletePodRetrying(ctx, m.Namespace, m.PodName, uids[i]); err != nil {
+			log.WithError(err).WithField("pod", m.Namespace+"/"+m.PodName).Error("group checkpoint: cannot delete a member's pod")
+		}
+	}
 }
 
 // postCheckpoint runs one member's checkpoint on its node's agent.

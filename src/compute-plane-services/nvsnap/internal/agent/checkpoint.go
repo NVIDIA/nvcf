@@ -35,8 +35,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
@@ -776,7 +774,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
-	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, gpuPIDs, dopts, log)
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, dopts, log)
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
@@ -786,7 +784,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		if sourceMustBeReplaced(err) && a.kubeClient != nil && req.GPUShareGroupSize == 0 {
 			// Its controller replaces it with a pod that serves.
 			log.WithError(err).Error("the capture left the workload unusable; deleting its pod")
-			if derr := a.kubeClient.CoreV1().Pods(req.Namespace).Delete(context.WithoutCancel(ctx), req.PodName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			if derr := a.deletePodRetrying(context.WithoutCancel(ctx), req.Namespace, req.PodName, ""); derr != nil {
 				log.WithError(derr).Error("cannot delete the unusable workload's pod")
 			}
 		}
@@ -1393,7 +1391,9 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 		// The size limit is for the emptyDirs replayed as such, not for
 		// the allowlist (nvsnap's cachedir is an emptyDir, and larger).
 		if isEmptyDirMount(mi.Root) && !onAllowlist(mi.MountPoint, allowlist) {
-			over, n, err := treeBytesOver(fmt.Sprintf("/proc/%d/root%s", containerInfo.PID, mi.MountPoint), emptyDirMax)
+			// Walked under the container's root: the workload can write the
+			// emptyDir and the directories above it (confined_fs.go).
+			over, n, err := emptyDirOver(int(containerInfo.PID), mi.MountPoint, emptyDirMax)
 			if err != nil || over {
 				log.WithError(err).WithFields(logrus.Fields{"mp": mi.MountPoint, "bytes": n, "limit": emptyDirMax}).
 					Warn("emptyDir not copied into the checkpoint: too large or unreadable; a restore that needs its files fails and starts cold")

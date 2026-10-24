@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -37,11 +36,6 @@ import (
 )
 
 func main() {
-	// Run as CRIU's action script in an in-container dump, through the
-	// node bundle's in-container/ link (internal/agent/dump_snapshot.go).
-	if filepath.Base(os.Args[0]) == agent.DumpHookName {
-		os.Exit(agent.RunDumpHook(os.Getenv("CRTOOLS_SCRIPT_ACTION"), os.Getenv(agent.DumpHookDirEnv)))
-	}
 	// Subcommand dispatch: the per-capture writer Job invokes the agent
 	// binary with one of these names. Both flow through runCaptureWrite,
 	// which dispatches per-source by Kind (rootfs → treecopy.Copier;
@@ -53,6 +47,12 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "bind-unix-listeners":
+			if err := bindUnixListenersExec(); err != nil {
+				fmt.Fprintln(os.Stderr, "bind-unix-listeners:", err)
+				os.Exit(1)
+			}
+			return
 		case "pidns-restore-exec":
 			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
 				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)

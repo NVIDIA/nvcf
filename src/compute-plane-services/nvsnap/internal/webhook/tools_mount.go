@@ -124,29 +124,21 @@ func mountAtPath(pod *corev1.Pod, path string) bool {
 	return false
 }
 
-// reservedVolumes are the volumes the webhook adds. A container's mount of
-// one is valid only once the webhook has added it, so a pod that mounts
-// one it does not declare would have its mount resolved to the node's
-// directory the webhook places (the bundle, the checkpoints, the GPU
-// stores) on the pod's own terms: writable, or under a path of its choice.
-var reservedVolumes = map[string]bool{
-	bundleToolsVolume: true, cacheDirVolumeName: true, cacheRWVolumeName: true, cacheSeedVolumeName: true,
-	capturedVolumeName: true, criuCheckpointsVolume: true, gpushareLibVolume: true, gpushareStoreVolume: true,
-	modelVolumeName: true, nvsnapToolsVolumeName: true, restoreWorkVolume: true, scratchVolumeName: true,
-	helperVolumeName: true,
-}
-
-// undeclaredReservedMount names a container's mount of a reserved volume
-// the pod does not declare itself, "" when there is none.
-func undeclaredReservedMount(pod *corev1.Pod) string {
+// undeclaredMount names a container's mount of a volume the pod does not
+// declare, "" when there is none. Such a mount is valid only once the
+// webhook has added a volume of that name, and the webhook adds volumes of
+// node-wide directories (the bundle, the checkpoints, the GPU stores, a
+// capture's tree): the mount would get the node's directory on the pod's
+// own terms (writable, under a path of its choosing).
+func undeclaredMount(pod *corev1.Pod) string {
 	declared := map[string]bool{}
 	for i := range pod.Spec.Volumes {
 		declared[pod.Spec.Volumes[i].Name] = true
 	}
 	check := func(kind, name string, mounts []corev1.VolumeMount) string {
 		for i := range mounts {
-			if v := mounts[i].Name; reservedVolumes[v] && !declared[v] {
-				return kind + " " + name + " mounts volume " + v + ", which only the webhook adds"
+			if v := mounts[i].Name; !declared[v] {
+				return kind + " " + name + " mounts volume " + v + ", which the pod does not declare"
 			}
 		}
 		return ""

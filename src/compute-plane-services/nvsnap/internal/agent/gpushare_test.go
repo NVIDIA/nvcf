@@ -105,48 +105,6 @@ func TestGPUShareTargets_NoShim(t *testing.T) {
 	}
 }
 
-func TestDumpV2Args_GPUShare(t *testing.T) {
-	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit)
-	if !slices.Contains(plain, "--libdir") || slices.Contains(plain, "--image-io-mode") {
-		t.Errorf("plain dump must load the CUDA plugin and keep buffered I/O: %v", plain)
-	}
-	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit)
-	if slices.Contains(gs, "--libdir") {
-		t.Errorf("gpushare dump must not load the CUDA plugin: %v", gs)
-	}
-	if g := slices.Index(gs, "--ghost-limit"); g < 0 || gs[g+1] != "1099511627776" {
-		t.Errorf("dump must save deleted files up to the ghost limit: %v", gs)
-	}
-	i := slices.Index(gs, "--image-io-mode")
-	if i < 0 || gs[i+1] != "direct" {
-		t.Errorf("gpushare dump with direct I/O: %v", gs)
-	}
-	for _, want := range []string{"--leave-running", "--external", "dev[195/0]:nvidia0", "--ghost-links"} {
-		if !slices.Contains(gs, want) {
-			t.Errorf("gpushare dump lacks %q: %v", want, gs)
-		}
-	}
-	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit), "--image-io-mode") {
-		t.Errorf("--image-io-mode added although the bundled CRIU lacks it")
-	}
-}
-
-func TestRestoreV2Args_GPUShare(t *testing.T) {
-	plain := restoreV2Args(10, "/checkpoints/x", false, false, "", "/criu-bundle/plugins")
-	if !slices.Contains(plain, "--libdir") {
-		t.Errorf("plain restore must load the CUDA plugin: %v", plain)
-	}
-	gs := restoreV2Args(10, "/checkpoints/x", true, true, "", "/criu-bundle/plugins")
-	// The images are read-only in the placeholder: CRIU writes its log
-	// and stats to the work volume.
-	if w := strings.Join(gs, " "); !strings.Contains(w, "-D /checkpoints/x -W /nvsnap-restore-work -o restore.log") {
-		t.Errorf("restore argv lacks the work directory: %s", w)
-	}
-	if slices.Contains(gs, "--libdir") || !slices.Contains(gs, "--image-io-mode") || !slices.Contains(gs, "--restore-detached") {
-		t.Errorf("gpushare restore argv: %v", gs)
-	}
-}
-
 func TestCRIUSupportsDirectImageIO(t *testing.T) {
 	if !criuSupportsDirectImageIO("  --image-io-mode MODE   writeback or direct\n") {
 		t.Error("help text with the option not recognized")

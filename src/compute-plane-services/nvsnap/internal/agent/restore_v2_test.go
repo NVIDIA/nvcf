@@ -25,6 +25,9 @@ func TestRestoreLogReportsFailure(t *testing.T) {
 // A criu that logs a failed restore and does not exit is cancelled after
 // the grace period; one that is still restoring is left alone.
 func TestCancelWhenRestoreFailed(t *testing.T) {
+	prev := restoreLogPoll
+	restoreLogPoll = 20 * time.Millisecond
+	t.Cleanup(func() { restoreLogPoll = prev })
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "restore.log")
 	if err := os.WriteFile(logPath, []byte("(00.1) Restoring 735 to 336 pgid\n"), 0o644); err != nil {
@@ -44,7 +47,7 @@ func TestCancelWhenRestoreFailed(t *testing.T) {
 		t.Fatal("a restore still in progress must not be cancelled")
 	case <-time.After(300 * time.Millisecond):
 	}
-	if err := os.WriteFile(logPath, []byte("(00.2) Error (criu/cr-restore.c:2382): Restoring FAILED.\n"), 0o644); err != nil {
+	if err := work.writeFileAtomic("restore.log", []byte("(00.2) Error (criu/cr-restore.c:2382): Restoring FAILED.\n")); err != nil {
 		t.Fatal(err)
 	}
 	select {

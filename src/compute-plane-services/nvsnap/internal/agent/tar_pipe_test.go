@@ -10,38 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
-
-// A reader that exits early fails the pipe instead of leaving its writer
-// blocked on a full pipe forever.
-func TestRunTarPipe_ReaderExitsEarly(t *testing.T) {
-	src := exec.Command("sh", "-c", "yes nvsnap")
-	dst := exec.Command("sh", "-c", "head -c 100 >/dev/null; echo extract died >&2; exit 7")
-	done := make(chan error, 1)
-	go func() { done <- runTarPipe(src, dst, "src", "dst") }()
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "dst") || !strings.Contains(err.Error(), "extract died") {
-			t.Errorf("err = %v; want the reader's failure with its stderr", err)
-		}
-	case <-time.After(20 * time.Second):
-		_ = src.Process.Kill()
-		t.Fatal("the pipe hung after its reader exited")
-	}
-}
-
-func TestRunTarPipe_Copies(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "out")
-	src := exec.Command("sh", "-c", "printf 'a%.0s' $(seq 100000)")
-	dst := exec.Command("sh", "-c", "cat > "+out)
-	if err := runTarPipe(src, dst, "src", "dst"); err != nil {
-		t.Fatal(err)
-	}
-	if fi, err := os.Stat(out); err != nil || fi.Size() != 100000 {
-		t.Errorf("copied %v, %v; want 100000 bytes", fi, err)
-	}
-}
 
 // A captured diff that carries the agent's bundle (captures before it was
 // left out) replays without it.

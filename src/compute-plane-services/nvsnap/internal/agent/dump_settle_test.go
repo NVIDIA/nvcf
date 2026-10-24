@@ -9,60 +9,6 @@ import (
 	"testing"
 )
 
-// Every outcome of a dump whose suspend stopped the source brings the
-// source back, but a whole dump of a tree CRIU then killed. A dump that
-// succeeded but whose images could not be harvested (no space left to copy
-// them) leaves a leave-running source suspended, and is the case that was
-// missed: it returned the harvest error with no resume.
-func TestFinishDump_SettlesTheSource(t *testing.T) {
-	dumpErr, harvestErr, resumeFailed := errors.New("criu dump failed"), syscall.ENOSPC, errors.New("resume failed")
-	cases := []struct {
-		name                 string
-		run, move            error
-		suspended, leave     bool
-		resume               error
-		wantResumes          int
-		wantErr, wantLeft    bool
-		wantRun, wantHarvest bool
-	}{
-		{name: "whole leave-running dump", suspended: true, leave: true, wantResumes: 1},
-		{name: "whole dump, tree killed", suspended: true, leave: false, wantResumes: 0},
-		{name: "harvest fails after a leave-running dump", move: harvestErr, suspended: true, leave: true,
-			wantResumes: 1, wantErr: true, wantHarvest: true},
-		{name: "harvest fails and the resume fails", move: harvestErr, suspended: true, leave: true, resume: resumeFailed,
-			wantResumes: 1, wantErr: true, wantLeft: true, wantHarvest: true},
-		{name: "harvest fails, tree killed", move: harvestErr, suspended: true, leave: false,
-			wantResumes: 0, wantErr: true, wantHarvest: true},
-		{name: "dump fails", run: dumpErr, suspended: true, leave: false,
-			wantResumes: 1, wantErr: true, wantRun: true},
-		{name: "dump and harvest fail, resume fails", run: dumpErr, move: harvestErr, suspended: true, leave: true, resume: resumeFailed,
-			wantResumes: 1, wantErr: true, wantLeft: true, wantRun: true, wantHarvest: true},
-		{name: "resume after a whole dump fails", suspended: true, leave: true, resume: resumeFailed,
-			wantResumes: 1, wantErr: true, wantLeft: true},
-		{name: "nothing suspended", move: harvestErr, leave: true, wantResumes: 0, wantErr: true, wantHarvest: true},
-	}
-	for _, c := range cases {
-		resumes := 0
-		err := finishDump(c.run, c.move, []byte("out"), "tail", c.suspended, c.leave, func() error { resumes++; return c.resume })
-		if resumes != c.wantResumes {
-			t.Errorf("%s: %d resumes, want %d", c.name, resumes, c.wantResumes)
-		}
-		if (err != nil) != c.wantErr {
-			t.Errorf("%s: err = %v, want error %v", c.name, err, c.wantErr)
-			continue
-		}
-		if got := errors.Is(err, errSourceLeftSuspended); got != c.wantLeft {
-			t.Errorf("%s: left suspended = %v, want %v (%v)", c.name, got, c.wantLeft, err)
-		}
-		if got := errors.Is(err, dumpErr); got != c.wantRun {
-			t.Errorf("%s: reaches the dump error = %v, want %v", c.name, got, c.wantRun)
-		}
-		if got := errors.Is(err, harvestErr); got != c.wantHarvest {
-			t.Errorf("%s: reaches the harvest error = %v, want %v", c.name, got, c.wantHarvest)
-		}
-	}
-}
-
 // The pid-namespace dump settles its source the same way.
 func TestSettleSource(t *testing.T) {
 	for _, c := range []struct {

@@ -174,11 +174,26 @@ func (a *Agent) holdCgroups(key, target string, keep bool, log *logrus.Entry) er
 	h := &podHold{record: a.holdRecordPath(key)}
 	a.holds.m[key] = h
 	a.holds.mu.Unlock()
+	if holdRegistered != nil {
+		holdRegistered(key)
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// A release that came between the registration above and here found
+	// nothing frozen yet: freezing now would outlive it.
+	if a.holds.get(key) != h {
+		return errHoldReleased
+	}
+	// Unrecorded, a hold would outlive an agent restart: the record is
+	// what the next run thaws (recoverPodHolds).
 	if err := writeHoldRecord(h.record, dirs); err != nil {
-		log.WithError(err).Warn("pod hold: cannot record the hold; an agent restart would not thaw it")
+		a.holds.mu.Lock()
+		if a.holds.m[key] == h {
+			delete(a.holds.m, key)
+		}
+		a.holds.mu.Unlock()
+		return fmt.Errorf("pod hold: record the hold: %w", err)
 	}
 	var errs []error
 	for _, d := range dirs {
@@ -245,6 +260,10 @@ func (a *Agent) heldTargetSince(key string) (clocks, bool) {
 	return h.frozenAt, h.frozenAt != (clocks{})
 }
 
+// holdRegistered, when set (tests), runs between a hold's registration
+// and its freeze, where a release can come in.
+var holdRegistered func(key string)
+
 // errHoldReleased refuses a hold whose capture already released it.
 var errHoldReleased = errors.New("pod hold: the capture already released this hold")
 
@@ -273,17 +292,46 @@ func (a *Agent) releaseHold(key string, log *logrus.Entry) {
 	if h.timer != nil {
 		h.timer.Stop()
 	}
-	thawAll(h.frozen, log)
+	if left := thawAll(h.frozen, log); len(left) > 0 {
+		// Kept recorded until thawed: retried here, and by the next run.
+		_ = writeHoldRecord(h.record, left)
+		go retryThaw(h.record, left, log)
+		return
+	}
 	_ = os.Remove(h.record)
 	log.WithField("containers", len(h.frozen)).Info("pod hold: pod thawed")
 }
 
-func thawAll(dirs []string, log *logrus.Entry) {
+// thawAll thaws dirs and returns those it could not thaw (a cgroup gone
+// with its container is thawed).
+func thawAll(dirs []string, log *logrus.Entry) []string {
+	var left []string
 	for _, d := range dirs {
 		if err := setFrozen(d, false); err != nil && !os.IsNotExist(err) {
 			log.WithError(err).WithField("cgroup", d).Warn("pod hold: cannot thaw a container")
+			left = append(left, d)
 		}
 	}
+	return left
+}
+
+// thawRetry bounds the retries of a thaw that failed; past it the record
+// stays for the next run of the agent.
+var thawRetry = struct{ first, max, total time.Duration }{time.Second, 30 * time.Second, podHoldTimeout}
+
+// retryThaw thaws dirs until it can, then removes their record.
+func retryThaw(record string, dirs []string, log *logrus.Entry) {
+	wait := thawRetry.first
+	for deadline := time.Now().Add(thawRetry.total); time.Now().Before(deadline); wait = min(2*wait, thawRetry.max) {
+		time.Sleep(wait)
+		if dirs = thawAll(dirs, log); len(dirs) == 0 {
+			_ = os.Remove(record)
+			log.Info("pod hold: pod thawed on a retry")
+			return
+		}
+		_ = writeHoldRecord(record, dirs)
+	}
+	log.WithField("cgroups", dirs).Error("pod hold: cannot thaw the pod; the next run of the agent tries again")
 }
 
 func (a *Agent) holdRecordDir() string { return filepath.Join(a.config.CheckpointDir, ".pod-holds") }
@@ -314,7 +362,11 @@ func (a *Agent) recoverPodHolds(log *logrus.Entry) {
 		p := filepath.Join(a.holdRecordDir(), e.Name())
 		var dirs []string
 		if b, err := os.ReadFile(p); err == nil && json.Unmarshal(b, &dirs) == nil {
-			thawAll(dirs, log)
+			if left := thawAll(dirs, log); len(left) > 0 {
+				_ = writeHoldRecord(p, left)
+				go retryThaw(p, left, log)
+				continue
+			}
 			log.WithField("hold", e.Name()).Warn("pod hold: thawed a pod held by an earlier run of the agent")
 		}
 		_ = os.Remove(p)

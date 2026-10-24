@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -183,4 +184,89 @@ func TestPodHold_AfterItsRelease(t *testing.T) {
 		t.Fatalf("a later capture's hold: %v", err)
 	}
 	a.releaseHold(holdKey("s2", "ns", "etcd-0"), log)
+}
+
+// A release that comes between a hold's registration and its freeze keeps
+// the hold from freezing anything.
+func TestPodHold_ReleaseBeforeTheFreeze(t *testing.T) {
+	a := &Agent{config: Config{CheckpointDir: t.TempDir()}}
+	log := logrus.NewEntry(logrus.New())
+	pod := fakePodCgroup(t, "cri-pause", "cri-etcd")
+	key := holdKey("s1", "ns", "etcd-0")
+	holdRegistered = func(k string) { a.releaseHold(k, log) }
+	t.Cleanup(func() { holdRegistered = nil })
+	if err := a.holdCgroups(key, filepath.Join(pod, "cri-etcd"), false, log); !errors.Is(err, errHoldReleased) {
+		t.Fatalf("hold: %v, want errHoldReleased", err)
+	}
+	for _, c := range []string{"cri-pause", "cri-etcd"} {
+		if frozenState(t, filepath.Join(pod, c)) == "1" {
+			t.Errorf("%s frozen by a hold released before its freeze", c)
+		}
+	}
+}
+
+// A hold that cannot be recorded does not freeze: an agent restart would
+// leave it frozen.
+func TestPodHold_UnrecordedHoldDoesNotFreeze(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{config: Config{CheckpointDir: file}}
+	log := logrus.NewEntry(logrus.New())
+	pod := fakePodCgroup(t, "cri-pause", "cri-etcd")
+	key := holdKey("s1", "ns", "etcd-0")
+	if err := a.holdCgroups(key, filepath.Join(pod, "cri-etcd"), false, log); err == nil {
+		t.Fatal("an unrecorded hold went ahead")
+	}
+	if frozenState(t, filepath.Join(pod, "cri-pause")) == "1" || a.holds.get(key) != nil {
+		t.Error("an unrecorded hold froze the pod or stayed registered")
+	}
+}
+
+// A thaw that fails keeps its record and is retried until it succeeds.
+func TestPodHold_FailedThawIsRetried(t *testing.T) {
+	prev := thawRetry
+	thawRetry.first, thawRetry.max, thawRetry.total = 10*time.Millisecond, 20*time.Millisecond, 5*time.Second
+	t.Cleanup(func() { thawRetry = prev })
+	a := &Agent{config: Config{CheckpointDir: t.TempDir()}}
+	log := logrus.NewEntry(logrus.New())
+	pod := fakePodCgroup(t, "cri-pause", "cri-etcd")
+	key := holdKey("s1", "ns", "etcd-0")
+	if err := a.holdCgroups(key, filepath.Join(pod, "cri-etcd"), false, log); err != nil {
+		t.Fatal(err)
+	}
+	// The pause container's freeze file cannot be written for now.
+	freeze := filepath.Join(pod, "cri-pause", "cgroup.freeze")
+	if err := os.Remove(freeze); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(freeze, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.releaseHold(key, log)
+	if _, err := os.Stat(a.holdRecordPath(key)); err != nil {
+		t.Fatalf("a hold whose thaw failed lost its record: %v", err)
+	}
+	if err := os.Remove(freeze); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(freeze, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for frozenState(t, filepath.Join(pod, "cri-pause")) != "0" {
+		if time.Now().After(deadline) {
+			t.Fatal("the failed thaw was not retried")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(a.holdRecordPath(key)); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the record of a thawed hold stayed")
+		}
+	}
 }

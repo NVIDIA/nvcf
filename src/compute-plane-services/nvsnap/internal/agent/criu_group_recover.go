@@ -17,15 +17,21 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func (c *criuAutoRestorer) recoverInterruptedCaptures(ctx context.Context, started time.Time) {
 	a := c.a
-	cms, err := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=nvsnap"})
-	if err != nil {
-		a.log.WithError(err).Warn("CRIU group capture: cannot list the group records to recover interrupted captures")
+	var cms *corev1.ConfigMapList
+	// The records must be read, however long the API server takes to answer.
+	if err := retryUntil(ctx, recoverRetry.first, recoverRetry.max, recoverRetry.total, func() (bool, error) {
+		var err error
+		cms, err = a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=nvsnap"})
+		if err != nil {
+			a.log.WithError(err).Warn("CRIU group capture: cannot list the group records to recover interrupted captures yet; retrying")
+		}
+		return err == nil, err
+	}); err != nil {
 		return
 	}
 	for _, cm := range cms.Items {
@@ -74,7 +80,7 @@ func (c *criuAutoRestorer) recoverInterruptedCaptures(ctx context.Context, start
 			log.WithError(err).Warn("CRIU group capture: cannot fail the interrupted capture's record")
 		}
 		for _, p := range instance {
-			if err := a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			if err := a.deletePodRetrying(ctx, p.Namespace, p.Name, p.UID); err != nil {
 				log.WithError(err).WithField("rank", p.Name).Error("cannot delete a rank of the interrupted capture")
 			}
 		}

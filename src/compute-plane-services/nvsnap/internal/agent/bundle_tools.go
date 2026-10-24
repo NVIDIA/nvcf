@@ -33,6 +33,8 @@ type bundleTools struct {
 	pid int
 	// version is the bundle version mounted there.
 	version string
+	// dir is the node's copy of that version.
+	dir string
 }
 
 // capSysAdmin is CAP_SYS_ADMIN's bit in /proc/<pid>/status's CapEff.
@@ -71,7 +73,7 @@ func bundleToolsOf(procBase string, pid int, versionsDir string) (bundleTools, e
 	if err != nil {
 		return bundleTools{}, err
 	}
-	return bundleTools{pid: pid, version: version}, nil
+	return bundleTools{pid: pid, version: version, dir: filepath.Join(versionsDir, version)}, nil
 }
 
 // bundleVersionOf names the staged version whose directory is dev:ino.
@@ -134,51 +136,23 @@ func (t bundleTools) pluginDir(procBase string) string {
 	return v2BinDirInContainer + "/plugins"
 }
 
-// usageCache holds each version's tool usage text: a version never changes.
-var usageCache sync.Map
+// gpuToolTextCache holds each version's GPU tool binary: a version never
+// changes.
+var gpuToolTextCache sync.Map
 
-// usage is tool's usage text in the mounted version (with arg, its help
-// flag; without, the text a tool prints when given no action), read once
-// per version.
-func (t bundleTools) usage(tool string, arg ...string) string {
-	key := t.version + "\x00" + tool
-	if v, ok := usageCache.Load(key); ok {
+// gpuToolText is the mounted version's GPU tool, read from the node's copy
+// of the version, for the options it carries; "" when it cannot be read.
+func (t bundleTools) gpuToolText() string {
+	if v, ok := gpuToolTextCache.Load(t.version); ok {
 		return v.(string)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	args := append([]string{"-t", strconv.Itoa(t.pid), "-m", "--", t.path(tool)}, arg...)
-	out, _ := exec.CommandContext(ctx, "nsenter", args...).CombinedOutput() //nolint:gosec // a bundle tool at a fixed path
-	if ctx.Err() != nil {
-		return string(out) // not cached: a timeout says nothing about the version
+	b, err := os.ReadFile(filepath.Join(t.dir, gpushareToolName))
+	if err != nil {
+		return ""
 	}
-	usageCache.Store(key, string(out))
-	return string(out)
+	gpuToolTextCache.Store(t.version, string(b))
+	return string(b)
 }
-
-// criuHelp is the mounted CRIU's --help.
-func (t bundleTools) criuHelp() string { return t.usage("criu", "--help") }
-
-func (t bundleTools) directImageIO() bool { return criuSupportsDirectImageIO(t.criuHelp()) }
-
-func (t bundleTools) netMigration() bool { return criuSupportsNetMigration(t.criuHelp()) }
-
-func (t bundleTools) timensBudget() bool { return criuSupportsTimensBudget(t.criuHelp()) }
-
-// compressBlockFlag is the mounted CRIU's name for block compression.
-func (t bundleTools) compressBlockFlag() string { return criuCompressBlockFlag(t.criuHelp()) }
-
-// clockThroughGPU reports whether a restore with these tools keeps the GPU
-// reload out of the restored clocks (restore_clock_gpu.go).
-func (t bundleTools) clockThroughGPU() bool {
-	return clockThroughGPUSupported(t.criuHelp(), t.usage(gpushareToolName))
-}
-
-// bundlePATH is the PATH a bundle tool runs with inside a workload: the
-// bundle first. CRIU's CUDA plugin runs cuda-checkpoint from PATH, and
-// in-container/ holds it without the wrapper the agent's own container
-// needs (the workload's driver libraries are already in its loader path).
-const bundlePATH = v2BinDirInContainer + "/in-container:" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin"
 
 var (
 	agentCRIUHelpOnce sync.Once
