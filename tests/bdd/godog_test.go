@@ -2112,75 +2112,143 @@ func TestMultiClusterHelmfileLLMLastClusterAffinityFeatureFileWiresToSteps(t *te
 }
 
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
-// focused upstream-image feature against a fake runner. The seeded global
-// template contains the exact documentation blocks so the ledger-backed
-// substitutions exercise real file writes.
+// focused upstream-image feature against a strict fake runner, including
+// incorrect deployed identities and an unconfigured NATS exec command.
 func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T) {
-	t.Setenv("NGC_API_KEY", "test-key")
-	t.Setenv("SAMPLE_NGC_ORG", "test-org")
-	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:fixture-tag"
-	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"k3d cluster get ncp-local-cp": {ExitCode: 1},
-		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
-			ExitCode: 0,
-			Stdout:   helmListAllNamespacesJSON(),
-		},
-		`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
-			ExitCode: 0,
-			Stdout:   upstreamReloader,
-		},
-		`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'`: {
-			Stdout: "docker.io/synadia/nats-server:fixture-tag",
-		},
-		`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.securityContext.runAsNonRoot}:` +
-			`{.spec.template.spec.securityContext.runAsUser}:{.spec.template.spec.securityContext.runAsGroup}:{.spec.template.spec.securityContext.fsGroup}'`: {
-			Stdout: "true:1000:1000:1000",
-		},
-		`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'`: {
-			Stdout: "docker.io/natsio/nats-box:fixture-nonroot@sha256:" + strings.Repeat("a", 64),
-		},
-	}))
-	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
-	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
-	seedUpstreamImageStackInputs(t, suite.Config.RepoRoot)
-	seedUpstreamImageRenderOutput(t, suite.Config.RepoRoot)
+	for _, testCase := range []string{"matching catalog", "wrong server tag", "wrong box digest", "missing exec fixture"} {
+		t.Run(testCase, func(t *testing.T) {
+			t.Setenv("NGC_API_KEY", "test-key")
+			t.Setenv("SAMPLE_NGC_ORG", "test-org")
+			t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+			t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+			runner := newFakeRunner(nil)
+			suite := newWiringSuite(t, runner)
+			refs := seedUpstreamImageCatalog(t, suite.Config.RepoRoot)
+			runner.results = map[string]harness.Result{
+				"k3d cluster get ncp-local-cp": {ExitCode: 1},
+				"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
+					ExitCode: 0,
+					Stdout:   helmListAllNamespacesJSON(),
+				},
+				`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
+					ExitCode: 0,
+					Stdout:   refs["nats-server-config-reloader"],
+				},
+				`kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'`: {
+					Stdout: refs["nats-server"],
+				},
+				`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.securityContext.runAsNonRoot}:` +
+					`{.spec.template.spec.securityContext.runAsUser}:{.spec.template.spec.securityContext.runAsGroup}:{.spec.template.spec.securityContext.fsGroup}'`: {
+					Stdout: "true:1000:1000:1000",
+				},
+				`kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'`: {
+					Stdout: refs["nats-box"],
+				},
+			}
+			seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+			seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+			seedUpstreamImageStackInputs(t, suite.Config.RepoRoot)
+			seedUpstreamImageRenderOutput(t, suite.Config.RepoRoot)
 
-	sc := steps.NewScenarioContext(suite)
-	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-upstream-images.feature")
-	var out strings.Builder
-	status := godog.TestSuite{
-		Name: "single-cluster-helmfile-upstream-images-wiring",
-		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
-		},
-		Options: &godog.Options{
-			Format: "pretty",
-			Paths:  []string{featurePath},
-			Strict: true,
-			Output: &out,
-		},
-	}.Run()
-	if status != 0 {
-		t.Fatalf("godog suite status = %d\n%s", status, out.String())
-	}
-	runs := suite.Runner.(*fakeRunner).runs
-	if !commandRanThatContains(runs, "template HELMFILE_ENV=local-bdd") {
-		t.Fatal("helmfile template make target was never invoked")
-	}
-	for _, selector := range []string{
-		"HELMFILE_SELECTOR=release-group=dependencies",
-		"HELMFILE_SELECTOR=name=ess-api",
-		"HELMFILE_SELECTOR=name=nats-auth-callout-service",
-		"HELMFILE_SELECTOR=name=api",
-	} {
-		if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd "+selector) {
-			t.Fatalf("helmfile install selector %q was never invoked", selector)
-		}
-	}
-	if commandRanThatContains(runs, "rg --fixed-strings") {
-		t.Fatal("rendered manifest assertions should not invoke rg")
+			for name, ref := range refs {
+				expression := fmt.Sprintf(`.artifacts[] | select(.name == %q and .type == "image") | .upstream_repository + ":" + .version`, name)
+				if name == "nats-box" {
+					expression += ` + "@" + .digest`
+				}
+				runner.results["yq -r '"+expression+"' docs/version-catalog/main.yaml"] = harness.Result{Stdout: ref}
+			}
+			for _, name := range []string{"EXPECTED_NATS_RELOADER_IMAGE", "EXPECTED_NATS_SERVER_IMAGE", "EXPECTED_NATS_BOX_IMAGE"} {
+				t.Setenv(name, "")
+			}
+			for _, command := range []string{
+				"make -C tools/ncp-local-cluster build-and-deploy-cluster",
+				"env HELM_REGISTRY_CONFIG=/repo-root-placeholder/tools/ncp-local-cluster/secrets/docker-config.json " +
+					"make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd",
+			} {
+				runner.results[command] = harness.Result{}
+			}
+			for _, selector := range []string{"release-group=dependencies", "name=ess-api", "name=nats-auth-callout-service", "name=api"} {
+				runner.results["env HELM_REGISTRY_CONFIG=/repo-root-placeholder/tools/ncp-local-cluster/secrets/docker-config.json "+
+					"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd HELMFILE_SELECTOR="+selector] = harness.Result{}
+			}
+			const execCommand = `kubectl --context k3d-ncp-local exec -n nats-system deployment/nats-box -- sh -ec '` +
+				`test "$(id -u):$(id -g)" = "1000:1000"; test -r /etc/nats-nkeys/default/user.key; test -d /etc/nats-contexts; ` +
+				`nsc generate nkey --user >/dev/null; nats --version; nats context info; nats --context default --timeout 10s rtt'`
+			runner.results[execCommand] = harness.Result{}
+			// Only generated pull-secret paths vary. All other commands must be configured.
+			runner.respond = func(command string) (harness.Result, bool) {
+				if result, ok := runner.results[command]; ok {
+					return result, true
+				}
+				if strings.HasPrefix(command, "kubectl apply -f ") && strings.Contains(command, suite.Config.OutDir) {
+					return harness.Result{}, true
+				}
+				return harness.Result{ExitCode: 1, Stderr: "unexpected wiring command: " + command}, true
+			}
+			switch testCase {
+			case "wrong server tag":
+				for command, result := range runner.results {
+					if strings.HasPrefix(command, "kubectl ") && result.Stdout == refs["nats-server"] {
+						result.Stdout += "-wrong"
+						runner.results[command] = result
+					}
+				}
+			case "wrong box digest":
+				for command, result := range runner.results {
+					if strings.HasPrefix(command, "kubectl ") && result.Stdout == refs["nats-box"] {
+						result.Stdout = strings.ReplaceAll(result.Stdout, strings.Repeat("a", 64), strings.Repeat("b", 64))
+						runner.results[command] = result
+					}
+				}
+			case "missing exec fixture":
+				delete(runner.results, execCommand)
+			}
+
+			sc := steps.NewScenarioContext(suite)
+			featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-upstream-images.feature")
+			var out strings.Builder
+			status := godog.TestSuite{
+				Name: "single-cluster-helmfile-upstream-images-wiring",
+				ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+					steps.RegisterAll(ctx, sc)
+				},
+				Options: &godog.Options{
+					Format: "pretty",
+					Paths:  []string{featurePath},
+					Strict: true,
+					Output: &out,
+				},
+			}.Run()
+			if testCase != "matching catalog" {
+				if status == 0 {
+					t.Fatalf("invalid wiring case %q passed", testCase)
+				}
+				return
+			}
+			if status != 0 {
+				t.Fatalf("godog suite status = %d\n%s", status, out.String())
+			}
+			runs := runner.runs
+			if !commandRanThatContains(runs, execCommand) {
+				t.Fatal("NATS box tools were never exercised")
+			}
+			if !commandRanThatContains(runs, "template HELMFILE_ENV=local-bdd") {
+				t.Fatal("helmfile template make target was never invoked")
+			}
+			for _, selector := range []string{
+				"HELMFILE_SELECTOR=release-group=dependencies",
+				"HELMFILE_SELECTOR=name=ess-api",
+				"HELMFILE_SELECTOR=name=nats-auth-callout-service",
+				"HELMFILE_SELECTOR=name=api",
+			} {
+				if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd "+selector) {
+					t.Fatalf("helmfile install selector %q was never invoked", selector)
+				}
+			}
+			if commandRanThatContains(runs, "rg --fixed-strings") {
+				t.Fatal("rendered manifest assertions should not invoke rg")
+			}
+		})
 	}
 }
 
@@ -2342,6 +2410,47 @@ func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
 	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
 		t.Fatalf("write global template: %v", err)
 	}
+}
+
+// seedUpstreamImageCatalog derives fake command outputs from the catalog fixture.
+func seedUpstreamImageCatalog(t *testing.T, repoRoot string) map[string]string {
+	t.Helper()
+	path := filepath.Join(repoRoot, "docs", "version-catalog", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `artifacts:
+  - name: nats-server-config-reloader
+    type: image
+    upstream_repository: docker.io/natsio/nats-server-config-reloader
+    version: fixture-tag
+  - name: nats-server
+    type: image
+    upstream_repository: docker.io/synadia/nats-server
+    version: fixture-tag
+  - name: nats-box
+    type: image
+    upstream_repository: docker.io/natsio/nats-box
+    version: fixture-nonroot
+    digest: sha256:` + strings.Repeat("a", 64) + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refs := make(map[string]string)
+	for i, name := range []string{"nats-server-config-reloader", "nats-server", "nats-box"} {
+		read := func(key string) string {
+			value, found, err := dsl.ReadYAMLKey(path, fmt.Sprintf("artifacts[%d].%s", i, key))
+			if err != nil || !found {
+				t.Fatalf("catalog fixture %s: found=%t, err=%v", key, found, err)
+			}
+			return value
+		}
+		refs[name] = read("upstream_repository") + ":" + read("version")
+		if name == "nats-box" {
+			refs[name] += "@" + read("digest")
+		}
+	}
+	return refs
 }
 
 // seedUpstreamImageRenderOutput writes representative render directories for
