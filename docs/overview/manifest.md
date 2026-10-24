@@ -236,9 +236,7 @@ openbao:
       tag: "1.7.4@sha256:e2ef79b457f50d971851df836f78cf41be454644095d84a7411f93ccf3304c15"
 ```
 
-This changes only the injector distribution source. Defaults remain unchanged;
-it does not remediate vulnerabilities. Keep the existing nonroot policy
-(UID 100, GID 1000 on standard Kubernetes) or OpenShift security policy.
+This changes only the injector distribution source.
 The webhook image is separate from `openbao.injector.agentImage` and
 `openbao.server.image`; keep those matched NVCF OpenBao images unchanged.
 
