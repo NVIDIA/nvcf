@@ -79,3 +79,29 @@ func TestRecoverInterruptedSources(t *testing.T) {
 		t.Errorf("markers left: %v", ents)
 	}
 }
+
+// A group checkpoint that left a member unusable deletes every member's
+// pod it captured, bound to its uid: a pod since replaced is left alone.
+func TestDeleteMembers(t *testing.T) {
+	cs := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "w-0", UID: types.UID(markerUID)}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "w-1", UID: "replaced"}},
+	)
+	var deletes []string
+	cs.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		d := action.(k8stesting.DeleteActionImpl)
+		p := d.GetDeleteOptions().Preconditions
+		if p == nil || p.UID == nil {
+			t.Errorf("delete of %s not bound to a uid", d.GetName())
+			return true, nil, nil
+		}
+		deletes = append(deletes, d.GetName()+"="+string(*p.UID))
+		return false, nil, nil
+	})
+	a := &Agent{kubeClient: cs}
+	a.deleteMembers(t.Context(), []CheckpointRequest{{Namespace: "ns", PodName: "w-0"}, {Namespace: "ns", PodName: "w-1"}},
+		[]types.UID{types.UID(markerUID), types.UID(otherMarkerUID)}, logrus.NewEntry(logrus.New()))
+	if len(deletes) != 2 || deletes[0] != "w-0="+markerUID || deletes[1] != "w-1="+otherMarkerUID {
+		t.Errorf("deletes = %v", deletes)
+	}
+}
