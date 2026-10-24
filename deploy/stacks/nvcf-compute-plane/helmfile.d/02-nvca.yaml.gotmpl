@@ -117,6 +117,11 @@ helmDefaults:
 {{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
 {{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 
+{{- $byooOtelCollector := dig "byooOtelCollector" dict $nvcaOp }}
+{{- $defaultByooOtelCollectorImageRepository := printf "%s/%s/byoo-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $byooOtelCollectorImageRepository := dig "imageRepository" "" $byooOtelCollector | default $defaultByooOtelCollectorImageRepository }}
+{{- $byooOtelCollectorImageTag := dig "imageTag" "" $byooOtelCollector }}
+
 {{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
 {{- $kaiSchedulerEnabled := dig "addons" "kaiScheduler" "enabled" false .Values }}
 {{- $dynamoOperatorEnabled := dig "addons" "dynamoOperator" "enabled" false .Values }}
@@ -295,8 +300,12 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
-        {{- if or $agentTolerations $workloadTolerations }}
         agent:
+          byooOtelCollector:
+            imageRepository: {{ $byooOtelCollectorImageRepository | quote }}
+            {{- with $byooOtelCollectorImageTag }}
+            imageTag: {{ . | quote }}
+            {{- end }}
           {{- with $agentTolerations }}
           tolerations:
 {{ toYaml . | nindent 12 }}
@@ -306,7 +315,6 @@ releases:
             tolerations:
 {{ toYaml . | nindent 14 }}
           {{- end }}
-        {{- end }}
     labels:
       release-group: workers
     wait: true
