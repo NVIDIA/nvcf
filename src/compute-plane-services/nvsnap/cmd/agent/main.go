@@ -181,6 +181,8 @@ func main() {
 		"How long a complete model or cache volume is kept after its last use before the reaper frees its storage (0 = keep forever)")
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
+	flag.StringVar(&config.ModelVolume.TenantLabel, "model-volume-tenant-label", "",
+		"Namespace label naming the tenant a namespace belongs to; model volumes are shared only between namespaces of one tenant (empty = each namespace is its own tenant)")
 	flag.BoolVar(&config.ModelVolume.RefreshDisabled, "cache-set-refresh-disabled", false,
 		"Turn off cache set refresh: warm ranks that gained files no longer propose a new generation of their set")
 	flag.DurationVar(&config.ModelVolume.RefreshCooldown, "cache-set-refresh-cooldown", 0,
