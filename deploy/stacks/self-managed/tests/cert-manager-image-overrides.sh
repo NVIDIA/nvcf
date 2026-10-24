@@ -50,6 +50,9 @@ assert_images() {
     repository="$(yq -r ".certManager.$path.repository" "$environment_file")"
     tag="$(yq -r ".certManager.$path.tag // \"\"" "$environment_file")"
     digest="$(yq -r ".certManager.$path.digest // \"\"" "$environment_file")"
+    if test -z "$tag$digest"; then
+      tag="$(yq -r '.appVersion' "$chart/charts/cert-manager/Chart.yaml")"
+    fi
     expected="$repository"
     if test -n "$tag"; then expected="$expected:$tag"; fi
     if test -n "$digest"; then expected="$expected@$digest"; fi
@@ -92,6 +95,13 @@ assert_images
 for component in controller webhook cainjector startupapicheck acmesolver; do
   path="$(image_path "$component")"
   yq -i "del(.certManager.$path.digest) | .certManager.$path.tag = \"custom-$component\"" "$environment_file"
+done
+render
+assert_images
+# Repository-only mirrors retain the selected chart version.
+for component in controller webhook cainjector startupapicheck acmesolver; do
+  path="$(image_path "$component")"
+  yq -i "del(.certManager.$path.tag)" "$environment_file"
 done
 render
 assert_images
