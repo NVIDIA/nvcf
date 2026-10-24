@@ -89,25 +89,42 @@ Feature: Install a local single-cluster stack with upstream supporting images
 
     When I run command:
       """
+      yq -r '.artifacts[] | select(.name == "nats-server-config-reloader" and .type == "image") | .upstream_repository + ":" + .version' docs/version-catalog/main.yaml
+      """
+    And I export command output to environment variable "EXPECTED_NATS_RELOADER_IMAGE"
+
+    When I run command:
+      """
       kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'
       """
     Then the command exit code should be 0
-    And the command output should contain "docker.io/natsio/nats-server-config-reloader:"
+    And the command output should have exactly "1" distinct matches of "^\Q${EXPECTED_NATS_RELOADER_IMAGE}\E$"
+
+    When I run command:
+      """
+      yq -r '.artifacts[] | select(.name == "nats-server" and .type == "image") | .upstream_repository + ":" + .version' docs/version-catalog/main.yaml
+      """
+    And I export command output to environment variable "EXPECTED_NATS_SERVER_IMAGE"
 
     When I run command:
       """
       kubectl --context k3d-ncp-local get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats")].image}'
       """
     Then the command exit code should be 0
-    And the command output should contain "docker.io/synadia/nats-server:"
+    And the command output should have exactly "1" distinct matches of "^\Q${EXPECTED_NATS_SERVER_IMAGE}\E$"
+
+    When I run command:
+      """
+      yq -r '.artifacts[] | select(.name == "nats-box" and .type == "image") | .upstream_repository + ":" + .version + "@" + .digest' docs/version-catalog/main.yaml
+      """
+    And I export command output to environment variable "EXPECTED_NATS_BOX_IMAGE"
 
     When I run command:
       """
       kubectl --context k3d-ncp-local get deployment nats-box -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="nats-box")].image}'
       """
     Then the command exit code should be 0
-    And the command output should contain "docker.io/natsio/nats-box:"
-    And the command output should contain "-nonroot@sha256:"
+    And the command output should have exactly "1" distinct matches of "^\Q${EXPECTED_NATS_BOX_IMAGE}\E$"
 
     When I run command:
       """
