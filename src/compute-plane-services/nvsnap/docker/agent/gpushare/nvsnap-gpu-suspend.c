@@ -41,6 +41,12 @@ SPDX-License-Identifier: Apache-2.0
  * writes to multicast memory (NCCL NVLS) that another node has not bound
  * again yet; those writes are lost and the kernels waiting for them spin.
  * A library that predates it resumes as without it.
+ * --clock-at NS (resume after stop + CRIU restore): NS is the CLOCK_MONOTONIC
+ * CRIU dumped. Thaw only once the pids' clock (in their time namespace) has
+ * reached it, so that no thread sees its clock behind the dump, nor the
+ * restore count as time it ran (a peer it last heard from then is not
+ * taken for dead). The restore's own budget must let the clock start far
+ * enough behind.
  * --cache DIR (suspend, resume): node-local cache of the chunk store (e.g. on
  * NVMe; same layout): saved chunks are copied into it, and loads read it
  * first. A load does not fill it (that would slow the restore down):
@@ -274,6 +280,7 @@ static int visible_gpus(CUuuid *out, int max)
 static const char *gpu_map_file;
 static const char *store_dir, *ckpt_dir, *cache_dir, *fabric_dir;
 static int hold_gate;  /* --hold-gate */
+static long long clock_at = -1;  /* --clock-at, ns */
 static int resume_held(const int *pids, int n);
 
 static int do_restore(int pid)
@@ -904,12 +911,56 @@ static int wait_all_stopped(int pid)
     return -1;
 }
 
+/* A process's CLOCK_MONOTONIC offset (its time namespace's), in ns. */
+static int mono_offset(const char *pid, long long *ns)
+{
+    char path[64], name[32];
+    long long sec, nsec;
+    snprintf(path, sizeof(path), "/proc/%s/timens_offsets", pid);
+    FILE *f = fopen(path, "re");
+    if (!f) return -1;
+    int r = -1;
+    while (r < 0 && fscanf(f, "%31s %lld %lld", name, &sec, &nsec) == 3)
+        if (strcmp(name, "monotonic") == 0) *ns = sec * 1000000000LL + nsec, r = 0;
+    fclose(f);
+    return r;
+}
+
+/* --clock-at: how far pid's CLOCK_MONOTONIC is from clock_at now, in ns
+ * (as CRIU's timens_wait_dumped_clocks: ours, less our offset, plus its). */
+static int clock_behind(int pid, long long *ns)
+{
+    char p[16];
+    long long self, its;
+    struct timespec ts;
+    snprintf(p, sizeof(p), "%d", pid);
+    if (mono_offset("self", &self) < 0 || mono_offset(p, &its) < 0) {
+        fprintf(stderr, "pid=%d --clock-at: timens_offsets: %s\n", pid, strerror(errno));
+        return -1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    *ns = clock_at - (ts.tv_sec * 1000000000LL + ts.tv_nsec - self + its);
+    return 0;
+}
+
+static void wait_clock(int pid)
+{
+    long long d;
+    if (clock_behind(pid, &d) < 0) return;  /* checked before the freeze */
+    printf("pid=%d clock %.3fs %s the dump\n", pid, (d < 0 ? -d : d) / 1e9, d > 0 ? "behind" : "past");
+    if (d <= 0) return;
+    struct timespec w = { d / 1000000000LL, d % 1000000000LL };
+    while (nanosleep(&w, &w) != 0 && errno == EINTR) {}
+}
+
 /* Resume without a holder: pids are CHECKPOINTED and possibly SIGSTOPped
  * (after stop + CRIU restore). Freeze everything but the restore threads,
  * SIGCONT, restore + unlock, thaw. */
 static int resume_unheld(const int *pids, int n)
 {
     if (load_api() < 0) return -1;
+    long long d;
+    if (clock_at >= 0 && clock_behind(pids[0], &d) < 0) return -1;
     struct frozen *fz = calloc(n, sizeof(*fz));
     int rc = -1;
     for (int i = 0; i < n; i++)
@@ -930,6 +981,7 @@ static int resume_unheld(const int *pids, int n)
     rc = 0;
 out:
     if (rc == 0) {
+        if (clock_at >= 0) wait_clock(pids[0]);  /* every pid is in one time namespace */
         thaw_all(fz, n);
         printf("thawed all pids\n");
     } else {
@@ -1165,6 +1217,7 @@ static int resume(const int *pids, int n, unsigned timeout_s)
     state_path(hp, sizeof(hp), pids[0], "holder");
     if (state_exists(hp)) {
         if (hold_gate) printf("--hold-gate: not for an in-place resume; launches go through at once\n");
+        if (clock_at >= 0) printf("--clock-at: not for an in-place resume; ignored\n");
         return signal_holder(pids, SIGUSR1, timeout_s);
     }
     return resume_unheld(pids, n);
@@ -1435,6 +1488,8 @@ static void usage(const char *prog)
         "--fabric-map DIR: (suspend, resume) multi-node NVLink: after load, write the new\n"
         "         fabric handles to DIR/out and wait for DIR/in, all nodes' out merged\n"
         "--hold-gate: (resume after CRIU restore) thaw with GPU launches held until open\n"
+        "--clock-at NS: (resume after CRIU restore) thaw once the pids' CLOCK_MONOTONIC\n"
+        "         reaches NS, the value CRIU dumped\n"
         "Cache:   cache-prefetch STORE CKPT-DIR CACHE | cache-gc CACHE MAX-GiB\n"
         "Multi-GPU: pass all ranks in one call, e.g.:\n"
         "  %s full-save 503 504 505 508\n", prog, prog);
@@ -1455,6 +1510,8 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[argi], "--timeout-ms") == 0)
             timeout_ms = (unsigned)strtoul(argv[argi + 1], NULL, 10);
+        else if (strcmp(argv[argi], "--clock-at") == 0)
+            clock_at = strtoll(argv[argi + 1], NULL, 10);
         else if (strcmp(argv[argi], "--gpu-map") == 0)
             gpu_map_file = argv[argi + 1];
         else if (strcmp(argv[argi], "--store") == 0)
