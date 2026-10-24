@@ -235,8 +235,14 @@ and [upstream Helm guide](https://cert-manager.io/docs/installation/helm/).
 For a private mirror, replace each full `repository` above, preserving its tag
 and digest after copying the complete multi-platform index. Verify the digest
 at the destination. These repositories take precedence over `global.image`;
-configure `global.imagePullSecrets` if authentication is required. Without
-explicit repositories, the four controller components keep the global mirror
+configure `global.imagePullSecrets` for the chart's pods if authentication is
+required. HTTP-01 solver pods need separate pull credentials in the challenge
+namespace: set `imagePullSecrets` in the ACME Issuer's HTTP-01 solver
+`podTemplate.spec`, or on the solver pod's service account. The global chart
+setting does not propagate to those dynamically created pods. See the
+[HTTP-01 pod template](https://cert-manager.io/docs/configuration/acme/http01/#podtemplate).
+Without explicit repositories, the four controller components keep the global
+mirror
 and the solver keeps its upstream default. Unset or empty image keys retain
 chart/stack defaults. A tag and digest render as `repository:tag@digest`; a
 digest without a tag renders as `repository@digest`. A tag without a digest
