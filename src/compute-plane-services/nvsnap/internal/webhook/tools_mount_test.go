@@ -121,7 +121,7 @@ func TestCRIURestore_MountsTheRecordedTools(t *testing.T) {
 // A pod that mounts a volume only the webhook adds, without declaring it,
 // gets no placement at all: the webhook's volume would give its mount the
 // node's directory. Declared by the pod itself, the name is the pod's own.
-func TestMutate_UndeclaredReservedMount(t *testing.T) {
+func TestMutate_UndeclaredMount(t *testing.T) {
 	m := criuMutator(t, criuCaptureRecord())
 	m.HostBundleRoot, m.BundleID, m.GPUShareHostRoot = "/bundle", "v7", "/ckpt/gpushare-pods"
 	// The same pod without the mount is placed: a refusal below is the
@@ -129,7 +129,9 @@ func TestMutate_UndeclaredReservedMount(t *testing.T) {
 	if patches, err := m.Mutate(context.Background(), gpushareTestPod(true, nil)); err != nil || len(patches) == 0 {
 		t.Fatalf("the plain pod was not placed: %d patches (%v)", len(patches), err)
 	}
-	for _, v := range []string{gpushareLibVolume, helperVolumeName, criuCheckpointsVolume, bundleToolsVolume} {
+	// Any undeclared name: the webhook's per-capture volumes (a capture's
+	// tree, nvsnap-<hash>-<volume>) are named by values a pod can know.
+	for _, v := range []string{gpushareLibVolume, helperVolumeName, criuCheckpointsVolume, bundleToolsVolume, "nvsnap-0123456789abcdef-data", "anything"} {
 		pod := gpushareTestPod(true, nil)
 		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: v, MountPath: "/x"})
 		if patches, err := m.Mutate(context.Background(), pod); err != nil || patches != nil {
@@ -139,7 +141,7 @@ func TestMutate_UndeclaredReservedMount(t *testing.T) {
 	own := gpushareTestPod(true, nil)
 	own.Spec.Volumes = append(own.Spec.Volumes, corev1.Volume{Name: helperVolumeName})
 	own.Spec.Containers[0].VolumeMounts = append(own.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: helperVolumeName, MountPath: "/x"})
-	if why := undeclaredReservedMount(own); why != "" {
+	if why := undeclaredMount(own); why != "" {
 		t.Errorf("a pod that declares the volume itself refused: %s", why)
 	}
 }

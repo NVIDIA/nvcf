@@ -128,6 +128,24 @@ func sliceElems(v any) ([]any, bool) {
 	return out, true
 }
 
+// patchElementKey is what makes two elements of array arr the same
+// element. A volume, an env var or an init container is one per name. A
+// volume mount is the whole mount: one volume can be mounted at several
+// paths (cachedir's subdirectories), and two builders' mounts of one name
+// must not be merged into whichever came first, dropping the other's
+// path, subPath, subPathExpr or read-only flag. Mounts that clash on a
+// path are left for the API to refuse.
+func patchElementKey(arr string, v any) string {
+	if strings.HasSuffix(arr, "/volumeMounts") {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	return patchElementName(v)
+}
+
 // patchElementName pulls the "name" field out of a patch value (volume,
 // volumeMount, initContainer, env). JSON round-trip so it works for both
 // map[string]any and typed corev1 values (restore builders).
@@ -207,7 +225,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 		}
 		// Element-append form: /spec/volumes/- etc.
 		if base := strings.TrimSuffix(p.Path, "/-"); base != p.Path && isMergeableArray(base) {
-			name := patchElementName(p.Value)
+			name := patchElementKey(base, p.Value)
 			if name != "" && seen[base][name] {
 				continue // duplicate element (e.g. a second nvsnap-lib) — drop
 			}
@@ -226,7 +244,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 				bootstrapped[p.Path] = true
 				kept := make([]any, 0, len(elems))
 				for _, e := range elems {
-					name := patchElementName(e)
+					name := patchElementKey(p.Path, e)
 					if name != "" && seen[p.Path][name] {
 						continue
 					}
@@ -239,7 +257,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 			// Array already exists — append each fresh element instead of
 			// replacing the array.
 			for _, e := range elems {
-				name := patchElementName(e)
+				name := patchElementKey(p.Path, e)
 				if name != "" && seen[p.Path][name] {
 					continue
 				}
@@ -576,11 +594,12 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			Info("nvsnap.io/inject=false; admitting pod unchanged")
 		return nil, nil
 	}
-	// No placement for a pod that mounts a volume only the webhook adds
-	// (tools_mount.go): the API then refuses its undeclared mount.
-	if why := undeclaredReservedMount(pod); why != "" {
+	// No placement for a pod that mounts a volume it does not declare
+	// (tools_mount.go): only a volume the webhook adds could make that
+	// mount valid. Unchanged, the API refuses it.
+	if why := undeclaredMount(pod); why != "" {
 		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("reason", why).
-			Warn("the pod mounts an nvsnap volume it does not declare; admitting it unchanged")
+			Warn("the pod mounts a volume it does not declare; admitting it unchanged")
 		return nil, nil
 	}
 
