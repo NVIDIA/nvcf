@@ -466,7 +466,7 @@ const pidNSExtNetKey = "extNetNs"
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
 // namespace on PIDNSNetFD).
-func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap string) []string {
+func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap, pluginDir string) []string {
 	args := []string{
 		"restore",
 		"-D", imgsInContainer,
@@ -482,7 +482,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		"--join-ns", "ipc:/proc/1/ns/ipc",
 	}
 	if !gpushare {
-		args = append(args, "--libdir", v2BinDirInContainer)
+		args = append(args, "--libdir", pluginDir)
 	}
 	if directIO {
 		args = append(args, "--image-io-mode", "direct")
@@ -636,7 +636,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO(), a.ghostLimit())
+		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && criuSupportsDirectImageIO(a.agentCRIUHelp()), a.ghostLimit())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	if hooks.ActionScript != "" {
@@ -694,26 +694,9 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		StdoutPipe: stdout, StderrPipe: stderr})
 }
 
-// pidNSRestoreHelperName is the agent binary staged into the placeholder's
-// bundle directory to run pidns-restore-exec there.
+// pidNSRestoreHelperName is the agent binary in the node bundle, run in the
+// placeholder for pidns-restore-exec.
 const pidNSRestoreHelperName = "nvsnap-agent"
-
-// stagePIDNSRestoreHelper copies the agent binary (static) into the
-// placeholder's bundle directory.
-func (a *Agent) stagePIDNSRestoreHelper(root string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("pid-namespace restore: locate the agent binary: %w", err)
-	}
-	dst := filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), pidNSRestoreHelperName)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("pid-namespace restore: %w", err)
-	}
-	if err := copyFileExec(self, dst); err != nil {
-		return fmt.Errorf("pid-namespace restore: stage the helper: %w", err)
-	}
-	return nil
-}
 
 // readPIDNSMarkerOrFalse reads the marker; a checkpoint without one is an
 // in-namespace checkpoint.

@@ -240,20 +240,6 @@ func netUnlock(ctx context.Context, hostPID int, imagesDir string, log *logrus.E
 	return nil
 }
 
-var (
-	bundledNetMigrationOnce sync.Once
-	bundledNetMigration     bool
-)
-
-// bundledSupportsNetMigration reports whether the bundled CRIU can move
-// connections to new addresses and unlock separately.
-func bundledSupportsNetMigration() bool {
-	bundledNetMigrationOnce.Do(func() {
-		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
-		bundledNetMigration = criuSupportsNetMigration(string(out))
-	})
-	return bundledNetMigration
-}
 
 func criuSupportsNetMigration(help string) bool {
 	return strings.Contains(help, "--inet-addr-map") && strings.Contains(help, "net-unlock")

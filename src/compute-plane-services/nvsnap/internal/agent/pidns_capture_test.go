@@ -111,7 +111,7 @@ func TestPIDNSArgs(t *testing.T) {
 	}
 	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"},
 		[]UnixListener{{Inode: 719101449, Type: 1, Path: "/tmp/ipc-a"}, {Inode: 719101460, Type: 5, Path: "/tmp/ipc-b"}},
-		false, false, "10.0.0.1=10.0.0.2"), " ")
+		false, false, "10.0.0.1=10.0.0.2", "/criu-bundle/plugins"), " ")
 	for _, want := range []string{"--inherit-fd fd[101]:socket:[719101449]", "--inherit-fd fd[102]:socket:[719101460]"} {
 		if !strings.Contains(restore, want) {
 			t.Errorf("restore lacks %q: %s", want, restore)
@@ -119,7 +119,7 @@ func TestPIDNSArgs(t *testing.T) {
 	}
 	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[100]:extNetNs",
 		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:/etc/hosts", "--restore-detached",
-		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir"} {
+		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir /criu-bundle/plugins"} {
 		if !strings.Contains(restore, want) {
 			t.Errorf("restore argv lacks %q: %s", want, restore)
 		}
@@ -296,7 +296,7 @@ func TestDumpArgsNoCUDAPluginWithoutGPUs(t *testing.T) {
 	if strings.Contains(pidns, "--libdir") {
 		t.Errorf("pid-namespace dump of a CPU-only tree loads the CUDA plugin: %s", pidns)
 	}
-	inns := strings.Join(dumpV2Args(10, 51, nil, dumpLeaveRunning, false, false, "", defaultGhostLimit), " ")
+	inns := strings.Join(dumpV2Args(10, 51, nil, dumpLeaveRunning, false, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit), " ")
 	if strings.Contains(inns, "--libdir") {
 		t.Errorf("in-namespace dump of a CPU-only tree loads the CUDA plugin: %s", inns)
 	}

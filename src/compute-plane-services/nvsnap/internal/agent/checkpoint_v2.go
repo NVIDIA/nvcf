@@ -20,8 +20,9 @@ limitations under the License.
 // Instead of running "criu swrk" from the agent's own mount namespace
 // (which requires Root/ExtMnt reconstruction, skip-mnt lists, and
 // LD_LIBRARY_PATH gymnastics — the failure classes of the legacy path),
-// criu-v2 stages a small bundle (criu + cuda_plugin.so + cuda-checkpoint)
-// into the target container's rootfs and executes CRIU dump INSIDE the
+// criu-v2 runs the node bundle (criu + cuda_plugin.so + cuda-checkpoint),
+// which the webhook mounts read-only in the target container
+// (bundle_tools.go), and executes CRIU dump INSIDE the
 // container's mnt/pid/net/ipc/uts namespaces via nsenter (full namespace
 // fidelity — a partial join makes CRIU serialize the container's ipc/uts
 // as foreign namespaces and recreate them isolated at restore, which
@@ -62,6 +63,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // CapturePathCRIUV2 is the request value selecting the in-namespace CRIU
@@ -92,7 +94,7 @@ const v2ImagesDirInContainer = "/opt/nvsnap-imgs"
 // INTERP=/criu-bundle/lib/ld-linux-x86-64.so.2 and RUNPATH=/criu-bundle/lib
 // (self-contained loader), so staging anywhere else makes execve fail with
 // ENOENT inside the container (first criu-v2 e2e, 2026-07-12).
-const v2BinDirInContainer = "/criu-bundle"
+const v2BinDirInContainer = webhook.BundleToolsMountPath
 
 // dumpFinal is what a dump leaves of the dumped tree.
 type dumpFinal int
@@ -119,82 +121,8 @@ func finalOf(leaveRunning bool) dumpFinal {
 	return dumpKill
 }
 
-// placeholderTools are the bundle's own copies of the tools run inside a
-// container's mount namespace, where the workload image may have none
-// (distroless) or ones without the options used (busybox): GNU tar and the
-// zstd or gzip it runs for criu's tmpfs contents, and mkdir for the agent's
-// replay. Staging zstd makes whether a capture uses it a property of the
-// bundle, which its restore stages too, not of the workload image.
-var placeholderTools = []string{"tar", "zstd", "gzip", "mkdir"}
-
-// inContainerTool is the path to run name at inside the mount namespace of
-// host pid pid: the staged bundle copy when there is one, else name from the
-// container's PATH.
-func inContainerTool(pid int, name string) string {
-	staged := v2BinDirInContainer + "/" + name
-	if fileExists(fmt.Sprintf("/proc/%d/root%s", pid, staged)) {
-		return staged
-	}
-	return name
-}
-
-// stageV2Bundle copies the criu bundle into the container rootfs at
-// /criu-bundle, including lib/ (criu's INTERP and RUNPATH point there —
-// it runs against its own staged glibc, never the container's).
-// cuda-checkpoint.real is staged under the plain name the CUDA plugin
-// execs from PATH; inside the container the driver libs are
-// runtime-injected so no wrapper is needed.
-func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
-	bundleDir := filepath.Dir(a.config.CRIUPath)
-	stageDir := filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"))
-	if err := os.MkdirAll(stageDir, 0o755); err != nil {
-		return fmt.Errorf("stage dir: %w", err)
-	}
-	stage := map[string]string{
-		filepath.Join(bundleDir, "criu"):                                 "criu",
-		resolveCRIUPluginDir(a.config.CRIUPath, log) + "/cuda_plugin.so": "cuda_plugin.so",
-		filepath.Join(bundleDir, "cuda-checkpoint.real"):                 "cuda-checkpoint",
-	}
-	// gpushare's driver tool, when the bundle carries it (base images before
-	// gpushare do not; only a gpushare capture needs it).
-	if tool := filepath.Join(bundleDir, gpushareToolName); fileExists(tool) {
-		stage[tool] = gpushareToolName
-	}
-	// The tools run inside the container's mount namespace: criu's tmpfs
-	// restore and the agent's replay steps. Base images before they were
-	// bundled do not carry them.
-	for _, name := range placeholderTools {
-		if tool := filepath.Join(bundleDir, name); fileExists(tool) {
-			stage[tool] = name
-		}
-	}
-	for src, name := range stage {
-		if err := copyFileExec(src, filepath.Join(stageDir, name)); err != nil {
-			return fmt.Errorf("stage %s: %w", name, err)
-		}
-	}
-	libDst := filepath.Join(stageDir, "lib")
-	if err := os.MkdirAll(libDst, 0o755); err != nil {
-		return fmt.Errorf("stage lib dir: %w", err)
-	}
-	libs, err := os.ReadDir(filepath.Join(bundleDir, "lib"))
-	if err != nil {
-		return fmt.Errorf("read bundle lib dir: %w", err)
-	}
-	for _, e := range libs {
-		if e.IsDir() {
-			continue
-		}
-		src := filepath.Join(bundleDir, "lib", e.Name())
-		if err := copyFileExec(src, filepath.Join(libDst, e.Name())); err != nil {
-			return fmt.Errorf("stage lib/%s: %w", e.Name(), err)
-		}
-	}
-	return nil
-}
-
-// dumpV2 stages the bundle and runs CRIU dump inside the container's
-// namespaces. On success the image files have been moved into checkpointDir.
+// dumpV2 runs CRIU dump inside the container's namespaces, with the
+// node bundle mounted there. On success the image files have been moved into checkpointDir.
 // resumeSource brings a source back after its dump, under its own deadline:
 // the capture's may have run out, which is often why the dump failed.
 func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) error {
@@ -301,9 +229,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	root := filepath.Join(procBase, strconv.Itoa(hostPID), "root")
 
-	// 1. Stage the bundle into the container rootfs.
-	if err := a.stageV2Bundle(root, log); err != nil {
-		return nil, err
+	// 1. The tools run from the node bundle mounted read-only in the
+	// container (bundle_tools.go), never from a copy in its filesystem.
+	tools, err := bundleToolsOf(procBase, hostPID, a.bundleVersionsDir())
+	if err != nil {
+		return nil, fmt.Errorf("criu-v2: %w", err)
 	}
 
 	// 2. Fresh in-container images dir.
@@ -387,8 +317,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			return nil, fmt.Errorf("gpushare: the workload loads %s but has no chunk store at %s "+
 				"(the webhook mounts one into pods annotated %s=true)", gpushareLibName, GPUShareStoreInContainer, "nvsnap.io/gpushare")
 		}
-		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
-			return nil, fmt.Errorf("gpushare: %s is not in the agent bundle; the agent base image predates gpushare", gpushareToolName)
+		if !tools.has(procBase, gpushareToolName) {
+			return nil, fmt.Errorf("gpushare: %s is not in the pod's node bundle (version %s predates gpushare)", gpushareToolName, tools.version)
 		}
 		// The store is created by the kubelet, as root: an engine that runs
 		// as another user cannot write its GPU memory there.
@@ -503,7 +433,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
-	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"), a.ghostLimit())
+	args := dumpV2Args(hostPID, nsPID, externals, final, gsOn, gsOn && tools.directImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"),
+		tools.compressBlockFlag(), tools.pluginDir(procBase), a.ghostLimit())
 	// criu runs in the container's mount namespace here: its action script
 	// and the snapshot request live in the images dir, which the agent sees
 	// through the container's root while the tree runs.
@@ -531,10 +462,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// /criu-bundle/lib on its own. Setting LD_LIBRARY_PATH here would be
 	// inherited by cuda-checkpoint, forcing it onto the bundle's glibc instead
 	// of the target container's -- which aborts it on newer-glibc images.
-	cmd.Env = []string{
-		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=/root",
-	}
+	cmd.Env = []string{"PATH=" + bundlePATH, "HOME=/root"}
 	// The tree's stdio, read before the dump takes the tree away
 	// (restore_stdio.go).
 	stdio := readStdio(procBase, targetHostPID)
@@ -873,26 +801,12 @@ func criuCompressBlockFlag(help string) string {
 	return "--compress-region"
 }
 
-var (
-	bundledCompressFlagOnce sync.Once
-	bundledCompressFlag     string
-)
-
-// bundledCompressBlockFlag probes the bundled criu once for the spelling it
-// understands. A failed probe falls back to the earlier name, which the
-// binaries shipped before the upstream rename accept.
-func bundledCompressBlockFlag() string {
-	bundledCompressFlagOnce.Do(func() {
-		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
-		bundledCompressFlag = criuCompressBlockFlag(string(out))
-	})
-	return bundledCompressFlag
-}
-
 // dumpV2Args builds the nsenter + criu dump argv. A gpushare dump omits the
 // CUDA plugin: nvsnap-gpu-suspend has already checkpointed the GPU state.
 // directIO writes the pages image with O_DIRECT (--image-io-mode direct).
-func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushare, directIO bool, compress string, ghostLimit int64) []string {
+// pluginDir is where the mounted bundle keeps CRIU's plugins, and
+// compressFlag its CRIU's name for block compression.
+func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushare, directIO bool, compress, compressFlag, pluginDir string, ghostLimit int64) []string {
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "dump",
@@ -904,7 +818,7 @@ func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushar
 	}
 	// The CUDA plugin only for a tree with GPU devices (pidNSDumpArgs).
 	if !gpushare && len(externals) > 0 {
-		args = append(args, "--libdir", v2BinDirInContainer)
+		args = append(args, "--libdir", pluginDir)
 	}
 	args = append(args,
 		// The kubelet readiness probe leaves half-open connections in the
@@ -924,11 +838,11 @@ func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushar
 	case mode == "page":
 		args = append(args, "--compress")
 	case mode == "region" || mode == "region:" || mode == "block" || mode == "block:":
-		args = append(args, bundledCompressBlockFlag(), "256K")
+		args = append(args, compressFlag, "256K")
 	case strings.HasPrefix(mode, "region:"):
-		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "region:"))
+		args = append(args, compressFlag, strings.TrimPrefix(mode, "region:"))
 	case strings.HasPrefix(mode, "block:"):
-		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
+		args = append(args, compressFlag, strings.TrimPrefix(mode, "block:"))
 	default: // "" / "off": no compression
 	}
 	if f := final.flag(); f != "" {
@@ -938,21 +852,6 @@ func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushar
 		args = append(args, "--external", e)
 	}
 	return args
-}
-
-var (
-	bundledDirectIOOnce sync.Once
-	bundledDirectIO     bool
-)
-
-// bundledSupportsDirectImageIO reports whether the bundled CRIU accepts
-// --image-io-mode (direct I/O for the pages image; base v0.0.22 and later).
-func bundledSupportsDirectImageIO() bool {
-	bundledDirectIOOnce.Do(func() {
-		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
-		bundledDirectIO = criuSupportsDirectImageIO(string(out))
-	})
-	return bundledDirectIO
 }
 
 func criuSupportsDirectImageIO(help string) bool {

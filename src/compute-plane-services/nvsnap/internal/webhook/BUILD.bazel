@@ -29,6 +29,7 @@ go_library(
         "rootfs_l2_mount.go",
         "rootfs_l2_overlay.go",
         "server.go",
+        "tools_mount.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
@@ -75,6 +76,7 @@ go_test(
         "rootfs_l2_mount_test.go",
         "rootfs_l2_overlay_test.go",
         "server_test.go",
+        "tools_mount_test.go",
     ],
     embed = [":webhook"],
     deps = [

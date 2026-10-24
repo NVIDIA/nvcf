@@ -133,7 +133,7 @@ func TestUntarIntoMntns_MissingTar(t *testing.T) {
 	// Missing tar → no-op, no error. Mirrors mirrorIntoMntns semantics for
 	// missing source diff.
 	tmp := t.TempDir()
-	if err := untarIntoMntns(os.Getpid(), "/dev/shm", filepath.Join(tmp, "nope.tar"), nil); err != nil {
+	if err := untarIntoMntns(os.Getpid(), "/dev/shm", filepath.Join(tmp, "nope.tar"), bundleTools{}, nil); err != nil {
 		t.Errorf("missing tar: got err %v, want nil", err)
 	}
 }

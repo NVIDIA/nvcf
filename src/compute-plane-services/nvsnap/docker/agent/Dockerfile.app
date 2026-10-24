@@ -76,6 +76,13 @@ RUN chmod +x /criu-bundle/restore-bundle-init.sh
 # the context and no staging step.
 COPY docker/agent/cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
 RUN chmod +x /criu-bundle/cuda-checkpoint
+# Inside a workload, where the webhook mounts this bundle read-only at
+# /criu-bundle, CRIU's CUDA plugin runs cuda-checkpoint from PATH, and the
+# workload's driver libraries are already in its loader path: in-container/,
+# first on that PATH, holds the real binary without the wrapper
+# (internal/agent/bundle_tools.go, bundlePATH).
+RUN mkdir -p /criu-bundle/in-container && \
+    ln -s ../cuda-checkpoint.real /criu-bundle/in-container/cuda-checkpoint
 
 # Create symlinks
 RUN ln -sf /criu-bundle/nvsnap-agent /usr/local/bin/nvsnap-agent && \

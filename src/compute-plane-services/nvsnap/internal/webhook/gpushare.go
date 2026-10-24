@@ -191,6 +191,11 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 	if len(libMountedAt) < len(gpuContainers) {
 		vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.bundleDir(m.BundleID), Type: &dir}}})
 	}
+	// The tools a capture runs in these containers (tools_mount.go).
+	toolsVol, toolsMount, tools := m.bundleTools(pod, m.BundleID)
+	if tools {
+		vols = append(vols, toolsVol)
+	}
 	patches = append(patches, addVolumes(pod, vols)...)
 
 	for _, i := range gpuContainers {
@@ -201,6 +206,9 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 		}
 		if !libMountedAt[i] {
 			mounts = append(mounts, corev1.VolumeMount{Name: gpushareLibVolume, MountPath: nvsnapToolsMountPath, ReadOnly: true})
+		}
+		if tools {
+			mounts = append(mounts, toolsMount)
 		}
 		patches = append(patches, addContainerMounts(i, c, mounts)...)
 		uid := corev1.EnvVar{Name: gpusharePodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}

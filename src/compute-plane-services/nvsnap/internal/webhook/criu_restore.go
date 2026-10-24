@@ -213,6 +213,13 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 			mounts = append(mounts, corev1.VolumeMount{Name: gpushareLibVolume, MountPath: nvsnapToolsMountPath, ReadOnly: true})
 		}
 	}
+	// The tools the restore runs in the placeholder: the version the
+	// checkpoint recorded, like the library above (tools_mount.go).
+	toolsVol, toolsMount, ok := m.bundleTools(pod, restoreBundle(man, m.BundleID))
+	if !ok {
+		return nil, fmt.Errorf("the pod uses the node bundle's mount path %s or volume itself", BundleToolsMountPath)
+	}
+	vols, mounts = append(vols, toolsVol), append(mounts, toolsMount)
 	patches = append(patches, addVolumes(pod, vols)...)
 	patches = m.withHelperVolume(pod, patches)
 	patches = append(patches, addContainerMounts(i, c, mounts)...)

@@ -594,6 +594,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
 	injectPatches = append(injectPatches, m.livenessBudgetPatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.companionToolsPatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.criuIdentityPatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]

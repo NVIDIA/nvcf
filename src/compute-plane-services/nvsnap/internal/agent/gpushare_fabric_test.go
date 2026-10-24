@@ -641,11 +641,11 @@ func TestPlanGroupRestore(t *testing.T) {
 }
 
 func TestRestoreV2Args_GroupRestore(t *testing.T) {
-	got := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2"), " ")
+	got := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2", "/criu-bundle/plugins"), " ")
 	if !strings.Contains(got, "--inet-addr-map 10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2 --keep-network-lock") {
 		t.Errorf("group restore args lack the map and the held lock: %s", got)
 	}
-	if plain := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, ""), " "); strings.Contains(plain, "inet-addr-map") || strings.Contains(plain, "keep-network-lock") {
+	if plain := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "", "/criu-bundle/plugins"), " "); strings.Contains(plain, "inet-addr-map") || strings.Contains(plain, "keep-network-lock") {
 		t.Errorf("single-pod restore carries group flags: %s", plain)
 	}
 }
