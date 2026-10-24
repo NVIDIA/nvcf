@@ -36,7 +36,7 @@ global:
     imageTag: "3.10.3"
     selfManaged:
       sharedStorage:
-        imageTag: "1.0.6"
+        imageTag: "1.0.7"
       nvcaVersion: "3.10.3"
       imageCredHelper:
         imageTag: "0.11.3"
