@@ -145,9 +145,9 @@ nats:
 The box image declares user/group `1000:1000`. `runAsNonRoot` adds Kubernetes
 enforcement; `runAsUser` and `runAsGroup` make the identity explicit. The server
 pod settings also cover its reloader; neither image declares a nonroot user.
-Server `fsGroup` allows UID 1000 to write
-the JetStream and shared PID volumes. The box uses its writable home for CLI
-state and `nsc` keys. Its default context links to read-only mounted Secrets;
+Server `fsGroup` assigns group 1000 to the JetStream and shared PID volumes.
+The box image provides writable directories for CLI state and `nsc` keys.
+Its default context links to read-only mounted Secrets;
 use a separate `XDG_CONFIG_HOME` to save additional contexts. The box needs no
 additional volume or `fsGroup` for this example.
 
