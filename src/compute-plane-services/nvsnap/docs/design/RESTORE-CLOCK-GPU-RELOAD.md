@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Restored clocks through the GPU reload
 
-Status: agreed; CRIU and agent parts written, gpushare `--clock-at` pending. Scope: the agent (`restore_clock.go`, `restore_v2.go`), CRIU's `--timens-budget`, and
+Status: in use (CRIU `--timens-no-wait`, gpushare `--clock-at`, agent). Section 6, a budget that aims low, is proposed. Scope: the agent (`restore_clock.go`, `restore_v2.go`), CRIU's `--timens-budget`, and
 `nvsnap-gpu-suspend resume`.
 
 ## 1. The problem
@@ -115,3 +115,70 @@ leaves the overrun counted, as CRIU's budget does today. The recorded span makes
 - **On the cluster:** a Kimi-K3 2-node restore logs no `No available shared memory broadcast block`
   after the resume. A small probe in the workload that reads CLOCK_MONOTONIC before the dump and after
   the restore sees the gap within the budget's margin.
+
+## 6. Proposed: a budget that aims low
+
+### What the first runs showed
+
+Kimi-K3, 2 nodes, mv194 (gpushare with the host-buffer prefault). Both ranks agree within 0.1 s.
+
+| Restore | Budget | Work (CRIU start to GPU resume) | Waited for the clock |
+|---|---|---|---|
+| Verify restore, the checkpoint's first | 2 m 3 s (estimate) | 72.8 s | 50 s |
+| Scale-out on two other nodes | 1 m 25 s (72.8 s x 1.1 + 5 s) | 55.5 s | 30 s |
+
+The clock fix works: no restored process saw time jump, and nothing timed out. But the wait cost 50 s and 30 s,
+a third of each restore. Two things make the budget too large:
+
+- **The first-restore estimate** adds 60 s for the GPU resume (`restoreGPUSlack`). It was sized for the
+  30-48 s first remap per node that the prefault has since removed: remaps now take 3-8 s.
+- **The margin over the last restore.** Restores of one checkpoint vary: 72.8 s, then 55.5 s, the second with
+  every remap at 3 s instead of up to 7.6 s. Budgeting the last restore plus 10 % and 5 s turns that
+  variance, and the margin, into waiting.
+
+### What each kind of error costs
+
+The budget has to be set before the restore runs: a time namespace's offsets can be written only before its
+first task enters it, which is when CRIU restores the tasks. So the budget is a prediction, and it misses one
+way or the other:
+
+- **Too large:** every restore waits the difference before it serves.
+- **Too small:** the restored tasks see their clocks jump forward by the overrun when they resume. Only a jump
+  that reaches a timeout does harm. The one we hit is NCCL RAS's 60 s (`RAS_PEER_DEAD_TIMEOUT`); vLLM's shared
+  memory broadcast warns at 60 s. A jump of a few seconds is what any process sees from a busy host.
+
+So the budget should aim low, and bound the jump instead of the wait.
+
+### Proposal
+
+- **History.** `restore-span-ms` keeps the work of the last 5 restores of the checkpoint, one per line, newest
+  last. A file with one value, as written today, reads as a history of one. The file travels with the
+  checkpoint when another node fetches it (seen on the scale-out above), so a fetched checkpoint starts with
+  its source's history.
+- **Budget from history:** `max(min(spans), max(spans) - J)`, no margin. `J`, the largest jump a restore
+  within the history's range can see, is 20 s, a third of the 60 s timeout.
+  - Spans that agree within `J`: the budget is the fastest. A restore as fast as the fastest waits nothing;
+    a slower one jumps by at most `J`.
+  - Spans that spread wider: the budget rises to keep the slowest one's jump at `J`, and the others wait.
+- **First restore:** the estimate's GPU allowance drops from 60 s to 15 s. On the restore above, that makes the
+  estimate about 78 s against 72.8 s of work: 5 s of waiting.
+- **Unchanged:** the 15 min bound; the recorded span excludes the wait; the agent uses this only when CRIU has
+  `--timens-no-wait` and the tool has `--clock-at`.
+- **Log** the budget, the history it came from, and the outcome: `waited Ns` or `overran by Ns`. An overrun past
+  `J` logs a warning naming the 60 s timeouts.
+
+On the scale-out above, with the history (72.8 s), the budget would have been 72.8 - 20 = 52.8 s raised to the
+minimum 72.8 s: still 17 s of waiting, since one value is both the minimum and the maximum. From the second
+restore on (55.5, 72.8): `max(55.5, 52.8)` = 55.5 s, so a restore like the scale-out waits nothing, and one
+like the verify restore jumps 17 s.
+
+### Tests
+
+- Budget: one value; several within `J` (the minimum); spread wider than `J` (the maximum minus `J`); the
+  15 min bound; an unreadable or empty history falls back to the estimate.
+- History: keeps the last 5, newest last; reads the one-value file written today; a bad line is skipped,
+  not fatal.
+- Estimate: the 15 s GPU allowance on a checkpoint of known CRIU image and GPU store sizes.
+- On the cluster: three restores of one Kimi-K3 checkpoint, each logging budget, work and wait or overrun,
+  no `No available shared memory broadcast block` after the resume, and every jump under `J`.
+
