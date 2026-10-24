@@ -596,9 +596,11 @@ static int ctl(int pid, const char *cmd)
                pid, cmd, pid, pid, cl == sizeof(cr) ? cr.pid : -1);
         return -1;
     }
-    /* "release"/"load" move the saved GPU memory: allow for slow disks. */
+    /* "release"/"load" move the saved GPU memory: allow for slow disks.
+     * "open" waits at most 2 s for the state lock: a pid silent for longer
+     * is stuck or dying, and the restore should fail now. */
     int slow = !strncmp(cmd, "release", 7) || !strncmp(cmd, "load", 4);
-    struct timeval tv = { slow ? 3600 : 120, 0 };
+    struct timeval tv = { slow ? 3600 : !strcmp(cmd, "open") ? 10 : 120, 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     char rep[256] = "err no reply (timeout)";
     if (send(s, cmd, strlen(cmd) + 1, MSG_NOSIGNAL) < 0) snprintf(rep, sizeof(rep), "err send: %s", strerror(errno));
@@ -750,15 +752,24 @@ static int resume_held(const int *pids, int n)
     return count;
 }
 
-/* open: after resume --hold-gate, let every pid's launches through. A
- * library that predates "open" opened its gate at resume. */
+/* open: after resume --hold-gate, let every pid's launches through, all at
+ * once, so that a pid that does not answer holds no other. A library that
+ * predates "open" opened its gate at resume. */
 static int open_all(const int *pids, int n)
 {
+    struct ctl_job *j = calloc(n, sizeof(*j));
+    pthread_t *t = calloc(n, sizeof(*t));
     int bad = 0;
     for (int i = 0; i < n; i++) {
-        int r = ctl(pids[i], "open");
-        if (r < 0 && r != -3) bad++;
+        j[i] = (struct ctl_job){ pids[i], "open", -1 };
+        if (pthread_create(&t[i], NULL, ctl_thread, &j[i]) != 0) ctl_thread(&j[i]), t[i] = 0;
     }
+    for (int i = 0; i < n; i++) {
+        if (t[i]) pthread_join(t[i], NULL);
+        if (j[i].r < 0 && j[i].r != -3) bad++;
+    }
+    free(j);
+    free(t);
     return bad ? -1 : 0;
 }
 
