@@ -7,11 +7,12 @@ Functions (NVCF) umbrella.
 
 The chart is designed to offer:
 
-- Sensible Defaults: Pre-configured values that are well-suited for
+- **Sensible Defaults**: Pre-configured values that are well-suited for
     NVCF-managed deployments.
-- NKey Generation: Helm templates generate NATS NKeys and store them in
-    Kubernetes Secrets. The box mounts the client NKey and context.
-- Dependency Management: Leverages the official NATS Helm chart as a
+- **NKey Generation**: Convenience hooks and a Kubernetes Job to
+    automatically generate NATS NKeys and store them as a Kubernetes secret.
+    This simplifies the setup of NATS authentication.
+- **Dependency Management**: Leverages the official NATS Helm chart as a
     dependency for the core NATS deployment, allowing users to benefit from
     upstream updates while layering NVCF defaults on top.
 
@@ -32,14 +33,13 @@ but authenticated service traffic requires those downstream components.
 
 ### Install via Helm Directly
 
-1. Build Dependencies:
+1. **Build Dependencies:**
     <!-- markdownlint-disable-next-line MD013 -->
     ```bash
-    helm repo add nats https://nats-io.github.io/k8s/helm/charts/
     helm dependency build .
     ```
 
-2. Install the Chart:
+2. **Install the Chart:**
     <!-- markdownlint-disable-next-line MD013 -->
     ```bash
     helm install <release-name> . \
@@ -65,9 +65,8 @@ by providing a custom values file during installation
 
 By default, the chart uses images from the public `docker.io` registry. If your
 environment requires a different registry, mirror, or pull-secret setup,
-set each component image registry and repository in your custom values file.
-Explicit component registries take precedence over `nats.global.image.registry`.
-Use `nats.global.image.pullSecretNames` for private-registry credentials.
+override the relevant `nats.global.*` and component image values in your custom
+values file.
 
 Key configurable areas include:
 
@@ -80,28 +79,6 @@ Key configurable areas include:
 
 Refer to the `values.yaml` file for a detailed list of configurable parameters
 and their default values.
-
-### Upstream images
-
-NATS server uses `docker.io/synadia/nats-server`; the reloader uses
-`docker.io/natsio/nats-server-config-reloader`. NATS box uses the nonroot
-`docker.io/natsio/nats-box` image. Versions are pinned in `values.yaml`.
-The box tag includes `@sha256:` and the multi-platform index digest, which
-Helm preserves in the rendered image reference and release inventory.
-
-[NATS box v0.20.1](https://github.com/nats-io/nats-box/releases/tag/v0.20.1)
-is the selected box release. Its Docker Hub index includes `linux/amd64`
-and `linux/arm64`; both image configs declare UID/GID `1000:1000`.
-The chart also enforces that identity and keeps the NKeys/context mounts.
-Registry metadata verifies image identity and platform availability; runtime
-qualification must exercise `nsc` key generation and NATS CLI access on both
-architectures.
-
-For mirrors, set `registry` and `repository` under `nats.container.image`,
-`nats.reloader.image`, and `nats.natsBox.container.image`. Copy all platforms
-with `skopeo copy --all --preserve-digests`. Leave `tag` unset to keep the
-selected pin. An explicit box `tag` replaces the complete version and digest;
-use `version-nonroot@sha256:<mirrored-index-digest>` for different bytes.
 
 ### Auth Callout NKeys
 

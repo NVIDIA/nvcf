@@ -13,6 +13,7 @@ test:
 	@tests/gateway-routes-enable-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
+	@tests/nats-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
 	@tests/upgrade-receipt-wiring.sh
@@ -23,7 +24,6 @@ test:
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
 	@tests/image-override-wiring.sh
-	@tests/nats-upstream-images.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh

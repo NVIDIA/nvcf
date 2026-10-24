@@ -24,9 +24,6 @@ states:
 # its immutable public GitHub release tag, then report the public self-managed
 # catalog destination.
 sourceCharts:
-  helm-nvcf-nats:
-    tagPrefix: deploy/helm/nats/v
-    path: deploy/helm/nats
   helm-nvcf-invocation-service:
     tagPrefix: deploy/helm/http-invocation/v
     path: deploy/helm/http-invocation/nvcf-invocation-service

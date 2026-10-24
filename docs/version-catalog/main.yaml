@@ -32,6 +32,10 @@ publications:
     type: image
     version: 1.7.4
     registry: public-images
+  - name: nats-box
+    type: image
+    version: 0.19.7-nonroot
+    registry: public-images
   - name: nvcf-state-metrics-service
     type: image
     version: 1.23.7
@@ -90,6 +94,10 @@ publications:
   - name: ess-agent
     type: image
     version: 1.4.1
+    registry: public-images
+  - name: nats-server
+    type: image
+    version: 2.14.6-alpine3.22
     registry: public-images
   - name: nvcf-api-keys-service
     type: image
@@ -1122,16 +1130,13 @@ artifacts:
   - name: nats-box
     type: image
     registry: public-images
-    upstream_repository: docker.io/natsio/nats-box
-    version: 0.20.1-nonroot
-    digest: sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+    version: 0.19.7-nonroot
     stacks:
       - self-managed
     requirement: required
   - name: nats-server
     type: image
     registry: public-images
-    upstream_repository: docker.io/synadia/nats-server
     version: 2.14.6-alpine3.22
     stacks:
       - self-managed
