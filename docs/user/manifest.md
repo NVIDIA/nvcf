@@ -219,6 +219,59 @@ Secrets without an nkey job. Their legacy `cassandra.initialization.image` and
 `alpine-k8s` for those operations requires chart support rather than a
 configuration-only override.
 
+### Use the upstream Vault injector image
+
+The OpenBao injector can use the upstream HashiCorp image at the same version
+as the NVCF mirror. Merge this opt-in example into
+`deploy/stacks/self-managed/environments/<environment>.yaml`:
+
+```yaml
+openbao:
+  injector:
+    image:
+      registry: docker.io
+      repository: hashicorp/vault-k8s
+      tag: "1.7.4@sha256:e2ef79b457f50d971851df836f78cf41be454644095d84a7411f93ccf3304c15"
+```
+
+The digest identifies the upstream multi-platform index, including Linux
+AMD64 and ARM64. Its platform images match the NVCF mirror. This changes the
+distribution source; it does not remediate vulnerabilities or change the
+stack's default image or inventory. The selected published OpenBao chart
+already supports this image reference, so no chart change is needed.
+
+The injector image declares the `vault` user (UID 100, GID 1000). On standard
+Kubernetes, the chart enforces `runAsNonRoot`, UID 100 and GID 1000, disables
+privilege escalation and drops all capabilities. Keep those settings. OpenShift
+uses its existing platform security policy.
+
+This image runs the admission webhook. It is separate from
+`openbao.injector.agentImage` and `openbao.server.image`, which remain the
+matched NVCF OpenBao images. Do not substitute a Vault or upstream OpenBao
+server image when selecting the injector distribution.
+
+For a private mirror, set `registry` and `repository` together and use a
+verified mirrored `tag@sha256:...`. Omitted or empty fields preserve the
+existing registry/repository defaults and the chart-owned tag. Configure
+`global.imagePullSecrets` if your registry requires authentication.
+
+Apply the environment through your normal Helmfile deployment, then check the
+injector using your explicit Kubernetes context:
+
+```bash
+kubectl --context "$KUBE_CONTEXT" -n vault-system rollout status \
+  deployment/openbao-server-agent-injector
+kubectl --context "$KUBE_CONTEXT" -n vault-system get deployment \
+  openbao-server-agent-injector \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="sidecar-injector")].image}'
+kubectl --context "$KUBE_CONTEXT" -n vault-system exec \
+  deployment/openbao-server-agent-injector -c sidecar-injector -- id
+```
+
+Also verify that an annotated workload receives its OpenBao init/sidecar
+containers, retrieves its expected secret and continues to authenticate and
+renew credentials. Injector readiness alone does not verify secret delivery.
+
 <Info>
 Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.
 
