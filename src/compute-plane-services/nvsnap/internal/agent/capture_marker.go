@@ -10,9 +10,10 @@ package agent
 // does neither, and the pod may read Ready while it serves nothing.
 //
 // So each dump leaves a marker on the node, in the agent's checkpoint
-// directory, until it ends. A marker that outlives the agent's run names a
-// source the agent may have left stopped: the next run deletes its pod, so
-// its controller replaces it. A group capture also recovers through its
+// directory, until it ends; and so does each restore, which changes its
+// placeholder from the CRIU restore until the GPU resume. A marker that
+// outlives the agent's run names a pod the agent may have left stopped or
+// half restored: the next run deletes it, so its controller replaces it. A group capture also recovers through its
 // record (criu_group_recover.go); the marker covers each member's own part
 // and a single pod's capture.
 

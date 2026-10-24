@@ -116,6 +116,17 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2: the placeholder has no restore work volume at %s (admitted before it was added: recreate it): %w", webhook.RestoreWorkMountPath, err)
 	}
 	defer func() { _ = work.Close() }()
+	// From here the restore changes the placeholder; a marker names it until
+	// the restore ends, so the next run of an agent that stops mid-restore
+	// replaces it rather than leave a tree half restored (capture_marker.go).
+	if uid := placeholderInfo.Labels["io.kubernetes.pod.uid"]; uid != "" {
+		clearMarker, merr := a.markCapturing(captureMarker{Namespace: placeholderInfo.Labels["io.kubernetes.pod.namespace"],
+			Pod: placeholderInfo.Labels["io.kubernetes.pod.name"], UID: uid})
+		if merr != nil {
+			return nil, merr
+		}
+		defer clearMarker()
+	}
 
 	// Refuse to restore into a placeholder that never pushed its own pid
 	// allocations clear of the dumped range. CRIU recreates the dumped tree at
@@ -341,7 +352,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
 			}
 		}
-		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+		// Run to its end under its own deadline: cut off by the agent
+		// stopping, it would leave the tree stopped without its GPU memory.
+		if err := gpushareResumeWithGPUsOf(context.WithoutCancel(ctx), resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
