@@ -11,6 +11,10 @@ package agent
 // managed that by restoredServeDeadline. An engine that hangs while it
 // still answers its readiness probe gives up within its own step timeout
 // and exits, which the restored-pod watch fails (restored_watch.go).
+//
+// A verified capture whose restores have failed (recordFailure) is kept
+// until they fail criuGroupMaxRestoreFailures times; a restore of it whose
+// pods serve the same way clears its count.
 
 import (
 	"context"
@@ -36,8 +40,10 @@ const (
 )
 
 // considerVerify verifies the capture a restored pod is being verified
-// from, or fails its restore. Only the first pod the record names acts, so
-// the agents of a group's nodes do not both decide.
+// from, or fails its restore; for a verified capture with failed restores,
+// it clears their count once this restore has served. Only the first pod
+// the record names acts, so the agents of a group's nodes do not both
+// decide.
 func (c *criuAutoRestorer) considerVerify(ctx context.Context, pod *corev1.Pod, ref restoredRef) {
 	key := ref.group
 	if key == "" {
@@ -48,7 +54,11 @@ func (c *criuAutoRestorer) considerVerify(ctx context.Context, pod *corev1.Pod, 
 	}
 	log := c.a.log.WithFields(map[string]interface{}{"pod": pod.Namespace + "/" + pod.Name, "criuGroup": key})
 	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
-	if err != nil || cm.Data["state"] != criuGroupStateVerifying {
+	if err != nil {
+		return
+	}
+	verifying := cm.Data["state"] == criuGroupStateVerifying
+	if !verifying && (cm.Data["state"] != criuGroupStateComplete || cm.Data[groupRestoreFailuresKey] == "") {
 		return
 	}
 	uids := restoredPodUIDs(cm.Data[groupRestoredPodsKey])
@@ -62,6 +72,23 @@ func (c *criuAutoRestorer) considerVerify(ctx context.Context, pod *corev1.Pod, 
 	}
 	served, why := restoreServed(pods.Items, uids, time.Now())
 	switch {
+	case served && !verifying:
+		pinned := cm.Data[groupRestoredPodsKey]
+		if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+			if d["state"] != criuGroupStateComplete || d[groupRestoredPodsKey] != pinned || d[groupRestoreFailuresKey] == "" {
+				return false
+			}
+			delete(d, groupRestoreFailuresKey)
+			delete(d, groupLastRestoreFailureKey)
+			return true
+		}); err != nil {
+			log.WithError(err).Warn("CRIU restore: cannot clear the capture's failed restores; it is tried again on a later event")
+			return
+		}
+		log.Info("CRIU restore: the restored pods served; the capture's earlier failed restores are cleared")
+	case !verifying:
+		// A verified capture is not failed for a slow restore: the
+		// restored-pod watch fails an engine that dies.
 	case served:
 		pinned := cm.Data[groupRestoredPodsKey]
 		if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {

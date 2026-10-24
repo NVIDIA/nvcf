@@ -164,6 +164,33 @@ func TestConsiderVerify_OnlyTheFirstPodActs(t *testing.T) {
 	}
 }
 
+// A verified capture with failed restores: a restore of it that served
+// clears their count.
+func TestConsiderVerify_ServedClearsFailuresOfAVerifiedCapture(t *testing.T) {
+	long := time.Now().Add(-restoredServedFor - time.Minute)
+	c, kc, leader := verifyFixture(t, long, long)
+	setRecord(t, kc, map[string]string{"state": criuGroupStateComplete, groupRestoreFailuresKey: "2", groupLastRestoreFailureKey: "x"})
+	c.considerVerify(context.Background(), leader, restoredRef{container: "engine", group: "k1"})
+	if d := groupRecord(t, kc); d["state"] != criuGroupStateComplete || d[groupRestoreFailuresKey] != "" || d[groupLastRestoreFailureKey] != "" {
+		t.Errorf("record = %v, want the failures cleared", d)
+	}
+}
+
+// A verified capture's restore that has not served (yet, or by the
+// deadline) keeps its count and fails nothing: the restored-pod watch
+// fails an engine that dies.
+func TestConsiderVerify_VerifiedCaptureNotFailedForASlowRestore(t *testing.T) {
+	c, kc, leader := verifyFixture(t, time.Now().Add(-restoredServeDeadline-time.Minute), time.Time{})
+	setRecord(t, kc, map[string]string{"state": criuGroupStateComplete, groupRestoreFailuresKey: "1"})
+	c.considerVerify(context.Background(), leader, restoredRef{container: "engine", group: "k1"})
+	if d := groupRecord(t, kc); d["state"] != criuGroupStateComplete || d[groupRestoreFailuresKey] != "1" {
+		t.Errorf("record = %v, want it unchanged", d)
+	}
+	if got := remainingPods(t, kc); len(got) != 3 {
+		t.Errorf("pods left = %v, want all", got)
+	}
+}
+
 // A complete capture is not judged again.
 func TestConsiderVerify_IgnoresCompleteCapture(t *testing.T) {
 	c, kc, leader := verifyFixture(t, time.Now().Add(-restoredServeDeadline-time.Minute), time.Time{})

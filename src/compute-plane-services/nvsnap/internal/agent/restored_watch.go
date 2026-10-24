@@ -164,13 +164,14 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, re
 	}
 	id := ref.checkpoint
 	log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "checkpoint": id})
-	log.WithError(cause).Error("CRIU restore failed after it ran; blocking the checkpoint and deleting the pod so its replacement starts fresh")
-	if err := c.markFailed(ctx, id, cause); err != nil {
-		log.WithError(err).Error("CRIU restore: could not block the checkpoint")
-	}
-	if key := pod.Annotations[webhook.CRIUGroupAnnotation]; key != "" {
-		// Only a record of this checkpoint is touched (recordFailure).
-		_ = c.updateGroupRecord(ctx, key, func(d map[string]string) bool { return recordFailure(d, id, true, cause) })
+	// Only a record of this checkpoint is touched (recordFailure).
+	if c.failedRestoreBlocks(ctx, pod.Annotations[webhook.CRIUGroupAnnotation], id, cause, log) {
+		log.WithError(cause).Error("CRIU restore failed after it ran; blocking the checkpoint and deleting the pod so its replacement starts fresh")
+		if err := c.markFailed(ctx, id, cause); err != nil {
+			log.WithError(err).Error("CRIU restore: could not block the checkpoint")
+		}
+	} else {
+		log.WithError(cause).Error("CRIU restore failed after it ran; its capture was verified, so it is kept and the replacement restores from it again")
 	}
 	c.dropRestoreRecord(pod.UID)
 	if err := c.a.kubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {

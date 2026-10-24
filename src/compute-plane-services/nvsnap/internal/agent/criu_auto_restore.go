@@ -264,15 +264,17 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid type
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
 	}
-	if errors.Is(err, errCheckpointUnavailable) {
+	switch {
+	case errors.Is(err, errCheckpointUnavailable):
 		log.WithError(err).Warn("CRIU auto-restore did not run; deleting the pod so its replacement tries again")
 		record(func(d map[string]string) bool { return recordFailure(d, id, false, err) })
-	} else {
+	case c.failedRestoreBlocks(context.WithoutCancel(ctx), groupKey, id, err, log):
 		log.WithError(err).Error("CRIU auto-restore failed; blocking the checkpoint and deleting the pod so its replacement starts fresh")
 		if merr := c.markFailed(context.WithoutCancel(ctx), id, err); merr != nil {
 			log.WithError(merr).Error("CRIU auto-restore: could not record the failed checkpoint; its next pods will try it again")
 		}
-		record(func(d map[string]string) bool { return recordFailure(d, id, true, err) })
+	default:
+		log.WithError(err).Error("CRIU auto-restore failed; its capture was verified, so it is kept and the replacement restores from it again")
 	}
 	if derr := a.kubeClient.CoreV1().Pods(ns).Delete(context.WithoutCancel(ctx), pod, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 		log.WithError(derr).Error("CRIU auto-restore: could not delete the failed pod")

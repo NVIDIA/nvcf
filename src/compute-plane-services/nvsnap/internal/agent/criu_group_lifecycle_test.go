@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,9 +129,28 @@ func TestFailGroup_StallKeepsCheckpointsAndDeletesEveryRank(t *testing.T) {
 	}
 }
 
+// setRecord sets fields of group record k1.
+func setRecord(t *testing.T, kc *fake.Clientset, fields map[string]string) {
+	t.Helper()
+	ctx := context.Background()
+	cm, err := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		cm.Data[k] = v
+	}
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A verified capture at its last allowed failure: the failed restore
+// blocks it and lets the configuration be captured again.
 func TestFailGroup_RestoreFailureBlocksAndAllowsRecapture(t *testing.T) {
 	c, kc, leader := groupFixture(t)
 	ctx := context.Background()
+	setRecord(t, kc, map[string]string{groupRestoreFailuresKey: strconv.Itoa(criuGroupMaxRestoreFailures - 1)})
 	c.failGroup(ctx, leader, "k1", true, errors.New("criu restore: exit status 1"), logrus.NewEntry(logrus.New()))
 	if !c.Blocked(ctx, "c0") || !c.Blocked(ctx, "c1") {
 		t.Error("a failed restore must block every checkpoint of the group")
@@ -138,7 +159,7 @@ func TestFailGroup_RestoreFailureBlocksAndAllowsRecapture(t *testing.T) {
 		t.Errorf("pods left = %v, want only the other instance", got)
 	}
 	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
-	if cm.Data["state"] != criuGroupStateRestoreFailed || !criuGroupRecaptures(cm.Data, time.Now()) {
+	if cm.Data["state"] != criuGroupStateRestoreFailed || !criuGroupRecaptures(cm.Data, time.Now()) || cm.Data[groupRestoreFailuresKey] != "" {
 		t.Errorf("record = %v, want a restore-failed record that may be captured again", cm.Data)
 	}
 	// The next Ready instance takes the record over, once.
@@ -149,6 +170,65 @@ func TestFailGroup_RestoreFailureBlocksAndAllowsRecapture(t *testing.T) {
 	}
 	if again, err := c.claimGroupRecord(ctx, "k1", &p, 2); err != nil || again != nil {
 		t.Errorf("a second claim while capturing = %v, %v; want none", again, err)
+	}
+}
+
+// A verified capture whose restore fails, with failures to spare: its
+// checkpoints are not blocked and it stays usable, the failure is counted,
+// and the instance's pods are replaced so they restore from it again.
+func TestFailGroup_VerifiedCaptureSurvivesAFailedRestore(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	c.failGroup(ctx, leader, "k1", true, errors.New("gpushare open: no reply"), logrus.NewEntry(logrus.New()))
+	if c.Blocked(ctx, "c0") || c.Blocked(ctx, "c1") {
+		t.Error("one failed restore blocked a verified capture")
+	}
+	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if cm.Data["state"] != criuGroupStateComplete || cm.Data[groupRestoreFailuresKey] != "1" ||
+		!strings.Contains(cm.Data[groupLastRestoreFailureKey], "no reply") || criuGroupRecaptures(cm.Data, time.Now()) {
+		t.Errorf("record = %v, want it complete with one failure counted", cm.Data)
+	}
+	if got := remainingPods(t, kc); len(got) != 1 || got[0] != "other-0" {
+		t.Errorf("pods left = %v, want only the other instance", got)
+	}
+}
+
+// A capture still being verified has never served: its first failed
+// restore ends it.
+func TestFailGroup_CaptureBeingVerifiedFailsAtOnce(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	setRecord(t, kc, map[string]string{"state": criuGroupStateVerifying, "sourceNamespace": "fn"})
+	c.failGroup(ctx, leader, "k1", true, errors.New("criu restore: exit status 1"), logrus.NewEntry(logrus.New()))
+	if !c.Blocked(ctx, "c0") || !c.Blocked(ctx, "c1") {
+		t.Error("a failed restore of a capture being verified must block it")
+	}
+	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if cm.Data["state"] != criuGroupStateRestoreFailed {
+		t.Errorf("record = %v, want restore-failed", cm.Data)
+	}
+}
+
+func TestRecordFailure_CountsFailuresOfAVerifiedCapture(t *testing.T) {
+	d := map[string]string{"state": "complete", "checkpoint.0": "c0"}
+	cause := errors.New("boom")
+	for i := 1; i < criuGroupMaxRestoreFailures; i++ {
+		if !recordFailure(d, "c0", true, cause) || d["state"] != "complete" || d[groupRestoreFailuresKey] != strconv.Itoa(i) {
+			t.Fatalf("failure %d: record %v", i, d)
+		}
+	}
+	if !recordFailure(d, "c0", true, cause) || d["state"] != criuGroupStateRestoreFailed || d[groupRestoreFailuresKey] != "" {
+		t.Errorf("failure %d: record %v, want restore-failed", criuGroupMaxRestoreFailures, d)
+	}
+	// A restore that did not run counts a stall, not a failure.
+	d = map[string]string{"state": "complete", "checkpoint.0": "c0"}
+	if !recordFailure(d, "c0", false, cause) || d[groupRestoreFailuresKey] != "" || d["stalls"] != "1" {
+		t.Errorf("stall: record %v", d)
+	}
+	// Another capture's record is not touched.
+	d = map[string]string{"state": "complete", "checkpoint.0": "n0"}
+	if recordFailure(d, "c0", true, cause) || d[groupRestoreFailuresKey] != "" {
+		t.Errorf("another capture: record %v", d)
 	}
 }
 
@@ -324,6 +404,7 @@ func TestRecoverInterruptedCaptures(t *testing.T) {
 func TestFailGroup_BlocksBeforeDeleting(t *testing.T) {
 	c, kc, leader := groupFixture(t)
 	ctx := context.Background()
+	setRecord(t, kc, map[string]string{groupRestoreFailuresKey: strconv.Itoa(criuGroupMaxRestoreFailures - 1)})
 	var deletedUnblocked []string
 	kc.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		name := action.(k8stesting.DeleteAction).GetName()
