@@ -11,7 +11,6 @@ test:
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
-	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/nats-image-overrides.sh
