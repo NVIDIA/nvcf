@@ -97,6 +97,7 @@ sync_wrapper = { version = "1", features = ["futures"] }
 thiserror = "2"
 tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 tokio-stream = "0.1"
 tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
 tonic-health = "0.14"
