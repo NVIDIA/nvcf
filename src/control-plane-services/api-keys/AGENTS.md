@@ -64,6 +64,12 @@ legacy routing in these two classes instead of the DAOs or controllers.
 maps every model column to a same-named value-object field, so a new column on
 an encrypted model also needs that field on its `@ValueObject`.
 
+`KeyManagementFacade` holds the operations behind the key-owner, account-admin
+and platform-admin endpoints under `/v2/api-keys/<actor>`. Controllers only map
+`KeyManagementRoutes` paths to facade calls with a `KeyManagementActor`. The
+actor selects the route dimensions it must supply and whether a suspended owner
+is denied. The NCA, issuer service and user always come from the route.
+
 Integration tests bind each `.cql` file in `local_env/docker-compose.test.yml`
 because Bazel runfiles are symlinks. Local Compose mounts the whole schema
 directory.
