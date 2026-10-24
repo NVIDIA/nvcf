@@ -160,8 +160,8 @@ openbao:
 
   injector:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+      registry: {{ dig "openbao" "injector" "image" "registry" "" .Values | default .Values.global.image.registry | quote }}
+      repository: {{ dig "openbao" "injector" "image" "repository" "" .Values | default (printf "%s/oss-vault-k8s" .Values.global.image.repository) | quote }}
       {{- with dig "openbao" "injector" "image" "tag" "" .Values }}
       tag: {{ . | quote }}
       {{- end }}
