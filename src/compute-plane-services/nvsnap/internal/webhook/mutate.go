@@ -576,6 +576,13 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			Info("nvsnap.io/inject=false; admitting pod unchanged")
 		return nil, nil
 	}
+	// No placement for a pod that mounts a volume only the webhook adds
+	// (tools_mount.go): the API then refuses its undeclared mount.
+	if why := undeclaredReservedMount(pod); why != "" {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("reason", why).
+			Warn("the pod mounts an nvsnap volume it does not declare; admitting it unchanged")
+		return nil, nil
+	}
 
 	ctx, span := tracing.Tracer().Start(ctx, "webhook.mutate")
 	defer span.End()

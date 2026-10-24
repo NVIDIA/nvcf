@@ -123,3 +123,49 @@ func mountAtPath(pod *corev1.Pod, path string) bool {
 	}
 	return false
 }
+
+// reservedVolumes are the volumes the webhook adds. A container's mount of
+// one is valid only once the webhook has added it, so a pod that mounts
+// one it does not declare would have its mount resolved to the node's
+// directory the webhook places (the bundle, the checkpoints, the GPU
+// stores) on the pod's own terms: writable, or under a path of its choice.
+var reservedVolumes = map[string]bool{
+	bundleToolsVolume: true, cacheDirVolumeName: true, cacheRWVolumeName: true, cacheSeedVolumeName: true,
+	capturedVolumeName: true, criuCheckpointsVolume: true, gpushareLibVolume: true, gpushareStoreVolume: true,
+	modelVolumeName: true, nvsnapToolsVolumeName: true, restoreWorkVolume: true, scratchVolumeName: true,
+	helperVolumeName: true,
+}
+
+// undeclaredReservedMount names a container's mount of a reserved volume
+// the pod does not declare itself, "" when there is none.
+func undeclaredReservedMount(pod *corev1.Pod) string {
+	declared := map[string]bool{}
+	for i := range pod.Spec.Volumes {
+		declared[pod.Spec.Volumes[i].Name] = true
+	}
+	check := func(kind, name string, mounts []corev1.VolumeMount) string {
+		for i := range mounts {
+			if v := mounts[i].Name; reservedVolumes[v] && !declared[v] {
+				return kind + " " + name + " mounts volume " + v + ", which only the webhook adds"
+			}
+		}
+		return ""
+	}
+	for i := range pod.Spec.InitContainers {
+		if why := check("init container", pod.Spec.InitContainers[i].Name, pod.Spec.InitContainers[i].VolumeMounts); why != "" {
+			return why
+		}
+	}
+	for i := range pod.Spec.Containers {
+		if why := check("container", pod.Spec.Containers[i].Name, pod.Spec.Containers[i].VolumeMounts); why != "" {
+			return why
+		}
+	}
+	for i := range pod.Spec.EphemeralContainers {
+		c := &pod.Spec.EphemeralContainers[i]
+		if why := check("ephemeral container", c.Name, c.VolumeMounts); why != "" {
+			return why
+		}
+	}
+	return ""
+}
