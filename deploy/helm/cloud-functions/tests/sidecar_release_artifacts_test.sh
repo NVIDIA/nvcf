@@ -26,7 +26,7 @@ cleanup() {
 trap cleanup EXIT
 
 hostname="nvcr.io"
-repository="0651155215864979/ncp-dev"
+repository="example-org/example-team"
 
 manifest="${tmp_dir}/manifest.yaml"
 manifest_without_sidecar_env="${tmp_dir}/manifest-without-sidecar-env.yaml"
@@ -44,16 +44,24 @@ helm template nvcf-api "${chart_dir}" \
 # Every sidecar entry carrying the ${nvcf.sidecars.*} placeholder must surface a
 # concrete, placeholder-free release-artifact-*-image annotation resolved from
 # NVCF_SIDECARS_HOSTNAME / NVCF_SIDECARS_REPOSITORY.
-expected_annotations=(
-  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.2.1\""
-  "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.2.3\""
-  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.110.0\""
-  "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.4.1\""
-  "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.1.2\""
-  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.15.1\""
+sidecar_paths=(
+  'init-container-image|."init-container"'
+  'utils-container-image-go-image|."utils-container-image".go'
+  'niclls-container-image|."niclls-container"'
+  'ess-agent-container-image|."ess-agent-container"'
+  'llm-credential-manager-image|."llm-credential-manager-image"'
+  'llm-router-client-image|."llm-router-client-image"'
 )
 
-for annotation in "${expected_annotations[@]}"; do
+# Read expected image versions from chart values, keeping annotation names fixed
+# so unrelated image pin changes do not weaken the reference-resolution check.
+for sidecar_path in "${sidecar_paths[@]}"; do
+  name="${sidecar_path%%|*}"
+  expression="${sidecar_path#*|}"
+  value="$(yq -r ".api.remoteConfig.configData.nvcf.sidecars${expression}" "${chart_dir}/values.yaml")"
+  resolved="${value//\$\{nvcf.sidecars.hostname\}/${hostname}}"
+  resolved="${resolved//\$\{nvcf.sidecars.repository\}/${repository}}"
+  annotation="release-artifact-${name}: \"${resolved}\""
   if ! grep -Fq "${annotation}" "${manifest}"; then
     echo "expected rendered remote-config ConfigMap to include annotation: ${annotation}" >&2
     exit 1
