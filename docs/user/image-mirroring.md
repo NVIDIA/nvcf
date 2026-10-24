@@ -122,7 +122,7 @@ skopeo copy --all --preserve-digests \
   "docker://docker.io/natsio/nats-box@${NATS_BOX_DIGEST}" \
   "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}"
 skopeo inspect --raw "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}" > nats-box-index.json
-sha256sum nats-box-index.json
+skopeo manifest-digest nats-box-index.json
 ```
 
 The result must match `NATS_BOX_DIGEST`. The index must retain `linux/amd64`
@@ -145,7 +145,7 @@ skopeo copy --all \
   "docker://docker.io/natsio/nats-box@${NATS_BOX_DIGEST}" \
   "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}"
 skopeo inspect --raw "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}" > nats-box-mirror-index.json
-MIRROR_DIGEST="sha256:$(sha256sum nats-box-mirror-index.json | cut -d ' ' -f 1)"
+MIRROR_DIGEST="$(skopeo manifest-digest nats-box-mirror-index.json)"
 jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] |
   index("amd64") != null and index("arm64") != null' nats-box-mirror-index.json
 printf '%s@%s\n' "$NATS_BOX_VERSION" "$MIRROR_DIGEST"
