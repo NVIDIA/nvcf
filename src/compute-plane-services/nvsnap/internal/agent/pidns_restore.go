@@ -82,11 +82,19 @@ func bindPlaceholderListeners(ctx context.Context, hostPID int, listeners []Unix
 	}
 	ours, theirs := os.NewFile(uintptr(pair[0]), "listeners"), os.NewFile(uintptr(pair[1]), "listeners")
 	defer func() { _ = ours.Close() }()
+	// The socket pair's end is the child's descriptor 3, the mount
+	// namespace 4.
+	nsArgs, nsFiles, err := nsenterByFD(hostProcBase(), hostPID, []string{"mnt"}, false, 4)
+	if err != nil {
+		_ = theirs.Close()
+		return nil, fmt.Errorf("enter the placeholder's mount namespace: %w", err)
+	}
+	defer closeFiles(nsFiles)
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "nsenter", "-t", strconv.Itoa(hostPID), "-m", "--", //nolint:gosec // the node bundle's agent binary, verified mounted read-only
-		tools.path(pidNSRestoreHelperName), "bind-unix-listeners")
-	cmd.ExtraFiles = []*os.File{theirs}
+	cmd := exec.CommandContext(cctx, "nsenter", append(nsArgs, "--", //nolint:gosec // the node bundle's agent binary, verified mounted read-only
+		tools.path(pidNSRestoreHelperName), "bind-unix-listeners")...)
+	cmd.ExtraFiles = append([]*os.File{theirs}, nsFiles...)
 	cmd.Env = []string{PIDNSUnixListenersEnv + "=" + encodeUnixListeners(listeners)}
 	out, err := cmd.CombinedOutput()
 	_ = theirs.Close()
