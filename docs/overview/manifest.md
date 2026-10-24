@@ -185,6 +185,46 @@ output; `failed` or an authorization error is a failure even if `rtt` exits
 successfully. Check the reloader logs after a configuration update to confirm
 it reloads successfully.
 
+### Use upstream cert-manager images
+
+Merge these overrides into the Helmfile environment file
+`deploy/stacks/self-managed/environments/<environment>.yaml` to use upstream
+cert-manager images.
+For a private mirror, replace each full `repository`, which takes precedence
+over `global.image`.
+
+```yaml
+certManager:
+  image:
+    repository: "quay.io/jetstack/cert-manager-controller"
+    tag: "v1.20.2"
+    digest: "sha256:fe0623d7d04a382c888f03343a3a2da716e0d96ad3d5d790c0ebcbcb2a4329a5"
+  webhook:
+    image:
+      repository: "quay.io/jetstack/cert-manager-webhook"
+      tag: "v1.20.2"
+      digest: "sha256:baf651128b9f05c426cbd5e60e2036bf382c99ca270f49d0757d6f7d2452f4e5"
+  cainjector:
+    image:
+      repository: "quay.io/jetstack/cert-manager-cainjector"
+      tag: "v1.20.2"
+      digest: "sha256:6f5a644135887b2aa7d5cc145072fa56421560e3586ff1f184358022d490f4e1"
+  startupapicheck:
+    image:
+      repository: "quay.io/jetstack/cert-manager-startupapicheck"
+      tag: "v1.20.2"
+      digest: "sha256:4e2a69b4a0cc9627905bbeecf720f95d5153ca39cacdab923d2748e73556792b"
+  acmesolver:
+    image:
+      repository: "quay.io/jetstack/cert-manager-acmesolver"
+      tag: "v1.20.2"
+      digest: "sha256:cfa55e9c3dcfc6a3cba97575748c1549b04a30fd14d88a2fcb9e2dddef415e2f"
+```
+
+For authenticated mirrors, set `global.imagePullSecrets` for chart pods and
+separate pull credentials in the ACME Issuer's HTTP-01 solver
+[pod template](https://cert-manager.io/docs/configuration/acme/http01/#podtemplate).
+
 ### Override the Cassandra images
 
 The Cassandra server and its dynamic seed discovery container take the same
