@@ -1,4 +1,4 @@
-ARG GO_IMAGE=golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+ARG GO_IMAGE=golang:1.27.3-alpine3.23@sha256:754d5200fc3edae76d3b6598a9a3fac7e74981ee6a5413ab955025f185753ef2
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS migrate-builder
 
@@ -23,7 +23,7 @@ RUN apk add --no-cache curl unzip && \
 
 FROM --platform=$BUILDPLATFORM alpine:3.23 AS java-library-downloader
 
-# Cassandra can lag security-only Jackson releases. Fetch one coherent,
+# Cassandra can lag security-only Java library releases. Fetch one coherent,
 # checksum-pinned replacement set without adding build tools to the final
 # image. Release builds can route the same paths through a caching repository.
 ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
@@ -40,7 +40,7 @@ RUN apk add --no-cache curl && \
       printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c -; \
     done < /tmp/java-libraries.lock
 
-FROM cassandra:5.0.9
+FROM cassandra:5.0.9@sha256:3ea9333712c5692f3fe91d6c4dcc262df9e36338c4fdd1bc00a5e53f1137a1a0
 
 ARG GIT_SHA
 
@@ -50,6 +50,10 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates gettext-base && \
     dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge 5.40.1-6+deb13u1 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge 10.46-1~deb13u2 && \
+    for package in python3.13 python3.13-minimal libpython3.13-minimal libpython3.13-stdlib; do \
+      dpkg --compare-versions "$(dpkg-query -W -f='${Version}' "$package")" ge 3.13.5-2+deb13u5 || exit 1; \
+    done && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     rm -f \
@@ -57,6 +61,8 @@ RUN apt-get update && \
       /opt/cassandra/lib/jackson-core-*.jar \
       /opt/cassandra/lib/jackson-databind-*.jar \
       /opt/cassandra/lib/jackson-datatype-jsr310-*.jar \
+      /opt/cassandra/lib/logback-core-*.jar \
+      /opt/cassandra/lib/logback-classic-*.jar \
       /opt/cassandra/lib/lz4-java-*.jar \
       /opt/cassandra/lib/netty-*-4.1.130.Final*.jar
 
