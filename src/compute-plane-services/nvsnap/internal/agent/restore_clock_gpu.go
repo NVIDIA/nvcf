@@ -26,7 +26,6 @@ package agent
 // overrun counted.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,7 +35,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -46,8 +44,9 @@ const (
 	// restore with a GPU reload took on this node, from CRIU's start to the
 	// GPU resume, in milliseconds.
 	restoreSpanFile = "restore-span-ms"
-	// timensResumePIDsFile is CRIU's list of the tasks that ran at the
-	// dump, which the agent resumes (--timens-no-wait).
+	// timensResumePIDsFile is CRIU's list, in its work directory, of the
+	// tasks that ran at the dump, which the agent resumes
+	// (--timens-no-wait).
 	timensResumePIDsFile = "timens-resume-pids"
 	// restoreGPULoadRate is a conservative rate for a node's GPU memory
 	// reload: a Kimi-K3 rank's node loaded 4 x 200 GiB in 36 s, 22 GiB/s.
@@ -153,13 +152,10 @@ func parseTimensMonotonic(b []byte) (int64, error) {
 	return m.Sec*int64(time.Second) + m.Nsec, nil
 }
 
-// readTimensResumePIDs reads CRIU's list of the tasks to resume, pids in
-// the pid namespace CRIU restored them in.
-func readTimensResumePIDs(dir string) ([]int, error) {
-	b, err := os.ReadFile(filepath.Join(dir, timensResumePIDsFile))
-	if err != nil {
-		return nil, err
-	}
+// parseTimensResumePIDs reads CRIU's list of the tasks to resume (the
+// work directory's timensResumePIDsFile), pids in the pid namespace CRIU
+// restored them in.
+func parseTimensResumePIDs(b []byte) ([]int, error) {
 	var pids []int
 	for _, f := range strings.Fields(string(b)) {
 		n, err := strconv.Atoi(f)
@@ -218,30 +214,6 @@ func continueRestoredTasks(procBase string, nsRef int, pids, skip []int) (int, e
 		return n, fmt.Errorf("restored tasks %s not found to resume", strings.Join(missing, ","))
 	}
 	return n, nil
-}
-
-var (
-	bundledClockAtOnce sync.Once
-	bundledClockAt     bool
-)
-
-// restoreClockThroughGPU reports whether a restore that reloads GPU memory
-// keeps the reload out of the restored clocks: the bundled CRIU has
-// --timens-no-wait and the bundled nvsnap-gpu-suspend has --clock-at.
-// Without either, CRIU's own budget applies (restore_clock.go).
-func restoreClockThroughGPU() bool {
-	bundledClockAtOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		criuHelp, _ := exec.CommandContext(ctx, v2BinDirInContainer+"/criu", "--help").CombinedOutput()
-		// The tool prints its usage, with its options, when given no action.
-		var toolHelp bytes.Buffer
-		cmd := exec.CommandContext(ctx, v2BinDirInContainer+"/"+gpushareToolName) //nolint:gosec // fixed bundled binary
-		cmd.Stdout, cmd.Stderr = &toolHelp, &toolHelp
-		_ = cmd.Run()
-		bundledClockAt = clockThroughGPUSupported(string(criuHelp), toolHelp.String())
-	})
-	return bundledClockAt
 }
 
 func clockThroughGPUSupported(criuHelp, toolUsage string) bool {

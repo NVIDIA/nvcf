@@ -22,12 +22,10 @@ package agent
 import (
 	"bufio"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -130,21 +128,6 @@ func recordRestoreClock(dir string) (time.Duration, bool) {
 		return d, false
 	}
 	return d, true
-}
-
-var (
-	bundledTimensBudgetOnce sync.Once
-	bundledTimensBudget     bool
-)
-
-// bundledSupportsTimensBudget reports whether the bundled CRIU has
-// --timens-budget.
-func bundledSupportsTimensBudget() bool {
-	bundledTimensBudgetOnce.Do(func() {
-		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
-		bundledTimensBudget = criuSupportsTimensBudget(string(out))
-	})
-	return bundledTimensBudget
 }
 
 func criuSupportsTimensBudget(help string) bool {

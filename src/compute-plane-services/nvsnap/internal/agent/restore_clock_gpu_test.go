@@ -90,22 +90,14 @@ func TestParseTimensMonotonic(t *testing.T) {
 	}
 }
 
-func TestReadTimensResumePIDs(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := readTimensResumePIDs(dir); err == nil {
-		t.Error("no list read as one")
-	}
-	if err := os.WriteFile(filepath.Join(dir, timensResumePIDsFile), []byte("1\n609\n7\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := readTimensResumePIDs(dir); err != nil || len(got) != 3 || got[1] != 609 {
+func TestParseTimensResumePIDs(t *testing.T) {
+	if got, err := parseTimensResumePIDs([]byte("1\n609\n7\n")); err != nil || len(got) != 3 || got[1] != 609 {
 		t.Errorf("pids = %v, %v", got, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, timensResumePIDsFile), []byte("1\nx\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readTimensResumePIDs(dir); err == nil {
-		t.Error("a bad pid accepted")
+	for _, bad := range []string{"1\nx\n", "0\n", "-3\n"} {
+		if _, err := parseTimensResumePIDs([]byte(bad)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }
 

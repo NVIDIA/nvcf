@@ -543,3 +543,25 @@ func aliasGroup(t *testing.T, kc *fake.Clientset, uri, ns, key string) {
 		t.Fatal(err)
 	}
 }
+
+// A failure is recorded only on a group record the pod may act under: a
+// pod naming another tenant's record and checkpoint adds nothing to it.
+func TestFailGroup_RecordsOnlyOnItsOwnRecord(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	foreign := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName("k2"), Namespace: "nvsnap-system"},
+		Data: map[string]string{"state": "complete", "size": "1", "captures": "1", "checkpoint.0": "x9"}}
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(ctx, foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	leader.Annotations[webhook.CRIURestoreAnnotation] = "x9"
+	leader.Annotations[webhook.CRIUGroupAnnotation] = "k2"
+	c.failGroup(ctx, leader, "k2", false, errors.New("placeholders not running"), logrus.NewEntry(logrus.New()))
+	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k2"), metav1.GetOptions{})
+	if cm.Data["stalls"] != "" || cm.Data["state"] != "complete" {
+		t.Errorf("another tenant's record changed: %v", cm.Data)
+	}
+	if c.Blocked(ctx, "x9") {
+		t.Error("another tenant's checkpoint blocked")
+	}
+}

@@ -10,6 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 
 - [Problem](#problem)
 - [Design](#design)
+- [Tools run from the mounted bundle](#tools-run-from-the-mounted-bundle)
 - [Not covered](#not-covered)
 <!-- /toc -->
 
@@ -49,6 +50,40 @@ deleted:
 6. **Unused versions are removed.** The checkpoint reaper deletes a version
    that is not current, not mounted by any pod on the node, not recorded by
    any checkpoint on the node, and older than an hour.
+
+## Tools run from the mounted bundle
+
+A capture or restore runs tools as root inside a workload's mount namespace:
+CRIU, `nvsnap-gpu-suspend`, `tar`, `mkdir`, and the agent binary for a
+pid-namespace restore. They used to be copied into the workload's filesystem
+at `/criu-bundle` before each run. The workload can write that filesystem, so
+it could change what root then ran.
+
+Now nothing is copied:
+
+1. **The webhook mounts the bundle read-only at `/criu-bundle`**: the version
+   the pod mounts at `/nvsnap`, under its own volume (`nvsnap-criu-bundle`).
+   It goes into a GPU pod's GPU containers with the gpushare placement, into
+   every container of a companion a capture may dump (`CaptureCandidate`), and
+   into a restore placeholder at the version its checkpoint recorded. The
+   bundle's binaries load their libraries from `/criu-bundle/lib`, so they run
+   unchanged from the mount.
+2. **The agent checks the mount before it runs a tool there**
+   (`internal/agent/bundle_tools.go`): `/criu-bundle` is a mount, read-only,
+   whose directory is one of the node's staged versions (by device and inode),
+   in a workload without `CAP_SYS_ADMIN`, which could otherwise change its
+   mounts. Otherwise the capture or restore is refused; the capture preflight
+   reports it before a capture is claimed.
+3. **Features come from the mounted version.** What the agent asks of CRIU
+   and the GPU tool (direct image I/O, block compression, address migration,
+   the clock budget) is read from that version's own `--help`, once per
+   version. The GPU tool a capture runs is the one built with the library in
+   the processes it drives.
+4. **No fallback** to a tool from the workload image.
+
+A pod admitted before this has no tools mount and is not captured until it is
+recreated. A pod that mounts something at `/criu-bundle` itself, or declares
+the volume, is left without it and is not captured or restored.
 
 ## Not covered
 

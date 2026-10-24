@@ -13,7 +13,7 @@ package agent
 // Spec checks read the pod (probes, sidecars, the pid namespace); host
 // checks run on the member's node and read its container's processes
 // (deleted files the dump must save, RDMA devices it cannot, the memory it
-// dumps). A finding that
+// dumps, the node bundle its tools run from). A finding that
 // blocks skips the capture before it is claimed; the others are logged.
 // GET /v1/capture-preflight/{namespace}/{pod} reports on the instance whose
 // rank 0 is pod, on demand.
@@ -147,7 +147,13 @@ func (a *Agent) hostPreflight(ctx context.Context, ns, pod, container string) ([
 	if err != nil {
 		return nil, err
 	}
-	return processFindings(procBase, pids, pod, container, a.ghostLimit()), nil
+	fs := processFindings(procBase, pids, pod, container, a.ghostLimit())
+	// The capture runs its tools from the node bundle mounted in the
+	// container, and only there (bundle_tools.go).
+	if _, err := bundleToolsOf(procBase, int(info.PID), a.bundleVersionsDir()); err != nil {
+		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "bundle", Detail: err.Error()})
+	}
+	return fs, nil
 }
 
 // processFindings is the host checks of a container's processes pids.

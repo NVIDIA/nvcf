@@ -238,6 +238,17 @@ func (c *criuAutoRestorer) groupKeyRefusal(ctx context.Context, pod *corev1.Pod,
 	return "the group record is not its configuration's in its tenant scope", nil
 }
 
+// groupRecordRefusal returns why pod may not act under group record key,
+// "" when it may, or errRestoreUnverified: a pod with a configuration
+// through groupKeyRefusal, a member without one (a companion) through
+// memberRefusal on the checkpoint it restores.
+func (c *criuAutoRestorer) groupRecordRefusal(ctx context.Context, pod *corev1.Pod, key string) (string, error) {
+	if pod.Annotations[cacheURIAnnotation] != "" {
+		return c.groupKeyRefusal(ctx, pod, key)
+	}
+	return c.memberRefusal(ctx, key, pod.Annotations[webhook.CRIURestoreAnnotation])
+}
+
 // memberRefusal returns why a pod without a configuration may not restore
 // checkpoint id as a member of group record key, "" when it may, or
 // errRestoreUnverified: the record must list id among the checkpoints of

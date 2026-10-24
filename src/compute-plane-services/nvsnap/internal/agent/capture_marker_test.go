@@ -1,0 +1,81 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+)
+
+const (
+	markerUID      = "0f3c2a9e-7d41-4b8e-9a1f-2c5d6e7f8a90"
+	otherMarkerUID = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+)
+
+// A marker lives exactly as long as its dump.
+func TestMarkCapturing(t *testing.T) {
+	a := &Agent{config: Config{CheckpointDir: t.TempDir()}}
+	clearMarker, err := a.markCapturing(captureMarker{Namespace: "ns", Pod: "w-0", UID: markerUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(a.captureMarkerDir(), markerUID+".json")
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("no marker during the dump: %v", err)
+	}
+	clearMarker()
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Errorf("marker left after the dump: %v", err)
+	}
+	if _, err := a.markCapturing(captureMarker{Namespace: "ns", Pod: "w-0", UID: "../x"}); err == nil {
+		t.Error("a uid that is not one names a file")
+	}
+}
+
+// At start, the pod of each surviving marker is deleted, bound to its
+// uid; a pod gone or replaced is left alone; every handled marker goes.
+func TestRecoverInterruptedSources(t *testing.T) {
+	a := &Agent{config: Config{CheckpointDir: t.TempDir()}}
+	log := logrus.NewEntry(logrus.New())
+	for _, m := range []captureMarker{
+		{Namespace: "ns", Pod: "stopped", UID: markerUID},
+		{Namespace: "ns", Pod: "gone", UID: otherMarkerUID},
+	} {
+		if _, err := a.markCapturing(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(a.captureMarkerDir(), "junk.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs := fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "stopped", UID: types.UID(markerUID)}})
+	var preconditions []string
+	cs.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		d := action.(k8stesting.DeleteActionImpl)
+		if p := d.GetDeleteOptions().Preconditions; p != nil && p.UID != nil {
+			preconditions = append(preconditions, d.GetName()+"="+string(*p.UID))
+		}
+		return false, nil, nil
+	})
+	a.kubeClient = cs
+	a.recoverInterruptedSources(t.Context(), log)
+	if _, err := cs.CoreV1().Pods("ns").Get(t.Context(), "stopped", metav1.GetOptions{}); err == nil {
+		t.Error("the stopped source's pod was not deleted")
+	}
+	if len(preconditions) != 2 || preconditions[0] == preconditions[1] {
+		t.Errorf("deletes not bound to the pods' uids: %v", preconditions)
+	}
+	if ents, _ := os.ReadDir(a.captureMarkerDir()); len(ents) != 0 {
+		t.Errorf("markers left: %v", ents)
+	}
+}

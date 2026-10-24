@@ -28,7 +28,12 @@ func TestOwnGPUShareStore(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(store, "fabric"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := ownGPUShareStore(proc, 42, root, GPUShareStoreInContainer+"/fabric"); err != nil {
+	parent, err := openConfinedDir(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.Close() }()
+	if err := ownGPUShareStore(proc, 42, root, &fabricSessionDir{parent: parent, name: "fabric"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range []string{store, filepath.Join(store, "fabric")} {

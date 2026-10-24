@@ -479,7 +479,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
 		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)
-		if stopped || strings.Contains(err.Error(), errSourceLeftSuspended.Error()) {
+		if stopped || sourceMustBeReplacedText(err.Error()) {
 			// The instance was stopped for the capture: rather than resume
 			// a stopped instance, its controllers replace every pod of it,
 			// cold.
@@ -1062,15 +1062,29 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 		}
 		ids[id] = true
 	}
+	// The record and the checkpoint are named by the pod's annotations:
+	// record the failure only for a pod that may act under that record and
+	// restore that checkpoint (restore_trust.go), or a pod could add
+	// failures to another tenant's capture and have its restores start cold.
+	why, rerr := c.groupRecordRefusal(ctx, leader, key)
+	mayRecord := rerr == nil && why == "" && ids[leaderID]
+	if !mayRecord {
+		log.WithError(rerr).WithField("reason", why).Warn("CRIU group restore: not recording the failure on a group record the pod may not act under")
+	}
 	switch {
 	case !restoreFailed:
 		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
+		if !mayRecord {
+			break
+		}
 		if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
 			return recordFailure(d, leaderID, false, cause)
 		}); err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).Warn("CRIU group restore: cannot update the group record")
 		}
-	case c.failedRestoreBlocks(ctx, key, leaderID, cause, log):
+	case !mayRecord || c.failedRestoreBlocks(ctx, key, leaderID, cause, log):
+		// Without a record it may act under, a failed restore blocks the
+		// pods' own checkpoints, as when the record cannot be read.
 		log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")
 		for id := range ids {
 			if id == "" {

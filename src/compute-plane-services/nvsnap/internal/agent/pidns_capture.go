@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -36,6 +35,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // pidNSMarkerFile, in the checkpoint directory, marks a checkpoint that
@@ -466,10 +467,11 @@ const pidNSExtNetKey = "extNetNs"
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
 // namespace on PIDNSNetFD).
-func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap string) []string {
+func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap, pluginDir string) []string {
 	args := []string{
 		"restore",
 		"-D", imgsInContainer,
+		"-W", webhook.RestoreWorkMountPath,
 		"-o", "restore.log", "-v4",
 		"--root", "/",
 		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
@@ -482,7 +484,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		"--join-ns", "ipc:/proc/1/ns/ipc",
 	}
 	if !gpushare {
-		args = append(args, "--libdir", v2BinDirInContainer)
+		args = append(args, "--libdir", pluginDir)
 	}
 	if directIO {
 		args = append(args, "--image-io-mode", "direct")
@@ -636,7 +638,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO(), a.ghostLimit())
+		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && criuSupportsDirectImageIO(a.agentCRIUHelp()), a.ghostLimit())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	if hooks.ActionScript != "" {
@@ -659,15 +661,24 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 			return fmt.Errorf("pid-namespace dump: %w", err)
 		}
 		cg = filepath.Join(cgroupRoot(), rel)
+		// Recorded like a pod hold (pod_hold.go), so the next run of an
+		// agent that stops mid-dump thaws it.
+		record := a.holdRecordPath(fmt.Sprintf("pidns-dump-%d", hostPID))
+		if err := writeHoldRecord(record, []string{cg}); err != nil {
+			return fmt.Errorf("pid-namespace dump: record the freeze: %w", err)
+		}
 		if err := setFrozen(cg, true); err != nil {
 			_ = setFrozen(cg, false)
+			_ = os.Remove(record)
 			return fmt.Errorf("pid-namespace dump: stop the container: %w", err)
 		}
 		// criu leaves the cgroup as it found it, frozen.
 		defer func() {
 			if err := setFrozen(cg, false); err != nil {
 				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container")
+				return
 			}
+			_ = os.Remove(record)
 		}()
 	}
 	ended, err := endExecSessions(procBase, hostPID, killPID)
@@ -679,14 +690,12 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	}
 	args = append(args, "--freeze-cgroup", cg)
 	log.WithField("cgroup", cg).Info("criu-v2: dumping the container from its frozen cgroup")
-	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
 	// CRIU locks TCP in the network namespace it runs in. The agent runs on
 	// the node's network, so enter the pod's: the lock must hold the pod's
-	// connections, never the node's.
-	cmd := exec.CommandContext(dctx, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...)
-	cmd.Env = []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// connections, never the node's. nsenter -n does not fork: a kill
+	// reaches CRIU itself, so the dump runs to its end (runDump).
+	env := []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
+	if out, err := runDump(ctx, pidNSDumpDeadline, env, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...); err != nil {
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
@@ -694,26 +703,13 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		StdoutPipe: stdout, StderrPipe: stderr})
 }
 
-// pidNSRestoreHelperName is the agent binary staged into the placeholder's
-// bundle directory to run pidns-restore-exec there.
-const pidNSRestoreHelperName = "nvsnap-agent"
+// pidNSDumpDeadline bounds a pid-namespace dump; CRIU's own --timeout
+// bounds its freeze well within it.
+const pidNSDumpDeadline = 20 * time.Minute
 
-// stagePIDNSRestoreHelper copies the agent binary (static) into the
-// placeholder's bundle directory.
-func (a *Agent) stagePIDNSRestoreHelper(root string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("pid-namespace restore: locate the agent binary: %w", err)
-	}
-	dst := filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), pidNSRestoreHelperName)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("pid-namespace restore: %w", err)
-	}
-	if err := copyFileExec(self, dst); err != nil {
-		return fmt.Errorf("pid-namespace restore: stage the helper: %w", err)
-	}
-	return nil
-}
+// pidNSRestoreHelperName is the agent binary in the node bundle, run in the
+// placeholder for pidns-restore-exec.
+const pidNSRestoreHelperName = "nvsnap-agent"
 
 // readPIDNSMarkerOrFalse reads the marker; a checkpoint without one is an
 // in-namespace checkpoint.

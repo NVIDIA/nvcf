@@ -53,6 +53,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // v2CheckpointsMountInContainer is where the placeholder pod must mount
@@ -101,14 +102,20 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2: checkpoint images not visible at %s inside placeholder — restore manifest must mount the checkpoint hostPath at %s: %w", imgsInContainer, v2CheckpointsMountInContainer, err)
 	}
 
-	// The bundle normally rides the rootfs-diff replay into the
-	// placeholder; re-stage from the agent bundle if it didn't.
-	if _, err := os.Stat(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), "criu")); err != nil {
-		log.Info("criu-v2: bundle not delivered by rootfs-diff; staging into placeholder")
-		if serr := a.stageV2Bundle(root, log); serr != nil {
-			return nil, fmt.Errorf("criu-v2: stage bundle into placeholder: %w", serr)
-		}
+	// The tools run from the node bundle mounted read-only in the
+	// placeholder (bundle_tools.go).
+	tools, err := bundleToolsOf(procBase, hostPID, a.bundleVersionsDir())
+	if err != nil {
+		return nil, fmt.Errorf("criu-v2: %w", err)
 	}
+	// What the restore writes (CRIU's log, a group restore's session) goes
+	// to the placeholder's own work volume; the checkpoint is read-only
+	// there (confined_fs.go).
+	work, err := openWorkloadDir(procBase, hostPID, webhook.RestoreWorkMountPath)
+	if err != nil {
+		return nil, fmt.Errorf("criu-v2: the placeholder has no restore work volume at %s (admitted before it was added: recreate it): %w", webhook.RestoreWorkMountPath, err)
+	}
+	defer func() { _ = work.Close() }()
 
 	// Refuse to restore into a placeholder that never pushed its own pid
 	// allocations clear of the dumped range. CRIU recreates the dumped tree at
@@ -144,8 +151,8 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		} else if maxPID > 0 {
 			log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
 		}
-	} else if err := a.stagePIDNSRestoreHelper(root); err != nil {
-		return nil, err
+	} else if !tools.has(procBase, pidNSRestoreHelperName) {
+		return nil, fmt.Errorf("pid-namespace restore: %s is not in the placeholder's node bundle (version %s)", pidNSRestoreHelperName, tools.version)
 	}
 
 	log.WithFields(logrus.Fields{
@@ -168,10 +175,8 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			return nil, fmt.Errorf("gpushare: placeholder has no chunk store at %s; mount the checkpoint's %s directory there",
 				gs.StorePath, GPUShareCheckpointSubdir)
 		}
-		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
-			if serr := a.stageV2Bundle(root, log); serr != nil {
-				return nil, fmt.Errorf("gpushare: stage %s into placeholder: %w", gpushareToolName, serr)
-			}
+		if !tools.has(procBase, gpushareToolName) {
+			return nil, fmt.Errorf("gpushare: %s is not in the placeholder's node bundle (version %s predates gpushare)", gpushareToolName, tools.version)
 		}
 	}
 	// A group restore's session: the driver learns from it that this pod
@@ -179,25 +184,26 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// handle exchange of the resume).
 	var sess *restoreSession
 	if group.Session != "" {
-		if group.InetAddrMap != "" && !bundledSupportsNetMigration() {
-			return nil, errors.New("criu-v2: the bundled CRIU has no --inet-addr-map/net-unlock; the agent base image predates them")
+		if group.InetAddrMap != "" && !tools.netMigration() {
+			return nil, fmt.Errorf("criu-v2: the placeholder's CRIU (bundle %s) has no --inet-addr-map/net-unlock", tools.version)
 		}
-		s, err := a.openRestoreSession(group, checkpointDir, gs != nil)
-		if err != nil {
-			return nil, err
+		s, serr := a.openRestoreSession(group, work, gs != nil)
+		if serr != nil {
+			return nil, serr
 		}
 		sess = s
 		defer sess.close()
 		log = log.WithField("fabricSession", group.Session)
 	}
-	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)
+	directIO, pluginDir := gs != nil && tools.directImageIO(), tools.pluginDir(procBase)
+	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, directIO, group.InetAddrMap, pluginDir)
 	if pidns {
 		// -n: CRIU's TCP lock and unlock act on the network namespace it
 		// runs in, which must be the pod's, never the node's (the agent
 		// runs on the node's network).
 		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-r", "-w", "--",
 			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
-			append(pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixListeners, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap),
+			append(pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixListeners, gs != nil, directIO, group.InetAddrMap, pluginDir),
 				stdioInheritFDs(pidnsCapture)...)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
@@ -205,8 +211,8 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// (restore_clock.go). With a GPU reload, that is the whole restore up to
 	// the GPU resume: every task stays stopped until the clocks are there
 	// (restore_clock_gpu.go).
-	clockThroughGPU := gs != nil && bundledSupportsTimensBudget() && restoreClockThroughGPU()
-	if clockArgs, budget := restoreClockArgs(checkpointDir, bundledSupportsTimensBudget(), clockThroughGPU); clockArgs != nil {
+	clockThroughGPU := gs != nil && tools.timensBudget() && tools.clockThroughGPU()
+	if clockArgs, budget := restoreClockArgs(checkpointDir, tools.timensBudget(), clockThroughGPU); clockArgs != nil {
 		args = append(args, clockArgs...)
 		msg := "criu-v2: the restored clocks continue from the dump once the restore has taken its budget"
 		if clockThroughGPU {
@@ -254,13 +260,13 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	cmd.WaitDelay = 10 * time.Second
-	go cancelWhenRestoreFailed(rctx, filepath.Join(checkpointDir, "restore.log"), restoreFailureGrace, cancel, log)
+	go cancelWhenRestoreFailed(rctx, work, restoreFailureGrace, cancel, log)
 	// No LD_LIBRARY_PATH: the bundle's libraries carry RPATH=$ORIGIN (see
 	// Dockerfile.base), so criu resolves its dependency graph from
 	// /criu-bundle/lib on its own. Setting it here would leak the bundle's
 	// glibc into cuda-checkpoint and abort restore into newer-glibc containers.
 	cmd.Env = []string{
-		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
+		"PATH=" + bundlePATH,
 		"HOME=/root",
 	}
 	if pidns && len(pidnsCapture.UnixListeners) > 0 {
@@ -288,7 +294,10 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU restore failed (criu-v2)")
 		criuSpan.End()
-		tail := tailOfFile(filepath.Join(checkpointDir, "restore.log"), 8)
+		tail := "(no restore.log)"
+		if b, terr := work.readTail("restore.log", restoreLogTail); terr == nil {
+			tail = tailOfText(string(b), 8)
+		}
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
@@ -330,7 +339,11 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		if !clockThroughGPU {
 			return nil
 		}
-		pids, err := readTimensResumePIDs(checkpointDir)
+		b, err := work.readFile(timensResumePIDsFile, fabricInLimit)
+		if err != nil {
+			return fmt.Errorf("criu-v2: read the tasks to resume: %w", err)
+		}
+		pids, err := parseTimensResumePIDs(b)
 		if err != nil {
 			return fmt.Errorf("criu-v2: read the tasks to resume: %w", err)
 		}
@@ -371,7 +384,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			// The restored processes write their handle lists into the
 			// session directory, as the user they run as; the agent made it
 			// as root. The capture side hands its session over the same way.
-			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
+			if err := sess.dir.own(procBase, resumePID); err != nil {
 				gsSpan.End()
 				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
 			}
@@ -737,10 +750,14 @@ func restoreLogReportsFailure(content string) bool {
 	return strings.Contains(content, "Restoring FAILED")
 }
 
-// cancelWhenRestoreFailed polls the restore log until ctx ends. Once the log
-// reports a failed restore it waits grace for criu to exit, then cancels,
-// which kills the criu process group through cmd.Cancel.
-func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
+// restoreLogTail is how much of the end of CRIU's restore log the agent
+// reads: its last lines say whether and how the restore failed.
+const restoreLogTail = 1 << 20
+
+// cancelWhenRestoreFailed polls the restore log in work until ctx ends.
+// Once the log reports a failed restore it waits grace for criu to exit,
+// then cancels, which kills the criu process group through cmd.Cancel.
+func cancelWhenRestoreFailed(ctx context.Context, work *confinedDir, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	for {
@@ -749,7 +766,7 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 			return
 		case <-tick.C:
 		}
-		b, err := os.ReadFile(logPath)
+		b, err := work.readTail("restore.log", restoreLogTail)
 		if err != nil || !restoreLogReportsFailure(string(b)) {
 			continue
 		}
@@ -768,16 +785,18 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 // restoreV2Args builds the nsenter + criu restore argv. A gpushare restore
 // omits the CUDA plugin: nvsnap-gpu-suspend restores the GPU state after
 // CRIU. directIO reads the pages image with O_DIRECT.
-func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool, inetAddrMap string) []string {
+func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool, inetAddrMap, pluginDir string) []string {
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "restore",
 		"-D", imgsInContainer,
+		// The images are read-only; the log and stats go to the work volume.
+		"-W", webhook.RestoreWorkMountPath,
 		"-o", "restore.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
 	}
 	if !gpushare {
-		args = append(args, "--libdir", v2BinDirInContainer)
+		args = append(args, "--libdir", pluginDir)
 	}
 	args = append(args,
 		// Match the dump: unlock TCP in-process via libnftables (workload

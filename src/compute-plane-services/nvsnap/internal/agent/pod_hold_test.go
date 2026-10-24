@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -159,4 +160,27 @@ func TestProcessCgroup(t *testing.T) {
 	if _, err := processCgroup(proc, 43); err == nil {
 		t.Error("a missing process has no cgroup")
 	}
+}
+
+// A hold that arrives after its capture released it does not freeze the
+// pod: the member's own end overtook the driver's request.
+func TestPodHold_AfterItsRelease(t *testing.T) {
+	a := &Agent{config: Config{CheckpointDir: t.TempDir()}}
+	log := logrus.NewEntry(logrus.New())
+	pod := fakePodCgroup(t, "cri-pause", "cri-etcd")
+	key := holdKey("s1", "ns", "etcd-0")
+	a.releaseHold(key, log)
+	if err := a.holdCgroups(key, filepath.Join(pod, "cri-etcd"), false, log); !errors.Is(err, errHoldReleased) {
+		t.Fatalf("hold after release: %v, want errHoldReleased", err)
+	}
+	for _, c := range []string{"cri-pause", "cri-etcd"} {
+		if got := frozenState(t, filepath.Join(pod, c)); got == "1" {
+			t.Errorf("%s frozen by a hold that arrived after its release", c)
+		}
+	}
+	// Another capture's hold of the same pod is not affected.
+	if err := a.holdCgroups(holdKey("s2", "ns", "etcd-0"), filepath.Join(pod, "cri-etcd"), false, log); err != nil {
+		t.Fatalf("a later capture's hold: %v", err)
+	}
+	a.releaseHold(holdKey("s2", "ns", "etcd-0"), log)
 }

@@ -20,7 +20,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -777,18 +776,18 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
-	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, dopts, log)
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, gpuPIDs, dopts, log)
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 		criuSpan.End()
 		// A rank of a group capture is one engine with its peers: the
 		// group's driver replaces the whole instance.
-		if errors.Is(err, errSourceLeftSuspended) && a.kubeClient != nil && req.GPUShareGroupSize == 0 {
+		if sourceMustBeReplaced(err) && a.kubeClient != nil && req.GPUShareGroupSize == 0 {
 			// Its controller replaces it with a pod that serves.
-			log.WithError(err).Error("the capture left the workload suspended; deleting its pod")
+			log.WithError(err).Error("the capture left the workload unusable; deleting its pod")
 			if derr := a.kubeClient.CoreV1().Pods(req.Namespace).Delete(context.WithoutCancel(ctx), req.PodName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-				log.WithError(derr).Error("cannot delete the suspended workload's pod")
+				log.WithError(derr).Error("cannot delete the unusable workload's pod")
 			}
 		}
 		return nil, fmt.Errorf("CRIU dump failed (criu-v2): %w", err)

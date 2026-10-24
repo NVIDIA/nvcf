@@ -106,11 +106,11 @@ func TestGPUShareTargets_NoShim(t *testing.T) {
 }
 
 func TestDumpV2Args_GPUShare(t *testing.T) {
-	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "", defaultGhostLimit)
+	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit)
 	if !slices.Contains(plain, "--libdir") || slices.Contains(plain, "--image-io-mode") {
 		t.Errorf("plain dump must load the CUDA plugin and keep buffered I/O: %v", plain)
 	}
-	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "", defaultGhostLimit)
+	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit)
 	if slices.Contains(gs, "--libdir") {
 		t.Errorf("gpushare dump must not load the CUDA plugin: %v", gs)
 	}
@@ -126,17 +126,22 @@ func TestDumpV2Args_GPUShare(t *testing.T) {
 			t.Errorf("gpushare dump lacks %q: %v", want, gs)
 		}
 	}
-	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, "", defaultGhostLimit), "--image-io-mode") {
+	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit), "--image-io-mode") {
 		t.Errorf("--image-io-mode added although the bundled CRIU lacks it")
 	}
 }
 
 func TestRestoreV2Args_GPUShare(t *testing.T) {
-	plain := restoreV2Args(10, "/checkpoints/x", false, false, "")
+	plain := restoreV2Args(10, "/checkpoints/x", false, false, "", "/criu-bundle/plugins")
 	if !slices.Contains(plain, "--libdir") {
 		t.Errorf("plain restore must load the CUDA plugin: %v", plain)
 	}
-	gs := restoreV2Args(10, "/checkpoints/x", true, true, "")
+	gs := restoreV2Args(10, "/checkpoints/x", true, true, "", "/criu-bundle/plugins")
+	// The images are read-only in the placeholder: CRIU writes its log
+	// and stats to the work volume.
+	if w := strings.Join(gs, " "); !strings.Contains(w, "-D /checkpoints/x -W /nvsnap-restore-work -o restore.log") {
+		t.Errorf("restore argv lacks the work directory: %s", w)
+	}
 	if slices.Contains(gs, "--libdir") || !slices.Contains(gs, "--image-io-mode") || !slices.Contains(gs, "--restore-detached") {
 		t.Errorf("gpushare restore argv: %v", gs)
 	}
@@ -307,7 +312,7 @@ func TestGPUShareCollectStore(t *testing.T) {
 	ckptDir := filepath.Join(root, "ckpt-1")
 	a := &Agent{config: Config{CheckpointDir: root}}
 	ci := &containerd.ContainerInfo{Labels: map[string]string{"io.kubernetes.pod.uid": "uid-1"}}
-	if err := a.gpushareCollectStore(ci, "/nonexistent-container-root", ckptDir, "GPU-a\nGPU-b\n"); err != nil {
+	if err := a.gpushareCollectStore(ci, ckptDir, "GPU-a\nGPU-b\n"); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"chunks/ab/abcd", "gpu-51.chunks"} {

@@ -26,6 +26,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -180,7 +181,11 @@ func (a *Agent) freezeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		q := r.URL.Query()
 		if err := a.holdMember(r.Context(), v["session"], v["namespace"], v["pod"], q.Get("container"), q.Get("keep") == "true"); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			code := http.StatusInternalServerError
+			if errors.Is(err, errHoldReleased) {
+				code = http.StatusConflict
+			}
+			http.Error(w, err.Error(), code)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

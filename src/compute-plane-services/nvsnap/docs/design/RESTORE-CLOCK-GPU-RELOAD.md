@@ -88,7 +88,7 @@ leaves the overrun counted, as CRIU's budget does today. The recorded span makes
   CLOCK_BOOTTIME at the moment the tasks were seized (`timens_note_seized`), not at the end of the dump.
   The wait uses CLOCK_MONOTONIC; BOOTTIME moves with it.
 - **After `resume` returns,** the agent resumes the other tasks. CRIU writes the pids of the tasks that
-  ran at the dump to `timens-resume-pids` in the images directory before it stops them all, so a task
+  ran at the dump to `timens-resume-pids` in its work directory (`-W`, the placeholder's writable work volume) before it stops them all, so a task
   that was stopped at the dump stays stopped. The agent finds the listed pids in CRIU's pid namespace
   and sends each SIGCONT, leaving out the GPU processes, which `resume` thawed. No task then runs
   before the clocks reach the dumped values.

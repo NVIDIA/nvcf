@@ -438,8 +438,8 @@ func TestFabricSession_EndToEndOverHTTP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cdir != fabricContainerDir(session) {
-			t.Fatalf("container dir = %q", cdir)
+		if cdir.container != fabricContainerDir(session) {
+			t.Fatalf("container dir = %q", cdir.container)
 		}
 		nodes[i] = node{a: a, srv: srv, dir: a.fabricHostDir(fmt.Sprintf("uid-%d", i), session), closeF: closeF}
 	}
@@ -646,11 +646,11 @@ func TestPlanGroupRestore(t *testing.T) {
 }
 
 func TestRestoreV2Args_GroupRestore(t *testing.T) {
-	got := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2"), " ")
+	got := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2", "/criu-bundle/plugins"), " ")
 	if !strings.Contains(got, "--inet-addr-map 10.0.0.1=10.1.0.1,10.0.0.2=10.1.0.2 --keep-network-lock") {
 		t.Errorf("group restore args lack the map and the held lock: %s", got)
 	}
-	if plain := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, ""), " "); strings.Contains(plain, "inet-addr-map") || strings.Contains(plain, "keep-network-lock") {
+	if plain := strings.Join(restoreV2Args(10, "/checkpoints/x", true, false, "", "/criu-bundle/plugins"), " "); strings.Contains(plain, "inet-addr-map") || strings.Contains(plain, "keep-network-lock") {
 		t.Errorf("single-pod restore carries group flags: %s", plain)
 	}
 }
@@ -669,17 +669,26 @@ func TestNetUnlockArgs(t *testing.T) {
 }
 
 // A restore member reports itself restored, waits, and gets the driver's
-// unlock over HTTP; with gpushare its session lives in the checkpoint's
-// store, where the placeholder sees it at the store path.
+// unlock over HTTP; its session lives in the placeholder's work volume,
+// where the tool sees it at the work path (the checkpoint is read-only).
 func TestRestoreSession_UnlockOverHTTP(t *testing.T) {
 	a, srv := fabricTestAgent(t)
-	ckpt := t.TempDir()
-	sess, err := a.openRestoreSession(restoreV2Group{Session: "s1", Namespace: "ns", Pod: "p0"}, ckpt, true)
+	workDir := t.TempDir()
+	work, err := openConfinedDir(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.hostDir != filepath.Join(ckpt, GPUShareCheckpointSubdir, ".fabric-s1") || sess.containerDir != "/nvsnap-gpushare/.fabric-s1" {
-		t.Fatalf("session dirs = %q, %q", sess.hostDir, sess.containerDir)
+	defer func() { _ = work.Close() }()
+	sess, err := a.openRestoreSession(restoreV2Group{Session: "s1", Namespace: "ns", Pod: "p0"}, work, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostDir := filepath.Join(workDir, ".fabric-s1")
+	if fi, err := os.Stat(hostDir); err != nil || !fi.IsDir() || sess.containerDir != "/nvsnap-restore-work/.fabric-s1" {
+		t.Fatalf("session dir %s (%v), container dir %q", hostDir, err, sess.containerDir)
+	}
+	if _, err := a.openRestoreSession(restoreV2Group{Session: "../x", Namespace: "ns", Pod: "p1"}, work, true); err == nil {
+		t.Error("a path accepted as a session")
 	}
 	verdict := make(chan string, 1)
 	go func() {
@@ -698,7 +707,7 @@ func TestRestoreSession_UnlockOverHTTP(t *testing.T) {
 		t.Errorf("verdict = %q", v)
 	}
 	sess.close()
-	if _, err := os.Stat(sess.hostDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(hostDir); !os.IsNotExist(err) {
 		t.Errorf("session dir survives close: %v", err)
 	}
 }
