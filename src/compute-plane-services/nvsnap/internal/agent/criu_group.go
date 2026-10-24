@@ -1059,7 +1059,13 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 	} else {
 		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
 	}
-	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+	// The record and the checkpoint are named by the pod's annotations:
+	// record the failure only for a pod that may act under that record and
+	// restore that checkpoint (restore_trust.go), or a pod could add
+	// failures to another tenant's capture and have its restores start cold.
+	if why, rerr := c.groupRecordRefusal(ctx, leader, key); rerr != nil || why != "" || !ids[leaderID] {
+		log.WithError(rerr).WithField("reason", why).Warn("CRIU group restore: not recording the failure on a group record the pod may not act under")
+	} else if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
 		return recordFailure(d, leaderID, restoreFailed, cause)
 	}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
