@@ -335,16 +335,22 @@ func writeRegistrationArtifact(t *testing.T, repoRoot, stackDir, name, body stri
 // at least once. Recorded call counts are intentionally not asserted
 // per AGENTS.md guidance against deep-equality wiring tests.
 func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	policyInspectCommand := "cat /repo-root-placeholder/docs/overview/samples/configs/envoy-api-connection-idle.yaml"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		// Conflict precheck: the feature asserts the conflicting
 		// multi-cluster control-plane is absent. Mimic k3d v5 "not
 		// found" by returning ExitCode 1 with no error so the
 		// `command exit code should be 1` assertion passes.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		policyInspectCommand: {
+			ExitCode: 0, Stdout: "kind: BackendTrafficPolicy\nmetadata:\n  namespace: envoy-gateway-system\nspec:\n" +
+				"  targetRefs:\n    - kind: HTTPRoute\n      name: nvcf-api\n  timeout:\n    http:\n      connectionIdleTimeout: \"30s\"\n",
+		},
 	}))
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeSingleClusterComputeRegisterValues(t, suite.Config.RepoRoot)
@@ -524,7 +530,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
-			Stderr:   "deployment failed: function deployment failed with status: ERROR\n",
+			Stderr:   "waiting for deployment completion: function deployment failed with status: ERROR\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -1375,7 +1381,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
-			Stderr:   "deployment failed: function deployment failed with status: ERROR\n",
+			Stderr:   "waiting for deployment completion: function deployment failed with status: ERROR\n",
 		},
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent.
@@ -3030,6 +3036,14 @@ func TestSingleClusterUp(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-up.feature")
+}
+
+// TestGatewayAPIIdleContract inspects the standalone example without contacting a cluster.
+func TestGatewayAPIIdleContract(t *testing.T) {
+	if testing.Short() {
+		t.Skip("standalone example inspection skipped under -short")
+	}
+	runLiveFeatureTags(t, "single-cluster-up.feature", "@gateway-api-idle-contract")
 }
 
 // TestMultiClusterUp is the live entry point for the multi-cluster
