@@ -162,10 +162,34 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
+for component in api nvctApi ess notary sis; do
+  expected="$(yq -r ".$component.image.tag" "$stack_dir/environments/base.yaml")"
+  test -n "$expected" && test "$expected" != null ||
+    fail "$component must select its maintained image in the stack defaults"
+  test "$(yq -r ".$component.image.tag" "$work_dir/default-values.yaml")" = "$expected" ||
+    fail "$component must forward the stack image selection"
+done
+for path in .sis.lls.hmacRotation.image; do
+  test "$(yq -r "$path.tag" "$work_dir/default-values.yaml")" = \
+    "$(yq -r '.openbao.migrations.image.tag' "$stack_dir/environments/base.yaml")" ||
+    fail "$path must select the stack migrations image"
+done
+for component in container reloader; do
+  test "$(yq -r ".nats.$component.merge.securityContext.runAsNonRoot" "$work_dir/default-values.yaml")" = true ||
+    fail "NATS $component must run without root"
+  test "$(yq -r ".nats.$component.merge.securityContext.runAsUser" "$work_dir/default-values.yaml")" = \
+    "$(yq -r '.nats.podTemplate.merge.spec.securityContext.runAsUser' "$stack_dir/environments/base.yaml")" ||
+    fail "NATS server and reloader identities must match for reload signaling"
+done
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | tag' "$work_dir/default-values.yaml")" = '!!map' ||
+  fail "nats pod security-context defaults must be a map"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/default-values.yaml")" = \
+  "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$stack_dir/environments/base.yaml")" ||
+  fail "NATS storage group must reach the pod"
 assert_absent "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
-  .nats.reloader "nats.reloader chart default"
+  .nats.reloader.image "nats.reloader chart default"
 assert_absent "$work_dir/default-values.yaml" \
   alpine/k8s "api.accountBootstrap chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
@@ -351,7 +375,7 @@ grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
 assert_absent "$work_dir/empty-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
-  .nats.reloader "nats.reloader explicit empty"
+  .nats.reloader.image "nats.reloader explicit empty"
 assert_absent "$work_dir/empty-values.yaml" \
   alpine/k8s "api.accountBootstrap explicit empty"
 assert_yaml_path_absent "$work_dir/empty-values.yaml" \
@@ -376,7 +400,7 @@ render_values "$work_dir/public-catalog-values.yaml"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
-  .nats.reloader "nats.reloader public catalog"
+  .nats.reloader.image "nats.reloader public catalog"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   alpine/k8s "api.accountBootstrap public catalog"
 assert_yaml_path_absent "$work_dir/public-catalog-values.yaml" \
@@ -430,5 +454,213 @@ assert_absent "$work_dir/mirror-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader mirror install"
 assert_absent "$work_dir/mirror-values.yaml" \
   alpine/k8s "api.accountBootstrap mirror install"
+
+# Forward environment security-context overrides while preserving the
+# stack non-root requirement and independently selected image defaults.
+write_env <<'EOF'
+nats:
+  container:
+    merge:
+      securityContext:
+        runAsUser: 2000
+        runAsGroup: 2000
+        readOnlyRootFilesystem: true
+  reloader:
+    merge:
+      securityContext:
+        runAsUser: 2000
+        runAsGroup: 2000
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsUser: 2000
+          runAsGroup: 2000
+          fsGroup: 2000
+          fsGroupChangePolicy: Always
+EOF
+
+render_values "$work_dir/security-context-values.yaml"
+for path in .nats.container.merge.securityContext .nats.reloader.merge.securityContext .nats.podTemplate.merge.spec.securityContext; do
+  for field in runAsUser runAsGroup; do
+    test "$(yq -r "$path.$field" "$work_dir/security-context-values.yaml")" = 2000 ||
+      fail "nats security-context override must preserve $path.$field"
+  done
+  test "$(yq -r "$path.runAsNonRoot" "$work_dir/security-context-values.yaml")" = true ||
+    fail "NATS identity overrides must preserve runAsNonRoot at $path"
+done
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/security-context-values.yaml")" = 2000 ||
+  fail "nats pod filesystem-group override must be preserved"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroupChangePolicy' "$work_dir/security-context-values.yaml")" = Always ||
+  fail "nats pod filesystem-group change policy must be preserved"
+test "$(yq -r '.nats.container.merge.securityContext.readOnlyRootFilesystem' "$work_dir/security-context-values.yaml")" = true ||
+  fail "nats container security settings must be preserved"
+assert_yaml_path_absent "$work_dir/security-context-values.yaml" .nats.reloader.image "nats security-only override"
+
+# Maintenance images must be selectable without taking unrelated chart changes.
+write_env <<'EOF'
+api:
+  image:
+    tag: 9.8.7-maintenance
+ess:
+  image:
+    tag: 9.8.7-maintenance
+notary:
+  image:
+    tag: 9.8.7-maintenance
+sis:
+  image:
+    tag: 9.8.7-maintenance
+apikeys:
+  image:
+    tag: 9.8.7-maintenance
+invocation:
+  image:
+    tag: 9.8.7-maintenance
+grpcproxy:
+  image:
+    tag: 9.8.7-maintenance
+rateLimiter:
+  image:
+    tag: 9.8.7-maintenance
+reval:
+  image:
+    tag: 9.8.7-maintenance
+openbao:
+  server:
+    image:
+      tag: 9.8.7-maintenance
+  injector:
+    image:
+      tag: 9.8.7-maintenance
+    agentImage:
+      tag: 9.8.7-maintenance
+nats:
+  container:
+    image:
+      registry: mirror.example.com
+      repository: maintenance/nats
+      tag: 9.8.7-maintenance
+nvctApi:
+  image:
+    tag: 9.8.7-maintenance
+  remoteConfig:
+    configData:
+      nvct:
+        sidecars:
+          init-container: worker-init:9.8.7-maintenance
+          ess-agent-container: ess-agent:9.8.7-maintenance
+        retained-option: true
+EOF
+render_values "$work_dir/maintenance-values.yaml"
+for component in api nvctApi ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
+  test "$(yq -r ".$component.image.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
+    fail "$component image tag override was not forwarded"
+done
+for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage; do
+  test "$(yq -r "$path.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
+    fail "$path image tag override was not forwarded"
+done
+for path in .nats.container.image; do
+  for field in registry repository tag; do
+    expected="$(yq -r "$path.$field" "$environment_file")"
+    actual="$(yq -r "$path.$field" "$work_dir/maintenance-values.yaml")"
+    test "$actual" = "$expected" || fail "$path.$field override was not forwarded"
+  done
+done
+for sidecar in init-container ess-agent-container; do
+  expected="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$environment_file")"
+  actual="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$work_dir/maintenance-values.yaml")"
+  test "$actual" = "$expected" || fail "task $sidecar override was not forwarded"
+done
+test "$(yq -r '.nvctApi.remoteConfig.configData.nvct.retained-option' "$work_dir/maintenance-values.yaml")" = true ||
+  fail "task configuration fields must be preserved"
+
+write_env <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+api:
+  image:
+    tag: ""
+ess:
+  image:
+    tag: ""
+notary:
+  image:
+    tag: ""
+sis:
+  image:
+    tag: ""
+apikeys:
+  image:
+    tag: ""
+invocation:
+  image:
+    tag: ""
+grpcproxy:
+  image:
+    tag: ""
+rateLimiter:
+  image:
+    tag: ""
+reval:
+  image:
+    tag: ""
+openbao:
+  server:
+    image:
+      tag: ""
+  injector:
+    image:
+      tag: ""
+    agentImage:
+      tag: ""
+nats:
+  container:
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
+nvctApi:
+  image:
+    tag: ""
+  remoteConfig:
+    configData: {}
+EOF
+render_values "$work_dir/empty-maintenance-values.yaml"
+for component in api nvctApi ess notary sis apikeys invocation grpcproxy rateLimiter reval; do
+  assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" ".$component.image.tag" "$component empty override"
+done
+for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage; do
+  assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" "$path.tag" "$path empty tag override"
+done
+for path in .nats.container.image; do
+  for field in registry repository; do
+    expected="$(yq -r "$path.$field" "$work_dir/default-values.yaml")"
+    actual="$(yq -r "$path.$field" "$work_dir/empty-maintenance-values.yaml")"
+    test "$actual" = "$expected" || fail "$path.$field empty override must preserve its default"
+  done
+done
+test "$(yq -r '.nats.container.image.tag' "$work_dir/empty-maintenance-values.yaml")" = \
+  "$(yq -r '.nats.container.image.tag' "$work_dir/default-values.yaml")" ||
+  fail "nats container empty tag must preserve the stack default"
+for sidecar in init-container utils-container ess-agent-container; do
+  expected="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$stack_dir/environments/base.yaml")"
+  actual="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$work_dir/empty-maintenance-values.yaml")"
+  test "$actual" = "$expected" || fail "empty task configuration must retain the selected $sidecar"
+done
+
+write_env <<'EOF'
+nvctApi:
+  remoteConfig:
+    configData: invalid
+EOF
+if render_values "$work_dir/invalid-maintenance-values.yaml" >"$work_dir/invalid.log" 2>&1; then
+  fail "task remote configuration must reject a non-map"
+fi
+grep -qF 'nvctApi.remoteConfig.configData must be a map' "$work_dir/invalid.log" ||
+  fail "task remote configuration did not report its invalid type"
 
 echo "image-override-wiring: OK"
