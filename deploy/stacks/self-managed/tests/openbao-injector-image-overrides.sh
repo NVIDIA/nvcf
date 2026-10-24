@@ -13,8 +13,11 @@ printf '{}\n' > "$work_dir/self-managed/secrets/injector-images-test-secrets.yam
 manifest="$repo_root/docs/overview/manifest.md"
 if test ! -f "$manifest"; then manifest="$repo_root/docs/user/manifest.md"; fi
 
+# Report a failure with the regression name for CI logs.
 fail() { echo "openbao-injector-image-overrides: $*" >&2; exit 1; }
+# Compare observed and expected values with a named diagnostic.
 assert_equal() { test "$1" = "$2" || fail "$3: got $1, expected $2"; }
+# Exercise the normal environment-to-chart Helmfile values path.
 write_values() {
   HELMFILE_ENV=injector-images-test HELMFILE_CACHE_HOME="$work_dir/cache" \
     helmfile -f "$work_dir/self-managed/helmfile.d/01-dependencies.yaml.gotmpl" \
@@ -41,18 +44,28 @@ for path in openbao.injector.agentImage openbao.server.image; do
     "$(yq -o=json -I=0 ".$path | sort_keys(.)" "$work_dir/default.yaml")" "$path unchanged"
 done
 
+# Always render a chart. A caller can supply the selected published wrapper;
+# the default test builds the source wrapper's locked dependency in temp space.
+chart_dir="${OPENBAO_STACK_CHART_DIR:-}"
+if test -z "$chart_dir"; then
+  chart_dir="$work_dir/chart"
+  cp -R "$repo_root/deploy/helm/openbao/helm" "$chart_dir"
+  helm dependency build "$chart_dir" >/dev/null
+fi
+test -f "$chart_dir/Chart.yaml" || fail "missing wrapper chart: $chart_dir"
+
+# Check the rendered image and preserve the rest of the injector Deployment.
 check_chart() {
-  test -n "${OPENBAO_STACK_CHART_DIR:-}" || return 0
-  helm template openbao-server "$OPENBAO_STACK_CHART_DIR" -n vault-system \
+  helm template openbao-server "$chart_dir" -n vault-system \
     -f "$work_dir/$1.yaml" > "$work_dir/rendered-$1.yaml"
   expected="$(yq -r '.openbao.injector.image | .registry + "/" + .repository + ":" + .tag' "$environment_file")"
   actual="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "sidecar-injector") | .image' "$work_dir/rendered-$1.yaml")"
-  assert_equal "$actual" "$expected" "$1 published-chart image"
+  assert_equal "$actual" "$expected" "$1 chart image"
   # Only the webhook image may change; injected agent/server and policy stay intact.
   yq 'select(.kind == "Deployment") | .spec.template.spec.containers[] |= (select(.name == "sidecar-injector").image = "injector-placeholder")' \
     "$work_dir/rendered-$1.yaml" > "$work_dir/injector-$1.yaml"
   if test "$1" = upstream; then
-    helm template openbao-server "$OPENBAO_STACK_CHART_DIR" -n vault-system \
+    helm template openbao-server "$chart_dir" -n vault-system \
       -f "$work_dir/default.yaml" > "$work_dir/rendered-default.yaml"
     yq 'select(.kind == "Deployment") | .spec.template.spec.containers[] |= (select(.name == "sidecar-injector").image = "injector-placeholder")' \
       "$work_dir/rendered-default.yaml" > "$work_dir/injector-default.yaml"
