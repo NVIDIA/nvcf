@@ -47,6 +47,9 @@ done
 
 # Optional integration with the immutable published chart selected by this lane.
 if test -n "${NATS_STACK_CHART_DIR:-}"; then
+  # Distinct identities catch accidental forwarding of the server policy to the box.
+  yq -i '(.nats.natsBox.podTemplate.merge.spec.securityContext.runAsUser, .nats.natsBox.podTemplate.merge.spec.securityContext.runAsGroup) = 2000' "$environment_file"
+  write_values "$work_dir/upstream.yaml"
   helm template nats "$NATS_STACK_CHART_DIR" -n nats-system -f "$work_dir/upstream.yaml" > "$work_dir/rendered.yaml"
   for pair in nats:container reloader:reloader nats-box:natsBox.container; do
     container="${pair%%:*}"; path="${pair#*:}"
@@ -54,9 +57,10 @@ if test -n "${NATS_STACK_CHART_DIR:-}"; then
     actual="$(yq -r "select(.kind == \"StatefulSet\" or .kind == \"Deployment\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .image" "$work_dir/rendered.yaml")"
     assert_equal "$actual" "$expected" "$container rendered reference"
   done
-  for kind in StatefulSet Deployment; do
+  for pair in StatefulSet:podTemplate Deployment:natsBox.podTemplate; do
+    kind="${pair%%:*}"; path="${pair#*:}"
     for field in runAsNonRoot runAsUser runAsGroup; do
-      expected="$(yq ".nats.podTemplate.merge.spec.securityContext.$field" "$environment_file")"
+      expected="$(yq ".nats.$path.merge.spec.securityContext.$field" "$environment_file")"
       assert_equal "$(yq "select(.kind == \"$kind\") | .spec.template.spec.securityContext.$field" "$work_dir/rendered.yaml")" "$expected" "$kind $field"
     done
   done
