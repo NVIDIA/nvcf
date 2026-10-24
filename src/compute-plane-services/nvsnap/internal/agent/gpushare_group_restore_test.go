@@ -86,9 +86,20 @@ func (h *groupRestoreHarness) restore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "restore failed: criu-v2 restore: exit status 1", http.StatusInternalServerError)
 		return
 	}
-	ckptDir := filepath.Join(h.a.config.CheckpointDir, req.CheckpointID)
+	// The placeholder's work volume.
+	workDir := filepath.Join(h.a.config.CheckpointDir, "work-"+req.PlaceholderPodName)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	work, err := openConfinedDir(workDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = work.Close() }()
 	sess, err := h.a.openRestoreSession(restoreV2Group{Session: req.GPUShareFabricSession, InetAddrMap: req.InetAddrMap,
-		Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName}, ckptDir, true)
+		Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName}, work, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -97,12 +108,12 @@ func (h *groupRestoreHarness) restore(w http.ResponseWriter, r *http.Request) {
 	if md := h.ckpts[req.CheckpointID]; md.GPUShareGroup == nil || !md.GPUShareGroup.Companion {
 		// A GPU rank: the tool's resume (its list, then the merged one)
 		// before it reports restored.
-		if err := sess.dir.write("out", []byte(req.PlaceholderPodName+"-old "+req.PlaceholderPodName+"-new\n")); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if werr := sess.dir.write("out", []byte(req.PlaceholderPodName+"-old "+req.PlaceholderPodName+"-new\n")); werr != nil {
+			http.Error(w, werr.Error(), http.StatusInternalServerError)
 			return
 		}
 		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-			if b, err := os.ReadFile(filepath.Join(sess.hostDir, "in")); err == nil {
+			if b, rerr := sess.dir.read("in", fabricInLimit); rerr == nil {
 				h.mu.Lock()
 				h.ins[req.PlaceholderPodName] = string(b)
 				h.resumed = time.Now()

@@ -90,9 +90,20 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	if got.Spec.Containers[0].Command != nil {
 		t.Error("the sidecar must run unchanged")
 	}
-	var mounted bool
+	// The images read-only (later restores on the node use them); what the
+	// restore writes goes to the pod's own work volume.
+	var mounted, work bool
 	for _, vm := range c.VolumeMounts {
-		mounted = mounted || (vm.MountPath == "/checkpoints/abc123__20261008-101010" && !vm.ReadOnly) // CRIU writes restore.log there
+		mounted = mounted || (vm.MountPath == "/checkpoints/abc123__20261008-101010" && vm.ReadOnly)
+		work = work || (vm.MountPath == RestoreWorkMountPath && vm.Name == restoreWorkVolume && !vm.ReadOnly)
+	}
+	for _, v := range got.Spec.Volumes {
+		if v.Name == restoreWorkVolume && v.EmptyDir == nil {
+			t.Errorf("work volume %+v, want an emptyDir", v)
+		}
+	}
+	if !work {
+		t.Error("no writable work volume for the restore")
 	}
 	var hostDir string
 	var hostType corev1.HostPathType
@@ -453,5 +464,42 @@ func TestWithPIDReserve(t *testing.T) {
 	boot := []PatchOp{{Op: "add", Path: "/spec/initContainers", Value: []corev1.Container{{Name: "x"}}}}
 	if got := withPIDReserve(none, boot); got[len(got)-1].Path != "/spec/initContainers/0" {
 		t.Errorf("a list another patch created must be joined, not replaced: %+v", got)
+	}
+}
+
+// A gpushare restore mounts the checkpoint's chunk store read-only (a
+// restored pod is never captured into it), and a pod that uses the
+// restore's work path or volume itself is not admitted as a placeholder.
+func TestCRIURestore_StoreReadOnlyAndWorkVolumeReserved(t *testing.T) {
+	man := criuCaptureRecord()
+	man.SourcePodMeta["gpushare"] = "true"
+	m := criuMutator(t, man)
+	pod := criuFunctionPod()
+	patches, err := m.criuRestorePatches(pod, "abc123__20261008-101010", man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, mergePatchPlan(patches))
+	store := false
+	for i := range got.Spec.Containers {
+		if vm := mountAt(got.Spec.Containers[i], GPUShareStorePath); vm != nil {
+			store = true
+			if !vm.ReadOnly {
+				t.Error("the checkpoint's chunk store is mounted writable")
+			}
+		}
+	}
+	if !store {
+		t.Fatal("no chunk store mounted")
+	}
+	declares := criuFunctionPod()
+	declares.Spec.Volumes = append(declares.Spec.Volumes, corev1.Volume{Name: restoreWorkVolume})
+	mounts := criuFunctionPod()
+	mounts.Spec.Volumes = append(mounts.Spec.Volumes, corev1.Volume{Name: "x"})
+	mounts.Spec.Containers[0].VolumeMounts = append(mounts.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "x", MountPath: RestoreWorkMountPath})
+	for what, p := range map[string]*corev1.Pod{"declares the work volume": declares, "mounts the work path": mounts} {
+		if _, err := m.criuRestorePatches(p, "abc123__20261008-101010", man); err == nil {
+			t.Errorf("%s: admitted as a placeholder", what)
+		}
 	}
 }

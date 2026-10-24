@@ -45,6 +45,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 const (
@@ -161,12 +163,21 @@ func (a *Agent) openFabricSessionAt(session, namespace, pod, host string) (*fabr
 	if err != nil {
 		return nil, nil, fmt.Errorf("gpushare: fabric dir parent: %w", err)
 	}
-	if err := parent.root.RemoveAll(name); err != nil {
+	s, closeFn, err := a.openFabricSessionIn(session, namespace, pod, parent, name)
+	if err != nil {
 		_ = parent.Close()
+		return nil, nil, err
+	}
+	return s, func() { closeFn(); _ = parent.Close() }, nil
+}
+
+// openFabricSessionIn creates name (fresh) in parent and registers it for
+// the pod. The returned func removes both; parent stays open.
+func (a *Agent) openFabricSessionIn(session, namespace, pod string, parent *confinedDir, name string) (*fabricSessionDir, func(), error) {
+	if err := parent.root.RemoveAll(name); err != nil {
 		return nil, nil, fmt.Errorf("gpushare: clear fabric dir: %w", err)
 	}
 	if err := parent.root.Mkdir(name, 0o755); err != nil {
-		_ = parent.Close()
 		return nil, nil, fmt.Errorf("gpushare: create fabric dir: %w", err)
 	}
 	s := &fabricSessionDir{parent: parent, name: name}
@@ -175,7 +186,6 @@ func (a *Agent) openFabricSessionAt(session, namespace, pod, host string) (*fabr
 	return s, func() {
 		a.fabricSessions.Delete(key)
 		_ = parent.root.RemoveAll(name)
-		_ = parent.Close()
 	}, nil
 }
 
@@ -207,29 +217,31 @@ type restoreV2Group struct {
 
 // restoreSession is one pod's directory in a group restore.
 type restoreSession struct {
-	dir     *fabricSessionDir
-	hostDir string
+	dir *fabricSessionDir
 	// containerDir is where the gpushare tool sees it ("" without gpushare).
 	containerDir string
 	close        func()
 }
 
-// openRestoreSession creates the pod's session directory. With gpushare it
-// lives in the checkpoint's store, which the placeholder mounts at the store
-// path, so the tool's resume can use it as --fabric-map.
-func (a *Agent) openRestoreSession(g restoreV2Group, checkpointDir string, gpushare bool) (*restoreSession, error) {
-	host := filepath.Join(checkpointDir, fabricDirPrefix+g.Session)
+// openRestoreSession creates the pod's session directory in the
+// placeholder's work volume (webhook.RestoreWorkMountPath), which the
+// placeholder mounts writable: the tool's resume uses it as --fabric-map,
+// and the checkpoint itself is read-only there.
+func (a *Agent) openRestoreSession(g restoreV2Group, work *confinedDir, gpushare bool) (*restoreSession, error) {
+	if !validFabricSession(g.Session) {
+		return nil, fmt.Errorf("gpushare: invalid fabric session %q", g.Session)
+	}
+	name := fabricDirPrefix + g.Session
 	cdir := ""
 	if gpushare {
-		host = filepath.Join(checkpointDir, GPUShareCheckpointSubdir, fabricDirPrefix+g.Session)
-		cdir = fabricContainerDir(g.Session)
+		cdir = webhook.RestoreWorkMountPath + "/" + name
 	}
-	dir, closeFn, err := a.openFabricSessionAt(g.Session, g.Namespace, g.Pod, host)
+	dir, closeFn, err := a.openFabricSessionIn(g.Session, g.Namespace, g.Pod, work, name)
 	if err != nil {
 		return nil, err
 	}
 	var once sync.Once
-	return &restoreSession{dir: dir, hostDir: host, containerDir: cdir, close: func() { once.Do(closeFn) }}, nil
+	return &restoreSession{dir: dir, containerDir: cdir, close: func() { once.Do(closeFn) }}, nil
 }
 
 // fabricUnlockWait bounds the hold: TCP gives up on a connection held

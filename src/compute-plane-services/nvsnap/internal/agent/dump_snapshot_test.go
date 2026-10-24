@@ -45,7 +45,7 @@ func TestDumpActionScript_SnapshotThenBarrier(t *testing.T) {
 	}
 	var takes int
 	var reachedBeforeSnapshot bool
-	stop := serveSnapshot(context.Background(), snap, func() error {
+	stop := serveSnapshot(context.Background(), confinedFor(t, snap), func() error {
 		takes++
 		_, err := os.Stat(filepath.Join(barrier, "reached"))
 		reachedBeforeSnapshot = err == nil
@@ -79,7 +79,7 @@ func TestDumpActionScript_SnapshotFailureFailsTheDump(t *testing.T) {
 		t.Fatal(err)
 	}
 	boom := errors.New("tar failed")
-	stop := serveSnapshot(context.Background(), snap, func() error { return boom })
+	stop := serveSnapshot(context.Background(), confinedFor(t, snap), func() error { return boom })
 	if err := runAction(t, script, "post-dump").Wait(); err == nil {
 		t.Fatal("script passed after a failed snapshot, want a failure")
 	}
@@ -100,7 +100,7 @@ func TestDumpActionScript_OtherActionsPass(t *testing.T) {
 	if err := writeDumpActionScript(script, snap, ""); err != nil {
 		t.Fatal(err)
 	}
-	stop := serveSnapshot(context.Background(), snap, func() error {
+	stop := serveSnapshot(context.Background(), confinedFor(t, snap), func() error {
 		t.Error("snapshot taken for a pre-dump action")
 		return nil
 	})
@@ -139,5 +139,43 @@ func TestDumpActionScript_BarrierOnly(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(barrier, "abort"), nil, 0o644)
 	if err := cmd.Wait(); err == nil {
 		t.Fatal("aborted barrier passed, want a failure")
+	}
+}
+
+// confinedFor opens dir as a confined directory for the test.
+func confinedFor(t *testing.T, dir string) *confinedDir {
+	t.Helper()
+	d, err := openConfinedDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+// The in-container dump hook asks for the snapshot at post-dump only, and
+// exits as the agent answers: 0 once it is taken, 1 when it failed.
+func TestRunDumpHook(t *testing.T) {
+	if got := RunDumpHook("pre-dump", t.TempDir()); got != 0 {
+		t.Errorf("pre-dump: exit %d, want 0", got)
+	}
+	if got := RunDumpHook("post-dump", ""); got != 0 {
+		t.Errorf("no directory: exit %d, want 0", got)
+	}
+	for answer, want := range map[string]int{"snapshot-taken": 0, "snapshot-failed": 1} {
+		dir := t.TempDir()
+		stop := serveSnapshot(context.Background(), confinedFor(t, dir), func() error {
+			if answer == "snapshot-failed" {
+				return errors.New("copy failed")
+			}
+			return nil
+		})
+		if got := RunDumpHook("post-dump", dir); got != want {
+			t.Errorf("%s: exit %d, want %d", answer, got, want)
+		}
+		taken, _ := stop()
+		if taken != (want == 0) {
+			t.Errorf("%s: agent reports taken=%v", answer, taken)
+		}
 	}
 }

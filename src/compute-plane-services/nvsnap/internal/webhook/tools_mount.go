@@ -94,3 +94,32 @@ func (m *Mutator) companionToolsPatches(ctx context.Context, pod *corev1.Pod) []
 	}
 	return patches
 }
+
+// mountAtPath reports whether any container of the pod (init, regular,
+// ephemeral) mounts something at path.
+func mountAtPath(pod *corev1.Pod, path string) bool {
+	at := func(mounts []corev1.VolumeMount) bool {
+		for i := range mounts {
+			if mounts[i].MountPath == path {
+				return true
+			}
+		}
+		return false
+	}
+	for i := range pod.Spec.InitContainers {
+		if at(pod.Spec.InitContainers[i].VolumeMounts) {
+			return true
+		}
+	}
+	for i := range pod.Spec.Containers {
+		if at(pod.Spec.Containers[i].VolumeMounts) {
+			return true
+		}
+	}
+	for i := range pod.Spec.EphemeralContainers {
+		if at(pod.Spec.EphemeralContainers[i].VolumeMounts) {
+			return true
+		}
+	}
+	return false
+}

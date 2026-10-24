@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // pidNSMarkerFile, in the checkpoint directory, marks a checkpoint that
@@ -470,6 +472,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 	args := []string{
 		"restore",
 		"-D", imgsInContainer,
+		"-W", webhook.RestoreWorkMountPath,
 		"-o", "restore.log", "-v4",
 		"--root", "/",
 		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",

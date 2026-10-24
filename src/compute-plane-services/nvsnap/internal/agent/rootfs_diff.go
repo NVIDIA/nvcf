@@ -19,6 +19,7 @@ package agent
 
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -302,7 +303,7 @@ func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entr
 // tar -x fails; per Q6 in the design the caller logs warn-and-continue.
 //
 // Returns nil if the tar file doesn't exist (no replay needed).
-func untarIntoMntns(placeholderPID int, mp, tarFile string, tools bundleTools, log *logrus.Entry) error {
+func untarIntoMntns(ctx context.Context, placeholderPID int, mp, tarFile string, tools bundleTools, log *logrus.Entry) error {
 	if placeholderPID <= 0 || mp == "" || tarFile == "" {
 		return fmt.Errorf("untarIntoMntns: empty pid/mp/tar")
 	}
@@ -320,7 +321,7 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, tools bundleTools, l
 	// /opt/nvsnap) has no directory here yet, and tar -C refuses a missing
 	// one ("Cannot open: No such file or directory", 2026-10-04). Create
 	// it on the placeholder's rootfs first; /dev/shm already exists.
-	mkdir := exec.Command("nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	mkdir := exec.CommandContext(ctx, "nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	if out, err := mkdir.CombinedOutput(); err != nil {
 		return fmt.Errorf("nsenter+mkdir (pid=%d, mp=%s): %w (output: %s)", placeholderPID, mp, err, strings.TrimSpace(string(out)))
 	}
@@ -336,7 +337,7 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, tools bundleTools, l
 		}
 		nested = nestedMountPoints(mps, mp)
 	}
-	cmd := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", tools.path("tar")}, replayExtractArgs(mp, nested)...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	cmd := exec.CommandContext(ctx, "nsenter", append([]string{"--mount=" + mntnsPath, "--", tools.path("tar")}, replayExtractArgs(mp, nested)...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	cmd.Stdin = f
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

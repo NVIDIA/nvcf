@@ -138,7 +138,6 @@ go_test(
         "checkpoint_v2_test.go",
         "client_limits_test.go",
         "confined_fs_test.go",
-        "copy_file_exec_test.go",
         "criu_auto_restore_test.go",
         "criu_companion_slots_test.go",
         "criu_companion_test.go",

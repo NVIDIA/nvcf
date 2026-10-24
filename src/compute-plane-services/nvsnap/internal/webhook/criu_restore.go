@@ -34,6 +34,13 @@ const (
 	// criuCheckpointsMount is where the restore reads the images
 	// (/checkpoints/<id>), the same path the agent's placeholder uses.
 	criuCheckpointsMount = "/checkpoints"
+
+	restoreWorkVolume = "nvsnap-restore-work"
+	// RestoreWorkMountPath is the placeholder's own writable directory for
+	// what a restore writes: CRIU's log and stats (criu -W) and a group
+	// restore's session. The checkpoint itself is mounted read-only: later
+	// restores on the node use the same images.
+	RestoreWorkMountPath = "/nvsnap-restore-work"
 )
 
 // criuCheckpointID returns the CRIU checkpoint a capture record points to,
@@ -187,9 +194,21 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		Name:         criuCheckpointsVolume,
 		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.CheckpointHostRoot + "/" + checkpointID, Type: &orCreate}},
 	}}
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == restoreWorkVolume {
+			return nil, fmt.Errorf("the pod declares the restore's work volume %s itself", restoreWorkVolume)
+		}
+	}
+	if mountAtPath(pod, RestoreWorkMountPath) {
+		return nil, fmt.Errorf("the pod mounts something at the restore's work path %s itself", RestoreWorkMountPath)
+	}
+	vols = append(vols, corev1.Volume{Name: restoreWorkVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
 	mounts := []corev1.VolumeMount{
-		// Writable: CRIU writes restore.log into the images directory.
-		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount + "/" + checkpointID},
+		// Read-only: the restore only reads the images, and later restores
+		// of the checkpoint on this node read them too. What it writes goes
+		// to the work volume.
+		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount + "/" + checkpointID, ReadOnly: true},
+		{Name: restoreWorkVolume, MountPath: RestoreWorkMountPath},
 		helperMount(),
 	}
 	if man.SourcePodMeta["gpushare"] == "true" {
@@ -202,7 +221,9 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		}
 		vols = append(vols, corev1.Volume{Name: gpushareStoreVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
 			Path: m.CheckpointHostRoot + "/" + checkpointID + "/gpushare", Type: &orCreate}}})
-		mounts = append(mounts, corev1.VolumeMount{Name: gpushareStoreVolume, MountPath: GPUShareStorePath})
+		// Read-only, like the images: the load reads it, and a restored pod
+		// is never captured into it.
+		mounts = append(mounts, corev1.VolumeMount{Name: gpushareStoreVolume, MountPath: GPUShareStorePath, ReadOnly: true})
 		libMounted := false
 		for _, vm := range c.VolumeMounts {
 			libMounted = libMounted || vm.MountPath == nvsnapToolsMountPath

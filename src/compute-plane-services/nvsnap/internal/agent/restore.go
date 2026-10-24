@@ -49,7 +49,7 @@ import (
 // the source's tmpfs gets its parent dir recreated. Abstract sockets
 // (path begins with NUL byte = "=00...") are skipped: they don't need
 // a filesystem entry.
-func precreateUnixSocketDirs(filesImg string, placeholderPID int, tools bundleTools, log *logrus.Entry) {
+func precreateUnixSocketDirs(ctx context.Context, filesImg string, placeholderPID int, tools bundleTools, log *logrus.Entry) {
 	cmd := exec.Command("crit", "decode", "-i", filesImg, "--pretty")
 	out, err := cmd.Output()
 	if err != nil {
@@ -94,7 +94,7 @@ func precreateUnixSocketDirs(filesImg string, placeholderPID int, tools bundleTo
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	created := 0
 	for d := range dirs {
-		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		mk := exec.CommandContext(ctx, "nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 		if err := mk.Run(); err != nil {
 			log.WithError(err).WithField("dir", d).Warn("Failed to mkdir unix-socket parent dir in placeholder")
 			continue
@@ -448,7 +448,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// directory" in zmq poll etc.).
 		filesImg := filepath.Join(checkpointDir, "files.img")
 		if _, fErr := os.Stat(filesImg); fErr == nil {
-			precreateUnixSocketDirs(filesImg, placeholderMntnsPID, tools, log)
+			precreateUnixSocketDirs(ctx, filesImg, placeholderMntnsPID, tools, log)
 		}
 
 		// Replay the source container's overlay diff into the placeholder's
@@ -492,7 +492,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// first one missing, or restore a workload without them.
 		for _, rm := range metadata.ReplayMounts {
 			tarAbs := filepath.Join(checkpointDir, rm.Tarball)
-			if rErr := untarIntoMntns(placeholderMntnsPID, rm.Path, tarAbs, tools, log); rErr != nil {
+			if rErr := untarIntoMntns(ctx, placeholderMntnsPID, rm.Path, tarAbs, tools, log); rErr != nil {
 				return nil, fmt.Errorf("replay %s into the placeholder: %w", rm.Path, rErr)
 			}
 		}

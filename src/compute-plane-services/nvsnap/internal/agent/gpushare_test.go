@@ -137,6 +137,11 @@ func TestRestoreV2Args_GPUShare(t *testing.T) {
 		t.Errorf("plain restore must load the CUDA plugin: %v", plain)
 	}
 	gs := restoreV2Args(10, "/checkpoints/x", true, true, "", "/criu-bundle/plugins")
+	// The images are read-only in the placeholder: CRIU writes its log
+	// and stats to the work volume.
+	if w := strings.Join(gs, " "); !strings.Contains(w, "-D /checkpoints/x -W /nvsnap-restore-work -o restore.log") {
+		t.Errorf("restore argv lacks the work directory: %s", w)
+	}
 	if slices.Contains(gs, "--libdir") || !slices.Contains(gs, "--image-io-mode") || !slices.Contains(gs, "--restore-detached") {
 		t.Errorf("gpushare restore argv: %v", gs)
 	}
@@ -296,7 +301,7 @@ func TestGPUShareCollectStore(t *testing.T) {
 	ckptDir := filepath.Join(root, "ckpt-1")
 	a := &Agent{config: Config{CheckpointDir: root}}
 	ci := &containerd.ContainerInfo{Labels: map[string]string{"io.kubernetes.pod.uid": "uid-1"}}
-	if err := a.gpushareCollectStore(ci, "/nonexistent-container-root", ckptDir, "GPU-a\nGPU-b\n"); err != nil {
+	if err := a.gpushareCollectStore(ci, ckptDir, "GPU-a\nGPU-b\n"); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"chunks/ab/abcd", "gpu-51.chunks"} {

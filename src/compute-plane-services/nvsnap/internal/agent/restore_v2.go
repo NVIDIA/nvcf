@@ -53,6 +53,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
 // v2CheckpointsMountInContainer is where the placeholder pod must mount
@@ -107,6 +108,14 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	if err != nil {
 		return nil, fmt.Errorf("criu-v2: %w", err)
 	}
+	// What the restore writes (CRIU's log, a group restore's session) goes
+	// to the placeholder's own work volume; the checkpoint is read-only
+	// there (confined_fs.go).
+	work, err := openWorkloadDir(procBase, hostPID, webhook.RestoreWorkMountPath)
+	if err != nil {
+		return nil, fmt.Errorf("criu-v2: the placeholder has no restore work volume at %s (admitted before it was added: recreate it): %w", webhook.RestoreWorkMountPath, err)
+	}
+	defer func() { _ = work.Close() }()
 
 	// Refuse to restore into a placeholder that never pushed its own pid
 	// allocations clear of the dumped range. CRIU recreates the dumped tree at
@@ -178,9 +187,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		if group.InetAddrMap != "" && !tools.netMigration() {
 			return nil, fmt.Errorf("criu-v2: the placeholder's CRIU (bundle %s) has no --inet-addr-map/net-unlock", tools.version)
 		}
-		s, err := a.openRestoreSession(group, checkpointDir, gs != nil)
-		if err != nil {
-			return nil, err
+		s, serr := a.openRestoreSession(group, work, gs != nil)
+		if serr != nil {
+			return nil, serr
 		}
 		sess = s
 		defer sess.close()
@@ -244,7 +253,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	cmd.WaitDelay = 10 * time.Second
-	go cancelWhenRestoreFailed(rctx, filepath.Join(checkpointDir, "restore.log"), restoreFailureGrace, cancel, log)
+	go cancelWhenRestoreFailed(rctx, work, restoreFailureGrace, cancel, log)
 	// No LD_LIBRARY_PATH: the bundle's libraries carry RPATH=$ORIGIN (see
 	// Dockerfile.base), so criu resolves its dependency graph from
 	// /criu-bundle/lib on its own. Setting it here would leak the bundle's
@@ -278,7 +287,10 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU restore failed (criu-v2)")
 		criuSpan.End()
-		tail := tailOfFile(filepath.Join(checkpointDir, "restore.log"), 8)
+		tail := "(no restore.log)"
+		if b, terr := work.readTail("restore.log", restoreLogTail); terr == nil {
+			tail = tailOfText(string(b), 8)
+		}
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
@@ -654,10 +666,14 @@ func restoreLogReportsFailure(content string) bool {
 	return strings.Contains(content, "Restoring FAILED")
 }
 
-// cancelWhenRestoreFailed polls the restore log until ctx ends. Once the log
-// reports a failed restore it waits grace for criu to exit, then cancels,
-// which kills the criu process group through cmd.Cancel.
-func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
+// restoreLogTail is how much of the end of CRIU's restore log the agent
+// reads: its last lines say whether and how the restore failed.
+const restoreLogTail = 1 << 20
+
+// cancelWhenRestoreFailed polls the restore log in work until ctx ends.
+// Once the log reports a failed restore it waits grace for criu to exit,
+// then cancels, which kills the criu process group through cmd.Cancel.
+func cancelWhenRestoreFailed(ctx context.Context, work *confinedDir, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	for {
@@ -666,7 +682,7 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 			return
 		case <-tick.C:
 		}
-		b, err := os.ReadFile(logPath)
+		b, err := work.readTail("restore.log", restoreLogTail)
 		if err != nil || !restoreLogReportsFailure(string(b)) {
 			continue
 		}
@@ -690,6 +706,8 @@ func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool,
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "restore",
 		"-D", imgsInContainer,
+		// The images are read-only; the log and stats go to the work volume.
+		"-W", webhook.RestoreWorkMountPath,
 		"-o", "restore.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
 	}
