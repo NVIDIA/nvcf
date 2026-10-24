@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+helper="$root/tools/ci/assemble-umbrella-candidate"
+workflow="$root/.github/workflows/umbrella-candidate.yml"
+workflow_has() { grep -Fq -- "$1" "$workflow" || { echo "missing workflow contract: $1" >&2; exit 1; }; }
+workflow_has '  pull_request:'
+workflow_has "      - 'deploy/releases/**'"
+workflow_has "      - 'tools/docs-version-sync/**'"
+workflow_has "      - 'tools/ci/assemble-umbrella-candidate'"
+workflow_has "      - 'tools/scripts/test/test-umbrella-candidate'"
+workflow_has '  push:'
+workflow_has "      - 'release-nvcf/**'"
+workflow_has '  contents: read'
+workflow_has '          persist-credentials: false'
+workflow_has '          fetch-depth: 0'
+# These expressions must remain literal workflow expressions.
+# shellcheck disable=SC2016
+{
+  workflow_has 'CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}'
+  workflow_has 'ref: ${{ env.CANDIDATE_SHA }}'
+  workflow_has 'name: umbrella-candidate-${{ env.CANDIDATE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}'
+}
+if grep -Eq 'pull_request_target:|workflow_dispatch:|contents: write|secrets\.|umbrella publish' "$workflow"; then
+  echo 'candidate workflow gained a publication or privileged execution path' >&2
+  exit 1
+fi
+if grep 'uses:' "$workflow" | grep -Ev '@[0-9a-f]{40} '; then
+  echo 'candidate workflow requires pinned actions' >&2
+  exit 1
+fi
+work=$(mktemp -d "${TMPDIR:-/tmp}/test-umbrella-candidate.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+fail() { echo "test-umbrella-candidate: $*" >&2; exit 1; }
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+export GIT_AUTHOR_NAME='Candidate test' GIT_AUTHOR_EMAIL='candidate@example.com'
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+export REAL_GIT
+REAL_GIT=$(command -v git)
+go build -C "$root/tools/docs-version-sync" -o "$work/docs-version-sync" .
+mkdir "$work/remote" "$work/published" "$work/bin"
+export FIXTURE_REMOTE="$work/remote" FIXTURE_PUBLISHED="$work/published"
+git -C "$FIXTURE_REMOTE" init -q
+printf 'Fixture license\n' > "$FIXTURE_REMOTE/LICENSE"
+printf 'Fixture notices\n' > "$FIXTURE_REMOTE/NOTICE"
+printf '{}\n' > "$work/stacks.json"
+while read -r plane directory version asset; do
+  # Later tags deliberately contain incorrect incidental sibling directories.
+  for state in "$FIXTURE_REMOTE"/deploy/stacks/*/helmfile.d/state.yaml; do
+    [[ ! -f "$state" ]] || printf 'source: incidental\n' > "$state"
+  done
+  stack_dir="$FIXTURE_REMOTE/deploy/stacks/$directory"
+  mkdir -p "$stack_dir/environments" "$stack_dir/helmfile.d"
+  printf '{}\n' > "$stack_dir/environments/base.yaml"
+  printf 'source: %s@%s\n' "$plane" "$version" > "$stack_dir/helmfile.d/state.yaml"
+  git -C "$FIXTURE_REMOTE" add .
+  git -C "$FIXTURE_REMOTE" commit -qm "fixture $plane"
+  commit=$(git -C "$FIXTURE_REMOTE" rev-parse HEAD)
+  tag="deploy/stacks/$directory/v$version"
+  # Exercise peeling annotated source tags, too.
+  git -C "$FIXTURE_REMOTE" tag -a "$tag" -m "fixture $plane"
+  jq -n --arg plane "$plane" --arg version "$version" --arg tag "$tag" --arg commit "$commit" '
+    {schema_version:1, source:{version:$version,tag:$tag,commit:$commit},
+     releases:[{plane:$plane,name:$plane,required:true,chart:("https://charts.example.com/"+$plane),version:"0.1.0"}],
+     artifacts:[{type:"helm-chart",name:$plane,repository:"https://charts.example.com",version:"0.1.0",
+       reference:("https://charts.example.com/"+$plane+"@0.1.0"),sources:[{plane:$plane,release:$plane,requirement:"required"}]}]}
+  ' > "$FIXTURE_PUBLISHED/$asset"
+  digest=$(sha256sum "$FIXTURE_PUBLISHED/$asset")
+  jq --arg plane "$plane" --arg version "$version" --arg tag "$tag" --arg commit "$commit" \
+    --arg asset "$asset" --arg digest "sha256:${digest%% *}" \
+    '. + {($plane):{version:$version,source_tag:$tag,source_commit:$commit,inventory_asset:$asset,inventory_sha256:$digest}}' \
+    "$work/stacks.json" > "$work/next.json"
+  mv "$work/next.json" "$work/stacks.json"
+  jq -n --arg tag "$tag" --arg asset "$asset" \
+    '{id:1,tag_name:$tag,draft:false,prerelease:false,published_at:"2026-01-01T00:00:00Z",assets:[{id:2,name:$asset,state:"uploaded"}]}' \
+    > "$FIXTURE_PUBLISHED/$asset.release"
+done <<'STACKS'
+control-plane self-managed 1.2.3 nvcf-self-managed-stack-inventory.json
+compute-plane nvcf-compute-plane 2.3.4 nvcf-compute-plane-stack-inventory.json
+observability observability 3.4.5 nvcf-observability-stack-inventory.json
+STACKS
+base=$(git -C "$FIXTURE_REMOTE" rev-parse HEAD)
+manifest_path=deploy/releases/9.0.0/manifest.json
+mkdir -p "$FIXTURE_REMOTE/deploy/releases/9.0.0"
+jq --arg source "$base" '
+  . as $stacks | {schema_version:2,version:"9.0.0",change:"initial",status:"development",source_commit:$source,
+    toolchain:{helm:"3.19.1",helmfile:"1.1.9"},
+    stacks:($stacks | with_entries(.key as $plane | .value.compatible_with =
+      ($stacks | with_entries(select(.key != $plane) | .value = .value.version))))}
+' "$work/stacks.json" > "$FIXTURE_REMOTE/$manifest_path"
+for state in "$FIXTURE_REMOTE"/deploy/stacks/*/helmfile.d/state.yaml; do
+  printf 'source: candidate branch\n' > "$state"
+done
+git -C "$FIXTURE_REMOTE" add .
+git -C "$FIXTURE_REMOTE" commit -qm 'fixture candidate'
+
+# Only the public network boundary is replaced. The real Go validator/bundler,
+# Git object transfer, digest checks, and archive verification run end to end.
+cat > "$work/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FIXTURE_NETWORK"
+url='' output=''
+while (($#)); do
+  case "$1" in
+    -q|--fail|--silent|--show-error|--location) shift ;;
+    --retry|--proto|--proto-redir) shift 2 ;;
+    --header) [[ "$2" == 'Accept: application/vnd.github+json' ]]; shift 2 ;;
+    --output) output=$2; shift 2 ;;
+    https://*) url=$1; shift ;;
+    *) echo "unexpected curl argument $1" >&2; exit 1 ;;
+  esac
+done
+for inventory in "$FIXTURE_PUBLISHED"/*.json; do
+  tag=$(jq -r .source.tag "$inventory")
+  encoded=$(jq -rn --arg tag "$tag" '$tag | @uri')
+  asset=${inventory##*/}
+  case "$url" in
+    "https://api.github.com/repos/NVIDIA/nvcf/releases/tags/$encoded")
+      case "${FIXTURE_FAILURE:-}" in
+        missing-release) echo 'HTTP 404: fixture tag has no public release' >&2; exit 22 ;;
+        draft) jq '.draft=true' "$inventory.release" > "$output" ;;
+        prerelease) jq '.prerelease=true' "$inventory.release" > "$output" ;;
+        unpublished) jq '.published_at=null' "$inventory.release" > "$output" ;;
+        wrong-release) jq '.tag_name="another-tag"' "$inventory.release" > "$output" ;;
+        missing-asset) jq '.assets=[]' "$inventory.release" > "$output" ;;
+        incomplete-asset) jq '.assets[0].state="new"' "$inventory.release" > "$output" ;;
+        *) cp "$inventory.release" "$output" ;;
+      esac
+      exit 0 ;;
+    "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset")
+      [[ "${FIXTURE_FAILURE:-}" != missing-inventory ]] || exit 22
+      cp "$inventory" "$output"
+      [[ "${FIXTURE_FAILURE:-}" != corrupt-inventory ]] || printf '\n' >> "$output"
+      exit 0 ;;
+  esac
+done
+echo "unexpected public request: $url" >&2
+exit 1
+CURL
+cat > "$work/bin/git" <<'GIT'
+#!/usr/bin/env bash
+set -euo pipefail
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[i]}" == https://github.com/NVIDIA/nvcf.git ]]; then
+    [[ " $* " == *' fetch --no-tags --no-write-fetch-head '* ]]
+    [[ " $* " == *' -c credential.helper= -c http.extraheader= '* ]]
+    printf '%s\n' "$*" >> "$FIXTURE_NETWORK"
+    args[i]=$FIXTURE_REMOTE
+  fi
+done
+exec "$REAL_GIT" "${args[@]}"
+GIT
+chmod +x "$work/bin/"*
+export PATH="$work/bin:$PATH"
+export GITHUB_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=2
+
+new_case() {
+  case_dir="$work/$1"
+  mkdir "$case_dir"
+  git clone --no-tags -q "$FIXTURE_REMOTE" "$case_dir/repo"
+  export GITHUB_OUTPUT="$case_dir/output" GITHUB_STEP_SUMMARY="$case_dir/summary"
+  export FIXTURE_NETWORK="$case_dir/network" FIXTURE_FAILURE=''
+  : > "$FIXTURE_NETWORK"
+  event=pull_request ref=feature/candidate
+}
+invoke() {
+  candidate=$(git -C "$case_dir/repo" rev-parse HEAD)
+  "$helper" --repo "$case_dir/repo" --candidate-sha "$candidate" --base-sha "$base" \
+    --ref "$ref" --event "$event" --out "$case_dir/artifacts" --tool "$work/docs-version-sync" "$@"
+}
+succeed() {
+  if ! invoke > "$case_dir/log" 2>&1; then cat "$case_dir/log" >&2; fail "${case_dir##*/}"; fi
+  echo "PASS ${case_dir##*/}"
+}
+reject() {
+  local expected=$1
+  shift
+  if invoke "$@" > "$case_dir/log" 2>&1; then fail "accepted ${case_dir##*/}"; fi
+  grep -Fq "$expected" "$case_dir/log" || { cat "$case_dir/log" >&2; fail "expected $expected"; }
+  [[ ! -f "$GITHUB_OUTPUT" ]] || ! grep -q 'assembled=true' "$GITHUB_OUTPUT" || fail 'uploaded a failed candidate'
+  echo "PASS ${case_dir##*/}"
+}
+commit_case() {
+  git -C "$case_dir/repo" add .
+  git -C "$case_dir/repo" commit -qm 'fixture candidate update'
+}
+mutate_manifest() {
+  jq "$1" "$case_dir/repo/$manifest_path" > "$case_dir/manifest.json"
+  cp "$case_dir/manifest.json" "$case_dir/repo/$manifest_path"
+  commit_case
+}
+
+new_case successful-pr
+succeed
+assets="$case_dir/artifacts/9.0.0"
+jq -e --arg sha "$candidate" --arg merge "$GITHUB_SHA" \
+  '.candidate_commit==$sha and .candidate_commit!=$merge and .workflow_commit==$merge and .event=="pull_request" and .run_id=="123" and .run_attempt=="2"' \
+  "$assets/candidate.json" > /dev/null
+grep -Fq "$candidate" "$GITHUB_STEP_SUMMARY"
+grep -Fxq 'assembled=true' "$GITHUB_OUTPUT"
+manifest_digest=$(sha256sum "$assets/manifest.json")
+bundle_digest=$(sha256sum "$assets/nvcf-9.0.0.tar.gz")
+jq -e --arg manifest "sha256:${manifest_digest%% *}" --arg bundle "sha256:${bundle_digest%% *}" \
+  '.manifest_sha256==$manifest and .bundle_sha256==$bundle and .bundle=="nvcf-9.0.0.tar.gz"' "$assets/candidate.json" > /dev/null
+mkdir "$case_dir/extracted"
+tar -xzf "$assets/nvcf-9.0.0.tar.gz" -C "$case_dir/extracted"
+while read -r plane directory; do
+  version=$(jq -r --arg plane "$plane" '.stacks[$plane].version' "$assets/manifest.json")
+  grep -Fxq "source: $plane@$version" "$case_dir/extracted/deploy/stacks/$directory/helmfile.d/state.yaml"
+  [[ $(cat "$case_dir/extracted/deploy/stacks/$directory/VERSION") == "$version" ]]
+done <<'STACKS'
+control-plane self-managed
+compute-plane nvcf-compute-plane
+observability observability
+STACKS
+[[ $(grep -c ' fetch ' "$FIXTURE_NETWORK") == 3 ]] || fail 'did not fetch exactly the selected source tags'
+[[ $(git -C "$case_dir/repo" status --porcelain) == '' ]] || fail 'assembly modified checkout files'
+
+new_case successful-push
+event=push ref=refs/heads/release-nvcf/9.0.0
+succeed
+jq -e '.event=="push" and .ref=="refs/heads/release-nvcf/9.0.0"' "$case_dir/artifacts/9.0.0/candidate.json" > /dev/null
+
+for failure in missing-release draft prerelease unpublished wrong-release missing-asset incomplete-asset missing-inventory corrupt-inventory; do
+  new_case "$failure"
+  export FIXTURE_FAILURE=$failure
+  case "$failure" in
+    missing-release) expected='public source release unavailable' ;;
+    missing-inventory) expected='public inventory unavailable' ;;
+    corrupt-inventory) expected='inventory checksum mismatch' ;;
+    *) expected='source must be a published stable release' ;;
+  esac
+  reject "$expected"
+done
+
+new_case wrong-source-commit
+mutate_manifest '.stacks["compute-plane"].source_commit=.source_commit'
+reject 'public source tag does not match selected commit'
+
+new_case wrong-inventory-identity
+export FIXTURE_PUBLISHED="$case_dir/published"
+cp -R "$work/published" "$FIXTURE_PUBLISHED"
+inventory="$FIXTURE_PUBLISHED/nvcf-compute-plane-stack-inventory.json"
+jq --arg sha "$base" '.source.commit=$sha' "$inventory" > "$case_dir/inventory.json"
+cp "$case_dir/inventory.json" "$inventory"
+digest=$(sha256sum "$inventory")
+mutate_manifest ".stacks[\"compute-plane\"].inventory_sha256=\"sha256:${digest%% *}\""
+reject 'inventory source differs'
+export FIXTURE_PUBLISHED="$work/published"
+
+new_case wrong-checkout
+reject 'checkout HEAD does not match' --candidate-sha "$base"
+
+new_case malformed-manifest
+printf '{invalid\n' > "$case_dir/repo/$manifest_path"
+commit_case
+reject 'decode umbrella manifest'
+[[ ! -s "$FIXTURE_NETWORK" ]] || fail 'requested a malformed manifest source'
+
+new_case unsafe-asset
+mutate_manifest '.stacks["compute-plane"].inventory_asset="../outside.json"'
+reject 'canonical inventory'
+[[ ! -s "$FIXTURE_NETWORK" ]] || fail 'requested an unsafe asset'
+
+new_case unsafe-tag
+mutate_manifest '.stacks["compute-plane"].source_tag="../../another-repository"'
+reject 'source tag'
+[[ ! -s "$FIXTURE_NETWORK" ]] || fail 'requested an unsafe tag'
+
+new_case wrong-manifest-directory
+mutate_manifest '.version="9.1.0"'
+reject 'manifest version differs from its directory'
+[[ ! -s "$FIXTURE_NETWORK" ]] || fail 'requested an invalid candidate'
+
+new_case unsafe-manifest-path
+mkdir -p "$case_dir/repo/deploy/releases/latest"
+cp "$case_dir/repo/$manifest_path" "$case_dir/repo/deploy/releases/latest/manifest.json"
+commit_case
+reject 'invalid candidate manifest path'
+
+new_case symlink-manifest
+cp "$case_dir/repo/$manifest_path" "$case_dir/repo/linked.json"
+rm "$case_dir/repo/$manifest_path"
+ln -s ../../../linked.json "$case_dir/repo/$manifest_path"
+commit_case
+reject 'committed regular manifest'
+
+new_case deleted-manifest
+rm "$case_dir/repo/$manifest_path"
+old_base=$base
+base=$(git -C "$case_dir/repo" rev-parse HEAD)
+commit_case
+reject 'committed regular manifest'
+base=$old_base
+
+new_case no-manifest-tooling-pr
+git -C "$case_dir/repo" checkout -q "$base"
+printf 'tooling fixture\n' > "$case_dir/repo/tooling.txt"
+commit_case
+succeed
+grep -Fq 'No candidate manifests' "$GITHUB_STEP_SUMMARY"
+grep -Fxq 'assembled=false' "$GITHUB_OUTPUT"
+[[ ! -s "$FIXTURE_NETWORK" ]] || fail 'tooling-only PR accessed source releases'
+
+new_case missing-candidate-branch-manifest
+event=push ref=refs/heads/release-nvcf/9.1.0
+reject 'committed regular manifest'
+
+new_case invalid-candidate-branch
+event=push ref=refs/heads/release-nvcf/latest
+reject 'release-nvcf/X.Y.Z'
+
+new_case existing-candidate-tooling-pr
+old_base=$base
+base=$(git -C "$case_dir/repo" rev-parse HEAD)
+printf 'tooling fixture\n' > "$case_dir/repo/tooling.txt"
+commit_case
+succeed
+base=$old_base
+
+new_case historical-release-tooling-pr
+git -C "$case_dir/repo" tag nvcf/9.0.0
+old_base=$base
+base=$(git -C "$case_dir/repo" rev-parse HEAD)
+printf 'tooling fixture\n' > "$case_dir/repo/tooling.txt"
+commit_case
+succeed
+grep -Fxq 'assembled=false' "$GITHUB_OUTPUT"
+base=$old_base
+
+new_case previous-qualified-release
+mutate_manifest '.status="qualified" | .qualification="https://github.com/NVIDIA/nvcf/issues/1"'
+git -C "$case_dir/repo" tag nvcf/9.0.0
+old_base=$base
+base=$(git -C "$case_dir/repo" rev-parse HEAD)
+mkdir "$case_dir/repo/deploy/releases/9.0.1"
+jq '.version="9.0.1" | .previous_version="9.0.0" | .change="patch" | .status="development" | del(.qualification)' \
+  "$case_dir/repo/$manifest_path" > "$case_dir/repo/deploy/releases/9.0.1/manifest.json"
+commit_case
+succeed
+[[ -f "$case_dir/artifacts/9.0.1/nvcf-9.0.1.tar.gz" ]] || fail 'previous release was not used'
+base=$old_base
+
+echo 'Candidate helper fixtures passed.'
