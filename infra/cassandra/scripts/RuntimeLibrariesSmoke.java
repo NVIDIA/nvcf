@@ -16,6 +16,12 @@ import net.jpountz.lz4.LZ4Factory;
 import org.slf4j.LoggerFactory;
 
 public class RuntimeLibrariesSmoke {
+    /**
+     * Verifies Jackson round trips, LZ4 interoperability, and the selected Logback configuration.
+     *
+     * @param args unused command-line arguments
+     * @throws Exception if a library operation fails
+     */
     public static void main(String[] args) throws Exception {
         if (!Files.isRegularFile(Path.of(System.getProperty("logback.configurationFile")))) {
             throw new AssertionError("Missing shipped Logback configuration");

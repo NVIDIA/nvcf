@@ -160,7 +160,7 @@ Java runtime replacements are checksum-pinned in `java-libraries.lock`.
 Logback core and classic use the same patch version. Logback 1.5.37 and later
 remove Janino-based `<if condition="...">` expressions. The shipped Cassandra
 logging configurations do not use them. Migrate custom logging configurations
-to the [Logback condition syntax](https://logback.qos.ch/manual/configuration.html#conditional)
+to the [Logback condition syntax](https://logback.qos.ch/manual/configuration-conditional.html)
 before upgrading.
 
 The image smoke checks exercise Jackson time values, LZ4 native and Java
