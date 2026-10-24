@@ -96,36 +96,86 @@ func (a *Agent) fabricHostDir(podUID, session string) string {
 
 // openFabricSession creates a pod's session directory and registers it, so
 // the driver can reach it. The returned func removes both.
-func (a *Agent) openFabricSession(session, namespace, pod, podUID string) (containerDir string, closeFn func(), err error) {
+func (a *Agent) openFabricSession(session, namespace, pod, podUID string) (*fabricSessionDir, func(), error) {
 	if !validFabricSession(session) {
-		return "", nil, fmt.Errorf("gpushare: invalid fabric session %q", session)
+		return nil, nil, fmt.Errorf("gpushare: invalid fabric session %q", session)
 	}
 	if podUID == "" {
-		return "", nil, errors.New("gpushare: a fabric session needs the pod uid to find its store")
+		return nil, nil, errors.New("gpushare: a fabric session needs the pod uid to find its store")
 	}
-	closeFn, err = a.openFabricSessionAt(session, namespace, pod, a.fabricHostDir(podUID, session))
+	s, closeFn, err := a.openFabricSessionAt(session, namespace, pod, a.fabricHostDir(podUID, session))
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	return fabricContainerDir(session), closeFn, nil
+	s.container = fabricContainerDir(session)
+	return s, closeFn, nil
 }
 
+// fabricSessionDir is a session directory, worked in through its parent: the
+// pod's chunk store, or a checkpoint's, which the workload can write
+// (confined_fs.go).
+type fabricSessionDir struct {
+	parent *confinedDir
+	name   string
+	// container is the directory as the workload and the tool see it.
+	container string
+}
+
+// own gives the directory to the user process pid runs as: the tool and
+// the restored processes write their handle lists there as that user.
+func (s *fabricSessionDir) own(procBase string, pid int) error {
+	uid, gid, err := procOwner(procBase, pid)
+	if err != nil {
+		return err
+	}
+	return s.parent.root.Lchown(s.name, uid, gid)
+}
+
+func (s *fabricSessionDir) read(name string, limit int64) ([]byte, error) {
+	return s.parent.readFile(s.name+"/"+name, limit)
+}
+
+func (s *fabricSessionDir) exists(name string) bool { return s.parent.exists(s.name + "/" + name) }
+
+// write writes name by rename, so the tool never reads a partial file.
+func (s *fabricSessionDir) write(name string, data []byte) error {
+	return s.parent.writeFileAtomic(s.name+"/"+name, data, 0o644) // read by the tool inside the workload
+}
+
+// fabricSmallLimit bounds the files of a session other than the handle
+// lists: a vote, a verdict.
+const fabricSmallLimit = 4 << 10
+
 // openFabricSessionAt creates host (fresh) and registers it for the pod.
-func (a *Agent) openFabricSessionAt(session, namespace, pod, host string) (func(), error) {
+// host's parent is created when missing; host itself is worked in only
+// through its parent (fabricSessionDir).
+func (a *Agent) openFabricSessionAt(session, namespace, pod, host string) (*fabricSessionDir, func(), error) {
 	if !validFabricSession(session) {
-		return nil, fmt.Errorf("gpushare: invalid fabric session %q", session)
+		return nil, nil, fmt.Errorf("gpushare: invalid fabric session %q", session)
 	}
-	if err := os.RemoveAll(host); err != nil {
-		return nil, fmt.Errorf("gpushare: clear fabric dir: %w", err)
+	parentDir, name := filepath.Dir(host), filepath.Base(host)
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("gpushare: fabric dir parent: %w", err)
 	}
-	if err := os.MkdirAll(host, 0o755); err != nil {
-		return nil, fmt.Errorf("gpushare: create fabric dir: %w", err)
+	parent, err := openConfinedDir(parentDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("gpushare: fabric dir parent: %w", err)
 	}
+	if err := parent.root.RemoveAll(name); err != nil {
+		_ = parent.Close()
+		return nil, nil, fmt.Errorf("gpushare: clear fabric dir: %w", err)
+	}
+	if err := parent.root.Mkdir(name, 0o755); err != nil {
+		_ = parent.Close()
+		return nil, nil, fmt.Errorf("gpushare: create fabric dir: %w", err)
+	}
+	s := &fabricSessionDir{parent: parent, name: name}
 	key := fabricKey(session, namespace, pod)
-	a.fabricSessions.Store(key, host)
-	return func() {
+	a.fabricSessions.Store(key, s)
+	return s, func() {
 		a.fabricSessions.Delete(key)
-		_ = os.RemoveAll(host)
+		_ = parent.root.RemoveAll(name)
+		_ = parent.Close()
 	}, nil
 }
 
@@ -157,6 +207,7 @@ type restoreV2Group struct {
 
 // restoreSession is one pod's directory in a group restore.
 type restoreSession struct {
+	dir     *fabricSessionDir
 	hostDir string
 	// containerDir is where the gpushare tool sees it ("" without gpushare).
 	containerDir string
@@ -173,12 +224,12 @@ func (a *Agent) openRestoreSession(g restoreV2Group, checkpointDir string, gpush
 		host = filepath.Join(checkpointDir, GPUShareCheckpointSubdir, fabricDirPrefix+g.Session)
 		cdir = fabricContainerDir(g.Session)
 	}
-	closeFn, err := a.openFabricSessionAt(g.Session, g.Namespace, g.Pod, host)
+	dir, closeFn, err := a.openFabricSessionAt(g.Session, g.Namespace, g.Pod, host)
 	if err != nil {
 		return nil, err
 	}
 	var once sync.Once
-	return &restoreSession{hostDir: host, containerDir: cdir, close: func() { once.Do(closeFn) }}, nil
+	return &restoreSession{dir: dir, hostDir: host, containerDir: cdir, close: func() { once.Do(closeFn) }}, nil
 }
 
 // fabricUnlockWait bounds the hold: TCP gives up on a connection held
@@ -188,18 +239,18 @@ const fabricUnlockWait = 10 * time.Minute
 // awaitUnlock reports this pod restored and waits for the driver's
 // verdict, "unlock" or "abort".
 func (s *restoreSession) awaitUnlock(ctx context.Context, log *logrus.Entry) (string, error) {
-	if err := writeFileAtomic(s.hostDir, "restored", []byte("1\n")); err != nil {
+	if err := s.dir.write("restored", []byte("1\n")); err != nil {
 		return "", fmt.Errorf("group restore: report restored: %w", err)
 	}
 	log.Info("group restore: CRIU restore done, holding the network lock until every pod is restored")
-	return waitFabricVerdictFile(ctx, filepath.Join(s.hostDir, "u"), fabricUnlockWait)
+	return waitFabricVerdictFile(ctx, s.dir, "u", fabricUnlockWait)
 }
 
-// waitFabricVerdictFile polls path for "unlock" or "abort".
-func waitFabricVerdictFile(ctx context.Context, path string, limit time.Duration) (string, error) {
+// waitFabricVerdictFile polls name in the session for "unlock" or "abort".
+func waitFabricVerdictFile(ctx context.Context, s *fabricSessionDir, name string, limit time.Duration) (string, error) {
 	t0 := time.Now()
 	for {
-		if b, err := os.ReadFile(path); err == nil {
+		if b, err := s.read(name, fabricSmallLimit); err == nil {
 			v := strings.TrimSpace(string(b))
 			if v == "unlock" || v == fabricVerdictAbort {
 				return v, nil
@@ -278,9 +329,9 @@ func parseFabricVote(s string) (*fabricVote, error) {
 
 // readFabricState reads a session directory. The tool writes q and out by
 // rename, so a file that exists is complete.
-func readFabricState(dir string) (fabricState, error) {
+func readFabricState(s *fabricSessionDir) (fabricState, error) {
 	var st fabricState
-	if b, err := os.ReadFile(filepath.Join(dir, "q")); err == nil {
+	if b, err := s.read("q", fabricSmallLimit); err == nil {
 		v, perr := parseFabricVote(string(b))
 		if perr != nil {
 			return st, perr
@@ -289,60 +340,32 @@ func readFabricState(dir string) (fabricState, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return st, err
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "out")); err == nil {
+	if b, err := s.read("out", fabricInLimit); err == nil {
 		s := string(b)
 		st.Out = &s
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return st, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, "in")); err == nil {
-		st.HaveIn = true
-	}
-	if _, err := os.Stat(filepath.Join(dir, "restored")); err == nil {
-		st.Restored = true
-	}
+	st.HaveIn, st.Restored = s.exists("in"), s.exists("restored")
 	return st, nil
-}
-
-// writeFileAtomic writes name in dir through a rename, so the tool never
-// reads a partial file.
-func writeFileAtomic(dir, name string, data []byte) error {
-	tmp, err := os.CreateTemp(dir, "."+name+".tmp-*")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil { //nolint:gosec // read by the tool inside the workload
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
 // Member endpoints.
 
-func (a *Agent) fabricDirFor(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (a *Agent) fabricDirFor(w http.ResponseWriter, r *http.Request) (*fabricSessionDir, bool) {
 	v := mux.Vars(r)
 	if !validFabricSession(v["session"]) {
 		http.Error(w, "invalid session", http.StatusBadRequest)
-		return "", false
+		return nil, false
 	}
 	d, ok := a.fabricSessions.Load(fabricKey(v["session"], v["namespace"], v["pod"]))
 	if !ok {
 		// Not yet registered (the member's checkpoint has not reached the
 		// suspend) or already closed: the driver polls again.
 		http.Error(w, "no such fabric session on this node", http.StatusNotFound)
-		return "", false
+		return nil, false
 	}
-	return d.(string), true
+	return d.(*fabricSessionDir), true
 }
 
 func (a *Agent) fabricStateHandler(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +393,7 @@ func (a *Agent) fabricVerdictHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "attempt (>= 0) and verdict (go, retry, abort) required", http.StatusBadRequest)
 		return
 	}
-	if err := writeFileAtomic(dir, "d", []byte(fmt.Sprintf("%d %s\n", attempt, verdict))); err != nil {
+	if err := dir.write("d", []byte(fmt.Sprintf("%d %s\n", attempt, verdict))); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -387,7 +410,7 @@ func (a *Agent) fabricUnlockHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "verdict (unlock, abort) required", http.StatusBadRequest)
 		return
 	}
-	if err := writeFileAtomic(dir, "u", []byte(verdict+"\n")); err != nil {
+	if err := dir.write("u", []byte(verdict+"\n")); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -408,7 +431,7 @@ func (a *Agent) fabricInHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unreadable or oversized handle list", http.StatusBadRequest)
 		return
 	}
-	if err := writeFileAtomic(dir, "in", data); err != nil {
+	if err := dir.write("in", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

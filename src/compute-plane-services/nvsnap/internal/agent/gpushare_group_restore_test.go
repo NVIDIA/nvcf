@@ -97,7 +97,7 @@ func (h *groupRestoreHarness) restore(w http.ResponseWriter, r *http.Request) {
 	if md := h.ckpts[req.CheckpointID]; md.GPUShareGroup == nil || !md.GPUShareGroup.Companion {
 		// A GPU rank: the tool's resume (its list, then the merged one)
 		// before it reports restored.
-		if err := writeFileAtomic(sess.hostDir, "out", []byte(req.PlaceholderPodName+"-old "+req.PlaceholderPodName+"-new\n")); err != nil {
+		if err := sess.dir.write("out", []byte(req.PlaceholderPodName+"-old "+req.PlaceholderPodName+"-new\n")); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -23,14 +23,20 @@ func TestOwnSessionDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proc, "42", "status"), []byte(status), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ownSessionDir(proc, 42, dir); err != nil {
+	parent, err := openConfinedDir(filepath.Dir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.Close() }()
+	sess := &fabricSessionDir{parent: parent, name: filepath.Base(dir)}
+	if err := sess.own(proc, 42); err != nil {
 		t.Fatal(err)
 	}
 	var st syscall.Stat_t
 	if err := syscall.Stat(dir, &st); err != nil || int(st.Uid) != uid || int(st.Gid) != gid {
 		t.Errorf("owner %d:%d (%v), want %d:%d", st.Uid, st.Gid, err, uid, gid)
 	}
-	if err := ownSessionDir(proc, 7, dir); err == nil {
+	if err := sess.own(proc, 7); err == nil {
 		t.Error("a process that is gone must be an error, not a guess")
 	}
 }

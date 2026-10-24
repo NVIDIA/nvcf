@@ -433,8 +433,8 @@ func TestFabricSession_EndToEndOverHTTP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cdir != fabricContainerDir(session) {
-			t.Fatalf("container dir = %q", cdir)
+		if cdir.container != fabricContainerDir(session) {
+			t.Fatalf("container dir = %q", cdir.container)
 		}
 		nodes[i] = node{a: a, srv: srv, dir: a.fabricHostDir(fmt.Sprintf("uid-%d", i), session), closeF: closeF}
 	}

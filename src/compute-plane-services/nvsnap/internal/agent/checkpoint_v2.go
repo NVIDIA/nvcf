@@ -134,31 +134,21 @@ func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string
 // gpushareResumeTimeout bounds bringing a source back after its dump.
 const gpushareResumeTimeout = 10 * time.Minute
 
-// ownSessionDir makes dir owned by the user the process pid runs as.
-func ownSessionDir(procBase string, pid int, dir string) error {
-	uid, gid, err := procOwner(procBase, pid)
-	if err != nil {
-		return err
-	}
-	return os.Lchown(dir, uid, gid)
-}
-
 // ownGPUShareStore makes the workload's chunk store (and the fabric
 // session directory in it, when there is one) owned by the user the
-// workload's process runs as, so it can write its GPU memory there.
-func ownGPUShareStore(procBase string, hostPID int, root, fabricDir string) error {
+// workload's process runs as, so it can write its GPU memory there. The
+// store is the workload's mount point, which it cannot replace; the
+// session directory is reached through its parent (fabricSessionDir).
+func ownGPUShareStore(procBase string, hostPID int, root string, fabric *fabricSessionDir) error {
 	uid, gid, err := procOwner(procBase, hostPID)
 	if err != nil {
 		return err
 	}
-	dirs := []string{filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))}
-	if fabricDir != "" {
-		dirs = append(dirs, filepath.Join(root, strings.TrimPrefix(fabricDir, "/")))
+	if err := os.Lchown(filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/")), uid, gid); err != nil {
+		return err
 	}
-	for _, d := range dirs {
-		if err := os.Lchown(d, uid, gid); err != nil {
-			return err
-		}
+	if fabric != nil {
+		return fabric.parent.root.Lchown(fabric.name, uid, gid)
 	}
 	return nil
 }
@@ -301,14 +291,15 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// A multi-node session's directory lives in the pod's store and must be
 	// gone before the store is collected into the checkpoint.
 	fabricDir, closeFabric := "", func() {}
+	var fabric *fabricSessionDir
 	if fabricSession != "" {
-		dir, closeFn, err := a.openFabricSession(fabricSession, containerInfo.Labels["io.kubernetes.pod.namespace"],
+		s, closeFn, err := a.openFabricSession(fabricSession, containerInfo.Labels["io.kubernetes.pod.namespace"],
 			containerInfo.Labels["io.kubernetes.pod.name"], containerInfo.Labels["io.kubernetes.pod.uid"])
 		if err != nil {
 			return nil, err
 		}
 		var once sync.Once
-		fabricDir, closeFabric = dir, func() { once.Do(closeFn) }
+		fabric, fabricDir, closeFabric = s, s.container, func() { once.Do(closeFn) }
 		defer closeFabric()
 		log = log.WithField("fabricSession", fabricSession)
 	}
@@ -322,7 +313,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		}
 		// The store is created by the kubelet, as root: an engine that runs
 		// as another user cannot write its GPU memory there.
-		if err := ownGPUShareStore(procBase, targetHostPID, root, fabricDir); err != nil {
+		if err := ownGPUShareStore(procBase, targetHostPID, root, fabric); err != nil {
 			return nil, fmt.Errorf("gpushare: give the workload its chunk store: %w", err)
 		}
 		gm, suspended, err := gpushareSuspend(ctx, hostPID, gsPIDs, fabricDir, log)

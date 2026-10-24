@@ -324,7 +324,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			// The restored processes write their handle lists into the
 			// session directory, as the user they run as; the agent made it
 			// as root. The capture side hands its session over the same way.
-			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
+			if err := sess.dir.own(procBase, resumePID); err != nil {
 				gsSpan.End()
 				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
 			}
