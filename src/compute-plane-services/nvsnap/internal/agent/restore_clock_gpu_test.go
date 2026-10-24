@@ -192,6 +192,21 @@ func TestClockWaited(t *testing.T) {
 	}
 }
 
+// Every pid's remap reply is kept whole, and nothing else.
+func TestRemapReplies(t *testing.T) {
+	out := "fabric map: 283 handle(s) in /f/out.694; waiting for /f/in\n" +
+		"pid=694 remap /f/in: ok remapped 333 mapping(s), 77 host buffer(s) in 3.10s: host register 2.40s (614400 MiB; prefault 31.2s, waited 0.0s)\n" +
+		"pid=695 remap /f/in: ok remapped 333 mapping(s)\n" +
+		"pid=694 clock 1.000s behind the dump\nresumed\n"
+	got := remapReplies(out)
+	if len(got) != 2 || !strings.HasSuffix(got[0], "waited 0.0s)") || !strings.HasPrefix(got[1], "pid=695 remap") {
+		t.Errorf("remap replies %q", got)
+	}
+	if remapReplies("resumed\n") != nil {
+		t.Error("a resume without remap has replies")
+	}
+}
+
 func TestGPUShareResumeArgsClockAt(t *testing.T) {
 	got := strings.Join(gpushareResumeArgs("", "", true, 1234, []int{7}), " ")
 	if got != "--hold-gate --clock-at 1234 resume 7" {

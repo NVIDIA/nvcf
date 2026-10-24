@@ -302,6 +302,11 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
+	// Each pid's remap reply: what it remapped, and where the time went
+	// (host register, imports, map, multicast).
+	for _, l := range remapReplies(out) {
+		log.Info("gpushare: " + l)
+	}
 	if clockAt <= 0 {
 		return 0, nil
 	}
@@ -314,6 +319,20 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		}
 	}
 	return clockWaited(out), nil
+}
+
+// remapLine is the tool's report of one pid's reply to remap.
+var remapLine = regexp.MustCompile(`^pid=\d+ remap `)
+
+// remapReplies returns the remap reply lines of a resume's output, whole.
+func remapReplies(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); remapLine.MatchString(l) {
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }
 
 // clockLine is the tool's report of a pid's clock at its thaw.
