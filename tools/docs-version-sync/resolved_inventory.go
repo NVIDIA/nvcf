@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -336,6 +337,11 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 					return err
 				}
 			}
+			if key.Value == "env" {
+				if err := collectResolvedCollectorEnvironment(value, images); err != nil {
+					return err
+				}
+			}
 			if err := collectResolvedImages(value, images); err != nil {
 				return err
 			}
@@ -351,6 +357,31 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 }
 
 func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind == yaml.SequenceNode {
+		for i, argument := range node.Content {
+			if argument.Value != "--function-env-overrides-b64" && argument.Value != "--task-env-overrides-b64" {
+				continue
+			}
+			if i+1 == len(node.Content) {
+				return fmt.Errorf("%s has no encoded environment", argument.Value)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(node.Content[i+1].Value)
+			if err != nil {
+				return fmt.Errorf("decode %s: %w", argument.Value, err)
+			}
+			var overrides map[string]string
+			if err := json.Unmarshal(decoded, &overrides); err != nil {
+				return fmt.Errorf("parse %s environment: %w", argument.Value, err)
+			}
+			if reference := overrides["BYOO_OTEL_COLLECTOR_CONTAINER"]; reference != "" {
+				image, err := parseResolvedImageReference(reference)
+				if err != nil {
+					return fmt.Errorf("BYOO_OTEL_COLLECTOR_CONTAINER: %w", err)
+				}
+				images[image.Reference] = image
+			}
+		}
+	}
 	if node.Kind == yaml.ScalarNode {
 		if reference, ok := resolvedImageArgument(node.Value); ok {
 			image, err := parseResolvedImageReference(reference)
@@ -369,6 +400,44 @@ func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImag
 		if err := collectResolvedImageArguments(child, images); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func collectResolvedCollectorEnvironment(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var repository, tag string
+	for _, entry := range node.Content {
+		var variable struct {
+			Name  string `yaml:"name"`
+			Value string `yaml:"value"`
+		}
+		if err := entry.Decode(&variable); err != nil {
+			return fmt.Errorf("decode collector environment: %w", err)
+		}
+		switch variable.Name {
+		case "OTEL_COLLECTOR_IMAGE_REPO":
+			repository = variable.Value
+		case "OTEL_COLLECTOR_IMAGE_TAG":
+			tag = variable.Value
+		}
+	}
+	if repository == "" && tag == "" {
+		return nil
+	}
+	if repository == "" || tag == "" {
+		return fmt.Errorf("OTEL_COLLECTOR_IMAGE_REPO and OTEL_COLLECTOR_IMAGE_TAG must both be resolved")
+	}
+	image, err := parseResolvedImageReference(repository + ":" + tag)
+	if err != nil {
+		return fmt.Errorf("OTEL_COLLECTOR_IMAGE_REPO/TAG: %w", err)
+	}
+	// NVCA creates this optional collector later; it is not an operator container.
+	image.Indirect = true
+	if existing, exists := images[image.Reference]; !exists || existing.Indirect {
+		images[image.Reference] = image
 	}
 	return nil
 }
