@@ -2,7 +2,7 @@
 ### Stage 1: Build binaries for byoo-otel-collector
 #####
 
-FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -33,7 +33,7 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 ### the standard Go module proxy). The diff on otel version bumps is
 ### reviewable against the regenerated otelcol/ tree.
 ####
-FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder-otelcol
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm AS builder-otelcol
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -54,7 +54,7 @@ RUN cd otelcol && \
 ####
 ### Stage 3: Create the final Distroless image for byoo-otel-collector
 ####
-FROM nvcr.io/nvidia/distroless/go:v4.1.2 AS byoo-otel-collector
+FROM nvcr.io/nvidia/distroless/static:v4.1.5 AS byoo-otel-collector
 
 WORKDIR /app
 
