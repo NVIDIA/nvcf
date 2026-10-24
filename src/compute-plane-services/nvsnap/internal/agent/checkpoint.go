@@ -1391,7 +1391,9 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 		// The size limit is for the emptyDirs replayed as such, not for
 		// the allowlist (nvsnap's cachedir is an emptyDir, and larger).
 		if isEmptyDirMount(mi.Root) && !onAllowlist(mi.MountPoint, allowlist) {
-			over, n, err := treeBytesOver(fmt.Sprintf("/proc/%d/root%s", containerInfo.PID, mi.MountPoint), emptyDirMax)
+			// Walked under the container's root: the workload can write the
+			// emptyDir and the directories above it (confined_fs.go).
+			over, n, err := emptyDirOver(int(containerInfo.PID), mi.MountPoint, emptyDirMax)
 			if err != nil || over {
 				log.WithError(err).WithFields(logrus.Fields{"mp": mi.MountPoint, "bytes": n, "limit": emptyDirMax}).
 					Warn("emptyDir not copied into the checkpoint: too large or unreadable; a restore that needs its files fails and starts cold")

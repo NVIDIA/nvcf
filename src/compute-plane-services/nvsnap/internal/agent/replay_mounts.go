@@ -20,7 +20,6 @@ package agent
 import (
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -162,9 +161,19 @@ func classifyMount(root, mp, fsType, opts string, allowlist []string) MountClass
 
 // treeBytesOver reports whether the regular files under dir add up to more
 // than limit bytes, and the bytes counted. It stops counting past limit.
-func treeBytesOver(dir string, limit int64) (bool, int64, error) {
-	var total int64
-	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+// emptyDirOver is treeBytesOver of mount point mp of host pid pid, walked
+// under the container's root.
+func emptyDirOver(pid int, mp string, limit int64) (over bool, total int64, err error) {
+	d, err := openWorkloadDir("/proc", pid, mp)
+	if err != nil {
+		return false, 0, err
+	}
+	defer func() { _ = d.Close() }()
+	return treeBytesOver(d.root.FS(), limit)
+}
+
+func treeBytesOver(fsys fs.FS, limit int64) (over bool, total int64, err error) {
+	err = fs.WalkDir(fsys, ".", func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

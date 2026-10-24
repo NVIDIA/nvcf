@@ -115,10 +115,10 @@ func TestTreeBytesOver(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if over, n, err := treeBytesOver(dir, 2000); err != nil || over || n != 1200 {
+	if over, n, err := treeBytesOver(os.DirFS(dir), 2000); err != nil || over || n != 1200 {
 		t.Errorf("treeBytesOver(2000) = %v, %d, %v; want false, 1200", over, n, err)
 	}
-	if over, _, err := treeBytesOver(dir, 1000); err != nil || !over {
+	if over, _, err := treeBytesOver(os.DirFS(dir), 1000); err != nil || !over {
 		t.Errorf("treeBytesOver(1000) = %v, %v; want over", over, err)
 	}
 }

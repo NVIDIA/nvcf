@@ -234,7 +234,10 @@ func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entr
 		return fmt.Errorf("tarMount: empty pid/mp/out")
 	}
 	src := fmt.Sprintf("/proc/%d/root%s", srcPID, mp)
-	st, err := os.Stat(src)
+	// The workload can write the mount and the directories above it: open
+	// it under the container's root, so no component resolves outside it,
+	// and have tar read from that directory (confined_fs.go).
+	d, err := openWorkloadDir("/proc", srcPID, mp)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if log != nil {
@@ -243,17 +246,20 @@ func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entr
 			}
 			return nil
 		}
-		return fmt.Errorf("stat src %s: %w", src, err)
+		return fmt.Errorf("open src %s: %w", src, err)
 	}
-	if !st.IsDir() {
-		return fmt.Errorf("src %s is not a directory", src)
+	defer func() { _ = d.Close() }()
+	dir, err := d.root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open src %s: %w", src, err)
 	}
+	defer func() { _ = dir.Close() }()
 	if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent of %s: %w", outFile, err)
 	}
 
 	args := []string{
-		"-C", src,
+		"-C", "/proc/self/fd/3", // dir, the child's fd 3
 		"-cf", outFile,
 		"--xattrs",
 		"--acls",
@@ -266,6 +272,7 @@ func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entr
 	}
 	args = append(args, ".")
 	cmd := exec.Command("tar", args...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	cmd.ExtraFiles = []*os.File{dir}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
