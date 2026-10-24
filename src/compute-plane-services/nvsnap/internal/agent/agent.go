@@ -253,6 +253,10 @@ type ModelVolumeConfig struct {
 	// Retention is how long a complete model or cache volume is kept
 	// after its last use before the reaper frees it. Zero keeps forever.
 	Retention time.Duration
+	// TenantLabel is the namespace label naming a namespace's tenant;
+	// model volumes are shared only within one (modelvolume.Config).
+	// Empty means each namespace is its own tenant.
+	TenantLabel string
 }
 
 // L2BackendConfig is the per-capture PVC L2 backend (nvsnap#63). See

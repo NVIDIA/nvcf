@@ -11,11 +11,14 @@ import (
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 func pod(uid string) *corev1.Pod {
@@ -111,17 +114,24 @@ func TestPodIdentity(t *testing.T) {
 	}
 }
 
+// modelPod is a pod running the model container the election tests elect.
+func modelPod(uid string) *corev1.Pod {
+	p := pod(uid)
+	p.Spec.Containers = []corev1.Container{{Name: "engine", Image: "vllm/vllm-openai:v1", Command: []string{"vllm"}, Args: []string{"serve", "org/model"}}}
+	return p
+}
+
 // The watcher takes a pod's stamped hash only from the elected leader on
 // the architecture it was elected for. Everything a pod can set on itself
 // (the hash, the election id, the pin) is checked against the Lease,
 // which it cannot write.
 func TestLeaseElector_VerifyStamp(t *testing.T) {
-	e := &LeaseElector{KubeClient: fake.NewSimpleClientset(), Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
-	if _, _, err := e.Elect(context.Background(), hash, pod("")); err != nil {
-		t.Fatal(err)
-	}
+	created := metav1.NewTime(time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC))
 	leader := func() *corev1.Pod {
-		p := pod("u1")
+		p := modelPod("u1")
+		p.Name = "w-leader"
+		p.CreationTimestamp = created
+		p.Labels = map[string]string{HashLabel: checkpointstore.ShortHash(hash)}
 		p.Annotations = map[string]string{HashAnnotation: hash, ElectionIDAnnotation: "leader-id"}
 		p.Spec.NodeSelector = ArchPin("9.0")
 		return p
@@ -157,16 +167,174 @@ func TestLeaseElector_VerifyStamp(t *testing.T) {
 		}, hash, "9.0", false},
 		"another architecture":      {leader, hash, "8.0", false},
 		"node architecture unknown": {leader, hash, "", false},
+		// A pod that copies every stamp off the leader is still not it.
+		"the stamps copied onto another pod": {func() *corev1.Pod {
+			p := leader()
+			p.Name, p.UID = "w-copy", "u2"
+			return p
+		}, hash, "9.0", false},
+		"another image": {func() *corev1.Pod {
+			p := leader()
+			p.Spec.Containers[0].Image = "busybox"
+			return p
+		}, hash, "9.0", false},
 	}
 	for name, c := range cases {
+		kc := fake.NewSimpleClientset(leader())
+		e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
+		if _, _, err := e.Elect(context.Background(), hash, modelPod("")); err != nil {
+			t.Fatal(err)
+		}
 		err := e.VerifyStamp(context.Background(), c.pod(), c.hash, c.nodeCC)
 		if (err == nil) != c.ok {
 			t.Errorf("%s: err=%v, want ok=%v", name, err, c.ok)
 		}
 	}
 	// The election gone (released, failed or never held): nothing vouches.
-	gone := &LeaseElector{KubeClient: fake.NewSimpleClientset(), Namespace: "nvsnap-system"}
+	gone := &LeaseElector{KubeClient: fake.NewSimpleClientset(leader()), Namespace: "nvsnap-system"}
 	if err := gone.VerifyStamp(context.Background(), leader(), hash, "9.0"); err == nil {
 		t.Error("a stamp with no live election verified")
+	}
+}
+
+// A pod that copies the leader's election id, hash and pin is refused
+// whether it asks before or after the leader, and the Lease keeps the
+// leader's UID once bound even if the leader pod goes away.
+func TestLeaseElector_VerifyStamp_CopiedStamps(t *testing.T) {
+	t0 := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	stamped := func(name, uid string, at time.Time) *corev1.Pod {
+		p := modelPod(uid)
+		p.Name = name
+		p.CreationTimestamp = metav1.NewTime(at)
+		p.Labels = map[string]string{HashLabel: checkpointstore.ShortHash(hash)}
+		p.Annotations = map[string]string{HashAnnotation: hash, ElectionIDAnnotation: "leader-id"}
+		p.Spec.NodeSelector = ArchPin("9.0")
+		return p
+	}
+	ctx := context.Background()
+	leader := stamped("w-leader", "u1", t0)
+	copied := stamped("w-copy", "u2", t0.Add(3*time.Second))
+	kc := fake.NewSimpleClientset(leader, copied)
+	e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
+	if _, _, err := e.Elect(ctx, hash, modelPod("")); err != nil {
+		t.Fatal(err)
+	}
+	// The copy turns Ready first, long before the leader has downloaded.
+	if err := e.VerifyStamp(ctx, copied, hash, "9.0"); err == nil {
+		t.Fatal("a pod carrying copied stamps verified")
+	}
+	lease, err := kc.CoordinationV1().Leases("nvsnap-system").Get(ctx, LeaseName(hash), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Annotations[LeaderUIDAnnotation] != "u1" {
+		t.Fatalf("the Lease must bind the earliest pod carrying the id, got %q", lease.Annotations[LeaderUIDAnnotation])
+	}
+	if err := e.VerifyStamp(ctx, leader, hash, "9.0"); err != nil {
+		t.Fatalf("the leader must verify: %v", err)
+	}
+	// Once bound, the leader pod going away does not hand the election to
+	// the copy.
+	if err := kc.CoreV1().Pods("fn").Delete(ctx, "w-leader", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.VerifyStamp(ctx, copied, hash, "9.0"); err == nil {
+		t.Error("the copy verified after the bound leader was deleted")
+	}
+}
+
+// Two pods created in the same second carrying the id cannot be told
+// apart: neither is vouched for.
+func TestLeaseElector_VerifyStamp_Ambiguous(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC))
+	pods := make([]runtime.Object, 0, 2)
+	for _, n := range []string{"a", "b"} {
+		p := modelPod("u-" + n)
+		p.Name, p.CreationTimestamp = "w-"+n, at
+		p.Labels = map[string]string{HashLabel: checkpointstore.ShortHash(hash)}
+		p.Annotations = map[string]string{HashAnnotation: hash, ElectionIDAnnotation: "leader-id"}
+		p.Spec.NodeSelector = ArchPin("9.0")
+		pods = append(pods, p)
+	}
+	kc := fake.NewSimpleClientset(pods...)
+	e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
+	if _, _, err := e.Elect(context.Background(), hash, modelPod("")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pods {
+		if err := e.VerifyStamp(context.Background(), p.(*corev1.Pod), hash, "9.0"); err == nil {
+			t.Errorf("%s verified though it cannot be told from its twin", p.(*corev1.Pod).Name)
+		}
+	}
+	lease, _ := kc.CoordinationV1().Leases("nvsnap-system").Get(context.Background(), LeaseName(hash), metav1.GetOptions{})
+	if lease.Annotations[LeaderUIDAnnotation] != "" {
+		t.Errorf("an ambiguous leader must not be bound, got %q", lease.Annotations[LeaderUIDAnnotation])
+	}
+}
+
+// A concurrent check that binds the leader first wins; the loser re-reads
+// and uses its binding.
+func TestLeaseElector_VerifyStamp_BindConflict(t *testing.T) {
+	leader := modelPod("u1")
+	leader.Name = "w-leader"
+	leader.Labels = map[string]string{HashLabel: checkpointstore.ShortHash(hash)}
+	leader.Annotations = map[string]string{HashAnnotation: hash, ElectionIDAnnotation: "leader-id"}
+	leader.Spec.NodeSelector = ArchPin("9.0")
+	kc := fake.NewSimpleClientset(leader)
+	e := &LeaseElector{KubeClient: kc, Namespace: "nvsnap-system", NewID: func() string { return "leader-id" }}
+	if _, _, err := e.Elect(context.Background(), hash, modelPod("")); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := 0
+	kc.PrependReactor("update", "leases", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if conflicts > 0 {
+			return false, nil, nil
+		}
+		conflicts++
+		// Another agent binds the leader between this check's read and
+		// its update.
+		cur, err := kc.Tracker().Get(coordinationv1.SchemeGroupVersion.WithResource("leases"), "nvsnap-system", LeaseName(hash))
+		if err != nil {
+			return true, nil, err
+		}
+		l := cur.(*coordinationv1.Lease).DeepCopy()
+		l.Annotations[LeaderUIDAnnotation] = "u1"
+		if err := kc.Tracker().Update(coordinationv1.SchemeGroupVersion.WithResource("leases"), l, "nvsnap-system"); err != nil {
+			return true, nil, err
+		}
+		return true, nil, apierrors.NewConflict(coordinationv1.Resource("leases"), LeaseName(hash), errors.New("modified"))
+	})
+	if err := e.VerifyStamp(context.Background(), leader, hash, "9.0"); err != nil {
+		t.Errorf("the leader must verify after a binding conflict: %v", err)
+	}
+	if conflicts != 1 {
+		t.Errorf("conflicts = %d, want 1", conflicts)
+	}
+}
+
+func TestSpecIdentity(t *testing.T) {
+	base := SpecIdentity(modelPod("a"), 0)
+	if base == "" || SpecIdentity(modelPod("b"), 0) != base {
+		t.Fatal("the identity must depend on what the pod runs, not on which pod it is")
+	}
+	for name, mutate := range map[string]func(*corev1.Container){
+		"name":    func(c *corev1.Container) { c.Name = "other" },
+		"image":   func(c *corev1.Container) { c.Image = "busybox" },
+		"command": func(c *corev1.Container) { c.Command = []string{"sh"} },
+		"args":    func(c *corev1.Container) { c.Args = []string{"serve", "org/other"} },
+	} {
+		p := modelPod("a")
+		mutate(&p.Spec.Containers[0])
+		if SpecIdentity(p, 0) == base {
+			t.Errorf("a different %s must change the identity", name)
+		}
+	}
+	p := modelPod("a")
+	p.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "HF_HOME", Value: "/opt/nvsnap/hf"}}
+	if SpecIdentity(p, 0) != base {
+		t.Error("env the webhook injects must not change the identity")
+	}
+	if SpecIdentity(nil, 0) != "" || SpecIdentity(modelPod("a"), 1) != "" || SpecIdentity(modelPod("a"), -1) != "" {
+		t.Error("no model container must yield an empty identity")
 	}
 }

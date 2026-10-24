@@ -2,7 +2,7 @@
 
 Goal: for any Helm chart of GPU model workers, on any registry, any
 deployment shape and any scheduler, the model is downloaded once per cluster
-and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
+(per tenant on it: see the identity, step 1) and the compile artifacts (torch.compile, Triton, FlashInfer, DeepGEMM, CUDA
 JIT) are built once per cluster, and every other pod consumes them. No chart
 change. No pod is ever held back from scheduling.
 
@@ -104,7 +104,20 @@ not.
    The init's destination is resolved through the volume it names, so an
    init and an engine that mount one volume at different paths agree.
 
-2. One download step per identity per cluster, as a Job (webhook). The
+   Pods share a volume within one tenant only, and the tenant is part of
+   the key (`<tenant>/<uri>#<layout>`). The download runs with the
+   downloading tenant's registry credentials, and a reader of a complete
+   volume skips the download, so a pod in another tenant naming the same
+   private NGC, gated Hugging Face or S3 artifact would otherwise read it
+   without presenting any credential; nothing at admission tells a public
+   artifact from a private one. The tenant is the value of the namespace
+   label `agent.modelVolume.tenantLabel`, which the platform that creates
+   namespaces sets and their users cannot edit, so every namespace of one
+   account (each redeploy of a function, for one) shares its volumes.
+   With no label configured, or on a namespace without it, the namespace
+   is the tenant.
+
+2. One download step per identity per tenant, as a Job (webhook). The
    webhook creates Job `nvsnap-model-dl-<key>` in the pod's namespace on
    first sight; create is idempotent, so concurrent admissions need no
    election. The Job's pod is the chart's own download init (image,

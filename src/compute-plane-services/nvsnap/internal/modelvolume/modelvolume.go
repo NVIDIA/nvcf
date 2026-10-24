@@ -223,6 +223,11 @@ type Config struct {
 	// KindCache, the compile caches captured from a running pod. The two
 	// kinds share every mechanism and differ in names and labels only.
 	Kind Kind
+	// TenantLabel is the namespace label naming the tenant a namespace
+	// belongs to, set by the platform that creates the namespaces (pod
+	// authors cannot write it). Volumes are shared only within a tenant
+	// (Provisioner.Scope). Empty means every namespace is its own tenant.
+	TenantLabel string
 }
 
 // Kind of volume a Provisioner manages.
@@ -440,6 +445,31 @@ func (p *Provisioner) now() time.Time {
 	}
 	return time.Now()
 }
+
+// Scope is the tenant a pod in namespace ns downloads and reads models
+// for: the value of the namespace's TenantLabel, or the namespace itself
+// when no label is configured or the namespace does not carry it. A
+// volume is filled with the credentials of the tenant that downloaded
+// it, so a model volume is never shared across tenants: a pod naming the
+// same artifact in another tenant would otherwise read a private model
+// it has no access to without ever presenting a credential.
+func (p *Provisioner) Scope(ctx context.Context, ns string) (string, error) {
+	if label := p.Cfg.TenantLabel; label != "" {
+		n, err := p.Kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("read namespace %s for its tenant: %w", ns, err)
+		}
+		if v := n.Labels[label]; v != "" {
+			return "tenant:" + label + "=" + v, nil
+		}
+	}
+	return "namespace:" + ns, nil
+}
+
+// ScopedURI is the volume identity of the artifact shareKey for tenant
+// scope (Scope): the key every name, label and record of the volume is
+// derived from.
+func ScopedURI(scope, shareKey string) string { return scope + "/" + shareKey }
 
 // EnsureWriterClaim creates the claim the download writes into, in ns, at
 // the configured RWX size. Idempotent. RWX mode creates a ReadWriteMany
