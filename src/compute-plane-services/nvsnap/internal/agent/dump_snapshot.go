@@ -75,48 +75,6 @@ func writeDumpActionScript(path, snapDir, barrierDir string) error {
 	return os.WriteFile(path, []byte(b.String()), 0o755)
 }
 
-// DumpHookName is the name the agent binary runs under as CRIU's action
-// script in an in-container dump: the bundle's in-container/ link to it, a
-// static binary from the read-only bundle (bundle_tools.go). A script would
-// run the workload's own shell, as root.
-const DumpHookName = "nvsnap-dump-hook"
-
-// DumpHookDirEnv names the directory the hook asks for the snapshot in, as
-// the hook sees it.
-const DumpHookDirEnv = "NVSNAP_DUMP_SNAPSHOT_DIR"
-
-// RunDumpHook is the in-container dump's action script (snapshotHook, as a
-// program): at post-dump it asks for the snapshot in dir and waits for the
-// agent's answer. It returns the exit status: non-zero makes CRIU roll the
-// dump back. dir is in the workload's filesystem, so it is used through a
-// confined directory.
-func RunDumpHook(action, dir string) int {
-	if action != "post-dump" || dir == "" {
-		return 0
-	}
-	d, err := openConfinedDir(dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "nvsnap-dump-hook:", err)
-		return 1
-	}
-	defer func() { _ = d.Close() }()
-	if err := d.writeFileAtomic("snapshot", nil); err != nil {
-		fmt.Fprintln(os.Stderr, "nvsnap-dump-hook: ask for the snapshot:", err)
-		return 1
-	}
-	for deadline := time.Now().Add(snapshotWait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		switch {
-		case d.exists("snapshot-taken"):
-			return 0
-		case d.exists("snapshot-failed"):
-			fmt.Fprintln(os.Stderr, "nvsnap-dump-hook: the agent could not take the snapshot")
-			return 1
-		}
-	}
-	fmt.Fprintln(os.Stderr, "nvsnap-dump-hook: no answer from the agent")
-	return 1
-}
-
 // serveSnapshot takes the snapshot when the action script asks for it in
 // dir. The returned function stops serving and reports whether the
 // snapshot was taken; a snapshot under way is finished first.

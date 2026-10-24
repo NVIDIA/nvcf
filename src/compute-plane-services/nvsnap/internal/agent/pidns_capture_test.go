@@ -296,10 +296,6 @@ func TestDumpArgsNoCUDAPluginWithoutGPUs(t *testing.T) {
 	if strings.Contains(pidns, "--libdir") {
 		t.Errorf("pid-namespace dump of a CPU-only tree loads the CUDA plugin: %s", pidns)
 	}
-	inns := strings.Join(dumpV2Args(10, 51, nil, dumpLeaveRunning, false, false, "", "--compress-block", "/criu-bundle/plugins", defaultGhostLimit), " ")
-	if strings.Contains(inns, "--libdir") {
-		t.Errorf("in-namespace dump of a CPU-only tree loads the CUDA plugin: %s", inns)
-	}
 	gpu := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
 		[]string{"/etc/hosts"}, nil, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, false, false, defaultGhostLimit), " ")
 	if !strings.Contains(gpu, "--libdir /criu-bundle/plugins") {

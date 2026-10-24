@@ -679,6 +679,10 @@ func restoreLogReportsFailure(content string) bool {
 	return strings.Contains(content, "Restoring FAILED")
 }
 
+// restoreLogPoll is how often the agent reads the restore log for a
+// failure.
+var restoreLogPoll = 2 * time.Second
+
 // restoreLogTail is how much of the end of CRIU's restore log the agent
 // reads: its last lines say whether and how the restore failed.
 const restoreLogTail = 1 << 20
@@ -687,7 +691,7 @@ const restoreLogTail = 1 << 20
 // Once the log reports a failed restore it waits grace for criu to exit,
 // then cancels, which kills the criu process group through cmd.Cancel.
 func cancelWhenRestoreFailed(ctx context.Context, work *confinedDir, grace time.Duration, cancel context.CancelFunc, log *logrus.Entry) {
-	tick := time.NewTicker(2 * time.Second)
+	tick := time.NewTicker(restoreLogPoll)
 	defer tick.Stop()
 	for {
 		select {

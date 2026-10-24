@@ -165,9 +165,6 @@ func (t bundleTools) netMigration() bool { return criuSupportsNetMigration(t.cri
 
 func (t bundleTools) timensBudget() bool { return criuSupportsTimensBudget(t.criuHelp()) }
 
-// compressBlockFlag is the mounted CRIU's name for block compression.
-func (t bundleTools) compressBlockFlag() string { return criuCompressBlockFlag(t.criuHelp()) }
-
 // bundlePATH is the PATH a bundle tool runs with inside a workload: the
 // bundle first. CRIU's CUDA plugin runs cuda-checkpoint from PATH, and
 // in-container/ holds it without the wrapper the agent's own container

@@ -152,30 +152,3 @@ func confinedFor(t *testing.T, dir string) *confinedDir {
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
-
-// The in-container dump hook asks for the snapshot at post-dump only, and
-// exits as the agent answers: 0 once it is taken, 1 when it failed.
-func TestRunDumpHook(t *testing.T) {
-	if got := RunDumpHook("pre-dump", t.TempDir()); got != 0 {
-		t.Errorf("pre-dump: exit %d, want 0", got)
-	}
-	if got := RunDumpHook("post-dump", ""); got != 0 {
-		t.Errorf("no directory: exit %d, want 0", got)
-	}
-	for answer, want := range map[string]int{"snapshot-taken": 0, "snapshot-failed": 1} {
-		dir := t.TempDir()
-		stop := serveSnapshot(context.Background(), confinedFor(t, dir), func() error {
-			if answer == "snapshot-failed" {
-				return errors.New("copy failed")
-			}
-			return nil
-		})
-		if got := RunDumpHook("post-dump", dir); got != want {
-			t.Errorf("%s: exit %d, want %d", answer, got, want)
-		}
-		taken, _ := stop()
-		if taken != (want == 0) {
-			t.Errorf("%s: agent reports taken=%v", answer, taken)
-		}
-	}
-}

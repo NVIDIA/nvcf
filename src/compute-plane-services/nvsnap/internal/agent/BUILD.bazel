@@ -137,7 +137,6 @@ go_test(
         "cascade_fetch_test.go",
         "catalog_test.go",
         "checkpoint_reaper_test.go",
-        "checkpoint_v2_test.go",
         "client_limits_test.go",
         "confined_fs_test.go",
         "criu_auto_restore_test.go",

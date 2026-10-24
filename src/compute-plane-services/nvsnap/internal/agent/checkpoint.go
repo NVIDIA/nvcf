@@ -774,7 +774,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		}
 		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
-	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, gpuPIDs, dopts, log)
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, dopts, log)
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
