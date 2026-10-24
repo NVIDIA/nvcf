@@ -189,8 +189,7 @@ it reloads successfully.
 
 Merge these overrides into the Helmfile environment file
 `deploy/stacks/self-managed/environments/<environment>.yaml` to use upstream
-cert-manager images. The v1.20.2 pins match wrapper 0.1.0 and its CRDs; each
-digest covers Linux AMD64 and ARM64. Omitted overrides retain existing defaults.
+cert-manager images.
 For a private mirror, replace each full `repository`, which takes precedence
 over `global.image`.
 
