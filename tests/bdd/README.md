@@ -316,7 +316,8 @@ and `CMCTL` (the path to `cmctl`). Do not use a production context.
 go test -run '^TestCertManagerUpstreamImages$' -count=1 -timeout=15m .
 ```
 
-The suite installs the selected published wrapper through Helmfile, checks API
+The suite installs the selected published wrapper through Helmfile, verifies
+all five explicit image references and their chart version, checks API
 readiness, issues a self-signed CA certificate, verifies CA injection, and
 renews the certificate to revision 2. It leaves the release and test resources
 for inspection. Use a fresh cluster or remove the task's previous test
