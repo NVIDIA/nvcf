@@ -63,6 +63,36 @@ assert_images() {
 printf '{}\n' > "$environment_file"
 render
 cp "$work_dir/rendered.yaml" "$work_dir/default.yaml"
+# Test each values-template input independently, without rendering a chart.
+# Unspecified fields and other components must retain their global defaults.
+printf 'global:\n  image:\n    registry: global.example.com\n    repository: private\n' > "$environment_file"
+cp "$environment_file" "$work_dir/global-environment.yaml"
+write_values "$work_dir/global-values.yaml"
+for component in controller webhook cainjector startupapicheck; do
+  path="$(image_path "$component")"
+  assert_equal "$(yq -r ".\"cert-manager\".$path.repository" "$work_dir/global-values.yaml")" \
+    "global.example.com/private/cert-manager-$component" "$component global mirror fallback"
+done
+for component in controller webhook cainjector startupapicheck acmesolver; do
+  path="$(image_path "$component")"
+  for field in repository tag digest pullPolicy; do
+    case "$field" in
+      repository) value="mirror.example.com/team/$component" ;;
+      tag) value="custom-$component" ;;
+      digest) value="sha256:$(printf '%064d' 1)" ;;
+      pullPolicy) value=Always ;;
+    esac
+    cp "$work_dir/global-environment.yaml" "$environment_file"
+    yq -i ".certManager.$path.$field = \"$value\"" "$environment_file"
+    cp "$work_dir/global-values.yaml" "$work_dir/expected-values.yaml"
+    yq -i ".\"cert-manager\".$path.$field = \"$value\"" "$work_dir/expected-values.yaml"
+    write_values "$work_dir/values.yaml"
+    diff -u \
+      <(yq -o=json '."cert-manager" | sort_keys(..)' "$work_dir/expected-values.yaml") \
+      <(yq -o=json '."cert-manager" | sort_keys(..)' "$work_dir/values.yaml") \
+      || fail "$component $field override changed another value"
+  done
+done
 # Exercise the authored example rather than duplicating its pins in the test.
 awk '/^### Use upstream cert-manager images/{section=1; next} section && /^```yaml$/{block=1; next} block && /^```$/{exit} block' "$manifest" > "$environment_file"
 test -s "$environment_file" || fail 'missing documented environment example'
@@ -85,6 +115,9 @@ for component in controller webhook cainjector startupapicheck acmesolver; do
 done
 render
 assert_images
+for name in cert-manager cert-manager-webhook cert-manager-cainjector cert-manager-startupapicheck; do
+  assert_equal "$(yq -r "select((.kind == \"Deployment\" or .kind == \"Job\") and .metadata.name == \"$name\") | .spec.template.spec.containers[0].imagePullPolicy" "$work_dir/rendered.yaml")" Always "$name rendered pullPolicy"
+done
 for component in controller webhook cainjector startupapicheck acmesolver; do
   path="$(image_path "$component")"
   assert_equal "$(yq -r ".\"cert-manager\".$path.pullPolicy" "$work_dir/values.yaml")" Always "$component pullPolicy"
