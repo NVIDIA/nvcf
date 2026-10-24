@@ -134,43 +134,6 @@ func (t bundleTools) pluginDir(procBase string) string {
 	return v2BinDirInContainer + "/plugins"
 }
 
-// usageCache holds each version's tool usage text: a version never changes.
-var usageCache sync.Map
-
-// usage is tool's usage text in the mounted version (with arg, its help
-// flag; without, the text a tool prints when given no action), read once
-// per version.
-func (t bundleTools) usage(tool string, arg ...string) string {
-	key := t.version + "\x00" + tool
-	if v, ok := usageCache.Load(key); ok {
-		return v.(string)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	args := append([]string{"-t", strconv.Itoa(t.pid), "-m", "--", t.path(tool)}, arg...)
-	out, _ := exec.CommandContext(ctx, "nsenter", args...).CombinedOutput() //nolint:gosec // a bundle tool at a fixed path
-	if ctx.Err() != nil {
-		return string(out) // not cached: a timeout says nothing about the version
-	}
-	usageCache.Store(key, string(out))
-	return string(out)
-}
-
-// criuHelp is the mounted CRIU's --help.
-func (t bundleTools) criuHelp() string { return t.usage("criu", "--help") }
-
-func (t bundleTools) directImageIO() bool { return criuSupportsDirectImageIO(t.criuHelp()) }
-
-func (t bundleTools) netMigration() bool { return criuSupportsNetMigration(t.criuHelp()) }
-
-func (t bundleTools) timensBudget() bool { return criuSupportsTimensBudget(t.criuHelp()) }
-
-// bundlePATH is the PATH a bundle tool runs with inside a workload: the
-// bundle first. CRIU's CUDA plugin runs cuda-checkpoint from PATH, and
-// in-container/ holds it without the wrapper the agent's own container
-// needs (the workload's driver libraries are already in its loader path).
-const bundlePATH = v2BinDirInContainer + "/in-container:" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin"
-
 var (
 	agentCRIUHelpOnce sync.Once
 	agentCRIUHelpText string

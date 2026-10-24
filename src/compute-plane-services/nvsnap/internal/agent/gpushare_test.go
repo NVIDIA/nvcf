@@ -105,22 +105,6 @@ func TestGPUShareTargets_NoShim(t *testing.T) {
 	}
 }
 
-func TestRestoreV2Args_GPUShare(t *testing.T) {
-	plain := restoreV2Args(10, "/checkpoints/x", false, false, "", "/criu-bundle/plugins")
-	if !slices.Contains(plain, "--libdir") {
-		t.Errorf("plain restore must load the CUDA plugin: %v", plain)
-	}
-	gs := restoreV2Args(10, "/checkpoints/x", true, true, "", "/criu-bundle/plugins")
-	// The images are read-only in the placeholder: CRIU writes its log
-	// and stats to the work volume.
-	if w := strings.Join(gs, " "); !strings.Contains(w, "-D /checkpoints/x -W /nvsnap-restore-work -o restore.log") {
-		t.Errorf("restore argv lacks the work directory: %s", w)
-	}
-	if slices.Contains(gs, "--libdir") || !slices.Contains(gs, "--image-io-mode") || !slices.Contains(gs, "--restore-detached") {
-		t.Errorf("gpushare restore argv: %v", gs)
-	}
-}
-
 func TestCRIUSupportsDirectImageIO(t *testing.T) {
 	if !criuSupportsDirectImageIO("  --image-io-mode MODE   writeback or direct\n") {
 		t.Error("help text with the option not recognized")

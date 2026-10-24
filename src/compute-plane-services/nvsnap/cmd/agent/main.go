@@ -47,6 +47,12 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "bind-unix-listeners":
+			if err := bindUnixListenersExec(); err != nil {
+				fmt.Fprintln(os.Stderr, "bind-unix-listeners:", err)
+				os.Exit(1)
+			}
+			return
 		case "pidns-restore-exec":
 			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
 				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)

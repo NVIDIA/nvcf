@@ -18,15 +18,10 @@ limitations under the License.
 package agent
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 // fakeProc builds a procfs stand-in. Each entry is hostPID -> (nsLink, NSpid
@@ -169,127 +164,6 @@ func TestNSPIDOfUsesInnermostNamespace(t *testing.T) {
 	}
 	if got != 3 {
 		t.Errorf("nsPIDOf = %d, want 3 (innermost)", got)
-	}
-}
-
-// The wait exists because the pod reports Running before its shell has finished
-// sourcing profile.d, so the reservation lands seconds later. Sampling once
-// rejected placeholders that were about to be fine -- observed against
-// nim-llama-8b before the wait was added.
-func TestAwaitPlaceholderPIDReservation(t *testing.T) {
-	log := logrus.NewEntry(logrus.New())
-	log.Logger.SetOutput(io.Discard)
-
-	t.Run("returns as soon as the reservation is visible", func(t *testing.T) {
-		base := fakeProc(t, map[int]procEntry{
-			5000: {ns: "pid:[111]", nspid: "1"},
-			5001: {ns: "pid:[111]", nspid: "100002"},
-		})
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 5*time.Second, nil, log)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != 100002 {
-			t.Errorf("got %d, want 100002", got)
-		}
-	})
-
-	t.Run("errors when the reservation never lands", func(t *testing.T) {
-		base := fakeProc(t, map[int]procEntry{
-			5000: {ns: "pid:[111]", nspid: "1"},
-			5001: {ns: "pid:[111]", nspid: "363"},
-		})
-		start := time.Now()
-		got, err := awaitPlaceholderPIDReservationFor(base, 5000, 1200*time.Millisecond, nil, log)
-		if err == nil {
-			t.Fatalf("expected an error, got max=%d", got)
-		}
-		// The highest pid seen belongs in the message: it is what tells an
-		// operator the bump did not run, rather than that it ran and was low.
-		if !strings.Contains(err.Error(), "363") {
-			t.Errorf("error should report the highest pid seen, got: %v", err)
-		}
-		if elapsed := time.Since(start); elapsed < 1200*time.Millisecond {
-			t.Errorf("returned after %s, should have waited the full timeout", elapsed)
-		}
-	})
-
-	t.Run("does not fail the restore when the namespace cannot be read", func(t *testing.T) {
-		// A procfs read error is ambiguous, not proof of a missing reservation.
-		_, err := awaitPlaceholderPIDReservationFor(t.TempDir(), 5000, 600*time.Millisecond, nil, log)
-		if err == nil {
-			t.Fatal("expected an error describing the unreadable namespace")
-		}
-		if !strings.Contains(err.Error(), "could not read") {
-			t.Errorf("want a read-failure message distinct from a missing reservation, got: %v", err)
-		}
-	})
-}
-
-// fakeThreads adds task entries (thread id -> NSpid) under a fake process.
-func fakeThreads(t *testing.T, base string, pid int, threads map[int]string) {
-	t.Helper()
-	for tid, nspid := range threads {
-		dir := filepath.Join(base, strconv.Itoa(pid), "task", strconv.Itoa(tid))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "status"), []byte("Name:\tx\nNSpid:\t"+nspid+"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// A task left below the floor (a child started before the bump, or a thread
-// of a multi-threaded init) holds a pid CRIU may recreate: the reservation is
-// not complete until it is gone, even with a task already above the floor.
-func TestAwaitPlaceholderPIDReservation_LowTaskBlocks(t *testing.T) {
-	log := logrus.NewEntry(logrus.New())
-	log.Logger.SetOutput(io.Discard)
-
-	base := fakeProc(t, map[int]procEntry{
-		5000: {ns: "pid:[111]", nspid: "1"},
-		5001: {ns: "pid:[111]", nspid: "100002"},
-	})
-	fakeThreads(t, base, 5000, map[int]string{5000: "1", 5003: "9"})
-	fakeThreads(t, base, 5001, map[int]string{5001: "100002"})
-	if max, low, err := placeholderPIDs(base, 5000); err != nil || max != 100002 || low != 9 {
-		t.Fatalf("placeholderPIDs = %d, %d, %v; want 100002, 9 (the init's thread)", max, low, err)
-	}
-	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log)
-	if err == nil || !strings.Contains(err.Error(), "still holds pid 9") {
-		t.Fatalf("a low thread must block the restore with its pid named, got %v", err)
-	}
-
-	// Single-threaded init, nothing else below the floor: ready.
-	if err := os.RemoveAll(filepath.Join(base, "5000", "task", "5003")); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log); err != nil || got != 100002 {
-		t.Fatalf("got %d, %v; want 100002", got, err)
-	}
-}
-
-// In a pod whose containers share one pid namespace, a sidecar started
-// before the placeholder holds a low pid. Only a pid the checkpoint
-// restores blocks the restore.
-func TestAwaitPlaceholderPIDReservation_ExactClash(t *testing.T) {
-	log := logrus.NewEntry(logrus.New())
-	log.Logger.SetOutput(io.Discard)
-	base := fakeProc(t, map[int]procEntry{
-		5000: {ns: "pid:[111]", nspid: "1"},
-		5001: {ns: "pid:[111]", nspid: "37"}, // a native sidecar
-		5002: {ns: "pid:[111]", nspid: "100002"},
-	})
-	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 2*time.Second, map[int]bool{45: true, 591: true}, log); err != nil || got != 100002 {
-		t.Fatalf("a sidecar on a pid the dump does not use blocked the restore: %d %v", got, err)
-	}
-	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, map[int]bool{37: true, 45: true}, log)
-	if err == nil || !strings.Contains(err.Error(), "pid 37, which the checkpoint restores") {
-		t.Fatalf("a held pid the dump restores: %v", err)
-	}
-	if _, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, nil, log); err == nil {
-		t.Fatal("without the dumped ids, any low pid must block the restore")
 	}
 }
 

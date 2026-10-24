@@ -16,22 +16,22 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent"
 )
 
-// pidNSRestoreExec runs inside a restore placeholder's mount and pid
-// namespaces and execs CRIU there, for a checkpoint that carries its pid
-// namespace (internal/agent/pidns_capture.go). CRIU needs a procfs of the
-// namespace it runs in (its own /proc/<pid> lookups) and a writable
-// /proc/sys, which a container's /proc is not. So: a private copy of the
-// mount namespace, a fresh procfs in it, the pod's network namespace on
-// agent.PIDNSNetFD (the --inherit-fd the restore argv names), then exec. The
-// agent binary is static, so it runs in any workload image.
-//
-// Every fd is placed only on a free target (placeFD): the Go runtime holds
-// fds of its own until the exec, and replacing one aborts it.
-//
-//	pidns-restore-exec <criu> <args...>
+// pidNSRestoreExec runs the agent's own CRIU for a checkpoint that carries
+// its pid namespace. It runs in the agent's filesystem, entered only into
+// the placeholder's pid and network namespaces (nsenter -p -n), so nothing
+// from the placeholder's filesystem is loaded or run
+// (docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md). In a private copy of the
+// agent's mount namespace it mounts a procfs of the placeholder's pid
+// namespace and the placeholder's root (a descriptor the agent passes) at
+// agent.PIDNSRestoreRoot, for CRIU's --root, and places the descriptors the
+// agent passes (agent.PIDNSFDsEnv) where CRIU's --inherit-fd names them.
 func pidNSRestoreExec(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: pidns-restore-exec <criu> <args...>")
+	}
+	fds, err := agent.ParsePIDNSFDs(os.Getenv(agent.PIDNSFDsEnv))
+	if err != nil {
+		return err
 	}
 	// Namespace changes apply to the calling thread; exec from the same one.
 	runtime.LockOSThread()
@@ -44,32 +44,26 @@ func pidNSRestoreExec(args []string) error {
 	if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return fmt.Errorf("mount procfs: %w", err)
 	}
-	// pid 1 of this pid namespace is the placeholder's own process; its
-	// network namespace is the pod's.
-	fd, err := unix.Open("/proc/1/ns/net", unix.O_RDONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open the pod's network namespace: %w", err)
+	base := filepath.Dir(agent.PIDNSRestoreRoot)
+	if err := unix.Mount("nvsnap-restore", base, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0700"); err != nil {
+		return fmt.Errorf("mount %s: %w", base, err)
 	}
-	if err := placeFD(fd, agent.PIDNSNetFD); err != nil {
+	if err := os.Mkdir(agent.PIDNSRestoreRoot, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", agent.PIDNSRestoreRoot, err)
+	}
+	if err := unix.Mount("/proc/self/fd/"+strconv.Itoa(fds.Root), agent.PIDNSRestoreRoot, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("mount the placeholder's root: %w", err)
+	}
+	_ = unix.Close(fds.Root)
+	if err := placeFD(fds.Net, agent.PIDNSNetFD); err != nil {
 		return fmt.Errorf("network namespace to fd %d: %w", agent.PIDNSNetFD, err)
 	}
-	n, err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv))
-	if err != nil {
-		return err
-	}
-	if os.Getenv(agent.PIDNSStdioEnv) != "" {
-		// The placeholder's stdout and stderr (pid 1 here is the
-		// placeholder's own process): containerd reads them for the pod
-		// log. They go on the two fds after the listeners.
-		for i, src := range []string{"/proc/1/fd/1", "/proc/1/fd/2"} {
-			fd, err := unix.Open(src, unix.O_WRONLY|unix.O_CLOEXEC, 0)
-			if err != nil {
-				return fmt.Errorf("open the placeholder's %s: %w", src, err)
-			}
-			if err := placeFD(fd, agent.PIDNSUnixListenerFD+n+i); err != nil {
-				return fmt.Errorf("place the placeholder's %s: %w", src, err)
-			}
+	next := agent.PIDNSUnixListenerFD
+	for _, fd := range append(append([]int{}, fds.Listeners...), fds.Stdio...) {
+		if err := placeFD(fd, next); err != nil {
+			return fmt.Errorf("descriptor %d to fd %d: %w", fd, next, err)
 		}
+		next++
 	}
 	if err := unix.Exec(args[0], args, os.Environ()); err != nil {
 		return fmt.Errorf("exec %s: %w (%s)", args[0], err, describeExecPath(args[0]))
@@ -77,9 +71,24 @@ func pidNSRestoreExec(args []string) error {
 	return nil
 }
 
-// describeExecPath reports what execve checks along path: each component's
-// mode and owner, and whether its filesystem is mounted noexec. An exec that
-// fails with EACCES says nothing about which of them refused it.
+// bindUnixListenersExec binds the listening unix sockets of a restore in
+// the placeholder's mount namespace (it runs there, from the node bundle:
+// a static binary) and sends them to the agent over fd 3.
+func bindUnixListenersExec() error {
+	n, err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv))
+	if err != nil {
+		return err
+	}
+	fds := make([]int, n)
+	for i := range fds {
+		fds[i] = agent.PIDNSUnixListenerFD + i
+	}
+	if n == 0 {
+		return nil
+	}
+	return unix.Sendmsg(3, []byte{0}, unix.UnixRights(fds...), nil, 0)
+}
+
 func describeExecPath(path string) string {
 	var parts []string
 	for p := path; ; p = filepath.Dir(p) {

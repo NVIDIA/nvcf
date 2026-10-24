@@ -109,17 +109,19 @@ func TestPIDNSArgs(t *testing.T) {
 	if strings.Contains(dump, "--libdir") {
 		t.Error("a gpushare dump must not load the CUDA plugin")
 	}
-	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"},
+	restore := strings.Join(pidNSRestoreArgs("/ck/x", "/ck/work", PIDNSRestoreRoot, []string{"/etc/hosts"},
 		[]UnixListener{{Inode: 719101449, Type: 1, Path: "/tmp/ipc-a"}, {Inode: 719101460, Type: 5, Path: "/tmp/ipc-b"}},
-		false, false, "10.0.0.1=10.0.0.2", "/criu-bundle/plugins"), " ")
+		false, false, "10.0.0.1=10.0.0.2", "/criu-bundle/plugins/cuda"), " ")
 	for _, want := range []string{"--inherit-fd fd[101]:socket:[719101449]", "--inherit-fd fd[102]:socket:[719101460]"} {
 		if !strings.Contains(restore, want) {
 			t.Errorf("restore lacks %q: %s", want, restore)
 		}
 	}
-	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[100]:extNetNs",
-		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:/etc/hosts", "--restore-detached",
-		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir /criu-bundle/plugins"} {
+	// The agent's CRIU: its own paths for the images and the work
+	// directory, the placeholder's root where the helper mounts it.
+	for _, want := range []string{"restore -D /ck/x -W /ck/work", "--root " + PIDNSRestoreRoot, "--inherit-fd fd[100]:extNetNs",
+		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:" + PIDNSRestoreRoot + "/etc/hosts", "--restore-detached",
+		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir /criu-bundle/plugins/cuda"} {
 		if !strings.Contains(restore, want) {
 			t.Errorf("restore argv lacks %q: %s", want, restore)
 		}
@@ -320,6 +322,25 @@ func TestCRIUSavedTmpfs(t *testing.T) {
 		"/run/nvidia-container-devices/GPU-7e1f1942", "/proc/driver/nvidia/params", "/dev/pts", "/data"} {
 		if saved[mp] {
 			t.Errorf("%s: not saved by the dump", mp)
+		}
+	}
+}
+
+// The descriptors the agent hands the restore helper round-trip through
+// their environment value; a value without the root or the network
+// namespace, or with a descriptor below 3, is refused.
+func TestPIDNSFDs(t *testing.T) {
+	f := PIDNSFDs{Root: 3, Net: 4, Listeners: []int{5, 6}, Stdio: []int{7, 8}}
+	got, err := ParsePIDNSFDs(f.String())
+	if err != nil || got.Root != 3 || got.Net != 4 || len(got.Listeners) != 2 || got.Listeners[1] != 6 || len(got.Stdio) != 2 || got.Stdio[0] != 7 {
+		t.Fatalf("round trip %q: %+v, %v", f.String(), got, err)
+	}
+	if got, err := ParsePIDNSFDs(PIDNSFDs{Root: 3, Net: 4}.String()); err != nil || len(got.Listeners) != 0 || len(got.Stdio) != 0 {
+		t.Errorf("no listeners, no stdio: %+v, %v", got, err)
+	}
+	for _, bad := range []string{"", "net=4", "root=3", "root=1,net=4", "root=3,net=4,listeners=1:2", "root=3,net=4,x=5"} {
+		if _, err := ParsePIDNSFDs(bad); err == nil {
+			t.Errorf("%q accepted", bad)
 		}
 	}
 }
