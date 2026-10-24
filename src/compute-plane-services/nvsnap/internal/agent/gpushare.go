@@ -219,11 +219,16 @@ func gpushareTool(ctx context.Context, hostPID int, timeout time.Duration, args 
 
 // gpushareToolEnv is gpushareTool with extra environment for the tool.
 func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout time.Duration, args ...string) (string, error) {
-	nsArgs := append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
-		v2BinDirInContainer + "/" + gpushareToolName}, args...)
+	nsArgs, files, err := nsenterByFD(hostProcBase(), hostPID, []string{"mnt", "pid", "net", "ipc", "uts"}, true, 3)
+	if err != nil {
+		return "", fmt.Errorf("%s: enter the workload's namespaces: %w", gpushareToolName, err)
+	}
+	defer closeFiles(files)
+	nsArgs = append(append(nsArgs, "--", v2BinDirInContainer+"/"+gpushareToolName), args...)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "nsenter", nsArgs...) //nolint:gosec // fixed binary; args are pids and tool verbs built here
+	cmd := exec.CommandContext(cctx, "nsenter", nsArgs...) //nolint:gosec // fixed binary; args are descriptors and tool verbs built here
+	cmd.ExtraFiles = files
 	cmd.Env = append([]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}, env...)
 	// nsenter -p forks the tool: a deadline or a cancel must stop the tool
 	// itself, not leave it running unseen behind a killed nsenter.
