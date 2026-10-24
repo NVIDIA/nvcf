@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -223,6 +224,9 @@ func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout tim
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "nsenter", nsArgs...) //nolint:gosec // fixed binary; args are pids and tool verbs built here
 	cmd.Env = append([]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}, env...)
+	// nsenter -p forks the tool: a deadline or a cancel must stop the tool
+	// itself, not leave it running unseen behind a killed nsenter.
+	killGroupOnCancel(cmd)
 	// Stdout only is returned (the GPU map is read from it); stderr joins
 	// it in the error so a failure carries the tool's own explanation.
 	var out, errOut bytes.Buffer
@@ -233,6 +237,18 @@ func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout tim
 	}
 	return out.String(), nil
 }
+
+// killGroupOnCancel makes the cancel of cmd's context (a deadline, a
+// caller gone) kill cmd's whole process group: what it forked too.
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 10 * time.Second
+}
+
+// gpushareResumeDeadline bounds a GPU resume: loading a large model's GPU
+// memory back takes minutes.
+const gpushareResumeDeadline = 60 * time.Minute
 
 // gpushareToolRun runs the tool; tests replace it.
 var gpushareToolRun = gpushareToolEnv
@@ -323,7 +339,7 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 	}
 	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
 	t0 := time.Now()
-	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
+	out, err := gpushareToolEnv(ctx, hostPID, env, gpushareResumeDeadline, args...)
 	if err != nil {
 		return err
 	}

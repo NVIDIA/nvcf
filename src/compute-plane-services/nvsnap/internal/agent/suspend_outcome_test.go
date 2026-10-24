@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +149,34 @@ func TestSourceMustBeReplaced(t *testing.T) {
 	}
 	if sourceMustBeReplaced(errors.New("criu dump failed")) || sourceMustBeReplacedText("criu dump failed") {
 		t.Error("an ordinary failure asks for the workload to be replaced")
+	}
+}
+
+// A tool run that passes its deadline stops what it forked too, not only
+// the nsenter in front of it: nsenter -p forks the tool.
+func TestKillGroupOnCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	out, err := os.CreateTemp(t.TempDir(), "pid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 30 & echo $! > "+out.Name()+"; wait")
+	killGroupOnCancel(cmd)
+	_ = cmd.Run()
+	b, _ := os.ReadFile(out.Name())
+	child, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("child pid %q: %v", b, err)
+	}
+	// Gone, or a zombie waiting for its reaper.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		st, err := os.ReadFile("/proc/" + strconv.Itoa(child) + "/stat")
+		if err != nil || strings.Contains(string(st), ") Z ") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the forked child %d outlived the deadline", child)
+		}
 	}
 }

@@ -122,16 +122,12 @@ func finalOf(leaveRunning bool) dumpFinal {
 
 // dumpV2 runs CRIU dump inside the container's namespaces, with the
 // node bundle mounted there. On success the image files have been moved into checkpointDir.
-// resumeSource brings a source back after its dump, under its own deadline:
-// the capture's may have run out, which is often why the dump failed.
+// resumeSource brings a source back after its dump, under the resume's own
+// deadline (gpushareResumeDeadline), not the capture's context: that may
+// have run out, which is often why the dump failed.
 func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) error {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gpushareResumeTimeout)
-	defer cancel()
-	return gpushareResume(rctx, hostPID, pids, "", fabricDir, log)
+	return gpushareResume(context.WithoutCancel(ctx), hostPID, pids, "", fabricDir, log)
 }
-
-// gpushareResumeTimeout bounds bringing a source back after its dump.
-const gpushareResumeTimeout = 10 * time.Minute
 
 // ownGPUShareStore makes the workload's chunk store (and the fabric
 // session directory in it, when there is one) owned by the user the
