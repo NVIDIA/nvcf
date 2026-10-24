@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -153,21 +152,12 @@ func archiveOverlayDir(src, outFile string, excludeMountpoints, excludeGlobs []s
 	return nil
 }
 
-// mirrorIntoMntns replays a previously-captured overlay diff into another
-// pod's mount namespace by piping a tar of the diff into a `tar -x` that
-// runs INSIDE the target mntns via nsenter. Writing through the merged
-// overlay path (placeholder root /) rather than its underlying diff dir
-// is what makes the new files visible to the placeholder's processes —
-// overlayfs caches its merged-view dentries at mount time and doesn't see
-// external mutations to the upperdir.
-//
-// srcDiff is the checkpoint's rootfsDiffArchive, streamed as it is, or
-// (checkpoints from before it) a rootfsDiffDir tree, archived on the fly.
-// Either way the extract leaves out the placeholder's own mountpoints
-// (excludeMountpoints) and the agent's directories. The target tar runs
-// unprivileged from the placeholder's perspective; the agent's privilege
-// provides the nsenter capability.
-func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []string, tools bundleTools, log *logrus.Entry) error {
+// mirrorIntoMntns replays a capture's rootfs diff (an archive, or a
+// directory from before the archive) into the placeholder of host pid
+// placeholderPID, through its root as the placeholder sees it (its
+// overlay's merged view), leaving out the placeholder's own mounts and
+// the agent's own directories (tar_extract.go).
+func mirrorIntoMntns(ctx context.Context, srcDiff string, placeholderPID int, excludeMountpoints []string, log *logrus.Entry) error {
 	if srcDiff == "" || placeholderPID <= 0 {
 		return fmt.Errorf("mirrorIntoMntns: empty src or invalid pid")
 	}
@@ -178,36 +168,67 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 		}
 		return fmt.Errorf("stat src %s: %w", srcDiff, err)
 	}
-
-	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
-	dstTar := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		tools.path("tar")}, replayDiffExtractArgs("/", excludeMountpoints)...)...)
-	dstName := fmt.Sprintf("dst tar (nsenter pid=%d)", placeholderPID)
+	d, err := openWorkloadDir(hostProcBase(), placeholderPID, "/")
+	if err != nil {
+		return fmt.Errorf("open the placeholder's root: %w", err)
+	}
+	defer func() { _ = d.Close() }()
+	o := replayDiffOpts(excludeMountpoints)
+	var n int
 	if !st.IsDir() {
 		f, err := os.Open(srcDiff)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", srcDiff, err)
 		}
 		defer func() { _ = f.Close() }()
-		dstTar.Stdin = f
-		var stderr strings.Builder
-		dstTar.Stderr = &stderr
-		if err := dstTar.Run(); err != nil {
-			return fmt.Errorf("%s: %w (stderr: %s)", dstName, err, strings.TrimSpace(stderr.String()))
+		if n, err = extractTar(f, d, o); err != nil {
+			return fmt.Errorf("replay %s: %w", srcDiff, err)
 		}
 	} else {
-		srcTar := exec.Command("tar", replayDiffSourceArgs(srcDiff, excludeMountpoints)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		if err := runTarPipe(srcTar, dstTar, "src tar (-C "+srcDiff+")", dstName); err != nil {
+		// A directory from before the archive: the agent's own tar reads it.
+		src := exec.CommandContext(ctx, "tar", replayDiffSourceArgs(srcDiff, excludeMountpoints)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		out, err := src.StdoutPipe()
+		if err != nil {
 			return err
+		}
+		var stderr strings.Builder
+		src.Stderr = &stderr
+		if serr := src.Start(); serr != nil {
+			return fmt.Errorf("src tar (-C %s): %w", srcDiff, serr)
+		}
+		n, err = extractTar(out, d, o)
+		_, _ = io.Copy(io.Discard, out)
+		if werr := src.Wait(); werr != nil && err == nil {
+			err = fmt.Errorf("src tar (-C %s): %w (stderr: %s)", srcDiff, werr, strings.TrimSpace(stderr.String()))
+		}
+		if err != nil {
+			return fmt.Errorf("replay %s: %w", srcDiff, err)
 		}
 	}
 	if log != nil {
-		log.WithFields(logrus.Fields{
-			"src": srcDiff,
-			"pid": placeholderPID,
-		}).Info("Replayed overlay diff into placeholder mntns")
+		log.WithFields(logrus.Fields{"src": srcDiff, "pid": placeholderPID, "entries": n}).Info("Replayed overlay diff into placeholder mntns")
 	}
 	return nil
+}
+
+// replayDiffOpts is what a rootfs diff's replay leaves out: the
+// placeholder's own mountpoints, the agent's own directories, and the
+// overlay's private attributes.
+func replayDiffOpts(excludeMountpoints []string) tarExtractOpts {
+	skipped := append(relPaths(excludeMountpoints), relPaths(agentContainerDirs)...)
+	return tarExtractOpts{
+		skip:      func(name string) bool { return underAny(name, skipped) },
+		skipXattr: func(attr string) bool { return strings.HasPrefix(attr, "trusted.overlay.") },
+	}
+}
+
+// relPaths is paths without their leading slash, as archive names are.
+func relPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, strings.TrimPrefix(p, "/"))
+	}
+	return out
 }
 
 // tarMount captures the contents of a single mountpoint inside a source
@@ -310,7 +331,7 @@ func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entr
 // tar -x fails; per Q6 in the design the caller logs warn-and-continue.
 //
 // Returns nil if the tar file doesn't exist (no replay needed).
-func untarIntoMntns(ctx context.Context, placeholderPID int, mp, tarFile string, tools bundleTools, log *logrus.Entry) error {
+func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) error {
 	if placeholderPID <= 0 || mp == "" || tarFile == "" {
 		return fmt.Errorf("untarIntoMntns: empty pid/mp/tar")
 	}
@@ -322,16 +343,24 @@ func untarIntoMntns(ctx context.Context, placeholderPID int, mp, tarFile string,
 		return fmt.Errorf("open tar %s: %w", tarFile, err)
 	}
 	defer func() { _ = f.Close() }()
-	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
+	root, err := openWorkloadDir(hostProcBase(), placeholderPID, "/")
+	if err != nil {
+		return fmt.Errorf("open the placeholder's root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	// The placeholder only has the mountpoints its own spec declares. A
 	// replayed mount that was a volume on the source (the nvsnap cachedir at
-	// /opt/nvsnap) has no directory here yet, and tar -C refuses a missing
-	// one ("Cannot open: No such file or directory", 2026-10-04). Create
-	// it on the placeholder's rootfs first; /dev/shm already exists.
-	mkdir := exec.CommandContext(ctx, "nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-	if out, err := mkdir.CombinedOutput(); err != nil {
-		return fmt.Errorf("nsenter+mkdir (pid=%d, mp=%s): %w (output: %s)", placeholderPID, mp, err, strings.TrimSpace(string(out)))
+	// /opt/nvsnap) has no directory here yet: create it on the
+	// placeholder's rootfs first; /dev/shm already exists.
+	rel := strings.TrimPrefix(filepath.Clean(mp), "/")
+	if merr := root.root.MkdirAll(rel, 0o755); merr != nil {
+		return fmt.Errorf("create %s in the placeholder: %w", mp, merr)
 	}
+	d, err := openWorkloadDir(hostProcBase(), placeholderPID, mp)
+	if err != nil {
+		return fmt.Errorf("open %s in the placeholder: %w", mp, err)
+	}
+	defer func() { _ = d.Close() }()
 	// The placeholder's own mounts under mp (the model volume under
 	// nvsnap's cachedir) are its volumes, not the source's: never extract
 	// over them. Archives from before tarMount left them out still carry
@@ -344,15 +373,10 @@ func untarIntoMntns(ctx context.Context, placeholderPID int, mp, tarFile string,
 		}
 		nested = nestedMountPoints(mps, mp)
 	}
-	cmd := exec.CommandContext(ctx, "nsenter", append([]string{"--mount=" + mntnsPath, "--", tools.path("tar")}, replayExtractArgs(mp, nested)...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-	cmd.Stdin = f
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("nsenter+tar (pid=%d, mp=%s): %w (stderr: %s)",
-			placeholderPID, mp, err, stderr.String())
+	if _, xerr := extractTar(f, d, tarExtractOpts{skip: func(name string) bool { return underAny(name, nested) }}); xerr != nil {
+		return fmt.Errorf("replay %s into the placeholder (pid=%d): %w", mp, placeholderPID, xerr)
 	}
-	n, err := verifyReplayed(placeholderPID, mp, tarFile, nested)
+	n, err := verifyReplayed(d, mp, tarFile, nested)
 	if err != nil {
 		return err
 	}
@@ -365,23 +389,6 @@ func untarIntoMntns(ctx context.Context, placeholderPID int, mp, tarFile string,
 		}).Info("Replayed mount snapshot into placeholder mntns")
 	}
 	return nil
-}
-
-// replayExtractArgs is the tar command line that extracts a replay archive
-// from stdin into mp, leaving out the placeholder's nested mounts (relative to
-// mp). The excludes are anchored at the archive's root: unanchored, GNU tar
-// matches "hf" at any depth and drops every directory of that name, such as
-// the inductor cache's hf/ under the cachedir (seen 2026-10-17), and the
-// replay check then fails the restore.
-func replayExtractArgs(mp string, nested []string) []string {
-	args := []string{"-C", mp, "-xf", "-", "--xattrs", "--acls", "--numeric-owner", "--preserve-permissions", "--overwrite"}
-	if len(nested) > 0 {
-		args = append(args, "--anchored", "--no-wildcards")
-	}
-	for _, e := range nested {
-		args = append(args, "--exclude=./"+e, "--exclude="+e)
-	}
-	return args
 }
 
 // underAny reports whether the relative path name is one of dirs or under one.
@@ -412,13 +419,12 @@ func nestedMountPoints(mountPoints []string, mp string) []string {
 // returns how many it checked. CRIU re-opens the workload's files by path and
 // re-creates its deleted ones next to their old path: an entry missing here
 // fails the restore inside CRIU, far from its cause.
-func verifyReplayed(placeholderPID int, mp, tarFile string, skip []string) (int, error) {
+func verifyReplayed(d *confinedDir, mp, tarFile string, skip []string) (int, error) {
 	f, err := os.Open(tarFile)
 	if err != nil {
 		return 0, fmt.Errorf("reopen %s: %w", tarFile, err)
 	}
 	defer func() { _ = f.Close() }()
-	root := filepath.Join(hostProcBase(), strconv.Itoa(placeholderPID), "root", mp)
 	tr := tar.NewReader(f)
 	var n int
 	var missing []string
@@ -435,7 +441,7 @@ func verifyReplayed(placeholderPID int, mp, tarFile string, skip []string) (int,
 			continue
 		}
 		n++
-		if _, err := os.Lstat(filepath.Join(root, name)); err != nil {
+		if _, err := d.root.Lstat(name); err != nil {
 			missing = append(missing, name)
 		}
 	}
@@ -461,63 +467,6 @@ func SanitizeMountPath(mp string) string {
 // agentContainerDirs are the directories the agent stages into a
 // container; a replay never writes them.
 var agentContainerDirs = []string{v2BinDirInContainer, v2ImagesDirInContainer}
-
-// runTarPipe runs src | dst and waits for both. The agent keeps no end of
-// the pipe: a dst that exits early leaves src a broken pipe, not a full
-// one it would block on forever (seen 2026-10-18: a restore hung on a
-// replay whose extracting tar had died). dst's failure is reported first:
-// src's broken pipe follows from it.
-func runTarPipe(src, dst *exec.Cmd, srcName, dstName string) error {
-	r, w, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("tar pipe: %w", err)
-	}
-	src.Stdout, dst.Stdin = w, r
-	var srcErr, dstErr strings.Builder
-	src.Stderr, dst.Stderr = &srcErr, &dstErr
-	if err := dst.Start(); err != nil {
-		r.Close()
-		w.Close()
-		return fmt.Errorf("start %s: %w", dstName, err)
-	}
-	if err := src.Start(); err != nil {
-		r.Close()
-		w.Close()
-		_ = dst.Wait()
-		return fmt.Errorf("start %s: %w", srcName, err)
-	}
-	r.Close()
-	w.Close()
-	dstWait := dst.Wait()
-	srcWait := src.Wait()
-	if dstWait != nil {
-		return fmt.Errorf("%s: %w (stderr: %s)", dstName, dstWait, lastLines(dstErr.String(), 8))
-	}
-	if srcWait != nil {
-		return fmt.Errorf("%s: %w (stderr: %s)", srcName, srcWait, lastLines(srcErr.String(), 8))
-	}
-	return nil
-}
-
-// replayDiffSourceArgs is the tar that reads a captured diff for a replay.
-// replayDiffExtractArgs is the tar command line that extracts a rootfs diff
-// from stdin into root, leaving out the placeholder's mountpoints and the
-// agent's directories the same way replayDiffSourceArgs does when it
-// archives a diff tree.
-func replayDiffExtractArgs(root string, excludeMountpoints []string) []string {
-	args := []string{
-		"-C", root,
-		"-xf", "-",
-		"--xattrs",
-		"--xattrs-exclude=trusted.overlay.*",
-		"--acls",
-		"--numeric-owner",
-		"--preserve-permissions",
-		"--overwrite",
-	}
-	args = append(args, excludeArgsForMountpoints(excludeMountpoints)...)
-	return append(args, excludeArgsForMountpoints(agentContainerDirs)...)
-}
 
 func replayDiffSourceArgs(srcDiff string, excludeMountpoints []string) []string {
 	args := []string{

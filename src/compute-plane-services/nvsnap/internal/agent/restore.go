@@ -49,7 +49,7 @@ import (
 // the source's tmpfs gets its parent dir recreated. Abstract sockets
 // (path begins with NUL byte = "=00...") are skipped: they don't need
 // a filesystem entry.
-func precreateUnixSocketDirs(ctx context.Context, filesImg string, placeholderPID int, tools bundleTools, log *logrus.Entry) {
+func precreateUnixSocketDirs(filesImg string, placeholderPID int, log *logrus.Entry) {
 	cmd := exec.Command("crit", "decode", "-i", filesImg, "--pretty")
 	out, err := cmd.Output()
 	if err != nil {
@@ -91,11 +91,17 @@ func precreateUnixSocketDirs(ctx context.Context, filesImg string, placeholderPI
 	if len(dirs) == 0 {
 		return
 	}
-	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
+	// Under the placeholder's root, as the placeholder sees it
+	// (confined_fs.go).
+	root, err := openWorkloadDir(hostProcBase(), placeholderPID, "/")
+	if err != nil {
+		log.WithError(err).Warn("Failed to open the placeholder's root for unix-socket parent dirs")
+		return
+	}
+	defer func() { _ = root.Close() }()
 	created := 0
 	for d := range dirs {
-		mk := exec.CommandContext(ctx, "nsenter", "--mount="+mntnsPath, "--", tools.path("mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		if err := mk.Run(); err != nil {
+		if err := root.root.MkdirAll(strings.TrimPrefix(d, "/"), 0o755); err != nil {
 			log.WithError(err).WithField("dir", d).Warn("Failed to mkdir unix-socket parent dir in placeholder")
 			continue
 		}
@@ -426,20 +432,6 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			}
 		}
 
-		// The steps below and criu's own tmpfs restore run tools inside the
-		// placeholder: the node bundle's, mounted read-only there
-		// (bundle_tools.go), never the image's own or a copy the workload
-		// could change.
-		tools, tErr := bundleToolsOf(hostProcBase(), placeholderMntnsPID, a.bundleVersionsDir())
-		if tErr != nil {
-			return nil, fmt.Errorf("restore: %w", tErr)
-		}
-		for _, name := range []string{"tar", "mkdir"} {
-			if !tools.has(hostProcBase(), name) {
-				return nil, fmt.Errorf("restore: %s is not in the placeholder's node bundle (version %s)", name, tools.version)
-			}
-		}
-
 		// Pre-create parent dirs of every path-bound unix socket the dump
 		// captured. Their tmpfs (/var/run, /tmp) is inside the container's
 		// mntns, not the overlay upperdir, so the mirror doesn't carry
@@ -448,7 +440,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// directory" in zmq poll etc.).
 		filesImg := filepath.Join(checkpointDir, "files.img")
 		if _, fErr := os.Stat(filesImg); fErr == nil {
-			precreateUnixSocketDirs(ctx, filesImg, placeholderMntnsPID, tools, log)
+			precreateUnixSocketDirs(filesImg, placeholderMntnsPID, log)
 		}
 
 		// Replay the source container's overlay diff into the placeholder's
@@ -474,7 +466,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			// extract must skip those paths, otherwise it hits EROFS
 			// on the bind targets.
 			plMounts, _ := mountinfo.NonRootMountPoints(placeholderMntnsPID)
-			if mErr := mirrorIntoMntns(diffSrc, placeholderMntnsPID, plMounts, tools, log); mErr != nil {
+			if mErr := mirrorIntoMntns(ctx, diffSrc, placeholderMntnsPID, plMounts, log); mErr != nil {
 				log.WithError(mErr).Warn("Failed to replay rootfs-diff into placeholder mntns; restore may fail")
 			}
 		}
@@ -492,7 +484,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// first one missing, or restore a workload without them.
 		for _, rm := range metadata.ReplayMounts {
 			tarAbs := filepath.Join(checkpointDir, rm.Tarball)
-			if rErr := untarIntoMntns(ctx, placeholderMntnsPID, rm.Path, tarAbs, tools, log); rErr != nil {
+			if rErr := untarIntoMntns(placeholderMntnsPID, rm.Path, tarAbs, log); rErr != nil {
 				return nil, fmt.Errorf("replay %s into the placeholder: %w", rm.Path, rErr)
 			}
 		}

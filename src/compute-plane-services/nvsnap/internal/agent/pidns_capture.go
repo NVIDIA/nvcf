@@ -26,7 +26,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,7 +35,6 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
@@ -850,23 +848,13 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 	return made, nil
 }
 
-// mknodIn creates character device rel under d, replacing what is there:
-// the device node is made relative to its parent directory, opened under
-// d's root, so no component of rel resolves outside it.
+// mknodIn creates character device rel under d, replacing what is there
+// (mknodAt, through its parent opened under d's root).
 func mknodIn(d *confinedDir, rel string, mode uint32, rdev uint64) error {
-	parent, err := d.root.Open(filepath.Dir(rel))
-	if err != nil {
+	if err := d.root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	defer func() { _ = parent.Close() }()
-	name := filepath.Base(rel)
-	if err := unix.Unlinkat(int(parent.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return err
-	}
-	if rdev > math.MaxInt {
-		return fmt.Errorf("device number %d out of range", rdev)
-	}
-	return unix.Mknodat(int(parent.Fd()), name, mode, int(rdev))
+	return mknodAt(d, rel, mode, rdev)
 }
 
 // deletedMount returns a mountpoint whose source was deleted on the node
