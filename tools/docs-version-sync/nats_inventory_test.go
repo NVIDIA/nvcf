@@ -5,6 +5,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -60,5 +63,57 @@ func TestNATSInventoryPreservesUpstreamPins(t *testing.T) {
 	}
 	if len(wantRepositories) != 0 {
 		t.Fatalf("missing NATS artifacts: %v", wantRepositories)
+	}
+}
+
+// TestNATSMirroringExamplesMatchCatalog covers authored examples outside the
+// generated blocks, including platform pulls and private-registry destinations.
+func TestNATSMirroringExamplesMatchCatalog(t *testing.T) {
+	root := docsVersionSyncRepoRoot(t)
+	catalog, err := LoadCatalog(filepath.Join(root, "docs", "version-catalog", "main.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var box Artifact
+	for _, artifact := range catalog.Artifacts {
+		if artifact.Name == "nats-box" && artifact.Type == ArtifactTypeImage {
+			box = artifact
+		}
+	}
+	if box.Version == "" || !lowercaseSHA256DigestRe.MatchString(box.Digest) {
+		t.Fatal("catalog must select a NATS box version and SHA-256 index digest")
+	}
+	checks := []struct {
+		name    string
+		pattern *regexp.Regexp
+		want    string
+	}{
+		{"version", regexp.MustCompile(`(?:nats-box:|NATS_BOX_VERSION=["']?)([A-Za-z0-9_.-]+)`), box.Version},
+		{"digest", regexp.MustCompile(`(?:nats-box(?::[A-Za-z0-9_.-]+)?@|NATS_BOX_DIGEST=["']?)(sha256:[A-Za-z0-9]+)`), box.Digest},
+	}
+	found := false
+	for _, output := range catalog.Outputs {
+		if filepath.Base(output.Path) != "image-mirroring.md" {
+			continue
+		}
+		found = true
+		content, err := os.ReadFile(filepath.Join(root, output.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, check := range checks {
+			matches := check.pattern.FindAllSubmatch(content, -1)
+			if len(matches) == 0 {
+				t.Errorf("%s: no NATS box %s examples found", output.Path, check.name)
+			}
+			for _, match := range matches {
+				if string(match[1]) != check.want {
+					t.Errorf("%s: example %q has %s %q, want catalog value %q", output.Path, match[0], check.name, match[1], check.want)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("catalog must identify the image-mirroring documentation")
 	}
 }
