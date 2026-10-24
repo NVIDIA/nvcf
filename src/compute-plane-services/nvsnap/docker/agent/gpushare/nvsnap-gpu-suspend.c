@@ -33,6 +33,12 @@ SPDX-License-Identifier: Apache-2.0
  *                 stop + CRIU restore, or full-save) it freezes every thread
  *                 except the restore thread itself, SIGCONTs, restores.
  *   open          After resume --hold-gate: let the pids' GPU launches through.
+ *   mx-pause      Before suspend: ModelExpress in each pid stops serving its
+ *                 weights to peers and drops its NIXL/RDMA state, which CRIU
+ *                 cannot dump. Each reply counts the RDMA device files the
+ *                 pid still has open or mapped: capture only at 0.
+ *   mx-resume     After open (or resume without --hold-gate): ModelExpress
+ *                 registers the weights again and republishes them.
  *   gpus [FILE]   Print (or write to FILE) the UUIDs of the GPUs visible here.
  *
  * --hold-gate (resume after stop + CRIU restore): the pids run, but their
@@ -1479,6 +1485,8 @@ static void usage(const char *prog)
         "         stop         (after suspend: leave pids SIGSTOPped for CRIU dump)\n"
         "         resume       (restore + unlock all, then thaw)\n"
         "         open         (after resume --hold-gate: let the pids' GPU launches through)\n"
+        "         mx-pause     (before suspend: ModelExpress drops its NIXL/RDMA state)\n"
+        "         mx-resume    (after open: ModelExpress registers and republishes again)\n"
         "         gpus [FILE]  (print or write the visible GPU UUIDs, for --gpu-map)\n"
         "--timeout-ms N: lock timeout per pid (default 10000, 0 = wait forever)\n"
         "--gpu-map FILE: restore GPUs listed in FILE onto the GPUs visible here\n"
@@ -1575,6 +1583,11 @@ int main(int argc, char **argv)
     }
     if (strcmp(action, "open") == 0) {
         failures = open_all(pids, n) < 0;
+        free(pids);
+        return failures;
+    }
+    if (strcmp(action, "mx-pause") == 0 || strcmp(action, "mx-resume") == 0) {
+        failures = ctl_all_par(pids, n, action[3] == 'p' ? "mx pause" : "mx resume") < 0;
         free(pids);
         return failures;
     }
