@@ -45,7 +45,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -965,11 +964,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 func (a *Agent) deleteMembers(ctx context.Context, members []CheckpointRequest, uids []types.UID, log *logrus.Entry) {
 	for i := range members {
 		m := &members[i]
-		opts := metav1.DeleteOptions{}
-		if uids[i] != "" {
-			opts.Preconditions = &metav1.Preconditions{UID: &uids[i]}
-		}
-		if err := a.kubeClient.CoreV1().Pods(m.Namespace).Delete(ctx, m.PodName, opts); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		if err := a.deletePodRetrying(ctx, m.Namespace, m.PodName, uids[i]); err != nil {
 			log.WithError(err).WithField("pod", m.Namespace+"/"+m.PodName).Error("group checkpoint: cannot delete a member's pod")
 		}
 	}

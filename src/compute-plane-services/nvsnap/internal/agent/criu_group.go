@@ -527,7 +527,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 // controllers replace them.
 func (c *criuAutoRestorer) deleteInstance(ctx context.Context, members []*corev1.Pod, log *logrus.Entry) {
 	for _, p := range members {
-		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.a.deletePodRetrying(ctx, p.Namespace, p.Name, p.UID); err != nil {
 			log.WithError(err).WithField("pod", p.Name).Error("CRIU group capture: cannot delete a pod of the captured instance")
 		}
 	}
@@ -1071,7 +1071,7 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
 	}
 	for _, p := range members {
-		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.a.deletePodRetrying(ctx, p.Namespace, p.Name, p.UID); err != nil {
 			log.WithError(err).WithField("placeholder", p.Name).Error("CRIU group restore: could not delete the placeholder")
 		}
 	}
