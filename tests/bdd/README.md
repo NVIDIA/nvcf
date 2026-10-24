@@ -303,24 +303,3 @@ Operator notes:
   destroy anyway.
 - Do not run BDD concurrently against the same k3d host. The cleanup
   modes assume one operator at a time.
-
-### Focused cert-manager upstream images
-
-`TestCertManagerUpstreamImages` uses an existing isolated cluster. Prepare
-`environments/<name>.yaml` with the five explicit pins from the authored
-Manifest page, the normal published chart source, and its secrets file.
-Set `REPO_ROOT`, a dedicated `KUBECONFIG`, `CERT_CONTEXT`, `CERT_MANAGER_ENV`,
-and `CMCTL` (the path to `cmctl`). Do not use a production context.
-
-```bash
-go test -run '^TestCertManagerUpstreamImages$' -count=1 -timeout=15m .
-```
-
-The suite installs the selected published wrapper through Helmfile, verifies
-all five explicit image references and their chart version, checks API
-readiness, issues a self-signed CA certificate, verifies CA injection, and
-renews the certificate to revision 2. It leaves the release and test resources
-for inspection. Use a fresh cluster or remove the task's previous test
-Certificate, Secret, Issuer and `upstream-ca-injection-test` webhook before a
-repeat. Cluster cleanup remains an explicit operator action. This focused
-suite does not qualify an ACME server, OpenBao, or the full control plane.
