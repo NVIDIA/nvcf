@@ -40,6 +40,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -893,13 +894,22 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	// excepted while it saves its GPU memory. The members are released
 	// from the freeze point only once all are held.
 	holdsDone := make(chan struct{})
+	var holding atomic.Bool
 	onGo := sync.OnceFunc(func() {
+		holding.Store(true)
 		go func() {
 			defer close(holdsDone)
 			holdMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
 		}()
 	})
-	defer releaseMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
+	defer func() {
+		// A hold still on its way would land after this release and keep
+		// its pod frozen: let every hold land, or fail, first.
+		if holding.Load() {
+			<-holdsDone
+		}
+		releaseMembers(ctx, fabricHTTPClient, session, req.Members, bases, log)
+	}()
 	freezeDone := make(chan struct{})
 	go func() {
 		defer close(freezeDone)

@@ -55,6 +55,10 @@ type podHold struct {
 type podHolds struct {
 	mu sync.Mutex
 	m  map[string]*podHold
+	// released holds the keys released in the last podHoldTimeout, held or
+	// not: a hold that arrives after its release (the driver's request
+	// overtaken by the member's own end) must not freeze the pod.
+	released map[string]time.Time
 }
 
 // holdKey names one member's hold in one capture.
@@ -163,6 +167,10 @@ func (a *Agent) holdCgroups(key, target string, keep bool, log *logrus.Entry) er
 		a.holds.mu.Unlock()
 		return nil // held already
 	}
+	if _, gone := a.holds.released[key]; gone {
+		a.holds.mu.Unlock()
+		return errHoldReleased
+	}
 	h := &podHold{record: a.holdRecordPath(key)}
 	a.holds.m[key] = h
 	a.holds.mu.Unlock()
@@ -237,12 +245,25 @@ func (a *Agent) heldTargetSince(key string) (clocks, bool) {
 	return h.frozenAt, h.frozenAt != (clocks{})
 }
 
-// releaseHold thaws every container a hold froze; a key without a hold
-// is a no-op.
+// errHoldReleased refuses a hold whose capture already released it.
+var errHoldReleased = errors.New("pod hold: the capture already released this hold")
+
+// releaseHold thaws every container a hold froze. A key without a hold is
+// remembered as released, so a hold arriving after it does not freeze.
 func (a *Agent) releaseHold(key string, log *logrus.Entry) {
+	now := time.Now()
 	a.holds.mu.Lock()
 	h := a.holds.m[key]
 	delete(a.holds.m, key)
+	if a.holds.released == nil {
+		a.holds.released = map[string]time.Time{}
+	}
+	for k, at := range a.holds.released {
+		if now.Sub(at) > podHoldTimeout {
+			delete(a.holds.released, k)
+		}
+	}
+	a.holds.released[key] = now
 	a.holds.mu.Unlock()
 	if h == nil {
 		return
