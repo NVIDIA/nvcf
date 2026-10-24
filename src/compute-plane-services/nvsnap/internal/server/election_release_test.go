@@ -104,19 +104,39 @@ func TestElectionRelease_FailedEvictsOnlyControllerOwnedFollowers(t *testing.T) 
 
 func TestElectionRelease_ReconcileLeaderLiveness(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	// copyOf carries the leader's election id, created after it.
+	copyOf := func(name string, after time.Duration) *corev1.Pod {
+		p := leaderPod(corev1.PodRunning)
+		p.Name, p.UID = name, types.UID("uid-"+name)
+		p.CreationTimestamp = metav1.NewTime(now.Add(after))
+		return p
+	}
+	failedAtNow := leaderPod(corev1.PodFailed)
+	failedAtNow.CreationTimestamp = metav1.NewTime(now)
 	cases := map[string]struct {
 		objs      []*corev1.Pod
 		deadline  time.Time
+		boundUID  string
 		wantEvict bool
 	}{
-		"live leader keeps followers":      {[]*corev1.Pod{leaderPod(corev1.PodRunning)}, now.Add(time.Hour), false},
-		"pending leader keeps followers":   {[]*corev1.Pod{leaderPod(corev1.PodPending)}, now.Add(time.Hour), false},
-		"leader gone evicts":               {nil, now.Add(time.Hour), true},
-		"failed leader evicts":             {[]*corev1.Pod{leaderPod(corev1.PodFailed)}, now.Add(time.Hour), true},
-		"deadline passed evicts even live": {[]*corev1.Pod{leaderPod(corev1.PodRunning)}, now.Add(-time.Minute), true},
+		"live leader keeps followers":      {[]*corev1.Pod{leaderPod(corev1.PodRunning)}, now.Add(time.Hour), "", false},
+		"pending leader keeps followers":   {[]*corev1.Pod{leaderPod(corev1.PodPending)}, now.Add(time.Hour), "", false},
+		"leader gone evicts":               {nil, now.Add(time.Hour), "", true},
+		"failed leader evicts":             {[]*corev1.Pod{leaderPod(corev1.PodFailed)}, now.Add(time.Hour), "", true},
+		"deadline passed evicts even live": {[]*corev1.Pod{leaderPod(corev1.PodRunning)}, now.Add(-time.Minute), "", true},
+		// A pod that copied the election id does not stand in for the
+		// leader, whether the Lease bound its UID yet or not.
+		"failed leader with a live copy evicts":     {[]*corev1.Pod{failedAtNow, copyOf("copy", time.Minute)}, now.Add(time.Hour), "", true},
+		"bound leader gone with a live copy evicts": {[]*corev1.Pod{copyOf("copy", time.Minute)}, now.Add(time.Hour), "uid-L", true},
+		"bound leader live keeps followers":         {[]*corev1.Pod{leaderPod(corev1.PodRunning)}, now.Add(time.Hour), "uid-L", false},
+		"leader and copy indistinguishable evicts":  {[]*corev1.Pod{copyOf("twin-a", 0), copyOf("twin-b", 0)}, now.Add(time.Hour), "", true},
 	}
 	for name, tc := range cases {
-		kc := fake.NewSimpleClientset(gatedFollower("f", true), electionLease("L", tc.deadline))
+		lease := electionLease("L", tc.deadline)
+		if tc.boundUID != "" {
+			lease.Annotations[election.LeaderUIDAnnotation] = tc.boundUID
+		}
+		kc := fake.NewSimpleClientset(gatedFollower("f", true), lease)
 		for _, p := range tc.objs {
 			if _, err := kc.CoreV1().Pods("fn").Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
 				t.Fatal(err)

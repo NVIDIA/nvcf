@@ -27,15 +27,21 @@ package election
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -78,6 +84,15 @@ const (
 	// DeadlineAnnotation is the RFC3339 time after which the reconciler
 	// treats the leader as failed even if its pod is still around.
 	DeadlineAnnotation = "nvsnap.io/deadline"
+	// LeaderSpecAnnotation on the Lease is the SpecIdentity of the leader
+	// as admitted: what it runs, which a capture under the election's
+	// hash must match.
+	LeaderSpecAnnotation = "nvsnap.io/leader-spec"
+	// LeaderUIDAnnotation on the Lease is the UID of the leader pod,
+	// bound once the pod exists (see ResolveLeader). The election id is
+	// readable on the leader pod and any pod in its namespace can copy
+	// it; the UID is the apiserver's and cannot be copied.
+	LeaderUIDAnnotation = "nvsnap.io/leader-uid"
 
 	// DefaultDeadline bounds a cold start plus a capture.
 	DefaultDeadline = 60 * time.Minute
@@ -135,6 +150,9 @@ type LeaseElector struct {
 	Now func() time.Time
 	// NewID mints the election id; a seam for tests. nil uses a UUID.
 	NewID func() string
+	// MainContainer is the index of the model container, the same one the
+	// webhook composes the hash from and the watcher captures.
+	MainContainer int
 }
 
 func (e *LeaseElector) newID() string {
@@ -161,11 +179,14 @@ func (e *LeaseElector) deadline() time.Duration {
 // VerifyStamp implements the capture watcher's check of a stamped hash: nil
 // when pod is the leader of the live election for hash, on a node of the
 // compute capability nodeCC the hash was elected for. The election Lease
-// lives in the election namespace, which pod authors cannot write, and
-// names the leader by namespace and by an id minted at admission that
-// only the Lease and the leader pod carry; a pod that sets the hash, the
-// id or the pin on itself does not get past it. The compute capability
-// the hash was composed for is the one admission pinned the pod to.
+// lives in the election namespace, which pod authors cannot write. It
+// names the leader by namespace and by an id minted at admission, but the
+// id is readable on the leader pod and can be copied onto another pod, so
+// the Lease also binds the leader's UID (ResolveLeader) and records what
+// the leader runs (SpecIdentity): a pod that copies the hash, the id and
+// the pin is neither the bound UID nor, unless it runs the same model
+// container, the same spec. The compute capability the hash was composed
+// for is the one admission pinned the pod to.
 func (e *LeaseElector) VerifyStamp(ctx context.Context, pod *corev1.Pod, hash, nodeCC string) error {
 	if e.KubeClient == nil {
 		return fmt.Errorf("no kube client")
@@ -188,6 +209,15 @@ func (e *LeaseElector) VerifyStamp(ctx context.Context, pod *corev1.Pod, hash, n
 		return fmt.Errorf("the pod is not the election's leader")
 	case lease.Annotations[LeaderNamespaceAnnotation] != pod.Namespace:
 		return fmt.Errorf("the election's leader is in another namespace")
+	case lease.Annotations[LeaderSpecAnnotation] == "" || lease.Annotations[LeaderSpecAnnotation] != SpecIdentity(pod, e.MainContainer):
+		return fmt.Errorf("the pod does not run what the election's leader was admitted with")
+	}
+	uid, err := e.bindLeader(ctx, lease)
+	if err != nil {
+		return err
+	}
+	if uid == "" || pod.UID != uid {
+		return fmt.Errorf("the pod is not the election's leader pod")
 	}
 	pinned := PinnedComputeCapability(pod)
 	switch {
@@ -197,6 +227,115 @@ func (e *LeaseElector) VerifyStamp(ctx context.Context, pod *corev1.Pod, hash, n
 		return fmt.Errorf("the node's compute capability %q is not the elected %q", nodeCC, pinned)
 	}
 	return nil
+}
+
+// bindLeader returns the UID of the election's leader pod, recording it on
+// the Lease the first time it is resolved so later checks do not depend
+// on which pods carry the id by then. "" means the leader pod is gone.
+func (e *LeaseElector) bindLeader(ctx context.Context, lease *coordinationv1.Lease) (types.UID, error) {
+	leases := e.KubeClient.CoordinationV1().Leases(e.Namespace)
+	var bound types.UID
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if uid := lease.Annotations[LeaderUIDAnnotation]; uid != "" {
+			bound = types.UID(uid)
+			return nil
+		}
+		pods, err := e.KubeClient.CoreV1().Pods(lease.Annotations[LeaderNamespaceAnnotation]).List(ctx, metav1.ListOptions{
+			LabelSelector: HashLabel + "=" + checkpointstore.ShortHash(lease.Annotations[HashAnnotation]),
+		})
+		if err != nil {
+			return fmt.Errorf("list the election's leader candidates: %w", err)
+		}
+		leader, err := ResolveLeader(lease, pods.Items)
+		if err != nil || leader == nil {
+			return err
+		}
+		next := lease.DeepCopy()
+		next.Annotations[LeaderUIDAnnotation] = string(leader.UID)
+		if _, err := leases.Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) {
+				// Another check bound it, or the Lease was renewed or
+				// replaced: re-read and decide again.
+				cur, gerr := leases.Get(ctx, lease.Name, metav1.GetOptions{})
+				if gerr != nil {
+					return gerr
+				}
+				if cur.UID != lease.UID {
+					return fmt.Errorf("the election was replaced")
+				}
+				lease = cur
+			}
+			return err
+		}
+		bound = leader.UID
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("bind the election's leader: %w", err)
+	}
+	return bound, nil
+}
+
+// ResolveLeader picks the leader of lease among pods, the pods of its hash
+// in the leader's namespace. A UID bound on the Lease decides. Before it
+// is bound, the leader is the earliest-created pod carrying the election
+// id: the id exists only on the Lease, which pod authors cannot read, and
+// on the leader as admitted, so a pod that copied it was created after
+// the leader. Two pods created in the same second cannot be told apart
+// and the election is refused rather than guessed. Returns nil, nil when
+// no pod is the leader (it is gone).
+func ResolveLeader(lease *coordinationv1.Lease, pods []corev1.Pod) (*corev1.Pod, error) {
+	ns := lease.Annotations[LeaderNamespaceAnnotation]
+	if uid := types.UID(lease.Annotations[LeaderUIDAnnotation]); uid != "" {
+		for i := range pods {
+			if pods[i].UID == uid && pods[i].Namespace == ns {
+				return &pods[i], nil
+			}
+		}
+		return nil, nil
+	}
+	id := lease.Annotations[LeaderIDAnnotation]
+	var candidates []*corev1.Pod
+	for i := range pods {
+		if p := &pods[i]; id != "" && p.Namespace == ns && p.Annotations[ElectionIDAnnotation] == id {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].CreationTimestamp.Before(&candidates[j].CreationTimestamp)
+	})
+	if len(candidates) > 1 && candidates[1].CreationTimestamp.Equal(&candidates[0].CreationTimestamp) {
+		return nil, fmt.Errorf("%d pods created at the same time carry the election id; the leader cannot be told apart", len(candidates))
+	}
+	return candidates[0], nil
+}
+
+// SpecIdentity digests what the model container at index main runs: its
+// name, image, command and args. Admission records it on the Lease for
+// the leader, and the stamp check requires it of the pod it captures, so
+// a capture published under the elected hash comes from a pod running
+// the model the hash was composed for. The env is left out because the
+// webhook injects into it; nothing in nvsnap changes these four fields of
+// a leader. "" when the pod has no such container.
+func SpecIdentity(pod *corev1.Pod, main int) string {
+	if pod == nil || main < 0 || main >= len(pod.Spec.Containers) {
+		return ""
+	}
+	c := pod.Spec.Containers[main]
+	b, err := json.Marshal(struct {
+		Name    string   `json:"name"`
+		Image   string   `json:"image"`
+		Command []string `json:"command"`
+		Args    []string `json:"args"`
+	}{c.Name, c.Image, c.Command, c.Args})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // Elect creates the Lease for hash with a freshly minted id as holder.
@@ -224,6 +363,7 @@ func (e *LeaseElector) Elect(ctx context.Context, hash string, pod *corev1.Pod) 
 				HashAnnotation:            hash,
 				LeaderNamespaceAnnotation: pod.Namespace,
 				LeaderIDAnnotation:        holder,
+				LeaderSpecAnnotation:      SpecIdentity(pod, e.MainContainer),
 				DeadlineAnnotation:        now.Add(e.deadline()).UTC().Format(time.RFC3339),
 			},
 		},

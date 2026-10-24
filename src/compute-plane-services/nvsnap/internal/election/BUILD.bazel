@@ -14,8 +14,10 @@ go_library(
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/api/errors",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/types",
         "@io_k8s_apimachinery//pkg/util/uuid",
         "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//util/retry",
     ],
 )
 
@@ -27,8 +29,10 @@ go_test(
     ],
     embed = [":election"],
     deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "@io_k8s_api//coordination/v1:coordination",
         "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
         "@io_k8s_apimachinery//pkg/api/resource",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/runtime",
