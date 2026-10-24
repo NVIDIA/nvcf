@@ -185,6 +185,40 @@ func procOwner(procBase string, pid int) (uid, gid int, err error) {
 // still reads Ready.
 var errSourceLeftSuspended = errors.New("gpushare: the source workload could not be resumed and stays suspended")
 
+// errSourceLeftLocked marks a capture whose dump was killed before CRIU
+// released the workload's network lock (an nftables table in the pod's
+// network namespace, named by a run id only CRIU knew): the workload no
+// longer reaches its peers, and the caller replaces it.
+var errSourceLeftLocked = errors.New("criu: the dump was killed before it released the workload's network lock")
+
+// sourceMustBeReplaced reports whether a capture left its source unusable
+// (suspended, or with its network locked): its pods are replaced.
+func sourceMustBeReplaced(err error) bool {
+	return errors.Is(err, errSourceLeftSuspended) || errors.Is(err, errSourceLeftLocked)
+}
+
+// sourceMustBeReplacedText is sourceMustBeReplaced on an error's text, as
+// it comes back from another node's agent.
+func sourceMustBeReplacedText(s string) bool {
+	return strings.Contains(s, errSourceLeftSuspended.Error()) || strings.Contains(s, errSourceLeftLocked.Error())
+}
+
+// runDump runs a CRIU dump (name args...) to its end, under its own
+// deadline rather than its caller's context: killed half-way, CRIU leaves
+// the workload stopped behind its network lock. A dump the deadline kills
+// is reported as errSourceLeftLocked.
+func runDump(ctx context.Context, deadline time.Duration, env []string, name string, args ...string) ([]byte, error) {
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+	cmd := exec.CommandContext(dctx, name, args...) //nolint:gosec // nsenter and CRIU, with arguments the agent builds
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil && dctx.Err() != nil {
+		return out, fmt.Errorf("%w (after %s): %w", errSourceLeftLocked, deadline, err)
+	}
+	return out, err
+}
+
 // dumpV2Opts are the choices of one dumpV2.
 type dumpV2Opts struct {
 	LeaveRunning  bool

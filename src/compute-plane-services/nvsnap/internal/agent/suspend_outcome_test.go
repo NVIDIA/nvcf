@@ -116,3 +116,36 @@ func TestGPUShareSuspendOutlivesTheCapture(t *testing.T) {
 		t.Error("a suspend that succeeded under a cancelled capture was not reported: nothing would resume the source")
 	}
 }
+
+// A dump runs to its end when its caller goes away, and one its own
+// deadline kills is reported as leaving the workload to replace.
+func TestRunDump(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	out, err := runDump(ctx, 10*time.Second, nil, "sh", "-c", "sleep 0.2; echo dumped")
+	if err != nil || strings.TrimSpace(string(out)) != "dumped" {
+		t.Errorf("a dump under a cancelled caller: %q, %v", out, err)
+	}
+	_, err = runDump(t.Context(), 100*time.Millisecond, nil, "sleep", "5")
+	if !errors.Is(err, errSourceLeftLocked) || !sourceMustBeReplaced(err) {
+		t.Errorf("a dump past its deadline: %v, want errSourceLeftLocked", err)
+	}
+	_, err = runDump(t.Context(), 10*time.Second, nil, "sh", "-c", "exit 1")
+	if err == nil || sourceMustBeReplaced(err) {
+		t.Errorf("a dump that failed by itself (CRIU cleaned up): %v", err)
+	}
+}
+
+// Either sentinel, on its own or as text from another node's agent, asks
+// for the workload to be replaced.
+func TestSourceMustBeReplaced(t *testing.T) {
+	for _, e := range []error{errSourceLeftSuspended, errSourceLeftLocked} {
+		wrapped := fmt.Errorf("member 1: %w", e)
+		if !sourceMustBeReplaced(wrapped) || !sourceMustBeReplacedText("agent said: "+wrapped.Error()) {
+			t.Errorf("%v not recognised", e)
+		}
+	}
+	if sourceMustBeReplaced(errors.New("criu dump failed")) || sourceMustBeReplacedText("criu dump failed") {
+		t.Error("an ordinary failure asks for the workload to be replaced")
+	}
+}

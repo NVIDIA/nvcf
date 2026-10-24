@@ -465,7 +465,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
 		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)
-		if stopped || strings.Contains(err.Error(), errSourceLeftSuspended.Error()) {
+		if stopped || sourceMustBeReplacedText(err.Error()) {
 			// The instance was stopped for the capture: rather than resume
 			// a stopped instance, its controllers replace every pod of it,
 			// cold.

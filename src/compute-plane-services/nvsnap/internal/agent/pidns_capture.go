@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -682,20 +681,22 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	}
 	args = append(args, "--freeze-cgroup", cg)
 	log.WithField("cgroup", cg).Info("criu-v2: dumping the container from its frozen cgroup")
-	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
 	// CRIU locks TCP in the network namespace it runs in. The agent runs on
 	// the node's network, so enter the pod's: the lock must hold the pod's
-	// connections, never the node's.
-	cmd := exec.CommandContext(dctx, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...)
-	cmd.Env = []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// connections, never the node's. nsenter -n does not fork: a kill
+	// reaches CRIU itself, so the dump runs to its end (runDump).
+	env := []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
+	if out, err := runDump(ctx, pidNSDumpDeadline, env, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...); err != nil {
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
 	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners,
 		StdoutPipe: stdout, StderrPipe: stderr})
 }
+
+// pidNSDumpDeadline bounds a pid-namespace dump; CRIU's own --timeout
+// bounds its freeze well within it.
+const pidNSDumpDeadline = 20 * time.Minute
 
 // pidNSRestoreHelperName is the agent binary in the node bundle, run in the
 // placeholder for pidns-restore-exec.
