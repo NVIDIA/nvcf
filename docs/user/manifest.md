@@ -59,25 +59,21 @@ See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
 ### Supporting images that ship from Docker Hub
 
-NATS server, NATS box, the configuration reloader, and the account-bootstrap
-Kubernetes utilities use upstream Docker Hub images. They are not NVCF
-customer-image publication requirements. The default `global.image` registry
-does not redirect these dependencies. See the generated inventory below for
-the selected versions and the NATS box index digest.
+The NATS configuration reloader and the account-bootstrap Kubernetes
+utilities are not republished under the public `nvidia/nvcf` catalog, so they
+default to their upstream Docker Hub source:
 
 | Value | Default image |
 | --- | --- |
-| `nats.container.image` | `docker.io/synadia/nats-server` (version below) |
-| `nats.natsBox.container.image` | `docker.io/natsio/nats-box` (nonroot version and digest below) |
 | `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.24.0` |
 | `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.37.0` |
 
-A public-catalog install needs no configuration for these images. Verify
+A public-catalog install needs no configuration for these two images. Verify
 that your cluster can reach Docker Hub. If your egress to Docker Hub is
 authenticated or rate-limited, add the pull secret to
 `global.imagePullSecrets`.
 
-If you have mirrored these images into your own registry, redirect them from
+If you have mirrored both images into your own registry, redirect them from
 your environment file
 (`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
 and `repository` together, because each key falls back to its own Docker Hub
@@ -86,15 +82,6 @@ default rather than to `global.image`. You do not need to edit
 
 ```yaml
 nats:
-  container:
-    image:
-      registry: <your-registry>
-      repository: <your-repository>/nats-server
-  natsBox:
-    container:
-      image:
-        registry: <your-registry>
-        repository: <your-repository>/nats-box
   reloader:
     image:
       registry: <your-registry>
@@ -109,11 +96,89 @@ api:
       tag: "1.37.0"
 ```
 
-The box `tag` contains both the nonroot version and the multi-platform digest
-(`version-nonroot@sha256:...`). Omit `tag` when copying the same image without
-changing its digest. To select different bytes, set the complete `tag` pin.
-Use the [multi-platform mirror procedure](./image-mirroring.md#mirror-nats-images)
-to retain AMD64 and ARM64 support.
+### Use upstream NATS images
+
+To use upstream images, merge these values into
+`deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
+these settings to the selected NATS chart; no chart or release-definition
+changes are needed. This example uses NATS server 2.14.6, reloader 0.24.0, and
+NATS box 0.20.1. The box pin identifies the upstream multi-platform index for
+Linux AMD64 and ARM64.
+
+```yaml
+nats:
+  container:
+    image:
+      registry: docker.io
+      repository: synadia/nats-server
+      tag: "2.14.6-alpine3.22"
+  reloader:
+    image:
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: "0.24.0"
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+  natsBox:
+    container:
+      image:
+        registry: docker.io
+        repository: natsio/nats-box
+        tag: "0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44"
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+```
+
+The box image declares user/group `1000:1000`. `runAsNonRoot` adds Kubernetes
+enforcement; `runAsUser` and `runAsGroup` make the identity explicit. The server
+pod settings also cover its reloader. Server `fsGroup` allows UID 1000 to write
+the JetStream and shared PID volumes. The box uses its writable home for CLI
+state and `nsc` keys. Its default context links to read-only mounted Secrets;
+use a separate `XDG_CONFIG_HOME` to save additional contexts. The box needs no
+additional volume or `fsGroup` for this example.
+
+For a private mirror, set each image's `registry` and `repository` together and
+use the mirrored `tag` or `tag@sha256:...`. Preserve the multi-platform index
+when copying the box image and verify the destination digest. Unset or empty
+keys retain the stack's existing defaults; this example does not change them.
+Configure `global.imagePullSecrets` if the destination requires authentication.
+
+Render before installing, using your normal chart source and secrets file:
+
+```bash
+cd deploy/stacks/self-managed
+export HELMFILE_ENV=<environment>
+helmfile -f helmfile.d/01-dependencies.yaml.gotmpl --selector name=nats template
+```
+
+Check the StatefulSet's server and reloader images and the box Deployment's
+full `tag@digest` reference and security context. Install with the normal
+stack workflow, then verify in the intended Kubernetes context:
+
+```bash
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status statefulset/nats
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status deployment/nats-box
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c nats -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c reloader -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- \
+  nats --context default rtt
+```
+
+The identities should report UID/GID 1000. The CLI check uses the mounted NKey
+and requires the stack's authentication service to be ready. Check the
+reloader logs after a configuration update to confirm it reloads successfully.
 
 ### Override the Cassandra images
 
@@ -216,7 +281,7 @@ Documentation: `dev` (development)
 | `icms-service-oss` | `0.7.2` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `nvcr.io/nvidia/nvcf/icms-service-oss:0.7.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
 | `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `llm-api-gateway` | `0.14.2` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `nats-box` | `0.20.1-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `docker.io/natsio/nats-box:0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44` | [Upstream](https://github.com/nats-io/nats-box) |
+| `nats-box` | `0.19.7-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvcf-ai-api-gateway-service` | `1.35.1` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
 | `nvcf-api-keys-service` | `1.9.1` | `self-managed` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.1` |  |

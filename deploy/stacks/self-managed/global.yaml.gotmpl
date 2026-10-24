@@ -268,20 +268,18 @@ nats:
     {{- end }}
   {{- end }}
   natsBox:
+    {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
     podTemplate:
       merge:
         spec:
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
+            {{- toYaml . | nindent 12 }}
+    {{- end }}
     container:
       image:
-        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default "docker.io" }}
-        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default "natsio/nats-box" }}
-        # Keep tag and index digest together so release inventories retain both.
-        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44" | quote }}
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
