@@ -133,6 +133,25 @@ Set the per-image `registry` and `repository` keys shown in the
 Leave the box `tag` unset to retain the selected version and digest. A custom
 `tag` replaces the complete `version-nonroot@sha256:...` pin; use the digest
 of your mirrored index if the destination cannot preserve the original.
+
+If the destination requires a different manifest representation,
+`--preserve-digests` fails. Use a separate copy without that flag, still copying
+all platforms, then inspect and pin the destination index:
+
+```bash
+skopeo copy --all \
+  "docker://docker.io/natsio/nats-box@${NATS_BOX_DIGEST}" \
+  "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}"
+skopeo inspect --raw "docker://${MIRROR_REPOSITORY}:${NATS_BOX_VERSION}" > nats-box-mirror-index.json
+MIRROR_DIGEST="sha256:$(sha256sum nats-box-mirror-index.json | cut -d ' ' -f 1)"
+jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] |
+  index("amd64") != null and index("arm64") != null' nats-box-mirror-index.json
+printf '%s@%s\n' "$NATS_BOX_VERSION" "$MIRROR_DIGEST"
+```
+
+Set `nats.natsBox.container.image.tag` to the complete printed
+`version-nonroot@sha256:...` value, along with the destination `registry` and
+`repository`. This pins the mirrored index instead of the upstream index.
 The NKeys and contexts mounts do not change.
 
 ### Pulling Helm Charts
