@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  * Copyright 2018-2024 The NATS Authors
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,12 +71,12 @@ func ParseServerVersion(version string) (int, int, int, error) {
 // Validate checks the validity of the operators contents
 func (o *Operator) Validate(vr *ValidationResults) {
 	if err := o.validateAccountServerURL(); err != nil {
-		vr.AddError(err.Error())
+		vr.AddError("%s", err.Error())
 	}
 
 	for _, v := range o.validateOperatorServiceURLs() {
 		if v != nil {
-			vr.AddError(v.Error())
+			vr.AddError("%s", v.Error())
 		}
 	}
 

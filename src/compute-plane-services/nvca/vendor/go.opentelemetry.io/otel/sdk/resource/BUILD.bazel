@@ -1,0 +1,81 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "resource",
+    srcs = [
+        "auto.go",
+        "builtin.go",
+        "config.go",
+        "container.go",
+        "doc.go",
+        "env.go",
+        "host_id.go",
+        "host_id_bsd.go",
+        "host_id_darwin.go",
+        "host_id_exec.go",
+        "host_id_linux.go",
+        "host_id_readfile.go",
+        "host_id_unsupported.go",
+        "host_id_windows.go",
+        "os.go",
+        "os_release_darwin.go",
+        "os_release_unix.go",
+        "os_unix.go",
+        "os_unsupported.go",
+        "os_windows.go",
+        "process.go",
+        "resource.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/resource",
+    importpath = "go.opentelemetry.io/otel/sdk/resource",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/internal/x",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.41.0:v1_41_0",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:android": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:windows": [
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows/registry",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resource",
+    visibility = ["//visibility:public"],
+)

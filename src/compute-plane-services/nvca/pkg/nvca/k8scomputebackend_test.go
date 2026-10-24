@@ -48,14 +48,18 @@ import (
 	k8sinformers "k8s.io/client-go/informers"
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	k8smock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcafake "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
@@ -115,7 +119,14 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 		Start(ctx)
 	require.NoError(t, err)
 
-	checkNS := func(t *testing.T, namespace, expLabelVal string, hasIntraEgressNP bool) {
+	// hasIntraNamespaceAccess is true for function namespaces (one
+	// MiniService/Helm release per namespace, single-tenant), where a
+	// same-namespace allow is safe and needed (e.g. the utils pod reaching
+	// its own inference pod on a different pod in the same namespace). It is
+	// false for the namespace shared across every container-function tenant
+	// (nvcf-backend), where the same allow would let one customer's pod
+	// reach another customer's pod.
+	checkNS := func(t *testing.T, namespace, expLabelVal string, hasIntraNamespaceAccess bool) {
 		t.Run(fmt.Sprintf("%s:%s", namespace, expLabelVal), func(t *testing.T) {
 			assert.EventuallyWithT(t, func(c *assert.CollectT) {
 				egressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
@@ -134,8 +145,9 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 				}
 
 				// Check for the intra-namespace egress policy
-				if hasIntraEgressNP {
-					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+				if hasIntraNamespaceAccess {
+					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 					if assert.NoError(c, err) {
 						assert.Equal(c, []netv1.PolicyType{"Egress"}, intraEgressNP.Spec.PolicyTypes)
 						if !assert.Len(c, intraEgressNP.Spec.Egress, 1) {
@@ -148,13 +160,22 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						assert.NotNil(c, peer.NamespaceSelector)
 						assert.Equal(c, namespace, peer.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 					}
+				} else {
+					_, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+					assert.True(c, errors.IsNotFound(err),
+						"allow-egress-intra-namespace should not be created for the shared pod instance namespace")
 				}
 
 				ingressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
 					k8sutil.MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 				if assert.NoError(c, err) {
 					assert.Equal(c, []netv1.PolicyType{"Ingress"}, ingressNP.Spec.PolicyTypes)
-					if !assert.Len(c, ingressNP.Spec.Ingress, 2) {
+					wantRules := 1
+					if hasIntraNamespaceAccess {
+						wantRules = 2
+					}
+					if !assert.Len(c, ingressNP.Spec.Ingress, wantRules) {
 						return
 					}
 					if !assert.Len(c, ingressNP.Spec.Ingress[0].From, 1) {
@@ -165,11 +186,13 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						return
 					}
 					assert.Equal(c, expLabelVal, peer1.NamespaceSelector.MatchLabels["foo"])
-					peer2 := ingressNP.Spec.Ingress[1].From[0]
-					if !assert.NotNil(c, peer2.NamespaceSelector) {
-						return
+					if hasIntraNamespaceAccess {
+						peer2 := ingressNP.Spec.Ingress[1].From[0]
+						if !assert.NotNil(c, peer2.NamespaceSelector) {
+							return
+						}
+						assert.Equal(c, namespace, peer2.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 					}
-					assert.Equal(c, namespace, peer2.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 				}
 			}, 5*time.Second, 200*time.Millisecond, "namespace: "+namespace)
 		})
@@ -778,6 +801,56 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 		assert.Equal(t, "128Gi", gotPod.Spec.Containers[0].Resources.Limits.StorageEphemeral().String())
 	}
 
+	llmLaunchSpecification := *cmContainer.LaunchSpecification
+	llmEnvironment, err := base64.StdEncoding.DecodeString(llmLaunchSpecification.EnvironmentB64)
+	require.NoError(t, err)
+	llmLaunchSpecification.EnvironmentB64 = base64.StdEncoding.EncodeToString(append(
+		llmEnvironment,
+		[]byte("\nLLM_REQUEST_ROUTER_ADDRESS=llm-request-router.example.com:50071")...,
+	))
+	llmDetails := cmContainer.Details
+	llmDetails.FunctionType = function.FunctionTypeLLM
+	reqLLM := reqContainer.DeepCopy()
+	reqLLM.Name = "sr-llm"
+	reqLLM.Spec.FunctionDetails = llmDetails
+	reqLLM.Spec.CreationMsgInfo.FunctionLaunchSpecification = &llmLaunchSpecification
+
+	gotArtifactsLLM, err := kc.translateFunctionLaunchSpecification(ctx, reqLLM)
+	require.NoError(t, err)
+	var llmPodArtifact function.LaunchArtifact
+	for _, artifact := range gotArtifactsLLM {
+		if artifact.Type == function.LaunchArtifactTypePod {
+			llmPodArtifact = artifact
+			break
+		}
+	}
+	require.NotEmpty(t, llmPodArtifact.Specification)
+	llmPodArtifactBytes, err := base64.StdEncoding.DecodeString(llmPodArtifact.Specification)
+	require.NoError(t, err)
+	llmPod := &corev1.Pod{}
+	require.NoError(t, json.Unmarshal(llmPodArtifactBytes, llmPod))
+	var llmWorker *corev1.Container
+	for i := range llmPod.Spec.Containers {
+		if llmPod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &llmPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	var backendConnectivityArgs, initialInputTPSArgs []string
+	for _, arg := range llmWorker.Args {
+		if strings.HasPrefix(arg, "--backend-connectivity=") {
+			backendConnectivityArgs = append(backendConnectivityArgs, arg)
+		}
+		if strings.HasPrefix(arg, "--initial-input-tps=") {
+			initialInputTPSArgs = append(initialInputTPSArgs, arg)
+		}
+		assert.False(t, strings.HasPrefix(arg, "--reverse-tunnel"))
+		assert.False(t, strings.HasPrefix(arg, "--do-calibration"))
+	}
+	assert.Equal(t, []string{"--backend-connectivity=reverse"}, backendConnectivityArgs)
+	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
+
 	// Helm chart basic function.
 	msgMetaHelmChart := cmHelmChart.CreationQueueMessageMetadata
 	reqHelmChart := &nvcav2beta1.ICMSRequest{
@@ -810,6 +883,18 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 	gotArtifactsHelmChart, err := kc.translateFunctionLaunchSpecification(ctx, reqHelmChart)
 	require.NoError(t, err)
 	assert.Len(t, gotArtifactsHelmChart, 6)
+
+	legacyReqContainer := reqContainer.DeepCopy()
+	legacyReqContainer.Name = "sr-legacy-request-instances"
+	legacyReqContainer.Spec.Action = common.MessageAction("RequestInstances")
+	legacyReqContainer.Spec.CreationMsgInfo.CreationQueueMessageMetadata.Action = common.MessageAction("RequestInstances")
+	_, err = kc.clients.BART.NvcaV2beta1().ICMSRequests(legacyReqContainer.Namespace).Create(ctx, legacyReqContainer, metav1.CreateOptions{})
+	require.NoError(t, err)
+	err = kc.ApplyCreationMessage(ctx, legacyReqContainer)
+	require.NoError(t, err)
+	gotLegacyReq, err := kc.clients.BART.NvcaV2beta1().ICMSRequests(legacyReqContainer.Namespace).Get(ctx, legacyReqContainer.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Len(t, gotLegacyReq.Spec.CreationMsgInfo.LaunchArtifacts, 3)
 
 	// For coverage
 	_, err = kc.clients.BART.NvcaV2beta1().ICMSRequests(reqContainer.Namespace).Create(ctx, reqContainer, metav1.CreateOptions{})
@@ -1718,6 +1803,140 @@ func TestPurgeInstanceID_ErrorHandling(t *testing.T) {
 	assert.False(t, result, "Should return false for already terminated instance")
 }
 
+// TestPurgeInstanceID_StillPresentAfterDelete simulates a Delete() call that is accepted by
+// the API server but does not actually remove the object yet (e.g. blocked by a finalizer
+// held by another controller). The vendored fake clientsets do not implement finalizer
+// semantics on Delete (they remove the object outright), so a reactor/interceptor is used to
+// make the delete call succeed without actually removing the object, mirroring what a
+// finalizer-blocked real Delete looks like from purgeInstanceID's point of view.
+func TestPurgeInstanceID_StillPresentAfterDelete(t *testing.T) {
+	ctx := newTestContext()
+
+	t.Run("Pod blocked by finalizer is not reported terminated", func(t *testing.T) {
+		clients := mockKubeClients()
+
+		b, _, err := NewBackendk8sCacheBuilder().
+			WithNamespaceLabels(labels.Set{"bartnamespace": "true"}).
+			WithClients(clients).
+			Start(ctx)
+		require.NoError(t, err)
+
+		kbInterface, _ := NewK8sComputeBackend(clients, b)
+		kb := kbInterface.(K8sComputeBackend)
+
+		instanceID := "finalizer-blocked-pod"
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instanceID,
+				Namespace: kb.bk8s.podInstanceNamespace,
+			},
+		}
+		_, err = clients.K8s.CoreV1().Pods(kb.bk8s.podInstanceNamespace).Create(ctx, pod, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Wait for the informer backing podSpecLister to observe the newly created pod
+		// before relying on the lister to reflect its presence/absence.
+		require.Eventually(t, func() bool {
+			_, err := kb.bk8s.podSpecLister.Get(instanceID)
+			return err == nil
+		}, 5*time.Second, 50*time.Millisecond, "informer should observe the created pod")
+
+		fakeK8s, ok := clients.K8s.(*fakek8sclient.Clientset)
+		require.True(t, ok)
+		deleteBlocked := true
+		fakeK8s.Fake.PrependReactor("delete", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+			if deleteBlocked {
+				// Simulate a Delete accepted by the API server (e.g. DeletionTimestamp set)
+				// without the object actually being removed, as happens when a finalizer
+				// held by another controller blocks removal.
+				return true, nil, nil
+			}
+			return false, nil, nil
+		})
+
+		req := &nvcav2beta1.ICMSRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-request", Namespace: "default"},
+			Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "test-request-id"},
+		}
+		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
+
+		result := kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.False(t, result, "instance should not be reported terminated while pod still exists")
+		_, exists := terminatedInstances[instanceID]
+		assert.False(t, exists, "instance should not be added to terminatedInstances while pod still exists")
+
+		// Now let a real delete go through, as if the finalizer were released.
+		deleteBlocked = false
+		require.NoError(t, clients.K8s.CoreV1().Pods(kb.bk8s.podInstanceNamespace).Delete(ctx, instanceID, metav1.DeleteOptions{}))
+
+		require.Eventually(t, func() bool {
+			result = kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+			return result
+		}, 5*time.Second, 50*time.Millisecond, "instance should eventually be reported terminated once pod is gone")
+
+		instanceStatus, exists := terminatedInstances[instanceID]
+		assert.True(t, exists)
+		assert.Equal(t, string(types.ICMSInstanceTerminated), instanceStatus.Status)
+	})
+
+	t.Run("MiniService blocked by finalizer is not reported terminated", func(t *testing.T) {
+		sch := newMiniServiceScheme()
+		deleteBlocked := true
+		fakeHelmClient := ctrlfake.NewClientBuilder().
+			WithScheme(sch).
+			WithStatusSubresource(&v1alpha1.MiniService{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					if deleteBlocked {
+						// Simulate a Delete accepted by the API server without the
+						// MiniService actually being removed (blocked by its own
+						// finalizer/cleanup logic).
+						return nil
+					}
+					return c.Delete(ctx, obj, opts...)
+				},
+			}).
+			Build()
+
+		clients := mockKubeClients()
+		clients.HelmV2 = fakeHelmClient
+
+		b, _, err := NewBackendk8sCacheBuilder().
+			WithNamespaceLabels(labels.Set{"bartnamespace": "true"}).
+			WithClients(clients).
+			Start(ctx)
+		require.NoError(t, err)
+
+		kbInterface, _ := NewK8sComputeBackend(clients, b)
+		kb := kbInterface.(K8sComputeBackend)
+
+		instanceID := "finalizer-blocked-instance-miniservice"
+		ms := &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{Name: instanceID},
+		}
+		require.NoError(t, clients.HelmV2.Create(ctx, ms))
+
+		req := &nvcav2beta1.ICMSRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-request", Namespace: "default"},
+			Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "test-request-id"},
+		}
+		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
+
+		result := kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.False(t, result, "instance should not be reported terminated while miniservice still exists")
+		_, exists := terminatedInstances[instanceID]
+		assert.False(t, exists, "instance should not be added to terminatedInstances while miniservice still exists")
+
+		// Now let a real delete go through, as if the finalizer/cleanup were resolved.
+		deleteBlocked = false
+		result = kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.True(t, result, "instance should be reported terminated once miniservice is gone")
+		instanceStatus, exists := terminatedInstances[instanceID]
+		assert.True(t, exists)
+		assert.Equal(t, string(types.ICMSInstanceTerminated), instanceStatus.Status)
+	})
+}
+
 func TestGetICMSRequestUpdatesForCreatePodRequest_CreateContainerError_EventLogInHealthInfo(t *testing.T) {
 	ctx := newTestContext()
 	clients := mockKubeClients()
@@ -1808,6 +2027,125 @@ func TestGetICMSRequestUpdatesForCreatePodRequest_CreateContainerError_EventLogI
 	assert.Contains(t, update.Payload.HealthInfo.ErrorLog, "Kubernetes events:")
 	assert.Contains(t, update.Payload.HealthInfo.ErrorLog, "[CreateContainerError]")
 	assert.Contains(t, update.Payload.HealthInfo.ErrorLog, eventMessage)
+}
+
+// A streaming app that quits when its session ends is restarted in place by the kubelet. Its restart count grows
+// with every session, but a clean exit after the Pod was ready must not purge the instance.
+func TestGetICMSRequestUpdatesForCreatePodRequest_ContainerRestarts(t *testing.T) {
+	now := time.Now()
+	lastExit := now.Add(-20 * time.Second)
+
+	tests := []struct {
+		name          string
+		lastExitCode  int32
+		lastReason    string
+		wantPurge     bool
+		wantInstState types.ICMSInstanceState
+	}{
+		{
+			name:          "clean exit after serving keeps the instance",
+			lastExitCode:  0,
+			lastReason:    "Completed",
+			wantInstState: types.ICMSInstanceStarted,
+		},
+		{
+			name:          "failed exit purges the instance",
+			lastExitCode:  1,
+			lastReason:    "Error",
+			wantPurge:     true,
+			wantInstState: types.ICMSInstanceTerminated,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClients()
+			ns := RequestsNamespace
+
+			bc := &BackendK8sCache{
+				podInstanceNamespace: ns,
+				systemNamespace:      SystemNamespace,
+				featureFlagFetcher:   &featureflagmock.Fetcher{},
+				clients:              clients,
+				k8sTimeConfig:        (&k8sutil.TimeConfig{}).Complete(),
+			}
+			kb := K8sComputeBackend{
+				clients: clients,
+				bk8s:    bc,
+			}
+
+			podName := "0-sr-restarting"
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns},
+				Status: v1.PodStatus{
+					Phase:     v1.PodRunning,
+					StartTime: &metav1.Time{Time: now.Add(-72 * time.Hour)},
+					Conditions: []v1.PodCondition{
+						{Type: v1.PodScheduled, Status: v1.ConditionTrue},
+						{Type: v1.PodInitialized, Status: v1.ConditionTrue},
+						{Type: v1.ContainersReady, Status: v1.ConditionFalse, LastTransitionTime: metav1.NewTime(lastExit)},
+						{Type: v1.PodReady, Status: v1.ConditionFalse, LastTransitionTime: metav1.NewTime(lastExit.Add(-5 * time.Second))},
+					},
+					ContainerStatuses: []v1.ContainerStatus{
+						{
+							Name:         "inference",
+							Ready:        true,
+							RestartCount: k8sutil.RestartCountToFailInstance,
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{StartedAt: metav1.NewTime(lastExit)},
+							},
+							LastTerminationState: v1.ContainerState{
+								Terminated: &v1.ContainerStateTerminated{
+									ExitCode:   tt.lastExitCode,
+									Reason:     tt.lastReason,
+									StartedAt:  metav1.NewTime(now.Add(-17 * time.Hour)),
+									FinishedAt: metav1.NewTime(lastExit),
+								},
+							},
+						},
+						{
+							Name:  common.UtilsContainerName,
+							State: v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-72 * time.Hour))}},
+						},
+					},
+				},
+			}
+			_, err := clients.K8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			req := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "sr-restarting", Namespace: ns},
+				Spec: nvcav2beta1.ICMSRequestSpec{
+					RequestID: "req-restarting",
+					Action:    common.FunctionCreationAction,
+				},
+				Status: nvcav2beta1.ICMSRequestStatus{
+					Instances: map[string]nvcav2beta1.InstanceStatus{
+						podName: {
+							ID:                 podName,
+							Type:               nvcav2beta1.InstanceTypePod,
+							Status:             string(types.ICMSInstanceRunning),
+							LastReportedStatus: string(types.ICMSInstanceRunning),
+						},
+					},
+				},
+			}
+
+			update, err := kb.GetICMSRequestUpdatesForCreatePodRequest(ctx, req.Status.Instances[podName], req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantInstState, update.Payload.InstanceState)
+
+			_, err = clients.K8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+			if tt.wantPurge {
+				assert.True(t, errors.IsNotFound(err), "pod should be deleted, got err %v", err)
+				assert.Equal(t, types.ICMSInstanceFailedContainerRestartLoop, update.Payload.TerminationCause)
+			} else {
+				require.NoError(t, err, "pod should be kept")
+				assert.Empty(t, update.Payload.TerminationCause)
+			}
+		})
+	}
 }
 
 func TestImageCredentialUpdater(t *testing.T) {
@@ -2243,4 +2581,101 @@ func simulateMalformedArgsError(t *testing.T) string {
 	_, err := function.Translate(msg, cfg)
 	require.Error(t, err, "function.Translate should fail on malformed container args")
 	return err.Error()
+}
+
+func TestFunctionTranslateInjectsLegacyStargateAddressFromLLMRequestRouterEnv(t *testing.T) {
+	const (
+		testContainerRegistriesCreds = "eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19"
+		testSidecarRegistryCred      = "eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQo="
+		testRouterAddress            = "llm-router.example.com:443"
+	)
+	env := strings.Join([]string{
+		common.ContainerFunctionImageEnv + "=nvcr.io/nvidia/fake-image:latest",
+		common.UtilsImageEnv + "=nvcr.io/nvidia/fake-utils:latest",
+		common.InitImageEnv + "=nvcr.io/nvidia/fake-init:latest",
+		common.ContainerRegistriesCredentialsEnv + "=" + testContainerRegistriesCreds,
+		common.SidecarRegistryCredentialEnv + "=" + testSidecarRegistryCred,
+		"INFERENCE_PORT=8080",
+		"LLM_REQUEST_ROUTER_ADDRESS=" + testRouterAddress,
+	}, "\n")
+
+	msg := function.CreationQueueMessage{
+		CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+			RequestID:         "request-id",
+			MessageBatchID:    "batch-id",
+			NCAID:             "nca-id",
+			Action:            common.RequestICMSInstances,
+			InstanceCount:     1,
+			InstanceTypeName:  "L40_1x",
+			InstanceTypeValue: "L40",
+			GPUType:           "L40",
+			RequestedGPUCount: 1,
+		},
+		Details: function.Details{
+			FunctionID:        "function-id",
+			FunctionVersionID: "function-version-id",
+			FunctionType:      function.FunctionTypeLLM,
+		},
+		LaunchSpecification: &function.LaunchSpecification{
+			EnvironmentB64:  base64.StdEncoding.EncodeToString([]byte(env)),
+			ICMSEnvironment: "test",
+			CloudProvider:   "DGXCLOUD",
+		},
+	}
+	cfg := function.TranslateConfig{
+		TranslateConfig: common.TranslateConfig{
+			Namespace:                    "test-ns",
+			ObjectNameBase:               "test-worker",
+			InstanceTypeLabelSelectorKey: "nvidia.com/gpu.product",
+			WorkloadResources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					"nvidia.com/gpu": resource.MustParse("1"),
+				},
+			},
+		},
+	}
+
+	objs, err := function.Translate(msg, cfg)
+	require.NoError(t, err)
+
+	var pod *corev1.Pod
+	for _, obj := range objs {
+		if candidate, ok := obj.(*corev1.Pod); ok {
+			pod = candidate
+			break
+		}
+	}
+	require.NotNil(t, pod)
+
+	var llmWorker *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &pod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	assert.Contains(t, llmWorker.Args, "--stargate-address="+testRouterAddress)
+
+	envMap := make(map[string]string, len(llmWorker.Env))
+	for _, envVar := range llmWorker.Env {
+		envMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, envMap["STARGATE_ADDRESS"])
+
+	var initContainer *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == "init" {
+			initContainer = &pod.Spec.InitContainers[i]
+			break
+		}
+	}
+	require.NotNil(t, initContainer)
+	initEnvMap := make(map[string]string, len(initContainer.Env))
+	for _, envVar := range initContainer.Env {
+		initEnvMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, initEnvMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, initEnvMap["STARGATE_ADDRESS"])
 }

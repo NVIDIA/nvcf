@@ -1,6 +1,104 @@
 # NVCF Invocation Service
 
-Run
+## Build with Bazel
+
+CI runs `bazel test //...` and publishes the multi-arch image via
+`bazel run //nvidia-internal:image_push_nvcf_dev` (the legacy
+`nvcr.io/0544956542906249/nvcf-dev` path). The legacy
+`cds/cicd-pipelines/pipelines/nvcf/nvcf-rust-ci-pipeline.yml` template
+is retired.
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on
+PATH delegating to the version pinned in `.bazelversion`).
+`MODULE.bazel` pulls the Rust toolchain (1.91.1), `rules_rust`,
+`crate_universe`, `rules_oci`, and the distroless/cc base image; no
+host toolchains are needed beyond a recent Linux (or macOS) and the
+`bazel` shim.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run the unit test. --flaky_test_attempts=3 lets timing-sensitive
+# tests self-heal instead of needing a manual retry.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI index for the server binary.
+bazel build //crates/server:image_index
+
+# Load the host-arch image into the local docker daemon for smoke tests.
+bazel run //crates/server:image_load
+
+# Push to nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service.
+# Needs DOCKER_CONFIG pointed at credentials for that path (CI uses
+# the NGC_REGISTRY_TOKEN from vault path
+# kv/gitlab/ngc-registry-auth/nvcf-invocation-service).
+bazel run //nvidia-internal:image_push_nvcf_dev
+
+# Repin crate_universe after Cargo.lock changes.
+CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
+```
+
+OSS contributors building from the GitHub mirror: the default
+`oci.pull` in `MODULE.bazel` points at `nvcr.io/nvidia/distroless/cc`,
+which requires NGC credentials. To build off-network, swap that entry
+for a public base such as `gcr.io/distroless/cc-debian12` (then
+`bazel mod tidy` to refresh the lockfile). `bazel build //...` and
+`bazel test //...` work without modification.
+
+Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
+
+## Legacy route access
+
+The legacy exec/pexec handlers delegate bearer-token validation and function
+authorization to the control plane. New polling records bind the authenticated
+tenant and subject that started the invocation. A replacement token for the same
+identity can continue polling. Mismatched or malformed ownership metadata is
+rejected in both rollout stages.
+
+The invocation service stores caller identity in the NATS message header
+`Nvcf-Http-Invocation-Owner`. The shared `WorkerResultTracking` protobuf payload
+is preserved so other services can continue decoding the same message.
+
+Use two releases for rolling and cross-region upgrades:
+
+1. Deploy with `enforce_polling_owner: false` (the default) to every region and
+   update every producer of polling records to write ownership metadata. This
+   preparation release accepts headerless records after the existing token and
+   function authorization checks. Intermediate polls preserve their original
+   expiry and never assign them to the polling caller.
+2. Wait more than 60 minutes after the last headerless writer is upgraded, or
+   longer if the tracking stream's retention has been increased. Enable
+   `enforce_polling_owner: true` in a subsequent release across every region.
+   Headerless records then return 404. Do not enable enforcement while any
+   producer, including a legacy NVCF producer, still writes headerless records.
+
+The counter `nvcf_http_invocation_polling_owner_checks_total` has bounded
+`outcome` labels: `matched`, `legacy_accepted`, `missing_rejected`,
+`invalid_rejected`, and `mismatch_rejected`. Watch increments of
+`legacy_accepted` to find remaining legacy polls. Full caller ownership
+enforcement requires the second release; preparation retains the old
+authorization behavior for headerless records.
+
+Browser access to legacy routes requires an explicit list of exact HTTP or HTTPS
+origins in the service configuration. The default list is empty. Cookie
+credentials are not enabled; callers send their bearer token explicitly.
+
+```yaml
+cors_allowed_origins:
+  - https://console.example.com
+enforce_polling_owner: false
+```
+
+Environment configuration uses comma-separated `CORS_ALLOWED_ORIGINS` and the
+boolean `ENFORCE_POLLING_OWNER`. For Helm, use
+`invocation.cors.allowedOrigins` and `invocation.polling.enforceOwnership`.
+Configure approved browser origins before deploying the preparation release.
+
+The transparent load-balancer routes continue to forward CORS requests to the
+workload, which owns their browser policy.
+
+## Cargo development (still supported)
 
 ```shell
 cargo run --package nvcf-invocation-service --bin server --release -- -c crates/server/resources/settings-stg-local.yaml  2>&1 | grep '^{.*}$' | jq '.'
@@ -21,6 +119,7 @@ cargo run --package nvcf-invocation-service --bin server -- -c crates/server/res
 ```
 
 This command will:
+
 1. Start ngrok in the background to forward port 8080
 2. Extract the public ngrok URL
 3. Run the service with the `WORKER_STREAM_PROPERTIES__SELF_ADDRESS` config set to the ngrok URL
@@ -40,7 +139,7 @@ cargo run --package nvcf-invocation-service --bin server -- -c crates/server/res
 The ngrok URL will be displayed in the ngrok terminal and can be used to access your service externally.
 
 ```shell
-curl --location 'http://localhost:8080/v2/nvcf/pexec/functions/6c15cde0-d06a-4bbf-a4e1-e587c4ca9a11' \
+curl --location 'http://localhost:8080/echo' \
 --header 'Accept: application/json' \
 --header 'NVCF-POLL-SECONDS: 10' \
 --header 'Content-Type: application/json' \
@@ -126,6 +225,11 @@ end group
 inference --> worker: http response header
 
 group if http response is 202
+    note over client,is
+        The invocation service records the authenticated tenant and subject.
+        Records with ownership require the same caller before reaching the worker.
+        Preparation accepts headerless records until the enforcement release.
+    end note
     loop
         worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id} 
         note right
@@ -174,27 +278,35 @@ worker --> nats: ack work request
 The service supports multiple memory allocator and profiling configurations:
 
 ### Default: jemalloc with Profiling Support
+
 The service uses `jemalloc` by default with integrated pprof server for memory profiling:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server  # Uses jemalloc + profiling (default)
 ```
 
 ### jemalloc without Profiling
+
 Use jemalloc allocator but disable the pprof HTTP server:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server --no-default-features --features jemalloc
 ```
 
 ### Alternative: mimalloc
+
 For high-performance allocation without profiling, you can use `mimalloc`:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server --no-default-features --features mimalloc
 ```
 
 When using both the `jemalloc` and `profiling` features, the service automatically starts a pprof HTTP server on port 6060 with this endpoint:
+
 - `http://localhost:6060/debug/pprof/allocs` - Current heap profile (protobuf format)
 
 Example usage:
+
 ```shell
 # Get heap profile (protobuf format for go tool pprof)
 curl -o heap.pb.gz http://localhost:6060/debug/pprof/allocs
@@ -215,11 +327,13 @@ Generate a coverage report in a format VS Code can read:
 ```
 
 Install the Coverage Gutters extension.  From Vscode:
+
 1. Ctl-Shift-p
 1. Type then select, `Coverage gutters: watch`
 
-From the code editor, see that coveraged lines have green sidebars, otherwise red.
+From the code editor, see that covered lines have green sidebars, otherwise red.
 To see entire lines highlighted in green and red:
+
 1. Right click the extension and select settings
 1. In the settings pane, select `Show line coverage`
 1. Open (or re-open) any file

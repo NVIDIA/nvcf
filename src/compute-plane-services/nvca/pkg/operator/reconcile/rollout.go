@@ -20,19 +20,21 @@ package operator
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
+	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const (
@@ -313,15 +315,57 @@ func hasOTelCollectorConfigChangedCheck(ctx context.Context,
 	}
 }
 
-func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (func() bool, error) {
-	genCfg, err := bc.newAgentConfig(ctx, nb)
-	if err != nil {
-		return nil, nvcaoperatorerrors.FatalError(err)
+// hasClusterValidatorEnabledChangedCheck compares the cluster-validator
+// setting the running agent was given with the operator's own. The setting is
+// stored nowhere else, so without this a validator enabled or disabled by a
+// chart upgrade would restart only the operator, and the agent would keep
+// publishing, or keep omitting, the validator metrics. Only the operator's
+// own entry is compared, not a later override of the same name, so an override
+// does not roll the agent on every sync. An agent written by an operator that
+// predates the setting has none, which counts as disabled: the operator
+// deletes the summary of a disabled validator, so that agent publishes no
+// validator metrics either, and an operator upgrade does not restart it.
+func hasClusterValidatorEnabledChangedCheck(ctx context.Context, enabled bool,
+	getDeployment func(ctx context.Context, name string, opts metav1.GetOptions) (*appsv1.Deployment, error),
+) func() bool {
+	return func() bool {
+		log := core.GetLogger(ctx)
+		dep, err := getDeployment(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+		if err != nil {
+			if !k8serrors.IsNotFound(err) {
+				log.WithError(err).Warn("failed to read the agent Deployment to compare its cluster-validator setting")
+			}
+			return false
+		}
+		want := strconv.FormatBool(enabled)
+		for _, c := range dep.Spec.Template.Spec.Containers {
+			if c.Name != agentContainerName {
+				continue
+			}
+			for _, env := range c.Env {
+				if env.Name == clustervalidator.EnabledEnv {
+					if env.Value == want {
+						return false
+					}
+					log.Infof("Agent %s changed from %q to %q", clustervalidator.EnabledEnv, env.Value, want)
+					return true
+				}
+			}
+			if !enabled {
+				return false
+			}
+			log.Infof("Agent has no %s, setting it to %q", clustervalidator.EnabledEnv, want)
+			return true
+		}
+		return false
 	}
-	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get agent config to merge: %w", err)
-	}
+}
+
+func (bc *BackendK8sCache) newAgentConfigChangedCheck(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	desiredCfgCM *corev1.ConfigMap,
+) (func() bool, error) {
 	existingCfgCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
 	switch {
 	case k8serrors.IsNotFound(err),
@@ -331,14 +375,10 @@ func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *n
 		return nil, err
 	}
 
-	genCfgData, err := encodeAgentConfig(genCfg, mergeCfg, nb.Spec.AgentConfig.NATSURL)
-	if err != nil {
-		return nil, fmt.Errorf("encode and merge generated config: %w", err)
-	}
-
+	genCfgData := desiredCfgCM.Data[agentConfigFile]
 	existingCfgData := existingCfgCM.Data[agentConfigFile]
 
 	return func() bool {
-		return !bytes.Equal(bytes.TrimSpace(genCfgData), bytes.TrimSpace([]byte(existingCfgData)))
+		return !bytes.Equal(bytes.TrimSpace([]byte(genCfgData)), bytes.TrimSpace([]byte(existingCfgData)))
 	}, nil
 }

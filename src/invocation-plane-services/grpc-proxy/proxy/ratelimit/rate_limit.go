@@ -22,8 +22,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/clients"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -49,7 +49,7 @@ func (r NoOpRateLimitService) IsRateLimited(context.Context, string, string, str
 	return false
 }
 
-func NewRateLimitClient(ssaFqdn, secretsPath string, rateLimitAddress string) (pbRatelimiter.RateLimitServiceClient, error) {
+func NewRateLimitClient(oauth2Fqdn, secretsPath string, rateLimitAddress string) (pbRatelimiter.RateLimitServiceClient, error) {
 	rateLimitUrl, err := url.Parse(rateLimitAddress)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing rate limit url `%s`: %w", rateLimitAddress, err)
@@ -97,7 +97,7 @@ func NewRateLimitClient(ssaFqdn, secretsPath string, rateLimitAddress string) (p
 		zap.L().Info("Using OAuth2 authentication for rate limit client")
 		authnConfig := &auth.AuthnConfig{
 			OIDCConfig: &auth.ProviderConfig{
-				Host:            ssaFqdn,
+				Host:            oauth2Fqdn,
 				CredentialsFile: secretsPath,
 				Scopes:          []string{"ratelimit:check_invocation"},
 			},

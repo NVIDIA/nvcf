@@ -31,7 +31,7 @@ type RevalConfig struct {
 	// Skip validation of objects.
 	SkipValidateObjects bool `mapstructure:"skip-validate-objects"`
 	// Skip validation of images.
-	SkipValidateImages bool `mapstructure:"skip-validate-images"`
+	SkipValidateImages *bool `mapstructure:"skip-validate-images"`
 	// Skip sanitization of object metadata (labels and annotations).
 	SkipSanitizeObjectMetadata bool `mapstructure:"skip-sanitize-object-metadata"`
 	// Configured labels to preserve

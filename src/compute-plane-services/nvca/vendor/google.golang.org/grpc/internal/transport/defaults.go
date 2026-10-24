@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2018 gRPC authors.
@@ -49,6 +46,7 @@ const (
 	defaultWriteQuota              = 64 * 1024
 	defaultClientMaxHeaderListSize = uint32(16 << 20)
 	defaultServerMaxHeaderListSize = uint32(16 << 20)
+	upcomingDefaultHeaderListSize  = uint32(8 << 10)
 )
 
 // MaxStreamID is the upper bound for the stream ID before the current

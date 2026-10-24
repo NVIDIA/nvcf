@@ -36,8 +36,8 @@ type IPLookupService struct {
 	glps  geoGetter
 }
 
-func NewGeoIPLookupService(ctx context.Context, geoSsaAddr, geoGlpsAddr, geoTableS3Region, geoTableS3BucketName, secretsPath string, routingTableValidityDays int) (*IPLookupService, error) {
-	glps, err := newGlpsClient(geoSsaAddr, geoGlpsAddr, secretsPath)
+func NewGeoIPLookupService(ctx context.Context, geoOAuth2Addr, geoGlpsAddr, geoTableS3Region, geoTableS3BucketName, secretsPath string, routingTableValidityDays int) (*IPLookupService, error) {
+	glps, err := newGlpsClient(geoOAuth2Addr, geoGlpsAddr, secretsPath)
 	if err != nil {
 		return nil, err
 	}

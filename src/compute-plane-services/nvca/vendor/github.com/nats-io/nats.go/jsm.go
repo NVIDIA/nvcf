@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2021-2023 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -370,8 +367,10 @@ type Tier struct {
 
 // APIStats reports on API calls to JetStream for this account.
 type APIStats struct {
-	Total  uint64 `json:"total"`
-	Errors uint64 `json:"errors"`
+	Level    int    `json:"level"`
+	Total    uint64 `json:"total"`
+	Errors   uint64 `json:"errors"`
+	Inflight uint64 `json:"inflight,omitempty"`
 }
 
 // AccountLimits includes the JetStream limits of the current account.

@@ -46,6 +46,17 @@ spec:
         runAsUser: 1000
         runAsGroup: 1010
         fsGroup: 1010
+        # Defense in depth: enforce non-root + seccomp at the pod
+        # level. runAsUser=1000 already guarantees non-root; setting
+        # runAsNonRoot=true makes the constraint explicit (kubelet
+        # will reject the pod if the image's USER somehow goes back
+        # to root). seccompProfile=RuntimeDefault blocks the
+        # ~40 syscalls Docker's default seccomp profile blocks
+        # (clock_settime, modify_ldt, …) — safe for any normal Go
+        # operator.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       {{- if .Values.priorityClassName }}
       priorityClassName: {{ .Values.priorityClassName }}
       {{- end}}
@@ -59,24 +70,62 @@ spec:
       {{- end }}
       terminationGracePeriodSeconds: {{ ((.Values.gracefulShutdown).terminationGracePeriodSeconds) | default 600 }}
       {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+      {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+      # This init container runs under the operator ServiceAccount
+      # (serviceAccountName above), which already has configmaps
+      # get/create/update in this namespace via role.yaml, so its summary
+      # write succeeds. The CronJob's runs use the separate cluster-validator
+      # ServiceAccount, whose namespaced Role in rbac.yaml grants the same
+      # configmaps verbs, update only on the summary.
       initContainers:
       - name: cluster-validator
-        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .Values.clusterValidator.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version .Values.clusterValidator.image.tag }}
-        imagePullPolicy: {{ .Values.clusterValidator.image.pullPolicy }}
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
+        imagePullPolicy: {{ $cv.image.pullPolicy }}
         env:
         - name: VALIDATOR_CONFIG_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
         - name: VALIDATOR_CONFIG_NAME
-          value: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" | quote }}
+          value: {{ $cv.configMapName | quote }}
+        # Namespace the NVCA agent watches for the metrics summary; kept
+        # separate from the config namespace so a config-namespace override
+        # can't redirect metrics.
+        - name: VALIDATOR_SUMMARY_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Deliberately pinned to the compute-plane check set, and deliberately
+        # NOT wired to clusterValidator.role. This chart is only installed on
+        # compute-plane clusters, and a critical check that fails is fatal
+        # here, so running the control-plane set would gate operator startup on
+        # control-plane HA: a single OpenBao pod stuck Terminating, or the
+        # Gateway API CRDs simply being absent on a compute-only cluster, would
+        # leave the operator in Init:CrashLoopBackOff.
+        - name: VALIDATOR_ROLE
+          value: "compute-plane"
+        # A check that could not run still makes the verdict and the summary
+        # Not-Ready, but only an observed critical failure stops the operator
+        # from starting.
+        - name: VALIDATOR_STARTUP_GATE
+          value: "true"
+        {{- /* Normalized like the validator's own parseRole, so a role of
+               "Control-Plane" still keeps this container off the summary. */}}
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+        # The CronJob owns the summary under the control-plane role, so this
+        # container must not republish a compute-plane summary over it: the GPU
+        # keys would reappear and the control-plane keys be pruned on every
+        # operator restart. Preflight mode keeps the checks and drops the write.
+        - name: VALIDATOR_PREFLIGHT
+          value: "true"
+        {{- end }}
         resources:
           requests:
-            cpu: {{ .Values.clusterValidator.resources.requests.cpu | quote }}
-            memory: {{ .Values.clusterValidator.resources.requests.memory | quote }}
+            cpu: {{ $cv.resources.requests.cpu | quote }}
+            memory: {{ $cv.resources.requests.memory | quote }}
           limits:
-            cpu: {{ .Values.clusterValidator.resources.limits.cpu | quote }}
-            memory: {{ .Values.clusterValidator.resources.limits.memory | quote }}
+            cpu: {{ $cv.resources.limits.cpu | quote }}
+            memory: {{ $cv.resources.limits.memory | quote }}
         securityContext:
           runAsNonRoot: true
           readOnlyRootFilesystem: true
@@ -98,6 +147,21 @@ spec:
               fieldPath: metadata.namespace
         - name: DEPLOYMENT_NAME
           value: {{ include "nvcaop.fullname" . | quote }}
+        {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+        {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+        # The agent publishes the cluster-validator metrics baseline only
+        # where the validator runs.
+        - name: NVCA_CLUSTER_VALIDATOR_ENABLED
+          value: "true"
+        {{- if eq (lower (trim (toString $cv.role))) "control-plane" }}
+        # The init container publishes no summary under the control-plane
+        # role, so the operator runs the CronJob whenever its spec changes,
+        # including at install. The run is not a release resource, so the
+        # install does not wait on it.
+        - name: NVCA_CLUSTER_VALIDATOR_CRONJOB
+          value: {{ printf "%s-cluster-validator" (include "nvcaop.fullname" .) | quote }}
+        {{- end }}
+        {{- end }}
         - name: NGC_API_URL
           value: {{ .Values.ngcConfig.apiURL }}
         - name: NGC_SERVICE_KEY_FILE
@@ -140,7 +204,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: {{ .Values.otelCollector.imageTag | default "0.143.2" | quote }}
+          value: {{ .Values.otelCollector.imageTag | default "0.160.0-nv-0.2.5" | quote }}
         {{- if .Values.otelCollector.resources }}
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: {{ .Values.otelCollector.resources | toJson | b64enc | quote }}
@@ -168,8 +232,6 @@ spec:
             name: otel-{{ include "nvcaop.fullname" . }}-config
         {{- end}}
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator
           - --nca-id
           - "{{ .Values.ncaID }}"
@@ -215,15 +277,25 @@ spec:
           - --nvca-secret-mirror-label-selector
           - "{{ .Values.agent.secretMirrorLabelSelector }}"
           {{- end }}
-          {{- if ((.Values.agent).functionEnvOverrides) }}
+          {{- $agent := .Values.agent | default dict }}
+          {{- $byooOtelCollectorImage := include "nvcaop.byooOtelCollectorImage" . }}
+          {{- $functionEnvOverrides := deepCopy ($agent.functionEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
+          {{- end }}
+          {{- $taskEnvOverrides := deepCopy ($agent.taskEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
+          {{- end }}
+          {{- if $functionEnvOverrides }}
           - --function-env-overrides-b64
-          - {{ .Values.agent.functionEnvOverrides | toJson | b64enc | quote }}
+          - {{ $functionEnvOverrides | toJson | b64enc | quote }}
           {{- end }}
-          {{- if ((.Values.agent).taskEnvOverrides) }}
+          {{- if $taskEnvOverrides }}
           - --task-env-overrides-b64
-          - {{ .Values.agent.taskEnvOverrides | toJson | b64enc | quote }}
+          - {{ $taskEnvOverrides | toJson | b64enc | quote }}
           {{- end }}
-        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -269,7 +341,7 @@ spec:
             cpu: {{ ((((.Values.agent).resources).limits).cpu) | default "500m" | quote }}
             memory: {{ ((((.Values.agent).resources).limits).memory) | default "500Mi" | quote }}
       - name: nvca-mirror
-        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         securityContext:
           runAsUser: 1000
@@ -279,8 +351,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace

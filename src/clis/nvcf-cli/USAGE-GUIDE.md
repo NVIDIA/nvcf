@@ -31,12 +31,14 @@ Complete guide for using the NVIDIA Cloud Functions CLI with direct HTTPS API ca
    - [Smart Configuration Integration](#smart-configuration-integration)
 5. [Registry Credential Management](#registry-credential-management)
 6. [Function Lifecycle](#function-lifecycle)
-7. [Additional Operations](#additional-operations)
-8. [Troubleshooting](#troubleshooting)
+7. [Cloud Tasks (NVCT)](#cloud-tasks-nvct)
+8. [Additional Operations](#additional-operations)
+9. [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
 ### Required Tools
+
 - Network access to NVCF API endpoints
 - Configuration file (`.nvcf-cli.yaml`) - optional but recommended
 
@@ -59,6 +61,7 @@ vi .nvcf-cli.yaml
 Admin tokens are required for privileged operations like function registration and registry management.
 
 #### Generate Token via API
+
 ```bash
 # Generate admin token automatically (saves to state file)
 ./nvcf-cli init --debug
@@ -79,6 +82,7 @@ Admin tokens are required for privileged operations like function registration a
 ```
 
 #### Token for Different Environments
+
 ```bash
 # Production (default)
 ./nvcf-cli init
@@ -113,6 +117,7 @@ API keys are used for general user operations.
 #### Default Scopes
 
 When no `--scopes` flag is provided, API keys are generated with these **default scopes**:
+
 - `invoke_function`
 - `list_functions`
 - `queue_details`
@@ -123,21 +128,27 @@ These default scopes are sufficient for most read-only user operations (invoking
 #### Custom Scopes Use Cases
 
 **Minimal Access (invoke-only):**
+
 ```bash
 --scopes "invoke_function"
 ```
+
 For applications that only need to invoke functions.
 
 **Read-Only Access:**
+
 ```bash
 --scopes "list_functions,list_functions_details,queue_details"
 ```
+
 For monitoring and discovery without invocation privileges.
 
 **Extended User Access:**
+
 ```bash
 --scopes "invoke_function,list_functions,queue_details,list_functions_details"
 ```
+
 Default scopes for extended access.
 
 #### Important Notes on Custom Scopes
@@ -158,6 +169,7 @@ Default scopes for extended access.
 | `--validate` | Test the key after generation | `--validate` |
 
 #### CLI Usage
+
 ```bash
 # Generate API key with default scopes (requires admin token in config)
 ./nvcf-cli api-key generate \
@@ -212,6 +224,7 @@ For customers building their own tools, the NVCF platform provides two distinct 
 **HTTP Method:** `POST`
 
 **Request:**
+
 ```bash
 curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/admin/keys \
   -H "Content-Type: application/json" \
@@ -219,6 +232,7 @@ curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/admin/keys \
 ```
 
 **Response:**
+
 ```json
 {
   "id": "6059b36c-b977-0d6a-b128-7c09458f2a57",
@@ -257,6 +271,7 @@ curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/admin/keys \
 ```
 
 **Token Scopes:**
+
 - `register_function` - Create new functions
 - `deploy_function` - Deploy and undeploy functions
 - `update_function` - Update function metadata
@@ -268,6 +283,7 @@ curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/admin/keys \
 - `manage_telemetries` - Manage telemetry settings
 
 **Usage:** The JWT token (`value` field) should be used as a Bearer token in the `Authorization` header for NVCF API operations:
+
 ```bash
 Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6IkFSTF9vdG1BSV9FeWEyVWUzRno0ek9lcm9hUSIsInR5cCI6IkpXVCJ9...
 ```
@@ -283,6 +299,7 @@ Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6IkFSTF9vdG1BSV9FeWEyVWUzRno0ek
 **Authentication Required:** Must provide a valid JWT token from `/v1/admin/keys` in the Authorization header.
 
 **Request:**
+
 ```bash
 curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/keys \
   -H "Content-Type: application/json" \
@@ -315,6 +332,7 @@ curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/keys \
 ```
 
 **Response:**
+
 ```json
 {
   "id": "fb63fee3-0321-4a67-b77a-102c2b5aea49",
@@ -348,12 +366,14 @@ curl -X POST https://api-keys.shqa.stg.nvcf.nvidia.com/v1/keys \
 ```
 
 **API Key Scopes:**
+
 - `invoke_function` - Invoke deployed functions
 - `list_functions` - List functions
 - `list_functions_details` - Get detailed function information
 - `queue_details` - Query function queue status
 
 **Usage:** The API key (`value` field) should be used directly as a Bearer token in the `Authorization` header for NVCF API operations:
+
 ```bash
 Authorization: Bearer nvapi-nvcf-stg-121e78JIqKdjzxiJvGHtYhYuNAj8EshCuzxSQLYX-AUMbBgIQO_SepmViUvuBGuk
 ```
@@ -361,6 +381,7 @@ Authorization: Bearer nvapi-nvcf-stg-121e78JIqKdjzxiJvGHtYhYuNAj8EshCuzxSQLYX-AU
 ### Workflow: Which Endpoint to Use?
 
 **For Function Management Operations:**
+
 1. Call `/v1/admin/keys` to generate a JWT token
 2. Use the JWT token for:
    - Creating functions (`POST /v2/nvcf/functions`)
@@ -370,10 +391,11 @@ Authorization: Bearer nvapi-nvcf-stg-121e78JIqKdjzxiJvGHtYhYuNAj8EshCuzxSQLYX-AU
    - Managing registry credentials (`POST /v2/nvcf/registry-credentials`)
 
 **For User Operations:**
+
 1. Call `/v1/admin/keys` to get a JWT token
 2. Call `/v1/keys` with the JWT token to generate an API key
 3. Use the API key for:
-   - Invoking functions (`POST /v2/nvcf/pexec/functions/{id}`)
+   - Invoking functions (`POST http://<function-id>.invocation.<gateway-addr>/<inference-path>`)
    - Listing functions (`GET /v2/nvcf/functions`)
 
 ### Environment-Specific URLs
@@ -417,7 +439,7 @@ NVCF_API_KEY: "nvapi-nvcf-stg-EIMjEiBR3mRbCBWRTx3EWkLpnXhxVVr2W2P8467WV8I9-dtxUY
 # For production/staging environments
 NVCF_BASE_HTTP_URL: "https://api.nvcf.nvidia.com"
 NVCF_BASE_GRPC_URL: "grpc.nvcf.nvidia.com:443"
-NVCF_INVOKE: "https://invocation.nvcf.nvidia.com"
+NVCF_INVOKE_URL: "https://invocation.nvcf.nvidia.com"
 
 # Client ID (account identifier)
 NVCF_CLIENT_ID: "nvcf-default"
@@ -436,6 +458,7 @@ demo: false
 ### Smart Configuration Integration
 
 The NVCF CLI uses a **unified configuration system** that seamlessly integrates two files:
+
 - **`.nvcf-cli.yaml`**: User configuration and manual overrides
 - **`.nvcf-cli.state`**: Runtime state and auto-generated tokens
 
@@ -443,7 +466,7 @@ The NVCF CLI uses a **unified configuration system** that seamlessly integrates 
 
 The CLI loads tokens and configuration using this priority order:
 
-```
+```text
 Priority 1: Environment variables (NVCF_TOKEN, NVCF_API_KEY) - Highest
 Priority 2: State file (.nvcf-cli.state) - Auto-generated, fresh tokens
 Priority 3: Config file (.nvcf-cli.yaml) - Static configuration
@@ -451,6 +474,7 @@ Priority 4: Defaults - Lowest
 ```
 
 **Why this order?**
+
 - **Environment variables** allow immediate overrides without file changes
 - **State file** contains freshly generated tokens from `init` and `api-key generate`
 - **Config file** provides static configuration and fallback values
@@ -475,7 +499,7 @@ Enable debug mode to see exactly where tokens are loaded from:
 
 **Example outputs:**
 
-```
+```text
 # Both tokens from config file
 DEBUG: NVCF_API_KEY loaded from: config_file
 DEBUG: NVCF_TOKEN loaded from: config_file
@@ -497,6 +521,7 @@ DEBUG: State function token expires: 2025-10-15 14:03:08
 #### User Workflows
 
 **Fresh Setup (Recommended)**
+
 ```bash
 # 1. User gets CLI and runs init
 #  Token generated and saved to state file
@@ -509,6 +534,7 @@ DEBUG: State function token expires: 2025-10-15 14:03:08
 ```
 
 **Advanced User Configuration**
+
 ```bash
 # User has custom tokens in config file
 echo "NVCF_TOKEN: my-custom-admin-token" >> ~/.nvcf-cli.yaml
@@ -521,6 +547,7 @@ echo "NVCF_API_KEY: my-custom-api-key" >> ~/.nvcf-cli.yaml
 ```
 
 **Temporary Override for Testing**
+
 ```bash
 # User needs to test with different token temporarily
 export NVCF_TOKEN="test-admin-token"
@@ -530,6 +557,7 @@ export NVCF_TOKEN="test-admin-token"
 ```
 
 **Token Expiration Handling**
+
 ```bash
 # State token expires, CLI automatically falls back
 ./nvcf-cli list functions --debug
@@ -683,6 +711,7 @@ Registry credentials allow NVCF to pull container images from private registries
 ### 3. Add Registry Credentials
 
 #### CLI Usage
+
 ```bash
 # Add registry credentials (requires admin token)
 ./nvcf-cli registry-credential add \
@@ -690,9 +719,16 @@ Registry credentials allow NVCF to pull container images from private registries
   --registry "docker.io" \
   --username "myusername" \
   --password "mypassword"
+
+# Add registry credentials securely using a secret file (or '-' for standard input)
+./nvcf-cli registry-credential add \
+  --hostname "docker.io" \
+  --secret-file "/path/to/secret.b64" \
+  --artifact-type CONTAINER
 ```
 
 #### Method C: Using curl directly
+
 ```bash
 # Add registry credentials
 curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-credentials \
@@ -709,6 +745,7 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ### List Registry Credentials
 
 #### CLI Usage
+
 ```bash
 ./nvcf-cli registry-credential list
 ```
@@ -716,6 +753,7 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ### List Recognized Registries
 
 #### CLI Usage
+
 ```bash
 ./nvcf-cli registry-credential list-recognized
 ```
@@ -725,9 +763,13 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ### 4. Create a Function
 
 #### CLI Usage
+
 ```bash
 # Create function (requires admin token)
 ./nvcf-cli create --file examples/create-function.json
+
+# Return the create response as structured JSON
+./nvcf-cli --json function create --input-file examples/create-function.json
 
 # Create function with secrets using command-line flags
 ./nvcf-cli function create \
@@ -743,15 +785,37 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ./nvcf-cli function create \
   --file examples/create-function.json \
   --secrets DB_HOST=db.example.com,DB_USER=admin,DB_PASS=secret123
+
+# Create an LLM function model with routing metadata
+./nvcf-cli function create \
+  --name my-llm-function \
+  --image nvcr.io/example/openai-compatible:latest \
+  --inference-port 8000 \
+  --inference-url / \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name my-priority-llm-function \
+  --image nvcr.io/example/openai-compatible:latest \
+  --inference-port 8000 \
+  --inference-url / \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Secrets Format:**
+
 - Use `name=value` format: `--secrets KEY1=value1,KEY2=value2`
 - Comma-separated for multiple secrets
 - Values can be strings, and will be passed to your function container
 - Secret values are encrypted at rest and masked in logs
 
 #### Sample Function JSON (`examples/create-function.json`)
+
 ```json
 {
   "name": "sample-pytorch-function",
@@ -781,9 +845,41 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 }
 ```
 
+#### LLM Function JSON
+
+```json
+{
+  "name": "sample-llm-function",
+  "containerImage": "nvcr.io/example/openai-compatible:latest",
+  "inferenceUrl": "/",
+  "inferencePort": 8000,
+  "functionType": "LLM",
+  "models": [
+    {
+      "name": "dummy-model",
+      "llmConfig": {
+        "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S"
+      }
+    }
+  ]
+}
+```
+
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name,
+optionally followed by `;name=value` tuning parameters, such as
+`pulsar;seed=stable-a`. The CLI sends the value unchanged; the API checks it
+and the CLI prints the API error.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
+and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
+Stargate, and Pylon build and a backend that serves that protocol. Published
+stack releases must qualify and include those builds before use.
+
 ### 5. List Functions
 
 #### CLI Usage
+
 ```bash
 # List functions (API key sufficient for user's functions, admin token for all)
 ./nvcf-cli list functions
@@ -794,12 +890,14 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ### 6. Deploy a Function
 
 #### CLI Usage
+
 ```bash
 # Deploy function (requires admin token)
 ./nvcf-cli deploy --file examples/deploy-function.json
 ```
 
 #### Sample Deployment JSON (`examples/deploy-function.json`)
+
 ```json
 {
   "functionId": "550e8400-e29b-41d4-a716-446655440000",
@@ -837,7 +935,8 @@ Display the secrets configured for the current function in state:
 ```
 
 **Sample Output:**
-```
+
+```text
 Secrets configured for function 550e8400-e29b-41d4-a716-446655440000 version 660e8400-e29b-41d4-a716-446655440001:
 
 1. API_KEY
@@ -895,6 +994,7 @@ Error: invalid secret format 'invalid' - expected NAME=VALUE
 ### 8. Invoke a Function
 
 #### CLI Usage
+
 ```bash
 # HTTP invocation (API key required)
 ./nvcf-cli invoke --file examples/invoke-function.json
@@ -903,7 +1003,38 @@ Error: invalid secret format 'invalid' - expected NAME=VALUE
 ./nvcf-cli invoke --grpc --file examples/invoke-function.json
 ```
 
+Direct HTTP invocation routes through the function-specific invocation host, not function routing headers:
+
+```bash
+curl --request POST \
+  --url "https://${FUNCTION_ID}.invocation.${INVOCATION_DOMAIN}/echo" \
+  --header "Authorization: Bearer ${API_KEY}" \
+  --header "Content-Type: application/json" \
+  --data '{"message": "hello"}'
+```
+
+LLM functions use the OpenAI-compatible LLM invocation route:
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/chat/completions" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+```
+
+Use the OpenAI `model` value `${FUNCTION_ID}/${MODEL_NAME}` for LLM invocation requests.
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
+```
+
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/overview/llm-gateway.md).
+
 #### Sample Invocation JSON (`examples/invoke-function.json`)
+
 ```json
 {
   "functionId": "550e8400-e29b-41d4-a716-446655440000",
@@ -950,12 +1081,14 @@ These are interactive or local-only commands where JSON adds little value:
 ### Suggested JSON shape
 
 When `--json` is set:
+
 - Emit a single JSON object to stdout
 - Include `result` or `data` for the primary payload
 - Include `warnings` or `errors` arrays if relevant
 - Avoid mixed human text + JSON in the same output (logs go to stderr when `--json` is set)
 
 ### Get Queue Details
+
 ```bash
 # Using
 
@@ -964,11 +1097,20 @@ When `--json` is set:
 ```
 
 ### Update Function
-```bash
-# Using
 
-# Using direct API calls
-./nvcf-cli update --file examples/update-metadata.json
+```bash
+./nvcf-cli function update --input-file examples/update-metadata.json
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 ### Delete Function or Deployment
@@ -1037,6 +1179,7 @@ Error: NVCF_TOKEN is required for delete operations (set in environment variable
 ### Common Issues
 
 #### 1. Authentication Errors
+
 ```bash
 # Check what tokens are loaded and their sources
 # Look for: "DEBUG: NVCF_TOKEN loaded from: state/config_file/environment"
@@ -1047,6 +1190,7 @@ Error: NVCF_TOKEN is required for delete operations (set in environment variable
 ```
 
 #### 2. Connection Issues
+
 ```bash
 # Test connectivity (direct API calls)
 curl -H "Authorization: Bearer $NVCF_API_KEY" https://api.nvcf.nvidia.com/v2/nvcf/functions
@@ -1055,6 +1199,7 @@ curl -H "Authorization: Bearer $NVCF_API_KEY" https://api.nvcf.nvidia.com/v2/nvc
 ```
 
 #### 3. Registry Issues
+
 ```bash
 # Test registry credentials
 
@@ -1062,7 +1207,9 @@ curl -H "Authorization: Bearer $NVCF_API_KEY" https://api.nvcf.nvidia.com/v2/nvc
 ```
 
 #### 4. Debug Mode
+
 Enable debug mode for detailed logging:
+
 ```bash
 # Add --debug flag to any command
 
@@ -1075,6 +1222,7 @@ echo "debug: true" >> ~/.nvcf-cli.yaml
 The CLI uses the following priority order for configuration values:
 
 #### Authentication Tokens and Configuration Values
+
 1. **Environment variables** (`NVCF_TOKEN`, `NVCF_API_KEY`, etc.) - **Highest priority**
    - Explicit user override for any specific run
    - Example: `NVCF_TOKEN=xyz ./nvcf-cli list functions`
@@ -1099,6 +1247,7 @@ The CLI uses the following priority order for configuration values:
 #### How It Works
 
 **Example workflow:**
+
 ```bash
 # 1. Set static config (lowest priority for tokens)
 echo "NVCF_TOKEN: old-token-123" > ~/.nvcf-cli.yaml
@@ -1118,6 +1267,7 @@ NVCF_TOKEN=special-token ./nvcf-cli list functions
 #### Debug Output
 
 Enable `--debug` to see which source is being used:
+
 ```bash
 ./nvcf-cli list functions --debug
 # Output:
@@ -1127,6 +1277,7 @@ Enable `--debug` to see which source is being used:
 ```
 
 **Token source indicators:**
+
 - `environment` - From environment variable (highest priority)
 - `state` - From state file (auto-generated, fresh tokens)
 - `config_file` - From ~/.nvcf-cli.yaml (static configuration)
@@ -1159,19 +1310,166 @@ Enable `--debug` to see which source is being used:
 #### Recommended Workflow
 
 1. **Start with `init`**: Generate admin token automatically
+
    ```bash
    #  Admin token saved to state file, ready to use
    ```
 
 2. **Generate API key for applications**: Create scoped API keys for specific use cases
+
    ```bash
    #  API key created with appropriate scopes
    ```
 
 3. **Use debug mode**: See which token source is being used
+
    ```bash
    ./nvcf-cli list functions --debug
    #  Shows: "DEBUG: NVCF_TOKEN loaded from: state"
    ```
 
 Choose the authentication method based on the operations you need to perform. The smart integration ensures tokens are used automatically once generated.
+
+## Cloud Tasks (NVCT)
+
+NVCT exposes a separate API surface for GPU-backed batch jobs. The CLI wraps
+it under `nvcf-cli task ...`, reusing the same authentication, state, config,
+and `--json` output conventions as `nvcf-cli function`.
+
+### NVCT Authentication
+
+Task commands use an NVCT-scoped API key. `nvcf-cli api-key generate` mints
+both the function and task keys by default:
+
+```bash
+nvcf-cli api-key generate
+```
+
+The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
+`nvcf-cli task` subcommands. Use `--for task` if you only want the task key.
+
+### NVCT Endpoint Configuration
+
+NVCT uses a dedicated base URL. Configure it via any of:
+
+```yaml
+# ~/.nvcf-cli.yaml
+base_nvct_url: https://api.nvct.nvidia.com         # production (default)
+# base_nvct_url: https://stg.api.nvct.nvidia.com   # staging
+```
+
+```bash
+# One-shot override via env var
+export NVCF_BASE_NVCT_URL=https://stg.api.nvct.nvidia.com
+nvcf-cli task list
+```
+
+### Subcommands at a Glance
+
+| Subcommand | Endpoint |
+| --- | --- |
+| `task create` | `POST /v1/nvct/tasks` |
+| `task list` | `GET /v1/nvct/tasks` |
+| `task bulk` | `POST /v1/nvct/tasks/bulk` |
+| `task get [taskId]` | `GET /v1/nvct/tasks/{taskId}` |
+| `task delete [taskId]` | `DELETE /v1/nvct/tasks/{taskId}` |
+| `task cancel [taskId]` | `POST /v1/nvct/tasks/{taskId}/cancel` |
+| `task events [taskId]` | `GET /v1/nvct/tasks/{taskId}/events` |
+| `task results [taskId]` | `GET /v1/nvct/tasks/{taskId}/results` |
+| `task update-secrets [taskId]` | `PUT /v1/nvct/secrets/tasks/{taskId}` |
+
+### Create a Task
+
+```bash
+# JSON spec (recommended)
+nvcf-cli task create --input-file examples/create-task.json
+
+# Inline flags
+nvcf-cli task create \
+  --name my-job \
+  --gpu H100 --instance-type GPU.H100_1x --backend GFN \
+  --image nvcr.io/0651155215864979/ncp-dev/example-trainer:0.1.0 \
+  --container-args "--epochs 10" \
+  --container-env LOG_LEVEL=INFO \
+  --tags example,demo \
+  --max-runtime PT4H \
+  --result-strategy NONE
+```
+
+`task create` saves the resulting task ID to the state file, so subsequent
+`get`/`events`/`results`/`cancel`/`delete`/`update-secrets` commands can omit
+the positional task ID and reuse the saved context.
+
+Bound an individual task status request when it is part of a larger workflow:
+
+```bash
+nvcf-cli task get --timeout 30
+```
+
+The same optional timeout bounds an individual event or result request:
+
+```bash
+nvcf-cli task events --timeout 30
+nvcf-cli task results --timeout 30
+```
+
+### Required vs Optional Fields
+
+`name`, `gpuSpecification.gpu`, and `gpuSpecification.instanceType` are
+mandatory. When `resultHandlingStrategy` is set to `UPLOAD`, you must also
+supply:
+
+- `resultsLocation` in the form `<org>/[<team>/]<model>` (an NGC Model Registry
+  path), and
+- an `NGC_API_KEY` secret with write privileges to that location.
+
+See [`examples/create-task-with-results.json`](./examples/create-task-with-results.json)
+for a fully populated example.
+
+### Listing and Filtering
+
+```bash
+nvcf-cli task list                              # all tasks (server default page)
+nvcf-cli task list --status RUNNING --limit 50  # filter by status
+nvcf-cli task list --cursor "$CURSOR"           # next page via cursor
+```
+
+Status enum: `QUEUED`, `LAUNCHED`, `RUNNING`, `ERRORED`, `CANCELED`,
+`EXCEEDED_MAX_RUNTIME_DURATION`, `EXCEEDED_MAX_QUEUED_DURATION`, `COMPLETED`.
+
+For an explicit set of IDs, use the bulk endpoint (returns `id`, `name`,
+`status` only):
+
+```bash
+nvcf-cli task bulk --task-ids id1,id2,id3
+nvcf-cli task bulk --input-file examples/bulk-tasks.json
+```
+
+### Watching Events and Results
+
+```bash
+nvcf-cli task events --limit 100 --timeout 30  # bounded latest events request
+nvcf-cli task results --timeout 30     # bounded results request (UPLOAD strategy)
+nvcf-cli --json task events > events.json   # automation-friendly output
+```
+
+### Rotating Secrets
+
+```bash
+# CLI flag style
+nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
+
+# JSON file style (lets you pass non-string values)
+nvcf-cli task update-secrets --input-file examples/update-task-secrets.json
+```
+
+The PUT merges the supplied secrets into the existing set: provided secrets are added or updated by name, and existing secrets not included in the request are preserved.
+
+### Cancel and Delete
+
+```bash
+nvcf-cli task cancel    # POST /cancel - runs to graceful shutdown
+nvcf-cli task delete    # DELETE - permanent
+```
+
+`task delete` clears the saved task from state when it matches.

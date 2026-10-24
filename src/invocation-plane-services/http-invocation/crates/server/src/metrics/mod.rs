@@ -29,7 +29,13 @@ struct Metric {
     description: &'static str,
 }
 
-const COUNTERS: [Metric; 19] = [
+/// Status code used to mark a client early disconnect (the caller went away
+/// before any response was produced). 499 is nginx's non-standard "client closed
+/// request"; it is emitted for internal telemetry only and never sent to a
+/// client. Defined once here and reused so the value stays consistent.
+pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
+
+const COUNTERS: [Metric; 20] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
     NATS_IN_BYTES,
@@ -49,6 +55,7 @@ const COUNTERS: [Metric; 19] = [
     HTTP_CLIENT_RESPONSES,
     NATS_STREAM_PUBLISHES,
     AWS_REQUESTS_STATUS,
+    POLLING_OWNER_CHECKS,
 ];
 const HISTOGRAMS: [Metric; 1] = [FUNCTION_REQUEST_LATENCY];
 
@@ -56,10 +63,11 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 1000.0,
 ];
 
-// define time bucket for FUNCTION_REQUEST_LATENCY in the same way we're doing in the Java code
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 15] = &[
-    0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 6.0, 20.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0,
-];
+// Reduces each (function_id, function_version_id) histogram from 18 to 12 series
+// (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
+// preserving useful resolution for AI inference latency.
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] =
+    &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
     name: "function.request.latency",
@@ -161,6 +169,52 @@ const AWS_REQUESTS_STATUS: Metric = Metric {
     description: "status of requests to aws.",
 };
 
+const POLLING_OWNER_CHECKS: Metric = Metric {
+    name: "nvcf_http_invocation_polling_owner_checks_total",
+    description: "Polling ownership outcomes during preparation and enforcement.",
+};
+
+/// Bounded outcomes for the caller-ownership check on a status request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PollingOwnerCheck {
+    Matched,
+    LegacyAccepted,
+    MissingRejected,
+    InvalidRejected,
+    MismatchRejected,
+}
+
+impl PollingOwnerCheck {
+    /// Use stable labels without caller, request, or function identifiers.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::LegacyAccepted => "legacy_accepted",
+            Self::MissingRejected => "missing_rejected",
+            Self::InvalidRejected => "invalid_rejected",
+            Self::MismatchRejected => "mismatch_rejected",
+        }
+    }
+}
+
+/// Expose every bounded outcome before the first poll for rollout monitoring.
+fn initialize_polling_owner_counters() {
+    for check in [
+        PollingOwnerCheck::Matched,
+        PollingOwnerCheck::LegacyAccepted,
+        PollingOwnerCheck::MissingRejected,
+        PollingOwnerCheck::InvalidRejected,
+        PollingOwnerCheck::MismatchRejected,
+    ] {
+        counter!(POLLING_OWNER_CHECKS.name, "outcome" => check.label()).increment(0);
+    }
+}
+
+/// Count an ownership decision independently of the worker response status.
+pub fn record_polling_owner_check(check: PollingOwnerCheck) {
+    counter!(POLLING_OWNER_CHECKS.name, "outcome" => check.label()).increment(1);
+}
+
 pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     let mut metrics_endpoint = "127.0.0.1:41337";
     // Find the prometheus exporter and retrieve the endpoint
@@ -200,6 +254,17 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     for name in HISTOGRAMS {
         register_histogram(name);
     }
+    initialize_polling_owner_counters();
+
+    // Pre-init the client-early-disconnect series so it reports 0 before the
+    // first disconnect.
+    counter!(
+        FUNCTION_INVOCATION_ERROR.name,
+        "http_status_code" => CLIENT_EARLY_DISCONNECT_STATUS,
+        "function_id" => "",
+    )
+    .increment(0);
+
     let collector = metrics_process::Collector::default();
     collector.describe();
     tokio::spawn(async move {
@@ -215,13 +280,11 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
 pub fn record_invocation_end(
     function_id: String,
     function_version_id: String,
-    nca_id: String,
     start_time: SystemTime,
 ) {
     let labels = [
         ("function_id", function_id),
         ("function_version_id", function_version_id),
-        ("nca_id", nca_id),
     ];
     if let Ok(latency) = start_time.elapsed() {
         histogram!(FUNCTION_REQUEST_LATENCY.name, &labels).record(latency);
@@ -238,8 +301,11 @@ pub fn record_invocation_start(function_id: String, function_version_id: String,
 }
 
 // errors that happened in the nvcf system, as opposed to inference errors
-pub fn record_nvcf_application_error(status_code: String) {
-    let labels = [("http_status_code", status_code)];
+pub fn record_nvcf_application_error(status_code: String, function_id: Option<String>) {
+    let labels = [
+        ("http_status_code", status_code),
+        ("function_id", function_id.unwrap_or_default()),
+    ];
     counter!(FUNCTION_INVOCATION_ERROR.name, &labels).increment(1);
 }
 
@@ -329,4 +395,105 @@ fn register_counter(metric: Metric) {
 
 fn register_histogram(metric: Metric) {
     metrics::describe_histogram!(metric.name, metric.description);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use metrics_util::MetricKind;
+
+    #[test]
+    fn polling_owner_counters_are_initialized_with_bounded_labels() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            initialize_polling_owner_counters();
+            record_polling_owner_check(PollingOwnerCheck::LegacyAccepted);
+        });
+        let values = snapshotter.snapshot().into_vec();
+        let values: Vec<_> = values
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name() == POLLING_OWNER_CHECKS.name)
+            .collect();
+        assert_eq!(values.len(), 5);
+        for (key, _, _, value) in values {
+            let labels: Vec<_> = key.key().labels().collect();
+            assert_eq!(labels.len(), 1);
+            assert_eq!(labels[0].key(), "outcome");
+            assert_eq!(
+                value,
+                &DebugValue::Counter(u64::from(labels[0].value() == "legacy_accepted"))
+            );
+        }
+    }
+
+    #[test]
+    fn function_request_latency_uses_expected_buckets() {
+        assert_eq!(
+            FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS,
+            &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0]
+        );
+    }
+
+    #[test]
+    fn invocation_latency_omits_nca_id() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_invocation_end(
+                "function-id".to_string(),
+                "function-version-id".to_string(),
+                SystemTime::now() - Duration::from_secs(1),
+            );
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        let (key, _, _, _) = metrics
+            .iter()
+            .find(|(key, _, _, _)| {
+                key.kind() == MetricKind::Histogram
+                    && key.key().name() == FUNCTION_REQUEST_LATENCY.name
+            })
+            .expect("function request latency should be recorded");
+
+        assert!(key
+            .key()
+            .labels()
+            .any(|label| label.key() == "function_id" && label.value() == "function-id"));
+        assert!(key.key().labels().any(|label| {
+            label.key() == "function_version_id" && label.value() == "function-version-id"
+        }));
+        assert!(!key.key().labels().any(|label| label.key() == "nca_id"));
+    }
+
+    #[test]
+    fn application_error_uses_empty_function_id_when_context_is_missing() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nvcf_application_error("504".to_string(), None);
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        let (_, _, _, value) = metrics
+            .iter()
+            .find(|(key, _, _, _)| {
+                key.kind() == MetricKind::Counter
+                    && key.key().name() == "app.invocation.error"
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "http_status_code" && label.value() == "504")
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "function_id" && label.value().is_empty())
+            })
+            .expect("app.invocation.error should include an empty function_id label");
+
+        assert_eq!(value, &DebugValue::Counter(1));
+    }
 }

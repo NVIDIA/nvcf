@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Local workstation region on k3d. scripts/local.py creates the clusters on
+# the shared stargate-dev-local Docker network and writes the protected values
+# file with image digests, router.address, and deploymentReady: true.
+deploymentReady: false
+platform: local
+namespace: stargate-dev
+region: local-b
+modelName: stargate-dev-model
+routingKey: stargate-dev
+
+clusters:
+  stargate:
+    name: stargate-dev-local-b-hub
+    kubeContext: k3d-stargate-dev-local-b-hub
+  mockdcs:
+    - name: stargate-dev-local-b-mockdc-1
+      kubeContext: k3d-stargate-dev-local-b-mockdc-1
+      mockDynamo:
+        backend0:
+          numGpuWorkers: 1
+        backend1:
+          numGpuWorkers: 1
+    - name: stargate-dev-local-b-mockdc-2
+      kubeContext: k3d-stargate-dev-local-b-mockdc-2
+      mockDynamo:
+        backend0:
+          numGpuWorkers: 2
+        backend1:
+          numGpuWorkers: 2
+
+router:
+  # A non-empty object replaces the complete default routing policy.
+  loadBalancerConfig: {}
+  # Peer hubs as http://<peer router.address>:50071.
+  remoteWatchUrls: []
+  # TLS and routing identity only; nothing resolves it. The router
+  # certificate needs this name and *.<this name> as DNS SANs.
+  hostname: router.local-b.stargate-dev.test
+  # The hub's IPv4 address on the stargate-dev-local network, where k3s
+  # ServiceLB exposes the registration Service.
+  address: 192.0.2.2

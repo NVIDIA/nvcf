@@ -16,12 +16,12 @@ global:
   helm:
     sources:
       registry: nvcr.io
-      repository: 0833294136851237/nvcf-ncp-staging
+      repository: nvidia/nvcf
 
   # Container image registry (where Kubernetes pulls images from)
   image:
     registry: nvcr.io
-    repository: 0833294136851237/nvcf-ncp-staging
+    repository: nvidia/nvcf
 
   # Pull secret created by create-nvcr-pull-secrets.sh (run once before deploying)
   imagePullSecrets:

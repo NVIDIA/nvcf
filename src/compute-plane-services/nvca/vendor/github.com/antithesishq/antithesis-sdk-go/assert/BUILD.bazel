@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "assert",
+    srcs = [
+        "assert_noop.go",
+        "assert_types.go",
+        "rich_assert_nop.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/antithesishq/antithesis-sdk-go/assert",
+    importpath = "github.com/antithesishq/antithesis-sdk-go/assert",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":assert",
+    visibility = ["//visibility:public"],
+)

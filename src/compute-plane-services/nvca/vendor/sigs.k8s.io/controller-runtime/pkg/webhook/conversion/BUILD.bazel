@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "conversion",
+    srcs = [
+        "conversion.go",
+        "decoder.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:apiextensions",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/conversion",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/conversion/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":conversion",
+    visibility = ["//visibility:public"],
+)

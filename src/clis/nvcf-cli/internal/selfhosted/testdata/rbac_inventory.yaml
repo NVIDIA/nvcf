@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Every Kubernetes API request the cluster-validator makes, by check set
+# (VALIDATOR_ROLE). This file is the one RBAC contract for every launcher:
+#
+#   - TestRBACInventory_* in this package fail when a run makes a request
+#     that is not listed here, or when a listed request is never made.
+#   - deploy/helm/nvca-operator/tests/cluster_validator_test.sh renders the
+#     chart and requires its validator RBAC to grant exactly these rules.
+#   - nvcf-cli launches the compute-plane and control-plane sets with
+#     VALIDATOR_PREFLIGHT, enforcement off and no networkPolicies pairs, so its
+#     per-run roles grant the subset of these rules that launch makes.
+#
+# scope: cluster rules belong in a ClusterRole. scope: namespace rules only
+# touch the validator's own namespace (its config and summary ConfigMaps), so a
+# namespaced Role grants them. Discovery (/api, /apis) is not listed: every
+# authenticated user can read it.
+rules:
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    apiGroup: ""
+    resources: [nodes]
+    verbs: [list]
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    apiGroup: ""
+    resources: [namespaces]
+    verbs: [get, list, create, delete]
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    apiGroup: ""
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: ""
+    resources: [services, events]
+    verbs: [list]
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    apiGroup: admissionregistration.k8s.io
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [list]
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    apiGroup: networking.k8s.io
+    resources: [networkpolicies]
+    verbs: [list, create, update, delete]
+  - roles: [compute-plane]
+    scope: cluster
+    apiGroup: storage.k8s.io
+    resources: [csidrivers]
+    verbs: [get]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: storage.k8s.io
+    resources: [storageclasses]
+    verbs: [get, list]
+  - roles: [compute-plane]
+    scope: cluster
+    apiGroup: apps
+    resources: [deployments]
+    verbs: [get, list]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: apps
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [list]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: apps
+    resources: [daemonsets]
+    verbs: [list, create, delete]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: apps
+    resources: [controllerrevisions]
+    verbs: [get]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: gateway.networking.k8s.io
+    resources: [gatewayclasses, gateways, httproutes, grpcroutes, tcproutes, udproutes]
+    verbs: [list]
+  - roles: [compute-plane, control-plane]
+    scope: namespace
+    apiGroup: ""
+    resources: [configmaps]
+    verbs: [get, create]
+  - roles: [compute-plane, control-plane]
+    scope: namespace
+    apiGroup: ""
+    resources: [configmaps]
+    resourceNames: [cluster-validator-summary]
+    verbs: [update]
+  - roles: [compute-plane, control-plane]
+    scope: cluster
+    nonResourceURLs: [/readyz, /version]
+    verbs: [get]

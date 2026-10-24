@@ -49,11 +49,11 @@ func (c *captureSink) Close() error { return nil }
 
 // fakeSIS is a test double for ClusterLister.
 type fakeSIS struct {
-	clusters []client.SISCluster
+	clusters []client.ICMSCluster
 	err      error
 }
 
-func (f *fakeSIS) ListClusters(_ context.Context, _, _ string) ([]client.SISCluster, error) {
+func (f *fakeSIS) ListClusters(_ context.Context, _, _ string) ([]client.ICMSCluster, error) {
 	return f.clusters, f.err
 }
 
@@ -100,7 +100,7 @@ func buildAllReadyKube(components []ComponentSpec) *fake.Clientset {
 func TestCollector_Healthy(t *testing.T) {
 	components := DefaultComponents()
 	kube := buildAllReadyKube(components)
-	sis := &fakeSIS{clusters: []client.SISCluster{{ClusterID: "cl-1", ClusterName: "ncp-local"}}}
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterID: "cl-1", ClusterName: "ncp-local"}}}
 	sink := &captureSink{}
 
 	coll := &Collector{
@@ -159,7 +159,7 @@ func TestCollector_DegradedOneNotReady(t *testing.T) {
 	_, err = kube.AppsV1().StatefulSets("cassandra-system").UpdateStatus(ctx, cassandra, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
-	sis := &fakeSIS{clusters: []client.SISCluster{{ClusterName: "ncp-local"}}}
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
 	sink := &captureSink{}
 
 	coll := &Collector{
@@ -217,15 +217,20 @@ func TestCollector_UnknownSISDown(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "unknown", snap.Verdict)
 
-	// Should have 9 ComponentHealth (all healthy) + 0 ClusterRow = 10 total.
-	assert.Len(t, sink.events, 10)
+	// Should have 9 workload ComponentHealth + 1 SIS diagnostic row + 0 ClusterRow.
+	assert.Len(t, sink.events, 11)
 
-	// All component health events should be healthy.
-	for _, e := range sink.events[1:] {
+	// Workload component health events should be healthy.
+	for _, e := range sink.events[1:10] {
 		ch, ok := e.(progress.ComponentHealth)
 		require.True(t, ok, "expected ComponentHealth, got %T", e)
 		assert.True(t, ch.Healthy)
 	}
+	sisDiag, ok := sink.events[10].(progress.ComponentHealth)
+	require.True(t, ok, "expected SIS diagnostic ComponentHealth, got %T", sink.events[10])
+	assert.Equal(t, "SIS Cluster List", sisDiag.Name)
+	assert.False(t, sisDiag.Healthy)
+	assert.Contains(t, sisDiag.Message, "connection refused")
 }
 
 // TestCollector_UnknownWinsOverDegraded pins verdict precedence: when SIS is
@@ -265,7 +270,7 @@ func TestCollector_UnknownWinsOverDegraded(t *testing.T) {
 func TestCollector_NotFoundComponent(t *testing.T) {
 	// Use an empty kube client — no resources exist.
 	kube := fake.NewSimpleClientset()
-	sis := &fakeSIS{clusters: []client.SISCluster{{ClusterName: "ncp-local"}}}
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
 	sink := &captureSink{}
 
 	// Single component to keep the test focused. No Role → single-cluster mode.
@@ -332,7 +337,7 @@ func TestCollector_SplitClusterEmitsRoleLabels(t *testing.T) {
 
 	cpKube := buildAllReadyKube(cpComponents)
 	gpuKube := buildAllReadyKube(gpuComponents)
-	sis := &fakeSIS{clusters: []client.SISCluster{
+	sis := &fakeSIS{clusters: []client.ICMSCluster{
 		{ClusterName: "ncp-local"},
 		{ClusterName: "gpu-cluster-2"},
 	}}
@@ -404,7 +409,7 @@ func TestCollector_SplitClusterEmitsRoleLabels(t *testing.T) {
 func TestCollector_SingleClusterPreserved(t *testing.T) {
 	components := DefaultComponents()
 	kube := buildAllReadyKube(components)
-	sis := &fakeSIS{clusters: []client.SISCluster{{ClusterName: "ncp-local"}}}
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
 	sink := &captureSink{}
 
 	// Legacy single-client construction — no ControlPlaneKube/ComputePlaneKube.
@@ -441,7 +446,7 @@ func TestCollector_SplitClusterIsCurrent_ContextOnlyOnCurrent(t *testing.T) {
 	cpKube := buildAllReadyKube(controlPlaneOnlyComponents())
 	gpuKube := buildAllReadyKube(computePlaneOnlyComponents())
 
-	sis := &fakeSIS{clusters: []client.SISCluster{
+	sis := &fakeSIS{clusters: []client.ICMSCluster{
 		{ClusterName: "cluster-a"},
 		{ClusterName: "cluster-b"},
 		{ClusterName: "cluster-c"},

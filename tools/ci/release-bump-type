@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Conventional Commit type for an automated bump, so the release it causes
+# carries the same semver step as the release that caused it.
+#
+# The chart version bump and stack pin bump workflows used to commit every
+# bump as fix(...). semantic-release then cut a patch release of the chart
+# (and of the stack) even when the service or chart it pinned had moved a
+# minor or a major. The tools now report the step they took as "bump: <level>";
+# this turns that into a commit type, and derives the type for the pull
+# request title from every bump commit on the branch.
+#
+#   release-bump-type for-level <major|minor|patch|"">   -> feat! | feat | fix
+#   release-bump-type for-branch <base-ref>              -> feat! | feat | fix
+#
+# for-branch reads the subjects of the commits on HEAD that are not on
+# <base-ref> and returns the largest type among them: any "!" wins, then feat,
+# else fix. A branch with no commits is fix.
+set -euo pipefail
+
+usage() {
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+for_level() {
+  case "${1:-}" in
+    major) echo 'feat!' ;;
+    minor) echo 'feat' ;;
+    patch|'') echo 'fix' ;;
+    *) echo "unknown level: $1" >&2; exit 2 ;;
+  esac
+}
+
+for_branch() {
+  local base=$1 type=fix subject
+  while IFS= read -r subject; do
+    if [[ "$subject" =~ ^[a-zA-Z]+(\([^\)]*\))?!: ]]; then
+      echo 'feat!'
+      return
+    fi
+    if [[ "$subject" =~ ^feat(\([^\)]*\))?: ]]; then
+      type=feat
+    fi
+  done < <(git log --format=%s "${base}..HEAD")
+  echo "$type"
+}
+
+[ $# -eq 2 ] || usage
+case "$1" in
+  for-level) for_level "$2" ;;
+  for-branch) for_branch "$2" ;;
+  *) usage ;;
+esac

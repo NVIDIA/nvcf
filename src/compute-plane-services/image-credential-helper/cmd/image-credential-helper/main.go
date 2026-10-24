@@ -37,8 +37,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	credhelper "github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 )
 
 func main() {
@@ -104,7 +102,7 @@ func resolveNamespaces(
 	targetNamespace, namespaceLabelSelectorStr string,
 ) ([]string, error) {
 	if targetNamespace != "" {
-		err := credhelper.RetryK8s(func() error {
+		err := imagecredential.RetryK8s(func() error {
 			_, err := k8sClient.CoreV1().Namespaces().Get(ctx, targetNamespace, metav1.GetOptions{})
 			return err
 		})
@@ -118,7 +116,7 @@ func resolveNamespaces(
 		return []string{targetNamespace}, nil
 	}
 	var namespaces []string
-	err := credhelper.RetryK8s(func() (err error) {
+	err := imagecredential.RetryK8s(func() (err error) {
 		namespaceList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
 			LabelSelector: namespaceLabelSelectorStr,
 		})
@@ -142,7 +140,7 @@ func listSecretsForNamespace(
 	namespace, secretLabelSelectorStr string,
 ) (*corev1.SecretList, error) {
 	var secretList *corev1.SecretList
-	err := credhelper.RetryK8s(func() (err error) {
+	err := imagecredential.RetryK8s(func() (err error) {
 		secretList, err = k8sClient.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: secretLabelSelectorStr,
 		})
@@ -207,7 +205,7 @@ func updateSecretsForWorkloadIDs(
 			logger.Info("Skipping secret update for id without matching image pull secrets")
 			continue
 		}
-		if err := credhelper.UpdateMatchingSecrets(ctx,
+		if err := imagecredential.UpdateMatchingSecrets(ctx,
 			k8sClient,
 			authCfgs.workloadAuthCfg, authCfgs.workerAuthCfg,
 			matchingPullSecrets, namespace, wlIDComponent,
@@ -296,14 +294,14 @@ func runNamespaced(ctx context.Context, k8sClient kubernetes.Interface, getEnv f
 	workerAuthCfg := common.RegistryAuthConfig{K8sSecrets: []common.RegistryAuthSecret{workerAuthSecret}}
 
 	var secretList *corev1.SecretList
-	if err = credhelper.RetryK8s(func() (err error) {
+	if err = imagecredential.RetryK8s(func() (err error) {
 		secretList, err = k8sClient.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
 		return err
 	}); err != nil {
 		return err
 	}
 
-	if err := credhelper.UpdateMatchingSecrets(ctx, k8sClient,
+	if err := imagecredential.UpdateMatchingSecrets(ctx, k8sClient,
 		workloadAuthCfg, workerAuthCfg,
 		secretList.Items, namespace, wlIDComponent,
 	); err != nil {

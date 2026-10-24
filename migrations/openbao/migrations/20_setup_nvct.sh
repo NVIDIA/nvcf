@@ -48,7 +48,7 @@ enable_secrets_mount "${VAULT_SECRET_BASE_PATH}/kv" "kv-v2"
 # Create default service paths and secrets
 #-------------------------------------------
 write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "cassandra/creds" "username=nvct_api_app_v0 password=${DEFAULT_CASSANDRA_PASSWORD}"
-write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "sidecars/image-pull-secret" "secret=${NVCF_SERVICE_SIDECARS_IMAGE_PULL_SECRET:-replace}"
+write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "sidecars/image-pull-secret" "secret=${NVCF_API_SIDECARS_IMAGE_PULL_SECRET:-replace}"
 
 #-------------------------------------------
 # Create policy for KV access
@@ -126,7 +126,7 @@ SCOPES="spot-request,cluster_listing,instance_types,cluster-management"
 # Create JWT Secret Role for NVCF JWT Signer
 #-------------------------------------------
 # Issuer: http://api.sis.svc.cluster.local
-jwt_secret_role=$(generate_jwt_secret_role "${SIS_API_SERVICE_ACCOUNT_NAMESPACE}" "${SIS_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
+jwt_secret_role=$(generate_jwt_secret_role "${SIS_API_SERVICE_ACCOUNT_NAMESPACE}" "${SIS_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}" "${JWT_ISSUER_OVERRIDE:-}")
 create_secret_jwt_role "${SIS_API_SECRET_BASE_PATH}/jwt" "${SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
 
 #-------------------------------------------
@@ -150,7 +150,8 @@ API_KEYS_API_SERVICE_ACCOUNT_NAMESPACE="api-keys"
 API_KEYS_API_SERVICE_ACCOUNT_NAME="api-keys-api"
 API_KEYS_API_SECRET_BASE_PATH="services/${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
 API_KEYS_API_SECRET_POLICY_PATH="services-${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
-SCOPES="KEY_ADMIN"
+# API Keys service (NAK) does not enforce scopes, so none are issued
+SCOPES=""
 
 #-------------------------------------------
 # Create JWT Secret Role for NVCF JWT Signer

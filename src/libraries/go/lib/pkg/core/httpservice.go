@@ -103,6 +103,7 @@ func (s *HTTPService) AddHealthRoute(ctx context.Context)  { HTTPAddHealthRoute(
 func (s *HTTPService) AddVersionRoute(ctx context.Context) { HTTPAddVersionRoute(ctx, s.Router) }
 func (s *HTTPService) AddMetricsRoute(ctx context.Context) { HTTPAddMetricsRoute(ctx, s.Router) }
 func (s *HTTPService) AddAdminRoute(ctx context.Context)   { HTTPAddAdminRoute(ctx, s.Router) }
+func (s *HTTPService) AddInfoRoute(ctx context.Context)    { HTTPAddInfoRoute(ctx, s.Router) }
 
 func (s *HTTPService) initListener(ctx context.Context) (net.Listener, error) {
 	log := GetLogger(ctx)
@@ -211,6 +212,12 @@ func HTTPVersionHandler(_ context.Context) http.Handler {
 			return
 		}
 	})
+}
+
+// HTTPAddInfoRoute serves the shared NVCF build-metadata contract:
+// GET /info returning {service, version, commit} as JSON.
+func HTTPAddInfoRoute(_ context.Context, r *mux.Router) {
+	r.Path("/info").Handler(version.Handler()).Methods("GET")
 }
 
 func HTTPAddMetricsRoute(_ context.Context, r *mux.Router) {

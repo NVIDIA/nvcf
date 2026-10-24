@@ -1,7 +1,19 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
 
-(set -o pipefail) >/dev/null 2>&1 && set -o pipefail
+check_only=0
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 1 ] || [ "$1" != --check ]; then
+    echo 'Usage: preview-docs [--check]' >&2
+    exit 2
+  fi
+  check_only=1
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
 
 require_cmd() {
   if command -v "$1" >/dev/null 2>&1; then
@@ -20,8 +32,58 @@ require_cmd() {
 require_cmd curl
 require_cmd jq
 
-fern_version="$(node -e "console.log(require('./fern/fern.config.json').version)")"
-npm install -g "fern-api@${fern_version}"
+# Preview configuration and link normalization happen in a disposable clone.
+# Git history and the real origin remain available for Fern's branch-ref resolver.
+preview_workspace=""
+preview_log="$(mktemp)"
+cleanup() {
+  rm -f "$preview_log"
+  if [ -n "$preview_workspace" ]; then
+    rm -rf "$preview_workspace"
+  fi
+}
+trap cleanup EXIT
+if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
+  if ! [[ "$DOCS_PREVIEW_CONFIG" =~ ^fern/[A-Za-z0-9._-]+\.ya?ml$ ]] || [ ! -f "$DOCS_PREVIEW_CONFIG" ]; then
+    echo "DOCS_PREVIEW_CONFIG must name an existing YAML file directly under fern/." >&2
+    exit 1
+  fi
+fi
+preview_workspace="$(mktemp -d)"
+git clone --quiet --shared --no-checkout "$repo_root" "$preview_workspace/source"
+git -C "$preview_workspace/source" remote set-url origin "$(git remote get-url origin)"
+cp -R docs fern "$preview_workspace/source/"
+if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
+  cp "$DOCS_PREVIEW_CONFIG" "$preview_workspace/source/fern/docs.yml"
+else
+  require_cmd go
+  go run -C "$repo_root/tools/docs-version-sync" . edition preview --repo "$preview_workspace/source"
+fi
+# Maintained refs are always materialized from the approved registry commits.
+if [ -f "$preview_workspace/source/fern/editions.yml" ]; then
+  require_cmd go
+  docs_mode="$(go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-mode --repo "$preview_workspace/source")"
+  case "$docs_mode" in
+    umbrella|legacy) ;;
+    *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
+  esac
+  if [[ "$docs_mode" == umbrella ]]; then
+    mkdir -p "$preview_workspace/source/tools/ci"
+    cp "$repo_root/tools/ci/run-fern" "$preview_workspace/source/tools/ci/run-fern"
+    go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-stage \
+      --repo "$preview_workspace/source" --out "$preview_workspace/approved"
+    cd "$preview_workspace/approved"
+  else
+    cd "$preview_workspace/source"
+  fi
+else
+  cd "$preview_workspace/source"
+fi
+
+if [ "$check_only" -eq 1 ]; then
+  "$repo_root/tools/ci/run-fern" check
+  exit 0
+fi
 
 project_name="${CI_PROJECT_NAME:-}"
 mr_iid="${CI_MERGE_REQUEST_IID:-}"
@@ -36,9 +98,8 @@ if [ -z "${preview_id}" ]; then
   preview_id="${project_name}-mr-${mr_iid}"
 fi
 
-set -o pipefail
-fern generate --docs --preview --id "${preview_id}" --force 2>&1 | tee /tmp/fern-output.log || true
-preview_url="$(grep -oE -m1 '(https://[^[:space:]]+-preview-[^[:space:]]+) ' /tmp/fern-output.log | tr -d ' ')"
+"$repo_root/tools/ci/run-fern" generate --docs --preview --id "${preview_id}" --force --strict-broken-links 2>&1 | tee "$preview_log"
+preview_url="$(grep -oE -m1 '(https://[^[:space:]]+-preview-[^[:space:]]+)' "$preview_log" | sed 's/[[:space:]()]$//' || true)"
 echo "Preview URL: ${preview_url}"
 
 if [ -z "${preview_url}" ]; then
@@ -55,8 +116,17 @@ if [ -z "${mr_project_id}" ] || [ -z "${mr_iid}" ] || [ -z "${FERN_BOT:-}" ]; th
   exit 0
 fi
 
-curl --silent --fail --location \
+gitlab_api_url="${DOCS_PREVIEW_GITLAB_API_URL:-${CI_API_V4_URL:-}}"
+if [ -z "${gitlab_api_url}" ]; then
+  echo "Skipping MR comment: set DOCS_PREVIEW_GITLAB_API_URL or CI_API_V4_URL to post it." >&2
+  exit 0
+fi
+gitlab_api_url="${gitlab_api_url%/}"
+
+if ! curl --silent --fail --location \
   --header "PRIVATE-TOKEN: ${FERN_BOT}" \
   --header "Content-Type: application/json" \
-  --url "https://github.com/NVIDIA/api/v4/projects/${mr_project_id}/merge_requests/${mr_iid}/notes" \
-  --data-raw "{ \"body\": \"Preview your docs at ${preview_url}\" }"
+  --url "${gitlab_api_url}/projects/${mr_project_id}/merge_requests/${mr_iid}/notes" \
+  --data-raw "{ \"body\": \"Preview your docs at ${preview_url}\" }"; then
+  echo "Skipping MR comment: GitLab API request failed." >&2
+fi

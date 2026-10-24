@@ -116,14 +116,27 @@ func IsPodAdmissionRejected(ps corev1.PodStatus) (bool, string) {
 	return false, ""
 }
 
-func ImagePullIssuesReported(ps corev1.PodStatus) (string, corev1.ContainerStateWaiting, bool) {
+type ContainerImagePullIssues struct {
+	Name    string
+	Image   string
+	Message string
+	Reason  string
+}
+
+func ImagePullIssuesReported(ps corev1.PodStatus) ([]ContainerImagePullIssues, bool) {
+	imagePullIssues := []ContainerImagePullIssues{}
 	for _, cs := range append(ps.InitContainerStatuses, ps.ContainerStatuses...) {
 		if cs.State.Waiting != nil && (strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueReason) ||
 			strings.EqualFold(cs.State.Waiting.Reason, ImagePullIssueAlternateReason)) {
-			return cs.Image, *cs.State.Waiting, true
+			imagePullIssues = append(imagePullIssues, ContainerImagePullIssues{
+				Name:    cs.Name,
+				Image:   cs.Image,
+				Message: cs.State.Waiting.Message,
+				Reason:  cs.State.Waiting.Reason,
+			})
 		}
 	}
-	return "", corev1.ContainerStateWaiting{}, false
+	return imagePullIssues, len(imagePullIssues) > 0
 }
 
 func ParseImageRegistry(imageTag string) (reg string) {
@@ -140,7 +153,18 @@ func ParseImageRegistry(imageTag string) (reg string) {
 	return reg
 }
 
-func IsPodDegraded(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (bool, string) {
+type PodDegraded struct {
+	Containers []ContainerDegraded
+	Reason     string
+}
+
+type ContainerDegraded struct {
+	Name    string
+	Reason  string
+	Message string
+}
+
+func IsPodDegraded(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodDegraded, bool) {
 	status := pod.Status
 	containersNotReady := false
 	podNotReady := false
@@ -170,15 +194,55 @@ func IsPodDegraded(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (bool, string) {
 
 	if containersNotReady && podNotReady && podInitialized {
 		isNonRestartableContainerTerminated := pod.Spec.RestartPolicy == corev1.RestartPolicyNever &&
-			slices.IndexFunc(status.ContainerStatuses, func(cs corev1.ContainerStatus) bool {
+			slices.ContainsFunc(status.ContainerStatuses, func(cs corev1.ContainerStatus) bool {
 				return cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0
-			}) != -1
+			})
 		isWDPPassed := !podNotReadyCond.LastTransitionTime.IsZero() && time.Since(podNotReadyCond.LastTransitionTime.Time) > wdp
 		if isNonRestartableContainerTerminated || isWDPPassed {
-			return true, containersNotReadyReason
+			return PodDegraded{
+				Containers: notReadyContainers(status.ContainerStatuses),
+				Reason:     containersNotReadyReason,
+			}, true
 		}
 	}
-	return false, ""
+	return PodDegraded{}, false
+}
+
+// notReadyContainers returns a ContainerDegraded entry for every container that is not
+// Ready, regardless of why: terminated with a non-zero exit code, stuck in a Waiting
+// state (e.g. ImagePullBackOff/CrashLoopBackOff), or otherwise Running but failing
+// readiness checks. This must not be restricted by the pod's RestartPolicy: a
+// RestartPolicy=Always worker stuck in ImagePullBackOff never terminates, so gating
+// container attribution on a Terminated state would leave this list permanently empty
+// for every function (only RestartPolicy=Never tasks can terminate a container).
+func notReadyContainers(statuses []corev1.ContainerStatus) []ContainerDegraded {
+	degraded := []ContainerDegraded{}
+	for _, cs := range statuses {
+		if cs.Ready {
+			continue
+		}
+		switch {
+		case cs.State.Terminated != nil:
+			if cs.State.Terminated.ExitCode == 0 {
+				continue
+			}
+			degraded = append(degraded, ContainerDegraded{
+				Name:    cs.Name,
+				Reason:  cs.State.Terminated.Reason,
+				Message: cs.State.Terminated.Message,
+			})
+		case cs.State.Waiting != nil:
+			degraded = append(degraded, ContainerDegraded{
+				Name:    cs.Name,
+				Reason:  cs.State.Waiting.Reason,
+				Message: cs.State.Waiting.Message,
+			})
+		default:
+			// Running but not Ready, e.g. a failing readiness probe.
+			degraded = append(degraded, ContainerDegraded{Name: cs.Name})
+		}
+	}
+	return degraded
 }
 
 func IsPodInInitialStartup(status corev1.PodStatus) bool {
@@ -196,7 +260,52 @@ func IsPodInInitialStartup(status corev1.PodStatus) bool {
 	return false
 }
 
-func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (bool, string) {
+const PodKey = "__pod"
+
+type PodStuckInitializing struct {
+	Containers []ContainerStuckInitializing
+	Reason     string
+}
+
+type ContainerStuckInitializing struct {
+	Name    string
+	Reason  string
+	Message string
+}
+
+// IsContainerInRestartLoop reports whether a container has restarted at least RestartCountToFailInstance times
+// in a Pod launched more than PodLaunchThresholdSecondsOnFailedRestarts ago. RestartCount is never reset during
+// the Pod's lifetime, so a container whose latest run exited with code 0 after the Pod became Ready is not
+// counted: the app ended on purpose (for example a streaming app that quits when its session ends) and the
+// kubelet restarted it in place.
+func IsContainerInRestartLoop(pod *corev1.Pod, cs corev1.ContainerStatus, k8sTimeConfig *TimeConfig) bool {
+	if cs.RestartCount < RestartCountToFailInstance ||
+		!IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+		return false
+	}
+	return !exitedCleanlyAfterPodReady(pod.Status, cs)
+}
+
+// exitedCleanlyAfterPodReady reports whether the container's latest run exited with code 0 and the Pod was
+// Ready at some point after that run started.
+func exitedCleanlyAfterPodReady(status corev1.PodStatus, cs corev1.ContainerStatus) bool {
+	// State holds the latest run until the kubelet restarts the container, then LastTerminationState does.
+	last := cs.State.Terminated
+	if last == nil {
+		last = cs.LastTerminationState.Terminated
+	}
+	if last == nil || last.ExitCode != 0 || last.StartedAt.IsZero() {
+		return false
+	}
+	ready := getPodReadyCondition(status)
+	if ready == nil {
+		return false
+	}
+	// PodReady only toggles between True and False, so a False condition was True until its last transition.
+	return ready.Status == corev1.ConditionTrue || ready.LastTransitionTime.After(last.StartedAt.Time)
+}
+
+func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuckInitializing, bool) {
 	podStatus := pod.Status
 	initConditionTrue := false
 	for _, cond := range podStatus.Conditions {
@@ -205,32 +314,57 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (bool, s
 			break
 		}
 	}
+	stuckContainers := []ContainerStuckInitializing{}
 	if initConditionTrue {
 		for _, containerStatus := range podStatus.ContainerStatuses {
-			if containerStatus.RestartCount >= RestartCountToFailInstance &&
-				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				reason := "ContainerInRestartLoop"
+				message := ""
 				switch {
 				case containerStatus.LastTerminationState.Terminated != nil:
 					reason = containerStatus.LastTerminationState.Terminated.Reason
+					message = containerStatus.LastTerminationState.Terminated.Message
 				case containerStatus.LastTerminationState.Waiting != nil:
 					reason = containerStatus.LastTerminationState.Waiting.Reason
+					message = containerStatus.LastTerminationState.Waiting.Message
 				}
-				return true, reason
+				stuckContainers = append(stuckContainers, ContainerStuckInitializing{
+					Name:    containerStatus.Name,
+					Reason:  reason,
+					Message: message,
+				})
+			}
+			if len(stuckContainers) > 0 {
+				return PodStuckInitializing{
+					Containers: stuckContainers,
+					Reason:     "ContainersInRestartLoop",
+				}, true
 			}
 		}
 	} else {
 		for _, containerStatus := range podStatus.InitContainerStatuses {
-			if containerStatus.RestartCount >= RestartCountToFailInstance &&
-				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
+			if IsContainerInRestartLoop(pod, containerStatus, k8sTimeConfig) {
 				reason := "InitContainerInRestartLoop"
+				message := ""
 				switch {
 				case containerStatus.LastTerminationState.Terminated != nil:
 					reason = containerStatus.LastTerminationState.Terminated.Reason
+					message = containerStatus.LastTerminationState.Terminated.Message
 				case containerStatus.LastTerminationState.Waiting != nil:
 					reason = containerStatus.LastTerminationState.Waiting.Reason
+					message = containerStatus.LastTerminationState.Waiting.Message
 				}
-				return true, reason
+				stuckContainers = append(stuckContainers, ContainerStuckInitializing{
+					Name:    containerStatus.Name,
+					Reason:  reason,
+					Message: message,
+				})
+			}
+			if len(stuckContainers) > 0 {
+				return PodStuckInitializing{
+					Containers: stuckContainers,
+					Reason:     "InitContainersInRestartLoop",
+				}, true
 			}
 		}
 	}
@@ -238,10 +372,13 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (bool, s
 	// Just check if the Pod's init container is stuck for > 120minutes
 	if !initConditionTrue {
 		if IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdMinutesOnInitFailure) {
-			return true, "ContainerStuckAfterThreshold"
+			return PodStuckInitializing{
+				Containers: stuckContainers,
+				Reason:     "ContainerStuckAfterThreshold",
+			}, true
 		}
 	}
-	return false, ""
+	return PodStuckInitializing{}, false
 }
 
 func IsTimeSincePodLaunchedLaterThan(pod *corev1.Pod, dtc time.Duration) bool {

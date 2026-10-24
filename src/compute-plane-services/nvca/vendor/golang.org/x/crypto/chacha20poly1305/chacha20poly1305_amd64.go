@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2016 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -23,7 +20,7 @@ func chacha20Poly1305Open(dst []byte, key []uint32, src, ad []byte) bool
 func chacha20Poly1305Seal(dst []byte, key []uint32, src, ad []byte)
 
 var (
-	useAVX2 = cpu.X86.HasAVX2 && cpu.X86.HasBMI2
+	useAVX2 = cpu.X86.HasSSSE3 && cpu.X86.HasAVX2 && cpu.X86.HasBMI2
 )
 
 // setupState writes a ChaCha20 input matrix to state. See
@@ -50,7 +47,7 @@ func setupState(state *[16]uint32, key *[32]byte, nonce []byte) {
 }
 
 func (c *chacha20poly1305) seal(dst, nonce, plaintext, additionalData []byte) []byte {
-	if !cpu.X86.HasSSSE3 {
+	if !useAVX2 {
 		return c.sealGeneric(dst, nonce, plaintext, additionalData)
 	}
 
@@ -69,7 +66,7 @@ func (c *chacha20poly1305) seal(dst, nonce, plaintext, additionalData []byte) []
 }
 
 func (c *chacha20poly1305) open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
-	if !cpu.X86.HasSSSE3 {
+	if !useAVX2 {
 		return c.openGeneric(dst, nonce, ciphertext, additionalData)
 	}
 

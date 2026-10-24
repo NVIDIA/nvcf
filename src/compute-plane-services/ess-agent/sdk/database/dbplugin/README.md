@@ -15,11 +15,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 # Combined Database Engine
+
 This package is how database plugins interact with Vault.
 
 ## Upgrading to Version 5
 
 ### Background
+
 In Vault 1.6, a new Database interface was created that solved a number of issues with the
 previous interface:
 
@@ -96,4 +98,3 @@ for upgrading to version 5.
    Many databases don't need to do anything with the updated expiration.
 6. Update `RevokeUser` to `DeleteUser`. This is the simplest change. The username to be
    deleted is enclosed in the `DeleteUserRequest` object.
-

@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "conv",
+    srcs = [
+        "convert.go",
+        "convert_types.go",
+        "doc.go",
+        "format.go",
+        "sizeof.go",
+        "type_constraints.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/conv",
+    importpath = "github.com/go-openapi/swag/conv",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":conv",
+    visibility = ["//visibility:public"],
+)
