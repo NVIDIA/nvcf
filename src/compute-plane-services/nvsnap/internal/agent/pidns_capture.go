@@ -661,15 +661,24 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 			return fmt.Errorf("pid-namespace dump: %w", err)
 		}
 		cg = filepath.Join(cgroupRoot(), rel)
+		// Recorded like a pod hold (pod_hold.go), so the next run of an
+		// agent that stops mid-dump thaws it.
+		record := a.holdRecordPath(fmt.Sprintf("pidns-dump-%d", hostPID))
+		if err := writeHoldRecord(record, []string{cg}); err != nil {
+			return fmt.Errorf("pid-namespace dump: record the freeze: %w", err)
+		}
 		if err := setFrozen(cg, true); err != nil {
 			_ = setFrozen(cg, false)
+			_ = os.Remove(record)
 			return fmt.Errorf("pid-namespace dump: stop the container: %w", err)
 		}
 		// criu leaves the cgroup as it found it, frozen.
 		defer func() {
 			if err := setFrozen(cg, false); err != nil {
 				log.WithError(err).WithField("cgroup", cg).Warn("criu-v2: cannot thaw the dumped container")
+				return
 			}
+			_ = os.Remove(record)
 		}()
 	}
 	ended, err := endExecSessions(procBase, hostPID, killPID)

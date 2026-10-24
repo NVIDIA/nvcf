@@ -278,6 +278,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	defer func() { _ = imgs.Close() }()
 
+	// From here the dump stops the source; a marker on the node names it
+	// until the dump ends, for the next run of the agent should this one
+	// stop mid-dump (capture_marker.go).
+	if uid := containerInfo.Labels["io.kubernetes.pod.uid"]; uid != "" {
+		clearMarker, merr := a.markCapturing(captureMarker{Namespace: containerInfo.Labels["io.kubernetes.pod.namespace"],
+			Pod: containerInfo.Labels["io.kubernetes.pod.name"], UID: uid})
+		if merr != nil {
+			return nil, merr
+		}
+		defer clearMarker()
+	} else {
+		log.Warn("criu-v2: the container belongs to no pod; an agent restart mid-dump would not recover it")
+	}
+
 	// 3. NVIDIA device externals from the container's /dev view.
 	externals, err := nvidiaDevExternals(filepath.Join(root, "dev"))
 	if err != nil {

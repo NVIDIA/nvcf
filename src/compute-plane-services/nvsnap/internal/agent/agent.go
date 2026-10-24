@@ -524,6 +524,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	metrics.RegisterAgent()
 	// A capture this agent was holding pods for ended with its last run.
 	a.recoverPodHolds(a.log.WithField("subsys", "pod-hold"))
+	// So did a dump it was running: replace what it may have left stopped.
+	a.recoverInterruptedSources(ctx, a.log.WithField("subsys", "capture-marker"))
 
 	// OpenTelemetry. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset,
 	// so prod clusters without Jaeger pay zero overhead.
