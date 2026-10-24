@@ -32,10 +32,8 @@ import com.nvidia.apikeys.dto.keysV2.UpdateOwnerStatusForAccountAndIssuerService
 import com.nvidia.apikeys.dto.keysV2.UpdateOwnerStatusForAccountRequest;
 import com.nvidia.apikeys.services.KeysV2Service;
 import com.nvidia.apikeys.validators.KeyManagementRequestValidator;
-import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeysByScopeFilterVo;
-import com.nvidia.apikeys.vo.OwnerAccountStatusVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
@@ -170,30 +168,29 @@ public class KeyManagementFacade {
     }
 
     /**
-     * The user's status in one account, or in every account known to API Keys when ncaId is
-     * null. A single account is always returned as one entry, ACTIVE when nothing is stored.
+     * The user's status in one account, as exactly one entry that is ACTIVE when nothing is
+     * stored.
      */
-    public KeyOwnerStatusesResponse getOwnerStatuses(
-            KeyManagementActor actor, String ncaId, String userId, Integer limit, String cursor) {
+    public KeyOwnerStatusesResponse getAccountOwnerStatuses(String ncaId, String userId) {
+        validator.assertRouteId("ncaId", ncaId);
         validator.assertRouteId("userId", userId);
-        var accounts = keysService.listOwnerAccountStatuses(USER, userId);
 
-        if (ncaId != null) {
-            validator.assertRouteId("ncaId", ncaId);
-            var account = accounts.stream()
-                    .filter(status -> status.ncaId().equals(ncaId))
-                    .findFirst()
-                    .orElseGet(() -> OwnerAccountStatusVo.builder()
-                            .ncaId(ncaId).status(KeyOwnerStatus.ACTIVE).issuerServices(List.of())
-                            .build());
-            return responseBuilder.toStatusesResponse(userId, List.of(account), null, null);
-        }
+        var account = keysService.getOwnerAccountStatus(ncaId, USER, userId);
+        return responseBuilder.toStatusesResponse(userId, List.of(account), null, null);
+    }
 
+    /**
+     * The user's status in every account known to API Keys, in pages ordered by account ID.
+     */
+    public KeyOwnerStatusesResponse listOwnerStatuses(
+            KeyManagementActor actor, String userId, Integer limit, String cursor) {
+        validator.assertRouteId("userId", userId);
         if (actor == KeyManagementActor.ACCOUNT_ADMIN) {
             throw new ForbiddenException(MESG_ACTOR_NOT_ALLOWED);
         }
         var resolvedLimit = validator.resolveLimit(limit, false);
         var after = decodeCursor(cursor);
+        var accounts = keysService.listOwnerAccountStatuses(USER, userId);
         var remaining = accounts.stream()
                 .filter(status -> after == null || status.ncaId().compareTo(after) > 0)
                 .toList();

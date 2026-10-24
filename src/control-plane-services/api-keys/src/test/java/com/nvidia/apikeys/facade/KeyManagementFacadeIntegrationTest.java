@@ -368,7 +368,7 @@ class KeyManagementFacadeIntegrationTest {
                 issuerStatusRequest(KeyOwnerStatus.SUSPENDED));
         create(ACCOUNT_ADMIN, NCA_ID_1, USER_ID_2);
 
-        var first = facade.getOwnerStatuses(KEY_OWNER, null, USER_KEY_OWNER_ID_1, 2, null);
+        var first = facade.listOwnerStatuses(KEY_OWNER, USER_KEY_OWNER_ID_1, 2, null);
         assertThat(first.getOwnerId()).isEqualTo(USER_KEY_OWNER_ID_1);
         assertThat(first.getLimit()).isEqualTo(2);
         assertThat(first.getCursor()).isNotBlank();
@@ -377,8 +377,8 @@ class KeyManagementFacadeIntegrationTest {
         assertThat(first.getAccounts()).extracting(OwnerStatusByAccount::getStatus)
                 .containsExactly(KeyOwnerStatus.ACTIVE, KeyOwnerStatus.SUSPENDED);
 
-        var second = facade.getOwnerStatuses(
-                PLATFORM_ADMIN, null, USER_KEY_OWNER_ID_1, 2, first.getCursor());
+        var second = facade.listOwnerStatuses(
+                PLATFORM_ADMIN, USER_KEY_OWNER_ID_1, 2, first.getCursor());
         assertThat(second.getCursor()).isNull();
         assertThat(second.getAccounts()).singleElement().satisfies(account -> {
             assertThat(account.getAccountId()).isEqualTo(NCA_ID_3);
@@ -395,16 +395,16 @@ class KeyManagementFacadeIntegrationTest {
         suspendAccount(NCA_ID_2, USER_KEY_OWNER_ID_1);
         create(ACCOUNT_ADMIN, NCA_ID_1, USER_KEY_OWNER_ID_1);
 
-        KeyOwnerStatusesResponse known = facade.getOwnerStatuses(
-                ACCOUNT_ADMIN, NCA_ID_2, USER_KEY_OWNER_ID_1, null, null);
+        KeyOwnerStatusesResponse known = facade.getAccountOwnerStatuses(
+                NCA_ID_2, USER_KEY_OWNER_ID_1);
         assertThat(known.getAccounts()).singleElement()
                 .satisfies(account -> assertThat(account.getStatus())
                         .isEqualTo(KeyOwnerStatus.SUSPENDED));
         assertThat(known.getCursor()).isNull();
         assertThat(known.getLimit()).isNull();
 
-        var unknown = facade.getOwnerStatuses(
-                PLATFORM_ADMIN, "unknown-nca", USER_KEY_OWNER_ID_1, null, null);
+        var unknown = facade.getAccountOwnerStatuses(
+                "unknown-nca", USER_KEY_OWNER_ID_1);
         assertThat(unknown.getAccounts()).singleElement().satisfies(account -> {
             assertThat(account.getAccountId()).isEqualTo("unknown-nca");
             assertThat(account.getStatus()).isEqualTo(KeyOwnerStatus.ACTIVE);
@@ -413,10 +413,42 @@ class KeyManagementFacadeIntegrationTest {
 
     @Test
     void statusesRejectInvalidCursorAndAccountAdminCrossAccountRead() {
-        assertThrows(BadRequestException.class, () -> facade.getOwnerStatuses(
-                PLATFORM_ADMIN, null, USER_KEY_OWNER_ID_1, 10, "***"));
-        assertForbidden(() -> facade.getOwnerStatuses(
-                ACCOUNT_ADMIN, null, USER_KEY_OWNER_ID_1, 10, null));
+        assertThrows(BadRequestException.class, () -> facade.listOwnerStatuses(
+                PLATFORM_ADMIN, USER_KEY_OWNER_ID_1, 10, "***"));
+        assertForbidden(() -> facade.listOwnerStatuses(
+                ACCOUNT_ADMIN, USER_KEY_OWNER_ID_1, 10, null));
+    }
+
+    @Test
+    void accountStatusesIncludeOnlyThatAccountsIssuerStatuses() {
+        suspendAccount(NCA_ID_1, USER_KEY_OWNER_ID_1);
+        facade.updateIssuerServiceStatus(
+                PLATFORM_ADMIN, NCA_ID_1, SERVICE_ID_1, USER_KEY_OWNER_ID_1,
+                issuerStatusRequest(KeyOwnerStatus.SUSPENDED));
+        facade.updateIssuerServiceStatus(
+                PLATFORM_ADMIN, NCA_ID_2, SERVICE_ID_1, USER_KEY_OWNER_ID_1,
+                issuerStatusRequest(KeyOwnerStatus.SUSPENDED));
+
+        var response = facade.getAccountOwnerStatuses(NCA_ID_1, USER_KEY_OWNER_ID_1);
+
+        assertThat(response.getAccounts()).singleElement().satisfies(account -> {
+            assertThat(account.getAccountId()).isEqualTo(NCA_ID_1);
+            assertThat(account.getStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED);
+            assertThat(account.getIssuerServices()).singleElement().satisfies(issuer -> {
+                assertThat(issuer.getIssuerServiceId()).isEqualTo(SERVICE_ID_1);
+                assertThat(issuer.getStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED);
+            });
+        });
+    }
+
+    @Test
+    void accountStatusesRejectInvalidRouteIds() {
+        assertThrows(BadRequestException.class,
+                     () -> facade.getAccountOwnerStatuses("*", USER_KEY_OWNER_ID_1));
+        assertThrows(BadRequestException.class,
+                     () -> facade.getAccountOwnerStatuses(NCA_ID_1, "*"));
+        assertThrows(BadRequestException.class,
+                     () -> facade.listOwnerStatuses(PLATFORM_ADMIN, "*", null, null));
     }
 
     @Test
@@ -426,8 +458,8 @@ class KeyManagementFacadeIntegrationTest {
                 ACCOUNT_ADMIN, LEGACY_NCA_ID, USER_KEY_OWNER_ID_1,
                 accountStatusRequest(KeyOwnerStatus.SUSPENDED));
 
-        assertThat(facade.getOwnerStatuses(
-                PLATFORM_ADMIN, null, USER_KEY_OWNER_ID_1, null, null).getAccounts())
+        assertThat(facade.listOwnerStatuses(
+                PLATFORM_ADMIN, USER_KEY_OWNER_ID_1, null, null).getAccounts())
                 .singleElement().satisfies(account -> {
                     assertThat(account.getAccountId()).isEqualTo(LEGACY_NCA_ID);
                     assertThat(account.getStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED);

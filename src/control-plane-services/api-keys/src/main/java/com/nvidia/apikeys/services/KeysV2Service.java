@@ -291,6 +291,29 @@ public class KeysV2Service {
     }
 
     /**
+     * The owner's status in one account, ACTIVE when nothing is stored. Reads only the owner's
+     * status records, never keys or other accounts' keys. The legacy account has no
+     * account-and-service records.
+     */
+    public OwnerAccountStatusVo getOwnerAccountStatus(
+            String ncaId, KeyOwnerType ownerType, String ownerId) {
+        var issuerStatuses = legacyAccount.isLegacy(ncaId)
+                ? List.<OwnerStatusByAccountAndServiceModel>of()
+                : ownerStatusDao.listOwnerStatusByAccountAndService(ncaId, ownerType, ownerId);
+        return OwnerAccountStatusVo.builder()
+                .ncaId(ncaId)
+                .status(getOwnerStatusByAccount(ncaId, ownerType, ownerId)
+                                .map(OwnerStatusByAccountModel::getOwnerStatus)
+                                .orElse(KeyOwnerStatus.ACTIVE))
+                .issuerServices(issuerStatuses.stream()
+                                        .map(KeysV2Service::toIssuerStatus)
+                                        .sorted(Comparator.comparing(
+                                                OwnerAccountStatusVo.IssuerStatus::issuerServiceId))
+                                        .toList())
+                .build();
+    }
+
+    /**
      * Owner status for the account and issuer service. The legacy account has no
      * account-and-service records.
      */
