@@ -299,6 +299,16 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
+	if clockAt > 0 {
+		// Each pid's distance from the dumped clock when it was thawed:
+		// "behind" means it waited for it, "past" that the restore overran
+		// its clock budget (restore_clock_gpu.go).
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, " the dump") && strings.Contains(l, "clock ") {
+				log.Info("gpushare: " + strings.TrimSpace(l))
+			}
+		}
+	}
 	return nil
 }
 

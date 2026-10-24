@@ -292,7 +292,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
-	if spent, ok := recordRestoreClock(checkpointDir); ok {
+	// Through a GPU reload the whole restore is recorded at the GPU resume
+	// (continueTasks), not CRIU's part of it.
+	if spent, ok := recordRestoreClock(checkpointDir); ok && !clockThroughGPU {
 		log.WithField("criuRestore", spent.Round(time.Millisecond).String()).Info("criu-v2: recorded the restore's length for the next one's clock budget")
 	}
 	if group.InetAddrMap != "" {
