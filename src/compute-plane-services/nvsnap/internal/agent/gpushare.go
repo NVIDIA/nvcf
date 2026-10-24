@@ -234,15 +234,24 @@ func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout tim
 	return out.String(), nil
 }
 
+// gpushareToolRun runs the tool; tests replace it.
+var gpushareToolRun = gpushareToolEnv
+
 // gpushareSuspend saves the GPU memory of pids to the store and checkpoints
 // their driver state, then hands them to CRIU stopped. It returns the GPU
 // map (UUIDs of the GPUs the workload saw, in order) for the checkpoint:
 // a restore onto other physical GPUs maps them with resume --gpu-map.
-func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) (string, error) {
+//
+// suspended reports that the source is left suspended, whatever err says:
+// once the suspend succeeded, a failure after it (the stop) still leaves
+// the caller a source to resume. A suspend whose outcome is not known is
+// reported as errSourceLeftSuspended, not as suspended: resuming a source
+// in an unknown state could do more harm than replacing it.
+func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) (gpus string, suspended bool, err error) {
 	store := GPUShareStoreInContainer
-	gpus, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(hostPID), time.Minute, "gpus")
+	gpus, err = gpushareToolRun(ctx, hostPID, podGPUEnv(hostPID), time.Minute, "gpus")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	// The per-pid chunk lists go in the store root: the mount guarantees it
 	// exists, while a subdirectory would have to be created inside the
@@ -250,16 +259,43 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir str
 	// /proc/<pid>/root (and the tool does not create --ckpt-dir).
 	args := gpushareSuspendArgs(store, fabricDir, pids)
 	t0 := time.Now()
-	out, err := gpushareTool(ctx, hostPID, 30*time.Minute, args...)
+	// The suspend runs to its end even when the capture is cancelled (its
+	// client went away, the group's driver timed out): killed half-way, it
+	// would leave the source in a state nothing records. nsenter forks the
+	// tool, so a cancel would kill only nsenter and lose the tool's result.
+	out, err := gpushareToolRun(context.WithoutCancel(ctx), hostPID, nil, 30*time.Minute, args...)
 	if err != nil {
-		return "", err
+		return "", false, suspendFailure(err)
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: suspended " + lastLines(out, 1))
-	if _, err := gpushareTool(ctx, hostPID, 2*time.Minute, append([]string{"stop"}, intsToStrings(pids)...)...); err != nil {
-		return "", err
+	if _, err := gpushareToolRun(ctx, hostPID, nil, 2*time.Minute, append([]string{"stop"}, intsToStrings(pids)...)...); err != nil {
+		return "", true, err
 	}
-	return gpus, nil
+	return gpus, true, nil
+}
+
+// suspendRollbackFailed is what the tool prints when a suspend failed and
+// its rollback did too (nvsnap-gpu-suspend.c, undo).
+const suspendRollbackFailed = "suspend failed and so did the rollback"
+
+// suspendFailure is how a failed suspend left the source. The tool rolls
+// back on any failure, so a suspend that exited left the workload as it
+// was, unless the tool says its rollback failed. A suspend that did not
+// exit (it timed out and was killed) left it in a state nobody knows. A
+// tool that never started changed nothing.
+func suspendFailure(err error) error {
+	var ee *exec.ExitError
+	switch {
+	case !errors.As(err, &ee):
+		return err
+	case !ee.Exited():
+		return fmt.Errorf("%w: the suspend did not finish: %w", errSourceLeftSuspended, err)
+	case strings.Contains(err.Error(), suspendRollbackFailed):
+		return fmt.Errorf("%w: the suspend's rollback failed: %w", errSourceLeftSuspended, err)
+	default:
+		return err
+	}
 }
 
 // gpushareResume restores the driver state of pids, loads their saved GPU

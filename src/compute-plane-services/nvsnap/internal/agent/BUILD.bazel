@@ -195,6 +195,7 @@ go_test(
         "rootfsonly_integration_test.go",
         "session_owner_test.go",
         "stage_bundle_test.go",
+        "suspend_outcome_test.go",
         "tail_of_file_test.go",
         "tar_pipe_test.go",
     ],

@@ -395,20 +395,23 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		if err := ownGPUShareStore(procBase, targetHostPID, root, fabricDir); err != nil {
 			return nil, fmt.Errorf("gpushare: give the workload its chunk store: %w", err)
 		}
-		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, fabricDir, log)
+		gm, suspended, err := gpushareSuspend(ctx, hostPID, gsPIDs, fabricDir, log)
+		if suspended {
+			// The source is stopped with its GPU memory released from
+			// here, even when the suspend's last step failed. The dump
+			// settles it (settleSource); any return before the dump brings
+			// it back through the guard. Deferred after the fabric
+			// session's close, so it runs while the session is still open.
+			guard.arm(func() error { return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log) }, func() {
+				if o.PostDumpDir != "" {
+					markPostDumpFailed(o.PostDumpDir, log)
+				}
+			})
+			defer func() { retErr = guard.settle(retErr) }()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("gpushare suspend: %w", err)
 		}
-		// The source is stopped with its GPU memory released from here.
-		// The dump settles it (settleSource); any return before the dump
-		// brings it back through the guard. Deferred after the fabric
-		// session's close, so it runs while the session is still open.
-		guard.arm(func() error { return resumeSource(ctx, hostPID, gsPIDs, fabricDir, log) }, func() {
-			if o.PostDumpDir != "" {
-				markPostDumpFailed(o.PostDumpDir, log)
-			}
-		})
-		defer func() { retErr = guard.settle(retErr) }()
 		gpuMap = gm
 		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
 	}
