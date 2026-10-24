@@ -266,7 +266,7 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir str
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
 func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
-	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, log)
+	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, 0, log)
 }
 
 // gpushareResumeWithGPUsOf resumes pids, entered through hostPID, on the
@@ -274,8 +274,10 @@ func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabric
 // namespace: its processes still carry the source pod's GPU environment.
 // holdGate keeps their GPU launches waiting until gpushareOpen: the pods of
 // a group open only once every one of them has resumed, so no node launches
-// into memory another node is still rebinding (see gpushareOpen).
-func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, log *logrus.Entry) error {
+// into memory another node is still rebinding (see gpushareOpen). clockAt,
+// when set, is the CLOCK_MONOTONIC their dump recorded: the tool thaws them
+// only once their clocks have reached it (restore_clock_gpu.go).
+func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, clockAt int64, log *logrus.Entry) error {
 	env := podGPUEnv(gpusPID)
 	if env == nil && gpusPID != hostPID {
 		// No UUIDs in NVIDIA_VISIBLE_DEVICES (GPUs given as device nodes,
@@ -289,7 +291,7 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		env = cudaVisibleEnv(gpus)
 	}
 	env = append(env, resumeDiagEnv()...)
-	args := gpushareResumeArgs(gpuMap, fabricDir, holdGate, pids)
+	args := gpushareResumeArgs(gpuMap, fabricDir, holdGate, clockAt, pids)
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
 	if err != nil {
@@ -311,10 +313,13 @@ func gpushareSuspendArgs(store, fabricDir string, pids []int) []string {
 }
 
 // gpushareResumeArgs builds the resume command line.
-func gpushareResumeArgs(gpuMap, fabricDir string, holdGate bool, pids []int) []string {
+func gpushareResumeArgs(gpuMap, fabricDir string, holdGate bool, clockAt int64, pids []int) []string {
 	var args []string
 	if holdGate {
 		args = append(args, "--hold-gate")
+	}
+	if clockAt > 0 {
+		args = append(args, "--clock-at", strconv.FormatInt(clockAt, 10))
 	}
 	if gpuMap != "" {
 		args = append(args, "--gpu-map", gpuMap)

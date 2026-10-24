@@ -341,15 +341,15 @@ func TestGPUShareArgs_FabricMap(t *testing.T) {
 	if got := gpushareSuspendArgs("/s", "", []int{7}); strings.Contains(strings.Join(got, " "), "fabric") {
 		t.Errorf("single-node suspend carries --fabric-map: %v", got)
 	}
-	got = gpushareResumeArgs("/s/gpus", "/f", false, []int{7})
+	got = gpushareResumeArgs("/s/gpus", "/f", false, 0, []int{7})
 	want = []string{"--gpu-map", "/s/gpus", "--fabric-map", "/f", "resume", "7"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resume args = %v, want %v", got, want)
 	}
-	if got := gpushareResumeArgs("", "", false, []int{7}); !reflect.DeepEqual(got, []string{"resume", "7"}) {
+	if got := gpushareResumeArgs("", "", false, 0, []int{7}); !reflect.DeepEqual(got, []string{"resume", "7"}) {
 		t.Errorf("plain resume args = %v", got)
 	}
-	got = gpushareResumeArgs("/s/gpus", "/f", true, []int{7, 8})
+	got = gpushareResumeArgs("/s/gpus", "/f", true, 0, []int{7, 8})
 	want = []string{"--hold-gate", "--gpu-map", "/s/gpus", "--fabric-map", "/f", "resume", "7", "8"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("held resume args = %v, want %v", got, want)

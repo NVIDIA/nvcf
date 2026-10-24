@@ -202,12 +202,19 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
 	// The restore does not count as time the restored tasks ran
-	// (restore_clock.go).
-	if bundledSupportsTimensBudget() {
-		budget := restoreClockBudget(checkpointDir)
-		args = append(args, "--timens-budget", strconv.FormatInt(budget.Milliseconds(), 10))
-		log.WithField("budget", budget.Round(time.Second).String()).Info("criu-v2: the restored clocks continue from the dump once the restore has taken its budget")
+	// (restore_clock.go). With a GPU reload, that is the whole restore up to
+	// the GPU resume: every task stays stopped until the clocks are there
+	// (restore_clock_gpu.go).
+	clockThroughGPU := gs != nil && bundledSupportsTimensBudget() && restoreClockThroughGPU()
+	if clockArgs, budget := restoreClockArgs(checkpointDir, bundledSupportsTimensBudget(), clockThroughGPU); clockArgs != nil {
+		args = append(args, clockArgs...)
+		msg := "criu-v2: the restored clocks continue from the dump once the restore has taken its budget"
+		if clockThroughGPU {
+			msg = "criu-v2: the restored clocks continue from the dump when the GPU processes resume"
+		}
+		log.WithField("budget", budget.Round(time.Second).String()).Info(msg)
 	}
+	criuStart := time.Now()
 	// An in-namespace restore: the restored tree logs to the placeholder's
 	// stdout and stderr (restore_stdio.go). nsenter passes the extra files
 	// on to criu.
@@ -305,6 +312,35 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// holdGate keeps their GPU launches waiting until openGPU. toolPID is
 	// the pid the resume tool entered, once it ran, for openGPU.
 	toolPID := 0
+	var clockAt int64
+	if clockThroughGPU {
+		var err error
+		if clockAt, err = dumpedMonotonic(ctx, checkpointDir); err != nil {
+			return nil, fmt.Errorf("criu-v2: read the dumped clock the restored tasks resume at: %w", err)
+		}
+	}
+	// continueTasks resumes the restored tasks the GPU resume did not, once
+	// it has: CRIU left them all stopped for the clocks (clockThroughGPU).
+	continueTasks := func() error {
+		if !clockThroughGPU {
+			return nil
+		}
+		pids, err := readTimensResumePIDs(checkpointDir)
+		if err != nil {
+			return fmt.Errorf("criu-v2: read the tasks to resume: %w", err)
+		}
+		n, err := continueRestoredTasks(procBase, toolPID, pids, gs.PIDs)
+		if err != nil {
+			return fmt.Errorf("criu-v2: resume the restored tasks: %w", err)
+		}
+		spent := time.Since(criuStart)
+		if err := recordRestoreSpan(checkpointDir, spent); err != nil {
+			log.WithError(err).Warn("criu-v2: cannot record the restore's length; the next one estimates its clock budget")
+		}
+		log.WithFields(logrus.Fields{"tasks": n, "restoreSpan": spent.Round(time.Millisecond).String()}).
+			Info("criu-v2: the restored tasks resumed with their clocks at the dumped values; recorded the restore's length for the next one's clock budget")
+		return nil
+	}
 	resumeGPU := func(holdGate bool) error {
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
@@ -336,7 +372,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			}
 		}
 		toolPID = resumePID
-		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, holdGate, log); err != nil {
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, holdGate, clockAt, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
@@ -374,6 +410,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				}
 				return nil, err
 			}
+			if err := continueTasks(); err != nil {
+				if oerr := openGPU(); oerr != nil {
+					log.WithError(oerr).Warn("gpushare: could not open the GPU launches of a failed resume")
+				}
+				return nil, err
+			}
 		}
 		// Every pod of the instance must be restored before any of them
 		// sends: hold the lock until the driver says so, then release it in
@@ -398,6 +440,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		}
 	} else if gs != nil {
 		if err := resumeGPU(false); err != nil {
+			return nil, err
+		}
+		if err := continueTasks(); err != nil {
 			return nil, err
 		}
 	}
