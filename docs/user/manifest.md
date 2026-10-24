@@ -219,6 +219,25 @@ Secrets without an nkey job. Their legacy `cassandra.initialization.image` and
 `alpine-k8s` for those operations requires chart support rather than a
 configuration-only override.
 
+### Use the upstream Vault injector image
+
+To use the upstream injector at the same version as the NVCF mirror, merge
+this opt-in example into
+`deploy/stacks/self-managed/environments/<environment>.yaml`:
+
+```yaml
+openbao:
+  injector:
+    image:
+      registry: docker.io
+      repository: hashicorp/vault-k8s
+      tag: "1.7.4@sha256:e2ef79b457f50d971851df836f78cf41be454644095d84a7411f93ccf3304c15"
+```
+
+This changes only the injector distribution source.
+The webhook image is separate from `openbao.injector.agentImage` and
+`openbao.server.image`; keep those matched NVCF OpenBao images unchanged.
+
 <Info>
 Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.
 

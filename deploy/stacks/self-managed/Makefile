@@ -16,6 +16,7 @@ test:
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/nats-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/openbao-injector-image-overrides.sh
 	@tests/api-keys-startup-probe.sh
 	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
