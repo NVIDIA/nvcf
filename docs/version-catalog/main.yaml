@@ -95,6 +95,10 @@ publications:
     type: image
     version: 1.4.1
     registry: public-images
+  - name: nats-server
+    type: image
+    version: 2.14.6-alpine3.22
+    registry: public-images
   - name: nvcf-api-keys-service
     type: image
     version: 1.9.1
@@ -1133,7 +1137,6 @@ artifacts:
   - name: nats-server
     type: image
     registry: public-images
-    upstream_repository: docker.io/synadia/nats-server
     version: 2.14.6-alpine3.22
     stacks:
       - self-managed

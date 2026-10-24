@@ -98,12 +98,9 @@ write_autoscaler_values "$work_dir/autoscaler-values.yaml"
 
 autoscaler_values="$work_dir/autoscaler-values.yaml"
 autoscaler_tag="$(yq -r '.functionautoscaler.image.tag // ""' "$autoscaler_values")"
-expected_autoscaler_tag="$(yq -r '.functionAutoscaler.image.tag // ""' "$stack_dir/environments/base.yaml")"
-test "$autoscaler_tag" = "$expected_autoscaler_tag" ||
-  fail "stack values did not forward the selected function autoscaler image tag"
-if test -z "$expected_autoscaler_tag"; then
-  expected_autoscaler_tag="$(yq -r '.appVersion // ""' "$repo_dir/deploy/helm/function-autoscaler/Chart.yaml")"
-fi
+test -z "$autoscaler_tag" ||
+  fail "stack values should let the function autoscaler chart supply the image tag"
+expected_autoscaler_tag="$(yq -r '.appVersion // ""' "$repo_dir/deploy/helm/function-autoscaler/Chart.yaml")"
 [[ -n "$expected_autoscaler_tag" ]] ||
   fail "function autoscaler chart does not define an appVersion"
 for expected in \

@@ -129,15 +129,6 @@ jobs:
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: tools/go-toolchain/go.mod
-
-      - name: Verify bundled receipt release inventory
-        env:
-          NVCF_RECEIPT_INVENTORY_E2E: "1"
-        run: go test -C tools/docs-version-sync -run '^TestReceiptInventoryIncludesBundledChartAndDefaultHookImage$' -count=1
-
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
 

@@ -127,20 +127,20 @@ state_table() {
 }
 
 if ! render_pki_image_case default-image-tag \
+  --state-values-set-string openbao.migrations.image.tag= \
   >"$work_dir/default-image-tag.log"; then
   cat "$work_dir/default-image-tag.log" >&2
-  fail "managed LLM PKI must render without a separate PKI image override"
+  fail "managed LLM PKI must render when both PKI image tags are omitted"
 fi
-# The PKI hook follows the selected migrations image unless explicitly overridden.
-default_pki_tag="$(yq -r '.openbao.migrations.image.tag // ""' "$stack_dir/environments/base.yaml")"
-if test -z "$default_pki_tag"; then
-  default_pki_tag="$(
-    (grep '\$pkiImageTag :=' "$stack_dir/global.yaml.gotmpl" || true) |
-      sed 's/.*default "\([^"]*\)".*/\1/'
-  )"
-fi
+# Read the compatible-stack-default tag from global.yaml.gotmpl itself rather
+# than hardcoding it, so this check does not need updating every time the
+# floor is bumped.
+default_pki_tag="$(
+  (grep '\$pkiImageTag :=' "$stack_dir/global.yaml.gotmpl" || true) |
+    sed 's/.*default "\([^"]*\)".*/\1/'
+)"
 test -n "$default_pki_tag" ||
-  fail "could not read the default LLM PKI image tag"
+  fail "could not read the default LLM PKI image tag from global.yaml.gotmpl"
 assert_pki_image_case default-image-tag "$default_pki_tag"
 
 render_pki_image_case legacy-image-tag \

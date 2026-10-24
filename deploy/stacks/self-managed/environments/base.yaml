@@ -158,8 +158,6 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  image:
-    tag: "1.21.10"
   # Additional application settings. Environment variables use `__` between
   # nested keys, for example SCALING__LOOKBACK_SECONDS.
   env: {}
@@ -180,10 +178,8 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at the selected request-router image version.
+# global.sidecars (or global.image) at version 0.18.0.
 api:
-  image:
-    tag: "1.18.1"
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
@@ -193,28 +189,12 @@ api:
   # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
   essBaseURL: ""
   remoteConfig:
-    configData:
-      nvcf:
-        sidecars:
-          init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.4
-          utils-container-image:
-            go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.2.6
-          ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.4
-          llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.5
+    configData: {}
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
 nvctApi:
-  image:
-    tag: "1.66.1"
   essBaseURL: ""
-  remoteConfig:
-    configData:
-      nvct:
-        sidecars:
-          init-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.4
-          utils-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-task-oss:1.1.6
-          ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.4.4
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -227,15 +207,6 @@ nvctApi:
 #       repository: <your-repository>/alpine-k8s
 #       tag: "1.37.0"
 
-# The bundled upgrade receipt uses its chart's public upstream helper image.
-# Global NVCF image settings do not select this third-party image. To use a
-# mirror, set upgradeReceipt.image.registry and repository together. A tag
-# override is optional and must be qualified for the cluster's Kubernetes version.
-#   upgradeReceipt:
-#     image:
-#       registry: <your-registry>
-#       repository: <your-repository>/alpine-k8s
-
 accounts:
   limits:
     maxFunctions: 10
@@ -244,42 +215,8 @@ accounts:
     maxRegistryCreds: 10
 
 # These static global values are processed in the values template
-natsAuthCalloutService:
-  image:
-    tag: "0.8.6"
-
 nats:
   enabled: true
-  container:
-    image:
-      registry: docker.io
-      repository: synadia/nats-server
-      tag: "2.14.6-alpine3.22"
-    merge:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: [ALL]
-  reloader:
-    merge:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: [ALL]
-  podTemplate:
-    merge:
-      spec:
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
-          fsGroup: 1000
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
@@ -345,7 +282,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      tag: 0.17.7
+      tag: 0.17.6
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -385,8 +322,6 @@ certManager:
 openbao:
   enabled: true
   migrations:
-    image:
-      tag: "0.19.9"
     issuerDiscovery:
       enabled: false
   injector:
@@ -428,19 +363,11 @@ addons:
   # When enabled, configures OpenBao secrets for TURN service and deploys HMAC rotation CronJob
   lls:
     enabled: false
-    hmacRotation:
-      image:
-        tag: "0.19.9"
 
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    gateway:
-      image:
-        tag: "0.14.11"
     requestRouter:
-      image:
-        tag: "0.18.3"
       # replicaCount defaults to the request-router chart value. Set it here
       # only when the stack needs a different topology.
       # replicaCount: 3
@@ -569,7 +496,8 @@ addons:
     enabled: false
     replicaCount: 2
     image:
-      tag: "1.35.3"
+      # Optional image tag override. Leave empty to use the chart appVersion.
+      tag: ""
       pullPolicy: IfNotPresent
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
@@ -607,9 +535,6 @@ addons:
   # Disabled by default
   nvcfUi:
     enabled: false
-    openbaoMigrations:
-      image:
-        tag: "0.19.9"
 
 stateMetrics:
   enabled: true
@@ -618,8 +543,6 @@ stateMetrics:
     enabled: false
 
 rateLimiter:
-  image:
-    tag: "1.17.5"
   enabled: true
   replicaCount: 1
   # PDB: enable when replicaCount > 1.
@@ -633,16 +556,10 @@ rateLimiter:
 icms:
   enabled: true
 
-sis:
-  image:
-    tag: "0.7.6"
-
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
-  image:
-    tag: "1.9.3"
   # Operator-set api-keys service env, deep-merged over the chart defaults
   # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
   # api-keys service authorizes keys against. Leave unset to keep the chart
@@ -655,19 +572,11 @@ apikeys:
     maxUnavailable: 1
 
 ess:
-  image:
-    tag: "0.5.4"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
 
-notary:
-  image:
-    tag: "1.14.5"
-
 invocation:
-  image:
-    tag: "0.12.3"
   env:
     # Keep request subjects aligned with the API and worker consumers.
     NATS_PROPERTIES__REGION: ncp
@@ -686,8 +595,6 @@ functionautoscaler:
     maxUnavailable: 1
 
 reval:
-  image:
-    tag: "0.20.3"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -798,8 +705,6 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
-  image:
-    tag: "1.33.7"
   # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
   podDisruptionBudget:
     enabled: false
