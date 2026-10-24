@@ -161,7 +161,7 @@ func TestKillGroupOnCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 30 & echo $! > "+out.Name()+"; wait")
+	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 30 & echo $! > "+out.Name()+"; wait") //nolint:gosec // a fixed script of this test
 	killGroupOnCancel(cmd)
 	_ = cmd.Run()
 	b, _ := os.ReadFile(out.Name())
