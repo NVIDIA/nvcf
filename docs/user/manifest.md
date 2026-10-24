@@ -185,11 +185,12 @@ it reloads successfully.
 
 ### Use upstream cert-manager images
 
-To use upstream images, merge these values into
-`deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile forwards
-all five images to the selected published wrapper. Wrapper 0.1.0 includes
-cert-manager v1.20.2; these pins match its chart and CRDs. This is an opt-in
-distribution change, not a security update or a new release qualification.
+Merge these overrides into the Helmfile environment file
+`deploy/stacks/self-managed/environments/<environment>.yaml` to use upstream
+cert-manager images. The v1.20.2 pins match wrapper 0.1.0 and its CRDs; each
+digest covers Linux AMD64 and ARM64. Omitted overrides retain existing defaults.
+For a private mirror, replace each full `repository`, which takes precedence
+over `global.image`.
 
 ```yaml
 certManager:
@@ -219,50 +220,9 @@ certManager:
       digest: "sha256:cfa55e9c3dcfc6a3cba97575748c1549b04a30fd14d88a2fcb9e2dddef415e2f"
 ```
 
-Each digest identifies an upstream Linux AMD64/ARM64 image index, including the
-ACME HTTP-01 solver. The images declare UID 65532. The existing chart enforces
-`runAsNonRoot` for the controller, webhook, CA injector and startup check;
-cert-manager applies its nonroot policy to HTTP-01 solver pods. No extra
-security-context override is required.
-
-Keep all five image versions aligned with the selected chart and CRDs.
-[cert-manager 1.20 supports Kubernetes 1.32-1.35](https://cert-manager.io/docs/releases/).
-Changing image locations does not change that compatibility range. Do not use
-1.21 images with this chart or raise the Kubernetes floor through an image override.
-See the [v1.20.2 release](https://github.com/cert-manager/cert-manager/releases/tag/v1.20.2)
-and [upstream Helm guide](https://cert-manager.io/docs/installation/helm/).
-
-For a private mirror, replace each full `repository` above, preserving its tag
-and digest after copying the complete multi-platform index. Verify the digest
-at the destination. These repositories take precedence over `global.image`;
-configure `global.imagePullSecrets` for the chart's pods if authentication is
-required. HTTP-01 solver pods need separate pull credentials in the challenge
-namespace: set `imagePullSecrets` in the ACME Issuer's HTTP-01 solver
-`podTemplate.spec`, or on the solver pod's service account. The global chart
-setting does not propagate to those dynamically created pods. See the
-[HTTP-01 pod template](https://cert-manager.io/docs/configuration/acme/http01/#podtemplate).
-Without explicit repositories, the four controller components keep the global
-mirror
-and the solver keeps its upstream default. Unset or empty image keys retain
-chart/stack defaults. A tag and digest render as `repository:tag@digest`; a
-digest without a tag renders as `repository@digest`. A tag without a digest
-uses the tag alone. Remove both old fields when changing that choice.
-
-Render with your normal chart source and secrets file before installing:
-
-```bash
-cd deploy/stacks/self-managed
-export HELMFILE_ENV=<environment>
-helmfile -f helmfile.d/01-dependencies.yaml.gotmpl --selector name=cert-manager template
-```
-
-Check the three Deployments, startup check Job, and controller's
-`--acme-http01-solver-image` argument for the full pinned references. Install
-through the normal stack workflow. In the intended Kubernetes context, wait
-for the controller, webhook and CA injector Deployments, and check the Helm
-startup hook succeeded. Issue and renew a test Certificate with your issuer,
-then verify its Ready condition and increasing revision. For ACME HTTP-01,
-also check the generated solver pod's image and nonroot policy during a challenge.
+For authenticated mirrors, set `global.imagePullSecrets` for chart pods and
+separate pull credentials in the ACME Issuer's HTTP-01 solver
+[pod template](https://cert-manager.io/docs/configuration/acme/http01/#podtemplate).
 
 ### Override the Cassandra images
 
