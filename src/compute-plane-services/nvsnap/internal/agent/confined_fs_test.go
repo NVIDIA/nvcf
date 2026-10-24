@@ -313,3 +313,16 @@ func TestInstallPlaceholderGPUsStaysInTheTree(t *testing.T) {
 		t.Errorf("created %v outside the restored tree (made %v, err %v)", ents, made, err)
 	}
 }
+
+// Only device nodes are declared as GPU externals: a link in the
+// workload's /dev to the agent's own /dev/null names nothing to declare.
+func TestNvidiaDevExternalsSkipsLinks(t *testing.T) {
+	dev := t.TempDir()
+	if err := os.Symlink("/dev/null", filepath.Join(dev, "nvidia0")); err != nil {
+		t.Fatal(err)
+	}
+	exts, err := nvidiaDevExternals(dev)
+	if err != nil || len(exts) != 0 {
+		t.Errorf("externals %v, %v; want none for a link", exts, err)
+	}
+}

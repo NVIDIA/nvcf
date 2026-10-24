@@ -688,8 +688,10 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 	}
 	var exts []string
 	for _, m := range matches {
+		// The device nodes themselves: /dev is the workload's to write, and
+		// a link there names nothing the dump should declare.
 		var st syscall.Stat_t
-		if err := syscall.Stat(m, &st); err != nil {
+		if err := syscall.Lstat(m, &st); err != nil {
 			continue
 		}
 		if st.Mode&syscall.S_IFMT != syscall.S_IFCHR {
