@@ -15,6 +15,7 @@ test:
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/nats-image-overrides.sh
+	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/service-pki-wiring.sh
 	@tests/nonroot-llm-migrations.sh
