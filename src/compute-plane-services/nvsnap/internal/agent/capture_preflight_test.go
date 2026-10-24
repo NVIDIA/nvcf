@@ -204,3 +204,104 @@ func TestCapturePreflightKeepsEveryFinding(t *testing.T) {
 		t.Errorf("%d findings, want %d (%d spec + %d host)", len(fs), want, spec, n)
 	}
 }
+
+// fakeRDMAProc writes the /proc entries of process pid that the RDMA check
+// reads: its fd links, its maps and its comm.
+func fakeRDMAProc(t *testing.T, base string, pid int, comm string, fds map[string]string, maps string) {
+	t.Helper()
+	dir := filepath.Join(base, fmt.Sprint(pid))
+	if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for fd, target := range fds {
+		if err := os.Symlink(target, filepath.Join(dir, "fd", fd)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range map[string]string{"maps": maps, "comm": comm + "\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// RDMA devices are found open and mapped (a doorbell page), once each;
+// the GPU's devices and ordinary files are not RDMA devices.
+func TestRDMADevices(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", map[string]string{
+		"3": "/dev/infiniband/uverbs0",
+		"4": "/dev/nvidia0",
+		"5": "/dev/infiniband/rdma_cm",
+		"6": "socket:[123]",
+	}, `7f0000000000-7f0000001000 rw-s 00000000 00:06 512 /dev/infiniband/uverbs0
+7f0000001000-7f0000002000 rw-s 00001000 00:06 513 /dev/infiniband/uverbs1
+7f0000002000-7f0000003000 r-xp 00000000 103:01 77 /usr/lib/libibverbs.so.1
+7f0000003000-7f0000004000 rw-p 00000000 00:00 0
+`)
+	got := strings.Join(rdmaDevices(proc, 41), " ")
+	if want := "/dev/infiniband/rdma_cm /dev/infiniband/uverbs0 /dev/infiniband/uverbs1"; got != want {
+		t.Errorf("devices %q, want %q", got, want)
+	}
+	// libibverbs loaded but no device open: the process holds no RDMA
+	// state.
+	fakeRDMAProc(t, proc, 42, "EngineCore", map[string]string{"3": "/dev/nvidia0", "4": "/dev/shm/pool"},
+		"7f0000002000-7f0000003000 r-xp 00000000 103:01 77 /usr/lib/libibverbs.so.1\n")
+	if devs := rdmaDevices(proc, 42); len(devs) != 0 {
+		t.Errorf("a process without RDMA devices: %v", devs)
+	}
+	// A process gone by the time it is read holds nothing.
+	if devs := rdmaDevices(proc, 43); len(devs) != 0 {
+		t.Errorf("a missing process: %v", devs)
+	}
+}
+
+// Each process holding RDMA devices blocks the capture, named with its
+// devices; none, nothing.
+func TestRDMAFindingsBlock(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", nil, "")
+	fakeRDMAProc(t, proc, 9, "nixl", nil, "")
+	fs := rdmaFindings(proc, "w-0", "main", map[int][]string{
+		41: {"/dev/infiniband/uverbs0", "/dev/infiniband/uverbs1"},
+		9:  {"/dev/infiniband/uverbs2"},
+	})
+	if b := blocking(fs); len(b) != 2 {
+		t.Fatalf("want 2 blocking findings: %+v", fs)
+	}
+	for i, want := range []string{"process 9 (nixl) holds RDMA devices /dev/infiniband/uverbs2:",
+		"process 41 (VllmWorker) holds RDMA devices /dev/infiniband/uverbs0, /dev/infiniband/uverbs1:"} {
+		if f := fs[i]; f.Check != "rdma" || f.Pod != "w-0" || f.Container != "main" || !strings.HasPrefix(f.Detail, want) {
+			t.Errorf("finding %d: %+v, want detail starting %q", i, f, want)
+		}
+	}
+	if fs := rdmaFindings(proc, "w-0", "main", map[int][]string{}); len(fs) != 0 {
+		t.Errorf("findings without RDMA devices: %+v", fs)
+	}
+}
+
+// The host checks of a container block its capture when one of its
+// processes holds an RDMA device, and only then; the other checks still
+// report.
+func TestProcessFindingsRDMA(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", map[string]string{"3": "/dev/nvidia0"}, "")
+	fakeRDMAProc(t, proc, 42, "frontend", map[string]string{"3": "socket:[9]"}, "")
+	fs := processFindings(proc, []int{41, 42}, "w-0", "main", 1<<40)
+	if b := blocking(fs); len(b) != 0 {
+		t.Fatalf("a container without RDMA devices blocked: %+v", b)
+	}
+	if _, ok := findingFor(fs, "memory"); !ok {
+		t.Errorf("no memory finding: %+v", fs)
+	}
+
+	fakeRDMAProc(t, proc, 43, "nixl", map[string]string{"3": "/dev/infiniband/uverbs0"}, "")
+	fs = processFindings(proc, []int{41, 42, 43}, "w-0", "main", 1<<40)
+	b := blocking(fs)
+	if len(b) != 1 || b[0].Check != "rdma" || !strings.Contains(b[0].Detail, "process 43 (nixl)") {
+		t.Fatalf("want one rdma block for process 43: %+v", fs)
+	}
+	if _, ok := findingFor(fs, "memory"); !ok {
+		t.Errorf("the RDMA block hid the other findings: %+v", fs)
+	}
+}

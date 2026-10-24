@@ -12,7 +12,8 @@ package agent
 //
 // Spec checks read the pod (probes, sidecars, the pid namespace); host
 // checks run on the member's node and read its container's processes
-// (deleted files the dump must save, the memory it dumps). A finding that
+// (deleted files the dump must save, RDMA devices it cannot, the memory it
+// dumps). A finding that
 // blocks skips the capture before it is claimed; the others are logged.
 // GET /v1/capture-preflight/{namespace}/{pod} reports on the instance whose
 // rank 0 is pod, on demand.
@@ -27,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,12 +147,74 @@ func (a *Agent) hostPreflight(ctx context.Context, ns, pod, container string) ([
 	if err != nil {
 		return nil, err
 	}
-	ghosts, anon := map[string]ghostFile{}, int64(0)
+	return processFindings(procBase, pids, pod, container, a.ghostLimit()), nil
+}
+
+// processFindings is the host checks of a container's processes pids.
+func processFindings(procBase string, pids []int, pod, container string, ghostLimit int64) []PreflightFinding {
+	ghosts, anon, rdma := map[string]ghostFile{}, int64(0), map[int][]string{}
 	for _, pid := range pids {
 		deletedFiles(procBase, pid, ghosts)
 		anon += anonymousBytes(procBase, pid)
+		if devs := rdmaDevices(procBase, pid); len(devs) > 0 {
+			rdma[pid] = devs
+		}
 	}
-	return ghostFindings(pod, container, ghosts, anon, a.ghostLimit()), nil
+	return append(rdmaFindings(procBase, pod, container, rdma), ghostFindings(pod, container, ghosts, anon, ghostLimit)...)
+}
+
+// rdmaDevicePrefix is where the RDMA devices are: uverbsN (verbs: memory
+// registrations, queue pairs, doorbell pages), rdma_cm, umadN.
+const rdmaDevicePrefix = "/dev/infiniband/"
+
+// rdmaDevices lists the RDMA device files process pid has open or mapped,
+// sorted. CRIU cannot dump them (checkpoint-restore/criu#267), and their
+// state could not be used after a restore anyway: the registrations belong
+// to a NIC context that does not survive, and the queue pairs are connected
+// to peers that keep this process's old keys. Only the process can release
+// them; a capture of one that holds them would fail in the dump.
+func rdmaDevices(procBase string, pid int) []string {
+	base := filepath.Join(procBase, strconv.Itoa(pid))
+	seen := map[string]bool{}
+	if ents, err := os.ReadDir(filepath.Join(base, "fd")); err == nil {
+		for _, e := range ents {
+			if t, err := os.Readlink(filepath.Join(base, "fd", e.Name())); err == nil && strings.HasPrefix(t, rdmaDevicePrefix) {
+				seen[t] = true
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(base, "maps")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			// address perms offset dev inode path
+			if f := strings.Fields(line); len(f) >= 6 && strings.HasPrefix(f[5], rdmaDevicePrefix) {
+				seen[f[5]] = true
+			}
+		}
+	}
+	devs := make([]string, 0, len(seen))
+	for d := range seen {
+		devs = append(devs, d)
+	}
+	sort.Strings(devs)
+	return devs
+}
+
+// rdmaFindings blocks the capture of a container whose processes hold
+// RDMA devices, one finding per process, naming it and its devices.
+func rdmaFindings(procBase, pod, container string, rdma map[int][]string) []PreflightFinding {
+	pids := make([]int, 0, len(rdma))
+	for pid := range rdma {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	fs := make([]PreflightFinding, 0, len(pids))
+	for _, pid := range pids {
+		comm, _ := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "comm"))
+		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "rdma",
+			Detail: fmt.Sprintf("process %d (%s) holds RDMA devices %s: a checkpoint cannot save RDMA state (checkpoint-restore/criu#267); the workload has to release them before it is captured",
+				pid, strings.TrimSpace(string(comm)), strings.Join(rdma[pid], ", "))})
+	}
+	return fs
 }
 
 // ghostFile is a deleted file a container's processes hold.
