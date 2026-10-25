@@ -58,6 +58,11 @@ type pidNSCapture struct {
 	// the new pod (kubectl logs) instead of a pipe nobody reads.
 	StdoutPipe uint64 `json:"stdoutPipe,omitempty"`
 	StderrPipe uint64 `json:"stderrPipe,omitempty"`
+	// Subtree marks the dump of a container that shares its pod's pid
+	// namespace: its own process tree, rooted at RootNSPID (its pid in
+	// that namespace), without the namespace (pidns_subtree.go).
+	Subtree   bool `json:"subtree,omitempty"`
+	RootNSPID int  `json:"rootNSPID,omitempty"`
 }
 
 // pipeInode returns the inode of pid's fd when it is a pipe, else 0.
@@ -415,13 +420,15 @@ func pathUnder(p, dir string) bool {
 	return dir == "/" || p == dir || strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/")
 }
 
-// pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
-// agent's namespaces against the container's host pid.
-func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool, ghostLimit int64) []string {
+// pidNSDumpArgs is the criu dump argv, run from the agent's filesystem:
+// target is the tree's root as CRIU sees it (the container's host pid, or
+// for a subtree its pid in the pod's pid namespace), root the container's
+// root through the node's /proc.
+func pidNSDumpArgs(target int, root, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool, ghostLimit int64) []string {
 	args := []string{
 		"dump",
-		"-t", strconv.Itoa(hostPID),
-		"--root", filepath.Join(procBase, strconv.Itoa(hostPID), "root"),
+		"-t", strconv.Itoa(target),
+		"--root", root,
 		"-D", imgsDir,
 		"-o", "dump.log", "-v4",
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
@@ -710,7 +717,22 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// The source's stdout and stderr, read while the tree still holds them:
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
-	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
+	// A container that shares its pod's pid namespace is dumped as its own
+	// process tree, from inside that namespace (pidns_subtree.go).
+	nsPID, err := nsPidOf(procBase, hostPID)
+	if err != nil {
+		return fmt.Errorf("pid-namespace dump: the container's pid: %w", err)
+	}
+	subtree, target := nsPID != 1, hostPID
+	if subtree {
+		if procBase == "/proc" {
+			// The helper mounts the pod's procfs at /proc: the container's
+			// root must be reachable through the node's, elsewhere.
+			return errors.New("pid-namespace dump: the container shares its pod's pid namespace, and the agent has no node /proc at /host/proc to dump it from")
+		}
+		target = nsPID
+	}
+	args := pidNSDumpArgs(target, filepath.Join(procBase, strconv.Itoa(hostPID), "root"), checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
 		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && criuSupportsDirectImageIO(a.agentCRIUHelp()), a.ghostLimit())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
@@ -769,12 +791,18 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// connections, never the node's. nsenter -n does not fork: a kill
 	// reaches CRIU itself, so the dump runs to its end (runDump).
 	env := []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
-	if out, err := runDump(ctx, pidNSDumpDeadline, env, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...); err != nil {
+	var out []byte
+	if subtree {
+		out, err = a.runSubtreeDump(ctx, procBase, hostPID, env, args, log)
+	} else {
+		out, err = runDump(ctx, pidNSDumpDeadline, env, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...)
+	}
+	if err != nil {
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
 	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners,
-		StdoutPipe: stdout, StderrPipe: stderr})
+		StdoutPipe: stdout, StderrPipe: stderr, Subtree: subtree, RootNSPID: rootNSPIDOf(subtree, nsPID)})
 }
 
 // pidNSDumpDeadline bounds a pid-namespace dump; CRIU's own --timeout

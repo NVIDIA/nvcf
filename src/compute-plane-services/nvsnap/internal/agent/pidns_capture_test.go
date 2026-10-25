@@ -95,7 +95,7 @@ func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
 }
 
 func TestPIDNSArgs(t *testing.T) {
-	dump := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
+	dump := strings.Join(pidNSDumpArgs(4242, "/proc/4242/root", "/ck/x", "/criu-bundle/plugins", 4026538391,
 		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, false, defaultGhostLimit), " ")
 	if !strings.Contains(dump, "--skip-mnt /dev/nvidia0") {
 		t.Errorf("GPU-identity mount not skipped: %s", dump)
@@ -293,12 +293,12 @@ func TestListeningUnixSockets_OnlyTheTreesOwn(t *testing.T) {
 // A tree without GPU devices is dumped without the CUDA plugin, which would
 // run cuda-checkpoint for nothing before criu freezes it.
 func TestDumpArgsNoCUDAPluginWithoutGPUs(t *testing.T) {
-	pidns := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
+	pidns := strings.Join(pidNSDumpArgs(4242, "/proc/4242/root", "/ck/x", "/criu-bundle/plugins", 4026538391,
 		[]string{"/etc/hosts"}, nil, nil, dumpLeaveRunning, false, false, defaultGhostLimit), " ")
 	if strings.Contains(pidns, "--libdir") {
 		t.Errorf("pid-namespace dump of a CPU-only tree loads the CUDA plugin: %s", pidns)
 	}
-	gpu := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
+	gpu := strings.Join(pidNSDumpArgs(4242, "/proc/4242/root", "/ck/x", "/criu-bundle/plugins", 4026538391,
 		[]string{"/etc/hosts"}, nil, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, false, false, defaultGhostLimit), " ")
 	if !strings.Contains(gpu, "--libdir /criu-bundle/plugins") {
 		t.Errorf("pid-namespace dump of a GPU tree without gpushare lacks the CUDA plugin: %s", gpu)

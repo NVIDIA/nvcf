@@ -277,22 +277,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 
 	// 4. Dump target: the container's init, so CRIU dumps the whole pid
 	// namespace and the restore recreates it fresh, every pid free by
-	// construction. CRIU runs from the agent's own filesystem, never inside
-	// the workload's (pidns_capture.go,
+	// construction; or, in a pod that shares one pid namespace, the
+	// container's own process tree (pidns_subtree.go). CRIU runs from the
+	// agent's own filesystem, never inside the workload's (pidns_capture.go,
 	// docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md).
 	targetHostPID := hostPID
 	nsPID, err := nsPidOf(procBase, targetHostPID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
-	if nsPID != 1 {
-		return nil, fmt.Errorf("criu-v2: the container's process %d is pid %d in its namespace, not its init: the container does not have its own pid namespace", targetHostPID, nsPID)
-	}
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
 		"nsPID":         nsPID,
 		"externals":     len(externals),
-	}).Info("criu-v2: dumping the container's pid namespace")
+	}).Info("criu-v2: dumping the container")
 
 	// gpushare: when the workload runs under libnvsnap_gpushare.so, its GPU
 	// state is saved by nvsnap-gpu-suspend before the dump and CRIU dumps the

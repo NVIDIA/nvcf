@@ -139,8 +139,10 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// races that window and rejects a placeholder that was about to be fine.
 	// A checkpoint that carries its pid namespace is restored into a nested
 	// one, where every pid is free (pidns_capture.go).
-	// Every capture dumps the container's pid namespace (pidns_capture.go),
-	// restored nested in the placeholder's, where every pid is free. A
+	// Every capture dumps the container's pid namespace, restored nested
+	// in the placeholder's, where every pid is free (pidns_capture.go), or
+	// in a pod that shares one pid namespace the container's process tree,
+	// restored at its pids in the placeholder's (pidns_subtree.go). A
 	// checkpoint taken inside the container's namespaces, before that, is
 	// not restored: a new capture replaces it.
 	pidns, pidnsCapture, err := readPIDNSMarkerOrFalse(checkpointDir)
@@ -150,8 +152,24 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	if !pidns {
 		return nil, fmt.Errorf("%w: it was captured inside the container's namespaces, which this agent no longer restores; a new capture replaces it", errCheckpointUnavailable)
 	}
-	if len(pidnsCapture.UnixListeners) > 0 && !tools.has(procBase, pidNSRestoreHelperName) {
+	if !tools.has(procBase, pidNSRestoreHelperName) {
 		return nil, fmt.Errorf("pid-namespace restore: %s is not in the placeholder's node bundle (version %s)", pidNSRestoreHelperName, tools.version)
+	}
+	if pidnsCapture.Subtree {
+		// The tree comes back at its dumped pids in the placeholder's own
+		// pid namespace, shared with the pod's other containers
+		// (pidns_subtree.go): wait until no placeholder task holds one.
+		need, nerr := dumpedTaskIDs(checkpointDir)
+		if nerr != nil {
+			// Without the dumped ids every low pid counts as a clash.
+			log.WithError(nerr).Warn("criu-v2: cannot read the dumped task ids; any placeholder pid below the reserved range blocks the restore")
+			need = nil
+		}
+		maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, need, log)
+		if perr != nil {
+			return nil, perr
+		}
+		log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
 	}
 	// CRIU's log and stats, in a directory of the agent's.
 	criuWorkDir := filepath.Join(a.config.CheckpointDir, ".restore-work", strconv.Itoa(hostPID))
@@ -233,7 +251,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	if err != nil {
 		return nil, fmt.Errorf("pid-namespace restore: the agent binary: %w", err)
 	}
-	log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
+	if pidnsCapture.Subtree {
+		log.WithFields(logrus.Fields{"externalMounts": len(pidnsCapture.Mounts), "rootNSPID": pidnsCapture.RootNSPID}).
+			Info("criu-v2: restoring the container's process tree into the pod's shared pid namespace")
+	} else {
+		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
+	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -312,10 +335,11 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
 		resumePID := hostPID
 		{
-			// The restored processes live in the nested pid namespace; their
-			// saved pids are pids there. They resume on the placeholder's
-			// GPUs, whose entries the dump left out.
-			p, err := nestedInitHostPID(procBase, hostPID)
+			// The restored processes live in the nested pid namespace (or,
+			// for a subtree, the placeholder's own); their saved pids are
+			// pids there. They resume on the placeholder's GPUs, whose
+			// entries the dump left out.
+			p, err := restoredRootHostPID(procBase, hostPID, pidnsCapture)
 			if err != nil {
 				gsSpan.End()
 				return fmt.Errorf("gpushare resume: %w", err)
