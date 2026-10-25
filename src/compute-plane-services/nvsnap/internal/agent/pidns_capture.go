@@ -467,7 +467,11 @@ func pidNSDumpArgs(target int, root, imgsDir, pluginDir string, netNSInode uint6
 
 // PIDNSRestoreRoot is where the restore helper mounts the placeholder's
 // root in its private copy of the agent's mount namespace: CRIU's --root.
-const PIDNSRestoreRoot = "/mnt/nvsnap-restore/root"
+const PIDNSRestoreRoot = PIDNSRestoreMountBase + "/nvsnap-restore/root"
+
+// PIDNSRestoreMountBase is the directory the restore helper covers with a
+// tmpfs of its own to hold PIDNSRestoreRoot: one the agent's image has.
+const PIDNSRestoreMountBase = "/mnt"
 
 // PIDNSFDsEnv tells the restore helper which inherited descriptors are
 // the placeholder's root, its network namespace, the listening sockets and

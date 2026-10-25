@@ -44,11 +44,14 @@ func pidNSRestoreExec(args []string) error {
 	if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return fmt.Errorf("mount procfs: %w", err)
 	}
-	base := filepath.Dir(agent.PIDNSRestoreRoot)
+	// A tmpfs over /mnt, in this private mount namespace only, holds the
+	// mountpoint: the agent's own filesystem is not written (and has no
+	// such directory).
+	base := agent.PIDNSRestoreMountBase
 	if err := unix.Mount("nvsnap-restore", base, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0700"); err != nil {
 		return fmt.Errorf("mount %s: %w", base, err)
 	}
-	if err := os.Mkdir(agent.PIDNSRestoreRoot, 0o700); err != nil {
+	if err := os.MkdirAll(agent.PIDNSRestoreRoot, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", agent.PIDNSRestoreRoot, err)
 	}
 	// The placeholder's root arrives as a mount tree cloned inside its own
