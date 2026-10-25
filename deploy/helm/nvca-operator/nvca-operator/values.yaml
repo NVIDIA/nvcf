@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.160.0-nv-0.2.8
+  imageTag: 0.160.0-nv-0.2.9
   resources:
     limits:
       cpu: 1000m
@@ -307,7 +307,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.160.0-nv-0.2.8"
+    imageTag: "0.160.0-nv-0.2.9"
   ## @param agent.byooFluentBit.imageRepository Optional BYOO Fluent Bit image repository, including the registry. If unset, NVCA uses its built-in upstream Fluent Bit image.
   ## @param agent.byooFluentBit.imageTag BYOO Fluent Bit image tag. Required when agent.byooFluentBit.imageRepository is set.
   byooFluentBit:
@@ -429,7 +429,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.160.0-nv-0.2.8
+    imageTag: 0.160.0-nv-0.2.9
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -455,7 +455,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.160.0-nv-0.2.8
+    imageTag: 0.160.0-nv-0.2.9
   ## @param selfManaged.icmsServiceURL (REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.
   icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
