@@ -141,7 +141,7 @@ func waitState(t *testing.T, pid int, want string) {
 // left to their resume, and a listed task that is not there fails it.
 func TestContinueRestoredTasks(t *testing.T) {
 	resume, gpu := stoppedChild(t), stoppedChild(t)
-	n, err := continueRestoredTasks("/proc", os.Getpid(), []int{resume, gpu}, []int{gpu})
+	n, err := continueRestoredTasks("/proc", os.Getpid(), os.Getpid(), []int{resume, gpu}, []int{gpu})
 	if err != nil || n != 1 {
 		t.Fatalf("resumed %d, %v", n, err)
 	}
@@ -149,7 +149,7 @@ func TestContinueRestoredTasks(t *testing.T) {
 	if s := taskState(gpu); s != "T" {
 		t.Errorf("the GPU process was resumed: state %q", s)
 	}
-	if _, err := continueRestoredTasks("/proc", os.Getpid(), []int{1 << 22}, nil); err == nil {
+	if _, err := continueRestoredTasks("/proc", os.Getpid(), os.Getpid(), []int{1 << 22}, nil); err == nil {
 		t.Error("a missing task did not fail the resume")
 	}
 }
@@ -203,5 +203,39 @@ func TestGPUShareResumeArgsClockAt(t *testing.T) {
 	got := strings.Join(gpushareResumeArgs("", "", true, 1234, []int{7}), " ")
 	if got != "--hold-gate --clock-at 1234 resume 7" {
 		t.Errorf("args %q", got)
+	}
+}
+
+// CRIU ran in the placeholder's pid namespace and wrote the pids it saw
+// there; a tree restored in a nested namespace has other pids in its own.
+// The tasks are found by their pid where CRIU ran, the GPU processes left
+// out by their pid in their own namespace.
+func TestRestoredTasksToResume_NestedNamespace(t *testing.T) {
+	base := fakeProc(t, map[int]procEntry{
+		5000: {ns: "pid:[111]", nspid: "5000 1"},          // the placeholder (CRIU ran here)
+		6001: {ns: "pid:[222]", nspid: "6001 100052 1"},   // restored init
+		6002: {ns: "pid:[222]", nspid: "6002 100053 447"}, // a GPU process
+		6003: {ns: "pid:[222]", nspid: "6003 100054 448"}, // another task
+		7001: {ns: "pid:[333]", nspid: "7001 100052 1"},   // another pod's tree
+	})
+	got, err := restoredTasksToResume(base, 6001, 5000, []int{100052, 100053, 100054}, []int{447})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[6001] != 100052 || got[6003] != 100054 {
+		t.Fatalf("tasks to resume %v, want 6001 and 6003", got)
+	}
+	// A tree restored in the placeholder's own namespace (a subtree): the
+	// same pids on both sides.
+	shared := fakeProc(t, map[int]procEntry{
+		5000: {ns: "pid:[111]", nspid: "5000 1"},
+		5064: {ns: "pid:[111]", nspid: "5064 64"},
+		5065: {ns: "pid:[111]", nspid: "5065 65"},
+	})
+	if got, err := restoredTasksToResume(shared, 5064, 5000, []int{64, 65}, []int{65}); err != nil || len(got) != 1 || got[5064] != 64 {
+		t.Fatalf("subtree tasks %v, %v", got, err)
+	}
+	if _, err := restoredTasksToResume(base, 6001, 5000, []int{100099}, nil); err == nil {
+		t.Fatal("a missing task did not fail")
 	}
 }

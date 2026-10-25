@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -167,27 +168,56 @@ func parseTimensResumePIDs(b []byte) ([]int, error) {
 	return pids, nil
 }
 
-// continueRestoredTasks resumes the tasks pids name: pids in the pid
-// namespace of nsRef, the one CRIU restored them in, leaving out skip (the
+// continueRestoredTasks resumes the tasks pids name, leaving out skip (the
 // GPU processes, which their resume thawed). It returns how many it
-// resumed, and fails when a task of the list is not there.
-func continueRestoredTasks(procBase string, nsRef int, pids, skip []int) (int, error) {
-	ns, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(nsRef), "ns", "pid"))
-	if err != nil {
-		return 0, fmt.Errorf("pid namespace of %d: %w", nsRef, err)
-	}
-	want := map[int]bool{}
-	for _, p := range pids {
-		want[p] = true
-	}
-	for _, p := range skip {
-		delete(want, p)
-	}
-	ents, err := os.ReadDir(procBase)
+// resumed, and fails when a task of the list is not there
+// (restoredTasksToResume).
+func continueRestoredTasks(procBase string, nsRef, criuNSRef int, pids, skip []int) (int, error) {
+	tasks, err := restoredTasksToResume(procBase, nsRef, criuNSRef, pids, skip)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
+	for host, criuPID := range tasks {
+		if kerr := syscall.Kill(host, syscall.SIGCONT); kerr != nil && kerr != syscall.ESRCH {
+			return n, fmt.Errorf("resume task %d (pid %d where CRIU ran): %w", host, criuPID, kerr)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// restoredTasksToResume returns the host pids of the tasks to resume, each
+// with its pid in pids. The restored tasks live in the pid namespace of
+// nsRef (the restored tree's); CRIU wrote their pids as it saw them, in the
+// pid namespace it ran in, that of criuNSRef (the placeholder's): the same
+// one for a tree restored in the placeholder's namespace, its parent for a
+// tree restored in a nested one. skip names tasks by their pid in their
+// own namespace (the GPU processes' saved pids). It fails when a task of
+// pids is not there.
+func restoredTasksToResume(procBase string, nsRef, criuNSRef int, pids, skip []int) (map[int]int, error) {
+	ns, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(nsRef), "ns", "pid"))
+	if err != nil {
+		return nil, fmt.Errorf("pid namespace of %d: %w", nsRef, err)
+	}
+	criuIDs, err := nsPIDs(procBase, criuNSRef)
+	if err != nil {
+		return nil, fmt.Errorf("pid namespace CRIU ran in (of %d): %w", criuNSRef, err)
+	}
+	level := len(criuIDs) - 1 // index in NSpid of a pid where CRIU ran
+	want := map[int]bool{}
+	for _, p := range pids {
+		want[p] = true
+	}
+	skipped := map[int]bool{}
+	for _, p := range skip {
+		skipped[p] = true
+	}
+	ents, err := os.ReadDir(procBase)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int]int{}
 	for _, e := range ents {
 		host, aerr := strconv.Atoi(e.Name())
 		if aerr != nil || len(want) == 0 {
@@ -197,23 +227,23 @@ func continueRestoredTasks(procBase string, nsRef int, pids, skip []int) (int, e
 			continue
 		}
 		ids, nerr := nsPIDs(procBase, host)
-		if nerr != nil || len(ids) == 0 || !want[ids[len(ids)-1]] {
+		if nerr != nil || len(ids) <= level || !want[ids[level]] {
 			continue
 		}
-		if kerr := syscall.Kill(host, syscall.SIGCONT); kerr != nil && kerr != syscall.ESRCH {
-			return n, fmt.Errorf("resume task %d (pid %d in its namespace): %w", host, ids[len(ids)-1], kerr)
+		delete(want, ids[level])
+		if !skipped[ids[len(ids)-1]] {
+			out[host] = ids[level]
 		}
-		delete(want, ids[len(ids)-1])
-		n++
 	}
 	if len(want) > 0 {
 		missing := make([]string, 0, len(want))
 		for p := range want {
 			missing = append(missing, strconv.Itoa(p))
 		}
-		return n, fmt.Errorf("restored tasks %s not found to resume", strings.Join(missing, ","))
+		sort.Strings(missing)
+		return out, fmt.Errorf("restored tasks %s not found to resume", strings.Join(missing, ","))
 	}
-	return n, nil
+	return out, nil
 }
 
 func clockThroughGPUSupported(criuHelp, toolUsage string) bool {

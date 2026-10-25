@@ -366,7 +366,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		if err != nil {
 			return fmt.Errorf("criu-v2: read the tasks to resume: %w", err)
 		}
-		n, err := continueRestoredTasks(procBase, toolPID, pids, gs.PIDs)
+		n, err := continueRestoredTasks(procBase, toolPID, hostPID, pids, gs.PIDs)
 		if err != nil {
 			return fmt.Errorf("criu-v2: resume the restored tasks: %w", err)
 		}
