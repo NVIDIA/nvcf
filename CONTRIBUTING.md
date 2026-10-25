@@ -65,7 +65,10 @@ Name your branch using your username and a prefix that reflects the type of chan
 - `yourname/fix/description`: bug fix (for example, `jsmith/fix/router-timeout`)
 - `yourname/docs/description`: documentation change (for example, `jsmith/docs/update-quickstart`)
 
-Branch model: `main` is the active development branch. All PRs target `main`, except hotfixes. Stable releases are cut from `release-x.y` branches.
+Branch model: `main` is the active development branch. Target maintenance fixes
+at the owning component train when needed. Services and charts can release from
+main; stacks release from their maintenance branches. Follow the
+[release workflow](docs/dev/github-release-process.md) for branch names and gates.
 
 ### Step 3: Make Your Changes
 
