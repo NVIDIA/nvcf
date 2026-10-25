@@ -10,6 +10,8 @@ Container image that runs Apache Cassandra for NVCF, built on the official
 - Base: `cassandra:5.0.9` (official Apache Cassandra, Docker Hub). Bump the
   Cassandra version by editing the `FROM cassandra:<version>` line; that tag is
   the single source of truth, there is no version build-arg.
+- gosu: rebuilt from pinned source and `scripts/gosu.go.mod` / `gosu.go.sum`.
+  Regenerate both locks together when updating its modules.
 - yq: fetched in a pinned `alpine:3.21` build stage and checksum-verified. The
   chart's config init container uses it to deep-merge cassandra.yaml overrides.
 - Exporter agent: not redistributed here. `files/` ships only `.gitkeep`, and the
@@ -39,6 +41,9 @@ infra/cassandra/scripts/fetch-verified-test.sh
 
 # repository-base override and lock handling unit test (local server, no network)
 infra/cassandra/scripts/fetch-java-libraries-test.sh
+
+# runtime image smoke (Docker and JDK 11+ on the host)
+sh infra/cassandra/scripts/test-image.sh nvcf-cassandra:dev
 
 # exporter dependency unit test (downloads checksum-pinned Netty jars)
 infra/cassandra/scripts/repack-exporter-netty-test.sh

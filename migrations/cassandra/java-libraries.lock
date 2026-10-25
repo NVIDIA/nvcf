@@ -1,9 +1,9 @@
 # SHA-256 and Maven Central URL for Cassandra migrations dependency overlays.
 # Jackson annotations follows the upstream family's major.minor versioning.
 53ca085f4a150f703f49e1aabd935bd03b43e1ea3d55d135438292af22cef56b  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar
-8c5623b98f32d5f7e1287ff61ed50e08ab7b11381e991fff89327faabba42261  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.21.7/jackson-core-2.21.7.jar
-1290c2795e93e8a6861a6c4d9ff0d844d32f5ea178362cb2721edf5561e828b1  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.21.7/jackson-databind-2.21.7.jar
-5989b937f0aa5b6407e7a061077c9bfcac0590dc0a32e54b2fac6a3e2d49e812  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.7/jackson-datatype-jsr310-2.21.7.jar
+604ef7765013daf5cde192e40bc4c8412c4ca93f4aaf7bf8e9a62fad1e1026bb  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.21.8/jackson-core-2.21.8.jar
+ad77f2285717e2f34c319d988b7c85783a47d0b33f33a501d1fcbf196e61bbaa  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.21.8/jackson-databind-2.21.8.jar
+63a0854504aa90ed8f34f891aaa5259f9bd622bac115323559a38abdc1e81632  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.8/jackson-datatype-jsr310-2.21.8.jar
 3c21d10662148be5e1dc37adea6866faf0e43096a2174c2ef12a4553b45c3af2  https://repo.maven.apache.org/maven2/io/netty/netty-all/4.1.137.Final/netty-all-4.1.137.Final.jar
 f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929  https://repo.maven.apache.org/maven2/io/netty/netty-buffer/4.1.137.Final/netty-buffer-4.1.137.Final.jar
 9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798  https://repo.maven.apache.org/maven2/io/netty/netty-codec/4.1.137.Final/netty-codec-4.1.137.Final.jar
@@ -20,3 +20,5 @@ b2eb04dbb6ec6cc8fc00aed37bb86b7aed1ccb87722eda44c90652a7d41fbdfe  https://repo.m
 185db6053e0e9573d36fa4eb6567b26139afaa4daa7bf5a068e661568304542b  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-epoll/4.1.137.Final/netty-transport-native-epoll-4.1.137.Final-linux-x86_64.jar
 8056e7637f9948f953314894cf995ab664711b66c73c4cd5b593ae84f0b1048c  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-unix-common/4.1.137.Final/netty-transport-native-unix-common-4.1.137.Final.jar
 58c8e0b813960d2a248e050c353baea73139b48a2ffc55382d42c69707e17325  https://repo.maven.apache.org/maven2/at/yawk/lz4/lz4-java/1.11.4/lz4-java-1.11.4.jar
+a855a0fc97b1d06f4efb1c3bba5ebd0eb508d8b58e68e89e4bbc23a85135c883  https://repo.maven.apache.org/maven2/ch/qos/logback/logback-core/1.5.38/logback-core-1.5.38.jar
+afb439c61fa287c9e1925523b13baab03617e724406a389d48b61c2c3e46b700  https://repo.maven.apache.org/maven2/ch/qos/logback/logback-classic/1.5.38/logback-classic-1.5.38.jar

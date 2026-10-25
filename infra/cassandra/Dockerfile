@@ -1,20 +1,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-ARG GOSU_GO_IMAGE=golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728
+ARG GOSU_GO_IMAGE=golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4
 
 FROM --platform=$BUILDPLATFORM ${GOSU_GO_IMAGE} AS gosu-builder
 
 ARG TARGETARCH
 
+COPY scripts/gosu.go.mod /tmp/gosu.go.mod
+COPY scripts/gosu.go.sum /tmp/gosu.go.sum
+
 # Rebuild the same gosu 1.19 source used by the Cassandra base with a current
 # Go toolchain. The immutable source archive is checksum-pinned because the
 # upstream release binaries were built with an older Go standard library.
+# The checked-in module overlay also updates x/sys without changing gosu.
 ADD --checksum=sha256:33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b \
     https://github.com/tianon/gosu/archive/6456aaa0f3c854d199d0f037f068eb97515b7513.tar.gz \
     /tmp/gosu.tar.gz
 RUN mkdir -p /src/gosu /out && \
     tar -xzf /tmp/gosu.tar.gz --strip-components=1 -C /src/gosu && \
+    cp /tmp/gosu.go.mod /src/gosu/go.mod && \
+    cp /tmp/gosu.go.sum /src/gosu/go.sum && \
     cd /src/gosu && \
     CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" GOTOOLCHAIN=local \
       go build -mod=readonly -trimpath -buildvcs=false \
@@ -39,8 +45,8 @@ RUN apk add --no-cache curl && \
     printf '%s  /tmp/yq\n' "${YQ_SHA256}" | sha256sum -c - && \
     chmod +x /tmp/yq
 
-# Cassandra 5.0.9 is still the latest supported 5.0 release, but its bundled
-# Jackson and Netty versions can lag security-only patch releases. Download a
+# Cassandra can bundle Java libraries that lag security-only patch releases.
+# Download a
 # checksum-pinned replacement set without adding build tools to the final image.
 # The lock pins public Maven Central URLs. A release build can route the same
 # artifact paths through a caching repository manager with
@@ -77,17 +83,25 @@ RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
     MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
     repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
 
-FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
+FROM cassandra:5.0.9@sha256:3ea9333712c5692f3fe91d6c4dcc262df9e36338c4fdd1bc00a5e53f1137a1a0
 
 COPY --from=gosu-builder --chmod=0555 /out/gosu /usr/local/bin/gosu
 
-# Refresh the OpenSSL runtime packages independently of the upstream image
+# Refresh vulnerable runtime packages independently of the upstream image
 # rebuild cadence. Fail the build if the Debian repository cannot provide the
 # first release containing the required fixes.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends --only-upgrade \
       libssl3t64 \
-      openssl-provider-legacy && \
+      openssl-provider-legacy \
+      perl-base \
+      python3.13 python3.13-minimal libpython3.13-minimal libpython3.13-stdlib \
+      libpcre2-8-0 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge 5.40.1-6+deb13u1 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge 10.46-1~deb13u2 && \
+    for package in python3.13 python3.13-minimal libpython3.13-minimal libpython3.13-stdlib; do \
+      dpkg --compare-versions "$(dpkg-query -W -f='${Version}' "$package")" ge 3.13.5-2+deb13u5 || exit 1; \
+    done && \
     dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3t64)" ge 3.5.7-1~deb13u2 && \
     dpkg --compare-versions "$(dpkg-query -W -f='${Version}' openssl-provider-legacy)" ge 3.5.7-1~deb13u2 && \
     rm -rf /var/lib/apt/lists/* && \
@@ -97,7 +111,10 @@ RUN apt-get update && \
       /opt/cassandra/lib/jackson-annotations-*.jar \
       /opt/cassandra/lib/jackson-core-*.jar \
       /opt/cassandra/lib/jackson-databind-*.jar \
-      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar && \
+      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar \
+      /opt/cassandra/lib/logback-core-*.jar \
+      /opt/cassandra/lib/logback-classic-*.jar \
+      /opt/cassandra/lib/lz4-java-*.jar && \
     find /opt/cassandra/lib -maxdepth 1 -type f -name 'netty-*-4.1.130.Final*.jar' -delete
 
 # Metrics exporter agent. The OSS snapshot does not redistribute the jar;
