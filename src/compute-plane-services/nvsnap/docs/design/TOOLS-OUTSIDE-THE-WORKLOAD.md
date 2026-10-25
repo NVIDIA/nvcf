@@ -73,7 +73,7 @@ helper attaches it with `move_mount`.
 
 - The in-namespace dump path goes. It is the default today; the pid-namespace path has been validated on single-pod
   and two-pod captures, not yet on every workload in the regression set.
-- The GPU tool needs a check from WrapCore that it works with only `CAP_SYS_PTRACE` as the workload's user (the driver
+- The GPU tool needs a check from the GPU tool owners that it works with only `CAP_SYS_PTRACE` as the workload's user (the driver
   checkpoint API on processes of the same user, the control socket's peer check).
 - Restore from the agent's side needs CRIU to restore into the placeholder's mount namespace with the binary outside
   it: CRIU supports `--root`; the pid-namespace restore helper changes accordingly.

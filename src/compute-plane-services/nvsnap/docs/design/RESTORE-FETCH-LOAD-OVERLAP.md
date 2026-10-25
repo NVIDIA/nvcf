@@ -107,7 +107,7 @@ estimate) when it has none.
   `fetch-done` after the last file; `fetch-failed` on an error and on the timeout.
 - Agent: CRIU starts after part 1, not after the whole fetch; a fetch failure during the load fails the
   restore with the fetch's error; a local restore passes no `--wait-for-store`.
-- gpushare (WrapCore): a load against a store filled slowly by a writer gives the same GPU memory as a load
+- gpushare (the GPU tool owners): a load against a store filled slowly by a writer gives the same GPU memory as a load
   from a full store; it fails at once on `fetch-failed`; it fails at `fetch-done` with a chunk missing.
 - On the cluster: a 2-node Kimi-K3 scale-out to nodes without the checkpoint; the restored instance serves
   and answers as before; fetch start to load done drops from about 113 s toward 70 s.

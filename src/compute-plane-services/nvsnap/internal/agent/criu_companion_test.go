@@ -276,7 +276,7 @@ func TestParseCRIUGroup_Containers(t *testing.T) {
 }
 
 // A companion placeholder is released as soon as a GPU pod of its rollout
-// was admitted cold: the instance does not restore (seen on ct1: the
+// was admitted cold: the instance does not restore (seen on a test cluster: the
 // ranks' model volume was still downloading, and the companions waited the
 // full placeholder wait). A rank a group restore took, restored or not,
 // never releases it, nor do pods from before the rollout, pods being

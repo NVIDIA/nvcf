@@ -90,7 +90,7 @@ func TestMatchCompanions_LeavesOutNVCAPods(t *testing.T) {
 	}
 }
 
-// The pods of a Dynamo instance at its capture on 2026-10-18 (ct1-e2e39):
+// The pods of a Dynamo instance at its capture on 2026-10-18 (a test cluster):
 // the workers connect to etcd and NATS through their Services; the
 // frontend connects to those Services too, and to the workers; NVCA's
 // request proxy connects to the frontend only.

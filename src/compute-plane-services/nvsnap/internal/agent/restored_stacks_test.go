@@ -141,7 +141,7 @@ func pidNS(t *testing.T, root string, pid int, id string) {
 // The restored processes are the placeholder's descendants and every
 // process in its pid namespace: in a pod sharing one pid namespace, the
 // restored engine hangs off the pod's pause process, not the placeholder
-// (seen on ct1, Kimi-K3 Dynamo, 2026-10-23).
+// (seen with Kimi-K3 on Dynamo, 2026-10-23).
 func TestRestoredProcesses(t *testing.T) {
 	root := fakeProcTree(t, map[int][2]string{
 		50:  {"1", "pause"},
