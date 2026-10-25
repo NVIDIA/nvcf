@@ -161,3 +161,13 @@ func undeclaredMount(pod *corev1.Pod) string {
 	}
 	return ""
 }
+
+// podDeclaresVolume reports whether the pod declares a volume named name.
+func podDeclaresVolume(pod *corev1.Pod, name string) bool {
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == name {
+			return true
+		}
+	}
+	return false
+}

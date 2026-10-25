@@ -435,3 +435,39 @@ func TestDebugEnv_ContainerWithoutEnv(t *testing.T) {
 		t.Errorf("env lost: %v", engine.Env)
 	}
 }
+
+// A gpushare container carries the restore's work volume, empty: a tree
+// restored from it keeps that mountpoint, where its placeholder binds its
+// own work volume, and the group restore's GPU resume and the restored
+// processes meet there. A pod that brings a volume of that name, or a
+// mount at that path, is left as it is.
+func TestGPUSharePatches_RestoreWorkMount(t *testing.T) {
+	m := &Mutator{HostBundleRoot: "/bundle", GPUShareHostRoot: "/ckpt/gpushare-pods"}
+	pod := gpushareTestPod(true, nil)
+	got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
+	work := 0
+	for _, v := range got.Spec.Volumes {
+		if v.Name == restoreWorkVolume {
+			work++
+			if v.EmptyDir == nil {
+				t.Errorf("restore work volume %+v, want an emptyDir", v)
+			}
+		}
+	}
+	if work != 1 {
+		t.Fatalf("%d restore work volumes, want 1", work)
+	}
+	if wm := mountAt(got.Spec.Containers[1], RestoreWorkMountPath); wm == nil || wm.Name != restoreWorkVolume || wm.ReadOnly {
+		t.Errorf("engine work mount %+v, want %s writable at %s", wm, restoreWorkVolume, RestoreWorkMountPath)
+	}
+	if wm := mountAt(got.Spec.Containers[0], RestoreWorkMountPath); wm != nil {
+		t.Errorf("the container without GPUs got the work mount: %+v", wm)
+	}
+
+	own := gpushareTestPod(true, nil)
+	own.Spec.Volumes = append(own.Spec.Volumes, corev1.Volume{Name: restoreWorkVolume})
+	got = applyPatches(t, own, m.gpusharePatches(context.Background(), own))
+	if wm := mountAt(got.Spec.Containers[1], RestoreWorkMountPath); wm != nil {
+		t.Errorf("work mount added beside the pod's own %s volume: %+v", restoreWorkVolume, wm)
+	}
+}
