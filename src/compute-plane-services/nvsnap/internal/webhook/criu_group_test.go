@@ -163,7 +163,7 @@ func TestCRIUGroupRestore_PlaceholderGetsOnlyTheLanding(t *testing.T) {
 	m.CRIUGroups = func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
 		return CRIUGroup{Key: "key-of/" + ns + "/" + uri, Checkpoints: []string{"r0__1"}, GPUShare: true}, true
 	}
-	completeModelPV(t, kc, ngcFunctionKey)
+	completeModelPV(t, kc, scoped("sr-fn", ngcFunctionKey))
 	pod := ngcFunctionPod()
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestCRIUGroupRestore_PlaceholderGetsOnlyTheLanding(t *testing.T) {
 	}
 	landing := false
 	for _, v := range got.Spec.Volumes {
-		if v.Name == "ngc-models" && v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == modelvolume.ReadOnlyClaimName(ngcFunctionKey) {
+		if v.Name == "ngc-models" && v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == modelvolume.ReadOnlyClaimName(scoped("sr-fn", ngcFunctionKey)) {
 			landing = true
 		}
 		if v.Name == cacheSeedVolumeName || v.Name == cacheDirVolumeName {

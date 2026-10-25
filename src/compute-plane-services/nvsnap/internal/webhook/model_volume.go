@@ -175,7 +175,13 @@ func (m *Mutator) placeholderModelPatches(ctx context.Context, pod *corev1.Pod) 
 	if !ok || res.Identity.Scheme == "path" || !res.Landing.Substitutable() {
 		return nil, nil
 	}
-	uri := res.ShareKey()
+	// The tenant's own volume, as at admission (modelVolumePatches): the
+	// captured pod read that one.
+	scope, err := m.ModelVolume.Scope(ctx, pod.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	uri := modelvolume.ScopedURI(scope, res.ShareKey())
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri, "source": res.Source})
 	st, err := m.ModelVolume.Lookup(ctx, uri)
 	if err != nil {
