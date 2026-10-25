@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -271,5 +272,43 @@ func TestParseCRIUGroup_Containers(t *testing.T) {
 	delete(d, "container.1")
 	if g, ok := parseCRIUGroup("k", d); !ok || g.Containers[0] != "" || g.Containers[1] != "" {
 		t.Errorf("old record: %+v, %v", g.Containers, ok)
+	}
+}
+
+// A companion placeholder is released as soon as a GPU pod of its rollout
+// was admitted cold: the instance does not restore (seen on ct1: the
+// ranks' model volume was still downloading, and the companions waited the
+// full placeholder wait). A rank a group restore took, restored or not,
+// never releases it, nor do pods from before the rollout, pods being
+// deleted, or pods without GPUs.
+func TestRankAdmittedCold(t *testing.T) {
+	at := time.Date(2026, 10, 24, 22, 15, 0, 0, time.UTC)
+	companion := cpuPod("etcd-x", "10.0.0.9")
+	companion.CreationTimestamp = metav1.NewTime(at)
+	pod := func(p corev1.Pod, created time.Time, ann map[string]string) corev1.Pod {
+		p.CreationTimestamp = metav1.NewTime(created)
+		p.Annotations = ann
+		return p
+	}
+	group := map[string]string{webhook.CRIUGroupAnnotation: "k"}
+	restored := map[string]string{webhook.CRIUGroupAnnotation: "k", webhook.CRIURestoredAnnotation: "true"}
+	deleting := pod(gpuPod("rank-gone", "10.0.0.5"), at, nil)
+	deleting.DeletionTimestamp = &metav1.Time{Time: at}
+	for name, c := range map[string]struct {
+		pods []corev1.Pod
+		want string
+	}{
+		"rank admitted cold":         {[]corev1.Pod{pod(gpuPod("rank-0", "10.0.0.1"), at.Add(time.Second), nil)}, "rank-0"},
+		"rank created just before":   {[]corev1.Pod{pod(gpuPod("rank-0", "10.0.0.1"), at.Add(-30*time.Second), nil)}, "rank-0"},
+		"rank the restore took":      {[]corev1.Pod{pod(gpuPod("rank-0", "10.0.0.1"), at, group)}, ""},
+		"rank restored":              {[]corev1.Pod{pod(gpuPod("rank-0", "10.0.0.1"), at, restored)}, ""},
+		"GPU pod from before":        {[]corev1.Pod{pod(gpuPod("old", "10.0.0.2"), at.Add(-time.Hour), nil)}, ""},
+		"rank being deleted":         {[]corev1.Pod{deleting}, ""},
+		"another companion, no GPUs": {[]corev1.Pod{pod(cpuPod("nats-x", "10.0.0.3"), at, nil)}, ""},
+		"no pods":                    {nil, ""},
+	} {
+		if got := rankAdmittedCold(&companion, c.pods); got != c.want {
+			t.Errorf("%s: %q, want %q", name, got, c.want)
+		}
 	}
 }
