@@ -191,6 +191,16 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 	if len(libMountedAt) < len(gpuContainers) {
 		vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.bundleDir(m.BundleID), Type: &dir}}})
 	}
+	// The restore's work volume, here empty: a restored tree keeps the
+	// mounts it was dumped with, and its placeholder binds its own work
+	// volume at this path into it, where the GPU resume of a group restore
+	// and the restored processes meet in the session directory
+	// (gpushare_fabric.go). A tree dumped without the mount has no such
+	// path.
+	work := !podDeclaresVolume(pod, restoreWorkVolume) && !mountAtPath(pod, RestoreWorkMountPath)
+	if work {
+		vols = append(vols, corev1.Volume{Name: restoreWorkVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	}
 	// The tools a capture runs in these containers (tools_mount.go).
 	toolsVol, toolsMount, tools := m.bundleTools(pod, m.BundleID)
 	if tools {
@@ -209,6 +219,9 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 		}
 		if tools {
 			mounts = append(mounts, toolsMount)
+		}
+		if work {
+			mounts = append(mounts, corev1.VolumeMount{Name: restoreWorkVolume, MountPath: RestoreWorkMountPath})
 		}
 		patches = append(patches, addContainerMounts(i, c, mounts)...)
 		uid := corev1.EnvVar{Name: gpusharePodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}
