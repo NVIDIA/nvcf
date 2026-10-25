@@ -99,7 +99,7 @@ global:
       # build pairs with the operator it is pinning, so supply the whole
       # reference here alongside the repository below.
       sharedStorage:
-        imageTag: "1.0.5"
+        imageTag: "1.0.8"
       nvcaVersion: "3.18.5"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
