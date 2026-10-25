@@ -19,16 +19,15 @@ import (
 
 // pidNSRestoreFiles opens what the restore helper hands the agent's CRIU
 // (cmd/agent pidns-restore-exec), as descriptors from 3 in order: the
-// placeholder's root, its network namespace, the listening unix sockets of
-// the capture (bound in the placeholder's mount namespace by the node
-// bundle's static agent binary), and the placeholder's stdout and stderr
-// when the capture recorded the workload's.
+// placeholder's root (a clone of its mount tree, made in its mount
+// namespace by the node bundle's static agent binary), its network
+// namespace, the listening unix sockets of the capture (bound there by the
+// same binary), and the placeholder's stdout and stderr when the capture
+// recorded the workload's.
 func (a *Agent) pidNSRestoreFiles(ctx context.Context, procBase string, hostPID int, c pidNSCapture, tools bundleTools, log *logrus.Entry) (files []*os.File, fds PIDNSFDs, err error) {
 	defer func() {
 		if err != nil {
-			for _, f := range files {
-				_ = f.Close()
-			}
+			closeFiles(files)
 			files = nil
 		}
 	}()
@@ -41,23 +40,22 @@ func (a *Agent) pidNSRestoreFiles(ctx context.Context, procBase string, hostPID 
 		files = append(files, os.NewFile(uintptr(fd), name))
 		return nil
 	}
-	if oerr := open("root", unix.O_PATH|unix.O_DIRECTORY); oerr != nil {
-		return files, fds, oerr
+	got, perr := placeholderFiles(ctx, hostPID, c.UnixListeners, tools)
+	if perr != nil {
+		return files, fds, perr
 	}
+	files = append(files, got[0])
 	if oerr := open("ns/net", unix.O_RDONLY); oerr != nil {
+		closeFiles(got[1:])
 		return files, fds, oerr
 	}
 	fds.Root, fds.Net = 3, 4
+	for _, l := range got[1:] {
+		fds.Listeners = append(fds.Listeners, 3+len(files))
+		files = append(files, l)
+	}
 	if len(c.UnixListeners) > 0 {
-		ls, lerr := bindPlaceholderListeners(ctx, hostPID, c.UnixListeners, tools)
-		if lerr != nil {
-			return files, fds, lerr
-		}
-		for _, l := range ls {
-			fds.Listeners = append(fds.Listeners, 3+len(files))
-			files = append(files, l)
-		}
-		log.WithField("listeners", len(ls)).Info("criu-v2: bound the capture's listening sockets in the placeholder")
+		log.WithField("listeners", len(c.UnixListeners)).Info("criu-v2: bound the capture's listening sockets in the placeholder")
 	}
 	if c.StdoutPipe != 0 || c.StderrPipe != 0 {
 		for _, name := range []string{"fd/1", "fd/2"} {
@@ -70,17 +68,17 @@ func (a *Agent) pidNSRestoreFiles(ctx context.Context, procBase string, hostPID 
 	return files, fds, nil
 }
 
-// bindPlaceholderListeners binds the capture's listening unix sockets in
-// the placeholder's mount namespace, where their paths are, and returns
-// them. The binding runs there as the node bundle's agent binary (static:
-// nothing from the placeholder's filesystem is loaded), and the sockets
-// come back over a socket pair.
-func bindPlaceholderListeners(ctx context.Context, hostPID int, listeners []UnixListener, tools bundleTools) ([]*os.File, error) {
+// placeholderFiles runs the node bundle's agent binary (static: nothing
+// from the placeholder's filesystem is loaded) in the placeholder's mount
+// namespace, where it clones the mount tree and binds the capture's
+// listening unix sockets at their paths, and returns them: the tree first,
+// then one socket per listener. They come back over a socket pair.
+func placeholderFiles(ctx context.Context, hostPID int, listeners []UnixListener, tools bundleTools) ([]*os.File, error) {
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	ours, theirs := os.NewFile(uintptr(pair[0]), "listeners"), os.NewFile(uintptr(pair[1]), "listeners")
+	ours, theirs := os.NewFile(uintptr(pair[0]), "placeholder-files"), os.NewFile(uintptr(pair[1]), "placeholder-files")
 	defer func() { _ = ours.Close() }()
 	// The socket pair's end is the child's descriptor 3, the mount
 	// namespace 4.
@@ -93,36 +91,35 @@ func bindPlaceholderListeners(ctx context.Context, hostPID int, listeners []Unix
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "nsenter", append(nsArgs, "--", //nolint:gosec // the node bundle's agent binary, verified mounted read-only
-		tools.path(pidNSRestoreHelperName), "bind-unix-listeners")...)
+		tools.path(pidNSRestoreHelperName), "placeholder-files")...)
 	cmd.ExtraFiles = append([]*os.File{theirs}, nsFiles...)
 	cmd.Env = []string{PIDNSUnixListenersEnv + "=" + encodeUnixListeners(listeners)}
 	out, err := cmd.CombinedOutput()
 	_ = theirs.Close()
 	if err != nil {
-		return nil, fmt.Errorf("bind the listening sockets: %w (%s)", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("the placeholder's root and listening sockets: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	buf, oob := make([]byte, 1), make([]byte, unix.CmsgSpace(4*len(listeners)))
+	want := 1 + len(listeners)
+	buf, oob := make([]byte, 1), make([]byte, unix.CmsgSpace(4*want))
 	_, oobn, _, _, err := unix.Recvmsg(int(ours.Fd()), buf, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
-		return nil, fmt.Errorf("receive the listening sockets: %w", err)
+		return nil, fmt.Errorf("receive the placeholder's root and listening sockets: %w", err)
 	}
 	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
 	if err != nil || len(msgs) != 1 {
-		return nil, fmt.Errorf("receive the listening sockets: %d messages: %w", len(msgs), err)
+		return nil, fmt.Errorf("receive the placeholder's root and listening sockets: %d messages: %w", len(msgs), err)
 	}
 	fds, err := unix.ParseUnixRights(&msgs[0])
 	if err != nil {
-		return nil, fmt.Errorf("receive the listening sockets: %w", err)
+		return nil, fmt.Errorf("receive the placeholder's root and listening sockets: %w", err)
 	}
 	files := make([]*os.File, 0, len(fds))
 	for _, fd := range fds {
-		files = append(files, os.NewFile(uintptr(fd), "listener"))
+		files = append(files, os.NewFile(uintptr(fd), "placeholder-file"))
 	}
-	if len(files) != len(listeners) {
-		for _, f := range files {
-			_ = f.Close()
-		}
-		return nil, fmt.Errorf("received %d listening sockets, want %d", len(files), len(listeners))
+	if len(files) != want {
+		closeFiles(files)
+		return nil, fmt.Errorf("received %d descriptors from the placeholder, want %d", len(files), want)
 	}
 	return files, nil
 }

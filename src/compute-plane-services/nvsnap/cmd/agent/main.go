@@ -47,9 +47,15 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "bind-unix-listeners":
-			if err := bindUnixListenersExec(); err != nil {
-				fmt.Fprintln(os.Stderr, "bind-unix-listeners:", err)
+		case "placeholder-files":
+			if err := placeholderFilesExec(); err != nil {
+				fmt.Fprintln(os.Stderr, "placeholder-files:", err)
+				os.Exit(1)
+			}
+			return
+		case "pidns-dump-exec":
+			if err := pidNSDumpExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-dump-exec:", err)
 				os.Exit(1)
 			}
 			return

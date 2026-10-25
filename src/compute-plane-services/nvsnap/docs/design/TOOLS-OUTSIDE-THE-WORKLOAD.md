@@ -46,6 +46,29 @@ into the container, and enters only the pod's network namespace.
 With 1 and 2, the bundle mount at `/criu-bundle` is no longer needed for CRIU or the replays; it stays for the GPU tool
 until 3 lands, then can go.
 
+### Pods that share one pid namespace
+
+A pod with `shareProcessNamespace` has one pid namespace for all its containers, whose init is the pause process: a
+container's own process is not pid 1 there, so its pid namespace cannot be dumped as its own. Such a container is dumped
+as its own process tree (a subtree), still with the agent's CRIU: the agent enters only the pod's pid and network
+namespaces, by descriptor, and a helper (`pidns-dump-exec`) mounts a procfs of that pid namespace in a private copy of
+the agent's mount namespace, where CRIU finds the tree by its pids there. `--root` reaches the container's root through
+the node's `/proc`. The checkpoint's marker records the subtree and its root's pid.
+
+Its restore recreates the tree at its dumped pids in the placeholder's own (shared) pid namespace: the placeholder bumps
+`ns_last_pid` clear of them, and the restore waits until no placeholder task holds a pid the checkpoint recreates (the
+same wait the in-namespace restore had). Ending the runtime's exec sessions before a dump only touches processes of the
+container's own cgroup: the pause process and the other containers, each the child of its own shim, are not the
+container's sessions.
+
+### The placeholder's root
+
+A bind mount cannot take its source from another mount namespace: `mount --bind /proc/<pid>/root` (and `open_tree`
+with `OPEN_TREE_CLONE`) from outside fail with `EINVAL` (checked on the GB300 nodes, kernel 6.17). The node bundle's
+static agent binary, run in the placeholder's mount namespace (as it already is to bind the capture's listening
+sockets), clones the placeholder's mount tree there (`open_tree`) and passes it back over a socket pair; the restore
+helper attaches it with `move_mount`.
+
 ## What it costs
 
 - The in-namespace dump path goes. It is the default today; the pid-namespace path has been validated on single-pod
@@ -58,7 +81,7 @@ until 3 lands, then can go.
 ## Tests
 
 - Every regression workload (single-GPU vLLM, SGLang, TRT-LLM; multi-GPU; Kimi-K3 two-node) captures and restores
-  through the pid-namespace path.
+  through the pid-namespace path, and a pod that shares one pid namespace through the subtree path.
 - A placeholder whose image carries loader configuration or libraries of its own: the restore loads none of them
   (CRIU and the replays run from the agent's filesystem).
 - The GPU tool as the workload's user: suspend and resume of a TP=4 vLLM, and of a two-node fabric session.

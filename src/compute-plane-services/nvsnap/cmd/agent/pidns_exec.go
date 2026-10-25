@@ -51,8 +51,11 @@ func pidNSRestoreExec(args []string) error {
 	if err := os.Mkdir(agent.PIDNSRestoreRoot, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", agent.PIDNSRestoreRoot, err)
 	}
-	if err := unix.Mount("/proc/self/fd/"+strconv.Itoa(fds.Root), agent.PIDNSRestoreRoot, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
-		return fmt.Errorf("mount the placeholder's root: %w", err)
+	// The placeholder's root arrives as a mount tree cloned inside its own
+	// mount namespace (placeholderFilesExec): a bind mount cannot take its
+	// source from another mount namespace (EINVAL), an attached clone can.
+	if err := unix.MoveMount(fds.Root, "", unix.AT_FDCWD, agent.PIDNSRestoreRoot, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
+		return fmt.Errorf("attach the placeholder's root: %w", err)
 	}
 	_ = unix.Close(fds.Root)
 	if err := placeFD(fds.Net, agent.PIDNSNetFD); err != nil {
@@ -71,20 +74,52 @@ func pidNSRestoreExec(args []string) error {
 	return nil
 }
 
-// bindUnixListenersExec binds the listening unix sockets of a restore in
-// the placeholder's mount namespace (it runs there, from the node bundle:
-// a static binary) and sends them to the agent over fd 3.
-func bindUnixListenersExec() error {
+// pidNSDumpExec runs the agent's own CRIU for a subtree dump: a container
+// that shares its pod's pid namespace (internal/agent/pidns_subtree.go).
+// It runs in the agent's filesystem, entered only into the pod's pid and
+// network namespaces (nsenter --pid --net, by descriptor), so nothing from
+// the container's filesystem is loaded or run. In a private copy of the
+// agent's mount namespace it mounts a procfs of the pod's pid namespace at
+// /proc, where CRIU finds the tree by its pids there; the node's /proc
+// (CRIU's --root, the container's root through it) stays where it was.
+func pidNSDumpExec(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: pidns-dump-exec <criu> <args...>")
+	}
+	// Namespace changes apply to the calling thread; exec from the same one.
+	runtime.LockOSThread()
+	if err := unix.Unshare(unix.CLONE_NEWNS); err != nil {
+		return fmt.Errorf("unshare mount namespace: %w", err)
+	}
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make mounts private: %w", err)
+	}
+	if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+		return fmt.Errorf("mount procfs: %w", err)
+	}
+	if err := unix.Exec(args[0], args, os.Environ()); err != nil {
+		return fmt.Errorf("exec %s: %w (%s)", args[0], err, describeExecPath(args[0]))
+	}
+	return nil
+}
+
+// placeholderFilesExec runs in the placeholder's mount namespace (from the
+// node bundle: a static binary) and sends the agent, over fd 3, what its
+// restore needs from there: a clone of the placeholder's mount tree (its
+// root), then the listening unix sockets of the capture, bound at their
+// paths.
+func placeholderFilesExec() error {
+	tree, err := unix.OpenTree(unix.AT_FDCWD, "/", unix.OPEN_TREE_CLONE|unix.AT_RECURSIVE|unix.OPEN_TREE_CLOEXEC)
+	if err != nil {
+		return fmt.Errorf("clone the mount tree: %w", err)
+	}
 	n, err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv))
 	if err != nil {
 		return err
 	}
-	fds := make([]int, n)
-	for i := range fds {
-		fds[i] = agent.PIDNSUnixListenerFD + i
-	}
-	if n == 0 {
-		return nil
+	fds := []int{tree}
+	for i := 0; i < n; i++ {
+		fds = append(fds, agent.PIDNSUnixListenerFD+i)
 	}
 	return unix.Sendmsg(3, []byte{0}, unix.UnixRights(fds...), nil, 0)
 }

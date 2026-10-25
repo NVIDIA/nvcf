@@ -55,6 +55,21 @@ func execSessions(procBase string, hostPID int) ([]int, error) {
 	if ns == "" {
 		return nil, fmt.Errorf("pid namespace of %d: not readable", hostPID)
 	}
+	// In a pod that shares one pid namespace, the namespace also holds the
+	// pause process and the other containers, each the child of its own
+	// shim: only the processes of this container's cgroup are its exec
+	// sessions to end (pidns_subtree.go).
+	inContainer := func(int) bool { return true }
+	if nsPID, nerr := nsPidOf(procBase, hostPID); nerr == nil && nsPID != 1 {
+		cg, cerr := processCgroup(procBase, hostPID)
+		if cerr != nil {
+			return nil, cerr
+		}
+		inContainer = func(pid int) bool {
+			c, perr := processCgroup(procBase, pid)
+			return perr == nil && c == cg
+		}
+	}
 	ents, err := os.ReadDir(procBase)
 	if err != nil {
 		return nil, err
@@ -62,7 +77,7 @@ func execSessions(procBase string, hostPID int) ([]int, error) {
 	parent := map[int]int{}
 	for _, e := range ents {
 		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == hostPID || nsOf(pid) != ns {
+		if err != nil || pid == hostPID || nsOf(pid) != ns || !inContainer(pid) {
 			continue
 		}
 		ppid, zombie, err := procParent(procBase, pid)
