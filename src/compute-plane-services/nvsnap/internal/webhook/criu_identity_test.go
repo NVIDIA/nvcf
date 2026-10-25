@@ -88,7 +88,7 @@ func TestCRIUModelReaderHasNoCachedir(t *testing.T) {
 	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, "", election.RoleFollower, kc)
 	m.CRIUCapture = true
 	m.Kube = kc
-	completeModelPV(t, kc, ngcFunctionKey)
+	completeModelPV(t, kc, scoped("sr-fn", ngcFunctionKey))
 	pod := ngcFunctionPod()
 	patches, err := m.Mutate(context.Background(), pod)
 	if err != nil {

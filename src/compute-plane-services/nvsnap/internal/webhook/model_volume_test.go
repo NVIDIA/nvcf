@@ -1703,7 +1703,7 @@ func TestModelVolume_InitMountsLandingElsewhere_JobMountsItOnce(t *testing.T) {
 func TestCacheVolume_RefreshedGenerationGetsItsOwnView(t *testing.T) {
 	ctx := context.Background()
 	kc := fake.NewSimpleClientset()
-	completeModelPV(t, kc, ngcFunctionKey)
+	completeModelPV(t, kc, scoped("sr-fn", ngcFunctionKey))
 	m := cacheMutator(t, kc)
 	probe := ngcFunctionPod()
 	probe.Name = "mini-service-kimi-k3-0"
@@ -1769,4 +1769,27 @@ func mustList(t *testing.T, kc *fake.Clientset) []corev1.PersistentVolume {
 		t.Fatal(err)
 	}
 	return pvs.Items
+}
+
+// A restore placeholder gets the captured pod's model landing: its own
+// tenant's complete volume, found by the same scoped identity as at
+// admission. Another tenant's volume of the same artifact is not it.
+func TestModelVolume_PlaceholderReadsItsTenantsVolume(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	m, _ := mvMutatorReader(t, modelvolume.ModeBlock, modelvolume.ReaderPVC, election.RoleFollower, kc)
+	pod := ngcFunctionPod()
+	pod.Namespace = "sr-other"
+	completePrimary(t, kc, scoped("sr-fn", ngcFunctionKey), "nvmesh-csi.excelero.com")
+	if _, err := m.placeholderModelPatches(context.Background(), pod); err == nil {
+		t.Fatal("a placeholder was given another tenant's model volume")
+	}
+	own := scoped("sr-other", ngcFunctionKey)
+	completePrimary(t, kc, own, "nvmesh-csi.excelero.com")
+	patches, err := m.placeholderModelPatches(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("the placeholder's own tenant's complete volume: %v", err)
+	}
+	if got := viewMV(pod, patches).annotations[modelvolume.IdentityAnnotation]; got != own {
+		t.Errorf("placeholder identity %q, want %q", got, own)
+	}
 }
