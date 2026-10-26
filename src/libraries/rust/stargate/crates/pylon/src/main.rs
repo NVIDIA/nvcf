@@ -134,6 +134,13 @@ struct Args {
     /// Upstream HTTP path for the engine stats stream
     #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
     engine_stats_stream_path: String,
+    /// Dynamo KV DC Relay gRPC URL (the Relay's `--bind` address). When set, model load, KV usage and model readiness come from the Relay instead of the engine stats stream and KV polling; the frontends and routers behind it must publish serving load (`DYN_SERVING_LOAD_PUBLISH`)
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with_all = ["kv_cache_stats_path", "engine_stats_stream", "engine_stats_stream_path"]
+    )]
+    dynamo_relay_grpc_url: Option<String>,
     /// Fallback maximum engine concurrency for every model until the engine reports a limit
     #[arg(long, value_name = "N")]
     max_engine_concurrency: Option<NonZeroU64>,
@@ -682,6 +689,52 @@ mod tests {
             metrics_config.kv_cache_stats_url,
             Some("http://127.0.0.1:8090/kv-cache/stats".to_string())
         );
+    }
+
+    #[test]
+    fn dynamo_relay_replaces_engine_stats_and_kv_polling() {
+        let args = parse_args("--dynamo-relay-grpc-url http://relay:50051");
+        let upstream = normalize_base_url(&args.upstream_http_base_url);
+        let metrics_config = stats_collector_config_from_args(&args, &upstream);
+
+        assert!(metrics_config.relay_enabled);
+        assert!(metrics_config.kv_cache_stats_url.is_none());
+        assert!(!metrics_config.openai_fallback_stats_enabled);
+    }
+
+    #[test]
+    fn stats_modes_without_a_dynamo_relay_leave_relay_mode_off() {
+        for extra in [
+            "",
+            "--engine-stats-stream off",
+            "--engine-stats-stream required",
+            "--kv-cache-stats-path /kv-cache/stats",
+        ] {
+            let args = parse_args(extra);
+            let config = stats_collector_config_from_args(&args, &args.upstream_http_base_url);
+
+            assert!(!config.relay_enabled, "{extra:?}");
+        }
+    }
+
+    #[test]
+    fn dynamo_relay_conflicts_with_explicit_engine_stats_and_kv_polling() {
+        for conflicting in [
+            &["--kv-cache-stats-path", "/kv-cache/stats"][..],
+            &["--engine-stats-stream", "off"],
+            &["--engine-stats-stream", "required"],
+            &["--engine-stats-stream-path", "/stats"],
+        ] {
+            let mut argv = vec!["--dynamo-relay-grpc-url", "http://relay:50051"];
+            argv.extend_from_slice(conflicting);
+            let error = try_parse_argv(&argv).expect_err("conflicting stats sources must fail");
+
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{conflicting:?}"
+            );
+        }
     }
 
     #[test]
