@@ -43,6 +43,8 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream"
 	utilsMetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/metrics"
@@ -649,16 +651,38 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 const natsConsumerSetupTimeout = 2 * time.Minute
 
 // newNatsConsumerWithRetry retries consumer setup until it succeeds, ctx ends,
-// or maxElapsed passes. Without it, a NATS disconnect longer than the
-// consumer lookup's own short retry window exits the worker process.
+// maxElapsed passes, or setup fails with an error that retrying cannot fix.
+// Without it, a NATS disconnect longer than the consumer lookup's own short
+// retry window exits the worker process.
 func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, create func() (*consumer.GlobalNatsConsumer, error)) (*consumer.GlobalNatsConsumer, error) {
 	b := backoff.NewExponentialBackOff(
 		backoff.WithMaxInterval(5*time.Second),
 		backoff.WithMaxElapsedTime(maxElapsed),
 	)
-	return backoff.RetryNotifyWithData(create, backoff.WithContext(b, ctx), func(err error, next time.Duration) {
+	attempt := func() (*consumer.GlobalNatsConsumer, error) {
+		c, err := create()
+		if err != nil && isPermanentSetupError(err) {
+			return nil, backoff.Permanent(err)
+		}
+		return c, err
+	}
+	return backoff.RetryNotifyWithData(attempt, backoff.WithContext(b, ctx), func(err error, next time.Duration) {
 		zap.L().Warn("failed to set up nats consumer, retrying", zap.Error(err), zap.Duration("retryIn", next))
 	})
+}
+
+// isPermanentSetupError reports whether worker provisioning rejected the
+// request itself, so waiting for NATS to come back will not help.
+func isPermanentSetupError(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch s.Code() {
+	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument:
+		return true
+	}
+	return false
 }
 
 // Shutdown triggers a graceful shutdown of the worker -- This is only used by tests

@@ -20,11 +20,14 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/consumer"
 )
@@ -66,5 +69,33 @@ func TestNewNatsConsumerWithRetry(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("does not retry errors that retrying cannot fix", func(t *testing.T) {
+		for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument} {
+			t.Run(code.String(), func(t *testing.T) {
+				rejected := fmt.Errorf("failed to create consumer for primary region ncp: %w", status.Error(code, "rejected"))
+				attempts := 0
+				_, err := newNatsConsumerWithRetry(context.Background(), time.Minute, func() (*consumer.GlobalNatsConsumer, error) {
+					attempts++
+					return nil, rejected
+				})
+				require.ErrorIs(t, err, rejected)
+				assert.Equal(t, 1, attempts)
+			})
+		}
+	})
+
+	t.Run("retries unavailable provisioning", func(t *testing.T) {
+		attempts := 0
+		_, err := newNatsConsumerWithRetry(context.Background(), time.Minute, func() (*consumer.GlobalNatsConsumer, error) {
+			attempts++
+			if attempts < 2 {
+				return nil, status.Error(codes.Unavailable, "connection refused")
+			}
+			return &consumer.GlobalNatsConsumer{}, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, attempts)
 	})
 }
