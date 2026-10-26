@@ -295,6 +295,47 @@ async fn test_polling_record_fails_fast_when_jetstream_does_not_ack() {
 }
 
 #[tokio::test]
+async fn test_polling_record_recreates_missing_tracking_stream() {
+    let nats_container = nats().await;
+    let nats_properties = nats_properties(&nats_container, None).await.unwrap();
+
+    let nats_service = NatsService::new(
+        &nats_properties,
+        "http://dummy.localhost",
+        None,
+        &nvcf_invocation_service::settings::GrpcClientConfig::default(),
+    )
+    .await
+    .expect("Should create NATS service");
+    let tracking_stream = format!("requestToFunctionVersion_{}", nats_properties.region);
+    nats_service
+        .jetstream()
+        .delete_stream(&tracking_stream)
+        .await
+        .expect("Should delete tracking stream");
+    let owner = PollingRequestOwner {
+        nca_id: "nca".into(),
+        subject: "subject".into(),
+    };
+
+    let result = nats_service
+        .record_polling_request(
+            None,
+            RequestId::new(),
+            &WorkerResultTracking::default(),
+            &owner,
+        )
+        .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    nats_service
+        .jetstream()
+        .get_stream(&tracking_stream)
+        .await
+        .expect("tracking stream should be recreated");
+}
+
+#[tokio::test]
 async fn test_cancel_request_gives_up_when_jetstream_does_not_answer() {
     let nats_container = nats().await;
     let mut nats_properties = nats_properties(&nats_container, None).await.unwrap();

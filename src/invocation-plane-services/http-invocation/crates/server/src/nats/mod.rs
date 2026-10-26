@@ -986,19 +986,32 @@ impl NatsService {
             .map_err(Self::tracking_publish_error)?;
         match self.await_ack(pub_ack).await {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
-                // create stream and try again
-                self.create_request_tracking_stream()
+                // create stream and try again, bounded like one publish attempt
+                let attempt_timeout =
+                    Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+                let recreate_and_publish = async {
+                    self.create_request_tracking_stream()
+                        .await
+                        .map_err(Self::stream_setup_error)?;
+                    let pub_ack = self
+                        .publish_to_request_mapping(region, request_id, tracking, &headers)
+                        .await
+                        .map_err(Self::tracking_publish_error)?;
+                    self.await_ack(pub_ack).await.map_err(|err| {
+                        // track the error if it fails to wait for the actual publish acknowledgment from NATS.
+                        record_nats_error_total();
+                        Self::tracking_publish_error(err)
+                    })
+                };
+                tokio::time::timeout(attempt_timeout, recreate_and_publish)
                     .await
-                    .map_err(Self::stream_setup_error)?;
-                let pub_ack = self
-                    .publish_to_request_mapping(region, request_id, tracking, &headers)
-                    .await
-                    .map_err(Self::tracking_publish_error)?;
-                self.await_ack(pub_ack).await.map_err(|err| {
-                    // track the error if it fails to wait for the actual publish acknowledgment from NATS.
-                    record_nats_error_total();
-                    Self::tracking_publish_error(err)
-                })
+                    .unwrap_or_else(|_| {
+                        record_nats_error_total();
+                        Err(Error::Unavailable(format!(
+                            "request tracking stream not ready within {} ms",
+                            attempt_timeout.as_millis()
+                        )))
+                    })
             }
             Err(err) => {
                 record_nats_error_total();
