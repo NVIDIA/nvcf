@@ -1,11 +1,12 @@
 # Compatibility Matrix
 
-Use this page to pick stack versions that are qualified to run together.
-
-Releases are listed as exact semantic versions (`X.Y.Z`). A requirement such
-as `1.0.0 or later` includes later compatible patch and minor releases. Only
-the latest minor release train and the one before it are maintained. Upgrade
-to a maintained train before moving further.
+<Warning>
+NVCF 1.0.4 candidate, pending QA. The tables lock the selected combination for
+evaluation; they do not declare whole-combination qualification. "Latest
+release" below means the version selected for this candidate, not the latest
+version on main. Use the [upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md)
+for the comparison to docs edition 1.0.2 and required ordering.
+</Warning>
 
 {/*docs-version-sync:BEGIN compatibility-matrix*/}
 
@@ -13,18 +14,17 @@ to a maintained train before moving further.
 
 | Stack | Latest release | Source tag |
 | --- | --- | --- |
-| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.1` | `deploy/stacks/self-managed/v1.0.1` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
+| [Self-managed (control plane)](../self-managed/installation.md) | `1.0.7` | `deploy/stacks/self-managed/v1.0.7` |
+| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.3` | `deploy/stacks/nvcf-compute-plane/v1.0.3` |
 | [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ## Compatible stack versions
 
 | Stack | Release | Works with |
 | --- | --- | --- |
-| Self-managed (control plane) | `1.0.1` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
-| Self-managed (control plane) | `1.0.0` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
-| Compute plane | `1.0.0` | Self-managed (control plane) `1.0.0` or later, Observability `1.0.0` or later |
-| Observability | `1.0.0` | Self-managed (control plane) `1.0.0` or later, Compute plane `1.0.0` or later |
+| Self-managed (control plane) | `1.0.7` | Compute plane `1.0.3` only, Observability `1.0.0` only |
+| Compute plane | `1.0.3` | Self-managed (control plane) `1.0.7` only, Observability `1.0.0` only |
+| Observability | `1.0.0` | Self-managed (control plane) `1.0.7` only, Compute plane `1.0.3` only |
 
 {/*docs-version-sync:END compatibility-matrix*/}
 

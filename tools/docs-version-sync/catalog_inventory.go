@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -226,7 +227,8 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 	}
 	catalog := refreshCatalogFromArtifacts(inventory.Source.Version, artifacts, base)
 	retainIndependentManifestArtifacts(catalog, inventory, base)
-	if err := materializeMissingEffectiveStackPins(catalog, base, snapshot.Files); err != nil {
+	pins, sources := inventoryStackPins(catalog, snapshot.Files)
+	if err := materializeMissingEffectiveStackPins(catalog, base, sources, pins); err != nil {
 		return nil, err
 	}
 	if base != nil {
@@ -236,12 +238,12 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 	}
 	catalog.Stack.SourceTag = inventory.Source.Tag
 	catalog.Stack.SourceCommit = inventory.Source.Commit
-	catalog.Stack.PinSources = effectiveStackPinSourcePaths(effectiveStackPins)
-	catalog.Stack.PinSourceDigest, err = pinSourceDigest(snapshot.Files, effectiveStackPins)
+	catalog.Stack.PinSources = effectiveStackPinSourcePaths(pins)
+	catalog.Stack.PinSourceDigest, err = pinSourceDigest(sources, pins)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCatalogEffectiveStackPins(catalog, snapshot.Files); err != nil {
+	if err := validateCatalogEffectiveStackPins(catalog, sources, pins); err != nil {
 		return nil, err
 	}
 
@@ -607,12 +609,12 @@ func effectiveStackPinSourcePaths(pins []effectiveStackPin) []string {
 
 // materializeMissingEffectiveStackPins adds source-only pins that do not
 // appear as image fields in rendered Kubernetes manifests.
-func materializeMissingEffectiveStackPins(catalog, base *Catalog, sources map[string][]byte) error {
-	versions, err := extractEffectiveStackPins(sources, effectiveStackPins)
+func materializeMissingEffectiveStackPins(catalog, base *Catalog, sources map[string][]byte, pins []effectiveStackPin) error {
+	versions, err := extractEffectiveStackPins(sources, pins)
 	if err != nil {
 		return err
 	}
-	for _, pin := range effectiveStackPins {
+	for _, pin := range pins {
 		if primaryArtifactExists(catalog, pin.artifact, pin.artifactType) {
 			continue
 		}
@@ -655,12 +657,12 @@ func removeSupplementalArtifact(catalog *Catalog, name string, artifactType Arti
 	catalog.SupplementalArtifacts = retained
 }
 
-func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]byte) error {
-	versions, err := extractEffectiveStackPins(sources, effectiveStackPins)
+func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]byte, pins []effectiveStackPin) error {
+	versions, err := extractEffectiveStackPins(sources, pins)
 	if err != nil {
 		return err
 	}
-	for _, pin := range effectiveStackPins {
+	for _, pin := range pins {
 		version := versions[pin.artifact]
 		artifact, ok := catalog.findArtifactByNameAndType(pin.artifact, pin.artifactType)
 		if !ok {
@@ -671,4 +673,23 @@ func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]by
 		}
 	}
 	return nil
+}
+
+// inventoryStackPins retains the legacy Pylon fallback only while its source
+// contains a literal pin or the rendered inventory has not recorded the image.
+func inventoryStackPins(catalog *Catalog, sources map[string][]byte) ([]effectiveStackPin, map[string][]byte) {
+	var pins []effectiveStackPin
+	selected := make(map[string][]byte)
+	for _, pin := range effectiveStackPins {
+		body, exists := sources[pin.path]
+		if exists && pin.artifact == "pylon" && primaryArtifactExists(catalog, pin.artifact, pin.artifactType) &&
+			!regexp.MustCompile(pin.pattern).Match(body) {
+			continue
+		}
+		pins = append(pins, pin)
+		if exists {
+			selected[pin.path] = body
+		}
+	}
+	return pins, selected
 }

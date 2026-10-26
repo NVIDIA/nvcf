@@ -1,0 +1,34 @@
+---
+title: NVCF 1.0.4 candidate
+tags: [self-managed, compute-plane, security]
+---
+
+## NVCF 1.0.4 candidate
+
+Pending QA. This candidate selects Self-Managed 1.0.7, Compute Plane 1.0.3
+and Observability 1.0.0. The comparison baseline is docs edition 1.0.2:
+Self-Managed 1.0.1, Compute Plane 1.0.0 and Observability 1.0.0.
+
+- Updates selected service, worker and telemetry dependencies for security
+  maintenance, including NICLLS 2.118.2, Samba 1.0.8 and both compute-plane
+  collectors at 0.160.0-nv-0.2.9.
+- Returns a prompt not-found response when an LLM function is sent to the
+  unsupported classic invocation endpoint.
+- Preserves existing readable secret-file ownership during non-root ESS refresh.
+- Processes new NVCA requests after a restarted stream reuses a sequence
+  number, and fixes NATS authentication reconnect and account selection.
+- Includes ICMS reconnect and instance-event fixes and an opt-in legacy
+  lookup backfill. Pylon allows queued LLM requests more time for first output.
+- Adds upstream image override support for NATS, cert-manager and the Vault
+  injector. NATS uses the upstream Synadia server by default.
+
+Read the [upgrade procedure](../../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md)
+for the hostname-policy prerequisite, NVCA-first ordering, queue draining,
+storage checks and rollback limits. The
+[artifact manifest](../../docs/overview/manifest.md) records the exact selection.
+
+This is targeted maintenance, not a claim that every CVE is resolved or every
+image runs non-root. Cassandra and OpenBao runtime upgrades, state-metrics
+changes and the Samba non-root redesign remain deferred. The selected
+Cassandra/OpenBao migration-image fixes are included. Customer publication and
+docs-site activation remain pending separate approval.
