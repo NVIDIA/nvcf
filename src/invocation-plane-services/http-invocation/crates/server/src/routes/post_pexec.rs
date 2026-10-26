@@ -499,7 +499,7 @@ pub(crate) async fn handle_streaming_response(
     start_time: SystemTime,
     region: Option<&str>,
     attach_response_rx: tokio::sync::oneshot::Receiver<http::Response<Body>>,
-) -> anyhow::Result<Response> {
+) -> Result<Response, AppError> {
     // try to read from the response stream
     // the worker may be trying to send an intermediate poll response exactly at the time
     // user supplied time runs out so give it an extra 2s.
@@ -527,7 +527,8 @@ pub(crate) async fn handle_streaming_response(
                 },
                 owner,
             )
-            .await?;
+            .await
+            .map_err(AppError::map_nats_err)?;
     }
 
     // Add NVCF status as header attribute
