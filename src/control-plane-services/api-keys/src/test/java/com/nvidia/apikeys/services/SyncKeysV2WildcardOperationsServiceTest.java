@@ -36,7 +36,7 @@ import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeysOperationType;
 import com.nvidia.apikeys.dto.keysV2.PlatformAdminKeysOperationRequest;
-import com.nvidia.apikeys.dto.keysV2.SyncKeysOperationResponse;
+import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.services.SyncKeysV2OperationsService.BulkOperationException;
@@ -129,9 +129,9 @@ class SyncKeysV2WildcardOperationsServiceTest {
         var response = operate(actor, operation, accounts, users, issuers,
                 everyAccount && everyUser && everyIssuer ? true : null);
 
-        assertThat(response.completedCount()).isEqualTo(expected.size());
+        assertThat(response.getCompletedCount()).isEqualTo(expected.size());
         assertThat(mutations).containsExactlyInAnyOrderElementsOf(expected);
-        assertThat(response.cutoffAt()).isEqualTo(CUTOFF);
+        assertThat(response.getSubmittedAt()).isEqualTo(CUTOFF);
         verify(selection, atLeastOnce()).select(any(), any(), any(), eq(CUTOFF));
     }
 
@@ -208,7 +208,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
                 (mask & 1) != 0 ? ALL : ACCOUNTS,
                 (mask & 2) != 0 ? ALL : USERS,
                 (mask & 4) != 0 ? ALL : ISSUERS, false);
-        assertThat(response.completedCount()).isOne();
+        assertThat(response.getCompletedCount()).isOne();
         assertThat(mutations).containsExactly(new Mutation(DELETE, "a1", "u1", "s1", "key"));
     }
 
@@ -223,7 +223,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
                 dimension.equals("accounts") ? List.of(account) : ALL,
                 dimension.equals("users") ? List.of(user) : ALL,
                 dimension.equals("issuerServices") ? List.of(issuer) : ALL, null);
-        assertThat(response.completedCount()).isOne();
+        assertThat(response.getCompletedCount()).isOne();
         assertThat(mutations).containsExactly(mutation(DELETE, exact));
     }
 
@@ -242,7 +242,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
 
         var response = operate("PLATFORM_ADMIN", operation, ALL, ALL, ALL, true);
 
-        assertThat(response.completedCount()).isEqualTo(2);
+        assertThat(response.getCompletedCount()).isEqualTo(2);
         assertThat(mutations).containsExactly(mutation(operation, before), mutation(operation, at));
         assertThat(closed).isTrue();
     }
@@ -251,8 +251,8 @@ class SyncKeysV2WildcardOperationsServiceTest {
     void emptyWildcardSelectionCompletesWithoutMutations() {
         when(selection.select(null, null, null, CUTOFF)).thenReturn(Stream.empty());
         var response = operate("PLATFORM_ADMIN", DELETE, ALL, ALL, ALL, true);
-        assertThat(response.completedCount()).isZero();
-        assertThat(response.correlationId()).isNotBlank();
+        assertThat(response.getCompletedCount()).isZero();
+        assertThat(response.getOperationId()).isNotNull();
         verifyNoInteractions(keys);
     }
 
@@ -321,7 +321,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
                         .ownerStatus(KeyOwnerStatus.SUSPENDED).build()));
         var response = operate(actor, operation, actor.equals("ACCOUNT_ADMIN") ? List.of("a1") : ALL,
                 ALL, ALL, actor.equals("PLATFORM_ADMIN") ? true : null);
-        assertThat(response.completedCount()).isOne();
+        assertThat(response.getCompletedCount()).isOne();
         assertThat(mutations).containsExactly(mutation(operation, key));
     }
 
@@ -336,7 +336,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
         });
     }
 
-    private SyncKeysOperationResponse operate(String actor, KeysOperationType operation,
+    private KeyOperationResponse operate(String actor, KeysOperationType operation,
             List<String> accounts, List<String> users, List<String> issuers, Boolean confirmation) {
         return switch (actor) {
             case "KEY_OWNER" -> service.operateAsKeyOwner(users.getFirst(), KeyOwnerKeysOperationRequest.builder()

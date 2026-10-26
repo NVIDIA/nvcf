@@ -34,11 +34,14 @@ import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.config.NakProperties;
 import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
+import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.PlatformAdminKeysOperationRequest;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.services.SyncKeysV2OperationsService.BulkOperationException;
+import com.nvidia.apikeys.utils.JsonUtils;
+import com.nvidia.apikeys.vo.KeyOperationStatus;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
@@ -47,9 +50,7 @@ import com.nvidia.apikeys.vo.ServiceVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -80,13 +81,15 @@ class SyncKeysV2OperationsServiceTest {
     private ServicesService services;
     @Mock
     private KeysV2BulkSelectionService selection;
+    @Mock
+    private MillisecondPrecisionClock clock;
     private SyncKeysV2OperationsService service;
 
     @BeforeEach
     void setUp() {
         var legacy = new LegacyAccountTranslator(NakProperties.builder()
                 .ncaId("legacy").serviceIdMap(Map.of(ISSUER, "legacy-issuer")).build());
-        var clock = new MillisecondPrecisionClock(Clock.fixed(CUTOFF, ZoneOffset.UTC));
+        lenient().when(clock.instant()).thenReturn(CUTOFF);
         service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection);
         lenient().when(services.getServiceById(ISSUER))
                 .thenReturn(Optional.of(ServiceVo.builder().serviceId(ISSUER).build()));
@@ -141,7 +144,7 @@ class SyncKeysV2OperationsServiceTest {
             default -> throw new IllegalArgumentException(actor);
         };
 
-        assertThat(response.completedCount()).isOne();
+        assertThat(response.getCompletedCount()).isOne();
         verify(keys).deleteKeyById(account, USER, user, issuer, "key");
     }
 
@@ -183,7 +186,7 @@ class SyncKeysV2OperationsServiceTest {
     void acceptsOptionalReasonWithoutAdditionalRestrictions(String reason) {
         assertThat(service.operateAsAccountAdmin("a",
                 accountRequest().toBuilder().reason(reason).build())
-                .completedCount()).isZero();
+                .getCompletedCount()).isZero();
     }
 
     static Stream<String> optionalReasons() {
@@ -197,7 +200,7 @@ class SyncKeysV2OperationsServiceTest {
                 .thenReturn(Stream.of(row("a", user, "key", CUTOFF)));
 
         assertThat(service.operateAsAccountAdmin("a", accountRequest().toBuilder()
-                .operation(DELETE).users(List.of(user)).build()).completedCount()).isOne();
+                .operation(DELETE).users(List.of(user)).build()).getCompletedCount()).isOne();
 
         verify(keys).deleteKeyById("a", USER, user, ISSUER, "key");
     }
@@ -208,18 +211,40 @@ class SyncKeysV2OperationsServiceTest {
         request.addHeader("NVCF-ACTOR-ID", "a".repeat(257));
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         try {
-            assertThat(service.operateAsAccountAdmin("a", accountRequest()).completedCount()).isZero();
+            assertThat(service.operateAsAccountAdmin("a", accountRequest()).getCompletedCount()).isZero();
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
     }
 
-    @Test
-    void noMatchesReturnsCompletedNoOp() {
+    @ParameterizedTest
+    @ValueSource(ints = {0, 2})
+    void returnsCompletedSharedResponse(int keyCount) {
+        var finishedAt = CUTOFF.plusSeconds(2);
+        when(clock.instant()).thenReturn(CUTOFF, finishedAt);
+        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(
+                java.util.stream.IntStream.range(0, keyCount)
+                        .mapToObj(i -> row("a", "u", "key-" + i, CUTOFF)));
+
         var response = service.operateAsAccountAdmin("a", accountRequest());
-        assertThat(response.completedCount()).isZero();
-        assertThat(response.cutoffAt()).isEqualTo(CUTOFF);
-        assertThat(response.correlationId()).isNotBlank();
+
+        assertThat(response.getOperationId()).isNotNull();
+        assertThat(response.getOperation()).isEqualTo(REVOKED);
+        assertThat(response.getStatus()).isEqualTo(KeyOperationStatus.COMPLETED);
+        assertThat(response.getMatchedCount()).isEqualTo((long) keyCount);
+        assertThat(response.getCompletedCount()).isEqualTo((long) keyCount);
+        assertThat(response.getFailedCount()).isZero();
+        assertThat(response.getSubmittedAt()).isEqualTo(CUTOFF);
+        assertThat(response.getUpdatedAt()).isEqualTo(finishedAt);
+
+        var mapper = JsonUtils.getRequestResponseJsonMapper();
+        var serialized = mapper.writeValueAsString(response);
+        var json = mapper.readTree(serialized);
+        assertThat(json.get("operationId").asString()).isEqualTo(response.getOperationId().toString());
+        assertThat(json.get("status").asString()).isEqualTo("COMPLETED");
+        assertThat(json.has("correlationId")).isFalse();
+        assertThat(json.has("cutoffAt")).isFalse();
+        assertThat(mapper.readValue(serialized, KeyOperationResponse.class)).isEqualTo(response);
     }
 
     @Test
@@ -228,7 +253,7 @@ class SyncKeysV2OperationsServiceTest {
         when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(row, row,
                 row("a", "u", "later", CUTOFF.plusMillis(1))));
         var response = service.operateAsAccountAdmin("a", accountRequest());
-        assertThat(response.completedCount()).isOne();
+        assertThat(response.getCompletedCount()).isOne();
         verify(keys).updateKeyStatus("a", USER, "u", ISSUER, "old", KeyStatus.REVOKED);
         verify(keys, never()).updateKeyStatus("a", USER, "u", ISSUER, "later", KeyStatus.REVOKED);
         verify(keys, never()).getOwnerStatusByAccount(anyString(), any(), anyString());
@@ -243,7 +268,7 @@ class SyncKeysV2OperationsServiceTest {
         var response = service.operateAsPlatformAdmin(PlatformAdminKeysOperationRequest.builder()
                 .operation(DELETE).accounts(List.of("a", "legacy")).users(List.of("u"))
                 .issuerServices(List.of(ISSUER)).build());
-        assertThat(response.completedCount()).isEqualTo(2);
+        assertThat(response.getCompletedCount()).isEqualTo(2);
         verify(keys).deleteKeyById("a", USER, "u", ISSUER, "new-key");
         verify(keys).deleteKeyById("legacy", USER, "u", ISSUER, "legacy-key");
     }
@@ -277,7 +302,7 @@ class SyncKeysV2OperationsServiceTest {
     void ownerRouteKeepsUserFixed() {
         when(selection.select("a", "u", ISSUER, CUTOFF))
                 .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
-        assertThat(service.operateAsKeyOwner("u", ownerRequest()).completedCount()).isOne();
+        assertThat(service.operateAsKeyOwner("u", ownerRequest()).getCompletedCount()).isOne();
         verify(keys).deleteKeyById("a", USER, "u", ISSUER, "key");
     }
 

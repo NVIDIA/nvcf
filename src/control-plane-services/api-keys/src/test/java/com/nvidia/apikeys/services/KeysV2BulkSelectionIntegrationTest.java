@@ -148,7 +148,7 @@ class KeysV2BulkSelectionIntegrationTest {
                 .operation(operation).accounts(List.of("*")).users(List.of("*"))
                 .issuerServices(List.of("*")).confirmPlatformWide(true).build());
 
-        assertThat(response.completedCount()).isEqualTo(seeded.size() + 1);
+        assertThat(response.getCompletedCount()).isEqualTo(seeded.size() + 1);
         for (var key : seeded) {
             var stored = keysV2Dao.getKeyByHash(key.getKeyHash());
             var management = keysV2Dao.get(key.getNcaId(), USER, key.getOwnerId(),

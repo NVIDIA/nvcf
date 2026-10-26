@@ -20,10 +20,11 @@ package com.nvidia.apikeys.services;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 
 import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
+import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeysOperationType;
 import com.nvidia.apikeys.dto.keysV2.PlatformAdminKeysOperationRequest;
-import com.nvidia.apikeys.dto.keysV2.SyncKeysOperationResponse;
+import com.nvidia.apikeys.vo.KeyOperationStatus;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
@@ -78,25 +79,25 @@ public class SyncKeysV2OperationsService {
         this.selection = selection;
     }
 
-    public SyncKeysOperationResponse operateAsKeyOwner(
+    public KeyOperationResponse operateAsKeyOwner(
             String userId, KeyOwnerKeysOperationRequest request) {
         return execute(Actor.KEY_OWNER, request.getOperation(), request.getAccounts(),
                 List.of(validateId(userId, "userId")), request.getIssuerServices(), null);
     }
 
-    public SyncKeysOperationResponse operateAsAccountAdmin(
+    public KeyOperationResponse operateAsAccountAdmin(
             String ncaId, AccountAdminKeysOperationRequest request) {
         return execute(Actor.ACCOUNT_ADMIN, request.getOperation(),
                 List.of(validateId(ncaId, "ncaId")), request.getUsers(), request.getIssuerServices(), null);
     }
 
-    public SyncKeysOperationResponse operateAsPlatformAdmin(PlatformAdminKeysOperationRequest request) {
+    public KeyOperationResponse operateAsPlatformAdmin(PlatformAdminKeysOperationRequest request) {
         return execute(Actor.PLATFORM_ADMIN, request.getOperation(), request.getAccounts(),
                 request.getUsers(), request.getIssuerServices(),
                 request.getConfirmPlatformWide());
     }
 
-    private SyncKeysOperationResponse execute(
+    private KeyOperationResponse execute(
             Actor actor, KeysOperationType operation, List<String> accountIds,
             List<String> userIds, List<String> issuerIds, Boolean confirmPlatformWide) {
         var cutoff = clock.instant();
@@ -120,18 +121,18 @@ public class SyncKeysV2OperationsService {
         if (actor == Actor.KEY_OWNER) {
             assertSelectedOwnerScopesActive(accounts, users.getFirst(), issuers, cutoff);
         }
-        var correlationId = UUID.randomUUID().toString();
-        log.atInfo().addKeyValue("requestId", correlationId).addKeyValue("actor", actor.name())
+        var operationId = UUID.randomUUID();
+        log.atInfo().addKeyValue("requestId", operationId).addKeyValue("actor", actor.name())
                 .addKeyValue("actorId", actorId).addKeyValue("operation", operation.name())
                 .addKeyValue("accounts", accounts).addKeyValue("users", users)
                 .addKeyValue("issuerServices", issuers)
                 .log("Synchronous bulk operation started");
-        return process(actor, operation, accounts, users, issuers, cutoff, correlationId);
+        return process(actor, operation, accounts, users, issuers, cutoff, operationId);
     }
 
-    private SyncKeysOperationResponse process(
+    private KeyOperationResponse process(
             Actor actor, KeysOperationType operation, List<String> accounts,
-            List<String> users, List<String> issuers, Instant cutoff, String correlationId) {
+            List<String> users, List<String> issuers, Instant cutoff, UUID operationId) {
         long completed = 0;
         boolean mutationAttempted = false;
         Set<KeyIdentity> seen = new HashSet<>();
@@ -171,12 +172,15 @@ public class SyncKeysV2OperationsService {
                 }
             }
         } catch (RuntimeException failure) {
-            throw new BulkOperationException(correlationId, mutationAttempted, failure);
+            throw new BulkOperationException(operationId.toString(), mutationAttempted, failure);
         }
-        log.atInfo().addKeyValue("requestId", correlationId)
+        log.atInfo().addKeyValue("requestId", operationId)
                 .addKeyValue("actor", actor.name()).addKeyValue("operation", operation.name())
                 .addKeyValue("completedCount", completed).log("Synchronous bulk operation completed");
-        return new SyncKeysOperationResponse(correlationId, operation, completed, cutoff);
+        return KeyOperationResponse.builder()
+                .operationId(operationId).operation(operation).status(KeyOperationStatus.COMPLETED)
+                .matchedCount(completed).completedCount(completed).failedCount(0L)
+                .submittedAt(cutoff).updatedAt(clock.instant()).build();
     }
 
     private Stream<KeysByOwnerAndAccountAndServiceVo> select(
