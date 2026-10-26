@@ -173,7 +173,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 	}
 	watcher := &rootfsonly.Watcher{
 		Capturer:    capturer,
-		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: cfg.CUDADriverMajor, Tenant: a.tenantScope},
+		Composer:    a.hashComposer(),
 		KubeClient:  kubeClient,
 		NodeName:    a.config.NodeName,
 		WarmupDelay: cfg.WarmupDelay,
@@ -255,4 +255,19 @@ func loadKubeConfig() (*rest.Config, error) {
 	}
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
+}
+
+// hashComposer composes a pod's capture identity. The webhook (election,
+// seed, lookup) and the capture watcher both use it, so a capture is filed
+// under the hash admission looks up, salt and tenant included.
+func (a *Agent) hashComposer() *rootfsonly.HashInputComposer {
+	major := a.config.RootfsCapture.CUDADriverMajor
+	if major == 0 {
+		major = 580
+	}
+	return &rootfsonly.HashInputComposer{
+		CUDADriverMajor: major,
+		Salt:            a.config.Webhook.CacheSalt,
+		Tenant:          a.tenantScope,
+	}
 }
