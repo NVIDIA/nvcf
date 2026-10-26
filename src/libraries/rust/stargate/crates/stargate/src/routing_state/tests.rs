@@ -2207,6 +2207,56 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
 }
 
 #[test]
+fn cluster_kv_cache_comes_from_the_freshest_backend_reporting_capacity() {
+    fn set_kv_cache(backend: &mut RoutedInferenceServerSnapshot, capacity: u64, used: u64) {
+        backend.stats.kv_cache_capacity_tokens = capacity;
+        backend.stats.kv_cache_used_tokens = used;
+        backend.stats.kv_cache_free_tokens = capacity - used;
+    }
+    fn kv_cache(cluster_state: &RoutedClusterState) -> (u64, u64, u64) {
+        let stats = cluster_state
+            .routing_snapshot()
+            .expect("cluster with backends should publish")
+            .stats;
+        (
+            stats.kv_cache_capacity_tokens,
+            stats.kv_cache_used_tokens,
+            stats.kv_cache_free_tokens,
+        )
+    }
+
+    let mut backend_a = backend!("kv-freshest", "backend-a", 1.0, 10.0, 5);
+    set_kv_cache(&mut backend_a, 1_000, 250);
+    backend_a.stats.stats_observed_at_unix_ms = 200;
+    let cluster_state = RoutedClusterState::new(backend_a.registration.cluster_generation.clone());
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+
+    // A backend without a KV view reports zero capacity; its later update
+    // does not clear the cluster's KV cache.
+    let mut backend_b = backend!(
+        backend_a.registration.cluster_generation.clone() =>
+        "kv-freshest", "backend-b", 1.0, 10.0, 5
+    );
+    backend_b.stats.stats_observed_at_unix_ms = 300;
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    assert_eq!(kv_cache(&cluster_state), (1_000, 250, 750));
+
+    set_kv_cache(&mut backend_b, 2_000, 500);
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    assert_eq!(kv_cache(&cluster_state), (2_000, 500, 1_500));
+
+    // Observation time, not update order, decides.
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+    assert_eq!(kv_cache(&cluster_state), (2_000, 500, 1_500));
+
+    set_kv_cache(&mut backend_a, 0, 0);
+    set_kv_cache(&mut backend_b, 0, 0);
+    cluster_state.upsert_backend(Arc::new(backend_a));
+    cluster_state.upsert_backend(Arc::new(backend_b));
+    assert_eq!(kv_cache(&cluster_state), (0, 0, 0));
+}
+
+#[test]
 fn replaced_backend_registration_cannot_reserve_same_id_successor() {
     let old = backend!(
         "cluster-exact-registration",

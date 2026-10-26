@@ -36,10 +36,22 @@ use super::snapshots::{
     RoutedClusterSnapshot, RoutedClusterState, RoutedInferenceServerSnapshot,
 };
 
-fn set_shared_engine_stats(stats: &mut ModelStats, src: &ModelStats) {
-    stats.kv_cache_capacity_tokens = src.kv_cache_capacity_tokens;
-    stats.kv_cache_used_tokens = src.kv_cache_used_tokens;
-    stats.kv_cache_free_tokens = src.kv_cache_free_tokens;
+fn set_shared_engine_stats(
+    stats: &mut ModelStats,
+    backends: &[Arc<RoutedInferenceServerSnapshot>],
+    src: &ModelStats,
+) {
+    // Backends of one cluster share its KV cache. A backend without a view of
+    // it reports zero capacity, so take the freshest view that has one.
+    let kv_cache = backends
+        .iter()
+        .map(|backend| &backend.stats)
+        .filter(|stats| stats.kv_cache_capacity_tokens > 0)
+        .max_by_key(|stats| stats.stats_observed_at_unix_ms)
+        .unwrap_or(src);
+    stats.kv_cache_capacity_tokens = kv_cache.kv_cache_capacity_tokens;
+    stats.kv_cache_used_tokens = kv_cache.kv_cache_used_tokens;
+    stats.kv_cache_free_tokens = kv_cache.kv_cache_free_tokens;
     stats.max_engine_concurrency = src.max_engine_concurrency;
 }
 
@@ -324,7 +336,7 @@ impl ClusterRoutingGeneration {
             pending.is_active()
         });
         let mut stats = backend_stats;
-        set_shared_engine_stats(&mut stats, &source_backend.stats);
+        set_shared_engine_stats(&mut stats, &self.backends, &source_backend.stats);
         let base_snapshot = RoutedClusterSnapshot {
             cluster_id: source_backend.cluster_id.clone(),
             stats,
