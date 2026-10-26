@@ -246,7 +246,7 @@ Please also review our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing
 
 For questions and support:
 
-- GitHub Issues: [Create an issue](https://github.com/NVIDIA/nvcf-image-credential-helper/issues)
+- GitHub Issues: [Create an issue](https://github.com/NVIDIA/nvcf/issues)
 
 ## Security
 

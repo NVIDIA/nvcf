@@ -1,7 +1,8 @@
 # Release process
 
 The pre-cutover generated GitLab pipeline described here has been retired for
-native public components. Start with [Release process](../../RELEASE.md).
+native public components. Start with the
+[release guide](https://github.com/NVIDIA/nvcf/blob/main/RELEASE.md).
 
 - [GitHub release automation](github-release-process.md) owns component
   versioning, maintenance branches, tags, inventory attachment and pin proposals.

@@ -98,7 +98,10 @@ Commit with a DCO sign-off and a conventional commit message (see [Commit Messag
 
 ### Step 6: Open a Pull Request
 
-- Push your branch and open a PR targeting `main`.
+- Push your branch and open a PR targeting the branch selected by the
+  [release workflow](docs/dev/github-release-process.md): `main` for new
+  development or compatible patches on its current minor, or the owning
+  maintenance branch when required.
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) when opening your pull request.
 - Reference the related issue in the PR description with `Fixes #123`.
 - Someone will review your PR soon!
