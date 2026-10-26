@@ -44,6 +44,7 @@ public class PlatformAdminKeysOperationRequest {
     private List<String> accounts;
 
     @NotEmpty
+    @JsonAlias("issuer_services")
     private List<String> issuerServices;
 
     @NotEmpty

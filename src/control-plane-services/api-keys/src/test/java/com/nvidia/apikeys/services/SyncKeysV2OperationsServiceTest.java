@@ -74,6 +74,8 @@ class SyncKeysV2OperationsServiceTest {
     private KeysV2Service keys;
     @Mock
     private ServicesService services;
+    @Mock
+    private KeysV2BulkSelectionService selection;
     private SyncKeysV2OperationsService service;
 
     @BeforeEach
@@ -81,7 +83,7 @@ class SyncKeysV2OperationsServiceTest {
         var legacy = new LegacyAccountTranslator(NakProperties.builder()
                 .ncaId("legacy").serviceIdMap(Map.of(ISSUER, "legacy-issuer")).build());
         var clock = new MillisecondPrecisionClock(Clock.fixed(CUTOFF, ZoneOffset.UTC));
-        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10);
+        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection);
         lenient().when(services.getServiceById(ISSUER))
                 .thenReturn(Optional.of(ServiceVo.builder().serviceId(ISSUER).build()));
     }
@@ -96,7 +98,7 @@ class SyncKeysV2OperationsServiceTest {
     }
 
     static Stream<List<String>> invalidSelections() {
-        return Stream.of(null, List.of(), List.of("*"), List.of("u", "*"),
+        return Stream.of(null, List.of(), List.of("u", "*"),
                 List.of("u", "u"), List.of(" "), List.of(" u"),
                 Arrays.asList("u", null), List.of("bad\nvalue"),
                 java.util.stream.IntStream.range(0, 11).mapToObj(i -> "u" + i).toList());
@@ -118,8 +120,8 @@ class SyncKeysV2OperationsServiceTest {
             String actor, String account, String user, String issuer) {
         when(services.getServiceById(issuer))
                 .thenReturn(Optional.of(ServiceVo.builder().serviceId(issuer).build()));
-        when(keys.listKeys(account, USER, user, issuer))
-                .thenReturn(List.of(row(account, user, "key", CUTOFF).toBuilder()
+        when(selection.select(account, user, issuer, CUTOFF))
+                .thenReturn(Stream.of(row(account, user, "key", CUTOFF).toBuilder()
                         .issuerServiceId(issuer).build()));
 
         var response = switch (actor) {
@@ -197,7 +199,7 @@ class SyncKeysV2OperationsServiceTest {
     @Test
     void appliesCutoffAndDeduplicatesWithinExactAccountBoundary() {
         var row = row("a", "u", "old", CUTOFF);
-        when(keys.listKeys("a", USER, "u", ISSUER)).thenReturn(List.of(row, row,
+        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(row, row,
                 row("a", "u", "later", CUTOFF.plusMillis(1))));
         var response = service.operateAsAccountAdmin("a", accountRequest());
         assertThat(response.completedCount()).isOne();
@@ -208,10 +210,10 @@ class SyncKeysV2OperationsServiceTest {
 
     @Test
     void platformSelectionUsesExactAccountUserIssuerIntersectionsIncludingLegacyAccount() {
-        when(keys.listKeys("a", USER, "u", ISSUER))
-                .thenReturn(List.of(row("a", "u", "new-key", CUTOFF)));
-        when(keys.listKeys("legacy", USER, "u", ISSUER))
-                .thenReturn(List.of(row("legacy", "u", "legacy-key", CUTOFF)));
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "new-key", CUTOFF)));
+        when(selection.select("legacy", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("legacy", "u", "legacy-key", CUTOFF)));
         var response = service.operateAsPlatformAdmin(PlatformAdminKeysOperationRequest.builder()
                 .operation(DELETE).accounts(List.of("a", "legacy")).users(List.of("u"))
                 .issuerServices(List.of(ISSUER)).build());
@@ -231,7 +233,7 @@ class SyncKeysV2OperationsServiceTest {
                 KeyOwnerKeysOperationRequest.builder().operation(DELETE)
                         .accounts(List.of("a", "blocked")).issuerServices(List.of(ISSUER)).build()))
                 .isInstanceOf(ForbiddenException.class);
-        verify(keys, never()).listKeys(anyString(), any(), anyString(), anyString());
+        verifyNoInteractions(selection);
     }
 
     @Test
@@ -242,21 +244,21 @@ class SyncKeysV2OperationsServiceTest {
                         .ownerStatus(KeyOwnerStatus.SUSPENDED).build()));
         assertThatThrownBy(() -> service.operateAsKeyOwner("u", ownerRequest()))
                 .isInstanceOf(ForbiddenException.class);
-        verify(keys, never()).listKeys(anyString(), any(), anyString(), anyString());
+        verifyNoInteractions(selection);
     }
 
     @Test
     void ownerRouteKeepsUserFixed() {
-        when(keys.listKeys("a", USER, "u", ISSUER))
-                .thenReturn(List.of(row("a", "u", "key", CUTOFF)));
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
         assertThat(service.operateAsKeyOwner("u", ownerRequest()).completedCount()).isOne();
         verify(keys).deleteKeyById("a", USER, "u", ISSUER, "key");
     }
 
     @Test
     void rejectsMismatchedStoredScopeWithoutMutation() {
-        when(keys.listKeys("a", USER, "u", ISSUER))
-                .thenReturn(List.of(row("different-account", "u", "key", CUTOFF)));
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("different-account", "u", "key", CUTOFF)));
         var failure = assertThrows(BulkOperationException.class,
                 () -> service.operateAsAccountAdmin("a", accountRequest()));
         assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", false);
@@ -266,7 +268,7 @@ class SyncKeysV2OperationsServiceTest {
 
     @Test
     void laterMutationFailureRetainsCauseAndStopsFurtherKeys() {
-        when(keys.listKeys("a", USER, "u", ISSUER)).thenReturn(List.of(
+        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(
                 row("a", "u", "first", CUTOFF), row("a", "u", "failure", CUTOFF),
                 row("a", "u", "last", CUTOFF)));
         when(keys.updateKeyStatus("a", USER, "u", ISSUER, "first", KeyStatus.REVOKED))
@@ -287,8 +289,8 @@ class SyncKeysV2OperationsServiceTest {
 
     @Test
     void firstMutationWithLostAcknowledgementIsAlsoPartial() {
-        when(keys.listKeys("a", USER, "u", ISSUER))
-                .thenReturn(List.of(row("a", "u", "key", CUTOFF)));
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
         doThrow(new IllegalStateException("acknowledgement lost")).when(keys)
                 .deleteKeyById("a", USER, "u", ISSUER, "key");
         var failure = assertThrows(BulkOperationException.class,
@@ -299,9 +301,9 @@ class SyncKeysV2OperationsServiceTest {
 
     @Test
     void laterDiscoveryFailureCanFollowSuccessfulMutation() {
-        when(keys.listKeys("a", USER, "u", ISSUER))
-                .thenReturn(List.of(row("a", "u", "key", CUTOFF)));
-        when(keys.listKeys("a", USER, "v", ISSUER))
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
+        when(selection.select("a", "v", ISSUER, CUTOFF))
                 .thenThrow(new IllegalStateException("selection unavailable"));
         var failure = assertThrows(BulkOperationException.class,
                 () -> service.operateAsAccountAdmin("a",

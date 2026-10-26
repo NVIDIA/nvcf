@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -49,9 +50,8 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
- * Sequential request-bound prototype. Selection materializes one exact account/user/issuer
- * partition at a time through the existing legacy-aware service. There is no durable job,
- * total match bound, rollback, or automatic whole-request retry.
+ * Processes explicit or wildcard selections synchronously using paged, legacy-aware reads
+ * and the existing per-key operations.
  */
 @Slf4j
 @Service
@@ -64,11 +64,13 @@ public class SyncKeysV2OperationsService {
     private final LegacyAccountTranslator legacyAccount;
     private final MillisecondPrecisionClock clock;
     private final int maxSelectorValues;
+    private final KeysV2BulkSelectionService selection;
 
     public SyncKeysV2OperationsService(
             KeysV2Service keys, ServicesService services, LegacyAccountTranslator legacyAccount,
             MillisecondPrecisionClock clock,
-            @Value("${local.sync-bulk-prototype.max-selector-values:10}") int maxSelectorValues) {
+            @Value("${local.sync-bulk-prototype.max-selector-values:10}") int maxSelectorValues,
+            KeysV2BulkSelectionService selection) {
         if (maxSelectorValues < 1) {
             throw new IllegalArgumentException("max-selector-values must be positive");
         }
@@ -77,29 +79,31 @@ public class SyncKeysV2OperationsService {
         this.legacyAccount = legacyAccount;
         this.clock = clock;
         this.maxSelectorValues = maxSelectorValues;
+        this.selection = selection;
     }
 
     public SyncKeysOperationResponse operateAsKeyOwner(
             String userId, KeyOwnerKeysOperationRequest request) {
         return execute(Actor.KEY_OWNER, request.getOperation(), request.getAccounts(),
-                List.of(validateId(userId, "userId")), request.getIssuerServices(), request.getReason());
+                List.of(validateId(userId, "userId")), request.getIssuerServices(), request.getReason(), null);
     }
 
     public SyncKeysOperationResponse operateAsAccountAdmin(
             String ncaId, AccountAdminKeysOperationRequest request) {
         return execute(Actor.ACCOUNT_ADMIN, request.getOperation(),
                 List.of(validateId(ncaId, "ncaId")), request.getUsers(), request.getIssuerServices(),
-                request.getReason());
+                request.getReason(), null);
     }
 
     public SyncKeysOperationResponse operateAsPlatformAdmin(PlatformAdminKeysOperationRequest request) {
         return execute(Actor.PLATFORM_ADMIN, request.getOperation(), request.getAccounts(),
-                request.getUsers(), request.getIssuerServices(), request.getReason());
+                request.getUsers(), request.getIssuerServices(), request.getReason(),
+                request.getConfirmPlatformWide());
     }
 
     private SyncKeysOperationResponse execute(
             Actor actor, KeysOperationType operation, List<String> accountIds,
-            List<String> userIds, List<String> issuerIds, String reason) {
+            List<String> userIds, List<String> issuerIds, String reason, Boolean confirmPlatformWide) {
         var cutoff = clock.instant();
         var reasonDigest = validateAndDigestReason(reason);
         var actorId = auditActorId();
@@ -109,16 +113,18 @@ public class SyncKeysV2OperationsService {
         var accounts = validateSelection(accountIds, "accounts");
         var users = validateSelection(userIds, "users");
         var issuers = validateSelection(issuerIds, "issuerServices");
-        for (var issuer : issuers) {
-            assertRegisteredIssuer(issuer);
+        if (actor == Actor.PLATFORM_ADMIN && isWildcard(accounts) && isWildcard(users)
+                && isWildcard(issuers) && !Boolean.TRUE.equals(confirmPlatformWide)) {
+            throw new BadRequestException("confirm_platform_wide must be true for a platform-wide operation");
+        }
+        if (!isWildcard(issuers)) {
+            for (var issuer : issuers) {
+                assertRegisteredIssuer(issuer);
+            }
         }
         // Check every selected owner boundary before allowing any changes.
         if (actor == Actor.KEY_OWNER) {
-            for (var account : accounts) {
-                for (var issuer : issuers) {
-                    assertOwnerActive(account, users.getFirst(), issuer);
-                }
-            }
+            assertSelectedOwnerScopesActive(accounts, users.getFirst(), issuers, cutoff);
         }
         var correlationId = UUID.randomUUID().toString();
         log.atInfo().addKeyValue("requestId", correlationId).addKeyValue("actor", actor.name())
@@ -139,27 +145,33 @@ public class SyncKeysV2OperationsService {
             for (var account : accounts) {
                 for (var user : users) {
                     for (var issuer : issuers) {
-                        var selected = keys.listKeys(account, USER, user, issuer);
-                        for (var key : selected) {
-                            assertMatchesScope(key, account, user, issuer);
-                            if (key.getCreatedAt() == null) {
-                                throw new IllegalStateException("Selected key has no creation time");
+                        try (var selected = select(account, user, issuer, cutoff)) {
+                            var iterator = selected.iterator();
+                            while (iterator.hasNext()) {
+                                var key = iterator.next();
+                                assertMatchesScope(key, account, user, issuer);
+                                if (key.getCreatedAt() == null) {
+                                    throw new IllegalStateException("Selected key has no creation time");
+                                }
+                                if (key.getCreatedAt().isAfter(cutoff)
+                                        || !seen.add(new KeyIdentity(key.getNcaId(), key.getOwnerId(),
+                                                key.getIssuerServiceId(), key.getKeyId()))) {
+                                    continue;
+                                }
+                                if (actor == Actor.KEY_OWNER) {
+                                    assertOwnerActive(key.getNcaId(), key.getOwnerId(), key.getIssuerServiceId());
+                                }
+                                mutationAttempted = true;
+                                switch (operation) {
+                                    case REVOKED -> keys.updateKeyStatus(
+                                            key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
+                                            key.getKeyId(), KeyStatus.REVOKED);
+                                    case DELETE -> keys.deleteKeyById(
+                                            key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
+                                            key.getKeyId());
+                                }
+                                completed++;
                             }
-                            if (key.getCreatedAt().isAfter(cutoff)
-                                    || !seen.add(new KeyIdentity(account, user, issuer, key.getKeyId()))) {
-                                continue;
-                            }
-                            if (actor == Actor.KEY_OWNER) {
-                                assertOwnerActive(account, user, issuer);
-                            }
-                            mutationAttempted = true;
-                            switch (operation) {
-                                case REVOKED -> keys.updateKeyStatus(
-                                        account, USER, user, issuer, key.getKeyId(), KeyStatus.REVOKED);
-                                case DELETE -> keys.deleteKeyById(
-                                        account, USER, user, issuer, key.getKeyId());
-                            }
-                            completed++;
                         }
                     }
                 }
@@ -171,6 +183,38 @@ public class SyncKeysV2OperationsService {
                 .addKeyValue("actor", actor.name()).addKeyValue("operation", operation.name())
                 .addKeyValue("completedCount", completed).log("Synchronous bulk operation completed");
         return new SyncKeysOperationResponse(correlationId, operation, completed, cutoff);
+    }
+
+    private Stream<KeysByOwnerAndAccountAndServiceVo> select(
+            String account, String user, String issuer, Instant cutoff) {
+        return selection.select("*".equals(account) ? null : account,
+                "*".equals(user) ? null : user, "*".equals(issuer) ? null : issuer, cutoff);
+    }
+
+    private void assertSelectedOwnerScopesActive(
+            List<String> accounts, String user, List<String> issuers, Instant cutoff) {
+        for (var account : accounts) {
+            if (!"*".equals(account) && isWildcard(issuers)) {
+                assertOwnerAccountActive(account, user);
+            }
+            for (var issuer : issuers) {
+                if (!"*".equals(account) && !"*".equals(issuer)) {
+                    assertOwnerActive(account, user, issuer);
+                } else {
+                    try (var selected = select(account, user, issuer, cutoff)) {
+                        selected.forEach(key -> {
+                            assertMatchesScope(key, account, user, issuer);
+                            if (key.getCreatedAt() == null) {
+                                throw new IllegalStateException("Selected key has no creation time");
+                            }
+                            if (!key.getCreatedAt().isAfter(cutoff)) {
+                                assertOwnerActive(key.getNcaId(), user, key.getIssuerServiceId());
+                            }
+                        });
+                    }
+                }
+            }
+        }
     }
 
     private static String validateAndDigestReason(String reason) {
@@ -214,6 +258,12 @@ public class SyncKeysV2OperationsService {
         if (selection.size() > maxSelectorValues) {
             throw new BadRequestException(dimension + " exceeds the configured selector limit");
         }
+        if (isWildcard(selection)) {
+            return List.of("*");
+        }
+        if (selection.contains("*")) {
+            throw new BadRequestException(dimension + " wildcard must be the only value");
+        }
         var distinct = new HashSet<String>();
         for (var value : selection) {
             validateId(value, dimension);
@@ -222,6 +272,10 @@ public class SyncKeysV2OperationsService {
             }
         }
         return List.copyOf(selection);
+    }
+
+    private static boolean isWildcard(List<String> selection) {
+        return selection.size() == 1 && "*".equals(selection.getFirst());
     }
 
     private static String validateId(String value, String dimension) {
@@ -245,23 +299,34 @@ public class SyncKeysV2OperationsService {
     }
 
     private void assertOwnerActive(String account, String user, String issuer) {
-        var accountStatus = keys.getOwnerStatusByAccount(account, USER, user);
+        assertOwnerAccountActive(account, user);
         var issuerStatus = keys.getOwnerStatusByAccountAndService(account, USER, user, issuer);
-        if (accountStatus.map(status -> status.getOwnerStatus() != KeyOwnerStatus.ACTIVE).orElse(false)
-                || issuerStatus.map(status -> status.getOwnerStatus() != KeyOwnerStatus.ACTIVE)
+        if (issuerStatus.map(status -> status.getOwnerStatus() != KeyOwnerStatus.ACTIVE)
                         .orElse(false)) {
+            throw new ForbiddenException("Key owner suspended.");
+        }
+    }
+
+    private void assertOwnerAccountActive(String account, String user) {
+        if (keys.getOwnerStatusByAccount(account, USER, user)
+                .map(status -> status.getOwnerStatus() != KeyOwnerStatus.ACTIVE).orElse(false)) {
             throw new ForbiddenException("Key owner suspended.");
         }
     }
 
     private static void assertMatchesScope(
             KeysByOwnerAndAccountAndServiceVo key, String account, String user, String issuer) {
-        if (!Objects.equals(account, key.getNcaId()) || key.getOwnerType() != USER
-                || !Objects.equals(user, key.getOwnerId())
-                || !Objects.equals(issuer, key.getIssuerServiceId())
+        if (!matches(account, key.getNcaId()) || key.getOwnerType() != USER
+                || !matches(user, key.getOwnerId())
+                || !matches(issuer, key.getIssuerServiceId())
                 || key.getKeyId() == null || key.getKeyId().isBlank()) {
             throw new IllegalStateException("Selected key does not match the requested scope");
         }
+    }
+
+    private static boolean matches(String selector, String value) {
+        return value != null && !value.isBlank() && !"*".equals(value)
+                && ("*".equals(selector) || Objects.equals(selector, value));
     }
 
     private enum Actor {

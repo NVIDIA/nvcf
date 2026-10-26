@@ -17,6 +17,7 @@
 
 package com.nvidia.apikeys.dto.keysV2;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
@@ -41,6 +42,7 @@ public class KeyOwnerKeysOperationRequest {
     private List<String> accounts;
 
     @NotEmpty
+    @JsonAlias("issuer_services")
     private List<String> issuerServices;
 
     private String reason;
