@@ -31,11 +31,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.NvcaClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
@@ -127,63 +124,18 @@ public class ClustersService {
 
         clusterGroupsSet.addAll(fetchClusterGroupsForNvca(ncaId, instanceTypeUsageEnum));
 
-        if (clusterAuthorizationService.isDetailedTargetingFlowEnabled()) {
-            // NEW: non-BYOC with authorization filtering using hardcoded cluster group ID.
-            ClusterGroups nonByocClusterGroup = clusterAuthorizationService
-                    .fetchAuthorizedClusterGroup(ncaId, instanceTypeUsageEnum);
-            if (nonByocClusterGroup != null) {
-                clusterGroupsSet.add(nonByocClusterGroup);
-            }
-        } else {
-            log.info("Using BART flow to fetch clusterGroup details for non-BYOC, ncaId: {}", ncaId);
-            // OLD: non-BYOC from BART tables
-            clusterGroupsSet.addAll(fetchClusterGroupsForBart(ncaId));
+        ClusterGroups nonByocClusterGroup = clusterAuthorizationService
+                .fetchAuthorizedClusterGroup(ncaId, instanceTypeUsageEnum);
+        if (nonByocClusterGroup != null) {
+            clusterGroupsSet.add(nonByocClusterGroup);
         }
 
-        // Applied last so every branch above (NVCA, detailed targeting, BART) is covered once.
+        // Apply GPU gating to both NVCA and non-BYOC discovery results.
         gpuGatingService.removeGatedClusterGroups(clusterGroupsSet, ncaId);
 
         return ClusterGroupResponse.builder()
                 .clusterGroup(clusterGroupsSet)
                 .build();
-    }
-
-    /**
-     *  All BYOC clusters are migrated to NVCA flow
-     *  Only non-BYOC manually registered clusters are present with BART flow and added by this function in response
-     *  For non-BYOC manually registered clusters all the instance types will have nodeType as "SINGLE"
-     *  We won't need to do instanceTypeUsage filtering for non-BYOC manually registered clusters as SINGLE nodeType will always be included in response
-     */
-    private Set<ClusterGroups> fetchClusterGroupsForBart(String ncaId) {
-        // Adding cluster groups from WILDCARD(*)
-        Set<ClusterGroups> clusterGroupsSet = getClusterGroupsForBart(WILDCARD);
-
-        // Fetching info of all the clusters available for given ncaId
-        if (ncaId != null && !ncaId.equals(WILDCARD)) {
-            clusterGroupsSet.addAll(getClusterGroupsForBart(ncaId));
-        }
-
-        filterRestrictedGpusForComputePlatformGroups(clusterGroupsSet, ncaId);
-        return clusterGroupsSet;
-    }
-
-    /**
-     * Restricts limited GPUs to dedicated NGC orgs on compute-platform cluster
-     * groups. No-op when {@code icms.gpu-allowed-nca-ids} is empty or the GPU is not listed
-     * (existing behavior); BYOC groups are never gated.
-     */
-    private void filterRestrictedGpusForComputePlatformGroups(Set<ClusterGroups> clusterGroupsSet,
-                                                              String ncaId) {
-        clusterGroupsSet.removeIf(clusterGroup -> {
-            if (!computePlatformService.isPlatformCluster(clusterGroup.getName())) {
-                return false;
-            }
-            if (clusterGroup.getGpus() != null) {
-                clusterGroup.getGpus().removeIf(gpu ->
-                        !icmsConfigurationProperties.isNcaAllowedForGpu(gpu.getName(), ncaId));
-            }
-            return clusterGroup.getGpus() == null || clusterGroup.getGpus().isEmpty();
-        });
     }
 
     private Set<ClusterGroups> fetchClusterGroupsForNvca(String ncaId,
@@ -200,71 +152,6 @@ public class ClustersService {
         }
 
         return new HashSet<>(groupIdToClusterGroupRespMap.values());
-    }
-
-    private Set<ClusterGroups> getClusterGroupsForBart(String ncaId) {
-
-        Set<ClusterGroups> clusterGroupsSet = new HashSet<>();
-
-        List<ClusterGroupsByAuthorizedAccountsEntity>
-                clusterGroupsByAuthorizedAccountsEntities =
-                clusterRepository.getAllClusterGroupsInAuthorizedAccount(ncaId);
-
-        for (ClusterGroupsByAuthorizedAccountsEntity entity : clusterGroupsByAuthorizedAccountsEntities) {
-            Set<ClustersResponse> clustersResponses =
-                    getClustersFromClusterGroupForBart(entity.getKey().getClusterGroupId())
-                            .stream()
-                            .map(ClustersService::toClustersResponse)
-                            .collect(Collectors.toSet());
-
-            // Don't include cluster group if no cluster is Ready
-            if (clustersResponses.isEmpty()) {
-                continue;
-            }
-            ClusterGroups clusterGroups = ClusterGroups.builder()
-                    .id(entity.getKey().getClusterGroupId())
-                    .name(entity.getKey().getClusterGroupName())
-                    .gpus(toGpuResponse(entity.getGpus()))
-                    .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                    .ncaId(entity.getNcaId())
-                    .clusters(clustersResponses)
-                    .build();
-            clusterGroupsSet.add(clusterGroups);
-        }
-
-        return clusterGroupsSet;
-    }
-
-    public Set<ClusterByGroupIdAndIdEntity> getClustersFromClusterGroupForBart(
-            String clusterGroupId) {
-        Set<ClusterByGroupIdAndIdEntity> entities = new HashSet<>();
-
-        List<ClusterByGroupIdAndIdEntity>
-                clustersFromDb = clusterRepository.getClustersFromClusterGroup(clusterGroupId);
-
-        for (ClusterByGroupIdAndIdEntity entity : clustersFromDb) {
-            // Don't include cluster either if it is not Ready or it is not Healthy
-            if (entity.getClusterStatus() != ClusterStatusEnum.READY) {
-                log.info(
-                        "Cluster with id {} name {} from cluster group id {} name {} is not READY hence avoiding populating in response for BART",
-                        entity.getKey().getClusterId(), entity.getClusterName(),
-                        entity.getClusterGroupName(), entity.getKey().getClusterGroupId());
-                continue;
-            }
-
-            // Don't include NVCA migrated clusters
-            if (entity.getNvcaVersion() != null) {
-                log.info(
-                        "Cluster with id {} name {} from cluster group id {} name {} is migrated to NVCA hence avoiding populating in response for BART",
-                        entity.getKey().getClusterId(), entity.getClusterName(),
-                        entity.getClusterGroupName(), entity.getKey().getClusterGroupId());
-                continue;
-            }
-
-            entities.add(entity);
-        }
-
-        return entities;
     }
 
     private void getClusterGroupsForNvca(
@@ -571,16 +458,6 @@ public class ClustersService {
         return allAttributes;
     }
 
-    private static ClusterGroups.ClustersResponse toClustersResponse(
-            ClusterByGroupIdAndIdEntity entity) {
-        return ClusterGroups.ClustersResponse.builder()
-                .id(entity.getKey().getClusterId())
-                .k8sVersion(entity.getK8sVersion())
-                .name(entity.getClusterName())
-                .build();
-    }
-
-
     /**
      * Apply {@link InstanceTypeUsageEnum}-based filtering to the supplied GPU set and
      * convert the survivors into {@link GpuResponse} instances. When filtering is
@@ -689,46 +566,6 @@ public class ClustersService {
                 .build();
     }
 
-    private Set<GpuResponse> toGpuResponse(Set<GpuUdt> gpusStoredInDb) {
-
-        Set<GpuResponse> gpuResponses = new HashSet<>();
-        for (GpuUdt entity : gpusStoredInDb) {
-            GpuResponse gpuResponse = GpuResponse.builder()
-                    .name(entity.getName())
-                    .instanceTypes(toInstanceTypeResponse(entity.getInstanceTypes()))
-                    .build();
-
-            gpuResponses.add(gpuResponse);
-        }
-
-        return gpuResponses;
-    }
-
-    private Set<InstanceTypeResponse> toInstanceTypeResponse(
-            Set<InstanceTypeUdt> instanceTypeStoredInDb) {
-
-        Set<InstanceTypeResponse> instanceTypeResponses = new HashSet<>();
-
-        for (InstanceTypeUdt entity : instanceTypeStoredInDb) {
-            InstanceTypeResponse instanceTypeResponse =
-                    InstanceTypeResponse.builder()
-                            .value(entity.getValue())
-                            .name(entity.getName())
-                            .isDefault(Boolean.TRUE.equals(entity.getIsDefault()) ? true : null)
-                            .description(entity.getDescription())
-
-                            /*
-                             *  All BYOC clusters are migrated to NVCA flow
-                             *  Only non-BYOC manually registered clusters are present with BART flow and added by this function in response
-                             *  For non-BYOC manually registered clusters all the instance types will have nodeType as "SINGLE"
-                             */
-                            .nodeType(NodeTypeEnum.SINGLE)
-                            .build();
-            instanceTypeResponses.add(instanceTypeResponse);
-        }
-        return instanceTypeResponses;
-    }
-
     private static Set<InstanceTypeResponse> toInstanceTypeV5Response(
             Set<InstanceTypeV5Udt> instanceTypeStoredInDb) {
 
@@ -821,4 +658,3 @@ public class ClustersService {
     }
 
 }
-

@@ -163,7 +163,7 @@ public class ClusterHealthMonitorTask {
             entity.setClusterStatus(ClusterStatusEnum.ABANDONED);
 
             // Updating in DB
-            clusterRepository.updateClusterInfo(entity, new HashSet<>(), false);
+            clusterRepository.updateClusterInfo(entity);
 
             // Sending audit logs
             Map<String, Object> auditProps = new HashMap<>();

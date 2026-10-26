@@ -17,7 +17,6 @@
 package com.nvidia.icms.outbound.cassandra.byoc;
 
 import com.nvidia.icms.errors.IcmsInternalServerException;
-import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeUsageEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.NodeTypeEnum;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
@@ -25,8 +24,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupByGroupIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAccountEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAccountKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
@@ -38,7 +35,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV3Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.NonNull;
@@ -140,22 +136,6 @@ public class NvcaConverter {
                 .creationQueueType(entity.getCreationQueueType())
                 .gpus(entity.getGpus())
                 .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .build();
-    }
-
-    public static ClusterGroupsByAuthorizedAccountsEntity toClusterGroupsByAuthorizedAccountsEntity(
-            ClusterEntity entity, String ncaId) {
-        return ClusterGroupsByAuthorizedAccountsEntity.builder()
-                .key(ClusterGroupsByAuthorizedAccountsKey.builder()
-                             .clusterGroupName(entity.getClusterGroupName())
-                             .clusterGroupId(entity.getClusterGroupId())
-                             .ncaIdKey(entity.getNcaId())
-                             .build())
-                .creationQueueUrl(entity.getCreationQueueUrl())
-                .creationQueueType(entity.getCreationQueueType())
-                .gpus(entity.getGpus())
-                .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .ncaId(ncaId)
                 .build();
     }
 

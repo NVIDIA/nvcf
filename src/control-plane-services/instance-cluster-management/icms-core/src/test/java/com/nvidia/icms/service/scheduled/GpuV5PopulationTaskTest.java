@@ -20,8 +20,10 @@ import static com.nvidia.icms.util.TestUtil.getDummyClusterEntity;
 
 import com.nvidia.icms.integration.IntegrationTest;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
+import com.nvidia.icms.outbound.cassandra.byoc.NvcaClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import java.util.Optional;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -34,31 +36,37 @@ class GpuV5PopulationTaskTest extends IntegrationTest {
     private ClusterRepository clusterRepository;
 
     @Autowired
+    private NvcaClusterRepository nvcaClusterRepository;
+
+    @Autowired
     private GpusV5PopulationTask task;
 
 
     @Test
     void update_gpuV5() {
-        // prepare
-
-        // Prepare
         ClusterEntity clusterEntity = getDummyClusterEntity();
+        clusterEntity.setClusterId(UUID.randomUUID().toString());
+        clusterEntity.setClusterName("cluster-" + clusterEntity.getClusterId());
+        clusterEntity.setClusterGroupId(UUID.randomUUID().toString());
+        clusterEntity.setClusterGroupName("group-" + clusterEntity.getClusterGroupId());
         String clusterId = clusterEntity.getClusterId();
         clusterEntity.setGpusV5(null);
-        clusterRepository.saveClusterInfo(clusterEntity);
-        Optional<ClusterEntity> beforeUpdateClusterEntity = clusterRepository.getClusterInfoByClusterId(
-                clusterId, false);
-        Assertions.assertTrue(beforeUpdateClusterEntity.isPresent());
-        Assertions.assertTrue(beforeUpdateClusterEntity.get().getGpusV5().isEmpty());
+        nvcaClusterRepository.saveClusterInfo(clusterEntity);
+        try {
+            Optional<ClusterEntity> beforeUpdateClusterEntity = clusterRepository.getClusterInfoByClusterId(
+                    clusterId, false);
+            Assertions.assertTrue(beforeUpdateClusterEntity.isPresent());
+            Assertions.assertTrue(beforeUpdateClusterEntity.get().getGpusV5().isEmpty());
 
-        // execute
-        task.updateClusters();
+            task.updateClusters();
 
-        // validate
-        Optional<ClusterEntity> updatedClusterEntity = clusterRepository.getClusterInfoByClusterId(
-                clusterId, false);
-        Assertions.assertTrue(updatedClusterEntity.isPresent());
-        Assertions.assertNotNull(updatedClusterEntity.get().getGpusV5());
-        log.info("after gpu {}", updatedClusterEntity.get().getGpusV5());
+            Optional<ClusterEntity> updatedClusterEntity = clusterRepository.getClusterInfoByClusterId(
+                    clusterId, false);
+            Assertions.assertTrue(updatedClusterEntity.isPresent());
+            Assertions.assertNotNull(updatedClusterEntity.get().getGpusV5());
+            log.info("after gpu {}", updatedClusterEntity.get().getGpusV5());
+        } finally {
+            nvcaClusterRepository.deleteClusterInfo(clusterEntity);
+        }
     }
 }

@@ -18,6 +18,7 @@ package com.nvidia.icms.service.byoc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
@@ -25,16 +26,10 @@ import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroupResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterGroups.GpuResponse;
-import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeUsageEnum;
+import com.nvidia.icms.inbound.rest.model.byoc.NodeTypeEnum;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.NvcaClusterRepository;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
 import com.nvidia.icms.service.gating.GpuGatingService;
@@ -51,10 +46,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
- * Focused coverage for the BART-legacy {@code /clusterGroups} GPU-to-NCA restriction added in
- * {@link ClustersService#getRegisteredClustersForNcaId}. Detailed targeting is disabled so the
- * request flows through {@code fetchClusterGroupsForBart} and the new
- * {@code filterRestrictedGpusForComputePlatformGroups} choke point.
+ * Covers authorized non-BYOC discovery alongside NVCA discovery and GPU gating.
  */
 @ExtendWith(MockitoExtension.class)
 class ClustersServiceTest {
@@ -104,54 +96,42 @@ class ClustersServiceTest {
                 clusterAuthorizationService,
                 new GpuGatingService(icmsConfigurationProperties, null));
 
-        // BART (legacy) flow, not detailed targeting.
-        when(clusterAuthorizationService.isDetailedTargetingFlowEnabled()).thenReturn(false);
-        // No NVCA groups for the always-queried WILDCARD account; isolate the BART group.
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(WILDCARD)).thenReturn(List.of());
     }
 
     @Test
-    void getRegisteredClustersForNcaId_dropsRestrictedGpuOnPlatformGroup_forDisallowedNca() {
-        icmsConfigurationProperties.setGpuAllowedNcaIds(Map.of(RESTRICTED_GPU, List.of(ALLOWED_NCA)));
-        stubBartGroup(PLATFORM_GROUP_ID, PLATFORM_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), DISALLOWED_NCA);
+    void getRegisteredClustersForNcaId_returnsNoPlatformGroupWhenNotAuthorized() {
+        when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DISALLOWED_NCA))
+                .thenReturn(List.of());
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(DISALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
 
-        ClusterGroups platformGroup = findGroup(response, PLATFORM_GROUP_NAME);
-        assertEquals(Set.of(OTHER_GPU), gpuNames(platformGroup),
-                "restricted GPU must be dropped, other GPU retained");
+        assertTrue(response.getClusterGroup().isEmpty());
+        verify(clusterAuthorizationService).fetchAuthorizedClusterGroup(
+                DISALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
     }
 
     @Test
-    void getRegisteredClustersForNcaId_dropsWholePlatformGroup_whenOnlyRestrictedGpuRemains() {
-        icmsConfigurationProperties.setGpuAllowedNcaIds(Map.of(RESTRICTED_GPU, List.of(ALLOWED_NCA)));
-        stubBartGroup(PLATFORM_GROUP_ID, PLATFORM_GROUP_NAME, Set.of(RESTRICTED_GPU), DISALLOWED_NCA);
-
-        ClusterGroupResponse response =
-                clustersService.getRegisteredClustersForNcaId(DISALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
-
-        assertTrue(response.getClusterGroup().isEmpty(),
-                "compute-platform group must be dropped entirely when its only GPU is restricted");
-    }
-
-    @Test
-    void getRegisteredClustersForNcaId_keepsRestrictedGpuOnPlatformGroup_forAllowedNca() {
-        icmsConfigurationProperties.setGpuAllowedNcaIds(Map.of(RESTRICTED_GPU, List.of(ALLOWED_NCA)));
-        stubBartGroup(PLATFORM_GROUP_ID, PLATFORM_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), ALLOWED_NCA);
+    void getRegisteredClustersForNcaId_keepsAuthorizedPlatformGpus() {
+        stubAuthorizedGroup(PLATFORM_GROUP_ID, PLATFORM_GROUP_NAME,
+                Set.of(RESTRICTED_GPU, OTHER_GPU), ALLOWED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(ALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
 
         ClusterGroups platformGroup = findGroup(response, PLATFORM_GROUP_NAME);
         assertEquals(Set.of(RESTRICTED_GPU, OTHER_GPU), gpuNames(platformGroup),
-                "allowed NCA keeps all GPUs");
+                "discovery returns the authorized provider's GPU set");
+        verify(clusterAuthorizationService).fetchAuthorizedClusterGroup(
+                ALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
     }
 
     @Test
     void getRegisteredClustersForNcaId_doesNotGateByocGroup_evenForDisallowedNca() {
         icmsConfigurationProperties.setGpuAllowedNcaIds(Map.of(RESTRICTED_GPU, List.of(ALLOWED_NCA)));
-        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), DISALLOWED_NCA);
+        stubAuthorizedGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME,
+                Set.of(RESTRICTED_GPU, OTHER_GPU), DISALLOWED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(DISALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
@@ -164,7 +144,8 @@ class ClustersServiceTest {
     void getRegisteredClustersForNcaId_dropsGatedGpusAndInstanceTypes_forGatedNca() {
         icmsConfigurationProperties.setGpuGating(Map.of(
                 GATED_NCA, Map.of(OTHER_GPU, List.of(instanceTypeName(OTHER_GPU, 0)))));
-        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
+        stubAuthorizedGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME,
+                Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
@@ -180,7 +161,8 @@ class ClustersServiceTest {
     void getRegisteredClustersForNcaId_dropsWholeGroup_whenGatingRemovesEveryGpu() {
         icmsConfigurationProperties.setGpuGating(Map.of(
                 GATED_NCA, Map.of("dummy-gpu-not-in-any-group", List.of("dummy-instance-type"))));
-        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
+        stubAuthorizedGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME,
+                Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
@@ -194,7 +176,7 @@ class ClustersServiceTest {
     void getRegisteredClustersForNcaId_dropsGpu_whenAllItsInstanceTypesAreGatedOut() {
         icmsConfigurationProperties.setGpuGating(Map.of(
                 GATED_NCA, Map.of(OTHER_GPU, List.of("dummy-instance-type-not-on-this-gpu"))));
-        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(OTHER_GPU), GATED_NCA);
+        stubAuthorizedGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(OTHER_GPU), GATED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
@@ -207,7 +189,8 @@ class ClustersServiceTest {
     void getRegisteredClustersForNcaId_leavesUngatedNcaUntouched() {
         icmsConfigurationProperties.setGpuGating(Map.of(
                 GATED_NCA, Map.of(OTHER_GPU, List.of(instanceTypeName(OTHER_GPU, 0)))));
-        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), ALLOWED_NCA);
+        stubAuthorizedGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME,
+                Set.of(RESTRICTED_GPU, OTHER_GPU), ALLOWED_NCA);
 
         ClusterGroupResponse response =
                 clustersService.getRegisteredClustersForNcaId(ALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
@@ -219,43 +202,26 @@ class ClustersServiceTest {
                 instanceTypeNames(byocGroup, OTHER_GPU));
     }
 
-    /** Wires the BART repository calls so the WILDCARD account exposes a single group with a READY cluster. */
-    private void stubBartGroup(String groupId, String groupName, Set<String> gpuNames, String requestingNcaId) {
-        ClusterGroupsByAuthorizedAccountsEntity groupEntity = ClusterGroupsByAuthorizedAccountsEntity.builder()
-                .key(ClusterGroupsByAuthorizedAccountsKey.builder()
-                        .clusterGroupId(groupId)
-                        .clusterGroupName(groupName)
-                        .ncaIdKey(WILDCARD)
-                        .build())
+    private void stubAuthorizedGroup(String groupId, String groupName, Set<String> gpuNames,
+                                     String requestingNcaId) {
+        ClusterGroups group = ClusterGroups.builder()
+                .id(groupId)
+                .name(groupName)
                 .ncaId(WILDCARD)
                 .authorizedNcaIds(Set.of())
-                .gpus(gpuNames.stream()
-                        .map(name -> GpuUdt.builder().name(name)
-                                .instanceTypes(Set.of(
-                                        InstanceTypeUdt.builder().name(instanceTypeName(name, 0)).build(),
-                                        InstanceTypeUdt.builder().name(instanceTypeName(name, 1)).build()))
-                                .build())
-                        .collect(Collectors.toSet()))
+                .gpus(gpuNames.stream().map(name -> GpuResponse.builder().name(name)
+                        .instanceTypes(Set.of(
+                                ClusterGroups.InstanceTypeResponse.builder()
+                                        .name(instanceTypeName(name, 0))
+                                        .nodeType(NodeTypeEnum.SINGLE).build(),
+                                ClusterGroups.InstanceTypeResponse.builder()
+                                        .name(instanceTypeName(name, 1))
+                                        .nodeType(NodeTypeEnum.SINGLE).build()))
+                        .build()).collect(Collectors.toSet()))
                 .build();
-
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(requestingNcaId)).thenReturn(List.of());
-        when(clusterRepository.getAllClusterGroupsInAuthorizedAccount(WILDCARD))
-                .thenReturn(List.of(groupEntity));
-        when(clusterRepository.getAllClusterGroupsInAuthorizedAccount(requestingNcaId))
-                .thenReturn(List.of());
-        when(clusterRepository.getClustersFromClusterGroup(groupId))
-                .thenReturn(List.of(readyCluster(groupId)));
-    }
-
-    private ClusterByGroupIdAndIdEntity readyCluster(String groupId) {
-        return ClusterByGroupIdAndIdEntity.builder()
-                .key(ClusterByGroupIdAndIdKey.builder()
-                        .clusterGroupId(groupId)
-                        .clusterId("cluster-1")
-                        .build())
-                .clusterName("cluster-1")
-                .clusterStatus(ClusterStatusEnum.READY)
-                .build();
+        when(clusterAuthorizationService.fetchAuthorizedClusterGroup(
+                requestingNcaId, InstanceTypeUsageEnum.DEFAULT)).thenReturn(group);
     }
 
     private ClusterGroups findGroup(ClusterGroupResponse response, String name) {

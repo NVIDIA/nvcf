@@ -46,11 +46,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.CreationQueueUdt;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
@@ -1199,29 +1196,6 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
 
 
-    private ClusterGroupsByAuthorizedAccountsEntity getDummyClusterGroupResponse(
-            String clusterGroupName, String ncaId, String instanceType, String instanceTypeValue,
-            String gpuName, int gpuCount) {
-        return ClusterGroupsByAuthorizedAccountsEntity.builder()
-                .key(ClusterGroupsByAuthorizedAccountsKey.builder()
-                             .clusterGroupId(DUMMY_CLUSTER_GROUP_ID)
-                             .clusterGroupName(clusterGroupName)
-                             .ncaIdKey(ncaId)
-                             .build())
-                .ncaId(ncaId)
-                .authorizedNcaIds(Set.of("authorized_id_1"))
-                .creationQueueUrl(DUMMY_BYOC_CREATION_QUEUE_URL)
-                .gpus(Set.of(GpuUdt.builder()
-                                     .name(gpuName)
-                                     .instanceTypes(Set.of(InstanceTypeUdt.builder()
-                                                                   .name(instanceType)
-                                                                   .value(instanceTypeValue)
-                                                                   .gpuCount(gpuCount)
-                                                                   .build()))
-                                     .build()))
-                .build();
-    }
-
     private ClusterEntity getDummyClusterEntity(String clusterGroupName) {
         return getDummyClusterEntity(clusterGroupName, ClusterProviderEnum.GDN);
     }
@@ -1542,7 +1516,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     /**
      * Tests that createNonByocOrBartNonTargetedInstanceDestination correctly sets cluster group name on the destination.
      * This test verifies that:
-     * 1. The method accepts a custom cluster group name through the ClusterGroupsByAuthorizedAccountsEntity
+     * 1. The method accepts a custom cluster group name on the destination.
      * 2. The resulting RequestInstanceDestination has the correct cluster group name set
      * 3. Other properties like GPU name are correctly preserved
      * 4. The destination is not marked as reserved (since it's non-targeted)
