@@ -8,10 +8,10 @@
 
 ## Architecture
 
-- **Scaling loop**: Queries utilization metrics, applies per-function scaling policies (static or custom via gRPC), decides desired instance count.
-- **Discovery**: Finds active functions from the timeseries DB (invocations + workers), writes them to Cassandra.
-- **Policy cache**: Fetches per-function scaling configs from a gRPC service, caches with configurable TTL.
-- **Distributed locking**: Cassandra-based locks for coordinating discovery and scaling across replicas.
+- Scaling loop: Queries utilization metrics, applies per-function scaling policies (static or custom via gRPC), decides desired instance count.
+- Discovery: Finds active functions from the timeseries DB (invocations + workers), writes them to Cassandra.
+- Policy cache: Fetches per-function scaling configs from a gRPC service, caches with configurable TTL.
+- Distributed locking: Cassandra-based locks for coordinating discovery and scaling across replicas.
 
 ## Key Paths
 
@@ -65,6 +65,6 @@ cargo fmt -p rs-autoscaler
 cargo deny check advisories
 ```
 
-CI subproject id: `function-autoscaler`. Native Bazel validation and release
-wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI
-config not present in this public snapshot.
+CI subproject id: `function-autoscaler`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.

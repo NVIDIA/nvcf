@@ -27,11 +27,9 @@ Run `./scripts/update-go-work-sum.sh` after changing `go.mod` here or in
 `otelcol/`, and commit `go.work.sum`. The Bazel otelcol genrule declares it as
 an input, so a clean checkout must have it. CI fails when it is stale.
 
-CI subproject id: `byoo-otel-collector`. The umbrella CI lane is declared in
-`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
-present in this public snapshot; current custom checks include generated example
-drift, generated config drift, and otelconfig validation. Do not add a subtree
-`.gitlab-ci.yml`.
+Follow the [release workflow](../../../docs/dev/github-release-process.md) for source versions and
+producer handoffs. Keep generated example drift, generated config drift and otelconfig checks.
+Do not add a subtree `.gitlab-ci.yml`.
 
 ## Collector Version Updates
 

@@ -126,7 +126,9 @@ exact public locations in `publications` and mark unavailable versions in
 `version` so charts, images, and resources with the same name remain distinct.
 Version overrides also require `name` and `type`.
 
-Release only after the complete three-stack combination is qualified. For
+Publish an umbrella or docs edition only after the complete selected
+three-stack combination is qualified. Independent stack source releases and
+inventories can precede that qualification. For
 umbrella versions, follow [the product and maintained docs workflow](dev/umbrella-releases.md).
 For legacy immutable editions, use `edition prepare`, then protect and register
 `docs/releases/X.Y.Z`; see [the edition workflow](dev/docs-editions.md).
