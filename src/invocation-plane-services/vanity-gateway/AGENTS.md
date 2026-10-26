@@ -23,7 +23,8 @@ Keep shadow replay contexts separate from mutable primary telemetry.
 
 For shadow sampling or OpenAI route changes, also run the single-cluster
 Helmfile BDD suite, which covers sticky sampling through the gateway's
-metrics. See [BDD prerequisites](../../../tests/bdd/README.md):
+metrics. See [BDD prerequisites](../../../tests/bdd/README.md). From the
+repository root, run:
 
 ```sh
 cd tests/bdd
