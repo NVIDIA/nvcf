@@ -234,22 +234,27 @@ a partial sum as complete.
 - Readiness: a model is ready while the Relay reports a ready frontend and a
   serving pool for it, whatever the window's coverage. Pylon admits no requests
   for a model before its first window or after the Relay is lost.
-- Load: the queue, running, and input-size gauges, the engine concurrency
-  limit, and the throughput come from a window in which the model's load is
-  complete. An incomplete window clears them to zero, and local request
-  observations never replace them. Rates use the Relay clock within one
-  `relay_incarnation`, so the first window of an incarnation has no rate.
-- KV usage: capacity and used tokens count only pools whose ranks all
-  reported. A model with incomplete usage reports zero capacity, which Stargate
-  reads as no KV view: a cluster takes KV usage from its freshest backend that
-  reports capacity.
+- Load: the queue, running, and input-size gauges, the output throughput, and
+  the engine concurrency limit come from a window in which the model's load is
+  complete, and local request observations never replace them. An incomplete
+  window clears them to zero, except that the concurrency limit, the sum over
+  the model's aggregated and decode pools, falls back to
+  `--max-engine-concurrency` whenever the Relay reports none. Rates use the
+  Relay clock within one `relay_incarnation`, so the first window of an
+  incarnation has no rate.
+- KV usage: capacity and used tokens sum the model's aggregated and decode
+  pools (prefill KV is transient), and count only when every such pool's ranks
+  all reported. A model with incomplete usage reports zero capacity, which
+  Stargate reads as no KV view: a cluster takes KV usage from its freshest
+  backend that reports capacity.
 - Shared clusters: every Pylon reading one Relay reports the Relay's whole
   load, so Stargate takes a cluster's load from its freshest complete Relay view
   (source `dynamo_relay_load`) instead of summing its backends.
 - Loss: when any Relay stream ends or sends an invalid message, or a load
   stream is silent for max(3 s, 3 × the window), Pylon clears the Relay's stats
-  and readiness and reconnects with backoff. It never falls back to OpenAI
-  stats.
+  and readiness and reconnects with backoff. Opening the streams, the first
+  catalog, and each load stream's first window each get 30 s. It never falls
+  back to OpenAI stats.
 - Capacity: the Relay reports load, not capacity, and relay mode turns off the
   OpenAI fallback, so a model's mean input capacity comes only from
   `--do-calibration` or `--initial-input-tps`. Calibration still measures
