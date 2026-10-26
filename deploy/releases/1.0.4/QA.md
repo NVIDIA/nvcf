@@ -8,7 +8,7 @@ complete combination passes QA.
 | Stack | Selected version | Source tag |
 | --- | --- | --- |
 | Self-Managed | 1.0.7 | `deploy/stacks/self-managed/v1.0.7` |
-| Compute Plane | 1.0.3 | `deploy/stacks/nvcf-compute-plane/v1.0.3` |
+| Compute Plane | 1.0.4 | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
 | Observability | 1.0.0 | `deploy/stacks/observability/v1.0.0` |
 
 ```sh
@@ -41,7 +41,9 @@ Qualify fresh single- and multi-cluster installation, function/task/LLM BDDs,
 non-root workloads, ESS secret delivery and rotation, and the supported
 upgrade/rollback path. Upgrade from Self-Managed 1.0.1 and Compute Plane 1.0.0.
 Follow the staged upgrade procedure in #2457. Include the updated NICLLS,
-Samba, and collector paths. Record any resource overrides used by QA.
+Samba, and collector paths. Samba 1.0.9 fixes startup ownership of the shared
+task directory. Verify that non-root Helm tasks create their results directory
+and finish successfully. Record any resource overrides used by QA.
 
 Land stack fixes in their owning maintenance branches and let their automatic
 releases complete. Then update this branch's manifest to consume the selected
