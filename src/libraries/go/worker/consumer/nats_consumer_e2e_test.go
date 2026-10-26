@@ -19,7 +19,9 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -387,6 +389,85 @@ func TestFetchWorkStreamContextCancelStopsConsumers(t *testing.T) {
 		_, ok := c.GetCurrentlyConnectedRegions()[testPrimaryRegion]
 		return !ok
 	}, 10*time.Second, 10*time.Millisecond)
+}
+
+// gatedDialer refuses new connections while blocked, keeping a client
+// disconnected for as long as a test needs.
+type gatedDialer struct {
+	blocked atomic.Bool
+}
+
+func (d *gatedDialer) Dial(network, address string) (net.Conn, error) {
+	if d.blocked.Load() {
+		return nil, errors.New("dial blocked by test")
+	}
+	return net.Dial(network, address)
+}
+
+// TestFetchWorkStreamRepullsAfterReconnect verifies that a request published
+// while the worker is disconnected is picked up promptly after it reconnects.
+// The server drops the pending pull when that request finds no one listening
+// on the pull's reply subject; without a re-pull on reconnect the fetch only
+// recovers after missing two 5s heartbeats.
+func TestFetchWorkStreamRepullsAfterReconnect(t *testing.T) {
+	t.Parallel()
+	sc, err := testutils.NewNatsSuperCluster(t)
+	require.NoError(t, err)
+	t.Cleanup(sc.Shutdown)
+	srv := sc.Clusters[0].Servers[0]
+	url := srv.ClientURL()
+
+	dialer := &gatedDialer{}
+	workerNc, err := nats.Connect(url, nats.SetCustomDialer(dialer), nats.ReconnectWait(50*time.Millisecond), nats.MaxReconnects(-1))
+	require.NoError(t, err)
+	t.Cleanup(workerNc.Close)
+	workerJs, err := jetstream.New(workerNc)
+	require.NoError(t, err)
+
+	publisherNc, err := nats.Connect(url)
+	require.NoError(t, err)
+	t.Cleanup(publisherNc.Close)
+	publisherJs, err := jetstream.New(publisherNc)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c, err := NewNatsConsumer(ctx, workerJs, provisionRegion(workerJs), testFunctionVersionId, testPrimaryRegion, nil, 4)
+	require.NoError(t, err)
+	ch, err := c.FetchWorkStream(ctx)
+	require.NoError(t, err)
+
+	// let the first pull request reach the server
+	require.Eventually(t, func() bool {
+		info, err := c.primaryConsumer.Info(ctx)
+		return err == nil && info.NumWaiting == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	reconnected := workerNc.StatusChanged(nats.CONNECTED)
+	dialer.blocked.Store(true)
+	require.NoError(t, workerNc.ForceReconnect())
+	// wait for the server, not just the client, to drop the worker connection so
+	// the request cannot be delivered to the old pull before it is removed
+	require.Eventually(t, func() bool { return srv.NumClients() == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	publishWorkRequest(t, publisherJs, testPrimaryRegion, "req-during-disconnect")
+	dialer.blocked.Store(false)
+	select {
+	case <-reconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not reconnect")
+	}
+
+	reconnectedAt := time.Now()
+	select {
+	case wr := <-ch:
+		require.NotNil(t, wr)
+		assert.Equal(t, "req-during-disconnect", wr.RequestData.GetRequestId())
+		assert.NoError(t, wr.Close())
+	case <-time.After(3 * time.Second):
+		t.Fatalf("request not picked up within %v of reconnecting", time.Since(reconnectedAt))
+	}
 }
 
 // TestNewWorkRequestMalformedReturnsError verifies NewWorkRequest rejects a
