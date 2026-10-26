@@ -3,6 +3,8 @@
 #
 # When a chart release is published, open a pull request moving every stack
 # pin on that chart to that version.
+# Release flow and maintenance handoff:
+# docs/dev/github-release-process.md#automatic-pin-bumps
 #
 # The released tag carries the version, so there is no "newest version" lookup
 # and none of the ordering questions that come with one. A tag of
@@ -78,7 +80,7 @@ jobs:
         run: go test -C tools/stack-pin-resolver ./...
 
       - name: Test the commit type helper
-        # It decides the semver step of the stack release this bump causes.
+        # It labels the upstream chart changes for review.
         run: bash tools/ci/test-release-bump-type
 
       - name: Select the tag
@@ -158,12 +160,9 @@ jobs:
         run: |
           set -euo pipefail
           git add deploy/stacks
-          # The commit type carries the semver step of the chart release into
-          # the stack release. Each stack under deploy/stacks is itself a
-          # release subproject, and tools/ci/github-release feeds RELEASE_RULES to
-          # semantic-release: fix cuts a patch, feat a minor, "!" a major, and
-          # chore cuts nothing, which would move the pin on main without any
-          # stack release for downstream to see.
+          # Record the chart bump level for review. Stack train selection and
+          # patch releases follow the version-file model, not these labels:
+          # docs/dev/github-release-process.md#the-version-file-model
           type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
           case "${type}" in
             *!) subject="${type%!}(stack)!: pin ${TAG#deploy/helm/}" ;;
@@ -184,7 +183,7 @@ jobs:
           fi
 
           # The pull request squashes to one commit, so its title has to carry
-          # the largest step among every pin accumulated on the branch.
+          # the largest chart bump among every pin accumulated on the branch.
           pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
           echo "pr_type=${pr_type}" >> "${GITHUB_OUTPUT}"
 
@@ -235,6 +234,10 @@ jobs:
             "Opened by \`.github/workflows/stack-pin-bump.yml\` when \`${TAG}\` was published." \
             "" \
             "The released tag carries the version, so this is a direct pin update rather than a lookup of the newest published chart." \
+            "" \
+            "Review the [release flow](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#automatic-pin-bumps) and verify that the selected chart and images are available from the intended registry routes before merge." \
+            "" \
+            "This PR targets main. Follow the [maintenance handoff](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#patch-an-existing-component-minor) for supported release trains." \
             "" \
             "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
             "" \
