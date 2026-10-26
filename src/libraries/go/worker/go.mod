@@ -17,8 +17,8 @@ require (
 	github.com/klauspost/compress v1.18.7
 	github.com/mattn/go-isatty v0.0.20
 	github.com/nats-io/nats-server/v2 v2.11.6
-	github.com/nats-io/nats.go v1.43.0
-	github.com/nats-io/nkeys v0.4.11
+	github.com/nats-io/nats.go v1.51.0
+	github.com/nats-io/nkeys v0.4.15
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/quic-go/quic-go v0.54.1

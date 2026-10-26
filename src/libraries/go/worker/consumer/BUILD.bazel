@@ -27,6 +27,7 @@ go_library(
         "//src/libraries/go/worker/proto/nvcf:pb",
         "//src/libraries/go/worker/semaphore",
         "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nats_io_nats_go//jetstream",
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
