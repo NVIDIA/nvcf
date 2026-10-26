@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -190,6 +191,33 @@ func compare(source, destination artifact) error {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 2 && args[0] == "repositories" {
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		var chart struct {
+			Dependencies []struct{ Repository string } `yaml:"dependencies"`
+		}
+		if err := yaml.Unmarshal(data, &chart); err != nil {
+			return fmt.Errorf("read dependency repositories: %w", err)
+		}
+		seen := make(map[string]bool)
+		for _, dependency := range chart.Dependencies {
+			repository := dependency.Repository
+			if repository == "" || strings.HasPrefix(repository, "file://") || strings.HasPrefix(repository, "oci://") || seen[repository] {
+				continue
+			}
+			u, err := url.Parse(repository)
+			if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || strings.ContainsAny(repository, " \t\r\n") {
+				return errors.New("dependency repository must be a credential-free URL, not an alias")
+			}
+			seen[repository] = true
+			digest := sha256.Sum256([]byte(repository))
+			fmt.Fprintf(stdout, "chart-dependency-%x %s\n", digest[:6], repository)
+		}
+		return nil
+	}
 	if len(args) > 1 && args[0] == "discover" {
 		for _, root := range args[1:] {
 			if err := filepath.WalkDir(root, func(dir string, entry os.DirEntry, err error) error {

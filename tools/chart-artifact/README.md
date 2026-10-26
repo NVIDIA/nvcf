@@ -26,6 +26,8 @@ The required `helm charts` check discovers package roots from `Chart.yaml` under
 as part of their parent package. The existing CI values mapping selects the
 charts that also receive lint and render checks. Dependency builds and packaging
 use temporary copies, leaving source files and existing archives unchanged.
+Dependency repositories come from `Chart.yaml`; Helm configuration and caches
+are isolated from the caller, and the check requires no registry credentials.
 Run the same check locally with Helm and Go on `PATH`:
 
 ```sh

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -229,4 +230,27 @@ func TestRejectsTrailingNonpadding(t *testing.T) {
 		t.Fatal(err)
 	}
 	command(t, "nonpadding data", "validate", "--name", "demo", "--version", "1.0.0", file)
+}
+
+func TestDependencyRepositories(t *testing.T) {
+	// Construct synthetic credentials so secret scanners do not mistake a
+	// literal authenticated URI fixture for a committed credential.
+	credentialURL := &url.URL{Scheme: "https", Host: "charts.example", Path: "/stable", User: url.UserPassword("fixture-user", "fixture-password")}
+	metadata := filepath.Join(t.TempDir(), "Chart.yaml")
+	for _, tc := range []struct{ repository, wantError string }{
+		{"https://charts.example/stable", ""},
+		{"@local-alias", "credential-free URL"},
+		{credentialURL.String(), "credential-free URL"},
+	} {
+		t.Run(tc.repository, func(t *testing.T) {
+			content := "dependencies:\n- repository: '" + tc.repository + "'\n- repository: '" + tc.repository + "'\n- repository: file://charts/local\n- repository: oci://registry.example/charts\n"
+			if err := os.WriteFile(metadata, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output := command(t, tc.wantError, "repositories", metadata)
+			if tc.wantError == "" && (strings.Count(output, "\n") != 1 || !strings.HasSuffix(output, " "+tc.repository+"\n")) {
+				t.Fatalf("unexpected repository registration: %q", output)
+			}
+		})
+	}
 }

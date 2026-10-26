@@ -132,6 +132,10 @@ fi
 # replace an existing dependency archive; neither should mutate the source tree.
 package_work="$(mktemp -d)"
 trap 'rm -rf "${package_work}"' EXIT
+export HELM_REPOSITORY_CONFIG="${package_work}/helm/repositories.yaml"
+export HELM_REPOSITORY_CACHE="${package_work}/helm/cache"
+export HELM_REGISTRY_CONFIG="${package_work}/helm/registry.json"
+mkdir -p "${HELM_REPOSITORY_CACHE}"
 
 copy_chart() {
     local source="$1" destination="$2"
@@ -230,6 +234,12 @@ render_and_check() {  # render_and_check <stem> <chart dir> <values file>
 prepare_dependencies() {
     local chart_dir="$1" stem="$2"
     if grep -qE '^dependencies:' "${chart_dir}/Chart.yaml"; then
+        local repositories repo_name repo_url
+        repositories="$("${package_work}/chart-artifact" repositories "${chart_dir}/Chart.yaml")" || return 1
+        while read -r repo_name repo_url; do
+            [[ -n "${repo_name}" ]] || continue
+            run_step "${stem}: helm repo add" helm repo add "${repo_name}" "${repo_url}" --force-update || return 1
+        done <<<"${repositories}"
         run_step "${stem}: helm dependency build" helm dependency build "${chart_dir}" || return 1
     fi
 }
