@@ -97,8 +97,6 @@ export CLUSTER_REGION="<region-label>"                      # e.g. us-east-1
 export HELMFILE_ENV="eks"                                   # single-cluster example
 # export HELMFILE_ENV="eks-multi"                           # multi-cluster example
 
-# Repository path the bundles use for charts and images
-
 # NGC credential used for chart/image pulls and the dockerconfig secret
 export NGC_API_KEY="<your-ngc-api-key>"
 
@@ -115,6 +113,11 @@ Use the [customer artifact access settings](../overview/umbrella-releases.md#con
 for both stack environments. HTTPS chart authentication, Kubernetes image pull
 secrets and worker credentials are separate inputs. An OCI login alone does
 not authenticate the HTTPS chart catalog.
+
+This example uses `nvcr-pull-secret` as the image pull secret name in both
+planes. Replace the consumption guide's example `nvcf-registry` entry with
+that name when merging the values. Keep one `global.imagePullSecrets` list;
+do not paste duplicate keys or add a second secret name.
 
 ## Step 1: Install the Gateway and capture the load balancer address
 
