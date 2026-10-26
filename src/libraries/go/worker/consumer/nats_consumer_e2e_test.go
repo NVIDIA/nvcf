@@ -414,7 +414,8 @@ func TestFetchWorkStreamRepullsAfterReconnect(t *testing.T) {
 	sc, err := testutils.NewNatsSuperCluster(t)
 	require.NoError(t, err)
 	t.Cleanup(sc.Shutdown)
-	url := sc.Clusters[0].Servers[0].ClientURL()
+	srv := sc.Clusters[0].Servers[0]
+	url := srv.ClientURL()
 
 	dialer := &gatedDialer{}
 	workerNc, err := nats.Connect(url, nats.SetCustomDialer(dialer), nats.ReconnectWait(50*time.Millisecond), nats.MaxReconnects(-1))
@@ -446,7 +447,9 @@ func TestFetchWorkStreamRepullsAfterReconnect(t *testing.T) {
 	reconnected := workerNc.StatusChanged(nats.CONNECTED)
 	dialer.blocked.Store(true)
 	require.NoError(t, workerNc.ForceReconnect())
-	require.Eventually(t, func() bool { return !workerNc.IsConnected() }, 5*time.Second, 10*time.Millisecond)
+	// wait for the server, not just the client, to drop the worker connection so
+	// the request cannot be delivered to the old pull before it is removed
+	require.Eventually(t, func() bool { return srv.NumClients() == 1 }, 5*time.Second, 10*time.Millisecond)
 
 	publishWorkRequest(t, publisherJs, testPrimaryRegion, "req-during-disconnect")
 	dialer.blocked.Store(false)
