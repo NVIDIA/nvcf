@@ -33,8 +33,7 @@ For a published umbrella release, open the matching `nvcf/X.Y.Z` tag in
 [GitHub Releases](https://github.com/NVIDIA/nvcf/releases) and download its
 `nvcf-X.Y.Z.tar.gz`, `manifest.json` and `release-assets.json` assets. Use the
 packaged bundle asset, not GitHub's automatically generated source archive.
-The commands below use the GitHub CLI, `jq`, and `shasum` for checksum
-verification. The equivalent download command is:
+The equivalent download command uses the GitHub CLI:
 
 ```bash
 RELEASE_VERSION="X.Y.Z" # Replace with an available published umbrella version.
@@ -50,33 +49,11 @@ separately versioned NGC stack resources are not an umbrella download command.
 Do not assemble a replacement combination from whichever stack releases are
 latest.
 
-## Verify and extract
+## Extract the bundle
 
-Set `ASSET_DIR` to the directory containing the downloaded assets and
-`RELEASE_VERSION` to their umbrella version. Verify both the archive and
-manifest against `release-assets.json` obtained from the trusted release or
-candidate artifact:
-
-```bash
-(
-  set -eu
-  cd "$ASSET_DIR"
-  for asset in "nvcf-${RELEASE_VERSION}.tar.gz" manifest.json; do
-    digest="$(jq -er --arg asset "$asset" \
-      '.assets[$asset] | select(test("^sha256:[0-9a-f]{64}$")) | sub("^sha256:"; "")' \
-      release-assets.json)"
-    printf '%s  %s\n' "$digest" "$asset" | shasum -a 256 -c -
-  done
-)
-```
-
-Stop if either check fails. For the current QA artifact, also compare the
-archive digest to the [candidate identity](manifest.md#candidate-identity).
-If a source checkout is available, the repository's `umbrella verify-bundle`
-command additionally validates the embedded manifest and file index; see the
-[verification command](https://github.com/NVIDIA/nvcf/blob/main/docs/dev/umbrella-releases.md#install-with-existing-stack-interfaces).
-
-Extract into a new directory after verification:
+Set `ASSET_DIR` to the downloaded assets directory and `RELEASE_VERSION` to the
+umbrella version. Extract the archive into a new directory. An optional
+[integrity check](#optional-integrity-verification) is available below.
 
 ```bash
 BUNDLE_DIR="$(mktemp -d)"
@@ -196,3 +173,32 @@ For an existing installation, use the
 [upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md) instead of the fresh
 installation order. They require hostname-policy preparation, patched NVCA
 before shared worker defaults, queue draining and explicit rollback limits.
+
+## Optional integrity verification
+
+To check downloaded assets before extraction, use `jq` and `shasum` to compare
+the local files with the published asset hashes.
+
+Set `ASSET_DIR` to the directory containing the downloaded assets and
+`RELEASE_VERSION` to their umbrella version. Verify both the archive and
+manifest against `release-assets.json` obtained from the trusted release or
+candidate artifact:
+
+```bash
+(
+  set -eu
+  cd "$ASSET_DIR"
+  for asset in "nvcf-${RELEASE_VERSION}.tar.gz" manifest.json; do
+    digest="$(jq -er --arg asset "$asset" \
+      '.assets[$asset] | select(test("^sha256:[0-9a-f]{64}$")) | sub("^sha256:"; "")' \
+      release-assets.json)"
+    printf '%s  %s\n' "$digest" "$asset" | shasum -a 256 -c -
+  done
+)
+```
+
+Stop if either check fails. For the current QA artifact, also compare the
+archive digest to the [candidate identity](manifest.md#candidate-identity).
+If a source checkout is available, the repository's `umbrella verify-bundle`
+command additionally validates the embedded manifest and file index; see the
+[verification command](https://github.com/NVIDIA/nvcf/blob/main/docs/dev/umbrella-releases.md#install-with-existing-stack-interfaces).
