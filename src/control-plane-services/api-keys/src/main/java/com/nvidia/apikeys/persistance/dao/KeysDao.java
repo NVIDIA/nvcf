@@ -17,9 +17,11 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
+import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.apikeys.converters.KeyOwnerVoBuilder;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
+import com.nvidia.apikeys.config.exceptions.CassandraUnavailableException;
 import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
@@ -35,11 +37,16 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.cassandra.core.CassandraBatchOperations;
 import org.springframework.data.cassandra.core.CassandraTemplate;
-import org.springframework.data.cassandra.core.WriteResult;
+import org.springframework.data.cassandra.core.DeleteOptions;
+import org.springframework.data.cassandra.core.InsertOptions;
 import org.springframework.stereotype.Service;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KeysDao {
@@ -51,6 +58,7 @@ public class KeysDao {
     private final KeyOwnerVoBuilder keyOwnerVoBuilder;
     private final Clock clock;
     private final CassandraTemplate cassandraTemplate;
+    private final CqlSession session;
 
 
     public SavedKeyVo save(KeyVo key, KeyOwnerVo owner) {
@@ -62,14 +70,27 @@ public class KeysDao {
         var keyByOwnerAndServiceModel = keyByOwnerAndServiceConverter.voToModel(
                 keyByOwnerAndServiceVo);
 
+        long timestamp = writeTimestamp();
         CassandraBatchOperations batchOperations = cassandraTemplate.batchOps()
+                .withTimestamp(timestamp)
                 .insert(List.of(keyModel))
                 .insert(List.of(keyByOwnerAndServiceModel));
 
-        WriteResult writeResult = batchOperations.execute();
-
-        if (!writeResult.wasApplied()) {
-            throw new CassandraException("Failed to write key into db");
+        try {
+            if (!batchOperations.execute().wasApplied()) {
+                throw new CassandraException("Failed to write key into db");
+            }
+        } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
+            log.warn("logged batch write of key failed, writing rows directly", e);
+            InsertOptions options = InsertOptions.builder()
+                    .timestamp(timestamp)
+                    .idempotent(true)
+                    .build();
+            // list the key before making it valid, so a partial write never leaves a hidden key
+            writeDirectly(() -> {
+                cassandraTemplate.insert(keyByOwnerAndServiceModel, options);
+                cassandraTemplate.insert(keyModel, options);
+            });
         }
 
         // read saved values back
@@ -127,15 +148,46 @@ public class KeysDao {
 
         var keyByOwnerAndServiceModel = keyByOwnerAndServiceConverter.voToModel(key);
 
+        long timestamp = writeTimestamp();
         CassandraBatchOperations batchOperations = cassandraTemplate.batchOps()
+                .withTimestamp(timestamp)
                 .delete(List.of(keyModel))
                 .delete(List.of(keyByOwnerAndServiceModel));
 
-        WriteResult writeResult = batchOperations.execute();
-
-        if (!writeResult.wasApplied()) {
-            throw new CassandraException("Failed to delete key.");
+        try {
+            if (!batchOperations.execute().wasApplied()) {
+                throw new CassandraException("Failed to delete key.");
+            }
+        } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
+            log.warn("logged batch delete of key failed, deleting rows directly", e);
+            DeleteOptions options = DeleteOptions.builder()
+                    .timestamp(timestamp)
+                    .idempotent(true)
+                    .build();
+            // revoke the key before removing it from the owner's list
+            writeDirectly(() -> {
+                cassandraTemplate.delete(keyModel, options);
+                cassandraTemplate.delete(keyByOwnerAndServiceModel, options);
+            });
         }
+    }
+
+    /**
+     * Writes the rows of a logged batch one by one after the batch failed. The batch outcome is
+     * unknown: a timed-out batch may still be replayed from the batchlog. The rows use the batch
+     * timestamp, so writing them again leaves the same state as the batch.
+     */
+    private void writeDirectly(Runnable write) {
+        try {
+            write.run();
+        } catch (TransientDataAccessException | DataAccessResourceFailureException e) {
+            throw new CassandraUnavailableException(
+                    "Key storage is temporarily unavailable, the outcome of the write is unknown", e);
+        }
+    }
+
+    private long writeTimestamp() {
+        return session.getContext().getTimestampGenerator().next();
     }
 
     public List<KeyByOwnerAndServiceVo> list(
