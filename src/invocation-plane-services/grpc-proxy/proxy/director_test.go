@@ -76,7 +76,7 @@ func TestStreamDirector(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -182,7 +182,7 @@ func TestUnauthenticatedError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -237,7 +237,7 @@ func TestGatewayTimeoutError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -292,7 +292,7 @@ func TestRequestIdHeader(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -355,7 +355,7 @@ func TestRequestIdCookie(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -695,7 +695,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1085,7 +1085,7 @@ func TestCorsPreflightRequest(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1164,7 +1164,7 @@ func TestCorsErrorResponses(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1282,7 +1282,7 @@ func TestCorsWithTimeoutError(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://"+proxyAddr, nil)
+	healthManager, err := healthManager(nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}

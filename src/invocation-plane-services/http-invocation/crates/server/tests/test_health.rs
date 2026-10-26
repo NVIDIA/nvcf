@@ -19,7 +19,7 @@ use axum::body::{to_bytes, Body};
 use axum::response::Response;
 use axum::Router;
 use http::{header, Method, StatusCode};
-use mocks::{fixtures, nvcf_api_mock::HEALTH_CACHE_TTL};
+use mocks::fixtures;
 use nvcf_invocation_service::app::app;
 use std::time::Duration;
 use tower::{Service, ServiceExt};
@@ -76,7 +76,7 @@ async fn test_info_route() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_health_cache() -> anyhow::Result<()> {
+async fn test_health_does_not_depend_on_nvcf_api() -> anyhow::Result<()> {
     let (_localstack, _nats, mock_nvcf_api, config) = fixtures().await;
 
     let mut app = app(config, None).await?;
@@ -84,18 +84,31 @@ async fn test_health_cache() -> anyhow::Result<()> {
 
     mock_nvcf_api.set_unhealthy().await;
     let response = call_health(app).await?;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    mock_nvcf_api.set_healthy().await;
-    let response = call_health(app).await?;
     assert_eq!(response.status(), StatusCode::OK);
-    mock_nvcf_api.set_unhealthy().await;
-    // Response from cache still says healthy
-    let response = call_health(app).await?;
-    assert_eq!(response.status(), StatusCode::OK);
-    // Checking again after nvcf_api health cache expires, should return unhealthy
-    tokio::time::sleep(Duration::from_secs(HEALTH_CACHE_TTL.into())).await;
-    let response = call_health(app).await?;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_health_fails_when_nats_disconnects() -> anyhow::Result<()> {
+    let (_localstack, nats, _mock_nvcf_api, config) = fixtures().await;
+
+    let mut app = app(config, None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+    assert_eq!(call_health(app).await?.status(), StatusCode::OK);
+
+    nats.stop().await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = call_health(app).await?.status();
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "health stayed {status} after NATS stopped"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     Ok(())
 }
 

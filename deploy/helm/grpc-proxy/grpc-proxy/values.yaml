@@ -98,10 +98,12 @@ grpcproxy:
       cpu: 1000m
       memory: 1Gi
 
+  # Liveness uses the admin listener's /health, which checks only this process.
+  # Readiness uses /health on the client port, which checks the NATS connection.
   livenessProbe:
     httpGet:
       path: /health
-      port: client
+      port: metrics
   readinessProbe:
     httpGet:
       path: /health

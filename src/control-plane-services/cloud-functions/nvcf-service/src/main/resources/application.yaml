@@ -156,11 +156,13 @@ management:
             - readinessState
             - cassandra
             - nats
+        # Liveness must not fail during a Cassandra or NATS outage: every replica shares
+        # them, so a failing check would restart all replicas. cassandraSession
+        # restarts only a pod whose session stays broken after Cassandra recovers.
         liveness:
           include:
             - livenessState
-            - cassandra
-            - nats
+            - cassandraSession
   health:
     livenessState:
       enabled: true
