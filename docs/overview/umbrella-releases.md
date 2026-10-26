@@ -25,8 +25,11 @@ named directory that survives workstation cleanup. Use a new directory for
 each installation or upgrade. Keep the previous directory through the rollback
 window; do not extract over an existing deployment's configuration.
 
-Run the examples in Bash. Set the release version to an available published
-version and choose a persistent location:
+Start a dedicated Bash child shell with `bash`, then run the examples below.
+Fail-fast mode returns to the original terminal on an error. Inspect any
+partial download or extraction before retrying; keep existing deployment
+directories intact. Set the release version to an available published version
+and choose a persistent location:
 
 ```bash
 set -euo pipefail

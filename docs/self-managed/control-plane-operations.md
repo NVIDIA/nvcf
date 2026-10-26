@@ -185,7 +185,7 @@ Before upgrading any chart:
 3. Review release notes for the target version. Check for breaking changes, required
    value changes, or new dependencies.
 
-4. Verify the cluster is healthy before starting. all pods running, no pending operations.
+4. Verify the cluster is healthy before starting: all pods running, no pending operations.
 
 ### Spot Upgrading a Helm Chart
 
@@ -208,7 +208,7 @@ kubectl rollout status deployment/<name> -n <namespace> --timeout=120s
 helm list -n <namespace>
 ```
 
-Example. upgrading the NVCF API chart:
+Example: upgrading the NVCF API chart:
 
 ```bash
 helm upgrade api \
@@ -289,7 +289,7 @@ rollback.
 
 Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential, cluster-group listing and cluster-management scopes.
 
-It does not authenticate callers. the stack relies on the gateway in front of it for that.
+It does not authenticate callers. The stack relies on the gateway in front of it for that.
 
 It exists so a new install with no identity provider can mint its first admin token, and `nvcf-cli init` uses it.
 
@@ -400,7 +400,7 @@ Re-enabling is simpler than disabling. Setting `adminIssuerProxy.enabled: true` 
 
 ### Verifying at the edge
 
-The route's hostname may have no DNS record, which does not by itself make it unreachable. a load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
+The route's hostname may have no DNS record, which does not by itself make it unreachable. A load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -413,10 +413,10 @@ echo "curl exit: $?"
 
 Read the two results together. Exit 0 with `404` means no route is attached, which is the outcome you want. Exit 0 with anything else means the route is still being served.
 
-A non-zero curl exit means the request never reached the Gateway, so the check is inconclusive rather than a pass. the printed status will be `000`.
+A non-zero curl exit means the request never reached the Gateway, so the check is inconclusive rather than a pass. The printed status will be `000`.
 
 <Note>
-If curl exits with a certificate error (exit 60), the edge is presenting a certificate that does not cover this hostname. expected when the route's hostname has no certificate of its own. Re-run with `-k` to get past the TLS check and read the routing result.
+If curl exits with a certificate error (exit 60), the edge is presenting a certificate that does not cover this hostname. This is expected when the route's hostname has no certificate of its own. Re-run with `-k` to get past the TLS check and read the routing result.
 
 Only do this when diagnosing that specific failure: `-k` disables certificate verification and says nothing about whether the edge's TLS is sound.
 

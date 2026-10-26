@@ -202,7 +202,7 @@ environment file. The template below shows the values to configure for Amazon
 EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/overview/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 export HELMFILE_ENV="<environment-name>"
 cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 ```
@@ -638,7 +638,7 @@ replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
 actual base64-encoded registry credentials.
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 ```
 
@@ -840,7 +840,7 @@ deployment and will fail if not authenticated.
 Before deploying, preview the rendered Kubernetes manifests:
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 HELMFILE_ENV=<environment-name> helmfile template
 ```
 

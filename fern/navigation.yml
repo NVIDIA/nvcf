@@ -450,7 +450,7 @@ navigation:
   - section: Upgrade Notes
     skip-slug: true
     contents:
-    - page: 1.0.2 to 1.0.4 Candidate Upgrade
+    - page: 1.0.2 to 1.0.4 Upgrade
       path: ../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md
       slug: 1-0-2-to-1-0-4-upgrade
     - page: 0.6.2 to 1.0.1 Upgrade
