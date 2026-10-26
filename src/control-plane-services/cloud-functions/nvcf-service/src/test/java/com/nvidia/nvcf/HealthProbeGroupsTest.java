@@ -50,19 +50,19 @@ class HealthProbeGroupsTest {
                     try {
                         var sources = new YamlPropertySourceLoader()
                                 .load("application", new ClassPathResource("application.yaml"));
-                        sources.forEach(source -> context.getEnvironment().getPropertySources().addLast(source));
+                        var propertySources = context.getEnvironment().getPropertySources();
+                        sources.forEach(propertySources::addLast);
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
                 })
                 .withBean(HealthContributorRegistry.class, () -> {
                     var registry = new DefaultHealthContributorRegistry();
-                    registry.registerContributor("livenessState", (HealthIndicator) () -> Health.up().build());
-                    registry.registerContributor("readinessState", (HealthIndicator) () -> Health.up().build());
-                    registry.registerContributor("cassandra", (HealthIndicator) () -> Health.down().build());
-                    registry.registerContributor("nats", (HealthIndicator) () -> Health.down().build());
-                    registry.registerContributor("cassandraSession",
-                                                 (HealthIndicator) () -> Health.status(cassandraSession).build());
+                    register(registry, "livenessState", Status.UP);
+                    register(registry, "readinessState", Status.UP);
+                    register(registry, "cassandra", Status.DOWN);
+                    register(registry, "nats", Status.DOWN);
+                    register(registry, "cassandraSession", cassandraSession);
                     return registry;
                 });
     }
@@ -70,23 +70,29 @@ class HealthProbeGroupsTest {
     @Test
     void livenessStaysUpWhenCassandraAndNatsAreDown() {
         contextRunner(Status.UP).run(context ->
-                assertEquals(Status.UP, endpoint(context).healthForPath("liveness").getStatus()));
+                assertEquals(Status.UP, status(context, "liveness")));
     }
 
     @Test
     void livenessGoesDownWhenCassandraSessionIsStuck() {
         contextRunner(Status.DOWN).run(context ->
-                assertEquals(Status.DOWN, endpoint(context).healthForPath("liveness").getStatus()));
+                assertEquals(Status.DOWN, status(context, "liveness")));
     }
 
     @Test
     void readinessGoesDownWhenCassandraAndNatsAreDown() {
         contextRunner(Status.UP).run(context ->
-                assertEquals(Status.DOWN, endpoint(context).healthForPath("readiness").getStatus()));
+                assertEquals(Status.DOWN, status(context, "readiness")));
     }
 
-    private static HealthEndpoint endpoint(ApplicationContext context) {
-        return new HealthEndpoint(context.getBean(HealthContributorRegistry.class), null,
-                                  context.getBean(HealthEndpointGroups.class), Duration.ZERO);
+    private static Status status(ApplicationContext context, String group) {
+        var registry = context.getBean(HealthContributorRegistry.class);
+        var groups = context.getBean(HealthEndpointGroups.class);
+        var endpoint = new HealthEndpoint(registry, null, groups, Duration.ZERO);
+        return endpoint.healthForPath(group).getStatus();
+    }
+
+    private static void register(HealthContributorRegistry registry, String name, Status status) {
+        registry.registerContributor(name, (HealthIndicator) () -> Health.status(status).build());
     }
 }

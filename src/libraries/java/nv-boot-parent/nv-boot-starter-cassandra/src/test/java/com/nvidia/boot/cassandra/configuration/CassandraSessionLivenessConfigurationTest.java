@@ -18,16 +18,23 @@ package com.nvidia.boot.cassandra.configuration;
 
 import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.RETRY_POLICY_CLASS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.CqlSessionBuilder;
 import com.datastax.oss.driver.api.core.config.DriverConfig;
 import com.datastax.oss.driver.api.core.config.DriverExecutionProfile;
 import com.datastax.oss.driver.api.core.context.DriverContext;
 import com.nvidia.boot.cassandra.retry.NextHostRetryPolicy;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -50,15 +57,36 @@ class CassandraSessionLivenessConfigurationTest {
 
     @Test
     void reportsUpWithoutAUniqueSession() {
-        contextRunner.run(context -> assertThat(context.getBean(CassandraSessionLivenessIndicator.class)
-                                                        .health().getStatus()).isEqualTo(Status.UP));
+        contextRunner.run(context -> {
+            var indicator = context.getBean(CassandraSessionLivenessIndicator.class);
+            assertThat(indicator.health().getStatus()).isEqualTo(Status.UP);
+        });
     }
 
     @Test
     void canBeDisabled() {
         contextRunner.withPropertyValues("app.cassandra.session-liveness.enabled=false")
                 .withBean(CqlSession.class, CassandraSessionLivenessConfigurationTest::session)
-                .run(context -> assertThat(context).doesNotHaveBean(CassandraSessionLivenessIndicator.class));
+                .run(context -> assertThat(context)
+                        .doesNotHaveBean(CassandraSessionLivenessIndicator.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void freshSessionUsesPrivateMetricRegistry() {
+        var builder = mock(CqlSessionBuilder.class);
+        when(builder.withMetricRegistry(any())).thenReturn(builder);
+        when(builder.build()).thenReturn(mock(CqlSession.class));
+        var builders = (ObjectProvider<CqlSessionBuilder>) mock(ObjectProvider.class);
+        when(builders.getIfAvailable()).thenReturn(builder);
+
+        assertThat(CassandraSessionLivenessConfiguration.freshSessionSucceeds(builders)).isTrue();
+
+        var registry = ArgumentCaptor.forClass(Object.class);
+        verify(builder).withMetricRegistry(registry.capture());
+        assertThat(registry.getValue())
+                .isInstanceOf(SimpleMeterRegistry.class)
+                .isNotSameAs(Metrics.globalRegistry);
     }
 
     private static CqlSession session() {
@@ -69,7 +97,8 @@ class CassandraSessionLivenessConfigurationTest {
         when(session.getContext()).thenReturn(context);
         when(context.getConfig()).thenReturn(config);
         when(config.getDefaultProfile()).thenReturn(profile);
-        when(profile.withClass(eq(RETRY_POLICY_CLASS), eq(NextHostRetryPolicy.class))).thenReturn(profile);
+        when(profile.withClass(eq(RETRY_POLICY_CLASS), eq(NextHostRetryPolicy.class)))
+                .thenReturn(profile);
         return session;
     }
 }

@@ -52,7 +52,8 @@ public class CassandraSessionLivenessIndicator implements HealthIndicator, Dispo
     private volatile Health health = Health.up().build();
     private Instant stuckSince;
 
-    CassandraSessionLivenessIndicator(BooleanSupplier sessionCheck, BooleanSupplier freshSessionCheck,
+    CassandraSessionLivenessIndicator(BooleanSupplier sessionCheck,
+                                      BooleanSupplier freshSessionCheck,
                                       Duration gracePeriod, Clock clock) {
         this.sessionCheck = sessionCheck;
         this.freshSessionCheck = freshSessionCheck;
@@ -61,7 +62,8 @@ public class CassandraSessionLivenessIndicator implements HealthIndicator, Dispo
         this.executor = null;
     }
 
-    CassandraSessionLivenessIndicator(BooleanSupplier sessionCheck, BooleanSupplier freshSessionCheck,
+    CassandraSessionLivenessIndicator(BooleanSupplier sessionCheck,
+                                      BooleanSupplier freshSessionCheck,
                                       Duration gracePeriod, Duration checkInterval) {
         this.sessionCheck = sessionCheck;
         this.freshSessionCheck = freshSessionCheck;
@@ -107,8 +109,8 @@ public class CassandraSessionLivenessIndicator implements HealthIndicator, Dispo
         var now = clock.instant();
         if (stuckSince == null) {
             stuckSince = now;
-            log.warn("Cassandra session is failing while a new session succeeds; restarting after {} "
-                     + "if it does not recover", gracePeriod);
+            log.warn("Cassandra session is failing while a new session succeeds; "
+                     + "restarting after {} if it does not recover", gracePeriod);
         }
         var stuckFor = Duration.between(stuckSince, now);
         if (stuckFor.compareTo(gracePeriod) >= 0) {

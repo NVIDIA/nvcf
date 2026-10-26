@@ -22,6 +22,7 @@ import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.CqlSessionBuilder;
 import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.nvidia.boot.cassandra.retry.NextHostRetryPolicy;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -61,7 +62,9 @@ public class CassandraSessionLivenessConfiguration {
         }
         var profile = session.getContext().getConfig().getDefaultProfile()
                 .withClass(RETRY_POLICY_CLASS, NextHostRetryPolicy.class);
-        var healthQuery = SimpleStatement.builder(HEALTH_QUERY).setExecutionProfile(profile).build();
+        var healthQuery = SimpleStatement.builder(HEALTH_QUERY)
+                .setExecutionProfile(profile)
+                .build();
         return new CassandraSessionLivenessIndicator(
                 () -> succeeds(() -> session.execute(healthQuery)),
                 () -> freshSessionSucceeds(sessionBuilders),
@@ -69,12 +72,14 @@ public class CassandraSessionLivenessConfiguration {
                 checkInterval);
     }
 
-    private static boolean freshSessionSucceeds(ObjectProvider<CqlSessionBuilder> sessionBuilders) {
+    static boolean freshSessionSucceeds(ObjectProvider<CqlSessionBuilder> sessionBuilders) {
         var builder = sessionBuilders.getIfAvailable();
         if (builder == null) {
             return false;
         }
-        try (var fresh = builder.build()) {
+        // The probe shares the application session's name and meter IDs, and closing a session
+        // removes its meters. A private registry keeps the application's driver metrics intact.
+        try (var fresh = builder.withMetricRegistry(new SimpleMeterRegistry()).build()) {
             fresh.execute(HEALTH_QUERY);
             return true;
         } catch (RuntimeException e) {

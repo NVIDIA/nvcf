@@ -33,8 +33,9 @@ class CassandraSessionLivenessIndicatorTest {
     private final MutableClock clock = new MutableClock();
     private boolean sessionWorks;
     private boolean freshSessionWorks;
-    private final CassandraSessionLivenessIndicator indicator = new CassandraSessionLivenessIndicator(
-            () -> sessionWorks, () -> freshSessionWorks, GRACE, clock);
+    private final CassandraSessionLivenessIndicator indicator =
+            new CassandraSessionLivenessIndicator(
+                    () -> sessionWorks, () -> freshSessionWorks, GRACE, clock);
 
     @Test
     void upWhenSessionWorks() {

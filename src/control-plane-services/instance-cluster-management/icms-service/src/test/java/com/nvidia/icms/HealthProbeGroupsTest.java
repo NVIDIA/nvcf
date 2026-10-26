@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -35,6 +36,7 @@ import org.springframework.boot.health.registry.DefaultHealthContributorRegistry
 import org.springframework.boot.health.registry.HealthContributorRegistry;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.ClassPathResource;
 
 /**
@@ -59,12 +61,11 @@ class HealthProbeGroupsTest {
                 })
                 .withBean(HealthContributorRegistry.class, () -> {
                     var registry = new DefaultHealthContributorRegistry();
-                    registry.registerContributor("livenessState", (HealthIndicator) () -> Health.up().build());
-                    registry.registerContributor("readinessState", (HealthIndicator) () -> Health.up().build());
-                    registry.registerContributor("cassandra", (HealthIndicator) () -> Health.down().build());
-                    registry.registerContributor("nats", (HealthIndicator) () -> Health.down().build());
-                    registry.registerContributor("cassandraSession",
-                                                 (HealthIndicator) () -> Health.status(cassandraSession).build());
+                    register(registry, "livenessState", Status.UP);
+                    register(registry, "readinessState", Status.UP);
+                    register(registry, "cassandra", Status.DOWN);
+                    register(registry, "nats", Status.DOWN);
+                    register(registry, "cassandraSession", cassandraSession);
                     return registry;
                 });
     }
@@ -73,24 +74,24 @@ class HealthProbeGroupsTest {
     @ValueSource(strings = {"ncp"})
     void livenessStaysUpWhenCassandraIsDown(String profile) {
         contextRunner(profile).run(context ->
-                assertEquals(Status.UP, endpoint(context).healthForPath("liveness").getStatus()));
+                assertEquals(Status.UP, status(context, "liveness")));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"ncp"})
     void livenessGoesDownWhenCassandraSessionIsStuck(String profile) {
         contextRunner(profile, Status.DOWN).run(context ->
-                assertEquals(Status.DOWN, endpoint(context).healthForPath("liveness").getStatus()));
+                assertEquals(Status.DOWN, status(context, "liveness")));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"ncp"})
     void readinessGoesDownWhenCassandraIsDown(String profile) {
         contextRunner(profile).run(context ->
-                assertEquals(Status.DOWN, endpoint(context).healthForPath("readiness").getStatus()));
+                assertEquals(Status.DOWN, status(context, "readiness")));
     }
 
-    private static java.util.List<org.springframework.core.env.PropertySource<?>> load(String resource) {
+    private static List<PropertySource<?>> load(String resource) {
         try {
             return new YamlPropertySourceLoader().load(resource, new ClassPathResource(resource));
         } catch (IOException e) {
@@ -98,8 +99,14 @@ class HealthProbeGroupsTest {
         }
     }
 
-    private static HealthEndpoint endpoint(ApplicationContext context) {
-        return new HealthEndpoint(context.getBean(HealthContributorRegistry.class), null,
-                                  context.getBean(HealthEndpointGroups.class), Duration.ZERO);
+    private static Status status(ApplicationContext context, String group) {
+        var registry = context.getBean(HealthContributorRegistry.class);
+        var groups = context.getBean(HealthEndpointGroups.class);
+        var endpoint = new HealthEndpoint(registry, null, groups, Duration.ZERO);
+        return endpoint.healthForPath(group).getStatus();
+    }
+
+    private static void register(HealthContributorRegistry registry, String name, Status status) {
+        registry.registerContributor(name, (HealthIndicator) () -> Health.status(status).build());
     }
 }
