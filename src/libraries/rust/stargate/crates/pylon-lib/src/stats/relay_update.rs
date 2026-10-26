@@ -35,6 +35,13 @@ pub struct RelayModelLoad {
     /// The Relay reports a ready frontend and a serving pool for the model,
     /// whatever the window's `DataStatus`.
     pub(crate) ready: bool,
+    /// `Some` only when the model's load is complete in this window; an
+    /// incomplete window clears the gauges instead of reporting them.
+    pub(crate) load: Option<RelayModelGauges>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RelayModelGauges {
     /// Rates since the previous window of the same `relay_incarnation`; `None`
     /// on the first window of an incarnation.
     pub(crate) input_tps: Option<f64>,
