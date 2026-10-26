@@ -95,6 +95,7 @@ go_library(
         "//src/compute-plane-services/nvsnap/internal/runtime",
         "//src/compute-plane-services/nvsnap/internal/runtime/crio",
         "//src/compute-plane-services/nvsnap/internal/tarstream",
+        "//src/compute-plane-services/nvsnap/internal/tenant",
         "//src/compute-plane-services/nvsnap/internal/tracing",
         "//src/compute-plane-services/nvsnap/internal/treecopy",
         "//src/compute-plane-services/nvsnap/internal/webhook",

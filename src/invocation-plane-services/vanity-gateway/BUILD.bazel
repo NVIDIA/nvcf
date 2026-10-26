@@ -40,6 +40,7 @@ go_oci_image(
     ],
     env = {"ULIMIT_FLAG": "1"},
     tags = ["nvcf-ai-api-gateway-service"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
 )
 
@@ -117,4 +118,20 @@ go_test(
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
     ],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
+)
+
+filegroup(
+    name = "model_info_testdata",
+    srcs = glob(["testdata/model_info/*"]),
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
 )

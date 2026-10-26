@@ -145,6 +145,9 @@ spec:
             {{- with .Values.agent.criuGhostLimit }}
             - --criu-ghost-limit={{ int64 . }}
             {{- end }}
+            {{- with .Values.agent.tenantLabel }}
+            - --tenant-label={{ . }}
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             # In-agent admission webhook. The Service in webhook.yaml
             # load-balances admission requests across agent pods.

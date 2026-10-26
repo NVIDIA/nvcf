@@ -74,5 +74,7 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//types/known/timestamppb",
         "@org_golang_x_oauth2//:oauth2",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zaptest/observer",
     ],
 )

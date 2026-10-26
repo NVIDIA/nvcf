@@ -84,6 +84,7 @@ The function API key (`NVCF_API_KEY`) is created with these default scopes:
 - `list_functions`
 - `queue_details`
 - `list_functions_details`
+- `manage_telemetries`
 
 The task API key (`NVCF_NVCT_API_KEY`) is created with these default scopes:
 

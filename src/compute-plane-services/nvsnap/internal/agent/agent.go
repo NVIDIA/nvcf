@@ -49,12 +49,18 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tenant"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Config holds agent configuration
 type Config struct {
-	ListenAddr    string
+	ListenAddr string
+	// TenantLabel is the namespace label naming the tenant a namespace
+	// belongs to (an account id the platform stamps); captures and caches
+	// are shared only within one tenant. Empty makes every namespace its
+	// own tenant.
+	TenantLabel   string
 	CheckpointDir string
 	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
 	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
@@ -250,7 +256,7 @@ type ModelVolumeConfig struct {
 	Retention time.Duration
 	// TenantLabel is the namespace label naming a namespace's tenant;
 	// model volumes are shared only within one (modelvolume.Config).
-	// Empty means each namespace is its own tenant.
+	// Empty falls back to Config.TenantLabel (modelVolumeTenantLabel).
 	TenantLabel string
 }
 
@@ -345,6 +351,10 @@ type Agent struct {
 	// its prewarm policy; the promoter strategy is already baked into
 	// l2Backend.
 	l2Profile *checkpointstore.StorageProfile
+	// tenants names the tenant of a namespace for content hashes; built on
+	// first use (tenantScope).
+	tenants     *tenant.Resolver
+	tenantsOnce sync.Once
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
@@ -1249,4 +1259,23 @@ func (a *Agent) modelHostRoot() string {
 		return a.config.ModelVolume.HostRoot
 	}
 	return "/var/lib/containerd/nvsnap-models"
+}
+
+// modelVolumeTenantLabel is the tenant label model volumes are scoped by:
+// the model volume's own when set, else the agent's, so one setting
+// scopes captures, caches and model volumes alike.
+func (a *Agent) modelVolumeTenantLabel() string {
+	if l := a.config.ModelVolume.TenantLabel; l != "" {
+		return l
+	}
+	return a.config.TenantLabel
+}
+
+// tenantScope names the tenant of namespace ns for content hashes
+// (internal/tenant).
+func (a *Agent) tenantScope(ns string) string {
+	a.tenantsOnce.Do(func() {
+		a.tenants = &tenant.Resolver{Kube: a.kubeClient, Label: a.config.TenantLabel}
+	})
+	return a.tenants.Scope(context.Background(), ns)
 }

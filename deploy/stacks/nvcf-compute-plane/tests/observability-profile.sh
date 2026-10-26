@@ -79,6 +79,15 @@ nvca_version() {
   ' "$1"
 }
 
+# has_feature_gate succeeds when the rendered selfManaged.featureGateValues
+# list contains the exact gate entry. "-<gate>" disables a gate and does not
+# match "<gate>".
+has_feature_gate() {
+  local gates
+  gates="$(yq -r '.selfManaged.featureGateValues[]' "$1")"
+  grep -Fxq -- "$2" <<<"$gates"
+}
+
 for profile in default disabled control compute all; do
   values="$work_dir/$profile.yaml"
   render_values "$profile" "$values"
@@ -89,7 +98,34 @@ for profile in default disabled control compute all; do
         fail "$profile profile enabled the self-managed NVCA collector by default"
       ;;
   esac
+
+  case "$profile" in
+    default|compute|all)
+      has_feature_gate "$values" BYOObservability ||
+        fail "$profile profile did not enable the BYOObservability gate"
+      ;;
+    disabled|control)
+      if has_feature_gate "$values" BYOObservability; then
+        fail "$profile profile enabled the BYOObservability gate"
+      fi
+      ;;
+  esac
 done
+
+render_values compute "$work_dir/compute-byoo-off.yaml" \
+  --state-values-set 'global.nvcaOperator.selfManaged.featureGateValues[0]=-BYOObservability'
+
+has_feature_gate "$work_dir/compute-byoo-off.yaml" -BYOObservability ||
+  fail "explicit BYOObservability disable was not preserved"
+if has_feature_gate "$work_dir/compute-byoo-off.yaml" BYOObservability; then
+  fail "explicit BYOObservability disable did not override the compute profile"
+fi
+
+render_values control "$work_dir/control-byoo-on.yaml" \
+  --state-values-set 'global.nvcaOperator.selfManaged.featureGateValues[0]=BYOObservability'
+
+has_feature_gate "$work_dir/control-byoo-on.yaml" BYOObservability ||
+  fail "explicit BYOObservability enable did not override the control profile"
 
 expected_nvca_version="$(yq -r '.global.nvcaOperator.selfManaged.nvcaVersion' "$stack_dir/environments/base.yaml")"
 [[ -n "$expected_nvca_version" && "$expected_nvca_version" != "null" ]] ||

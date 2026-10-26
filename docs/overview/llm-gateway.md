@@ -223,9 +223,35 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/embeddings" \
   }'
 ```
 
-The gateway accepts `input` as a string or an array of strings. Empty input is rejected. The request can include up to 2048 input entries.
+The `input` must not be empty and can include up to 2048 entries. The backend
+validates the entry types.
 
 Embeddings requests do not use session stickiness.
+
+### What the gateway checks on OpenAI endpoints
+
+The gateway checks only the fields that it needs to route, admit, and pin a
+request. A failed check returns a gateway `400`. The backend validates all
+other fields, so an invalid value there returns the backend's status and error
+body.
+
+| Endpoint | Checked by the gateway |
+| --- | --- |
+| `/v1/chat/completions` | `model` with the `<function-id>/` prefix, `stream`, `max_tokens`, `max_completion_tokens`, `prompt_cache_key`, `stream_options`, and a non-empty `messages` array |
+| `/v1/responses` | `model` with the `<function-id>/` prefix, `stream`, `max_output_tokens`, `prompt_cache_key`, `conversation.id`, and a non-empty `input` unless `prompt`, `previous_response_id`, or `conversation` is present |
+| `/v1/embeddings` | `model` with the `<function-id>/` prefix, and a non-empty `input` with at most 2048 entries |
+
+The body must be a JSON object. A checked field that appears twice in
+different letter cases returns `400`.
+
+The gateway forwards the body unchanged except for these fields:
+
+- Chat: sets `model` and `stream`, merges `stream_options`, and removes `debug`.
+- Responses: sets `model` and `stream`.
+- Embeddings: sets `model`.
+
+The gateway does not add `service_tier`. The backend receives it only when the
+client sends it.
 
 ### Anthropic Messages
 
@@ -357,6 +383,24 @@ to these aliases so clients can distinguish Messages-only models:
 }
 ```
 
+A request to Vanity Gateway that carries `anthropic-version`, as Anthropic SDKs
+and Claude Code send, gets the Anthropic Models API instead. `GET /v1/models`
+lists only `anthropicMessages` aliases, each with `type`, `id`, `display_name`,
+and `created_at`, plus `has_more`, `first_id`, and `last_id`. Use `limit`
+(1 to 1000, default 20) with `after_id` or `before_id` to page.
+`GET /v1/models/{model}` returns one alias, or `404` `not_found_error` for a
+model that is not served on Messages. An offline model returns `503`
+`api_error` with `Retry-After: 10800`, and an expired model returns `410`
+`not_found_error`. Requests without `anthropic-version` get
+the shared OpenAI-shaped list.
+
+Messages shadows support sticky sampling methods. On Messages, `promptCacheKey`
+reads only headers, by default `x-multi-turn-session-id` and then
+`x-claude-code-session-id`, so a Claude Code conversation stays on one side of
+the shadow. `firstMessageHash` hashes `system` and the first user message. List
+both, for example `[promptCacheKey, firstMessageHash]`, to fall back to the
+first message when no session header is present.
+
 For Claude Code, configure the invocation origin and pin both foreground and
 background requests to a declared model:
 
@@ -423,7 +467,7 @@ The gateway chooses the sticky routing key in this order:
 | Endpoint | Precedence |
 | --- | --- |
 | `/v1/messages` | `x-multi-turn-session-id`, `x-claude-code-session-id`, messages hash fallback |
-| `/v1/responses` | `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, input hash fallback |
+| `/v1/responses` | `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, input hash fallback (none when `input` is empty) |
 | `/v1/chat/completions` | `prompt_cache_key`, `x-multi-turn-session-id`, messages hash fallback |
 
 For Responses API follow-up calls, `previous_response_id` does not override the sticky routing key. Continue sending `prompt_cache_key`, `conversation.id`, or the returned `x-multi-turn-session-id` header when the next request needs the same backend affinity.

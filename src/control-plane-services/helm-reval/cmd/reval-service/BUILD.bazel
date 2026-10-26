@@ -45,6 +45,7 @@ go_oci_image(
     binary = ":reval-service",
     binary_path = "/usr/bin/reval-service",
     tags = ["nvcf-helm-reval-api"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
 )
 
@@ -65,4 +66,14 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )

@@ -285,7 +285,7 @@ class TelemetryServiceTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(secret)
                 .build();
 
@@ -319,7 +319,7 @@ class TelemetryServiceTest {
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(secret)
                 .build();
 
