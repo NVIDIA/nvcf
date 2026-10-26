@@ -4153,7 +4153,7 @@ func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, header
 		if !known {
 			return harness.HTTPResponse{}, fmt.Errorf("no fixed bucket for %q", key)
 		}
-		if f.broken == "non-sticky" && len(payload.Messages) > 1 {
+		if f.flipsTurn(method, payload.PromptCacheKey != "", len(payload.Messages)) {
 			admitted = !admitted
 		}
 		f.decide("chatCompletions", method, admitted)
@@ -4179,6 +4179,20 @@ func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, header
 		return harness.HTTPResponse{}, fmt.Errorf("waited for the shadow: %w", context.DeadlineExceeded)
 	}
 	return harness.HTTPResponse{Status: 200, Body: reply}, nil
+}
+
+// flipsTurn reports whether a non-sticky broken mode reverses the fixed
+// decision for this turn of a conversation.
+func (f *vanityShadowFake) flipsTurn(method string, bodyKey bool, messages int) bool {
+	switch f.broken {
+	case "non-sticky":
+		return messages > 1
+	case "non-sticky-first-message":
+		return method == "firstMessageHash" && messages > 1
+	case "flips-second-body-key-turn":
+		return bodyKey && messages == 3
+	}
+	return false
 }
 
 func (f *vanityShadowFake) decide(endpoint, method string, admitted bool) {
@@ -4291,7 +4305,7 @@ func TestVanityShadowScenarioRejectsBrokenGateway(t *testing.T) {
 	// The fake updates its counters before replying, so a broken gateway is
 	// detected without waiting out the live metric deadlines.
 	scenario = regexp.MustCompile(`within "\d+s"`).ReplaceAllString(scenario, `within "1s"`)
-	for _, broken := range []string{"", "non-sticky", "primary-waits", "shadow-leak", "no-fallback", "failing-shadow-breaks-primary", "replay-missing"} {
+	for _, broken := range []string{"", "non-sticky", "non-sticky-first-message", "flips-second-body-key-turn", "primary-waits", "shadow-leak", "no-fallback", "failing-shadow-breaks-primary", "replay-missing"} {
 		t.Run(broken, func(t *testing.T) {
 			runner := newFakeRunner(map[string]harness.Result{})
 			runner.onRun = func(command string) error {

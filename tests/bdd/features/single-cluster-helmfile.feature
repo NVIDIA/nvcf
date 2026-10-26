@@ -409,7 +409,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # Sticky shadow sampling through the Vanity Gateway's OpenAI-compatible
     # routes. The primary and shadow are separate LLM functions built from
     # SAMPLE_LLM_ECHO_IMAGE, which must honor the LOAD_TESTER_DEFAULT_*
-    # container settings; the shadow answers after 5 s with its own text. A
+    # container settings; the shadow answers after 4 s with its own text. A
     # client never sees whether a request was shadowed, so the checks read
     # the gateway's decision counter (which method decided and the outcome)
     # and its shadow replay server metric. Sampling is 50 percent; buckets
@@ -457,7 +457,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | --health-port    | 8000 |
         | --health-timeout | PT30S |
         | --llm-model      | name=bdd-shadow,uris=/v1/chat/completions\|/v1/responses,routingMethod=round_robin |
-        | --container-env  | LOAD_TESTER_DEFAULT_TTFT_MS=5000 |
+        | --container-env  | LOAD_TESTER_DEFAULT_TTFT_MS=4000 |
         | --container-env  | LOAD_TESTER_DEFAULT_CHUNK=bdd-shadow-reply |
       And I export the function selected by NVCF CLI to environment variables "BDD_SHADOW_TARGET_FUNCTION_ID" and "BDD_SHADOW_TARGET_VERSION_ID"
       And function "${BDD_SHADOW_TARGET_FUNCTION_ID}" version "${BDD_SHADOW_TARGET_VERSION_ID}" is deleted at scenario teardown
@@ -478,9 +478,10 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
       # Call the shadow function once directly so the LLM gateway has a route
-      # to it before the first shadow copy arrives. The 5 s delay lets Pylon
-      # finish startup calibration: its first batch sends five requests one at
-      # a time within 30 s.
+      # to it before the first shadow copy arrives. The 4 s delay lets Pylon
+      # finish startup calibration (its first batch sends five requests one at
+      # a time within 30 s) and stays under its 5 s canary timeout, so the idle
+      # shadow is not marked unavailable.
       When I successfully invoke model "bdd-shadow" at "/v1/chat/completions" with timeout "120" seconds:
         """
         {"messages":[{"role":"user","content":"bdd-shadow-warmup"}]}
@@ -567,7 +568,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       # The gateway restarted above and only the new pod remains, so its
       # counters start at zero and the totals below are cumulative. Admitted
-      # shadows take 5 s, so a primary that waited for them would exceed each
+      # shadows take 4 s, so a primary that waited for them would exceed each
       # request's 3 s deadline.
 
       # A prompt_cache_key in the body keeps one decision on every turn.
@@ -600,6 +601,12 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the HTTP status should be 200
       And the HTTP response body should contain "bdd-primary-reply"
       And the HTTP response body should not contain "bdd-shadow-reply"
+
+      # Read each conversation on its own: decisions that flip in both
+      # conversations would still give the same combined totals.
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                   | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=admitted | exactly    | 3     |
 
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
@@ -674,6 +681,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the HTTP status should be 200
       And the HTTP response body should contain "bdd-primary-reply"
       And the HTTP response body should not contain "bdd-shadow-reply"
+
+      # Read conversation a on its own, as for the body key above.
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                     | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=firstMessageHash,outcome=admitted | exactly    | 2     |
 
       Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
       And the HTTP request header "Content-Type" is "application/json"
