@@ -52,9 +52,4 @@ public class NoOpClusterAuthorizationService implements ClusterAuthorizationServ
         // No-op: non-BYOC module is not active so there are no non-BYOC clusters to filter.
     }
 
-    @Override
-    public boolean isDetailedTargetingFlowEnabled() {
-        // No-op: non-BYOC module is not active so the detailed-targeting flow is never enabled.
-        return false;
-    }
 }

@@ -16,7 +16,6 @@
  */
 package com.nvidia.icms.service.byoc;
 
-import static com.nvidia.icms.inbound.rest.controllers.account.AccountInfoControllerTest.getDummyClusterGroup;
 import static com.nvidia.icms.service.byoc.ClusterTargetingHelper.isClusterHealthyAndCapacityAvailable;
 import static com.nvidia.icms.util.TestUtil.DUMMY_AZURE_GPU_NAME;
 import static com.nvidia.icms.util.TestUtil.DUMMY_BYOC_AUTHORIZED_NCA_ID;
@@ -31,24 +30,22 @@ import static com.nvidia.icms.util.TestUtil.DUMMY_GPU_NAME;
 import static com.nvidia.icms.util.TestUtil.getClusterByGroupIdAndIdEntity;
 import static com.nvidia.icms.util.TestUtil.getDummyClustersByAuthorizedAccountResp;
 import static com.nvidia.icms.util.TestUtil.getDummyGpuV5;
-import static com.nvidia.icms.util.TestUtil.toClusterByGroupIdAndIdEntity;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.inbound.rest.model.CloudHealthStatus;
 import com.nvidia.icms.inbound.rest.model.ResourceProvider;
-import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.NvcaClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.CloudHealthRepository;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.util.TestUtil;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
