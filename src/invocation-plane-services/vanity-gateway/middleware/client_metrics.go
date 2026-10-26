@@ -61,7 +61,7 @@ func (rt clientMetricsRoundTripper) RoundTrip(r *http.Request) (*http.Response, 
 		switch {
 		case errors.Is(err, context.Canceled):
 			kind = "canceled"
-		case errors.Is(err, context.DeadlineExceeded), errors.As(err, &networkError) && networkError.Timeout():
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.DeadlineExceeded), errors.As(err, &networkError) && networkError.Timeout():
 			kind = "timeout"
 		}
 		labeler.Add(attribute.String("error.type", kind))
