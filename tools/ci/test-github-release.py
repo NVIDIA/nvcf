@@ -2048,20 +2048,7 @@ class GithubReleaseTest(unittest.TestCase):
     def test_resolved_stack_inventory_identity_must_match_release(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "inventory.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "source": {
-                            "version": "1.2.3",
-                            "tag": "deploy/stacks/self-managed/v1.2.3",
-                            "commit": "d" * 40,
-                        },
-                        "releases": [{}],
-                        "artifacts": [{}],
-                    }
-                )
-            )
+            path.write_text(json.dumps(self.retained_stack_inventory()))
             self.github_release.validate_resolved_stack_inventory(
                 path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "d" * 40
             )
@@ -2070,17 +2057,31 @@ class GithubReleaseTest(unittest.TestCase):
                     path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
                 )
 
-    def retained_stack_inventory(self):
+    def retained_stack_inventory(self, chart_version="1.0.0"):
         return {
             "schema_version": 1,
             "source": {"version": "1.2.3", "tag": "deploy/stacks/self-managed/v1.2.3", "commit": "d" * 40},
-            "releases": [{"name": "original"}], "artifacts": [{"name": "original"}],
+            "releases": [{
+                "plane": "control-plane",
+                "name": "original",
+                "namespace": "nvcf",
+                "required": True,
+                "chart": "https://charts.example.com/original",
+                "version": chart_version,
+            }],
+            "artifacts": [{
+                "type": "helm-chart",
+                "name": "original",
+                "repository": "https://charts.example.com",
+                "version": chart_version,
+                "reference": f"https://charts.example.com/original@{chart_version}",
+                "sources": [{"plane": "control-plane", "release": "original", "requirement": "required"}],
+            }],
         }
 
     def test_existing_release_inventory_is_left_unchanged(self):
         original = json.dumps(self.retained_stack_inventory()).encode()
-        fresh = self.retained_stack_inventory()
-        fresh["artifacts"] = [{"name": "regenerated"}]
+        fresh = self.retained_stack_inventory(chart_version="1.0.1")
         for local in (original, json.dumps(fresh).encode()):
             with self.subTest(local=local), tempfile.TemporaryDirectory() as tmp:
                 asset = Path(tmp) / "inventory.json"
