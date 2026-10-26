@@ -121,7 +121,8 @@ grpcproxy:
   # Optional routable grpc-proxy callback endpoint for workers that cannot
   # reach the grpc-proxy pod IP directly, such as split control-plane /
   # compute-plane deployments. The chart maps this value to the
-  # SELF_WORKER_FQDN environment variable used by the grpc-proxy binary.
+  # SELF_WORKER_FQDN environment variable used by the grpc-proxy binary, and
+  # this is the only way to set it: env.SELF_WORKER_FQDN fails render.
   # Leave empty to preserve the pod-IP fallback.
   workerConnectBaseURL: ""
 
@@ -136,9 +137,8 @@ grpcproxy:
   # domain that resolves those names instead. A custom base host needs DNS
   # for every <dashed-pod-ip>.<base host> name, for example a wildcard
   # record, not only the base host. Workers must trust the certificate's CA,
-  # for example through NVCF_PROXY_CA_PEM. The base (workerConnectBaseURL or
-  # env.SELF_WORKER_FQDN) must be an https URL with a DNS host and no path;
-  # other values, including an empty SELF_WORKER_FQDN, fail render.
+  # for example through NVCF_PROXY_CA_PEM. A workerConnectBaseURL base must
+  # be an https URL with a DNS host and no path; other values fail render.
   http3:
     enabled: false
     tls:

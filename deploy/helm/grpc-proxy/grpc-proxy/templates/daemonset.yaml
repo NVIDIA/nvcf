@@ -14,6 +14,7 @@
 # limitations under the License.
 
 {{- include "grpc-proxy.validateDeploymentType" . -}}
+{{- include "grpc-proxy.validateEnv" . -}}
 {{- if eq .Values.grpcproxy.deploymentType "daemonset" }}
 {{- $http3Env := include "grpc-proxy.http3Env" . | fromYaml }}
 apiVersion: apps/v1
@@ -64,9 +65,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            {{- if and .Values.grpcproxy.workerConnectBaseURL (hasKey .Values.grpcproxy.env "SELF_WORKER_FQDN") }}
-            {{- fail "set either grpcproxy.workerConnectBaseURL or grpcproxy.env.SELF_WORKER_FQDN, not both" }}
-            {{- end }}
             {{- if not (hasKey $http3Env "SELF_WORKER_FQDN") }}
             {{- with .Values.grpcproxy.workerConnectBaseURL }}
             - name: SELF_WORKER_FQDN

@@ -113,7 +113,7 @@ check_http3_workload "${tmp_dir}/daemonset.yaml" DaemonSet worker-callback-tls
 expect_eq "DaemonSet SELF_WORKER_FQDN" "$(workload_env "${tmp_dir}/daemonset.yaml" DaemonSet SELF_WORKER_FQDN)" \
   "https://grpc.example.com:10084"
 
-# Certificate names follow the advertised base host, from either setting.
+# Certificate names follow the advertised base host.
 render "${tmp_dir}/base-url.yaml" \
   --set grpcproxy.http3.enabled=true \
   --set grpcproxy.http3.tls.certificate.enabled=true \
@@ -121,13 +121,6 @@ render "${tmp_dir}/base-url.yaml" \
   --set grpcproxy.workerConnectBaseURL=https://grpc.example.com:10084
 expect_eq "base URL Certificate dnsNames" "$(yq -r 'select(.kind == "Certificate") | .spec.dnsNames[0]' "${tmp_dir}/base-url.yaml")" \
   "*.grpc.example.com"
-render "${tmp_dir}/env-url.yaml" \
-  --set grpcproxy.http3.enabled=true \
-  --set grpcproxy.http3.tls.certificate.enabled=true \
-  --set grpcproxy.http3.tls.certificate.issuerRef.name=nvcf-worker-callback \
-  --set grpcproxy.env.SELF_WORKER_FQDN=https://callbacks.example.net
-expect_eq "env URL Certificate dnsNames" "$(yq -r 'select(.kind == "Certificate") | .spec.dnsNames[0]' "${tmp_dir}/env-url.yaml")" \
-  "*.callbacks.example.net"
 render "${tmp_dir}/explicit-names.yaml" \
   --set grpcproxy.http3.enabled=true \
   --set grpcproxy.http3.tls.certificate.enabled=true \
@@ -149,15 +142,42 @@ assert_render_fails 'dnsNames must include "*.grpc.example.com"' \
 http3_secret=(--set grpcproxy.http3.enabled=true --set grpcproxy.http3.tls.secretName=x)
 assert_render_fails 'grpcproxy.workerConnectBaseURL "http://grpc.example.com:10086" is not a valid HTTP/3 callback URL: it must use https' \
   "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=http://grpc.example.com:10086
-assert_render_fails "grpcproxy.env.SELF_WORKER_FQDN is empty" \
-  "${http3_secret[@]}" --set grpcproxy.env.SELF_WORKER_FQDN=
 assert_render_fails "its host is an IP address" \
   "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=https://10.0.0.1:10084
 assert_render_fails "must not have a path" \
-  "${http3_secret[@]}" --set grpcproxy.env.SELF_WORKER_FQDN=https://grpc.example.com/v1/proxy
-assert_render_fails "set either grpcproxy.workerConnectBaseURL or grpcproxy.env.SELF_WORKER_FQDN, not both" \
-  "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=https://a.example.com \
-  --set grpcproxy.env.SELF_WORKER_FQDN=https://b.example.com
+  "${http3_secret[@]}" --set grpcproxy.workerConnectBaseURL=https://grpc.example.com/v1/proxy
+
+# workerConnectBaseURL is the only chart input for the callback address. The
+# self-managed stack sizes grpc-proxy from it, so env.SELF_WORKER_FQDN must
+# fail in every mode rather than reach the pods unseen.
+env_error="grpcproxy.env.SELF_WORKER_FQDN is not supported; set grpcproxy.workerConnectBaseURL"
+for type in deployment daemonset; do
+  assert_render_fails "${env_error}" \
+    --set grpcproxy.deploymentType="${type}" --set grpcproxy.env.SELF_WORKER_FQDN=http://grpc.example.com:10086
+  assert_render_fails "${env_error}" \
+    --set grpcproxy.deploymentType="${type}" --set-string grpcproxy.env.SELF_WORKER_FQDN=
+  assert_render_fails "${env_error}" \
+    --set grpcproxy.deploymentType="${type}" "${http3_secret[@]}" \
+    --set grpcproxy.env.SELF_WORKER_FQDN=https://grpc.example.com:10084
+  assert_render_fails "${env_error}" \
+    --set grpcproxy.deploymentType="${type}" "${http3_secret[@]}" \
+    --set grpcproxy.workerConnectBaseURL=https://a.example.com \
+    --set grpcproxy.env.SELF_WORKER_FQDN=https://b.example.com
+done
+
+# The chart value becomes the service's SELF_WORKER_FQDN, once, in both modes.
+for kind in Deployment DaemonSet; do
+  type="$(tr '[:upper:]' '[:lower:]' <<<"${kind}")"
+  render "${tmp_dir}/http1-${type}.yaml" \
+    --set grpcproxy.deploymentType="${type}" \
+    --set grpcproxy.workerConnectBaseURL=http://grpc.example.com:10086
+  expect_eq "${kind} HTTP/1 SELF_WORKER_FQDN" \
+    "$(workload_env "${tmp_dir}/http1-${type}.yaml" "${kind}" SELF_WORKER_FQDN)" "http://grpc.example.com:10086"
+  expect_eq "${kind} HTTP/1 SELF_WORKER_FQDN count" \
+    "$(workload_env "${tmp_dir}/http1-${type}.yaml" "${kind}" SELF_WORKER_FQDN | wc -l | tr -d ' ')" "1"
+  expect_eq "${kind} ConfigMap SELF_WORKER_FQDN" \
+    "$(yq -r 'select(.kind == "ConfigMap" and (.metadata.name | test("-env$"))) | .data.SELF_WORKER_FQDN // ""' "${tmp_dir}/http1-${type}.yaml")" ""
+done
 
 assert_render_fails "grpcproxy.http3.tls.secretName is required" \
   --set grpcproxy.http3.enabled=true

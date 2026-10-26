@@ -169,25 +169,27 @@ HTTP/3 worker callback TLS Secret name.
 {{- end }}
 
 {{/*
+workerConnectBaseURL is the only chart input for the callback address
+(SELF_WORKER_FQDN). Every pod advertises it, so the self-managed stack sizes
+grpc-proxy from it; a second input could hand the pods an address the stack
+never saw.
+*/}}
+{{- define "grpc-proxy.validateEnv" -}}
+{{- if hasKey (.Values.grpcproxy.env | default dict) "SELF_WORKER_FQDN" -}}
+{{- fail "grpcproxy.env.SELF_WORKER_FQDN is not supported; set grpcproxy.workerConnectBaseURL, which the chart passes to grpc-proxy as SELF_WORKER_FQDN" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The one HTTP/3 callback base URL, used for SELF_WORKER_FQDN and the
 Certificate. Each pod advertises https://<dashed-pod-ip>.<host>[:port], so the
-URL must be https with a DNS host and no path. Without workerConnectBaseURL or
-env.SELF_WORKER_FQDN, workers reach each pod through the grpc-headless Service.
+URL must be https with a DNS host and no path. Without workerConnectBaseURL,
+workers reach each pod through the grpc-headless Service.
 */}}
 {{- define "grpc-proxy.http3CallbackURL" -}}
-{{- $userEnv := .Values.grpcproxy.env | default dict -}}
+{{- include "grpc-proxy.validateEnv" . -}}
 {{- $configured := .Values.grpcproxy.workerConnectBaseURL | default "" | toString -}}
 {{- $source := "grpcproxy.workerConnectBaseURL" -}}
-{{- if hasKey $userEnv "SELF_WORKER_FQDN" -}}
-{{- if $configured -}}
-{{- fail "set either grpcproxy.workerConnectBaseURL or grpcproxy.env.SELF_WORKER_FQDN, not both" -}}
-{{- end -}}
-{{- $configured = get $userEnv "SELF_WORKER_FQDN" | default "" | toString -}}
-{{- $source = "grpcproxy.env.SELF_WORKER_FQDN" -}}
-{{- if not $configured -}}
-{{- fail "grpcproxy.env.SELF_WORKER_FQDN is empty; remove it to use the grpc-headless default, or set an https callback URL" -}}
-{{- end -}}
-{{- end -}}
 {{- $url := $configured | default (printf "https://grpc-headless.%s.svc.cluster.local:10084" (include "grpc-proxy.namespace" .)) -}}
 {{- $parsed := urlParse $url -}}
 {{- $invalid := "" -}}
