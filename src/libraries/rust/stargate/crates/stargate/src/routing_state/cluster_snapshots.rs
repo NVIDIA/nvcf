@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 use stargate_proto::pb::ModelStats;
-use stargate_protocol::common::valid_last_mean_input_tps;
+use stargate_protocol::common::{DYNAMO_RELAY_LOAD_STATS_SOURCE, valid_last_mean_input_tps};
 
 use crate::metrics::StargateMetrics;
 
@@ -53,6 +53,37 @@ fn set_shared_engine_stats(
     stats.kv_cache_used_tokens = kv_cache.kv_cache_used_tokens;
     stats.kv_cache_free_tokens = kv_cache.kv_cache_free_tokens;
     stats.max_engine_concurrency = src.max_engine_concurrency;
+}
+
+/// Pylons reading one Dynamo Relay each report the Relay's whole load, so
+/// summing them would count it once per Pylon. When any backend has a complete
+/// Relay view, the cluster takes the freshest one instead of the sum.
+fn set_shared_relay_load(stats: &mut ModelStats, backends: &[Arc<RoutedInferenceServerSnapshot>]) {
+    let Some(relay) = backends
+        .iter()
+        .map(|backend| &backend.stats)
+        .filter(|stats| {
+            stats
+                .stats_sources
+                .iter()
+                .any(|source| source == DYNAMO_RELAY_LOAD_STATS_SOURCE)
+        })
+        .max_by_key(|stats| stats.stats_observed_at_unix_ms)
+    else {
+        return;
+    };
+    stats.output_tps = if valid_output_tps(relay.output_tps) {
+        relay.output_tps
+    } else {
+        0.0
+    };
+    stats.queue_size = relay.queue_size;
+    stats.queued_input_size = relay.queued_input_size;
+    stats.num_running_queries = relay.num_running_queries;
+    stats.total_query_input_size = relay.total_query_input_size;
+    stats.input_processing_queries = relay.input_processing_queries;
+    stats.output_generation_queries = relay.output_generation_queries;
+    stats.max_engine_concurrency = relay.max_engine_concurrency;
 }
 
 fn valid_output_tps(output_tps: f64) -> bool {
@@ -337,6 +368,7 @@ impl ClusterRoutingGeneration {
         });
         let mut stats = backend_stats;
         set_shared_engine_stats(&mut stats, &self.backends, &source_backend.stats);
+        set_shared_relay_load(&mut stats, &self.backends);
         let base_snapshot = RoutedClusterSnapshot {
             cluster_id: source_backend.cluster_id.clone(),
             stats,

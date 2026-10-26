@@ -2257,6 +2257,66 @@ fn cluster_kv_cache_comes_from_the_freshest_backend_reporting_capacity() {
 }
 
 #[test]
+fn shared_cluster_takes_one_relay_load_view_instead_of_summing_relay_pylons() {
+    fn set_relay_view(backend: &mut RoutedInferenceServerSnapshot, observed_at: u64, queue: u64) {
+        let stats = &mut backend.stats;
+        stats.output_tps = 20.0;
+        stats.queue_size = queue;
+        stats.queued_input_size = 17;
+        stats.num_running_queries = 4;
+        stats.total_query_input_size = 31;
+        stats.input_processing_queries = 2;
+        stats.output_generation_queries = 2;
+        stats.max_engine_concurrency = 8;
+        stats.stats_observed_at_unix_ms = observed_at;
+        stats.stats_sources =
+            vec![stargate_protocol::common::DYNAMO_RELAY_LOAD_STATS_SOURCE.to_string()];
+    }
+    fn load(cluster_state: &RoutedClusterState) -> (f64, u64, u64, u64, u64, u64, u64, u64) {
+        let stats = cluster_state
+            .routing_snapshot()
+            .expect("cluster with backends should publish")
+            .stats;
+        (
+            stats.output_tps,
+            stats.queue_size,
+            stats.queued_input_size,
+            stats.num_running_queries,
+            stats.total_query_input_size,
+            stats.input_processing_queries,
+            stats.output_generation_queries,
+            stats.max_engine_concurrency,
+        )
+    }
+
+    // Two Pylons reading one Relay report the same whole-deployment view.
+    let mut backend_a = backend!("relay-cluster", "backend-a", 0.0, 10.0, 5);
+    set_relay_view(&mut backend_a, 200, 2);
+    let cluster_state = RoutedClusterState::new(backend_a.registration.cluster_generation.clone());
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+    let mut backend_b = backend!(
+        backend_a.registration.cluster_generation.clone() =>
+        "relay-cluster", "backend-b", 0.0, 10.0, 5
+    );
+    set_relay_view(&mut backend_b, 200, 2);
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    assert_eq!(load(&cluster_state), (20.0, 2, 17, 4, 31, 2, 2, 8));
+
+    // The freshest view wins, whatever the update order.
+    set_relay_view(&mut backend_b, 300, 5);
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+    assert_eq!(load(&cluster_state).1, 5);
+
+    // Without a complete Relay view, backend-local load is summed as before.
+    backend_a.stats.stats_sources.clear();
+    backend_b.stats.stats_sources.clear();
+    cluster_state.upsert_backend(Arc::new(backend_a));
+    cluster_state.upsert_backend(Arc::new(backend_b));
+    assert_eq!(load(&cluster_state).1, 7);
+}
+
+#[test]
 fn replaced_backend_registration_cannot_reserve_same_id_successor() {
     let old = backend!(
         "cluster-exact-registration",

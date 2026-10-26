@@ -17,7 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
-use stargate_protocol::common::valid_last_mean_input_tps;
+use stargate_protocol::common::{DYNAMO_RELAY_LOAD_STATS_SOURCE, valid_last_mean_input_tps};
 use tokio::time::Instant as TokioInstant;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
@@ -1305,7 +1305,9 @@ impl ModelMetricsState {
             stats.input_processing_queries = load.input_processing_queries;
             stats.output_generation_queries = load.output_generation_queries;
             stats.max_engine_concurrency = load.max_engine_concurrency;
-            stats.stats_sources.push("dynamo_relay_load".to_string());
+            stats
+                .stats_sources
+                .push(DYNAMO_RELAY_LOAD_STATS_SOURCE.to_string());
             stats
                 .stats_capabilities
                 .push("model.load.dynamo_relay".to_string());

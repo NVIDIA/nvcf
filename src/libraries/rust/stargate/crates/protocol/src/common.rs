@@ -111,6 +111,10 @@ pub fn entries_from_header_map(
         .collect()
 }
 
+/// `ModelStats.stats_sources` label of a complete Dynamo Relay load view. Pylons
+/// reading one Relay each report the Relay's whole load, not their own share.
+pub const DYNAMO_RELAY_LOAD_STATS_SOURCE: &str = "dynamo_relay_load";
+
 pub fn has_available_engine_slot(active_requests: u64, max_engine_concurrency: u64) -> bool {
     max_engine_concurrency > 0 && active_requests < max_engine_concurrency
 }

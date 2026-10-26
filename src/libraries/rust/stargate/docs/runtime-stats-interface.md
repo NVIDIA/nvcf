@@ -243,10 +243,17 @@ a partial sum as complete.
   reported. A model with incomplete usage reports zero capacity, which Stargate
   reads as no KV view: a cluster takes KV usage from its freshest backend that
   reports capacity.
-- Loss: when a load stream ends, sends an invalid message, or is silent for
-  max(3 s, 3 × the window), Pylon clears the Relay's stats and readiness and
-  reconnects with backoff. It never falls back to OpenAI stats.
-- Calibration still measures Pylon's own calibration requests.
+- Shared clusters: every Pylon reading one Relay reports the Relay's whole
+  load, so Stargate takes a cluster's load from its freshest complete Relay view
+  (source `dynamo_relay_load`) instead of summing its backends.
+- Loss: when any Relay stream ends or sends an invalid message, or a load
+  stream is silent for max(3 s, 3 × the window), Pylon clears the Relay's stats
+  and readiness and reconnects with backoff. It never falls back to OpenAI
+  stats.
+- Capacity: the Relay reports load, not capacity, and relay mode turns off the
+  OpenAI fallback, so a model's mean input capacity comes only from
+  `--do-calibration` or `--initial-input-tps`. Calibration still measures
+  Pylon's own calibration requests.
 
 A ready model whose load is incomplete reports zero load until a complete
 window arrives, because registration stats cannot say "unknown".
@@ -289,8 +296,9 @@ Pylon publishes `pylon_model_max_input_tps` when the maximum is known and remove
 the series when the model is removed or replaced with unknown maximum state.
 The additive protobuf field preserves older messages as an absent maximum.
 
-Shared clusters sum backend-local live load and union labels. Effective input
-capacity is:
+Shared clusters sum backend-local live load and union labels. A complete Dynamo
+Relay load view is shared engine state instead: the cluster takes the freshest
+one (see [Dynamo Relay Mode](#dynamo-relay-mode)). Effective input capacity is:
 
 ```text
 mean input capacity = sum(active runtime mean reports)
@@ -314,8 +322,10 @@ Later valid runtime samples continue updating either unpinned distribution.
 Labels:
 
 - capabilities: `request.output.chunk_usage`,
-  `machine.kv_cache.http`, `model.throughput.engine_stream`
-- sources: `chunk_usage`, `kv_cache_stats`, `engine_stats_stream`
+  `machine.kv_cache.http`, `model.throughput.engine_stream`,
+  `model.load.dynamo_relay`, `machine.kv_cache.dynamo_relay`
+- sources: `chunk_usage`, `kv_cache_stats`, `engine_stats_stream`,
+  `dynamo_relay_load`, `dynamo_relay_kv_usage`
 
 ## Metrics
 
