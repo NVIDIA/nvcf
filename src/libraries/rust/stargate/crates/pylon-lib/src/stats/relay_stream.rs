@@ -558,8 +558,12 @@ mod tests {
         let without_catalog = start_session();
         let with_catalog = start_session();
         with_catalog.catalogs.send(Ok(catalog())).unwrap();
-        // Both sessions' load streams stay live throughout.
-        while !without_catalog.end.is_finished() {
+        // Both sessions' load streams stay live throughout, for at most one
+        // step past the allowance.
+        for _ in 0..=FIRST_WINDOW_TIMEOUT.as_secs() {
+            if without_catalog.end.is_finished() {
+                break;
+            }
             for session in [&without_catalog, &with_catalog] {
                 let _ = session.kv_loads.send(Ok(kv_window()));
                 let _ = session.serving_loads.send(Ok(load_window()));
@@ -567,6 +571,10 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
+        assert!(
+            without_catalog.end.is_finished(),
+            "a session whose first catalog never arrives must end"
+        );
         assert!(start.elapsed() <= FIRST_WINDOW_TIMEOUT + Duration::from_secs(1));
         assert_eq!(
             without_catalog.end.await.unwrap(),
