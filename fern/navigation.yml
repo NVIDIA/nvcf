@@ -32,7 +32,7 @@ navigation:
   - page: Overview
     path: ../docs/overview/index.md
     slug: overview
-  - page: Consume an Umbrella Release
+  - page: Consume an NVCF Release
     path: ../docs/overview/umbrella-releases.md
     slug: umbrella-releases
   - page: Quickstart

@@ -567,6 +567,85 @@ func TestRenderImageMirroringCLIContentMatchesPublicationState(t *testing.T) {
 	}
 }
 
+func TestRenderStackPackageDownloads(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Stack.Version = "1.2.3"
+	catalog.SupplementalArtifacts[0].Version = "2.3.4"
+	catalog.SupplementalArtifacts[1].Version = "3.4.5"
+	got, err := Render("stack-package-downloads", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []struct{ name, version, directory string }{
+		{catalog.Stack.Name, catalog.Stack.Version, "self-managed"},
+		{computeStackResourceName, catalog.SupplementalArtifacts[0].Version, "nvcf-compute-plane"},
+		{observabilityStackResourceName, catalog.SupplementalArtifacts[1].Version, "observability"},
+	} {
+		for _, want := range []string{
+			"ngc registry resource download-version \"nvidia/nvcf/" + spec.name + ":" + spec.version + "\" &&",
+			spec.name + "_v" + spec.version + "/" + spec.name + "-" + spec.version + ".tar.gz",
+			"-C \"$BUNDLE_DIR/deploy/stacks/" + spec.directory + "\"",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("package download missing %q:\n%s", want, got)
+			}
+		}
+	}
+	catalog.PublicationPending = []string{catalog.Stack.Name, computeStackResourceName}
+	got, err = Render("stack-package-downloads", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got, "ngc registry resource download-version") != 1 ||
+		strings.Count(got, "Publication pending:") != 2 ||
+		strings.Contains(got, "-C \"$BUNDLE_DIR/deploy/stacks/self-managed\"") {
+		t.Fatalf("pending packages must not render download/extraction commands:\n%s", got)
+	}
+}
+
+func TestCatalogRefreshPreservesReleaseSelectionRenderer(t *testing.T) {
+	base := testCatalog()
+	base.Outputs = defaultOutputs()
+	base.Outputs[0].Blocks[0].Renderer = "release-selection"
+	got := refreshCatalogFromArtifacts(base.Stack.Version, base.Artifacts, base)
+	if got.Outputs[0].Blocks[0].Renderer != "release-selection" {
+		t.Fatal("refresh changed exact selection into a compatibility table")
+	}
+}
+
+func TestBundledChartDistribution(t *testing.T) {
+	catalog := testCatalog()
+	repository := "https://github.com/NVIDIA/nvcf/tree/" + strings.Repeat("a", 40) + "/deploy/stacks/self-managed/charts"
+	artifact := Artifact{Name: "receipt", Type: ArtifactTypeChart, Version: "0.1.0",
+		UpstreamRepository: publicUpstreamRepository(repository, ArtifactTypeChart)}
+	if artifact.UpstreamRepository != repository {
+		t.Fatal("immutable bundled chart source was discarded")
+	}
+	catalog.Artifacts = []Artifact{artifact}
+	catalog.markAllUnpublishedAsPending()
+	if catalog.publicationIsPending(artifact) {
+		t.Fatal("bundled chart incorrectly requires standalone publication")
+	}
+	got, err := catalog.artifactDistribution(artifact)
+	if err != nil || got != "Bundled with stack" {
+		t.Fatalf("distribution = %q, %v", got, err)
+	}
+	if _, err := catalog.chartPullReference(artifact); err == nil {
+		t.Fatal("bundled source must not render a Helm repository pull")
+	}
+	if got := publicUpstreamRepository(strings.Replace(repository, strings.Repeat("a", 40), "main", 1), ArtifactTypeChart); got != "" {
+		t.Fatalf("mutable source accepted as a bundled chart: %s", got)
+	}
+}
+
+func TestRenderStackPackageDownloadsRequiresSiblingPackages(t *testing.T) {
+	catalog := testCatalog()
+	catalog.SupplementalArtifacts = nil
+	if _, err := renderStackPackageDownloads(catalog); err == nil {
+		t.Fatal("expected an error for missing sibling packages")
+	}
+}
+
 func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 	tests := []struct {
 		name                       string

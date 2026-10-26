@@ -1,4 +1,4 @@
-# Consume an NVCF umbrella release
+# Consume an NVCF release
 
 An umbrella release selects one exact combination of the Self-Managed, Compute
 Plane and Observability stacks. Its version does not need to match any stack,
@@ -7,83 +7,120 @@ and [artifact manifest](manifest.md) together. Choose the docs edition for the
 umbrella version you are deploying; Development follows main and can describe
 different artifact pins.
 
-<Warning>
-This preview describes the NVCF 1.0.4 candidate: Self-Managed 1.0.7,
-Compute Plane 1.0.4 and Observability 1.0.0. It remains pending QA and customer
-publication. The published-release download below is for an available final
-release; it is not a download claim for this candidate.
-</Warning>
+Choose either an umbrella archive or the separate stack packages listed in
+this docs edition's [artifact manifest](manifest.md). Use one selected
+combination. Mixing the latest versions of each stack can select a different
+combination from the one documented here.
 
-Docs edition 1.0.2 selected Self-Managed 1.0.1, Compute Plane 1.0.0 and
-Observability 1.0.0. To upgrade that installation, follow the
-[staged upgrade procedure](release-notes/1.0.2-to-1.0.4-upgrade.md). A docs-only
-edition change does not require an installed stack change. See the
-[compatibility policy](compatibility-matrix.md#compatibility-and-maintenance-policy)
-for the distinction between exact selection and supported version ranges.
+For the 1.0.4 selection and changes from docs edition 1.0.2, read the
+[release notes](../../fern/changelog/2026-10-26.mdx) and
+[upgrade procedure](release-notes/1.0.2-to-1.0.4-upgrade.md).
+The [compatibility policy](compatibility-matrix.md#compatibility-and-maintenance-policy)
+explains supported version ranges separately from exact bundle membership.
 
-## Obtain the bundle
+## Choose an installation directory
 
-For this candidate, download the QA artifact from the
-[assembly run linked in the manifest](manifest.md#candidate-identity). Retain
-its candidate commit, original inventory hashes and bundle SHA-256 with the
-results. This CI artifact is not a final published release. Qualification and
-final assembly can change its manifest and archive hashes.
+Keep the extracted stack files, environment files and registration state in a
+named directory that survives workstation cleanup. Use a new directory for
+each installation or upgrade. Keep the previous directory through the rollback
+window; do not extract over an existing deployment's configuration.
+
+Run the examples in Bash. Set the release version to an available published
+version and choose a persistent location:
+
+```bash
+set -euo pipefail
+RELEASE_VERSION="X.Y.Z"
+INSTALL_ROOT="$HOME/nvcf/releases/$RELEASE_VERSION"
+ASSET_DIR="$INSTALL_ROOT/downloads"
+BUNDLE_DIR="$INSTALL_ROOT/stack-files"
+mkdir -p "$ASSET_DIR"
+```
+
+Choose one of the following download paths.
+
+## Download an umbrella archive
 
 For a published umbrella release, open the matching `nvcf/X.Y.Z` tag in
 [GitHub Releases](https://github.com/NVIDIA/nvcf/releases) and download its
-`nvcf-X.Y.Z.tar.gz`, `manifest.json` and `release-assets.json` assets. Use the
+`nvcf-X.Y.Z.tar.gz` and `manifest.json` assets. Use the
 packaged bundle asset, not GitHub's automatically generated source archive.
 The equivalent download command uses the GitHub CLI:
 
 ```bash
-RELEASE_VERSION="X.Y.Z" # Replace with an available published umbrella version.
-ASSET_DIR="$(mktemp -d)"
 gh release download "nvcf/${RELEASE_VERSION}" --repo NVIDIA/nvcf \
   --pattern "nvcf-${RELEASE_VERSION}.tar.gz" \
-  --pattern manifest.json --pattern release-assets.json \
+  --pattern manifest.json \
   --dir "$ASSET_DIR"
 ```
 
-An umbrella bundle is distributed through its GitHub release assets. The
-separately versioned NGC stack resources are not an umbrella download command.
-Do not assemble a replacement combination from whichever stack releases are
-latest.
-
-## Extract the bundle
+### Extract the archive
 
 Set `ASSET_DIR` to the downloaded assets directory and `RELEASE_VERSION` to the
-umbrella version. Extract the archive into a new directory. An optional
-[integrity check](#optional-integrity-verification) is available below.
+umbrella version. Extract the archive into a new directory.
 
 ```bash
-BUNDLE_DIR="$(mktemp -d)"
+mkdir "$BUNDLE_DIR"
 tar -xzf "$ASSET_DIR/nvcf-${RELEASE_VERSION}.tar.gz" -C "$BUNDLE_DIR"
 ```
 
-Keep this layout intact:
+## Download separate stack packages
+
+Use [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli) configured with
+a customer API key that can read the selected resource packages. Download into
+a new directory and extract each stack to its expected sibling path:
+
+```bash
+mkdir "$BUNDLE_DIR"
+mkdir -p "$BUNDLE_DIR/deploy/stacks/self-managed" \
+  "$BUNDLE_DIR/deploy/stacks/nvcf-compute-plane" \
+  "$BUNDLE_DIR/deploy/stacks/observability"
+cd "$ASSET_DIR"
+```
+
+Run the commands for the packages you need. Obtain every required package
+before deployment. A resource marked `Publication pending` has no verified
+download command in this catalog.
+
+{/*docs-version-sync:BEGIN stack-package-downloads*/}
+
+```bash
+# Self-Managed 1.0.7
+# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
+
+# Compute Plane 1.0.4
+# Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
+
+# Observability 1.0.0
+ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:1.0.0" && \
+  tar -xzf "nvcf-observability-stack_v1.0.0/nvcf-observability-stack-1.0.0.tar.gz" \
+    -C "$BUNDLE_DIR/deploy/stacks/observability"
+
+```
+
+{/*docs-version-sync:END stack-package-downloads*/}
+
+## Keep the stack directories together
+
+Umbrella archives and separate stack packages use these same paths:
 
 ```text
-README.md
-VERSION
-manifest.json
-inventory.json
-bundle-files.json
-inventories/
 deploy/stacks/self-managed/
 deploy/stacks/nvcf-compute-plane/
 deploy/stacks/observability/
 ```
 
-Root `VERSION` is the umbrella version. Each stack directory's `VERSION` is
-that stack's independently released version. The archive includes configuration
-and secret templates, but not customer credentials, external chart/image
-payloads or the CLI binary. Install `nvcf-cli` separately when using registration
+An umbrella archive also contains a root `VERSION`, `manifest.json`, `README.md`,
+`LICENSE` and `NOTICE`. Each stack directory's `VERSION` is its independently released
+version. Packages include configuration and secret templates. Customer
+credentials, external charts and images, and the CLI binary are separate.
+Install `nvcf-cli` separately when using registration
 or CLI-assisted operations. Pass its existing stack-path options explicitly;
 the CLI does not select or verify an umbrella release automatically.
 
 ## Configure customer artifact access
 
-The candidate's base environments contain `YOUR_ORG/YOUR_TEAM` placeholders.
+The base environments contain `YOUR_ORG/YOUR_TEAM` placeholders.
 Create `environments/<name>.yaml` in each selected stack directory and set
 `HELMFILE_ENV=<name>`. Complete the deployment-specific endpoints, storage,
 network and identity settings described by the
@@ -110,7 +147,8 @@ credential authorized for the selected catalog. Keep credential-bearing files
 out of source control. The HTTPS chart URL requires authentication; the URL
 alone can return 403. These are required installation inputs, not version
 changes or substitutions for producer artifacts. Preserve selected versions
-and the default resource and security settings when qualifying the candidate.
+and the default resource and security settings unless the deployment requires
+a reviewed override.
 
 The credentials have different consumers:
 
@@ -135,8 +173,8 @@ and [image mirroring](image-mirroring.md).
 
 ## Deploy the selected stacks
 
-Use Helm 3.21.4 and Helmfile 1.1.9 for this candidate, as recorded in its
-manifest. Select each cluster context explicitly. Read the extracted README
+Use the Helm and Helmfile versions recorded in the release's manifest. NVCF
+1.0.4 uses Helm 3.21.4 and Helmfile 1.1.9. Select each cluster context explicitly. Read the extracted README
 and render with the packaged Helmfiles before applying.
 
 For a fresh installation:
@@ -166,8 +204,7 @@ disabled. Profiles are `disabled`, `control`, `compute` and `all`; component
 modes can use existing infrastructure where supported. For a separate compute
 cluster, configure and run the sibling Observability stack on that cluster if
 its profile is enabled. Follow the [Observability guide](../observability/observability.md)
-for profile and existing-backend requirements. Bundle membership alone does not
-enable or qualify every telemetry path.
+for profile and existing-backend requirements. Enable only the telemetry paths required for the deployment.
 
 For an existing installation, use the
 [upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md) instead of the fresh
@@ -176,29 +213,7 @@ before shared worker defaults, queue draining and explicit rollback limits.
 
 ## Optional integrity verification
 
-To check downloaded assets before extraction, use `jq` and `shasum` to compare
-the local files with the published asset hashes.
-
-Set `ASSET_DIR` to the directory containing the downloaded assets and
-`RELEASE_VERSION` to their umbrella version. Verify both the archive and
-manifest against `release-assets.json` obtained from the trusted release or
-candidate artifact:
-
-```bash
-(
-  set -eu
-  cd "$ASSET_DIR"
-  for asset in "nvcf-${RELEASE_VERSION}.tar.gz" manifest.json; do
-    digest="$(jq -er --arg asset "$asset" \
-      '.assets[$asset] | select(test("^sha256:[0-9a-f]{64}$")) | sub("^sha256:"; "")' \
-      release-assets.json)"
-    printf '%s  %s\n' "$digest" "$asset" | shasum -a 256 -c -
-  done
-)
-```
-
-Stop if either check fails. For the current QA artifact, also compare the
-archive digest to the [candidate identity](manifest.md#candidate-identity).
-If a source checkout is available, the repository's `umbrella verify-bundle`
-command additionally validates the embedded manifest and file index; see the
-[verification command](https://github.com/NVIDIA/nvcf/blob/main/docs/dev/umbrella-releases.md#install-with-existing-stack-interfaces).
+Published umbrella releases can include `release-assets.json` with archive and
+manifest hashes. Use it to verify downloaded files before extraction when your
+installation process requires an integrity check. Packaging details are in the
+[release tooling reference](https://github.com/NVIDIA/nvcf/blob/main/docs/dev/umbrella-releases.md#install-with-existing-stack-interfaces).

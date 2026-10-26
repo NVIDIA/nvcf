@@ -16,12 +16,10 @@ installation path.
 
 </Info>
 
-Clone the public repository and run the compute-plane commands from its root:
-
-```bash
-git clone https://github.com/nvidia/nvcf.git
-cd nvcf
-```
+Obtain the selected stack packages using [Consume an NVCF release](../../overview/umbrella-releases.md).
+Run the commands below from the extracted `BUNDLE_DIR`, with the compute-plane
+and control-plane directories kept as siblings. A source checkout is needed
+only when developing from source.
 
 ## Prerequisites
 
@@ -63,7 +61,7 @@ step, and the operator consumes it:
 2. You export the control-plane profile. The profile is the canonical handoff
    for the control-plane identity, reachable endpoints, host overrides, and
    transport trust.
-3. From the repository root, you run
+3. From the extracted bundle root, you run
    `make -C deploy/stacks/nvcf-compute-plane register-cluster` (see
    [Register the cluster](#register-the-cluster)). The target runs
    `nvcf-cli self-hosted compute-plane register` with the profile. The CLI
@@ -71,7 +69,7 @@ step, and the operator consumes it:
    the control plane (ICMS), and writes the `clusterID`, `clusterGroupID`,
    identity source, endpoints, host overrides, and transport trust to a
    registration values file.
-4. From the repository root, you run
+4. From the extracted bundle root, you run
    `make -C deploy/stacks/nvcf-compute-plane install`. Helmfile installs
    `helm-nvca-operator` with the compute-plane environment and registration
    values for that cluster, using the same selected kubeconfig context as
@@ -112,30 +110,19 @@ sequenceDiagram
 
 ## Configure the compute plane
 
-Create the environment file from the repository root. It provides the chart
+Create the environment file from the extracted bundle root. It provides the chart
 registry, image registry, image pull secret name, and deployment-specific
 overrides used by the NVCA operator. The generated registration values provide
 the control-plane service URLs and host overrides.
 
 ```bash
-cd path/to/nvcf
+cd "$BUNDLE_DIR"
 touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
-```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
-global:
-  helm:
-    sources:
-      registry: <your-chart-registry>
-      repository: <your-chart-repository>
-
-  image:
-    registry: <your-image-registry>
-    repository: <your-image-repository>
-
-  imagePullSecrets:
-    - name: nvcr-pull-secret
-```
+Start with the [customer artifact access values](../../overview/umbrella-releases.md#configure-customer-artifact-access).
+Use the same selected chart and image source as the control plane. Add the
+compute-specific settings below to that environment file.
 
 The profile exporter derives the service URLs and route-matching host overrides
 from the selected control-plane environment, and registration writes them as

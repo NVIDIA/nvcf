@@ -12,8 +12,8 @@ remote deployment, or for separate control-plane and GPU clusters, use
 
 <Note>
 This source-development quickstart does not select an umbrella release.
-For the 1.0.4 candidate, use [Consume an umbrella release](umbrella-releases.md)
-and its packaged stack paths. The candidate remains pending QA.
+For an umbrella release, use [Consume an umbrella release](umbrella-releases.md)
+and its packaged stack paths.
 </Note>
 
 Run the commands from the NVCF repository root unless a step says otherwise.

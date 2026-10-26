@@ -1,41 +1,13 @@
 # Artifact Manifest
 
-This manifest records the exact NVCF 1.0.4 candidate selection. The generated
-tables come from the original inventories of Self-Managed 1.0.7, Compute Plane
-1.0.4 and Observability 1.0.0.
+The generated tables list the stack packages, charts and images selected by
+this docs edition. Stack, chart and image versions are independent. Use
+[Consume an NVCF release](umbrella-releases.md) to obtain the packages and
+configure customer registry access.
 
-<Warning>
-Pending QA. Artifact availability and successful assembly do not qualify this
-combination. Customer stack/umbrella publication and docs-site activation
-remain held for approval. Use the [upgrade procedure](release-notes/1.0.2-to-1.0.4-upgrade.md)
-before changing an existing deployment.
-</Warning>
-
-## Candidate identity
-
-- [Selected product manifest](https://github.com/NVIDIA/nvcf/blob/6f1cb2532b6cbc8bd88a8242af81be05d6a6221a/deploy/releases/1.0.4/manifest.json),
-  at candidate commit `6f1cb2532b6cbc8bd88a8242af81be05d6a6221a`.
-- [Candidate assembly and downloadable QA artifact](https://github.com/NVIDIA/nvcf/actions/runs/40340819778).
-  The artifact contains `nvcf-1.0.4.tar.gz` and the original inventories whose
-  SHA-256 hashes are recorded in the product manifest.
-- Bundle SHA-256:
-  `4df16bd76dc4e8d3133de932f30631f1bef98aa2ed9593046e9a392403d7bdda`.
-
-This candidate supersedes the earlier Compute Plane 1.0.3 / Samba 1.0.8
-selection. Customer access to Samba 1.0.9 and BDD results remain pending
-verification.
-
-The product manifest is the selection authority. Use the assembled bundle;
-the umbrella branch's incidental stack directories are not that selection.
-The [docs edition manifest](https://github.com/NVIDIA/nvcf/blob/sbaum1994/umbrella-104-docs-preview/docs/edition-manifest.json)
-records the same three stack versions and source commits for this preview.
-
-"Publication pending" means this catalog does not yet record verified customer
-access for that exact artifact, or the stack resource is held for QA. It does
-not mean a new chart or image version must be built. The upgrade-receipt and
-Observability helper charts are bundled in the selected stack sources. The
-original inventories remain unchanged; historical supplemental accounting does
-not replace them.
+`Publication pending` means the catalog has no verified customer download
+location for that exact artifact. Bundled charts are included in their stack
+packages.
 
 ## Artifacts overview
 
@@ -95,21 +67,27 @@ For archive download, integrity checks and deployment order, use
 
 ### Supporting images that ship from Docker Hub
 
-The NATS configuration reloader and the account-bootstrap Kubernetes
-utilities are not republished under the public `nvidia/nvcf` catalog, so they
-default to their upstream Docker Hub source:
+These Self-Managed helpers use Docker Hub independently of `global.image`.
+Check their egress or mirror configuration before rendering an upgrade:
 
 | Value | Default image |
 | --- | --- |
+| `nats.container.image` | `docker.io/synadia/nats-server:2.14.6-alpine3.22` |
 | `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.24.0` |
 | `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.37.0` |
+| `upgradeReceipt.image` | `docker.io/alpine/k8s:1.33.1` |
 
-A public-catalog install needs no configuration for these two images. Verify
-that your cluster can reach Docker Hub. If your egress to Docker Hub is
-authenticated or rate-limited, add the pull secret to
-`global.imagePullSecrets`.
+The NATS box uses the selected catalog image by default. The optional upstream
+box override below adds another Docker Hub dependency. Other enabled stacks
+and optional components also use upstream registries; inspect every image in
+the render and generated inventory, not just this helper table.
 
-If you have mirrored both images into your own registry, redirect them from
+Verify access from cluster nodes. If Docker Hub requires authentication, add
+its pull secret to `global.imagePullSecrets`. The receipt stage forwards this
+list to its bundled chart. Check that each enabled workload renders the
+intended pull secret.
+
+If you have mirrored these images into your own registry, redirect them from
 your environment file
 (`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
 and `repository` together, because each key falls back to its own Docker Hub
@@ -130,6 +108,12 @@ api:
       registry: <your-registry>
       repository: <your-repository>/alpine-k8s
       tag: "1.37.0"
+
+upgradeReceipt:
+  image:
+    registry: <your-registry>
+    repository: <your-repository>/alpine-k8s
+    tag: "1.33.1"
 ```
 
 ### Use upstream NATS images
@@ -361,7 +345,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-example-dashboards` | `1.6.0` | `self-managed` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
 | `nvcf-gateway-routes` | `1.18.3` | `self-managed` | Required | Deploys Gateway API routes for NVCF services. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
 | `nvcf-observability-reference-stack` | `1.10.0` | `self-managed` | Optional | Deploys a reference observability backend for evaluation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |  |
-| `nvcf-upgrade-receipt` | `0.1.0` | `self-managed` | Required | Records the deployed stack version after Helmfile completes. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed/charts/nvcf-upgrade-receipt) |
+| `nvcf-upgrade-receipt` | `0.1.0` | `self-managed` | Required | Records the deployed stack version after Helmfile completes. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed/charts/nvcf-upgrade-receipt) |
 
 ### Control plane services and images
 
@@ -374,38 +358,38 @@ The following tables list the complete artifact inventory.
 | `cert-manager-controller` | `v1.20.2` | `self-managed` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | `self-managed` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-webhook` | `v1.20.2` | `self-managed` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
-| `ess-agent` | `1.4.4` | `self-managed` | Required | Injects encrypted application secrets into function workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent) |
-| `icms-service-oss` | `0.7.6` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
+| `ess-agent` | `1.4.4` | `self-managed` | Required | Injects encrypted application secrets into function workloads. | `nvcr.io/nvidia/nvcf/ess-agent:1.4.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent) |
+| `icms-service-oss` | `0.7.6` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `nvcr.io/nvidia/nvcf/icms-service-oss:0.7.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
 | `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `k8s` | `1.33.1` | `self-managed` | Required | Runs the upgrade receipt hook; separate from the account-bootstrap helper. | `docker.io/alpine/k8s:1.33.1` | [GitHub](https://github.com/alpine-docker/k8s) |
-| `llm-api-gateway` | `0.14.11` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
+| `llm-api-gateway` | `0.14.11` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/nvidia/nvcf/llm-api-gateway:0.14.11` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
 | `nats-box` | `0.19.7-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `docker.io/synadia/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
-| `nvcf-ai-api-gateway-service` | `1.35.3` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
-| `nvcf-api-keys-service` | `1.9.3` | `self-managed` | Required | Creates and manages NVCF API keys. | `Publication pending` |  |
-| `nvcf-cassandra-migrations` | `0.17.7` | `self-managed` | Required | Applies the Cassandra schemas required by NVCF services. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
-| `nvcf-ess` | `0.5.4` | `self-managed` | Required | Provides encrypted application secrets to NVCF workloads. | `Publication pending` |  |
-| `nvcf-function-autoscaler` | `1.21.10` | `self-managed` | Required | Scales functions from NVCF workload metrics. | `Publication pending` |  |
-| `nvcf-grpc-proxy` | `1.33.7` | `self-managed` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
-| `nvcf-invocation-service` | `0.12.3` | `self-managed` | Required | Routes stateless HTTP function invocation requests. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
-| `nvcf-nats-auth-callout-service` | `0.8.6` | `self-managed` | Required | Authorizes NATS clients for NVCF services and workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
-| `nvcf-notary` | `1.14.5` | `self-managed` | Required | Signs and validates functions and cluster nodes. | `Publication pending` |  |
+| `nvcf-ai-api-gateway-service` | `1.35.3` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
+| `nvcf-api-keys-service` | `1.9.3` | `self-managed` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.3` |  |
+| `nvcf-cassandra-migrations` | `0.17.7` | `self-managed` | Required | Applies the Cassandra schemas required by NVCF services. | `nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
+| `nvcf-ess` | `0.5.4` | `self-managed` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/nvcf-ess:0.5.4` |  |
+| `nvcf-function-autoscaler` | `1.21.10` | `self-managed` | Required | Scales functions from NVCF workload metrics. | `nvcr.io/nvidia/nvcf/nvcf-function-autoscaler:1.21.10` |  |
+| `nvcf-grpc-proxy` | `1.33.7` | `self-managed` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.33.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
+| `nvcf-invocation-service` | `0.12.3` | `self-managed` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.12.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
+| `nvcf-nats-auth-callout-service` | `0.8.6` | `self-managed` | Required | Authorizes NATS clients for NVCF services and workloads. | `nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.8.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
+| `nvcf-notary` | `1.14.5` | `self-managed` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-notary:1.14.5` |  |
 | `nvcf-openbao` | `2.6.2-nv-1.3.4` | `self-managed` | Required | Stores and manages control-plane secrets. | `nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.2-nv-1.3.4` | [Upstream](https://github.com/openbao/openbao) |
-| `nvcf-openbao-migrations` | `0.19.9` | `self-managed` | Required | Applies the OpenBao configuration required by NVCF. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
-| `nvcf-ratelimiter` | `1.17.5` | `self-managed` | Required | Enforces request rate limits for supported invocation paths. | `Publication pending` |  |
-| `nvcf-service-oss` | `1.18.1` | `self-managed` | Required | Provides the primary NVCF control-plane API. | `Publication pending` |  |
+| `nvcf-openbao-migrations` | `0.19.9` | `self-managed` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.19.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
+| `nvcf-ratelimiter` | `1.17.5` | `self-managed` | Required | Enforces request rate limits for supported invocation paths. | `nvcr.io/nvidia/nvcf/nvcf-ratelimiter:1.17.5` |  |
+| `nvcf-service-oss` | `1.18.1` | `self-managed` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/nvidia/nvcf/nvcf-service-oss:1.18.1` |  |
 | `nvcf-state-metrics-service` | `1.23.7` | `self-managed` | Required | Exports NVCF resource state as Prometheus metrics. | `nvcr.io/nvidia/nvcf/nvcf-state-metrics-service:1.23.7` |  |
 | `nvcf-ui` | `1.1.2` | `self-managed` | Optional | Serves the optional NVCF administrative interface. | `nvcr.io/nvidia/nvcf/nvcf-ui:1.1.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/uis/nvcf-ui) |
-| `nvcf-worker-init-oss` | `1.2.4` | `self-managed` | Required | Prepares function resources before the user container starts. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init) |
-| `nvcf-worker-llm-credentials-oss` | `1.1.5` | `self-managed` | Required | Maintains a current NVCF worker token for LLM function workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials) |
-| `nvcf-worker-task-oss` | `1.1.6` | `self-managed` | Required | Runs task workloads selected by the task API. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services) |
-| `nvcf-worker-utils-oss` | `1.2.6` | `self-managed` | Required | Proxies NATS traffic between function containers and the control plane. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
+| `nvcf-worker-init-oss` | `1.2.4` | `self-managed` | Required | Prepares function resources before the user container starts. | `nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.4` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init) |
+| `nvcf-worker-llm-credentials-oss` | `1.1.5` | `self-managed` | Required | Maintains a current NVCF worker token for LLM function workloads. | `nvcr.io/nvidia/nvcf/nvcf-worker-llm-credentials-oss:1.1.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials) |
+| `nvcf-worker-task-oss` | `1.1.6` | `self-managed` | Required | Runs task workloads selected by the task API. | `nvcr.io/nvidia/nvcf/nvcf-worker-task-oss:1.1.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services) |
+| `nvcf-worker-utils-oss` | `1.2.6` | `self-managed` | Required | Proxies NATS traffic between function containers and the control plane. | `nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss:1.2.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
 | `nvcf_worker_niclls` | `2.118.2` | `self-managed` | Required | Runs Low Latency Streaming workers. | `nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.118.2` |  |
-| `nvct-service-oss` | `1.66.1` | `self-managed` | Required | Provides tenant-scoped NVCF control-plane operations. | `Publication pending` |  |
+| `nvct-service-oss` | `1.66.1` | `self-managed` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/nvidia/nvcf/nvct-service-oss:1.66.1` |  |
 | `oss-vault-k8s` | `1.7.4` | `self-managed` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` |  |
-| `pylon` | `0.18.3` | `self-managed` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
-| `reval-server` | `0.20.3` | `self-managed` | Required | Revalidates function state in the background. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/helm-reval) |
-| `stargate` | `0.18.3` | `self-managed` | Optional | Routes LLM requests to eligible worker instances. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `pylon` | `0.18.3` | `self-managed` | Optional | Connects LLM worker pods to the LLM request router. | `nvcr.io/nvidia/nvcf/pylon:0.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `reval-server` | `0.20.3` | `self-managed` | Required | Revalidates function state in the background. | `nvcr.io/nvidia/nvcf/reval-server:0.20.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/helm-reval) |
+| `stargate` | `0.18.3` | `self-managed` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/nvidia/nvcf/stargate:0.18.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 
 ### Compute plane Helm charts
 
@@ -419,7 +403,7 @@ The following tables list the complete artifact inventory.
 | `helm-nvca-operator` | `1.28.0` | `compute-plane` | Required | Deploys the NVCA operator and compute-plane integration. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator:1.28.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvca-operator) |
 | `kai-scheduler` | `v0.17.1` | `compute-plane` | Optional | Deploys the optional KAI Scheduler. | `oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `modelexpress` | `supported` | Independent | Optional | Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack. | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
-| `nvcf-cluster-topology` | `0.1.0` | `compute-plane` | Required | Configures cluster topology resources for compute scheduling. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-cluster-topology:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology) |
+| `nvcf-cluster-topology` | `0.1.0` | `compute-plane` | Required | Configures cluster topology resources for compute scheduling. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology) |
 | `nvcf-container-cache` | `0.25.22` | `compute-plane` | Optional | Deploys container image caching on GPU cluster nodes. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-container-cache:0.25.22` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 
 ### Compute plane services and images
@@ -436,10 +420,10 @@ The following tables list the complete artifact inventory.
 | `kubernetes-operator` | `1.4.2` | `compute-plane` | Optional | Reconciles NVIDIA Dynamo workloads on Kubernetes. | `nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2` | [Upstream](https://github.com/ai-dynamo/dynamo) |
 | `modelexpress-server` | `supported` | Independent | Optional | Serves model weights to Dynamo workers over NIXL RDMA transports. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
 | `nats` | `2.10.21-alpine` | `compute-plane` | Optional | Provides messaging for the optional NVIDIA Dynamo operator. | `docker.io/library/nats:2.10.21-alpine` | [Upstream](https://github.com/nats-io/nats-server) |
-| `nvca` | `3.10.3` | `compute-plane` | Required | Registers GPU clusters and orchestrates deployments in-cluster. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca) |
-| `nvca-operator` | `3.10.3` | `compute-plane` | Required | Reconciles NVCA resources and compute-plane configuration. | `Publication pending` |  |
+| `nvca` | `3.10.3` | `compute-plane` | Required | Registers GPU clusters and orchestrates deployments in-cluster. | `nvcr.io/nvidia/nvcf/nvca:3.10.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca) |
+| `nvca-operator` | `3.10.3` | `compute-plane` | Required | Reconciles NVCA resources and compute-plane configuration. | `nvcr.io/nvidia/nvcf/nvca-operator:3.10.3` |  |
 | `nvcf-container-cache` | `v1.1.36` | `compute-plane` | Optional | Caches container image layers on GPU cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.36` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
-| `nvcf-image-credential-helper` | `0.11.3` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
+| `nvcf-image-credential-helper` | `0.11.3` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `nvcr.io/nvidia/nvcf/nvcf-image-credential-helper:0.11.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
 | `nvcf-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Optional | Collects compute-plane workload telemetry. | `nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
 | `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
@@ -449,8 +433,8 @@ The following tables list the complete artifact inventory.
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nvcf-default-monitors` | `0.2.0` | `observability` | Required | Deploys the default service and pod monitors for NVCF. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-default-monitors:0.2.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-default-monitors) |
-| `nvcf-otel-collector` | `0.2.0` | `observability` | Required | Configures the OpenTelemetry Collector used by NVCF. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-otel-collector:0.2.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-otel-collector) |
+| `nvcf-default-monitors` | `0.2.0` | `observability` | Required | Deploys the default service and pod monitors for NVCF. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-default-monitors) |
+| `nvcf-otel-collector` | `0.2.0` | `observability` | Required | Configures the OpenTelemetry Collector used by NVCF. | `Bundled with stack` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-otel-collector) |
 | `opentelemetry-operator` | `0.122.0` | `observability` | Required | Deploys the OpenTelemetry Operator. | `https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator:0.122.0` | [Upstream](https://github.com/open-telemetry/opentelemetry-operator) |
 | `prometheus-operator-crds` | `31.0.1` | `observability` | Required | Installs the Prometheus Operator custom resource definitions. | `https://prometheus-community.github.io/helm-charts/prometheus-operator-crds:31.0.1` | [Upstream](https://github.com/prometheus-community/helm-charts) |
 | `victoria-metrics-single` | `0.45.0` | `observability` | Required | Deploys the default metrics storage backend. | `https://victoriametrics.github.io/helm-charts/victoria-metrics-single:0.45.0` | [Upstream](https://github.com/VictoriaMetrics/helm-charts) |
