@@ -175,8 +175,23 @@ impl KvPoolCatalog {
     }
 }
 
-/// KV usage per advertised model name. A model is present only when every pool
-/// carrying its KV reports full rank coverage of a known capacity.
+impl ServingPool {
+    /// Whether the pool's workers carry decode load and hold its KV cache:
+    /// aggregated and decode workers do, including a pool that also prefills.
+    /// Prefill- and encode-only workers' KV is transient.
+    fn serves_decode(&self) -> bool {
+        self.roles.iter().any(|role| {
+            matches!(
+                role,
+                proto::WorkerRole::Aggregated | proto::WorkerRole::Decode
+            )
+        })
+    }
+}
+
+/// KV usage per advertised model name: the sum over the model's decode-serving
+/// pools. A model is present only when each of them reports full rank coverage
+/// of a known capacity.
 pub(super) fn kv_update(
     catalog: &KvPoolCatalog,
     update: proto::KvPoolLoadUpdate,
@@ -218,10 +233,9 @@ pub(super) fn kv_update(
         else {
             continue;
         };
-        let role = serving_role(pools.iter().map(|(_, pool)| pool.roles.as_slice()));
         let totals = pools
             .iter()
-            .filter(|(_, pool)| pool.roles.contains(&role))
+            .filter(|(_, pool)| pool.serves_decode())
             .try_fold((0_u64, 0_u64), |(capacity, used), (pool_id, _)| {
                 let (pool_capacity, pool_used) = (*usage.get(*pool_id)?)?;
                 Some((
@@ -371,9 +385,9 @@ fn complete_gauges(
     })
 }
 
-/// The scheduler concurrency of the pools that carry the model's decode load,
-/// known only when every serving pool is in the catalog and reported a
-/// complete view.
+/// The scheduler concurrency of the model's decode-serving pools, known only
+/// when every serving pool is in the catalog and they all reported a complete
+/// view.
 fn max_engine_concurrency(
     catalog: &KvPoolCatalog,
     pools: &HashMap<proto::KvPoolId, LoadPool>,
@@ -383,10 +397,9 @@ fn max_engine_concurrency(
         .iter()
         .map(|pool_id| Some((catalog.serving_pool(pool_id)?, pools.get(pool_id)?)))
         .collect::<Option<Vec<_>>>()?;
-    let role = serving_role(serving.iter().map(|(pool, _)| pool.roles.as_slice()));
     let selected = serving
         .into_iter()
-        .filter(|(pool, _)| pool.roles.contains(&role))
+        .filter(|(pool, _)| pool.serves_decode())
         .map(|(_, load)| load)
         .collect::<Vec<_>>();
     if selected.is_empty() || !selected.iter().all(|pool| pool.complete) {
@@ -474,20 +487,6 @@ fn pool_roles(values: &[i32]) -> Option<Vec<proto::WorkerRole>> {
             role => Some(role),
         })
         .collect()
-}
-
-/// The role whose pools carry a model's KV capacity and decode load: aggregated
-/// when any serving pool has aggregated workers, otherwise decode. Callers then
-/// select every pool whose role set contains it, so a mixed prefill/decode pool
-/// counts as decode and prefill- or encode-only pools never count.
-fn serving_role<'a>(
-    mut pool_roles: impl Iterator<Item = &'a [proto::WorkerRole]>,
-) -> proto::WorkerRole {
-    if pool_roles.any(|roles| roles.contains(&proto::WorkerRole::Aggregated)) {
-        proto::WorkerRole::Aggregated
-    } else {
-        proto::WorkerRole::Decode
-    }
 }
 
 fn data_complete(value: i32) -> bool {
@@ -712,21 +711,29 @@ mod tests {
     }
 
     #[test]
-    fn kv_usage_prefers_aggregated_pools_and_scales_blocks_to_tokens() {
+    fn aggregated_and_disaggregated_namespaces_count_every_decode_pool() {
+        // Blue serves model-a from an aggregated pool; green from separate
+        // prefill and decode pools, whose prefill KV is transient.
         let catalog = catalog(vec![
             descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]),
-            descriptor(2, &[proto::WorkerRole::Decode], &["model-a"]),
+            descriptor(2, &[proto::WorkerRole::Prefill], &["model-a"]),
+            descriptor(3, &[proto::WorkerRole::Decode], &["model-a"]),
         ]);
 
         let translated = kv_update(
             &catalog,
-            usage_window(vec![usage(1, 100, 40), usage(2, 1_000, 900)]),
+            usage_window(vec![
+                usage(1, 100, 40),
+                usage(2, 1_000, 900),
+                usage(3, 10, 5),
+            ]),
         )
         .unwrap();
 
+        // Blocks of 16 tokens from pools 1 and 3.
         let usage = RelayModelKv {
-            capacity_tokens: 1_600,
-            used_tokens: 640,
+            capacity_tokens: 1_760,
+            used_tokens: 720,
         };
         assert_eq!(translated.observed_at_unix_ms, 7);
         assert_eq!(
@@ -736,6 +743,22 @@ mod tests {
                 ("model-a-alias".to_string(), usage),
             ])
         );
+
+        let models = || {
+            let mut blue = model_load("model-a", vec![pool_id(1)]);
+            blue.namespace = "blue".to_string();
+            let mut green = model_load("model-a", vec![pool_id(2), pool_id(3)]);
+            green.namespace = "green".to_string();
+            vec![blue, green]
+        };
+        let translated = translate_with_rates(
+            &catalog,
+            || vec![load_pool(1), load_pool(2), load_pool(3)],
+            models,
+        );
+        for gauges in gauges(&translated) {
+            assert_eq!(gauges.max_engine_concurrency, Some(16));
+        }
     }
 
     #[test]
@@ -795,7 +818,7 @@ mod tests {
         ]);
         let window = || usage_window(vec![usage(1, 100, 40), usage(2, 1_000, 900)]);
         let translated = kv_update(&legacy, window()).unwrap();
-        assert_eq!(translated.models["model-a"].capacity_tokens, 1_600);
+        assert_eq!(translated.models["model-a"].capacity_tokens, 17_600);
 
         let mut unknown = descriptor(2, &[proto::WorkerRole::Decode], &["model-a"]);
         unknown.pool_roles = vec![99];
