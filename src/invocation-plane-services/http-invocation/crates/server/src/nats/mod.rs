@@ -159,6 +159,12 @@ impl From<PublishError> for Error {
     }
 }
 
+/// True when a store failure means the request stream holds its maximum number of messages.
+fn is_queue_full(js_err: &jetstream::Error) -> bool {
+    js_err.error_code() == ErrorCode::STREAM_STORE_FAILED
+        && js_err.to_string().contains("maximum messages exceeded")
+}
+
 /// True when stream or consumer setup failed because JetStream cannot serve requests now:
 /// the request timed out, or the cluster has no quorum (`CLUSTER_NOT_AVAILABLE`, 10008).
 fn is_jetstream_unavailable(err: &anyhow::Error) -> bool {
@@ -637,7 +643,7 @@ impl NatsService {
                     // We need to differentiate between stream full vs duplicate subject
                     // Both use the same error code, so check the description after matching the code
                     let error_message = js_err.to_string();
-                    if error_message.contains("maximum messages exceeded") {
+                    if is_queue_full(js_err) {
                         // we *could* retry, but since the stream is full we don't want to spam it.
                         tracing::trace!("Maximum messages exceeded on stream, terminal error");
                         return PublishErrorClassification::Terminal;
@@ -762,6 +768,9 @@ impl NatsService {
     fn exhausted_publish_error(err: Error) -> Error {
         match err {
             Error::Other(err) => Error::Unavailable(err.to_string()),
+            Error::Publish(js_err) if !is_queue_full(&js_err) => {
+                Error::Unavailable(js_err.to_string())
+            }
             err => err,
         }
     }
@@ -1185,10 +1194,14 @@ mod tests {
     use tokio::net::TcpListener;
 
     fn jetstream_error(err_code: u64) -> jetstream::Error {
+        described_jetstream_error(err_code, "test error")
+    }
+
+    fn described_jetstream_error(err_code: u64, description: &str) -> jetstream::Error {
         serde_json::from_value(serde_json::json!({
             "code": 503,
             "err_code": err_code,
-            "description": "test error"
+            "description": description
         }))
         .unwrap()
     }
@@ -1226,8 +1239,18 @@ mod tests {
             Error::Unavailable(_)
         ));
         assert!(matches!(
-            NatsService::exhausted_publish_error(Error::Publish(jetstream_error(10077))),
+            NatsService::exhausted_publish_error(Error::Publish(described_jetstream_error(
+                10077,
+                "maximum messages exceeded"
+            ))),
             Error::Publish(_)
+        ));
+        assert!(matches!(
+            NatsService::exhausted_publish_error(Error::Publish(described_jetstream_error(
+                10077,
+                "store closed"
+            ))),
+            Error::Unavailable(_)
         ));
     }
 
