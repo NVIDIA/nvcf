@@ -110,6 +110,9 @@ navigation:
     - page: Architecture Overview
       path: ../docs/dev/architecture.md
       slug: architecture-overview
+    - page: Repository Protection Policy
+      path: ../docs/dev/github-ruleset-policy.md
+      slug: repository-protection-policy
     - section: Local Development
       skip-slug: true
       contents:

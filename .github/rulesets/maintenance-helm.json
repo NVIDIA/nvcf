@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "repository": "NVIDIA/nvcf",
+  "rulesets": [
+    {
+      "name": "release",
+      "target": "branch",
+      "require_existing": true,
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "include": ["refs/heads/release-*", "refs/heads/release-*/**/*"],
+          "exclude": []
+        }
+      },
+      "rules": [
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "required_status_checks": [
+              {"context": "helm charts", "integration_id": 15368}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
