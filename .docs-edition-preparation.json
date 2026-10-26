@@ -1,12 +1,12 @@
 {
-  "source": "2fb83747bff0a803a910823a3dee5ea854a1e0c7",
+  "source": "ba2585c9b7ddec3512a5db7c062426fe6d5c0eaa",
   "version": "1.0.4",
   "previous_version": "1.0.3",
   "change": "patch",
   "self_managed": "1.0.7",
-  "compute_plane": "1.0.3",
+  "compute_plane": "1.0.4",
   "observability": "1.0.0",
   "navigation": "navigation.yml",
   "qualification": "",
-  "digest": "563f66bb56a806d1e2e791957d9fc59552fcc72b6e30751d44b54dadd4b7b020"
+  "digest": "833acec4f97bdf2f15068bf7e17f1eeeb4e40a1cdc6843d555f2a322857bcc96"
 }
