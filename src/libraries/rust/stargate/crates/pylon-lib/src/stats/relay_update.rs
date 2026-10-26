@@ -18,7 +18,9 @@
 //! Each update replaces the Relay's whole view: a model this pylon serves that
 //! is absent from an update has no Relay load (or KV usage) and is cleared, not
 //! left at its previous value. Updates are keyed by advertised model name and
-//! apply only to a model's live generation; they never create a generation.
+//! apply only to a model's live generation; they never create a generation. A
+//! window queued before a model is replaced may apply to its same-name
+//! successor, until the next window replaces it.
 
 use std::collections::BTreeMap;
 
