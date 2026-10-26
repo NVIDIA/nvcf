@@ -980,11 +980,10 @@ impl NatsService {
         let region = region.unwrap_or(&self.nats_properties.region);
         // Keep invocation-service metadata outside the shared protobuf payload.
         let headers = owner.to_headers()?;
-        let pub_ack = self
+        match self
             .publish_to_request_mapping(region, request_id, tracking, &headers)
             .await
-            .map_err(Self::tracking_publish_error)?;
-        match self.await_ack(pub_ack).await {
+        {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
                 // create stream and try again, bounded like one publish attempt
                 let attempt_timeout =
@@ -993,15 +992,13 @@ impl NatsService {
                     self.create_request_tracking_stream()
                         .await
                         .map_err(Self::stream_setup_error)?;
-                    let pub_ack = self
-                        .publish_to_request_mapping(region, request_id, tracking, &headers)
+                    self.publish_to_request_mapping(region, request_id, tracking, &headers)
                         .await
-                        .map_err(Self::tracking_publish_error)?;
-                    self.await_ack(pub_ack).await.map_err(|err| {
-                        // track the error if it fails to wait for the actual publish acknowledgment from NATS.
-                        record_nats_error_total();
-                        Self::tracking_publish_error(err)
-                    })
+                        .map_err(|err| {
+                            // track the error if it fails to wait for the actual publish acknowledgment from NATS.
+                            record_nats_error_total();
+                            Self::tracking_publish_error(err)
+                        })
                 };
                 tokio::time::timeout(attempt_timeout, recreate_and_publish)
                     .await
@@ -1021,7 +1018,8 @@ impl NatsService {
         }
     }
 
-    /// Publish the shared payload with invocation-service ownership headers.
+    /// Publish the shared payload with invocation-service ownership headers. The publish
+    /// and its ack together take at most `attempt_timeout_ms`.
     #[tracing::instrument(level = Level::TRACE, skip(self, tracking, headers), err)]
     async fn publish_to_request_mapping(
         &self,
@@ -1029,12 +1027,21 @@ impl NatsService {
         request_id: RequestId,
         tracking: &WorkerResultTracking,
         headers: &HeaderMap,
-    ) -> Result<PublishAckFuture, PublishError> {
+    ) -> Result<(), PublishError> {
         let payload = tracking.encode_to_vec().into();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
-        self.jetstream
-            .publish_with_headers(subject, headers.clone(), payload)
+        let attempt_timeout =
+            Duration::from_millis(self.nats_properties.retry_strategy.attempt_timeout_ms);
+        let publish = async {
+            self.jetstream
+                .publish_with_headers(subject, headers.clone(), payload)
+                .await?
+                .await
+                .map(|_| ())
+        };
+        tokio::time::timeout(attempt_timeout, publish)
             .await
+            .unwrap_or_else(|_| Err(PublishError::new(PublishErrorKind::TimedOut)))
     }
 
     /// Find the tracking record and its ownership metadata in any configured region.

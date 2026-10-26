@@ -516,6 +516,8 @@ pub(crate) async fn handle_streaming_response(
     // Legacy polls must neither adopt the polling caller nor extend the old
     // record's expiry; otherwise a rolling upgrade cannot age out old records.
     if let (StatusCode::ACCEPTED, Some(owner)) = (response.status(), owner.as_ref()) {
+        // A worker already accepted this request, so a failure here stays a 500
+        // rather than a 503 that would invite the client to submit it again.
         nats_service
             .record_polling_request(
                 region,
@@ -527,8 +529,7 @@ pub(crate) async fn handle_streaming_response(
                 },
                 owner,
             )
-            .await
-            .map_err(AppError::map_nats_err)?;
+            .await?;
     }
 
     // Add NVCF status as header attribute
