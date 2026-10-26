@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -398,5 +399,37 @@ func TestCompose_RoleNeutral_LiveDynamoOperatorPods(t *testing.T) {
 	}
 	if hd != hr {
 		t.Errorf("two replicas of one component must hash the same: %s vs %s", hd[:8], hr[:8])
+	}
+}
+
+// The tenant is part of a capture's identity: the same image and arguments
+// in another tenant's namespace hash differently, so no tenant mounts
+// another's cache; two namespaces of one tenant (a redeploy) share it.
+// Without a resolver every namespace is its own tenant.
+func TestCompose_DistinguishesByTenant(t *testing.T) {
+	tenants := map[string]string{"sr-a": "tenant:nca-id=acct-1", "sr-b": "tenant:nca-id=acct-1", "sr-c": "tenant:nca-id=acct-2"}
+	c := HashInputComposer{CUDADriverMajor: 580, Tenant: func(ns string) string { return tenants[ns] }}
+	mk := func(ns string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Image: "vllm/vllm-openai:v0.11.2",
+				Args:  []string{"vllm serve --model m"},
+			}}},
+		}
+	}
+	hash := func(c HashInputComposer, ns string) string { return checkpointstore.ComputeHash(c.Compose(mk(ns), 0)) }
+	if hash(c, "sr-a") != hash(c, "sr-b") {
+		t.Error("two namespaces of one tenant hash differently")
+	}
+	if hash(c, "sr-a") == hash(c, "sr-c") {
+		t.Error("two tenants share a hash")
+	}
+	plain := HashInputComposer{CUDADriverMajor: 580}
+	if hash(plain, "sr-a") == hash(plain, "sr-b") {
+		t.Error("without a resolver, two namespaces share a hash")
+	}
+	if got := plain.Compose(mk("sr-a"), 0).Tenant; got != "namespace:sr-a" {
+		t.Errorf("tenant without a resolver %q", got)
 	}
 }

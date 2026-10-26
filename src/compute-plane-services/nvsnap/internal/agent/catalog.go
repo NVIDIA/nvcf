@@ -92,8 +92,9 @@ func (a *Agent) CollectCatalogInfo(ctx context.Context, namespace, podName, cont
 		ClusterName:    clusterName,
 	}
 
+	scope := a.tenantScope(namespace)
 	if a.kubeClient == nil {
-		info.Hash = computeHash(info)
+		info.Hash = computeHash(info, scope)
 		info.ShortHash = checkpointstore.ShortHash(info.Hash)
 		return info
 	}
@@ -110,7 +111,7 @@ func (a *Agent) CollectCatalogInfo(ctx context.Context, namespace, podName, cont
 		}
 	}
 
-	info.Hash = computeHash(info)
+	info.Hash = computeHash(info, scope)
 	info.ShortHash = checkpointstore.ShortHash(info.Hash)
 	return info
 }
@@ -280,7 +281,7 @@ func digestFromImageID(imageID string) string {
 // and returns the sha256 hex digest. Driver-major is parsed best-effort
 // from DriverVersion; failures default to 0 (so two pods with no
 // driver info still dedup together).
-func computeHash(info CatalogInfo) string {
+func computeHash(info CatalogInfo, tenantScope string) string {
 	major := 0
 	if info.DriverVersion != "" {
 		// Take the first dot-separated segment.
@@ -295,6 +296,7 @@ func computeHash(info CatalogInfo) string {
 		EngineCompatFlags:    info.EngineFlags,
 		CUDADriverMajor:      major,
 		GPUComputeCapability: info.GPUComputeCapability,
+		Tenant:               tenantScope,
 		CaptureFormatVersion: catalogFormatVersion,
 	})
 }

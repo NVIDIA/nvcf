@@ -43,6 +43,10 @@ type HashInputComposer struct {
 	// compatible on a 555.x node because the rootfs upperdir contains
 	// driver-versioned firmware paths.
 	CUDADriverMajor int
+	// Tenant names the tenant of a namespace (tenant.Resolver.Scope); nil
+	// makes every namespace its own tenant. A capture is shared only
+	// within its tenant.
+	Tenant func(namespace string) string
 }
 
 // Compose returns the HashInput for the given pod. mainContainer is the
@@ -55,7 +59,14 @@ func (c *HashInputComposer) Compose(pod *corev1.Pod, mainContainer int) checkpoi
 		CUDADriverMajor:      c.CUDADriverMajor,
 		CaptureFormatVersion: checkpointstore.CaptureFormatVersion,
 	}
-	if pod == nil || mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
+	if pod == nil {
+		return out
+	}
+	out.Tenant = "namespace:" + pod.Namespace
+	if c.Tenant != nil {
+		out.Tenant = c.Tenant(pod.Namespace)
+	}
+	if mainContainer < 0 || mainContainer >= len(pod.Spec.Containers) {
 		return out
 	}
 	main := pod.Spec.Containers[mainContainer]

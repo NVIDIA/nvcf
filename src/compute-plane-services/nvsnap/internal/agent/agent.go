@@ -48,12 +48,18 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/objectstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/runtime/crio" // register CRI-O factory
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tenant"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
 // Config holds agent configuration
 type Config struct {
-	ListenAddr    string
+	ListenAddr string
+	// TenantLabel is the namespace label naming the tenant a namespace
+	// belongs to (an account id the platform stamps); captures and caches
+	// are shared only within one tenant. Empty makes every namespace its
+	// own tenant.
+	TenantLabel   string
 	CheckpointDir string
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
@@ -291,6 +297,10 @@ type Agent struct {
 	// its prewarm policy; the promoter strategy is already baked into
 	// l2Backend.
 	l2Profile *checkpointstore.StorageProfile
+	// tenants names the tenant of a namespace for content hashes; built on
+	// first use (tenantScope).
+	tenants     *tenant.Resolver
+	tenantsOnce sync.Once
 	// elector is the admission election, built with the L2 backend when
 	// Election.Enabled; nil keeps the webhook on its explicit paths.
 	elector election.Elector
@@ -1218,4 +1228,13 @@ func (a *Agent) readCheckpointFileHandler(w http.ResponseWriter, r *http.Request
 	// GET, etc. For peer fanout, Range support is the critical feature —
 	// receivers can pull one large pages-*.img via parallel ranges.
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+// tenantScope names the tenant of namespace ns for content hashes
+// (internal/tenant).
+func (a *Agent) tenantScope(ns string) string {
+	a.tenantsOnce.Do(func() {
+		a.tenants = &tenant.Resolver{Kube: a.kubeClient, Label: a.config.TenantLabel}
+	})
+	return a.tenants.Scope(context.Background(), ns)
 }

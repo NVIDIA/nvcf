@@ -65,6 +65,9 @@ func main() {
 
 	var config agent.Config
 
+	flag.StringVar(&config.TenantLabel, "tenant-label", "",
+		"Namespace label naming the tenant a namespace belongs to, such as an account id the platform stamps; captures and caches are shared only within one tenant (empty = each namespace is its own tenant)")
+
 	flag.StringVar(&config.NodeName, "node-name", os.Getenv("NODE_NAME"), "Node name")
 	// Phase 5d.1: catalog URL + node IP for peer-fanout cascade.
 	flag.StringVar(&config.CatalogURL, "catalog-url", os.Getenv("NVSNAP_CATALOG_URL"),

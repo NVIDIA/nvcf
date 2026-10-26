@@ -92,6 +92,12 @@ nvsnap:
 agent:
   enabled: true
 
+  # Namespace label naming the tenant a namespace belongs to: a label your
+  # platform stamps with the account or tenant id, one namespace users
+  # cannot edit (NVCF: nca-id). Captures and caches are shared only between
+  # namespaces of one tenant; empty makes every namespace its own tenant.
+  tenantLabel: ""
+
   # cachedir (ember) mode. When set (e.g. "/opt/nvsnap"), the webhook
   # redirects every JIT/compile cache + the model into this single in-pod
   # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on

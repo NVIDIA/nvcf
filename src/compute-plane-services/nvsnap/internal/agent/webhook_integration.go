@@ -160,6 +160,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		ArchScope: a.electionScope,
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
+			Tenant:          a.tenantScope,
 		},
 		// EnsureLocal is intentionally left nil for the demo / for-speed
 		// flow. The Mutator emits nodeAffinity = CapturedOnNodes, which

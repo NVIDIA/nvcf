@@ -124,6 +124,9 @@ spec:
             # specs with paths built off this root, and kubelet runs
             # in host namespace.
             - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
+            {{- with .Values.agent.tenantLabel }}
+            - --tenant-label={{ . }}
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             # In-agent admission webhook. The Service in webhook.yaml
             # load-balances admission requests across agent pods.
