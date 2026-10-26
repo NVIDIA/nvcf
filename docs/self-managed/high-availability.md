@@ -179,6 +179,12 @@ safely.)
 > cluster DNS resolves to that pod. Workers in the same cluster reach that
 > address directly, so no proxy and no DNS change are needed.
 >
+> The invocation-service name is a CoreDNS endpoint record, which CoreDNS
+> answers by default. It does not resolve if CoreDNS has `endpoint_pod_names`
+> enabled, or if the cluster uses a DNS provider that does not publish these
+> records. On those clusters, set `global.workerEndpoints.invocationServiceURL`,
+> which keeps invocation-service at a single replica.
+>
 > A fixed callback URL (`global.workerEndpoints.invocationServiceURL`,
 > `global.workerEndpoints.grpcProxyWorkerConnectURL`,
 > `grpcproxy.workerConnectBaseURL`, or

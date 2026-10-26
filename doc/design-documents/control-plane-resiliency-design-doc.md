@@ -23,7 +23,7 @@ Running more than one control plane — for site-level failover, capacity poolin
 
 ## Goals
 
-- **Survive single node or pod failure without disruption.** No failure inside a site interrupts service or requires an operator to intervene.
+- **Survive single node or pod failure without an outage.** After any single failure inside a site, new requests are still served without an operator intervening. Requests in flight on the lost pod may fail, and clients retry them.
 - **Make resilience adoptable, not a rebuild.** An existing deployment reaches the resilient topology by changing configuration, not by migrating to a new platform.
 
 ## Non-Goals
@@ -120,7 +120,8 @@ Active-active, no leader election. Under HA the entire replica-safe serving set 
 
 *grpc-proxy* and *invocation-service* join the convention with direct worker callbacks. HA controls their replicas and placement; callback routing is a separate concern.
 
-- Both advertise a per-pod worker-callback address — *invocation-service* a per-pod DNS name (`<dashed-pod-ip>.invocation.<ns>.svc`, resolved by cluster DNS to the exact pod even on a plain ClusterIP Service), *grpc-proxy* a raw pod IP (`$POD_IP:10086`). In a single cluster the worker reaches the exact originating pod, so per-pod host binding works without a proxy or DNS changes.
+- Both advertise a per-pod worker-callback address — *invocation-service* a per-pod DNS name (`<dashed-pod-ip>.invocation.<ns>.svc`), *grpc-proxy* a raw pod IP (`$POD_IP:10086`). In a single cluster the worker reaches the exact originating pod, so per-pod host binding works without a proxy or DNS changes.
+- The invocation-service name is a CoreDNS endpoint record, not part of the Kubernetes DNS specification. CoreDNS's `kubernetes` plugin answers it by default, including for a ClusterIP Service. It does not resolve with `endpoint_pod_names` enabled, or with a DNS provider that does not publish these records; that was already true at one replica. Such clusters set a fixed `global.workerEndpoints.invocationServiceURL`, which holds invocation-service at one replica.
 - A fixed worker callback URL (`global.workerEndpoints.invocationServiceURL`, `grpcProxyWorkerConnectURL`, `grpcproxy.workerConnectBaseURL`, or `invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS`) is advertised by every replica. With one set, the affected service is a named exception held at `replicaCount: 1` with its HPA disabled: hostname anti-affinity and zone spread still render but are no-ops at one replica, and no HA PDB is set (a `minAvailable: 1` PDB on a singleton would block node drains).
 - With the HPA enabled, the HPA sets the pod count, so HA floors its `minReplicas` at 2 (and `maxReplicas` at that minimum), keeping the `minAvailable: 1` PDB consistent.
 - The decision reads the fully merged values, including `secrets/<env>-secrets.yaml`, which the releases apply after `global.yaml.gotmpl`. Sizing there that conflicts with the HA sizing fails render.
@@ -299,7 +300,7 @@ The stack validates the effective rendered result, not the presence of the top-l
 | :--- | :--- |
 | HA install, `mode: preferred` / `enforced` | Each in-convention Tier-1 Deployment ≥2 Ready, including grpc-proxy and invocation-service with per-pod callback addresses; a service with a fixed worker callback URL = 1 Ready; Tier-2 = 3 Ready |
 | Anti-affinity / zone spread (test under `enforced`) | No two Tier-2 peers on one node; Tier-1 replicas not confined to one AZ (best-effort under `preferred`) |
-| Tier-1 pod kill in AZ-A | Invocations continue on the surviving replica (AZ-B) |
+| Tier-1 pod kill in AZ-A | New invocations succeed on the surviving replica (AZ-B); invocations in flight on the killed pod may fail and succeed on client retry |
 | `kubectl drain` | PDB blocks eviction of the last Ready pod; service stays available |
 | Node failure | Service recovers and resumes serving; record the RTO (detection + election/promotion + reconnect) |
 | Rolling upgrade (`helm upgrade`) | No sustained Tier-1 invoke failure (guaranteed by `maxUnavailable: 0` / `maxSurge: 1`, not the PDB) |
@@ -343,7 +344,7 @@ What this design does not do, stated so an operator can plan around it.
 
 ## Looking Ahead
 
-This design makes a single control plane resilient, so no failure within its site interrupts service. Beyond it, there is still only one control plane, and it sits at one site:
+This design makes a single control plane resilient, so no single pod or node failure within its site causes an outage. Beyond it, there is still only one control plane, and it sits at one site:
 
 - **Single point of failure** — lose it and every connected GPU cluster stops receiving work, however healthy those GPUs are.
 - **Stranded capacity** — a GPU cluster is bound to one control plane, so capacity elsewhere cannot absorb load or be pooled.
