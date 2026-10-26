@@ -241,17 +241,15 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="1.0.1"
-export COMPUTE_STACK_VERSION="1.0.0"
+export STACK_VERSION="1.0.7"
+export COMPUTE_STACK_VERSION="1.0.3"
 export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
+# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
 
 # Download a specific compute-plane stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
+# Publication pending: nvcf-compute-plane-stack 1.0.3 is not yet available for download.
 
 # Download a specific observability stack version
 ngc registry resource download-version \
@@ -269,13 +267,7 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Set the version
-export VERSION="1.0.1"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
-   mkdir -p nvcf-self-managed-stack && \
-   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
-   rm -rf nvcf-self-managed-stack_v${VERSION}
+# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
@@ -294,13 +286,7 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Set the version
-export COMPUTE_VERSION="1.0.0"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
-   mkdir -p nvcf-compute-plane-stack && \
-   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
-   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
+# Publication pending: nvcf-compute-plane-stack 1.0.3 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
