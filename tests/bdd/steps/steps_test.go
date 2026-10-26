@@ -136,6 +136,13 @@ func TestIPrepareHelmfileEnvironmentCopiesUpdatesAndRestoresAbsentDestination(t 
 		t.Fatalf("prepare environment: %v", err)
 	}
 	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("environment permissions = %o, want 600 for registry credentials", info.Mode().Perm())
+	}
 	got, err := os.ReadFile(dest)
 	if err != nil {
 		t.Fatalf("read destination: %v", err)

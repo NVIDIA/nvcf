@@ -498,7 +498,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesWithVanityJSON()},
 		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
-			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/nvidia/nvcf/pylon:test\n",
 		},
 		gatewayTransportCommand:      {ExitCode: 0, Stdout: "true"},
 		gatewayServiceMonitorCommand: {ExitCode: 0, Stdout: "kind: ConfigMap\nmetadata:\n  name: llm-api-gateway\n"},
@@ -587,6 +587,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
+	assertCustomerStackRoutes(t, suite.Config.RepoRoot)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV") {
 		t.Fatal("helmfile install make target was never invoked")
 	}
@@ -1311,7 +1312,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
 				"      llm-request-router:\n        worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n" +
-				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+				"      sidecars:\n        llm-router-client-image: nvcr.io/nvidia/nvcf/pylon:test\n",
 		},
 		"kubectl get certificate/stargate-quic-tls --namespace nvcf --context k3d-ncp-local-cp -o yaml": {
 			ExitCode: 0,
@@ -1422,6 +1423,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
+	assertCustomerStackRoutes(t, suite.Config.RepoRoot)
 	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
 	for _, assertion := range []struct {
 		key  string
@@ -1429,7 +1431,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}{
 		{key: "global.workerEndpoints.invocationServiceURL", want: "http://invocation.nvcf.svc.cluster.local:8080"},
 		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
-		{key: "addons.llm.requestRouter.chartPath", want: "../../../helm/llm-request-router/llm-request-router"},
+		{key: "addons.llm.requestRouter.chartPath", want: ""},
 		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
 		{key: "addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress", want: "llm-request-router.nvcf.svc.cluster.local:50072"},
 		{key: "addons.llm.requestRouter.grpcTls.enabled", want: "true"},
@@ -1438,7 +1440,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		{key: "addons.llm.pki.allowedDomains", want: "cluster.local"},
 		{key: "addons.llm.pki.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[1]", want: "*.llm-request-router-headless.nvcf.svc.cluster.local"},
-		{key: "ingress.gatewayApi.chartPath", want: "../../../helm/gateway-routes/chart"},
+		{key: "ingress.gatewayApi.chartPath", want: ""},
 		{key: "ingress.gatewayApi.routes.llmWorker.enabled", want: "true"},
 		{key: "ingress.gatewayApi.routes.llmWorker.backend.namespace", want: "nvcf"},
 	} {
@@ -4073,5 +4075,27 @@ func seedFunctionAPIKey(t *testing.T, home string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"apiKey":"wiring-function-api-key"}`), 0o600); err != nil {
 		t.Fatalf("write NVCF CLI state: %v", err)
+	}
+}
+
+// Sample organizations must not redirect the artifacts under test.
+func assertCustomerStackRoutes(t *testing.T, repoRoot string) {
+	t.Helper()
+	for _, stack := range []string{"self-managed", "nvcf-compute-plane"} {
+		path := filepath.Join(repoRoot, "deploy", "stacks", stack, "environments", "local-bdd.yaml")
+		for key, want := range map[string]string{
+			"global.helm.sources.url":      "https://helm.ngc.nvidia.com/nvidia/nvcf",
+			"global.image.repository":      "nvidia/nvcf",
+			"global.helm.sources.username": "$oauthtoken",
+			"global.helm.sources.password": "test-key",
+		} {
+			got, found, err := dsl.ReadYAMLKey(path, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found || got != want {
+				t.Errorf("%s did not prepare the customer stack value for %s", stack, key)
+			}
+		}
 	}
 }
