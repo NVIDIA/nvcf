@@ -82,7 +82,7 @@ def run(args, cwd=None, check=True, capture=False, env=None):
         )
         if check and result.returncode != 0:
             sys.stdout.write(result.stdout)
-            raise subprocess.CalledProcessError(result.returncode, args, output=result.stdout)
+            raise subprocess.CalledProcessError(result.returncode, args)
         return result.stdout
 
     result = subprocess.run(args, cwd=cwd, env=env, check=False)
@@ -1043,18 +1043,21 @@ def publish_release_chart(root, service, version, dry_run):
         print(f"[github-release] published Helm chart {chart_name}:{version} to {registry}")
 
 
-def validate_resolved_stack_inventory(root, path, tag, version, commit):
-    # Use the same strict parser as catalog and umbrella consumers.
-    run(
-        [
-            "go", "run", ".", "validate-stack-inventory",
-            "--inventory", str(Path(path).resolve()),
-            "--stack-version", version,
-            "--stack-source-tag", tag,
-            "--stack-source-commit", commit,
-        ],
-        cwd=root / "tools" / "docs-version-sync",
-    )
+def validate_resolved_stack_inventory(path, tag, version, commit):
+    try:
+        with Path(path).open() as source:
+            inventory = json.load(source)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"resolved stack inventory is not valid JSON: {exc}") from exc
+    if not isinstance(inventory, dict) or inventory.get("schema_version") != 1:
+        raise SystemExit("resolved stack inventory must use schema_version 1")
+    expected_source = {"version": version, "tag": tag, "commit": commit}
+    if inventory.get("source") != expected_source:
+        raise SystemExit(
+            f"resolved stack inventory source is {inventory.get('source')!r}, want {expected_source!r}"
+        )
+    if not inventory.get("releases") or not inventory.get("artifacts"):
+        raise SystemExit("resolved stack inventory must contain releases and artifacts")
 
 
 def generate_resolved_stack_inventory(root, tag, version, commit, output_path):
@@ -1074,39 +1077,28 @@ def generate_resolved_stack_inventory(root, tag, version, commit, output_path):
         ],
         cwd=root / "tools" / "docs-version-sync",
     )
-    validate_resolved_stack_inventory(root, output_path, tag, version, commit)
+    validate_resolved_stack_inventory(output_path, tag, version, commit)
 
 
-def release_inventory_asset_names(tag, missing_ok=False):
-    try:
-        output = run(
+def publish_resolved_stack_inventory(tag, asset_path, version, commit):
+    asset_path = Path(asset_path)
+    existing = set(
+        run(
             ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
             capture=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        if missing_ok and str(exc.output or "").strip() == "release not found":
-            return []
-        raise
-    return output.splitlines()
-
-
-def publish_resolved_stack_inventory(root, tag, version, commit, asset_path, existing=None):
-    asset_path = Path(asset_path)
-    if existing is None:
-        existing = release_inventory_asset_names(tag)
+        ).splitlines()
+    )
     if asset_path.name not in existing:
         run(["gh", "release", "upload", tag, str(asset_path)])
         print(f"[github-release] uploaded {asset_path.name} to {tag}")
         return
 
-    if existing.count(asset_path.name) != 1:
-        raise SystemExit(f"GitHub release {tag} has more than one {asset_path.name} asset")
     with tempfile.TemporaryDirectory(prefix="nvcf-retained-stack-inventory-") as tmp:
         retained = Path(tmp) / asset_path.name
         run(["gh", "release", "download", tag, "--pattern", asset_path.name, "--output", str(retained)])
-        validate_resolved_stack_inventory(root, retained, tag, version, commit)
+        validate_resolved_stack_inventory(retained, tag, version, commit)
 
-    print(f"[github-release] verified original {asset_path.name} on {tag}; leaving it unchanged")
+    print(f"[github-release] GitHub release {tag} already has {asset_path.name}; leaving it unchanged")
 
 
 def delete_release_after_inventory_failure(tag):
@@ -1987,17 +1979,12 @@ def tag_release(args):
         return
 
     commit = tag_sha(root, tag)
-    existing = release_inventory_asset_names(tag, missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="nvcf-resolved-stack-inventory-") as tmp:
         asset_path = Path(tmp) / asset_name
-        created = False
-        if asset_name not in existing:
-            generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
-            created = create_release(tag, tag, notes, draft=True, dry_run=False)
-            # Recheck after creation in case another attempt attached the asset.
-            existing = None
+        generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
+        created = create_release(tag, tag, notes, draft=True, dry_run=False)
         try:
-            publish_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path, existing=existing)
+            publish_resolved_stack_inventory(tag, asset_path, parsed["version"], commit)
         except (Exception, SystemExit):
             if created:
                 delete_release_after_inventory_failure(tag)

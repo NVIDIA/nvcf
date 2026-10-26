@@ -24,21 +24,7 @@ commit type. No maintainer normally creates the stack tag by hand.
 
 The tag workflow renders only the states owned by the tagged stack. It attaches
 the resolved chart and image inventory before publishing the GitHub Release.
-Release attachment is keyed by tag, not by branch. On retry, the release helper
-downloads an existing inventory and validates its structure and exact source
-version, tag, and commit before publishing. A valid existing inventory skips
-rendering and uploading. Its original bytes stay unchanged. Public artifact publishing is
-a separate process and can happen later after QA.
-
-To validate a downloaded inventory without rendering or publishing:
-
-```bash
-go run -C tools/docs-version-sync . validate-stack-inventory \
-  --inventory /tmp/stack-inventory.json \
-  --stack-version X.Y.Z \
-  --stack-source-tag deploy/stacks/self-managed/vX.Y.Z \
-  --stack-source-commit FULL_COMMIT_SHA
-```
+Public artifact publishing is a separate process and can happen later after QA.
 
 Each registered stack publishes its own inventory:
 
