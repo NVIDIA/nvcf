@@ -552,9 +552,12 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 			return nil
 		}
 
-		globalNatsConsumer, err := newNatsConsumerWithRetry(ctx, natsConsumerSetupTimeout, func() (*consumer.GlobalNatsConsumer, error) {
+		// stop retrying setup when the worker starts shutting down
+		setupCtx, cancelSetup := context.WithCancel(ctx)
+		stopSetupAfterFunc := context.AfterFunc(w.shutdownCtx, cancelSetup)
+		globalNatsConsumer, err := newNatsConsumerWithRetry(setupCtx, natsConsumerSetupTimeout, func() (*consumer.GlobalNatsConsumer, error) {
 			connectedRegion := *w.nvcfClient.ConnectedRegions.Load()
-			return consumer.NewNatsConsumer(ctx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
+			return consumer.NewNatsConsumer(setupCtx, w.nvcfClient.JetStream, func(ctx context.Context, region string) error {
 				_, err := w.nvcfClient.Client.ProvisionRegionalWorker(ctx, &pb.ProvisionWorkerRequest{
 					InstanceId:        w.config.InstanceId,
 					FunctionId:        w.config.FunctionId,
@@ -564,7 +567,12 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 				return err
 			}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
 		})
+		stopSetupAfterFunc()
+		cancelSetup()
 		if err != nil {
+			if ctx.Err() != nil || w.shutdownCtx.Err() != nil {
+				return nil
+			}
 			return types.NewInternalError(err)
 		}
 		w.nvcfClient.CurrentNatsConsumer.Store(globalNatsConsumer)
