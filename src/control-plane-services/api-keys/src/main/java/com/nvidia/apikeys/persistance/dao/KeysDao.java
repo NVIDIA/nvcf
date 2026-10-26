@@ -61,7 +61,32 @@ public class KeysDao {
     private final CqlSession session;
 
 
+    /**
+     * Writes a new key without reading it back. A failed read after a successful write would
+     * report a persisted key as not created.
+     */
+    public void create(KeyVo key, KeyOwnerVo owner) {
+        write(key, owner);
+    }
+
     public SavedKeyVo save(KeyVo key, KeyOwnerVo owner) {
+        write(key, owner);
+
+        // read saved values back
+        key = getKeyByHash(key.getKeyHash())
+                .orElseThrow(() -> new CassandraException("Failed to read saved key"));
+
+        var keyByOwnerAndServiceVo = getKeyByOwnerAndServiceAndId(
+                key.getOwnerType(), key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId())
+                .orElseThrow(() -> new CassandraException("Failed to read saved key owner"));
+
+        return SavedKeyVo.builder()
+                .keyVo(key)
+                .keyByOwnerAndServiceVo(keyByOwnerAndServiceVo)
+                .build();
+    }
+
+    private void write(KeyVo key, KeyOwnerVo owner) {
         // write key record
         KeyModel keyModel = keyConverter.voToModel(key);
 
@@ -92,19 +117,6 @@ public class KeysDao {
                 cassandraTemplate.insert(keyModel, options);
             });
         }
-
-        // read saved values back
-        key = getKeyByHash(key.getKeyHash())
-                .orElseThrow(() -> new CassandraException("Failed to read saved key"));
-
-        keyByOwnerAndServiceVo = getKeyByOwnerAndServiceAndId(
-                key.getOwnerType(), key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId())
-                .orElseThrow(() -> new CassandraException("Failed to read saved key owner"));
-
-        return SavedKeyVo.builder()
-                .keyVo(key)
-                .keyByOwnerAndServiceVo(keyByOwnerAndServiceVo)
-                .build();
     }
 
     public Optional<KeyVo> getKeyByHash(String hash) {

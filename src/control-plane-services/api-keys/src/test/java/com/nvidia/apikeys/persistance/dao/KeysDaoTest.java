@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.datastax.oss.driver.api.core.CqlSession;
@@ -108,6 +109,18 @@ class KeysDaoTest {
 
         assertThat(dao.save(KEY_VO_1, KEY_OWNER_VO_1)).isEqualTo(expectedSavedKey());
         verify(cassandraTemplateMock, never()).insert(any(), any(InsertOptions.class));
+    }
+
+    @Test
+    void create_doesNotReadBack() {
+        mockSaveBatch();
+        when(cassandraBatchOperationsMock.execute()).thenReturn(writeResultMock);
+        when(writeResultMock.wasApplied()).thenReturn(true);
+
+        dao.create(KEY_VO_1, KEY_OWNER_VO_1);
+
+        verify(cassandraBatchOperationsMock).execute();
+        verifyNoInteractions(keyRepositoryMock, keyByOwnerAndServiceRepositoryMock);
     }
 
     @Test
