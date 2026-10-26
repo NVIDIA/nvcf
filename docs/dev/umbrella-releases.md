@@ -131,7 +131,8 @@ and customer `notes.md` under `deploy/releases/X.Y.Z/`.
 Before the first release, protect `refs/tags/nvcf/**` against updates and
 deletions while permitting creation by the release workflow. Keep component tag
 rules intact. The umbrella tag namespace intentionally does not match component
-release triggers. Record the effective rules in the release review.
+release triggers. Use the [reviewed ruleset policy](github-ruleset-policy.md)
+and record the effective rules in the release review.
 
 Run `Publish Umbrella Release` from `main` with `version=X.Y.Z` and
 `target=FULL_REVIEWED_PRODUCT_COMMIT`. Use `mode=validate`, then `draft`.

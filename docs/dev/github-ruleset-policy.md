@@ -69,3 +69,31 @@ Keep each protection requirement in one policy. Tests run without credentials:
 ```bash
 go test -C tools/github-rulesets ./...
 ```
+
+## Umbrella tags and maintained documentation
+
+Use `.github/rulesets/umbrella-release.json`
+with the same plan, review, apply and check commands above. Apply it before
+creating the first product tag or maintained-docs branch, and retain the
+reviewed plan and successful readback with the release evidence. The
+[public umbrella procedure](umbrella-releases.md)
+owns product publication and documentation activation. This policy does not
+activate maintained docs or add schema 2 docs support.
+
+| Scope | Allowed operation | Required protection |
+| --- | --- | --- |
+| `refs/tags/nvcf/**` | Create a new product tag | Reject updates and deletion, with no bypass actors |
+| `refs/heads/docs/versions/**` | Create the reviewed initial branch; merge approved corrections | Require one approval, code-owner review and the `docs` check; reject deletion and force pushes |
+
+The status check is bound to the GitHub Actions app. `build-test.yml` reports
+`docs` for PRs targeting `docs/**` without a path filter; that job validates the
+docs and edition layout. Confirm the selected docs source retains this workflow
+before rollout. Do not add a path-filtered check that may never report for a
+correction. Initial branch creation is exempt from status checks so the reviewed
+prepared tree can be bootstrapped; subsequent updates require a reviewed PR.
+
+The policy rejects existing creation restrictions on either scope, and an
+existing update freeze on maintained docs. Investigate those conflicts rather
+than silently removing protections. The existing `Frozen docs editions` ruleset
+for `docs/releases/**` is outside this policy and stays unchanged, as do component
+tag rules and unrelated branch protections.

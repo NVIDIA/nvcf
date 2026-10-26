@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "repository": "NVIDIA/nvcf",
+  "rulesets": [
+    {
+      "name": "Umbrella product tags",
+      "target": "tag",
+      "enforcement": "active",
+      "bypass_actors": [],
+      "conditions": {
+        "ref_name": {
+          "include": [
+            "refs/tags/nvcf/**"
+          ],
+          "exclude": []
+        }
+      },
+      "rules": [
+        {
+          "type": "update"
+        },
+        {
+          "type": "deletion"
+        }
+      ],
+      "forbidden_rule_types": [
+        "creation"
+      ]
+    },
+    {
+      "name": "Maintained docs editions",
+      "target": "branch",
+      "enforcement": "active",
+      "bypass_actors": [],
+      "conditions": {
+        "ref_name": {
+          "include": [
+            "refs/heads/docs/versions/**"
+          ],
+          "exclude": []
+        }
+      },
+      "rules": [
+        {
+          "type": "deletion"
+        },
+        {
+          "type": "non_fast_forward"
+        },
+        {
+          "type": "pull_request",
+          "parameters": {
+            "dismiss_stale_reviews_on_push": true,
+            "require_code_owner_review": true,
+            "require_last_push_approval": false,
+            "required_approving_review_count": 1,
+            "required_review_thread_resolution": true
+          }
+        },
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "strict_required_status_checks_policy": true,
+            "do_not_enforce_on_create": true,
+            "required_status_checks": [
+              {
+                "context": "docs",
+                "integration_id": 15368
+              }
+            ]
+          }
+        }
+      ],
+      "forbidden_rule_types": [
+        "creation",
+        "update"
+      ]
+    }
+  ]
+}
