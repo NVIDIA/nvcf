@@ -69,7 +69,7 @@ Before applying:
 3. Review the rendered change before applying:
 
    ```bash
-   cd path/to/nvcf-self-managed-stack
+   cd "$BUNDLE_DIR/deploy/stacks/self-managed"
    HELMFILE_ENV=<environment-name> helmfile --environment default diff --suppress-secrets
    ```
 
@@ -675,7 +675,7 @@ the API creates a new LLM function version.
 Apply the updated control-plane environment:
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 make apply HELMFILE_ENV=<environment-name>
 ```
 
