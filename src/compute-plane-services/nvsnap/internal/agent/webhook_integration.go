@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -189,11 +188,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// The election shares a cache only within one GPU architecture,
 		// established from the nodes a pod may run on.
 		ArchScope: a.electionScope,
-		Composer: &rootfsonly.HashInputComposer{
-			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
-			Salt:            a.config.Webhook.CacheSalt,
-			Tenant:          a.tenantScope,
-		},
+		Composer:  a.hashComposer(),
 		// EnsureLocal is intentionally left nil for the demo / for-speed
 		// flow. The Mutator emits nodeAffinity = CapturedOnNodes, which
 		// guarantees kubelet resolves the injected hostPath volumeMounts
