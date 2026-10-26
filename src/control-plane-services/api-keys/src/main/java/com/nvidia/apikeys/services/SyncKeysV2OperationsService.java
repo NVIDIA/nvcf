@@ -30,12 +30,8 @@ import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.BootResponseException;
 import com.nvidia.boot.exceptions.ForbiddenException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -85,27 +81,25 @@ public class SyncKeysV2OperationsService {
     public SyncKeysOperationResponse operateAsKeyOwner(
             String userId, KeyOwnerKeysOperationRequest request) {
         return execute(Actor.KEY_OWNER, request.getOperation(), request.getAccounts(),
-                List.of(validateId(userId, "userId")), request.getIssuerServices(), request.getReason(), null);
+                List.of(validateId(userId, "userId")), request.getIssuerServices(), null);
     }
 
     public SyncKeysOperationResponse operateAsAccountAdmin(
             String ncaId, AccountAdminKeysOperationRequest request) {
         return execute(Actor.ACCOUNT_ADMIN, request.getOperation(),
-                List.of(validateId(ncaId, "ncaId")), request.getUsers(), request.getIssuerServices(),
-                request.getReason(), null);
+                List.of(validateId(ncaId, "ncaId")), request.getUsers(), request.getIssuerServices(), null);
     }
 
     public SyncKeysOperationResponse operateAsPlatformAdmin(PlatformAdminKeysOperationRequest request) {
         return execute(Actor.PLATFORM_ADMIN, request.getOperation(), request.getAccounts(),
-                request.getUsers(), request.getIssuerServices(), request.getReason(),
+                request.getUsers(), request.getIssuerServices(),
                 request.getConfirmPlatformWide());
     }
 
     private SyncKeysOperationResponse execute(
             Actor actor, KeysOperationType operation, List<String> accountIds,
-            List<String> userIds, List<String> issuerIds, String reason, Boolean confirmPlatformWide) {
+            List<String> userIds, List<String> issuerIds, Boolean confirmPlatformWide) {
         var cutoff = clock.instant();
-        var reasonDigest = validateAndDigestReason(reason);
         var actorId = auditActorId();
         if (operation == null) {
             throw new BadRequestException("operation is required");
@@ -130,7 +124,7 @@ public class SyncKeysV2OperationsService {
         log.atInfo().addKeyValue("requestId", correlationId).addKeyValue("actor", actor.name())
                 .addKeyValue("actorId", actorId).addKeyValue("operation", operation.name())
                 .addKeyValue("accounts", accounts).addKeyValue("users", users)
-                .addKeyValue("issuerServices", issuers).addKeyValue("reasonDigest", reasonDigest)
+                .addKeyValue("issuerServices", issuers)
                 .log("Synchronous bulk operation started");
         return process(actor, operation, accounts, users, issuers, cutoff, correlationId);
     }
@@ -217,22 +211,6 @@ public class SyncKeysV2OperationsService {
         }
     }
 
-    private static String validateAndDigestReason(String reason) {
-        if (reason == null) {
-            return "absent";
-        }
-        if (reason.isBlank() || reason.length() > 1024
-                || reason.chars().anyMatch(Character::isISOControl)) {
-            throw new BadRequestException("reason must contain 1 to 1024 non-control characters");
-        }
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(reason.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("SHA-256 unavailable", impossible);
-        }
-    }
-
     private static String auditActorId() {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             var request = attributes.getRequest();
@@ -241,10 +219,6 @@ public class SyncKeysV2OperationsService {
                 actorId = request.getHeader(ActorResolver.HEADER_KEY_OWNER_ID);
             }
             if (actorId != null) {
-                if (actorId.isBlank() || actorId.length() > 256
-                        || actorId.chars().anyMatch(Character::isISOControl)) {
-                    throw new BadRequestException("Invalid internal actor ID");
-                }
                 return actorId;
             }
         }
@@ -279,8 +253,7 @@ public class SyncKeysV2OperationsService {
     }
 
     private static String validateId(String value, String dimension) {
-        if (value == null || value.isBlank() || "*".equals(value) || !value.equals(value.strip())
-                || value.chars().anyMatch(Character::isISOControl)) {
+        if (value == null || value.isBlank() || "*".equals(value)) {
             throw new BadRequestException(dimension + " contains an invalid ID");
         }
         return value;

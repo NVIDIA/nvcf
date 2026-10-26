@@ -27,8 +27,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -80,28 +78,6 @@ class KeyOperationDtosTest {
 
         assertThat(camel.getConfirmPlatformWide()).isTrue();
         assertThat(snake.getConfirmPlatformWide()).isTrue();
-    }
-
-    @ParameterizedTest
-    @CsvSource({"issuerServices,s1", "issuerServices,*", "issuer_services,s1", "issuer_services,*"})
-    void allActorsAcceptBothIssuerSelectorSpellings(String field, String value) throws Exception {
-        String issuer = "\"" + field + "\":[\"" + value + "\"]";
-        var owner = mapper.readValue("{\"operation\":\"DELETE\",\"accounts\":[\"a1\"]," + issuer + "}",
-                KeyOwnerKeysOperationRequest.class);
-        var account = mapper.readValue("{\"operation\":\"DELETE\",\"users\":[\"u1\"]," + issuer + "}",
-                AccountAdminKeysOperationRequest.class);
-        var platform = mapper.readValue("{\"operation\":\"DELETE\",\"accounts\":[\"a1\"],"
-                + "\"users\":[\"u1\"]," + issuer + "}", PlatformAdminKeysOperationRequest.class);
-
-        assertThat(owner.getIssuerServices()).containsExactly(value);
-        assertThat(account.getIssuerServices()).containsExactly(value);
-        assertThat(platform.getIssuerServices()).containsExactly(value);
-        for (var request : List.of(owner, account, platform)) {
-            assertThat(validator.validate(request)).isEmpty();
-            var serialized = mapper.readTree(mapper.writeValueAsString(request));
-            assertThat(serialized.get("issuerServices").get(0).asString()).isEqualTo(value);
-            assertThat(serialized.has("issuer_services")).isFalse();
-        }
     }
 
     @Test

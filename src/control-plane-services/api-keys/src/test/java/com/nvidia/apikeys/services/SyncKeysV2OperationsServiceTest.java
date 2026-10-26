@@ -61,8 +61,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @ExtendWith(MockitoExtension.class)
 class SyncKeysV2OperationsServiceTest {
@@ -99,8 +103,7 @@ class SyncKeysV2OperationsServiceTest {
 
     static Stream<List<String>> invalidSelections() {
         return Stream.of(null, List.of(), List.of("u", "*"),
-                List.of("u", "u"), List.of(" "), List.of(" u"),
-                Arrays.asList("u", null), List.of("bad\nvalue"),
+                List.of("u", "u"), List.of(" "), Arrays.asList("u", null),
                 java.util.stream.IntStream.range(0, 11).mapToObj(i -> "u" + i).toList());
     }
 
@@ -175,17 +178,40 @@ class SyncKeysV2OperationsServiceTest {
         verifyNoInteractions(keys);
     }
 
-    @Test
-    void reasonIsOptionalButProvidedReasonIsValidatedBeforeDiscovery() {
-        for (var reason : List.of(" ", "bad\nreason", "x".repeat(1025))) {
-            assertThatThrownBy(() -> service.operateAsAccountAdmin("a",
-                    accountRequest().toBuilder().reason(reason).build()))
-                    .isInstanceOf(BadRequestException.class);
-        }
-        verifyNoInteractions(keys);
+    @ParameterizedTest
+    @MethodSource("optionalReasons")
+    void acceptsOptionalReasonWithoutAdditionalRestrictions(String reason) {
         assertThat(service.operateAsAccountAdmin("a",
-                accountRequest().toBuilder().reason("User requested revocation").build())
+                accountRequest().toBuilder().reason(reason).build())
                 .completedCount()).isZero();
+    }
+
+    static Stream<String> optionalReasons() {
+        return Stream.of(null, " ", "bad\nreason", "x".repeat(1025));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {" user ", "user\nid"})
+    void preservesNonblankLiteralIds(String user) {
+        when(selection.select("a", user, ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", user, "key", CUTOFF)));
+
+        assertThat(service.operateAsAccountAdmin("a", accountRequest().toBuilder()
+                .operation(DELETE).users(List.of(user)).build()).completedCount()).isOne();
+
+        verify(keys).deleteKeyById("a", USER, user, ISSUER, "key");
+    }
+
+    @Test
+    void auditIdentityDoesNotAddAHeaderLengthLimit() {
+        var request = new MockHttpServletRequest();
+        request.addHeader("NVCF-ACTOR-ID", "a".repeat(257));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            assertThat(service.operateAsAccountAdmin("a", accountRequest()).completedCount()).isZero();
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 
     @Test
