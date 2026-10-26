@@ -637,7 +637,7 @@ LLM Gateway does not serve `/health`.
 
 The chart wires this `/health` to the readiness probe only. The liveness probe
 uses `/health` on the admin port (`10083`), which checks only the process, so an
-upstream outage takes pods out of the Service but does not restart them.
+`nvcf api` outage takes pods out of the Service but does not restart them.
 
 The two checks differ in what a failure does. A failing `nvcf api` check returns
 `503`, because that upstream serves every route. A failing `llm api gateway`
