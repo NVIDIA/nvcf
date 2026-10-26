@@ -294,6 +294,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
       - name: Run release helper tests
         run: python3 tools/ci/test-github-release.py
 
