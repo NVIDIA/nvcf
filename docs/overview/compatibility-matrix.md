@@ -1,15 +1,8 @@
 # Compatibility Matrix
 
-<Warning>
-NVCF 1.0.4 candidate, pending QA. The generated table records exact bundle
-membership. It is not a declaration that every combination of those stack
-trains has passed QA, or that other compatible patch/minor releases are excluded.
-</Warning>
-
-Umbrella versions and docs editions identify a documented combination. Stack,
-chart and image versions are independent; they do not need matching version
-numbers. The selected [product manifest](manifest.md#candidate-identity) fixes
-the three source releases, inventory hashes and artifact pins for this candidate.
+The table records the stack releases documented in this edition. Umbrella
+versions and docs editions identify a combination of independently released
+stacks. Stack, chart and image versions do not need matching version numbers.
 
 {/*docs-version-sync:BEGIN compatibility-matrix*/}
 
@@ -25,10 +18,9 @@ the three source releases, inventory hashes and artifact pins for this candidate
 
 ## Compatibility and maintenance policy
 
-A compatibility declaration such as `X.Y.Z+` or "X.Y.Z or later" covers
-compatible later patch and minor releases subject to the supported stack train
-policy and upgrade prerequisites. It does not mean any later major release,
-same-numbered stack versions, or every arbitrary mixed combination is qualified.
+Later patch or minor releases can be used when their stack compatibility and
+migration requirements are satisfied. "Or later" does not mean any later major
+release, same-numbered stack versions, or an arbitrary mix of releases.
 
 - Each stack maintains its latest minor train and the preceding train (N and
   N-1). Older trains receive no further patches.
@@ -38,11 +30,10 @@ same-numbered stack versions, or every arbitrary mixed combination is qualified.
   intermediate train. Complete its migration and upgrade prerequisites before
   continuing.
 
-The exact peer pins in this candidate's product manifest lock the combination
-under test. They do not replace the broader compatibility policy with an
-"only these versions are supported" restriction. Conversely, a compatible
-range does not change the contents or qualification of an immutable bundle.
-Use a separately reviewed release selection when changing that combination.
+A product manifest fixes the stack releases and artifacts shipped in one
+umbrella archive. That selection does not replace the stack compatibility
+policy with an "only these versions are supported" restriction. A compatible
+range does not change the contents of an existing archive.
 
 Docs edition 1.0.2 selected Self-Managed 1.0.1, Compute Plane 1.0.0 and
 Observability 1.0.0. Docs edition 1.0.3 changed documentation only and retained

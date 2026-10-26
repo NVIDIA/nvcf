@@ -1,13 +1,5 @@
 # NVIDIA Cloud Functions
 
-<Warning>
-NVCF 1.0.4 candidate, pending QA: Self-Managed 1.0.7, Compute Plane 1.0.4
-and Observability 1.0.0. Start with the
-[upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md) and
-[selected artifact manifest](manifest.md). This preview does not activate a
-stable docs edition or approve customer publication.
-</Warning>
-
 ![NVIDIA Cloud Functions banner](images/nvcf-banner.svg)
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
@@ -21,7 +13,7 @@ NVCF ships as three independently versioned Helm stacks.
 - [Observability Stack](../observability/observability.md)
   : Metrics, dashboards, and alerting.
 - [Compatibility Matrix](./compatibility-matrix.md)
-  : The selected combination, pending QA.
+  : Stack versions and the compatibility policy.
 
 ## Getting started
 

@@ -1,11 +1,11 @@
 ---
-title: NVCF 1.0.4 candidate
+title: NVCF 1.0.4
 tags: [self-managed, compute-plane, security]
 ---
 
-## NVCF 1.0.4 candidate
+## NVCF 1.0.4
 
-Pending QA. This candidate selects Self-Managed 1.0.7, Compute Plane 1.0.4
+NVCF 1.0.4 selects Self-Managed 1.0.7, Compute Plane 1.0.4
 and Observability 1.0.0. The comparison baseline is docs edition 1.0.2:
 Self-Managed 1.0.1, Compute Plane 1.0.0 and Observability 1.0.0.
 
@@ -31,9 +31,6 @@ for the hostname-policy prerequisite, NVCA-first ordering, queue draining,
 storage checks and rollback limits. The
 [artifact manifest](../../docs/overview/manifest.md) records the exact selection.
 
-This is targeted maintenance, not a claim that every CVE is resolved or every
-image runs non-root. Cassandra and OpenBao runtime upgrades, state-metrics
-changes and the Samba non-root redesign remain deferred. The selected
-Cassandra/OpenBao migration-image fixes are included. Customer publication and
-docs-site activation remain pending separate approval. Customer access to
-Samba 1.0.9 and BDD results for this selection remain pending verification.
+Cassandra and OpenBao runtime versions remain unchanged; their migration-image
+fixes are included. State-metrics changes and a Samba non-root redesign are
+outside this release.

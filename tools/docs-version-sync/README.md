@@ -45,6 +45,12 @@ reads `fern/changelog/`. Existing frozen copies (`docs/<stack>-<version>/`)
 remain historical archives and are never regenerated. New editions create a
 branch, not a new source directory. See [the release and rollback workflow](../../docs/dev/docs-editions.md).
 
+`docs/overview/umbrella-releases.md` owns the generated `stack-package-downloads`
+block. It places each selected package in the sibling directory expected by
+the packaged Helmfiles. Pending resources have no executable download command.
+Installation and image-mirroring pages link to this procedure; the CLI download
+block stays on the image-mirroring page.
+
 ## Compatibility matrix
 
 `docs/overview/compatibility-matrix.md` carries the `compatibility-matrix`

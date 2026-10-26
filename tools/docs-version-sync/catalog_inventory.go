@@ -482,11 +482,20 @@ func isPublicCatalogRegistry(registry Registry) bool {
 }
 
 func publicUpstreamRepository(repository string, artifactType ArtifactType) string {
+	if artifactType == ArtifactTypeChart && isBundledChartRepository(repository) {
+		return repository
+	}
 	repository = canonicalPublicRepository(repository, artifactType)
 	if _, ok := publicUpstreamRegistry(repository, artifactType); !ok || isNVCFPublicationRepository(repository) {
 		return ""
 	}
 	return repository
+}
+
+var bundledChartRepositoryPattern = regexp.MustCompile(`^https://github\.com/NVIDIA/nvcf/tree/[0-9a-f]{40}/deploy/(stacks|helm)/[A-Za-z0-9_./-]+$`)
+
+func isBundledChartRepository(repository string) bool {
+	return bundledChartRepositoryPattern.MatchString(repository) && !strings.Contains(repository, "/../")
 }
 
 func canonicalPublicRepository(repository string, artifactType ArtifactType) string {
@@ -543,6 +552,9 @@ func isNVCFPublicationRepository(repository string) bool {
 
 func upstreamArtifactPath(artifact Artifact) string {
 	repository := strings.TrimSuffix(artifact.UpstreamRepository, "/")
+	if artifact.Type == ArtifactTypeChart && isBundledChartRepository(repository) {
+		return repository + "/" + artifact.Name + "@" + artifact.Version
+	}
 	reference := repository
 	if artifact.Type == ArtifactTypeChart {
 		name := artifact.RepositoryName

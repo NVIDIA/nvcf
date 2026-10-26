@@ -4,8 +4,7 @@ This section covers manual Helmfile installation of the NVCF control plane and
 GPU cluster components for self-hosted NVCF deployments.
 
 For a selected umbrella release, first follow [Consume an umbrella release](../overview/umbrella-releases.md)
-to download, verify and configure its bundle. The 1.0.4 candidate remains
-pending QA. Use this Helmfile guide for explicit release control, partial
+to download and configure its bundle. Use this Helmfile guide for explicit release control, partial
 recovery and direct access to Helmfile values. Existing installations must
 follow the [upgrade notes](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 

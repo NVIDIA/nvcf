@@ -42,6 +42,8 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
+	case "stack-package-downloads":
+		return renderStackPackageDownloads(catalog)
 	case "compatibility-matrix":
 		return renderCompatibilityMatrix(catalog)
 	case "release-selection":
@@ -51,6 +53,38 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
+}
+
+func renderStackPackageDownloads(catalog *Catalog) (string, error) {
+	var b strings.Builder
+	b.WriteString("```bash\n")
+	for _, spec := range []struct{ name, directory, label string }{
+		{catalog.Stack.Name, "self-managed", "Self-Managed"},
+		{computeStackResourceName, "nvcf-compute-plane", "Compute Plane"},
+		{observabilityStackResourceName, "observability", "Observability"},
+	} {
+		artifact := catalog.stackArtifact()
+		if spec.name != catalog.Stack.Name {
+			var ok bool
+			artifact, ok = catalog.findArtifactByNameAndType(spec.name, ArtifactTypeResource)
+			if !ok {
+				return "", fmt.Errorf("stack package %s is required", spec.name)
+			}
+		}
+		fmt.Fprintf(&b, "# %s %s\n", spec.label, artifact.Version)
+		if catalog.publicationIsPending(artifact) {
+			fmt.Fprintf(&b, "# Publication pending: %s %s is not yet available for download.\n\n", artifact.Name, artifact.Version)
+			continue
+		}
+		ref, err := catalog.resourceRef(artifact)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "ngc registry resource download-version %q && \\\n  tar -xzf %q \\\n    -C \"$BUNDLE_DIR/deploy/stacks/%s\"\n\n", ref,
+			fmt.Sprintf("%s_v%s/%s-%s.tar.gz", artifact.Name, artifact.Version, artifact.Name, artifact.Version), spec.directory)
+	}
+	b.WriteString("```\n")
+	return b.String(), nil
 }
 
 func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {

@@ -231,99 +231,16 @@ cannot collide. Configure the chart and image repositories separately.
 
 </Tip>
 
-### Pulling Resources from NGC
+<a id="pulling-resources-from-ngc" />
+<a id="downloading-nvcf-self-managed-stack-control-plane" />
+<a id="downloading-nvcf-compute-plane-stack" />
+<a id="downloading-nvcf-observability-stack" />
 
-Using NGC CLI
+### Obtain stack packages
 
-First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nvidia.com/setup/installers/cli) using the Personal API key you created.
-
-{/*docs-version-sync:BEGIN image-mirroring-resource-examples*/}
-
-```bash
-# Set stack versions
-export STACK_VERSION="1.0.7"
-export COMPUTE_STACK_VERSION="1.0.4"
-export OBSERVABILITY_STACK_VERSION="1.0.0"
-
-# Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
-
-# Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
-
-# Download a specific observability stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}"
-```
-
-{/*docs-version-sync:END image-mirroring-resource-examples*/}
-
-### Downloading `nvcf-self-managed-stack` (control plane)
-
-The `nvcf-self-managed-stack` repository contains Helmfile configurations for deploying the NVCF control plane components.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
-
-```bash
-# Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
-```
-
-{/*docs-version-sync:END image-mirroring-stack-snippet*/}
-
-<Note>
-If you don't have access to this repository, contact your NVIDIA representative.
-
-</Note>
-
-### Downloading `nvcf-compute-plane-stack`
-
-The `nvcf-compute-plane-stack` repository contains Helmfile configurations for deploying compute-plane components.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
-
-```bash
-# Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
-```
-
-{/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
-
-<Note>
-Use both core stack bundles for split-stack local and self-managed installs:
-`nvcf-self-managed-stack` for the control plane and
-`nvcf-compute-plane-stack` for compute-plane components.
-
-</Note>
-
-### Downloading `nvcf-observability-stack`
-
-The `nvcf-observability-stack` repository contains Helmfile configurations for
-deploying shared observability components as a standalone stack.
-
-Download and extract:
-
-{/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
-
-```bash
-# Set the version
-export OBSERVABILITY_VERSION="1.0.0"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}" && \
-   mkdir -p nvcf-observability-stack && \
-   tar -xzf nvcf-observability-stack_v${OBSERVABILITY_VERSION}/nvcf-observability-stack-${OBSERVABILITY_VERSION}.tar.gz -C nvcf-observability-stack && \
-   rm -rf nvcf-observability-stack_v${OBSERVABILITY_VERSION}
-```
-
-{/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}
-
-<Note>
-Use this bundle when shared observability is deployed separately from the
-control-plane and compute-plane stacks.
-
-</Note>
+Use [Consume an NVCF release](umbrella-releases.md) for the selected stack
+packages or an umbrella archive. That guide owns the download commands and
+sibling directory layout. Continue here when charts or images need a mirror.
 
 ### Downloading `nvcf-cli`
 
