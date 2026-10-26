@@ -2,7 +2,7 @@
 
 This manifest records the exact NVCF 1.0.4 candidate selection. The generated
 tables come from the original inventories of Self-Managed 1.0.7, Compute Plane
-1.0.3 and Observability 1.0.0.
+1.0.4 and Observability 1.0.0.
 
 <Warning>
 Pending QA. Artifact availability and successful assembly do not qualify this
@@ -13,13 +13,17 @@ before changing an existing deployment.
 
 ## Candidate identity
 
-- [Selected product manifest](https://github.com/NVIDIA/nvcf/blob/077248a76580307ad823e2a9601187dca10099d1/deploy/releases/1.0.4/manifest.json),
-  at candidate commit `077248a76580307ad823e2a9601187dca10099d1`.
-- [Candidate assembly and downloadable QA artifact](https://github.com/NVIDIA/nvcf/actions/runs/40253438227).
+- [Selected product manifest](https://github.com/NVIDIA/nvcf/blob/6f1cb2532b6cbc8bd88a8242af81be05d6a6221a/deploy/releases/1.0.4/manifest.json),
+  at candidate commit `6f1cb2532b6cbc8bd88a8242af81be05d6a6221a`.
+- [Candidate assembly and downloadable QA artifact](https://github.com/NVIDIA/nvcf/actions/runs/40340819778).
   The artifact contains `nvcf-1.0.4.tar.gz` and the original inventories whose
   SHA-256 hashes are recorded in the product manifest.
 - Bundle SHA-256:
-  `e97ba5f3d4d917d4ae6c1fb390453b87068af10e91049f945446c9e1cbcd4801`.
+  `4df16bd76dc4e8d3133de932f30631f1bef98aa2ed9593046e9a392403d7bdda`.
+
+This candidate supersedes the earlier Compute Plane 1.0.3 / Samba 1.0.8
+selection. Customer access to Samba 1.0.9 and BDD results remain pending
+verification.
 
 The product manifest is the selection authority. Use the assembled bundle;
 the umbrella branch's incidental stack directories are not that selection.
@@ -324,7 +328,7 @@ The following tables list the complete artifact inventory.
 | Stack | Version | Source tag |
 | --- | --- | --- |
 | [Self-managed (control plane)](../self-managed/installation.md) | `1.0.7` | `deploy/stacks/self-managed/v1.0.7` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.3` | `deploy/stacks/nvcf-compute-plane/v1.0.3` |
+| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.4` | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
 | [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ### Control plane Helm charts
@@ -439,7 +443,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Optional | Collects compute-plane workload telemetry. | `nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
 | `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
-| `samba` | `1.0.8` | `compute-plane` | Required | Provides shared model storage for worker pods; retains its root runtime. | `nvcr.io/nvidia/nvcf/samba:1.0.8` | [Upstream](https://github.com/samba-team/samba) |
+| `samba` | `1.0.9` | `compute-plane` | Required | Provides shared model storage for worker pods; retains its root runtime. | `Publication pending` | [Upstream](https://github.com/samba-team/samba) |
 
 ### Observability Helm charts
 
@@ -475,7 +479,7 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Stack | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `nvcf-cli` | `1.16.2` | Independent | Manages functions, deployments, and clusters from the command line. | `nvcr.io/nvidia/nvcf/nvcf-cli:1.16.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `1.0.3` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
+| `nvcf-compute-plane-stack` | `1.0.4` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
 | `nvcf-observability-stack` | `1.0.0` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `nvcr.io/nvidia/nvcf/nvcf-observability-stack:1.0.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
 | `nvcf-self-managed-stack` | `1.0.7` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 

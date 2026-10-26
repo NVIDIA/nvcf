@@ -5,13 +5,15 @@ tags: [self-managed, compute-plane, security]
 
 ## NVCF 1.0.4 candidate
 
-Pending QA. This candidate selects Self-Managed 1.0.7, Compute Plane 1.0.3
+Pending QA. This candidate selects Self-Managed 1.0.7, Compute Plane 1.0.4
 and Observability 1.0.0. The comparison baseline is docs edition 1.0.2:
 Self-Managed 1.0.1, Compute Plane 1.0.0 and Observability 1.0.0.
 
 - Updates selected service, worker and telemetry dependencies for security
-  maintenance, including NICLLS 2.118.2, Samba 1.0.8 and both compute-plane
+  maintenance, including NICLLS 2.118.2, Samba 1.0.9 and both compute-plane
   collectors at 0.160.0-nv-0.2.9.
+- Corrects Samba share ownership setup so non-root Helm tasks can create
+  their results directory. Samba retains its existing root runtime.
 - Returns a prompt not-found response when an LLM function is sent to the
   unsupported classic invocation endpoint.
 - Preserves existing readable secret-file ownership during non-root ESS refresh.
@@ -33,4 +35,5 @@ This is targeted maintenance, not a claim that every CVE is resolved or every
 image runs non-root. Cassandra and OpenBao runtime upgrades, state-metrics
 changes and the Samba non-root redesign remain deferred. The selected
 Cassandra/OpenBao migration-image fixes are included. Customer publication and
-docs-site activation remain pending separate approval.
+docs-site activation remain pending separate approval. Customer access to
+Samba 1.0.9 and BDD results for this selection remain pending verification.

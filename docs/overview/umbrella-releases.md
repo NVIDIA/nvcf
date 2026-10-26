@@ -9,7 +9,7 @@ different artifact pins.
 
 <Warning>
 This preview describes the NVCF 1.0.4 candidate: Self-Managed 1.0.7,
-Compute Plane 1.0.3 and Observability 1.0.0. It remains pending QA and customer
+Compute Plane 1.0.4 and Observability 1.0.0. It remains pending QA and customer
 publication. The published-release download below is for an available final
 release; it is not a download claim for this candidate.
 </Warning>
