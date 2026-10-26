@@ -25,7 +25,7 @@ metadata:
     release-artifact-samba-image: "nvcr.io/0651155215864979/ncp-dev/samba:1.0.8"
     release-artifact-byoo-otel-collector-image: "nvcr.io/0651155215864979/ncp-dev/byoo-otel-collector:0.160.0-nv-0.4.7"
   labels:
-    helm.sh/chart: helm-nvca-operator-1.36.5
+    helm.sh/chart: helm-nvca-operator-1.37.1
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.16.1"
