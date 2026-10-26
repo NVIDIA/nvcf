@@ -30,6 +30,7 @@ test:
 	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
 	@tests/image-override-wiring.sh
+	@tests/sis-image-override.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
