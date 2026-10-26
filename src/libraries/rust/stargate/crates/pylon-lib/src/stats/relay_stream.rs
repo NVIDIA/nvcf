@@ -38,7 +38,8 @@ use super::relay_translate::{KvPoolCatalog, RelayLoadTranslator, kv_update};
 
 const INITIAL_RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
-/// How long a load stream may take to deliver its first window, before its
+/// How long a session may take to open its streams, and then to deliver the
+/// first catalog and each load stream's first window, before the windows'
 /// period is known.
 const FIRST_WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 /// After a window, a load stream is silent once three of its periods pass
@@ -139,50 +140,17 @@ impl RelaySubscriber {
     }
 
     async fn session(&mut self, stop: &CancellationToken) -> SessionEnd {
-        let config = &self.config;
-        let mut client = match stop
-            .run_until_cancelled(KvEventRelayClient::connect(config.url.clone()))
-            .await
-        {
+        // A peer that accepts the connection but never answers would hold the
+        // session here, before any window deadline, so opening the streams
+        // shares the first window's allowance.
+        let open = tokio::time::timeout(FIRST_WINDOW_TIMEOUT, open_streams(&self.config));
+        let (catalogs, kv_loads, serving_loads) = match stop.run_until_cancelled(open).await {
             None => return SessionEnd::Stopped,
-            Some(Err(error)) => {
-                tracing::warn!(url = config.url, %error, "Dynamo Relay connect failed");
-                return SessionEnd::Lost("connect");
-            }
-            Some(Ok(client)) => client.max_decoding_message_size(MAX_RELAY_MESSAGE_BYTES),
+            Some(Err(_)) => return silent(&self.config, "subscribe"),
+            Some(Ok(Err(end))) => return end,
+            Some(Ok(Ok(streams))) => streams,
         };
-        let subscribe = async {
-            let subscriber_id = &config.subscriber_id;
-            let catalogs = client
-                .watch_kv_pool_catalog(proto::WatchKvPoolCatalogRequest {
-                    subscriber_id: subscriber_id.clone(),
-                    contract_marker: proto::CONTRACT_MARKER,
-                })
-                .await?;
-            let kv_loads = client
-                .subscribe_kv_pool_load(proto::SubscribeKvPoolLoadRequest {
-                    subscriber_id: subscriber_id.clone(),
-                    contract_marker: proto::CONTRACT_MARKER,
-                })
-                .await?;
-            let serving_loads = client
-                .subscribe_serving_load(proto::SubscribeServingLoadRequest {
-                    subscriber_id: subscriber_id.clone(),
-                    contract_marker: proto::CONTRACT_MARKER,
-                })
-                .await?;
-            Ok::<_, tonic::Status>((
-                catalogs.into_inner(),
-                kv_loads.into_inner(),
-                serving_loads.into_inner(),
-            ))
-        };
-        let (catalogs, kv_loads, serving_loads) = match stop.run_until_cancelled(subscribe).await {
-            None => return SessionEnd::Stopped,
-            Some(Err(status)) => return status_end(config, "subscribe", &status),
-            Some(Ok(streams)) => streams,
-        };
-        if let Some(metrics) = &config.metrics {
+        if let Some(metrics) = &self.config.metrics {
             metrics.observe_engine_stats_stream_connected(METRICS_MODE, true);
         }
         self.drive(catalogs, kv_loads, serving_loads, stop).await
@@ -227,11 +195,17 @@ impl RelaySubscriber {
     {
         let mut relay_incarnation = None;
         let mut catalog = None;
-        let mut kv_deadline = Instant::now() + FIRST_WINDOW_TIMEOUT;
-        let mut load_deadline = kv_deadline;
+        let first_window = Instant::now() + FIRST_WINDOW_TIMEOUT;
+        let mut kv_deadline = first_window;
+        let mut load_deadline = first_window;
         loop {
             tokio::select! {
                 _ = stop.cancelled() => return Err(SessionEnd::Stopped),
+                // The catalog changes rarely and may stay quiet once it has
+                // arrived, but until then every window is skipped.
+                () = tokio::time::sleep_until(first_window), if catalog.is_none() => {
+                    return Err(silent(&self.config, "kv_pool_catalog"));
+                }
                 message = catalogs.next() => {
                     let update = received(&self.config, "kv_pool_catalog", message)?;
                     same_relay(
@@ -317,6 +291,55 @@ impl RelaySubscriber {
         }
         SessionEnd::Lost("invalid")
     }
+}
+
+/// Connects and subscribes to the catalog, KV pool load, and serving load.
+async fn open_streams(
+    config: &DynamoRelayConfig,
+) -> Result<
+    (
+        tonic::Streaming<proto::KvPoolCatalogUpdate>,
+        tonic::Streaming<proto::KvPoolLoadUpdate>,
+        tonic::Streaming<proto::ServingLoadUpdate>,
+    ),
+    SessionEnd,
+> {
+    let mut client = KvEventRelayClient::connect(config.url.clone())
+        .await
+        .map_err(|error| {
+            tracing::warn!(url = config.url, %error, "Dynamo Relay connect failed");
+            SessionEnd::Lost("connect")
+        })?
+        .max_decoding_message_size(MAX_RELAY_MESSAGE_BYTES);
+    let subscriber_id = &config.subscriber_id;
+    let subscribe = async {
+        let catalogs = client
+            .watch_kv_pool_catalog(proto::WatchKvPoolCatalogRequest {
+                subscriber_id: subscriber_id.clone(),
+                contract_marker: proto::CONTRACT_MARKER,
+            })
+            .await?;
+        let kv_loads = client
+            .subscribe_kv_pool_load(proto::SubscribeKvPoolLoadRequest {
+                subscriber_id: subscriber_id.clone(),
+                contract_marker: proto::CONTRACT_MARKER,
+            })
+            .await?;
+        let serving_loads = client
+            .subscribe_serving_load(proto::SubscribeServingLoadRequest {
+                subscriber_id: subscriber_id.clone(),
+                contract_marker: proto::CONTRACT_MARKER,
+            })
+            .await?;
+        Ok((
+            catalogs.into_inner(),
+            kv_loads.into_inner(),
+            serving_loads.into_inner(),
+        ))
+    };
+    subscribe
+        .await
+        .map_err(|status: tonic::Status| status_end(config, "subscribe", &status))
 }
 
 fn silence_timeout(window_ms: u64) -> Duration {
@@ -527,6 +550,57 @@ mod tests {
         assert_eq!(session.end.await.unwrap(), SessionEnd::Lost("stream_ended"));
         let retracted = session.updates.drain().collect::<Vec<_>>();
         assert!(matches!(retracted[..], [StatsAggregatorUpdate::RelayLost]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_first_catalog_must_arrive_but_may_then_stay_quiet() {
+        let start = Instant::now();
+        let without_catalog = start_session();
+        let with_catalog = start_session();
+        with_catalog.catalogs.send(Ok(catalog())).unwrap();
+        // Both sessions' load streams stay live throughout.
+        while !without_catalog.end.is_finished() {
+            for session in [&without_catalog, &with_catalog] {
+                let _ = session.kv_loads.send(Ok(kv_window()));
+                let _ = session.serving_loads.send(Ok(load_window()));
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        assert!(start.elapsed() <= FIRST_WINDOW_TIMEOUT + Duration::from_secs(1));
+        assert_eq!(
+            without_catalog.end.await.unwrap(),
+            SessionEnd::Lost("silence")
+        );
+        let retracted = without_catalog.updates.drain().collect::<Vec<_>>();
+        assert!(matches!(retracted[..], [StatsAggregatorUpdate::RelayLost]));
+        assert!(!with_catalog.end.is_finished());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_relay_that_never_answers_its_subscriptions_is_abandoned() {
+        // Accepts connections but never answers, so the subscriptions stall.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut accepted = Vec::new();
+            while let Ok(connection) = listener.accept().await {
+                accepted.push(connection);
+            }
+        });
+        let (tx, updates) = flume::unbounded();
+        let mut subscriber =
+            RelaySubscriber::new(DynamoRelayConfig::new(format!("http://{addr}"), "test"), tx);
+
+        let end = tokio::time::timeout(
+            FIRST_WINDOW_TIMEOUT * 2,
+            subscriber.session(&CancellationToken::new()),
+        )
+        .await
+        .expect("the session must give up on a Relay that never answers");
+
+        assert_eq!(end, SessionEnd::Lost("silence"));
+        assert!(updates.is_empty());
     }
 
     #[test]
