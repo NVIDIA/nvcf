@@ -19,6 +19,7 @@ mod openai;
 mod stats_stream;
 // mock-dynamo is an integration fixture, so its runtime image intentionally
 // exposes deterministic controls used by deployed behavior tests.
+mod relay;
 mod test_control;
 mod timing;
 
@@ -510,6 +511,7 @@ struct AppState {
     /// Batched engine; `None` selects the legacy timing model.
     engine: Option<engine_driver::EngineDriver>,
     stats_events: broadcast::Sender<stats_stream::StatsStreamEvent>,
+    relay: relay::RelayState,
     test_control: test_control::TestControlState,
 }
 
@@ -561,8 +563,11 @@ async fn main() -> Result<()> {
         ))),
         engine,
         stats_events,
+        relay: relay::RelayState::new(),
         test_control: test_control::TestControlState::with_discovered_models([args.model_name]),
     };
+
+    let relay_grpc = relay::grpc_router(state.clone());
 
     let app = Router::new()
         .route("/v1/chat/completions", post(openai::chat_completions))
@@ -577,11 +582,16 @@ async fn main() -> Result<()> {
         )
         .route("/test-control", get(test_control::test_control_snapshot))
         .route(
+            "/test-control/relay",
+            put(test_control::update_relay_test_control),
+        )
+        .route(
             "/test-control/discovery-models",
             put(test_control::replace_discovery_models),
         )
         .route("/health", get(openai::health))
-        .with_state(state);
+        .with_state(state)
+        .merge(relay_grpc);
 
     let listener = TcpListener::bind(http_addr).await?;
     let actual_http_addr = listener.local_addr()?;

@@ -10,6 +10,7 @@ load("//rules/oci:defs.bzl", "rust_oci_image")
 # Workspace-local Cargo deps (own-workspace `workspace = true`).
 _WORKSPACE_DEPS = [
     "//src/libraries/rust/stargate/crates/mock-engine",
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
 ]
 
 rust_binary(

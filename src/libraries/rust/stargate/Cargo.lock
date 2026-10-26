@@ -1869,10 +1869,13 @@ dependencies = [
  "async-stream",
  "axum",
  "clap",
+ "futures",
  "mock-engine",
  "serde",
  "serde_json",
+ "stargate-proto",
  "tokio",
+ "tonic",
  "tracing",
  "tracing-subscriber",
 ]
