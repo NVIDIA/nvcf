@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "version": "1.0.4",
+  "change": "initial",
+  "status": "development",
+  "source_commit": "6133572633b5d37ef6b935854971fc024acc1b0a",
+  "toolchain": {
+    "helm": "3.21.4",
+    "helmfile": "1.1.9"
+  },
+  "stacks": {
+    "compute-plane": {
+      "version": "1.0.3",
+      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.3",
+      "source_commit": "df5950486340163c7830c31aa99addcd838adb68",
+      "inventory_asset": "nvcf-compute-plane-stack-inventory.json",
+      "inventory_sha256": "sha256:4ebb53d24fc39dbba132a5884cb8a6a416fefc186acbb79d5b85ba5346c48816",
+      "compatible_with": {
+        "control-plane": "1.0.7",
+        "observability": "1.0.0"
+      }
+    },
+    "control-plane": {
+      "version": "1.0.7",
+      "source_tag": "deploy/stacks/self-managed/v1.0.7",
+      "source_commit": "c4ee95284f48694649b28707d0100ac1471a7a42",
+      "inventory_asset": "nvcf-self-managed-stack-inventory.json",
+      "inventory_sha256": "sha256:0fd65080bb3b35a540e1d87e730fffed289d348df9b72a780b6292d1adc0e1ee",
+      "compatible_with": {
+        "compute-plane": "1.0.3",
+        "observability": "1.0.0"
+      }
+    },
+    "observability": {
+      "version": "1.0.0",
+      "source_tag": "deploy/stacks/observability/v1.0.0",
+      "source_commit": "b77e96a3f8c18e9318b93e697e33e596c4ede7d7",
+      "inventory_asset": "nvcf-observability-stack-inventory.json",
+      "inventory_sha256": "sha256:28ff55447c9223be0472ce9157fa9f4eb6dc7c5092a7c4281e29826e9f3df6de",
+      "compatible_with": {
+        "compute-plane": "1.0.3",
+        "control-plane": "1.0.7"
+      }
+    }
+  }
+}
