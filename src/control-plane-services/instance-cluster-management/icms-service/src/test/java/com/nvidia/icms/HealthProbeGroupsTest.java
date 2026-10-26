@@ -52,6 +52,11 @@ class HealthProbeGroupsTest {
     }
 
     private static ApplicationContextRunner contextRunner(String profile, Status cassandraSession) {
+        return contextRunner(profile, Status.DOWN, Status.DOWN, cassandraSession);
+    }
+
+    private static ApplicationContextRunner contextRunner(
+            String profile, Status cassandra, Status nats, Status cassandraSession) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(HealthEndpointAutoConfiguration.class))
                 .withInitializer(context -> {
@@ -63,8 +68,8 @@ class HealthProbeGroupsTest {
                     var registry = new DefaultHealthContributorRegistry();
                     register(registry, "livenessState", Status.UP);
                     register(registry, "readinessState", Status.UP);
-                    register(registry, "cassandra", Status.DOWN);
-                    register(registry, "nats", Status.DOWN);
+                    register(registry, "cassandra", cassandra);
+                    register(registry, "nats", nats);
                     register(registry, "cassandraSession", cassandraSession);
                     return registry;
                 });
@@ -86,8 +91,22 @@ class HealthProbeGroupsTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"ncp"})
-    void readinessGoesDownWhenCassandraIsDown(String profile) {
+    void readinessGoesDownWhenCassandraAndNatsAreDown(String profile) {
         contextRunner(profile).run(context ->
+                assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ncp"})
+    void readinessGoesDownWhenOnlyNatsIsDown(String profile) {
+        contextRunner(profile, Status.UP, Status.DOWN, Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ncp"})
+    void readinessGoesDownWhenOnlyCassandraIsDown(String profile) {
+        contextRunner(profile, Status.DOWN, Status.UP, Status.UP).run(context ->
                 assertEquals(Status.DOWN, status(context, "readiness")));
     }
 

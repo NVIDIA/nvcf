@@ -44,6 +44,11 @@ import org.springframework.core.io.ClassPathResource;
 class HealthProbeGroupsTest {
 
     private static ApplicationContextRunner contextRunner(Status cassandraSession) {
+        return contextRunner(Status.DOWN, Status.DOWN, cassandraSession);
+    }
+
+    private static ApplicationContextRunner contextRunner(
+            Status cassandra, Status nats, Status cassandraSession) {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(HealthEndpointAutoConfiguration.class))
                 .withInitializer(context -> {
@@ -60,8 +65,8 @@ class HealthProbeGroupsTest {
                     var registry = new DefaultHealthContributorRegistry();
                     register(registry, "livenessState", Status.UP);
                     register(registry, "readinessState", Status.UP);
-                    register(registry, "cassandra", Status.DOWN);
-                    register(registry, "nats", Status.DOWN);
+                    register(registry, "cassandra", cassandra);
+                    register(registry, "nats", nats);
                     register(registry, "cassandraSession", cassandraSession);
                     return registry;
                 });
@@ -82,6 +87,18 @@ class HealthProbeGroupsTest {
     @Test
     void readinessGoesDownWhenCassandraAndNatsAreDown() {
         contextRunner(Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @Test
+    void readinessGoesDownWhenOnlyNatsIsDown() {
+        contextRunner(Status.UP, Status.DOWN, Status.UP).run(context ->
+                assertEquals(Status.DOWN, status(context, "readiness")));
+    }
+
+    @Test
+    void readinessGoesDownWhenOnlyCassandraIsDown() {
+        contextRunner(Status.DOWN, Status.UP, Status.UP).run(context ->
                 assertEquals(Status.DOWN, status(context, "readiness")));
     }
 
