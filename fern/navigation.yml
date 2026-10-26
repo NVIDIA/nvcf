@@ -32,6 +32,9 @@ navigation:
   - page: Overview
     path: ../docs/overview/index.md
     slug: overview
+  - page: Consume an Umbrella Release
+    path: ../docs/overview/umbrella-releases.md
+    slug: umbrella-releases
   - page: Quickstart
     path: ../docs/overview/quickstart.md
     slug: quickstart

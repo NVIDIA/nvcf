@@ -17,6 +17,22 @@ registries:
     host: nvcr.io
     namespace: nvidia/nvcf
 publications:
+  - name: samba
+    type: image
+    version: 1.0.8
+    registry: public-images
+  - name: byoo-otel-collector
+    type: image
+    version: 0.160.0-nv-0.2.9
+    registry: public-images
+  - name: nvcf-otel-collector
+    type: image
+    version: 0.160.0-nv-0.2.9
+    registry: public-images
+  - name: nvcf_worker_niclls
+    type: image
+    version: 2.118.2
+    registry: public-images
   - name: cert-manager-cainjector
     type: image
     version: v1.20.2
@@ -238,7 +254,6 @@ version_overrides:
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - byoo-otel-collector
   - ess-agent
   - icms-service-oss
   - llm-api-gateway
@@ -256,7 +271,6 @@ publication_pending:
   - nvcf-nats-auth-callout-service
   - nvcf-notary
   - nvcf-openbao-migrations
-  - nvcf-otel-collector-image
   - nvcf-ratelimiter
   - nvcf-self-managed-stack
   - nvcf-service-oss
@@ -265,11 +279,9 @@ publication_pending:
   - nvcf-worker-llm-credentials-oss
   - nvcf-worker-task-oss
   - nvcf-worker-utils-oss
-  - nvcf_worker_niclls
   - nvct-service-oss
   - pylon
   - reval-server
-  - samba
   - stargate
 manifest:
   entries:
@@ -1698,7 +1710,7 @@ outputs:
   - path: docs/overview/compatibility-matrix.md
     blocks:
       - marker: compatibility-matrix
-        renderer: compatibility-matrix
+        renderer: release-selection
   - path: docs/overview/manifest.md
     blocks:
       - marker: manifest-artifact-registry-paths

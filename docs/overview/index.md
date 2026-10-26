@@ -25,8 +25,10 @@ NVCF ships as three independently versioned Helm stacks.
 
 ## Getting started
 
+- [Consume an umbrella release](umbrella-releases.md)
+  : Download and verify the selected bundle, configure customer access, and deploy its stacks.
 - [Quickstart](./quickstart.md)
-  : Install the control plane, register a GPU cluster, and validate the deployment with the one-click CLI flow.
+  : Develop locally from a source checkout with the one-click CLI flow.
 - [Deployment](../self-managed/installation.md)
   : Compare the one-click and Helmfile installation paths.
 - [GPU Cluster Setup](../compute-plane/cluster-management/index.md)
