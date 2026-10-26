@@ -38,6 +38,8 @@ mod collector;
 mod engine_stats_stream;
 mod metrics;
 mod projection;
+#[cfg(test)]
+mod relay_contract_tests;
 mod relay_stream;
 mod relay_translate;
 mod relay_update;
