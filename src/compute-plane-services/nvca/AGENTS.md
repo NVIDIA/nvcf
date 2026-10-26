@@ -411,6 +411,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 | `GCCleanerRunTotal` | `status` | `success`, `failure` |
 | `KataRuntimeIsolationEnabled` | _(default labels only)_ | Initialized to 0; set via `SetKataRuntimeIsolationEnabled()` in `pkg/nvca/agent.go` |
 | `MaintenanceModeState` | `mode` | `MaintenanceMode` enum in `pkg/types/types.go` (`AllMaintenanceModes`); one-hot, set via `SetMaintenanceModeState()` / `WithMaintenanceMode()` |
+| `BYOOPlatformMetricsFederationState` | `state` | `AllBYOOPlatformMetricsFederationStates` in `internal/metrics/metrics.go`; one-hot, starts at `not_checked`, set by `pkg/nvca/byoofederation` |
 | `WorkloadResultTotal` | `workload_type` | `container`, `helm` (defined in `AllWorkloadTypes`) |
 | `WorkloadResultTotal` | `workload_kind` | Constants in `internal/metrics/workloadtypes/types.go` (`AllWorkloadKinds`) |
 | `WorkloadResultTotal` | `workload_status` | `success`, `failure` |

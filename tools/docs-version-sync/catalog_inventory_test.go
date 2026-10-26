@@ -381,6 +381,52 @@ func TestRetainIndependentManifestArtifactsUsesInventoryPlaneOwnership(t *testin
 	})
 }
 
+// A stack image can be listed as a supplemental artifact before the released
+// stack inventory reports it, for example a sidecar image that reaches release
+// tooling only through a later chart release. Once an inventory reports the
+// image, the inventory owns it and the supplemental copy is dropped.
+func TestCatalogRefreshPromotesSupplementalImageReportedByInventory(t *testing.T) {
+	base := testCatalog()
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{
+		Name:        "byoo-otel-collector",
+		Type:        ArtifactTypeImage,
+		Registry:    defaultImageRegistry,
+		Version:     "1.0.0",
+		Stacks:      []string{"compute-plane"},
+		Requirement: ManifestRequired,
+	})
+	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{
+		ArtifactID: "byoo-otel-collector", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage,
+		Requirement: ManifestRequired, Description: "BYOO collector sidecar.",
+	})
+
+	catalog := refreshCatalogFromArtifacts("0.6.0", []Artifact{{
+		Name:     "byoo-otel-collector",
+		Type:     ArtifactTypeImage,
+		Registry: defaultImageRegistry,
+		Version:  "1.1.0",
+		Stacks:   []string{"compute-plane"},
+	}}, base)
+	retainIndependentManifestArtifacts(catalog, resolvedStackInventory{Releases: []resolvedInventoryRelease{
+		{Plane: "compute-plane", Name: "nvca-operator"},
+	}}, base)
+
+	var versions []string
+	for _, artifact := range catalog.Artifacts {
+		if artifact.Name == "byoo-otel-collector" && artifact.Type == ArtifactTypeImage {
+			versions = append(versions, artifact.Version)
+		}
+	}
+	if strings.Join(versions, ",") != "1.1.0" {
+		t.Fatalf("inventory artifact versions = %v, want only the inventory version 1.1.0", versions)
+	}
+	for _, artifact := range catalog.SupplementalArtifacts {
+		if artifact.Name == "byoo-otel-collector" {
+			t.Fatalf("supplemental artifact %#v was retained after the inventory reported it", artifact)
+		}
+	}
+}
+
 func TestStackResourceVersionUpdateIgnoresSameNameImage(t *testing.T) {
 	catalog := testCatalog()
 	catalog.Artifacts = append(catalog.Artifacts, Artifact{

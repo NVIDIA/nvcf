@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -212,6 +213,78 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("operation prefix = %v, want %v", runner.operations, wantPrefix)
+	}
+}
+
+// TestCollectResolvedStackInventoryIncludesNVCACollectors covers the publisher's rendered-file path.
+func TestCollectResolvedStackInventoryIncludesNVCACollectors(t *testing.T) {
+	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
+	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
+	repo := initTestGitRepo(t)
+	configPath := "deploy/stacks/nvcf-compute-plane/release-inventory.yaml"
+	statePath := "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl"
+	chartPath := "deploy/helm/nvca-operator/nvca-operator"
+	source := commitTestStackSource(t, repo, "1.2.3", map[string]string{
+		configPath: `schemaVersion: 1
+publishedChartRepository: ` + testPublishedChartRepository + `
+states:
+  - plane: compute-plane
+    path: ` + statePath + `
+sourceCharts:
+  helm-nvca-operator:
+    tagPrefix: deploy/helm/nvca-operator/v
+    path: ` + chartPath + "\n",
+		statePath:                 "releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.0.0\n",
+		chartPath + "/Chart.yaml": "apiVersion: v2\nname: helm-nvca-operator\nversion: 0.0.0\n",
+	})
+	source.Tag = "deploy/stacks/nvcf-compute-plane/v" + source.Version
+	for _, tag := range []string{source.Tag, "deploy/helm/nvca-operator/v1.0.0"} {
+		if _, err := gitOutput(repo, "tag", tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byooReference := "mirror.example.com/byoo-otel-collector:fixture"
+	encoded := base64.StdEncoding.EncodeToString(mustJSON(t, map[string]string{
+		"BYOO_OTEL_COLLECTOR_CONTAINER": byooReference,
+	}))
+	runner := &fakeResolvedInventoryRunner{
+		t: t,
+		manifests: map[string]string{"nvca-operator": fmt.Sprintf(`apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: nvca-operator
+      image: registry.example.com/nvca-operator:fixture
+      args:
+        - --function-env-overrides-b64
+        - %s
+        - --task-env-overrides-b64
+        - %s
+      env:
+        - name: OTEL_COLLECTOR_ENABLED
+          value: "false"
+        - name: OTEL_COLLECTOR_IMAGE_REPO
+          value: mirror.example.com/nvcf-otel-collector
+        - name: OTEL_COLLECTOR_IMAGE_TAG
+          value: fixture
+`, encoded, encoded)},
+	}
+	inventory, err := collectResolvedStackInventory(repo, filepath.Join(repo, configPath), source, resolvedInventoryGenerationOptions{}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResolvedStackInventory(inventory); err != nil {
+		t.Fatal(err)
+	}
+	for reference, requirement := range map[string]ManifestRequirement{
+		byooReference: ManifestRequired,
+		"mirror.example.com/nvcf-otel-collector:fixture": ManifestOptional,
+	} {
+		image := findResolvedInventoryArtifact(t, inventory, "container-image", reference)
+		want := []resolvedArtifactSource{{Plane: "compute-plane", Release: "nvca-operator", Requirement: requirement}}
+		if !reflect.DeepEqual(image.Sources, want) {
+			t.Fatalf("image %s sources = %+v, want %+v", reference, image.Sources, want)
+		}
 	}
 }
 
@@ -574,6 +647,7 @@ func mustJSON(t *testing.T, value any) []byte {
 	return raw
 }
 
+// fakeResolvedInventoryRunner writes rendered fixtures while checking collection order.
 type fakeResolvedInventoryRunner struct {
 	t              *testing.T
 	prepareCalls   int
@@ -581,6 +655,7 @@ type fakeResolvedInventoryRunner struct {
 	sourcePrepared bool
 	publicPrepared bool
 	operations     []string
+	manifests      map[string]string
 }
 
 func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
@@ -682,6 +757,9 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 		outputDir := argumentAfter(runner.t, args, "--output-dir")
 		for _, release := range releases {
 			manifest := fmt.Sprintf("apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - image: nvcr.io/nvidia/nvcf/%s:1.0.0\n", release.Name)
+			if rendered, ok := runner.manifests[release.Name]; ok {
+				manifest = rendered
+			}
 			writeFile(runner.t, filepath.Join(outputDir, release.Name, "manifest.yaml"), manifest)
 		}
 		return nil, nil

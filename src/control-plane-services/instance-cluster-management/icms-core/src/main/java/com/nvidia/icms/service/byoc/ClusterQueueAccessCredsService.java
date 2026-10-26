@@ -16,97 +16,38 @@
  */
 package com.nvidia.icms.service.byoc;
 
-import com.amazonaws.services.sqs.model.QueueDeletedRecentlyException;
+import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.isClusterTargetingEnabled;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.nvidia.icms.configuration.aws.AwsQueueProperties;
-import com.nvidia.icms.errors.PreConditionFailedException;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
-import com.nvidia.icms.errors.IcmsNotFoundException;
 import com.nvidia.icms.inbound.rest.model.byoc.AwsQueueAccessInfo;
-import com.nvidia.icms.inbound.rest.model.byoc.BartAccessCreds;
-import com.nvidia.icms.inbound.rest.model.byoc.BartRegistrationCredentialsResponse;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.inbound.rest.model.nvca.NvcaAccessCreds;
-import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.CreationQueueUdt;
 import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.outbound.sts.CredentialsGenerationService;
 import com.nvidia.icms.service.InstanceServiceHelper;
-
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
-
-import io.micrometer.observation.annotation.Observed;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.sts.model.Credentials;
 
-import static com.nvidia.icms.service.byoc.nvca.NvcaClusterRegistrationService.isClusterTargetingEnabled;
-
 @Service
 @Slf4j
 @AllArgsConstructor
 public class ClusterQueueAccessCredsService {
 
-    private final ClusterRepository clusterRepository;
     private final CredentialsGenerationService credentialsGenerationService;
     private final QueueManager queueManager;
     private final AwsQueueProperties awsQueueProperties;
     private final InstanceServiceHelper instanceServiceHelper;
-
-    @Observed
-    public BartRegistrationCredentialsResponse getClusterQueuesInfo(String clusterId) {
-
-        Optional<ClusterEntity> optionalClusterEntity =
-                clusterRepository.getClusterInfoByClusterId(clusterId, false);
-
-        if (optionalClusterEntity.isEmpty()) {
-            log.error("Could not find any cluster registered with id {}", clusterId);
-            throw new IcmsNotFoundException(
-                    "Could not find any cluster registered with id " + clusterId);
-        }
-
-        ClusterEntity clusterEntity = optionalClusterEntity.get();
-
-        // New creds can be returned only if cluster is of bart flow
-        validateClusterForBartFlow(clusterEntity);
-
-        return generateCredsForQueues(clusterEntity);
-
-    }
-
-    private void validateClusterForBartFlow(ClusterEntity clusterEntity) {
-
-        if (clusterEntity.getNvcaVersion() != null) {
-            String errorMsg = String.format(
-                    "New creds for bart cannot be generated for clusterId %s since "
-                            + "it is registered with NVCA 2.0 flow", clusterEntity.getClusterId());
-            log.error(errorMsg);
-            throw new PreConditionFailedException(errorMsg);
-        }
-    }
-
-    BartRegistrationCredentialsResponse generateCredsForQueues(ClusterEntity clusterEntity) {
-        // validate cluster status
-        validateClusterStatus(clusterEntity.getClusterStatus());
-
-        // generate creds
-        Credentials creationQueueCreds = getQueueCreds(clusterEntity.getCreationQueueUrl());
-        Credentials terminationQueueCreds = getQueueCreds(clusterEntity.getTerminationQueueUrl());
-
-        // validate generated creds
-        validateCreds(creationQueueCreds, clusterEntity.getCreationQueueUrl());
-        validateCreds(terminationQueueCreds, clusterEntity.getTerminationQueueUrl());
-
-        // form response
-        return formCredentialsResponse(clusterEntity, creationQueueCreds, terminationQueueCreds);
-    }
 
     public NvcaAccessCreds generateCredsForNvcaQueues(ClusterEntity clusterEntity) {
         // No need to generate creds when nats enabled
@@ -235,19 +176,6 @@ public class ClusterQueueAccessCredsService {
         }
     }
 
-    // TODO: Remove this function after removing BART registration flow
-    public String createQueue(String queueName, String clusterName) {
-        try {
-            return queueManager.createQueue(queueName, awsQueueProperties.getByocQueueAttributes());
-        } catch (Exception exception) {
-            log.error("Failed to create a queue {} for cluster {}, error - {}", queueName,
-                    clusterName, exception.getMessage(), exception);
-
-            // Re throwing same exception as exception handling is done in createQueue function
-            throw exception;
-        }
-    }
-
     @VisibleForTesting
     String createQueueIfNotExists(String queueName, String clusterId, Map<String, String> queueAttributes, boolean updateQueueAttributesIfQueueExists) {
 
@@ -338,34 +266,6 @@ public class ClusterQueueAccessCredsService {
             log.error("Invalid creds generated for {}", queueUrl);
             throw new IcmsInternalServerException("Invalid creds generated for " + queueUrl);
         }
-    }
-
-    private BartRegistrationCredentialsResponse formCredentialsResponse(
-            ClusterEntity clusterEntity,
-            Credentials creationQueueCreds,
-            Credentials terminationQueueCreds) {
-        AwsQueueAccessInfo creationQueueAccessInfo = AwsQueueAccessInfo.builder()
-                .queueType(clusterEntity.getCreationQueueType())
-                .url(clusterEntity.getCreationQueueUrl())
-                .accessKeyId(creationQueueCreds.accessKeyId())
-                .secretAccessKey(creationQueueCreds.secretAccessKey())
-                .sessionToken(creationQueueCreds.sessionToken())
-                .expiresAt(creationQueueCreds.expiration())
-                .build();
-
-        AwsQueueAccessInfo terminationQueueAccessInfo = AwsQueueAccessInfo.builder()
-                .queueType(clusterEntity.getTerminationQueueType())
-                .url(clusterEntity.getTerminationQueueUrl())
-                .accessKeyId(terminationQueueCreds.accessKeyId())
-                .secretAccessKey(terminationQueueCreds.secretAccessKey())
-                .sessionToken(terminationQueueCreds.sessionToken())
-                .expiresAt(terminationQueueCreds.expiration())
-                .build();
-
-        return BartRegistrationCredentialsResponse.builder().credentials(
-                        BartAccessCreds.builder().creationQueue(creationQueueAccessInfo)
-                                .terminationQueue(terminationQueueAccessInfo).build())
-                .build();
     }
 
     private void validateClusterStatus(ClusterStatusEnum clusterStatusEnum) {

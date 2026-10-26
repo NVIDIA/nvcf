@@ -279,13 +279,14 @@ class XAccountTelemetryControllerTest {
 
     Stream<Arguments> createTelemetryArgs() {
         var secretJsonNodeValue = jsonMapper.createObjectNode()
-                .put("GRAFANA", "GRAFANA_PASSWORD");
+                .put("clientCert", "client-cert")
+                .put("clientKey", "client-key");
 
         var telemetryRequest = TelemetryRequest.builder()
                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                 .protocol(TelemetryProtocolEnum.HTTP)
                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                .types(Set.of(TelemetryTypeEnum.LOGS))
+                .types(Set.of(TelemetryTypeEnum.METRICS))
                 .secret(SecretDto.builder()
                                 .name("prometheus-secret")
                                 .value(jsonMapper.createObjectNode()
@@ -304,7 +305,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)
@@ -320,7 +321,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)
@@ -337,7 +338,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)
@@ -355,7 +356,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(null)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)
@@ -391,7 +392,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(null) // Missing secret
                                 .build(),
                         HttpStatus.BAD_REQUEST
@@ -406,7 +407,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .build(),
                         HttpStatus.BAD_REQUEST
                 ),
@@ -420,7 +421,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)
@@ -438,7 +439,7 @@ class XAccountTelemetryControllerTest {
                                 .endpoint(TEST_TELEMETRY_ENDPOINT)
                                 .protocol(TelemetryProtocolEnum.HTTP)
                                 .provider(TelemetryProviderEnum.PROMETHEUS)
-                                .types(Set.of(TelemetryTypeEnum.LOGS))
+                                .types(Set.of(TelemetryTypeEnum.METRICS))
                                 .secret(SecretDto.builder()
                                         .name("telemetry-secret")
                                         .value(secretJsonNodeValue)

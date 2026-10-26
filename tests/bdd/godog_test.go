@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,9 @@ type fakeRunner struct {
 	results map[string]harness.Result
 	runs    []string
 	onRun   func(string) error
+	// respond, when set, answers a command before the canned results are
+	// consulted. It reports false to fall through to them.
+	respond func(string) (harness.Result, bool)
 }
 
 // Run records the command, applies an optional test side effect, and returns
@@ -58,10 +62,37 @@ func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, err
 			return harness.Result{}, err
 		}
 	}
+	if f.respond != nil {
+		if result, ok := f.respond(command); ok {
+			return result, nil
+		}
+	}
 	if result, ok := f.results[command]; ok {
 		return result, nil
 	}
 	return harness.Result{ExitCode: 0}, nil
+}
+
+// taskLifecycleResponder answers `task get --json` for the task most recently
+// created through a fake `nvcf-cli`. A task created from a chart whose name
+// mentions missing resources reports ERRORED; every other task reports
+// COMPLETED. It stands in for NVCT status transitions in wiring tests only.
+func taskLifecycleResponder() func(string) (harness.Result, bool) {
+	lastTask := ""
+	return func(command string) (harness.Result, bool) {
+		if _, after, found := strings.Cut(command, " task create --name "); found {
+			lastTask, _, _ = strings.Cut(after, " ")
+			return harness.Result{ExitCode: 0}, true
+		}
+		if strings.HasSuffix(command, " task get --json") {
+			status := "COMPLETED"
+			if strings.Contains(lastTask, "missing-resources") {
+				status = "ERRORED"
+			}
+			return harness.Result{ExitCode: 0, Stdout: `{"task":{"id":"task-1","name":"` + lastTask + `","status":"` + status + `"}}`}, true
+		}
+		return harness.Result{}, false
+	}
 }
 
 // RunWithSensitiveStdin records only the command. Sensitive input must never
@@ -84,7 +115,7 @@ func (f *fakeRunner) RunWithTTY(ctx context.Context, command string) (harness.Re
 // specific commands. Commands not in the map resolve to ExitCode 0
 // with empty streams. Pass nil for an all-zero-exit runner.
 func newFakeRunner(canned map[string]harness.Result) *fakeRunner {
-	return &fakeRunner{results: canned, runs: nil}
+	return &fakeRunner{results: canned, runs: nil, respond: taskLifecycleResponder()}
 }
 
 // newWiringSuite builds a Suite tailored for the wiring tests: a
@@ -446,12 +477,6 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
 	const helmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function invoke --request-body '{\"message\":\"bdd-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
-	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
 	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function deploy create --backend ncp-local --gpu H100 --instance-type NCP.GPU.H100_1x" +
 		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
@@ -493,13 +518,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
 		},
-		helmTaskSmokeCommand: {
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list": {
 			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
-		},
-		invalidHelmTaskSmokeCommand: {
-			ExitCode: 1,
-			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
+			Stdout:   "Listing cluster groups...\nFound 1 cluster groups:\n\nID: test-cluster-group-id\n---\n",
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
@@ -631,12 +652,22 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmInvokeCommand) {
 		t.Fatal("Helm sample function was not invoked")
 	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script was not invoked on the local cluster")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local cluster")
-	}
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml",
+		name:   "bdd-nvct-helm-task-smoke",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local",
+		},
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml",
+		name:   "bdd-nvct-helm-task-missing-resources",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test-missing-resources.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local",
+		},
+	})
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
@@ -1270,13 +1301,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
-	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
-		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
-		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
 	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function deploy create --backend ncp-local-compute-1 --gpu H100 --instance-type NCP.GPU.H100_1x" +
 		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
@@ -1348,18 +1372,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			`-d '{"model":"unauthenticated/check","messages":[]}'`: {
 			ExitCode: 0,
 			Stdout:   "401",
-		},
-		taskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
-		},
-		helmTaskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
-		},
-		invalidHelmTaskSmokeCommand: {
-			ExitCode: 1,
-			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
 		},
 		invalidHelmFunctionDeployCommand: {
 			ExitCode: 1,
@@ -1523,18 +1535,33 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if cleanupCount != 5 {
 		t.Fatalf("function deployment cleanup commands = %d, want 5", cleanupCount)
 	}
-	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
-		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
-		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script was not invoked on the local compute cluster")
-	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
-		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local compute cluster")
-	}
+	const multiLocalConfig = "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-task-smoke",
+		createParts: []string{
+			"--image nvcr.io/test-org/test-team/task-simple-sample:local",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+			"--container-env DELAY_BETWEEN_RESULTS_IN_MINUTES=0",
+		},
+		deleted: true,
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-helm-task-smoke",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+		},
+	})
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: multiLocalConfig,
+		name:   "bdd-nvct-helm-task-missing-resources",
+		createParts: []string{
+			"--helm-chart https://charts.example.test/task-helmchart-test-missing-resources.tgz",
+			"--instance-type NCP.GPU.H100_1x", "--backend ncp-local-compute-1",
+		},
+	})
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
 }
 
@@ -2632,17 +2659,6 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	// EKS_GATEWAY_ADDR is intentionally NOT preset: @gateway-setup's
 	// export step captures it from the canned gateway stdout below. The
 	// gateway-domain export is likewise exercised from its canned result.
-	taskSmokeCommand := strings.Join([]string{
-		"env",
-		"NVCT_BDD_STATE_PATH=/home/wiring/.nvcf-cli.nvcf-cli-eks-bdd-multi.state",
-		"NVCT_BDD_API_KEYS_URL=http://" + wiringGatewayLB + "/v1/keys",
-		"NVCT_BDD_API_KEYS_HOST=api-keys." + wiringGatewayDomain,
-		"NVCT_BDD_TASKS_URL=http://" + wiringGatewayLB + "/v1/nvct/tasks",
-		"NVCT_BDD_TASKS_HOST=tasks." + wiringGatewayDomain,
-		"NVCT_BDD_TASK_BACKEND=" + computeClusterName,
-		"NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x",
-		"tests/bdd/scripts/run-nvct-task-smoke.sh",
-	}, " ")
 	pullSecretCommand := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context " + computeContext + " -o name"
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
@@ -2675,10 +2691,6 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
-		},
-		taskSmokeCommand: {
-			ExitCode: 0,
-			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
 		},
 	}))
 	seedStackBaseYaml(t, suite.Config.RepoRoot)
@@ -2732,10 +2744,283 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
 	}
-	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
-		t.Fatal("NVCT task API smoke script was not invoked with the EKS instance type")
+	assertTaskLifecycle(t, suite.Runner.(*fakeRunner).runs, taskLifecycleExpectation{
+		config: "/repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml",
+		name:   "bdd-nvct-task-smoke",
+		createParts: []string{
+			"--image nvcr.io/test-org/test-team/task-simple-sample:local",
+			"--instance-type NCP.GPU.H100_8x", "--backend " + computeClusterName,
+		},
+		deleted: true,
+	})
+	generatedConfig, err := os.ReadFile(filepath.Join(suite.Config.RepoRoot, "tests", "bdd", "out", "nvcf-cli-eks-bdd-multi.yaml"))
+	if err != nil {
+		t.Fatalf("read generated EKS CLI config: %v", err)
+	}
+	for _, want := range []string{
+		"base_nvct_url: http://" + wiringGatewayLB,
+		"nvct_host: tasks." + wiringGatewayDomain,
+	} {
+		if !strings.Contains(string(generatedConfig), want) {
+			t.Fatalf("generated EKS CLI config does not contain %q:\n%s", want, generatedConfig)
+		}
 	}
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_8x", 1)
+}
+
+// TestBYOORenderFeatureFileWiresToSteps runs the render-only BYOO feature
+// against a fake runner. Seeded render output carries the gate only for the
+// profiles that enable it, so each outline row exercises its assertion.
+func TestBYOORenderFeatureFileWiresToSteps(t *testing.T) {
+	const registryLoginCommand = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+	for profile, body := range map[string]string{
+		"compute":  "featureGateValues:\n- BYOObservability\n",
+		"all":      "featureGateValues:\n- BYOObservability\n",
+		"control":  "featureGateValues:\n- DynamicGPUDiscovery\n",
+		"disabled": "featureGateValues:\n- DynamicGPUDiscovery\n",
+	} {
+		path := filepath.Join(suite.Config.RepoRoot, "tests", "bdd", "out", "byoo-render", profile, "nvca-operator.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create rendered output directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write rendered output for %s: %v", profile, err)
+		}
+	}
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "byoo-render.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "byoo-render-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanExactly(runs, registryLoginCommand) {
+		t.Fatal("Helm OCI registry login command was never invoked")
+	}
+	for _, profile := range []string{"compute", "all", "control", "disabled"} {
+		if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-"+profile+" ") {
+			t.Fatalf("compute-plane Helmfile template command was never invoked for the %s profile", profile)
+		}
+	}
+}
+
+// byooExistingInstallTags skips every scenario that changes the stack, so the
+// workload scenarios run against an existing local install.
+const byooExistingInstallTags = "~@stack-change"
+
+const (
+	byooGateCommand   = `kubectl --context k3d-ncp-local --namespace nvca-operator get nvcfbackend ncp-local -o 'jsonpath={range .status.featureGate.values[*]}{@}{"\n"}{end}'`
+	byooTelemetries   = "http://api.localhost:8080/v2/nvcf/telemetries"
+	byooDeployment    = "http://api.localhost:8080/v2/nvcf/deployments/functions/function-1/versions/version-1"
+	byooCLIConfig     = "/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+	byooTaskImage     = "registry.example.com/samples/task-byoo-sample:test"
+	byooFunctionImage = "registry.example.com/samples/byoo-telemetry-sample:test"
+)
+
+// byooTaskLifecycle is the BYOO task the workload scenario launches through
+// nvcf-cli with the registered telemetry endpoint attached.
+var byooTaskLifecycle = taskLifecycleExpectation{
+	config: byooCLIConfig,
+	name:   "bdd-byoo-task",
+	createParts: []string{
+		"--image " + byooTaskImage,
+		"--instance-type NCP.GPU.H100_1x", "--backend ncp-local ",
+		"--container-env NUM_OF_RESULTS=3",
+		"--container-env DELAY_BETWEEN_RESULTS_IN_MINUTES=1",
+		"--logs-telemetry-id telemetry-1",
+		"--metrics-telemetry-id telemetry-1",
+		"--traces-telemetry-id telemetry-1",
+	},
+	deleted: true,
+}
+
+// byooGateOffDeployment is the deployment NVCF reports after NVCA rejects a
+// function with telemetries on a cluster without the BYOObservability gate.
+const byooGateOffDeployment = `{"deployment":{"functionStatus":"ERROR","healthInfo":[{"error":` +
+	`"Bring Your Own Observability (BYOO) is disabled on this cluster: the function requests telemetries, ` +
+	`but these NVCA feature flags are not enabled: BYOObservability. ` +
+	`Enable them on the cluster, or deploy without telemetries."}]}}`
+
+// byooHTTPFake answers telemetry registration and deletion and the gate-off
+// deployment read for the admin token, and records every request and body.
+type byooHTTPFake struct {
+	requests []string
+	bodies   []string
+}
+
+func (f *byooHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
+	f.requests = append(f.requests, method+" "+rawURL)
+	f.bodies = append(f.bodies, body)
+	switch {
+	case headers["Authorization"] != "Bearer admin-jwt":
+		return harness.HTTPResponse{Status: http.StatusUnauthorized}, nil
+	case method == http.MethodPost && rawURL == byooTelemetries:
+		return harness.HTTPResponse{Status: http.StatusOK, Body: `{"telemetry":{"telemetryId":"telemetry-1"}}`}, nil
+	case method == http.MethodDelete && rawURL == byooTelemetries+"/telemetry-1":
+		return harness.HTTPResponse{Status: http.StatusNoContent}, nil
+	case method == http.MethodGet && rawURL == byooDeployment:
+		return harness.HTTPResponse{Status: http.StatusOK, Body: byooGateOffDeployment}, nil
+	default:
+		return harness.HTTPResponse{Status: http.StatusNotFound}, nil
+	}
+}
+
+// runBYOOWiring runs byoo.feature against fakes with the given tag filter.
+// The fake NVCFBackend reports the BYOObservability gate until the gate-off
+// install runs, then reports it disabled.
+func runBYOOWiring(t *testing.T, tags string) ([]string, *byooHTTPFake) {
+	t.Helper()
+	const (
+		cli          = "/usr/bin/nvcf-cli --config " + byooCLIConfig
+		gateOffSetup = "make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-gate-off"
+	)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
+		t.Fatalf("seed cli state: %v", err)
+	}
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_BYOO_TASK_IMAGE", byooTaskImage)
+	t.Setenv("SAMPLE_BYOO_FUNCTION_IMAGE", byooFunctionImage)
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	runner := newFakeRunner(map[string]harness.Result{
+		// Conflict precheck: the multi-cluster control plane must be absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		byooGateCommand:                {ExitCode: 0, Stdout: "InfraResourceOverhead\nBYOObservability\n"},
+		"date +%s":                     {ExitCode: 0, Stdout: "1700000000\n"},
+		cli + " status --json": {
+			ExitCode: 0,
+			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+		},
+		"kubectl --context k3d-ncp-local get pods --all-namespaces --selector function-id=function-1 -o jsonpath={.items[*].spec.containers[*].name}": {
+			ExitCode: 0,
+			Stdout:   "ess inference utils byoo-otel-collector",
+		},
+		cli + " function deploy create --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 600": {
+			ExitCode: 1,
+			Stderr:   "function deployment failed",
+		},
+	})
+	runner.onRun = func(command string) error {
+		if strings.HasPrefix(command, gateOffSetup) {
+			runner.results[byooGateCommand] = harness.Result{ExitCode: 0, Stdout: "InfraResourceOverhead\n-BYOObservability\n"}
+		}
+		return nil
+	}
+	suite := newWiringSuite(t, runner)
+	httpFake := &byooHTTPFake{}
+	suite.HTTP = httpFake
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "byoo.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "byoo-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Tags:   tags,
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := runner.runs
+	for _, command := range runs {
+		if strings.Contains(command, "admin-jwt") {
+			t.Fatalf("admin token leaked into a command line: %s", command)
+		}
+	}
+	return runs, httpFake
+}
+
+// TestBYOOFeatureFileWiresToSteps runs every BYOO scenario, as TestBYOO does.
+func TestBYOOFeatureFileWiresToSteps(t *testing.T) {
+	runs, httpFake := runBYOOWiring(t, "")
+	for _, command := range []string{
+		"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-byoo",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo ",
+		" function deploy create ",
+		"--image " + byooFunctionImage + " ",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-byoo-gate-off",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("BYOO flow command was never invoked: %s", command)
+		}
+	}
+	assertTaskLifecycle(t, runs, byooTaskLifecycle)
+	if !strings.Contains(strings.Join(httpFake.bodies, "\n"), `"name":"bdd-byoo-task-1700000000"`) {
+		t.Fatalf("task telemetry registration did not use the per-scenario name: %v", httpFake.bodies)
+	}
+	deletes := 0
+	for _, request := range httpFake.requests {
+		if request == "DELETE "+byooTelemetries+"/telemetry-1" {
+			deletes++
+		}
+	}
+	if deletes != 4 {
+		t.Fatalf("telemetry endpoints deleted at teardown = %d, want 4", deletes)
+	}
+	if !slices.Contains(httpFake.requests, "GET "+byooDeployment) {
+		t.Fatalf("gate-off deployment status was never read: %v", httpFake.requests)
+	}
+}
+
+// TestBYOOExistingInstallTagsLeaveTheStackAlone guards the existing-install
+// entry point: it runs the workload scenarios without bootstrapping the
+// cluster or installing, upgrading, or removing a Helm release.
+func TestBYOOExistingInstallTagsLeaveTheStackAlone(t *testing.T) {
+	runs, _ := runBYOOWiring(t, byooExistingInstallTags)
+	for _, command := range runs {
+		for _, forbidden := range []string{"make ", "helm ", "k3d "} {
+			if strings.HasPrefix(command, forbidden) || strings.Contains(command, " "+forbidden) {
+				t.Fatalf("existing-install run issued a stack or cluster command: %s", command)
+			}
+		}
+	}
+	for _, command := range []string{
+		" function deploy create ",
+		"--image " + byooFunctionImage + " ",
+		"rollout restart deployment/otlp-sink-task",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("BYOO workload command was never invoked: %s", command)
+		}
+	}
+	assertTaskLifecycle(t, runs, byooTaskLifecycle)
 }
 
 // TestSingleClusterUp is the live entry point for the single-cluster
@@ -2849,6 +3134,37 @@ func TestObservabilityDisabled(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "observability-disabled.feature")
+}
+
+// TestBYOORender is the live entry point for the render-only BYOO gate
+// feature. Skipped under -short.
+func TestBYOORender(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "byoo-render.feature")
+}
+
+// TestBYOO is the live entry point for the BYOO feature. It installs the
+// local single-cluster stack with the BYOObservability gate on, checks task
+// and function telemetry against an in-cluster OTLP sink, then reinstalls NVCA
+// with the gate off and checks that a function with telemetries fails with an
+// actionable reason. Skipped under -short.
+func TestBYOO(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "byoo.feature")
+}
+
+// TestBYOOExistingInstall runs the BYOO workload scenarios against the
+// current local single-cluster install. It does not bring up the cluster or
+// install, upgrade, or remove the stack. Skipped under -short.
+func TestBYOOExistingInstall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeatureTags(t, "byoo.feature", byooExistingInstallTags)
 }
 
 // TestEventLedger is the live entry point for the event-ledger feature. It
@@ -3041,6 +3357,42 @@ func commandOptionEquals(command, option, want string) bool {
 		}
 	}
 	return false
+}
+
+// taskLifecycleExpectation describes one visible `nvcf-cli` task lifecycle:
+// the selected config, the created task, the arguments it must carry, and
+// whether the scenario deletes it.
+type taskLifecycleExpectation struct {
+	config      string
+	name        string
+	createParts []string
+	deleted     bool
+}
+
+// assertTaskLifecycle checks that the visible task steps ran through the
+// selected CLI config and that no script-based path remains. Exact status
+// matching is covered by the scenario passing against taskLifecycleResponder.
+func assertTaskLifecycle(t *testing.T, runs []string, want taskLifecycleExpectation) {
+	t.Helper()
+	cli := "/usr/bin/nvcf-cli --config " + want.config
+	if !commandRanThatContainsAll(runs, cli, "api-key generate --for task", "--scopes launch_task,task_details,delete_task") {
+		t.Fatalf("task API key was not generated through %s", want.config)
+	}
+	createNeedles := append([]string{cli + " task create --name " + want.name}, want.createParts...)
+	if !commandRanThatContainsAll(runs, createNeedles...) {
+		t.Fatalf("task %s was not created with %v", want.name, want.createParts)
+	}
+	if !commandRanExactly(runs, cli+" task get --json") {
+		t.Fatalf("task %s status was never polled through %s", want.name, want.config)
+	}
+	if want.deleted && !commandRanExactly(runs, cli+" task delete") {
+		t.Fatalf("task %s was not deleted through %s", want.name, want.config)
+	}
+	for _, run := range runs {
+		if strings.Contains(run, "run-nvct-task-smoke") || strings.Contains(run, "NVCT_BDD_") {
+			t.Fatalf("command %q still uses the task smoke script plumbing", run)
+		}
+	}
 }
 
 func commandRanExactly(runs []string, want string) bool {

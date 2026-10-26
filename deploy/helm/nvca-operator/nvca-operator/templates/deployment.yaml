@@ -203,8 +203,12 @@ spec:
           value: {{ .Values.otelCollector.enabled | quote }}
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
+        {{- if .Values.otelCollector.imageTag }}
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: {{ .Values.otelCollector.imageTag | default "0.160.0-nv-0.2.5" | quote }}
+          value: {{ .Values.otelCollector.imageTag | quote }}
+        {{- else if include "nvcaop.otelCollectorTagNeeded" . }}
+        {{- fail "otelCollector.imageTag is required when the OTel collector is enabled" }}
+        {{- end }}
         {{- if .Values.otelCollector.resources }}
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: {{ .Values.otelCollector.resources | toJson | b64enc | quote }}
@@ -286,6 +290,14 @@ spec:
           {{- $taskEnvOverrides := deepCopy ($agent.taskEnvOverrides | default dict) }}
           {{- if and $byooOtelCollectorImage (or (not (hasKey $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
           {{- $_ := set $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
+          {{- end }}
+          {{- with include "nvcaop.byooFluentBitImage" . }}
+          {{- if not (hasKey $functionEnvOverrides "BYOO_FLUENTBIT_CONTAINER") }}
+          {{- $_ := set $functionEnvOverrides "BYOO_FLUENTBIT_CONTAINER" . }}
+          {{- end }}
+          {{- if not (hasKey $taskEnvOverrides "BYOO_FLUENTBIT_CONTAINER") }}
+          {{- $_ := set $taskEnvOverrides "BYOO_FLUENTBIT_CONTAINER" . }}
+          {{- end }}
           {{- end }}
           {{- if $functionEnvOverrides }}
           - --function-env-overrides-b64

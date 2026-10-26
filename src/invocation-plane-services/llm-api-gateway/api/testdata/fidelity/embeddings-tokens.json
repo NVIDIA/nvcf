@@ -41,6 +41,8 @@
       "metadata": {}
     }
   },
+  "upstream_input_tokens": "3",
+  "upstream_affinity_key": "",
   "upstream_response": {
     "json": {
       "object": "list",

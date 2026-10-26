@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
 
 MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
@@ -53,5 +53,16 @@ go_oci_multi_binary_image(
     },
     registry = "nvcr.io/qtfpt1h0bieu/byocdev/nvca-operator",
     tags = ["nvca-operator"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )
