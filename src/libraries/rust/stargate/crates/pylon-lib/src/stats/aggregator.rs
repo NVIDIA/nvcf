@@ -691,6 +691,10 @@ impl StatsAggregator {
                 updated_models.extend(self.finalize_request(update))
             }
             StatsAggregatorUpdate::EnableOpenAiFallback => self.enable_openai_fallback(),
+            // Placeholder until the collector integration slice lands.
+            StatsAggregatorUpdate::RelayLoad(_)
+            | StatsAggregatorUpdate::RelayKv(_)
+            | StatsAggregatorUpdate::RelayLost => {}
         }
     }
 

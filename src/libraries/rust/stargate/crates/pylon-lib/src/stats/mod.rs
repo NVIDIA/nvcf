@@ -38,6 +38,7 @@ mod collector;
 mod engine_stats_stream;
 mod metrics;
 mod projection;
+mod relay_update;
 pub(crate) mod token_metrics;
 
 pub(crate) use collector::{ModelStatsInitialization, StatsCollectorControl};

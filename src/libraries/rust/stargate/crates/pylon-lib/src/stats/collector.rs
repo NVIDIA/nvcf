@@ -26,6 +26,7 @@ use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
 use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
+use super::relay_update::{RelayKvUpdate, RelayLoadUpdate};
 
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
@@ -202,6 +203,12 @@ pub enum StatsAggregatorUpdate {
     EngineConcurrency(EngineConcurrencyUpdate),
     FinalizeRequest(FinalizeRequestUpdate),
     EnableOpenAiFallback,
+    /// Replaces the Relay's model load (relay mode only).
+    RelayLoad(RelayLoadUpdate),
+    /// Replaces the Relay's KV usage (relay mode only).
+    RelayKv(RelayKvUpdate),
+    /// The Relay went silent past its timeout: clear its view and readiness.
+    RelayLost,
 }
 
 #[derive(Debug, Clone)]
