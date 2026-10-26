@@ -276,6 +276,21 @@ nats:
     #   tls:
     #     enabled: true
     #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
+  # CPU and memory for each NATS server container. The chart sets none, so the
+  # servers run as BestEffort and nats-server sizes its Go runtime to every
+  # core on the node. Set a CPU limit so the runtime sizes itself to it, and
+  # set requests so NATS keeps its CPU share when the node is full. Size both
+  # from your own load test. No memory limit is shown because the
+  # request-queue streams are memory-backed and a memory limit can end the
+  # server under a backlog.
+  # container:
+  #   merge:
+  #     resources:
+  #       requests:
+  #         cpu: <cores>
+  #         memory: <memory>
+  #       limits:
+  #         cpu: <cores>
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.

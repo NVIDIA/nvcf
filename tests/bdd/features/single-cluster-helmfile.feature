@@ -167,6 +167,41 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
+  Rule: Helmfile-installed local NVCF lists cluster groups
+
+    # This scenario intentionally has no Background. It depends on the
+    # earlier NVCA registration scenario in this feature run, and is not a
+    # standalone tag target. The final init clears the narrowly scoped API
+    # key from CLI state so later scenarios start from the admin token.
+    @cluster-groups
+    Scenario: Operator lists cluster groups with the admin token and with a scoped API key
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list
+        """
+      Then the command exit code should be 0
+      And the command output should contain "Found"
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-cluster-groups --for function --scopes list_cluster_groups
+        """
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml cluster list
+        """
+      Then the command exit code should be 0
+      And the command output should contain "Found"
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+
   Rule: Helmfile-installed local NVCF can run a Helm task
 
     # This scenario intentionally has no Background. It depends on the
@@ -175,24 +210,38 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     @nvct-task-api @helm-task
     Scenario: Operator sees a Helm task without resource limits fail
       Given environment variable "SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-helm-task-missing-resources |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I run command:
         """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml task create --name bdd-nvct-helm-task-missing-resources --helm-chart ${SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES} --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --result-strategy NONE --max-runtime PT10M --max-queued PT10M --termination-grace PT1M
         """
-      Then the command should fail
-      And the command output should contain "ERRORED"
+      Then the command exit code should be 0
+
+      And the task selected by NVCF CLI should reach status "ERRORED" within "900" seconds, polling every "10" seconds
 
     @nvct-task-api @helm-task
     Scenario: Operator launches an NVCT Helm task and waits for it to complete
       Given environment variable "SAMPLE_HELM_TASK_CHART" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-helm-task-smoke             |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I run command:
         """
-        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml task create --name bdd-nvct-helm-task-smoke --helm-chart ${SAMPLE_HELM_TASK_CHART} --gpu H100 --instance-type NCP.GPU.H100_1x --backend ncp-local --result-strategy NONE --max-runtime PT10M --max-queued PT10M --termination-grace PT1M
         """
       Then the command exit code should be 0
-      And the command output should contain "COMPLETED"
+
+      And the task selected by NVCF CLI should reach status "COMPLETED" within "900" seconds, polling every "10" seconds
 
   Rule: Helmfile-installed local NVCF can run a sample function
 

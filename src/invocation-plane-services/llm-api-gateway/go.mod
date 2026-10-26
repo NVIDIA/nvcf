@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
 
-go 1.25.6
+go 1.26.10
 
 require (
 	cloud.google.com/go/pubsub/v2 v2.4.0

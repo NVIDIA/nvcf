@@ -26,7 +26,6 @@ import com.nvidia.icms.inbound.rest.model.SpotInstanceInternalState;
 import com.nvidia.icms.inbound.rest.model.SpotInstanceRequestAction;
 import com.nvidia.icms.inbound.rest.model.SpotInstanceState;
 import com.nvidia.icms.inbound.rest.model.SpotInstanceStatus;
-import com.nvidia.icms.inbound.rest.model.byoc.ClusterHeartbeatStatus;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterProviderEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.ClusterStatusEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeUsageEnum;
@@ -99,7 +98,6 @@ class GsonCompatMapperTest {
         assertEquals("\"RESERVED_BACKUP\"", GsonCompatMapper.toJson(CapacityType.RESERVED_BACKUP));
         assertEquals("\"CORDON_AND_DRAIN\"",
                      GsonCompatMapper.toJson(ClusterStatusEnum.CORDON_AND_DRAIN));
-        assertEquals("\"healthy\"", GsonCompatMapper.toJson(ClusterHeartbeatStatus.HEALTHY));
         assertEquals("\"unhealthy\"", GsonCompatMapper.toJson(CloudHealthStatus.UNHEALTHY));
         assertEquals("\"ngc-managed\"", GsonCompatMapper.toJson(ClusterSource.NGC_MANAGED));
         assertEquals("\"SINGLE\"", GsonCompatMapper.toJson(NodeTypeEnum.SINGLE));

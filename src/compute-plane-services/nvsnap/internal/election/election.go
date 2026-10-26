@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -314,12 +315,13 @@ func ResolveLeader(lease *coordinationv1.Lease, pods []corev1.Pod) (*corev1.Pod,
 }
 
 // SpecIdentity digests what the model container at index main runs: its
-// name, image, command and args. Admission records it on the Lease for
-// the leader, and the stamp check requires it of the pod it captures, so
-// a capture published under the elected hash comes from a pod running
-// the model the hash was composed for. The env is left out because the
-// webhook injects into it; nothing in nvsnap changes these four fields of
-// a leader. "" when the pod has no such container.
+// name, image repository, command and args. Admission records it on the
+// Lease for the leader, and the stamp check requires it of the pod it
+// captures, so a capture published under the elected hash comes from a
+// pod running the model the hash was composed for. The env is left out
+// because the webhook injects into it, and the image's tag and digest
+// because another webhook may pin or rewrite them after ours; the version
+// is already part of the hash. "" when the pod has no such container.
 func SpecIdentity(pod *corev1.Pod, main int) string {
 	if pod == nil || main < 0 || main >= len(pod.Spec.Containers) {
 		return ""
@@ -330,12 +332,25 @@ func SpecIdentity(pod *corev1.Pod, main int) string {
 		Image   string   `json:"image"`
 		Command []string `json:"command"`
 		Args    []string `json:"args"`
-	}{c.Name, c.Image, c.Command, c.Args})
+	}{c.Name, imageRepo(c.Image), c.Command, c.Args})
 	if err != nil {
 		return ""
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// imageRepo drops the tag and digest of an image reference, keeping the
+// registry and repository: "reg:5000/org/img:v1@sha256:..." is
+// "reg:5000/org/img".
+func imageRepo(ref string) string {
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	return ref
 }
 
 // Elect creates the Lease for hash with a freshly minted id as holder.

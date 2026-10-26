@@ -27,6 +27,8 @@ trap cleanup EXIT
 manifest="${tmp_dir}/manifest.yaml"
 stage_manifest="${tmp_dir}/stage-manifest.yaml"
 manifest_with_byoo_override="${tmp_dir}/manifest-with-byoo-override.yaml"
+manifest_with_byoo_repository="${tmp_dir}/manifest-with-byoo-repository.yaml"
+manifest_with_byoo_repository_without_tag="${tmp_dir}/manifest-with-byoo-repository-without-tag.yaml"
 legacy_stage_manifest="${tmp_dir}/legacy-stage-manifest.yaml"
 legacy_values="${tmp_dir}/legacy-values.yaml"
 manifest_without_byoo_default="${tmp_dir}/manifest-without-byoo-default.yaml"
@@ -145,6 +147,32 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
   --set-string selfManaged.natsHostOverride=nats.gateway.example.invalid \
   > "${manifest_with_byoo_override}"
+
+# render_with_byoo_repository OUTPUT [HELM_ARGS...] renders the self-managed
+# chart with an explicit BYOO collector repository, as the compute-plane stack
+# sets it.
+render_with_byoo_repository() {
+  local output="$1"
+  shift
+  helm template nvca-operator "${repo_root}/nvca-operator" \
+    --set-string "ngcConfig.serviceKey=test-service-key" \
+    --set-string "nameOverride=nvca-operator" \
+    --set-string "fullnameOverride=nvca-operator" \
+    --namespace nvca-operator \
+    --set-string ngcConfig.clusterSource=self-managed \
+    --values "${repo_root}/nvca-operator/values.yaml" \
+    --values "${repo_root}/values.release-sbom.yaml" \
+    --set-string agent.byooOtelCollector.imageRepository=registry.example.test/nvcf/byoo-otel-collector \
+    --set-string selfManaged.icmsServiceURL=http://sis.example.invalid:8080 \
+    --set-string selfManaged.revalServiceURL=http://reval.example.invalid:8080 \
+    --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
+    "$@" \
+    > "${output}"
+}
+
+render_with_byoo_repository "${manifest_with_byoo_repository}"
+render_with_byoo_repository "${manifest_with_byoo_repository_without_tag}" \
+  --set-string agent.byooOtelCollector.imageTag=
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
   --set-string "ngcConfig.serviceKey=test-service-key" \
@@ -316,6 +344,31 @@ for expected_annotation in "${expected_annotations[@]}"; do
     exit 1
   fi
 done
+
+# The compute-plane stack sets agent.byooOtelCollector.imageRepository, so the
+# stack release inventory lists the collector through this annotation. Without
+# an explicit repository the chart default stays out of release artifacts.
+if grep -Fq "release-artifact-byoo-otel-collector-image:" "${manifest}"; then
+  echo "expected the chart default BYOO collector repository to omit release-artifact-byoo-otel-collector-image" >&2
+  exit 1
+fi
+
+expected_byoo_annotation="release-artifact-byoo-otel-collector-image: \"registry.example.test/nvcf/byoo-otel-collector:${byoo_otel_collector_tag}\""
+if ! grep -Fq "${expected_byoo_annotation}" "${manifest_with_byoo_repository}"; then
+  echo "expected an explicit BYOO collector repository to expose ${expected_byoo_annotation}" >&2
+  exit 1
+fi
+
+if [[ "$(decode_byoo_override "${manifest_with_byoo_repository}" '--function-env-overrides-b64')" != \
+  "registry.example.test/nvcf/byoo-otel-collector:${byoo_otel_collector_tag}" ]]; then
+  echo "expected the release-artifact BYOO collector image to match the function environment override" >&2
+  exit 1
+fi
+
+if grep -Fq "release-artifact-byoo-otel-collector-image:" "${manifest_with_byoo_repository_without_tag}"; then
+  echo "expected an empty BYOO collector tag to omit release-artifact-byoo-otel-collector-image" >&2
+  exit 1
+fi
 
 if grep -Fq "release-artifact-nvca-image:" "${manifest_without_nvca_image_override}"; then
   echo "expected rendered self-managed manifest without nvcaImage.repositoryOverride to omit release-artifact-nvca-image" >&2

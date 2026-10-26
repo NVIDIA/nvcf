@@ -94,6 +94,12 @@ nvsnap:
 agent:
   enabled: true
 
+  # Namespace label naming the tenant a namespace belongs to: a label your
+  # platform stamps with the account or tenant id, one namespace users
+  # cannot edit (NVCF: nca-id). Captures and caches are shared only between
+  # namespaces of one tenant; empty makes every namespace its own tenant.
+  tenantLabel: ""
+
   # cachedir (ember) mode. When set (e.g. "/opt/nvsnap"), the webhook
   # redirects every JIT/compile cache + the model into this single in-pod
   # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on
@@ -147,10 +153,9 @@ agent:
     retention: 168h
     # A volume is filled with the downloading tenant's registry
     # credentials, so it is shared only between namespaces of one tenant.
-    # Empty: each namespace is its own tenant. Set it to the namespace
-    # label your platform stamps with the account or tenant id (one that
-    # namespace users cannot edit) to share a model across all of that
-    # tenant's namespaces, such as every redeploy of a function.
+    # Empty: agent.tenantLabel, which is what you normally set. Set this
+    # only to scope model volumes by a different namespace label than
+    # captures and caches.
     tenantLabel: ""
 
   # Compile cache set refresh (docs/proposals/helm-chart-cache-refresh.md),

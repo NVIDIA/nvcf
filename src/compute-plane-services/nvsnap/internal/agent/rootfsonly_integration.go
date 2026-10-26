@@ -173,7 +173,7 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 	}
 	watcher := &rootfsonly.Watcher{
 		Capturer:    capturer,
-		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: cfg.CUDADriverMajor},
+		Composer:    &rootfsonly.HashInputComposer{CUDADriverMajor: cfg.CUDADriverMajor, Tenant: a.tenantScope},
 		KubeClient:  kubeClient,
 		NodeName:    a.config.NodeName,
 		WarmupDelay: cfg.WarmupDelay,

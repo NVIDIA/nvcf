@@ -167,7 +167,9 @@ type ContextV3 struct {
 // Used to deserialize CloudEvent extensions before converting to internal format
 // Note: CloudEvents spec forbids underscores in extension names, so we use camelCase
 type cloudEventWireFormat struct {
-	Namespace          string         `mapstructure:"namespace"`
+	Namespace string `mapstructure:"namespace"`
+	// FunctionVersionID lets a producer name the namespace by what it is.
+	FunctionVersionID  string         `mapstructure:"functionVersionId"`
 	InstanceID         string         `mapstructure:"instanceId"`
 	DeploymentID       string         `mapstructure:"deploymentId"`
 	GPUSpecificationID string         `mapstructure:"gpuSpecificationId"`
@@ -553,7 +555,7 @@ func extractK8sEvent(ctx context.Context, lr *logsv1.LogRecord) (*EventV3, error
 
 // extractCloudEvent converts a CloudEvent into our internal EventV3 format
 // CloudEvents extensions are mapped via mapstructure to:
-//   - namespace (required)
+//   - namespace (required), or functionVersionId, which is stored as the namespace
 //   - Context fields (optional, camelCase): instanceId, deploymentId, gpuSpecificationId, clusterId
 //     Note: CloudEvents spec forbids underscores in extension names, so we use camelCase
 func extractCloudEvent(ctx context.Context, ce *cloudevents.Event) (*EventV3, error) {
@@ -572,6 +574,14 @@ func extractCloudEvent(ctx context.Context, ce *cloudevents.Event) (*EventV3, er
 	var wireFormat cloudEventWireFormat
 	if err := mapstructure.Decode(ce.Extensions(), &wireFormat); err != nil {
 		return nil, fmt.Errorf("failed to decode CloudEvent extensions: %w", err)
+	}
+
+	namespace := wireFormat.Namespace
+	if wireFormat.FunctionVersionID != "" {
+		if namespace != "" && namespace != wireFormat.FunctionVersionID {
+			return nil, errors.New("namespace and functionVersionId must match when both are set")
+		}
+		namespace = wireFormat.FunctionVersionID
 	}
 
 	// Convert wire format to internal context representation
@@ -603,7 +613,7 @@ func extractCloudEvent(ctx context.Context, ce *cloudevents.Event) (*EventV3, er
 
 	event := &EventV3{
 		EventName:   ce.Type(),
-		Namespace:   wireFormat.Namespace,
+		Namespace:   namespace,
 		Source:      ce.Source(),
 		Context:     canonicalContext,
 		Timestamp:   ce.Time(),

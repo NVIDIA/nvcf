@@ -147,6 +147,12 @@ func RenderOtelConfigFromBytes(inputData []byte, tmplConfig TemplateConfig) ([]b
 }
 
 func RenderOtelConfig(telemetryConfig TelemetryConfig, tmplConfig TemplateConfig) ([]byte, error) {
+	// The templates render collector settings such as the federation target,
+	// so reject invalid settings before executing them.
+	if err := tmplConfig.OTelCollector.Validate(); err != nil {
+		return nil, fmt.Errorf("validate BYOO OTel collector config: %w", err)
+	}
+
 	configData := &bytes.Buffer{}
 	if err := ExecuteTemplate(configData, tmplConfig); err != nil {
 		return nil, fmt.Errorf("execute config template: %v", err)
@@ -224,6 +230,34 @@ func remoteWriteTLSCredentials(credentialPath, telemetryName string) (map[string
 		return nil, fmt.Errorf("metrics telemetry %q: TLS secret needs clientCert and clientKey, caFile, or both", telemetryName)
 	}
 	return creds, nil
+}
+
+const (
+	serviceNowLightstepHeader = "lightstep-access-token"
+	serviceNowOtelTokenHeader = "otel-token"
+	otelTokenPrefix           = "otel_"
+)
+
+// serviceNowTokenHeader picks the header a SERVICENOW traces token is sent in.
+// Tokens that start with "otel_" go in otel-token; any other token is a classic
+// Lightstep access token and keeps lightstep-access-token. Ingest gateways
+// reject a request that carries both headers, so exactly one is chosen. Only
+// the prefix is read: the rendered config still references the token file.
+// The prefix is matched against the raw file, not a trimmed copy, because the
+// collector sends the file's contents as they are. A missing file keeps the
+// classic header.
+func serviceNowTokenHeader(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return serviceNowLightstepHeader, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	if bytes.HasPrefix(content, []byte(otelTokenPrefix)) {
+		return serviceNowOtelTokenHeader, nil
+	}
+	return serviceNowLightstepHeader, nil
 }
 
 func secretFileHasContent(path string) (bool, error) {
@@ -441,10 +475,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
-			"tls": map[string]interface{}{
-				"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", config.Telemetries.Logs.Name)),
-				"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", config.Telemetries.Logs.Name)),
-			},
+			"tls": kratosClientTLS(credentialPath, config.Telemetries.Logs.Name),
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -482,6 +513,16 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	}
 	otelConfig.Exporters[exporterId]["sending_queue"] = logExporterSendingQueue()
 	return exporterId, nil
+}
+
+// kratosClientTLS returns the mTLS block for a KRATOS exporter. The secrets
+// extractor writes the clientCert and clientKey keys of the telemetry secret to
+// <name>-clientCert and <name>-clientKey.
+func kratosClientTLS(credentialPath, telemetryName string) map[string]interface{} {
+	return map[string]interface{}{
+		"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", telemetryName)),
+		"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", telemetryName)),
+	}
 }
 
 func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -850,12 +891,17 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 		exporterType = "otlp"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Traces.Name))
+		credentialFile := filepath.Join(credentialPath, config.Telemetries.Traces.Name)
+		exporterCredential = fmt.Sprintf("${file:%s}", credentialFile)
 
+		header, err := serviceNowTokenHeader(credentialFile)
+		if err != nil {
+			return "", err
+		}
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Traces.Endpoint,
 			"headers": map[string]interface{}{
-				"lightstep-access-token": exporterCredential,
+				header: exporterCredential,
 			},
 		}
 	case ProviderAzureMonitor:
@@ -878,6 +924,59 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 			"spaneventsenabled": true,
 		}
+	case ProviderKratosLogs:
+		exporterType = "otlp_http"
+		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
+		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
+
+		// The secrets extractor runs before render, so a missing or blank client
+		// cert or key fails here with a named error instead of an otelcol TLS
+		// load error at startup.
+		var missing []string
+		for _, key := range []string{"clientCert", "clientKey"} {
+			hasContent, err := secretFileHasContent(filepath.Join(credentialPath, fmt.Sprintf("%s-%s", config.Telemetries.Traces.Name, key)))
+			if err != nil {
+				return "", err
+			}
+			if !hasContent {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("traces telemetry %q: KRATOS secret needs clientCert and clientKey, missing or empty: %s",
+				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
+		}
+
+		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
+		// The client cert pair is enough for the Kratos traces gateway, which uses
+		// public CA roots. caFile is optional, and a blank CA file stops the
+		// collector from starting, so it is used only when the file has content.
+		caFile := filepath.Join(credentialPath, fmt.Sprintf("%s-caFile", config.Telemetries.Traces.Name))
+		hasCA, err := secretFileHasContent(caFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCA {
+			tls["ca_file"] = caFile
+		}
+		exporter := map[string]interface{}{
+			"traces_endpoint": config.Telemetries.Traces.Endpoint,
+			"tls":             tls,
+		}
+		// The gateway authenticates with the client certificate alone, so
+		// collectorId is optional. Send the header only when the secret has one,
+		// so the config never references a missing file.
+		collectorIdFile := filepath.Join(credentialPath, fmt.Sprintf("%s-collectorId", config.Telemetries.Traces.Name))
+		hasCollectorId, err := secretFileHasContent(collectorIdFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCollectorId {
+			exporter["headers"] = map[string]interface{}{
+				"collector-id": fmt.Sprintf("${file:%s}", collectorIdFile),
+			}
+		}
+		otelConfig.Exporters[exporterId] = exporter
 	case ProviderOtelCollector:
 		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
@@ -900,7 +999,8 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 	// health_check and healthcheckv2 extensions are present for all configurations
 	otelConfig.Service.Extensions = []string{"healthcheckv2", "cgroup_runtime"}
 
-	// Default telemetry configuration for the collector's own metrics, logs, and traces
+	// Default telemetry configuration for the collector's own metrics and logs.
+	// Its own traces are added below only when an OTLP endpoint is configured.
 	otelConfig.Service.Telemetry = map[string]map[string]interface{}{
 		"logs": {
 			"level": "warn",
@@ -923,14 +1023,16 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 				},
 			},
 		},
-		"traces": {
+	}
+	if tmplConfig.CollectorTracesEnabled {
+		otelConfig.Service.Telemetry["traces"] = map[string]interface{}{
 			"processors": []map[string]interface{}{
 				{
 					"batch": map[string]interface{}{
 						"exporter": map[string]interface{}{
 							"otlp": map[string]interface{}{
 								"protocol": "grpc",
-								"endpoint": "${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}",
+								"endpoint": "${env:OTEL_EXPORTER_OTLP_ENDPOINT}",
 								"headers": []map[string]interface{}{
 									{
 										"name":  "lightstep-access-token",
@@ -942,7 +1044,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 					},
 				},
 			},
-		},
+		}
 	}
 
 	resourceAttrs := []map[string]interface{}{

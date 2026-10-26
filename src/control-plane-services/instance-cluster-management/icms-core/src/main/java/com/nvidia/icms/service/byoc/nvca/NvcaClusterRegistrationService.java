@@ -51,7 +51,7 @@ import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.byoc.ByocServiceHelper;
 import com.nvidia.icms.service.byoc.ClusterQueueAccessCredsService;
-import com.nvidia.icms.service.byoc.ClusterRegistrationService;
+import com.nvidia.icms.service.byoc.ClusterValidation;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import com.nimbusds.jose.jwk.JWKSet;
@@ -796,7 +796,7 @@ public class NvcaClusterRegistrationService {
                     }
 
                     // Validate instance types present inside the GPUs
-                    ClusterRegistrationService.validateInstanceTypesV5(existingGpu.getInstanceTypes(),
+                    ClusterValidation.validateInstanceTypesV5(existingGpu.getInstanceTypes(),
                                                                        newlyAddedGpu.getInstanceTypes(),
                                                                        true, existingGpu.getName());
 

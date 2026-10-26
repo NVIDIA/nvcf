@@ -312,6 +312,23 @@ func TestLeaseElector_VerifyStamp_BindConflict(t *testing.T) {
 	}
 }
 
+func TestImageRepo(t *testing.T) {
+	for ref, want := range map[string]string{
+		"busybox":                        "busybox",
+		"busybox:1.36":                   "busybox",
+		"nvcr.io/org/img:v1":             "nvcr.io/org/img",
+		"reg:5000/org/img":               "reg:5000/org/img",
+		"reg:5000/org/img:v1":            "reg:5000/org/img",
+		"reg:5000/org/img@sha256:abc":    "reg:5000/org/img",
+		"reg:5000/org/img:v1@sha256:abc": "reg:5000/org/img",
+		"":                               "",
+	} {
+		if got := imageRepo(ref); got != want {
+			t.Errorf("imageRepo(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
 func TestSpecIdentity(t *testing.T) {
 	base := SpecIdentity(modelPod("a"), 0)
 	if base == "" || SpecIdentity(modelPod("b"), 0) != base {
@@ -333,6 +350,18 @@ func TestSpecIdentity(t *testing.T) {
 	p.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "HF_HOME", Value: "/opt/nvsnap/hf"}}
 	if SpecIdentity(p, 0) != base {
 		t.Error("env the webhook injects must not change the identity")
+	}
+	for _, image := range []string{
+		"vllm/vllm-openai:v2",
+		"vllm/vllm-openai@sha256:0123456789abcdef",
+		"vllm/vllm-openai:v1@sha256:0123456789abcdef",
+		"vllm/vllm-openai",
+	} {
+		p := modelPod("a")
+		p.Spec.Containers[0].Image = image
+		if SpecIdentity(p, 0) != base {
+			t.Errorf("a tag or digest pinned after admission (%s) must not change the identity", image)
+		}
 	}
 	if SpecIdentity(nil, 0) != "" || SpecIdentity(modelPod("a"), 1) != "" || SpecIdentity(modelPod("a"), -1) != "" {
 		t.Error("no model container must yield an empty identity")

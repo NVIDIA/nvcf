@@ -65,6 +65,9 @@ func main() {
 
 	var config agent.Config
 
+	flag.StringVar(&config.TenantLabel, "tenant-label", "",
+		"Namespace label naming the tenant a namespace belongs to, such as an account id the platform stamps; captures and caches are shared only within one tenant (empty = each namespace is its own tenant)")
+
 	flag.StringVar(&config.NodeName, "node-name", os.Getenv("NODE_NAME"), "Node name")
 	// Phase 5d.1: catalog URL + node IP for peer-fanout cascade.
 	flag.StringVar(&config.CatalogURL, "catalog-url", os.Getenv("NVSNAP_CATALOG_URL"),
@@ -172,7 +175,7 @@ func main() {
 	flag.DurationVar(&config.ModelVolume.WaitDeadline, "model-volume-wait-deadline", 0,
 		"How long a reader waits for the writer's download before downloading itself (default 1h)")
 	flag.StringVar(&config.ModelVolume.TenantLabel, "model-volume-tenant-label", "",
-		"Namespace label naming the tenant a namespace belongs to; model volumes are shared only between namespaces of one tenant (empty = each namespace is its own tenant)")
+		"Namespace label naming the tenant a namespace belongs to; model volumes are shared only between namespaces of one tenant (empty = --tenant-label)")
 	flag.BoolVar(&config.ModelVolume.RefreshDisabled, "cache-set-refresh-disabled", false,
 		"Turn off cache set refresh: warm ranks that gained files no longer propose a new generation of their set")
 	flag.DurationVar(&config.ModelVolume.RefreshCooldown, "cache-set-refresh-cooldown", 0,

@@ -199,7 +199,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 		if mv, minter, err := buildModelVolume(kc, profile, promoter, cfg.StorageClass, cfg.Namespace, log); err != nil {
 			log.WithError(err).Warn("model volume disabled")
 		} else {
-			mv.Cfg.TenantLabel = a.config.ModelVolume.TenantLabel
+			mv.Cfg.TenantLabel = a.modelVolumeTenantLabel()
 			a.modelVolume, a.modelMinter = mv, minter
 			// The compile-cache set is the model volume mechanism with
 			// another kind: same storage, same views, every mode.

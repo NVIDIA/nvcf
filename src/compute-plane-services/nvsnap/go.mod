@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
 
-go 1.25.0
+go 1.26.10
 
 require (
 	cloud.google.com/go/storage v1.62.3

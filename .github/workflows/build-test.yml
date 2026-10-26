@@ -100,6 +100,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Collector tests render the stack's pinned, independently released chart.
+          fetch-depth: 0
           persist-credentials: false
 
       # Pinned and checksum-verified rather than floating latest, so a chart
@@ -145,10 +147,14 @@ jobs:
       - name: Test NVCA chart schema and defaults
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
-          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
+          make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
+          make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
+          make -C deploy/helm/nvca-operator test-render-values
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
@@ -293,6 +299,9 @@ jobs:
 
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
+
+      - name: Test bump workflow push credentials
+        run: bash tools/ci/test-bump-workflow-push
 
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version
