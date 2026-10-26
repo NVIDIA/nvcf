@@ -4,11 +4,9 @@
 # When a service release is published, open a pull request moving the charts
 # that deploy it to that version.
 #
-# This is the first hop of the service to chart to stack cascade. The second is
-# stack-pin-bump.yml: merging this pull request does not by itself move the
-# stack, because a chart version only reaches the stack once the chart is
-# released. Cutting that chart release stays a human decision, and publishing
-# it is what triggers the stack bump.
+# Registered charts release automatically from main. For the release cascade
+# and maintenance-train stack handoff, see:
+# docs/dev/github-release-process.md#automatic-pin-bumps
 #
 # Which charts deploy the released service is declared, not derived; see
 # tools/ci/chart-service-edge for why deriving it is wrong. A service whose
@@ -205,13 +203,9 @@ jobs:
         run: |
           set -euo pipefail
           git add deploy/helm deploy/stacks
-          # The commit type carries the semver step of the service release
-          # into the chart release. tools/ci/github-release feeds RELEASE_RULES
-          # to semantic-release: fix cuts a patch, feat a minor, "!" a major,
-          # and chore cuts nothing (which would stop the cascade here, since a
-          # published chart release is what triggers stack-pin-bump.yml). A
-          # service that moved a minor therefore moves its chart a minor, and
-          # one step later the stack, instead of every bump reading as a patch.
+          # Carry the service bump level into chart commit labels. Chart source
+          # release rules are documented in:
+          # docs/dev/github-release-process.md#service-auto-tags
           type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
           case "${type}" in
             *!) subject="${type%!}(charts)!: bump for ${TAG}" ;;
@@ -298,7 +292,11 @@ jobs:
             "" \
             "The released tag identifies the version and source tree, so this is a direct update rather than a lookup of the newest published image." \
             "" \
-            "Merging this does not move a stack's chart pins. A chart version reaches a stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`. Image tags that a stack repeats in its own values, such as the compute-plane NVCA tags, do move here. A change under \`deploy/stacks/nvcf-compute-plane\` also needs its golden render fixtures refreshed with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` before merge." \
+            "Review the [release flow](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#automatic-pin-bumps) and verify that the selected images are available from the intended registry routes before merge." \
+            "" \
+            "This PR targets main. Follow the [maintenance handoff](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#patch-an-existing-component-minor) for supported release trains." \
+            "" \
+            "Image tags declared in a stack's own values are updated here. A change under \`deploy/stacks/nvcf-compute-plane\` also needs its golden render fixtures refreshed with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` before merge." \
             "" \
             "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
             "${notes}" \
