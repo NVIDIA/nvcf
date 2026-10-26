@@ -32,6 +32,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "validate-stack-inventory" {
+		return runValidateStackInventory(args[1:])
+	}
 	flags := flag.NewFlagSet("docs-version-sync", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 
@@ -277,4 +280,36 @@ func relOrAbs(base, path string) string {
 		return path
 	}
 	return rel
+}
+
+// runValidateStackInventory checks retained release evidence without regenerating
+// it or changing any files. The original inventory remains authoritative on retry.
+func runValidateStackInventory(args []string) error {
+	flags := flag.NewFlagSet("validate-stack-inventory", flag.ContinueOnError)
+	inventoryPath := flags.String("inventory", "", "inventory JSON file to validate")
+	version := flags.String("stack-version", "", "expected stack version")
+	tag := flags.String("stack-source-tag", "", "expected stack source tag")
+	commit := flags.String("stack-source-commit", "", "expected stack source commit")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *inventoryPath == "" {
+		return fmt.Errorf("validate-stack-inventory requires --inventory and no positional arguments")
+	}
+	expected := stackSourceRelease{Version: *version, Tag: *tag, Commit: *commit}
+	if err := validateStackSourceRelease(expected); err != nil {
+		return fmt.Errorf("expected inventory source: %w", err)
+	}
+	raw, err := os.ReadFile(*inventoryPath)
+	if err != nil {
+		return fmt.Errorf("read retained stack inventory: %w", err)
+	}
+	inventory, err := parseResolvedStackInventory(raw)
+	if err != nil {
+		return fmt.Errorf("validate retained stack inventory: %w", err)
+	}
+	if inventory.Source != expected {
+		return fmt.Errorf("resolved inventory source is %+v, want selected release %+v", inventory.Source, expected)
+	}
+	return nil
 }
