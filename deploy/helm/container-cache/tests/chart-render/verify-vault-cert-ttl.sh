@@ -75,7 +75,8 @@ echo "Checking the certificate expiry gauge is wired in both modes..."
 check_gauge() {
   assert_has 'container_cache_tls_cert_not_after_seconds'
   assert_has 'container_cache_tls_bundle_read_ok'
-  assert_has 'tls_cert_not_after:reset()'
+  assert_has 'lua_shared_dict cert_metrics_state'
+  assert_not_has 'tls_cert_not_after:reset()'
   assert_has 'lua-cert-expiry.lua: |-'
   assert_has 'path: lua-cert-expiry.lua'
   assert_has 'pcall(dofile, "/etc/nginx/conf.d/lua/lua-cert-expiry.lua")'

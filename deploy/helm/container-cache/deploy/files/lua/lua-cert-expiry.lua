@@ -13,65 +13,79 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 -- Publish the notAfter of every certificate in the served TLS bundle.
--- Depth 0 is the signing intermediate that leaf certificates are minted
--- from; when Vault is enabled the sidecar replaces it before expiry and this
--- gauge is how a stalled rotation becomes visible. Higher depths are the CA
--- chain above it, whose expiry is fixed at provisioning time.
+-- Depth is the certificate's position in ssl-bundle.crt. The producer writes
+-- the signing intermediate first, so depth 0 is the intermediate by
+-- construction; when Vault is enabled the sidecar replaces it before expiry
+-- and this gauge is how a stalled rotation becomes visible. Higher depths are
+-- the CA chain above it, whose expiry is fixed at provisioning time.
 -- Run from the /cache_metrics handler, so the file is read once per scrape.
+--
+-- Series are updated in place and deleted only when the bundle shrinks or
+-- fails to parse. nginx-lua-prometheus never reuses a key-index slot once a
+-- series is removed, so a reset() per scrape would grow the index for the
+-- life of the pod and make every worker rescan it after each scrape.
 local x509 = require "resty.openssl.x509"
 
 local bundle_path = "/etc/certs/ssl-bundle.crt"
+local state = ngx.shared.cert_metrics_state
+local PUBLISHED = "published_depths"
 
--- Drop every series from the previous scrape first. A gauge keeps old label
--- sets until they are removed, so without this a bundle that shrank, changed
--- a CN, or failed to read would keep exporting values that look current.
-tls_cert_not_after:reset()
 -- Pessimistic until the bundle is parsed: an error raised below is caught by
 -- the metrics handler, and the flag must not keep last scrape's 1.
 tls_bundle_read_ok:set(0)
 
+local function unpublish(from, to)
+    for d = from, to - 1 do
+        tls_cert_not_after:del({ tostring(d) })
+    end
+end
+
+-- A bundle we cannot trust publishes nothing: drop whatever the last good
+-- scrape left behind rather than show a partial or shifted view.
+local function fail(msg)
+    ngx.log(ngx.WARN, "cert expiry metrics: ", msg)
+    local prev = tonumber(state:get(PUBLISHED)) or 0
+    if prev > 0 then
+        unpublish(0, prev)
+        state:set(PUBLISHED, 0)
+    end
+end
+
 local fd, open_err = io.open(bundle_path, "rb")
 if not fd then
-    ngx.log(ngx.WARN, "cert expiry metrics: cannot open ", bundle_path, ": ", open_err)
-    return
+    return fail("cannot open " .. bundle_path .. ": " .. tostring(open_err))
 end
 local pem = fd:read("*all")
 fd:close()
 if not pem then
-    ngx.log(ngx.WARN, "cert expiry metrics: cannot read ", bundle_path)
-    return
+    return fail("cannot read " .. bundle_path)
 end
 
--- depth is the certificate's position in the bundle. The producer writes the
--- signing intermediate first, so position 0 is the intermediate by
--- construction; nothing in the parse loop may renumber it. A block that does
--- not parse therefore makes the whole bundle untrustworthy: publish nothing
--- for this scrape and report read_ok=0 rather than a partial, shifted view.
-local depth = 0
+local not_afters = {}
 for block in pem:gmatch("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-.-%-%-%-%-%-END CERTIFICATE%-%-%-%-%-") do
     local crt, err = x509.new(block, "PEM")
     if not crt then
-        ngx.log(ngx.WARN, "cert expiry metrics: cannot parse certificate at position ", depth, " of ", bundle_path, ": ", err)
-        tls_cert_not_after:reset()
-        return
+        return fail("cannot parse certificate at position " .. #not_afters .. " of " .. bundle_path .. ": " .. tostring(err))
     end
-    local cn = ""
-    local name = crt:get_subject_name()
-    if name then
-        local entry = name:find("CN")
-        if entry and entry.blob then
-            cn = entry.blob
-        end
-    end
-    tls_cert_not_after:set(crt:get_not_after(), { tostring(depth), cn })
-    depth = depth + 1
+    not_afters[#not_afters + 1] = crt:get_not_after()
 end
+
 -- The matcher silently skips a block with no END marker, so a truncated
 -- bundle would otherwise look complete. Every BEGIN must have parsed.
 local begins = select(2, pem:gsub("%-%-%-%-%-BEGIN CERTIFICATE%-%-%-%-%-", ""))
-if begins ~= depth then
-    ngx.log(ngx.WARN, "cert expiry metrics: ", bundle_path, " has ", begins, " BEGIN markers but ", depth, " complete certificates")
-    tls_cert_not_after:reset()
-    return
+if begins ~= #not_afters then
+    return fail(bundle_path .. " has " .. begins .. " BEGIN markers but " .. #not_afters .. " complete certificates")
 end
-tls_bundle_read_ok:set(depth > 0 and 1 or 0)
+if #not_afters == 0 then
+    return fail(bundle_path .. " holds no certificate")
+end
+
+for i, not_after in ipairs(not_afters) do
+    tls_cert_not_after:set(not_after, { tostring(i - 1) })
+end
+local prev = tonumber(state:get(PUBLISHED)) or 0
+if prev > #not_afters then
+    unpublish(#not_afters, prev)
+end
+state:set(PUBLISHED, #not_afters)
+tls_bundle_read_ok:set(1)

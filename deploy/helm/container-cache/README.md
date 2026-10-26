@@ -362,6 +362,14 @@ Vault signs a short-lived intermediate for it:
    intermediate is still valid then, and both intermediates carry the same
    subject and public key, so the chain verifies either way.
 
+A `ttl` above the mount's `max_lease_ttl` is truncated to that maximum with
+only a warning, so a cluster whose mount maximum is below
+`vault.intermediateCertTTL` rotates faster than the value suggests. The
+rotation leaves roughly 20 percent of the lifetime (about 3 days at 336h)
+between the first re-issue attempt and expiry; a Vault, auth, or policy
+outage longer than that puts an expired chain on every pod, so the alerts
+below are part of the rollout, not an afterthought.
+
 The TTL is always sent explicitly. A request without one takes the PKI
 mount's default, and Vault rejects the request when that default is longer
 than the signing CA's remaining life. A pod that restarts into that rejection
@@ -396,16 +404,14 @@ left means rotation has stalled.
 | `nucleus.enabled` | `false` | Enable nucleus proxy integration |
 
 The `/cache_metrics` endpoint also exports
-`container_cache_tls_cert_not_after_seconds{depth, subject_cn}`, the notAfter
-of every certificate in the served TLS bundle. Depth `0` is the signing
-intermediate that leaf certificates are minted from; higher depths are the CA
-chain above it. Depth is the certificate's position in `ssl-bundle.crt`,
-which the producer always writes intermediate first. The series are rebuilt
-on every scrape, so a certificate that leaves the bundle disappears rather
-than lingering with a stale value. If any block in the bundle fails to parse,
-no series are published for that scrape and
-`container_cache_tls_bundle_read_ok` is `0`; the same flag is `0` when the
-bundle cannot be read or is empty. Example alert expressions:
+`container_cache_tls_cert_not_after_seconds{depth}`, the notAfter of every
+certificate in the served TLS bundle. Depth is the certificate's position in
+`ssl-bundle.crt`, which the producer always writes intermediate first, so
+depth `0` is the signing intermediate that leaf certificates are minted from
+and higher depths are the CA chain above it. Series are updated in place and
+removed only when the bundle shrinks. If the bundle cannot be read, is empty,
+or any block in it fails to parse, every series is removed and
+`container_cache_tls_bundle_read_ok` is `0`. Example alert expressions:
 
 ```promql
 # Signing intermediate not rotated (expected before 2 days remain on a 14 day TTL).
