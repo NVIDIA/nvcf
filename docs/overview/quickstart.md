@@ -10,6 +10,12 @@ remote deployment, or for separate control-plane and GPU clusters, use
 [Helmfile Installation](../self-managed/helmfile-installation.md) and
 [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
 
+<Note>
+This source-development quickstart does not select an umbrella release.
+For the 1.0.4 candidate, use [Consume an umbrella release](umbrella-releases.md)
+and its packaged stack paths. The candidate remains pending QA.
+</Note>
+
 Run the commands from the NVCF repository root unless a step says otherwise.
 The `nvcf-cli self-hosted up` command runs on your workstation. It does not run
 inside Kubernetes.

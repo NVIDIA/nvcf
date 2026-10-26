@@ -18,21 +18,12 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 	if len(catalog.Compatibility) == 0 {
 		return "", fmt.Errorf("compatibility matrix requires at least one compatibility entry")
 	}
-	var b strings.Builder
-	b.WriteString("## Current stack releases\n\n")
-	b.WriteString("| Stack | Latest release | Source tag |\n| --- | --- | --- |\n")
-	for _, stack := range releaseSetStackNames {
-		metadata, err := catalog.ReleaseSet.Stacks.byName(stack)
-		if err != nil {
-			return "", err
-		}
-		link, err := overviewStackLink(stack, catalog.DocsEdition != nil)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(fmt.Sprintf("| [%s](%s) | `%s` | `%s` |\n",
-			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag))
+	selected, err := renderStackReleaseTable(catalog, "Current stack releases", "Latest release")
+	if err != nil {
+		return "", err
 	}
+	var b strings.Builder
+	b.WriteString(selected)
 	b.WriteString("\n## Compatible stack versions\n\n")
 	b.WriteString("| Stack | Release | Works with |\n| --- | --- | --- |\n")
 	entries := append([]CompatibilityEntry(nil), catalog.Compatibility...)
@@ -51,6 +42,34 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 			worksWith = append(worksWith, formatRequirement(other, entry.CompatibleWith[other]))
 		}
 		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Version, strings.Join(worksWith, ", ")))
+	}
+	return b.String(), nil
+}
+
+// renderReleaseSelection records bundle membership without interpreting exact
+// peer pins as compatibility restrictions or qualification evidence.
+func renderReleaseSelection(catalog *Catalog) (string, error) {
+	return renderStackReleaseTable(catalog, "Selected stack releases", "Selected version")
+}
+
+func renderStackReleaseTable(catalog *Catalog, heading, versionColumn string) (string, error) {
+	if catalog.ReleaseSet == (ReleaseSetMetadata{}) {
+		return "", fmt.Errorf("stack release table requires release_set stack releases")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s\n\n", heading)
+	fmt.Fprintf(&b, "| Stack | %s | Source tag |\n| --- | --- | --- |\n", versionColumn)
+	for _, stack := range releaseSetStackNames {
+		metadata, err := catalog.ReleaseSet.Stacks.byName(stack)
+		if err != nil {
+			return "", err
+		}
+		link, err := overviewStackLink(stack, catalog.DocsEdition != nil)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "| [%s](%s) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), link, metadata.Version, metadata.SourceTag)
 	}
 	return b.String(), nil
 }

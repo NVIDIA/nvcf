@@ -3,32 +3,31 @@
 This section covers manual Helmfile installation of the NVCF control plane and
 GPU cluster components for self-hosted NVCF deployments.
 
-For a fresh install, start with the [Quickstart](../overview/quickstart.md). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values.
+For a selected umbrella release, first follow [Consume an umbrella release](../overview/umbrella-releases.md)
+to download, verify and configure its bundle. The 1.0.4 candidate remains
+pending QA. Use this Helmfile guide for explicit release control, partial
+recovery and direct access to Helmfile values. Existing installations must
+follow the [upgrade notes](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
 
 <Info>
-This guide assumes you have already downloaded and extracted the
-`nvcf-self-managed-stack` Helmfile bundle (see
-[download-nvcf-self-managed-stack](../overview/image-mirroring.md)). Control-plane
-commands run from inside that directory unless otherwise noted. The directory
-contains the control-plane Helmfile definitions, environment templates, and
-sample configurations referenced throughout.
+Keep the extracted `deploy/stacks/self-managed`, `nvcf-compute-plane` and
+`observability` directories together. Control-plane commands run from
+`$BUNDLE_DIR/deploy/stacks/self-managed` unless otherwise noted. The directory
+contains Helmfile definitions, environment templates and secret templates.
 
-GPU clusters use the compute-plane Makefile in
-`deploy/stacks/nvcf-compute-plane`. It registers one GPU cluster at a time and
-installs the NVCA operator into that cluster.
-
-Clone the public repository before the GPU cluster steps:
+GPU-cluster commands use the sibling `deploy/stacks/nvcf-compute-plane`
+Makefile from the extracted root. It registers one GPU cluster at a time and
+installs the NVCA operator into that cluster. Use an installed `nvcf-cli` binary.
+Do not substitute stack directories from current main.
 
 ```bash
-git clone https://github.com/nvidia/nvcf.git
-```
-
-```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 ls
 # Expected contents: helmfile.d/  environments/  secrets/  global.yaml.gotmpl  ...
 ```
 
+The [local-development quickstart](../overview/quickstart.md) uses a source
+checkout and local k3d tooling; it does not select this umbrella bundle.
 </Info>
 
 ## Namespace Requirements
@@ -82,8 +81,8 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 
 - A kubernetes cluster (CSP agnostic or on-prem).
 - Gateway API ingress prepared as described in [Gateway quickstart](./gateway-routing.md#gateway-quickstart) if you are exposing NVCF through Gateway API
-- Artifacts must be available in a registry that your Kubernetes cluster can access. This can be the `nvcf-onprem` registry for NVCF control plane service artifacts, but function containers and helm charts must be configured to a user-managed registry. See [self-hosted-artifact-manifest](../overview/manifest.md) and [self-hosted-image-mirroring](../overview/image-mirroring.md).
-- The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](../overview/image-mirroring.md)).
+- Configure authenticated customer chart and image access for the [selected artifacts](../overview/manifest.md), or use an accessible [mirror](../overview/image-mirroring.md). Workload artifacts use their own registry credentials.
+- Download and verify the [umbrella bundle](../overview/umbrella-releases.md), and preserve its sibling stack directories.
 
 <Accordion title="Install helm-diff plugin">
 
@@ -1262,7 +1261,7 @@ curl -s -X GET "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
 
 ### Step 7. Configure the compute-plane Helmfile environment
 
-Use `deploy/stacks/nvcf-compute-plane` from the source repository for each GPU
+Use `deploy/stacks/nvcf-compute-plane` from the selected bundle for each GPU
 cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
 to the control plane values returned by cluster registration.
 
@@ -1274,7 +1273,7 @@ keep the URL pointed at the load balancer and set the host-header overrides to
 the route hostnames.
 
 ```bash
-cd path/to/nvcf
+cd "$BUNDLE_DIR"
 touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
@@ -1415,7 +1414,7 @@ nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> self-hosted \
 nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> init
 ```
 
-Run the compute-plane target from the repository root. The target writes
+Run the compute-plane target from the extracted bundle root. The target writes
 `deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash

@@ -1092,6 +1092,39 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 	}
 }
 
+func TestRenderReleaseSelectionSeparatesCompatibilityPolicy(t *testing.T) {
+	catalog := testCatalogWithReleaseSet()
+	catalog.Compatibility = []CompatibilityEntry{
+		{Stack: "control-plane", Version: "1.2.3", CompatibleWith: map[string]string{"compute-plane": "2.3.4", "observability": "3.4.5"}},
+	}
+	got, err := Render("release-selection", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Selected stack releases", "| Stack | Selected version | Source tag |",
+		"`deploy/stacks/self-managed/v1.2.3`", "`deploy/stacks/nvcf-compute-plane/v2.3.4`", "`deploy/stacks/observability/v3.4.5`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("selection missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"Latest", "Works with", " only", "or later", "qualified"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("selection incorrectly describes compatibility or qualification: %s", got)
+		}
+	}
+	catalog.Compatibility[0].CompatibleWith["compute-plane"] = "2.3.4+"
+	withRange, err := Render("release-selection", catalog)
+	if err != nil || withRange != got {
+		t.Fatalf("changing compatibility must not change selected membership: %v\n%s", err, withRange)
+	}
+	catalog.ReleaseSet = ReleaseSetMetadata{}
+	if _, err := Render("release-selection", catalog); err == nil {
+		t.Fatal("selection succeeded without selected releases")
+	}
+}
+
 func testCatalogWithReleaseSet() *Catalog {
 	catalog := testCatalog()
 	catalog.ReleaseSet = ReleaseSetMetadata{Stacks: ReleaseSetStacks{

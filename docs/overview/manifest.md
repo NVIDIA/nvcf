@@ -40,13 +40,20 @@ components require the corresponding deployment profile.
 
 ## Prepare Helm charts for Helmfile
 
-The self-managed Helmfile bundles currently expect NVCF charts in an OCI
-registry. Chart distributions that start with `https://` are Helm repository
-charts. Before deploying with Helmfile, copy each required repository chart
-version into the OCI registry configured by `global.helm.sources` in the
-Helmfile bundles.
+The selected Self-Managed and Compute Plane stacks support the authenticated
+HTTPS NVCF chart repository directly. Configure
+`global.helm.sources.url: https://helm.ngc.nvidia.com/nvidia/nvcf`, its customer
+username/password, and `global.image.registry: nvcr.io` with
+`global.image.repository: nvidia/nvcf`. The base files contain placeholders.
+See [customer artifact access](umbrella-releases.md#configure-customer-artifact-access)
+for the complete values and separate image/worker credentials.
 
-The following example copies one public NVCF chart into an OCI registry:
+Mirroring into OCI is an alternative when your deployment requires a private
+registry. Omit `global.helm.sources.url` for that path and set the OCI registry
+and repository after copying the selected charts.
+
+Set `NGC_API_KEY` to a customer key with chart access. The following example
+copies one public NVCF chart into an OCI registry:
 
 ```bash
 export CHART_NAME="helm-nvcf-api"
@@ -54,7 +61,8 @@ export CHART_VERSION="1.27.4"
 export TARGET_REGISTRY="<registry-host>"
 export TARGET_REPOSITORY="<repository>"
 
-helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf \
+  --username '$oauthtoken' --password "$NGC_API_KEY"
 helm repo update
 helm pull "nvcf/${CHART_NAME}" --version "${CHART_VERSION}"
 
@@ -63,7 +71,8 @@ helm push "${CHART_NAME}-${CHART_VERSION}.tgz" \
   "oci://${TARGET_REGISTRY}/${TARGET_REPOSITORY}"
 ```
 
-Repeat this process for every required chart with an `https://` distribution.
+For an OCI mirror, repeat this process for every required external chart with
+an `https://` distribution. Bundled charts remain in their stack directories.
 Copy required charts with an `nvcr.io` distribution into the same target
 repository so Helmfile can resolve all NVCF charts from one source. Configure
 the stack environment with that OCI location:
@@ -77,6 +86,8 @@ global:
 ```
 
 See [Image Mirroring](./image-mirroring.md) for additional registry examples.
+For archive download, integrity checks and deployment order, use
+[Consume an umbrella release](umbrella-releases.md).
 
 ### Supporting images that ship from Docker Hub
 
@@ -385,7 +396,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-worker-llm-credentials-oss` | `1.1.5` | `self-managed` | Required | Maintains a current NVCF worker token for LLM function workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials) |
 | `nvcf-worker-task-oss` | `1.1.6` | `self-managed` | Required | Runs task workloads selected by the task API. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services) |
 | `nvcf-worker-utils-oss` | `1.2.6` | `self-managed` | Required | Proxies NATS traffic between function containers and the control plane. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
-| `nvcf_worker_niclls` | `2.118.2` | `self-managed` | Required | Runs Low Latency Streaming workers. | `Publication pending` |  |
+| `nvcf_worker_niclls` | `2.118.2` | `self-managed` | Required | Runs Low Latency Streaming workers. | `nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.118.2` |  |
 | `nvct-service-oss` | `1.66.1` | `self-managed` | Required | Provides tenant-scoped NVCF control-plane operations. | `Publication pending` |  |
 | `oss-vault-k8s` | `1.7.4` | `self-managed` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` |  |
 | `pylon` | `0.18.3` | `self-managed` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
@@ -411,7 +422,7 @@ The following tables list the complete artifact inventory.
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `byoo-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Required | Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
+| `byoo-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Required | Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled. | `nvcr.io/nvidia/nvcf/byoo-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `fluent-bit` | `3.2` | `compute-plane` | Optional | Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar. | `docker.io/fluent/fluent-bit:3.2` | [Upstream](https://github.com/fluent/fluent-bit) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
@@ -425,10 +436,10 @@ The following tables list the complete artifact inventory.
 | `nvca-operator` | `3.10.3` | `compute-plane` | Required | Reconciles NVCA resources and compute-plane configuration. | `Publication pending` |  |
 | `nvcf-container-cache` | `v1.1.36` | `compute-plane` | Optional | Caches container image layers on GPU cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.36` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 | `nvcf-image-credential-helper` | `0.11.3` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
-| `nvcf-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Optional | Collects compute-plane workload telemetry. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
+| `nvcf-otel-collector` | `0.160.0-nv-0.2.9` | `compute-plane` | Optional | Collects compute-plane workload telemetry. | `nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.160.0-nv-0.2.9` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
 | `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
-| `samba` | `1.0.8` | `compute-plane` | Required | Provides shared model storage for worker pods; retains its root runtime. | `Publication pending` | [Upstream](https://github.com/samba-team/samba) |
+| `samba` | `1.0.8` | `compute-plane` | Required | Provides shared model storage for worker pods; retains its root runtime. | `nvcr.io/nvidia/nvcf/samba:1.0.8` | [Upstream](https://github.com/samba-team/samba) |
 
 ### Observability Helm charts
 
