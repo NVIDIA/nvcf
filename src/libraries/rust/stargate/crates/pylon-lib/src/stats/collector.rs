@@ -4463,7 +4463,6 @@ mod tests {
                             RelayModelLoad {
                                 ready: load.ready,
                                 load: load.queue_size.map(|queue_size| RelayModelGauges {
-                                    input_tps: Some(20.0),
                                     output_tps: Some(40.0),
                                     queue_size,
                                     num_running_queries: load.num_running_queries,
@@ -4646,7 +4645,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_stats!(stats; queue_size: 0, num_running_queries: 0, last_mean_input_tps: 0.0);
+            // Load waits for the Relay; capacity is the configured local value.
+            assert_stats!(stats; queue_size: 0, num_running_queries: 0, last_mean_input_tps: 1.0);
         }
 
         /// 8: with the Relay as the load source, a local request observation
@@ -4684,8 +4684,10 @@ mod tests {
                 (7, 3),
                 "a local observation must not replace Relay gauges"
             );
+            // Capacity stays the configured local value: the Relay's rates
+            // measure demand.
             assert_stats!(stats;
-                last_mean_input_tps: 20.0,
+                last_mean_input_tps: 1.0,
                 output_tps: 40.0,
                 stats_observed_at_unix_ms: 1_000,
             );
@@ -4902,8 +4904,8 @@ mod tests {
         }
 
         /// 14: bring-up calibration measures this pylon's own capacity, so in
-        /// relay mode its snapshot still comes from local observations while
-        /// the published stats stay Relay-only.
+        /// relay mode its snapshot still comes from local observations, and
+        /// the published stats advertise that capacity, as without the Relay.
         #[tokio::test]
         async fn relay_mode_calibration_sees_local_capacity() {
             let config = StatsCollectorConfig {
@@ -4950,8 +4952,20 @@ mod tests {
                 .expect("snapshot request should complete")
                 .expect("current generation should have stats");
             assert_eq!(
-                published.last_mean_input_tps, 0.0,
-                "without a Relay window, published stats must not take local rates"
+                published.last_mean_input_tps, calibration.last_mean_input_tps,
+                "published stats must advertise the local capacity"
+            );
+            assert_eq!(
+                published.max_input_tps, calibration.max_input_tps,
+                "published stats must advertise the local peak capacity"
+            );
+            assert!(
+                calibration.output_tps > 0.0,
+                "calibration must see its own output rate"
+            );
+            assert_eq!(
+                published.output_tps, 0.0,
+                "without a Relay window, published load must not take local rates"
             );
             collector.shutdown().await;
         }

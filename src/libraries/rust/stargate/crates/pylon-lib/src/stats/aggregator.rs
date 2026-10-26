@@ -1307,7 +1307,8 @@ impl ModelMetricsState {
     ) -> CurrentModelStats {
         let mut stats = CurrentModelStats {
             // Capacity evidence still belongs to this local model generation;
-            // aggregate Relay rates do not provide calibration samples.
+            // aggregate Relay rates measure demand, not capacity.
+            last_mean_input_tps: self.last_mean_input_tps,
             max_input_tps: self.max_input_tps,
             max_output_tps: self.max_chat_output_tps,
             max_embedding_item_tps: self.max_embedding_item_tps,
@@ -1315,7 +1316,6 @@ impl ModelMetricsState {
             ..CurrentModelStats::default()
         };
         if let Some(load) = &self.relay_load {
-            stats.last_mean_input_tps = load.input_tps.unwrap_or_default();
             stats.output_tps = load.output_tps.unwrap_or_default();
             stats.queue_size = load.queue_size;
             stats.queued_input_size = load.queued_input_size;

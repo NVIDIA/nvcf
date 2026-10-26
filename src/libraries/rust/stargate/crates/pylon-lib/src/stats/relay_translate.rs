@@ -77,7 +77,6 @@ struct CounterBaseline {
     /// The window's Relay clock. Totals grow as the Relay receives frontend
     /// reports, so rates are measured on that clock, not the reports'.
     observed_at_unix_ms: u64,
-    input_tokens_total: Option<u64>,
     output_tokens_total: Option<u64>,
 }
 
@@ -295,15 +294,13 @@ impl RelayLoadTranslator {
             if let Some(gauges) = &mut gauges {
                 gauges.max_engine_concurrency =
                     max_engine_concurrency(catalog, &pools, &deployment.serving_pools);
-                let tokens = load.tokens.unwrap_or_default();
                 let current = CounterBaseline {
                     relay_incarnation,
                     observed_at_unix_ms: update.observed_ms,
-                    input_tokens_total: tokens.input_tokens_total,
-                    output_tokens_total: tokens.output_tokens_total,
+                    output_tokens_total: load.tokens.and_then(|tokens| tokens.output_tokens_total),
                 };
                 if let Some(previous) = self.counters.get(&key) {
-                    (gauges.input_tps, gauges.output_tps) = counter_rates(*previous, current);
+                    gauges.output_tps = output_tps(*previous, current);
                 }
                 next_counters.insert(key.clone(), current);
             }
@@ -345,8 +342,8 @@ impl RelayLoadTranslator {
 }
 
 /// The model's gauges when its load view is complete: the Relay heard from
-/// every expected frontend and reported every gauge. Rates and concurrency are
-/// left for the caller.
+/// every expected frontend and reported every gauge. The rate and concurrency
+/// are left for the caller.
 fn complete_gauges(
     load: &proto::LoadView,
     deployment: &proto::ModelDeploymentStatus,
@@ -363,7 +360,6 @@ fn complete_gauges(
     let awaiting = requests.requests_awaiting_first_token?;
     let generating = requests.requests_generating?;
     Some(RelayModelGauges {
-        input_tps: None,
         output_tps: None,
         queue_size: awaiting,
         queued_input_size: tokens.awaiting_first_token_input_tokens?,
@@ -401,14 +397,13 @@ fn max_engine_concurrency(
     })
 }
 
-/// Sums two namespaces' gauges. A rate or concurrency stays known only when
+/// Sums two namespaces' gauges. The rate and concurrency stay known only when
 /// known in both.
 fn add_gauges(total: RelayModelGauges, view: RelayModelGauges) -> Option<RelayModelGauges> {
     fn add(total: Option<u64>, view: Option<u64>) -> Option<u64> {
         total?.checked_add(view?)
     }
     Some(RelayModelGauges {
-        input_tps: total.input_tps.zip(view.input_tps).map(|(a, b)| a + b),
         output_tps: total.output_tps.zip(view.output_tps).map(|(a, b)| a + b),
         queue_size: total.queue_size.checked_add(view.queue_size)?,
         queued_input_size: total
@@ -430,29 +425,21 @@ fn add_gauges(total: RelayModelGauges, view: RelayModelGauges) -> Option<RelayMo
     })
 }
 
-/// Token rates between two windows of one Relay incarnation. A new
+/// The output token rate between two windows of one Relay incarnation. A new
 /// incarnation restarts its totals from zero, so it skips one sample; so does
 /// a counter that went backwards.
-fn counter_rates(
-    previous: CounterBaseline,
-    current: CounterBaseline,
-) -> (Option<f64>, Option<f64>) {
-    let elapsed_seconds = (previous.relay_incarnation == current.relay_incarnation)
-        .then(|| {
-            current
-                .observed_at_unix_ms
-                .checked_sub(previous.observed_at_unix_ms)
-        })
-        .flatten()
-        .filter(|elapsed_ms| *elapsed_ms > 0)
-        .map(|elapsed_ms| elapsed_ms as f64 / 1_000.0);
-    let rate = |previous: Option<u64>, current: Option<u64>| {
-        Some(current?.checked_sub(previous?)? as f64 / elapsed_seconds?)
-    };
-    (
-        rate(previous.input_tokens_total, current.input_tokens_total),
-        rate(previous.output_tokens_total, current.output_tokens_total),
-    )
+fn output_tps(previous: CounterBaseline, current: CounterBaseline) -> Option<f64> {
+    if previous.relay_incarnation != current.relay_incarnation {
+        return None;
+    }
+    let elapsed_ms = current
+        .observed_at_unix_ms
+        .checked_sub(previous.observed_at_unix_ms)
+        .filter(|elapsed_ms| *elapsed_ms > 0)?;
+    let tokens = current
+        .output_tokens_total?
+        .checked_sub(previous.output_tokens_total?)?;
+    Some(tokens as f64 / (elapsed_ms as f64 / 1_000.0))
 }
 
 fn supported_pool_id(pool_id: &proto::KvPoolId) -> bool {
@@ -669,13 +656,11 @@ mod tests {
         }
     }
 
-    fn with_totals(
+    fn with_output_total(
         mut model: proto::ModelServingLoad,
-        input_tokens_total: u64,
         output_tokens_total: u64,
     ) -> proto::ModelServingLoad {
         let tokens = model.load.as_mut().unwrap().tokens.as_mut().unwrap();
-        tokens.input_tokens_total = Some(input_tokens_total);
         tokens.output_tokens_total = Some(output_tokens_total);
         model
     }
@@ -708,7 +693,7 @@ mod tests {
         let mut translator = RelayLoadTranslator::default();
         let baseline = models()
             .into_iter()
-            .map(|model| with_totals(model, 0, 0))
+            .map(|model| with_output_total(model, 0))
             .collect();
         translator
             .translate(catalog, load_window(RELAY, 4_000, pools(), baseline))
@@ -846,7 +831,7 @@ mod tests {
     fn complete_load_reports_gauges_for_model_and_alias() {
         let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        let baseline = with_totals(model_load("model-a", vec![pool_id(1)]), 0, 0);
+        let baseline = with_output_total(model_load("model-a", vec![pool_id(1)]), 0);
         let first = translator
             .translate(
                 &catalog,
@@ -871,7 +856,6 @@ mod tests {
         let model = RelayModelLoad {
             ready: true,
             load: Some(RelayModelGauges {
-                input_tps: Some(40.0),
                 output_tps: Some(20.0),
                 queue_size: 2,
                 queued_input_size: 17,
@@ -896,8 +880,8 @@ mod tests {
     fn counter_reset_skips_one_rate_sample_then_recovers() {
         let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        let mut translate = |observed_ms, input, output| {
-            let model = with_totals(model_load("model-a", vec![pool_id(1)]), input, output);
+        let mut translate = |observed_ms, output| {
+            let model = with_output_total(model_load("model-a", vec![pool_id(1)]), output);
             translator
                 .translate(
                     &catalog,
@@ -905,18 +889,15 @@ mod tests {
                 )
                 .unwrap()
         };
-        translate(5_000, 40, 20);
+        translate(5_000, 20);
 
-        let reset = translate(6_000, 4, 2);
+        let reset = translate(6_000, 2);
         for gauges in gauges(&reset) {
-            assert_eq!((gauges.input_tps, gauges.output_tps), (None, None));
+            assert_eq!(gauges.output_tps, None);
         }
 
-        for gauges in gauges(&translate(7_000, 14, 7)) {
-            assert_eq!(
-                (gauges.input_tps, gauges.output_tps),
-                (Some(10.0), Some(5.0))
-            );
+        for gauges in gauges(&translate(7_000, 7)) {
+            assert_eq!(gauges.output_tps, Some(5.0));
         }
     }
 
@@ -924,8 +905,8 @@ mod tests {
     fn relay_restart_skips_one_rate_sample_even_when_totals_grow() {
         let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        let mut translate = |relay, observed_ms, input, output| {
-            let model = with_totals(model_load("model-a", vec![pool_id(1)]), input, output);
+        let mut translate = |relay, observed_ms, output| {
+            let model = with_output_total(model_load("model-a", vec![pool_id(1)]), output);
             translator
                 .translate(
                     &catalog,
@@ -933,21 +914,18 @@ mod tests {
                 )
                 .unwrap()
         };
-        translate(RELAY, 5_000, 40, 20);
+        translate(RELAY, 5_000, 20);
         let restarted = proto::RelayIdentity {
             relay_incarnation: 3,
             ..RELAY
         };
 
-        for gauges in gauges(&translate(restarted, 6_000, 100, 50)) {
-            assert_eq!((gauges.input_tps, gauges.output_tps), (None, None));
+        for gauges in gauges(&translate(restarted, 6_000, 50)) {
+            assert_eq!(gauges.output_tps, None);
         }
 
-        for gauges in gauges(&translate(restarted, 7_000, 110, 55)) {
-            assert_eq!(
-                (gauges.input_tps, gauges.output_tps),
-                (Some(10.0), Some(5.0))
-            );
+        for gauges in gauges(&translate(restarted, 7_000, 55)) {
+            assert_eq!(gauges.output_tps, Some(5.0));
         }
     }
 
@@ -984,7 +962,6 @@ mod tests {
         let translated = translate_with_rates(&catalog, pools, models);
         assert!(translated.models["model-a"].ready);
         for gauges in gauges(&translated) {
-            assert_eq!(gauges.input_tps, Some(80.0));
             assert_eq!(gauges.output_tps, Some(40.0));
             assert_eq!(gauges.num_running_queries, 8);
             assert_eq!(gauges.max_engine_concurrency, Some(16));
@@ -1015,7 +992,7 @@ mod tests {
         let translated = translate_with_rates(&catalog, pools, draining);
         assert!(translated.models["model-a"].ready);
         for gauges in gauges(&translated) {
-            assert_eq!(gauges.input_tps, Some(40.0));
+            assert_eq!(gauges.output_tps, Some(20.0));
             assert_eq!(gauges.num_running_queries, 4);
             assert_eq!(gauges.max_engine_concurrency, Some(8));
         }

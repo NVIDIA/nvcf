@@ -44,9 +44,10 @@ pub struct RelayModelLoad {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelayModelGauges {
-    /// Rates since the previous window of the same `relay_incarnation`; `None`
-    /// on the first window of an incarnation.
-    pub(crate) input_tps: Option<f64>,
+    /// The output token rate since the previous window of the same
+    /// `relay_incarnation`; `None` on the first window of an incarnation.
+    /// The Relay's input rate is demand, not capacity, so it is not carried:
+    /// `last_mean_input_tps` stays this pylon's own capacity evidence.
     pub(crate) output_tps: Option<f64>,
     pub(crate) queue_size: u64,
     pub(crate) queued_input_size: u64,
