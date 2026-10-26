@@ -701,7 +701,12 @@ labels to distinguish calls and failures:
   or `transport_error`.
 
 Until an upstream emits `NVCF-Error-Source`, its non-2xx responses use
-`unknown`. These labels apply only to client metrics. The server
+`unknown`. The header is not authenticated today: the invocation service
+relays worker response headers unchanged, so a function can set it. Treat
+`error_source` as authoritative only once the service sets the header and
+drops any value supplied by a worker.
+
+These labels apply only to client metrics. The server
 `gateway_proxy_outcome` and response-header behavior described above remain
 unchanged. Existing queries that aggregate client metrics by all labels will
 see separate inference, health, and error-source series.
