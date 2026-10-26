@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Lint and render every chart that has a CI values file.
+# Lint, render, and validate a package for every chart that has a CI values file.
 #
 # tools/ci/helm-validate-values/<name>.yaml holds the CI-only values for one
 # chart. The chart directory is not derivable from the file name, so the
@@ -22,11 +22,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 values_dir="${repo_root}/tools/ci/helm-validate-values"
 chart_root="${repo_root}/deploy/helm"
+package_roots=("${chart_root}" "${repo_root}/deploy/stacks" "${repo_root}/src/uis")
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --values-dir) values_dir="$2"; shift 2 ;;
-        --chart-root) chart_root="$2"; shift 2 ;;
+        --chart-root) chart_root="$2"; package_roots=("$2"); shift 2 ;;
         -h|--help)
             echo "usage: check-helm-charts [--values-dir DIR] [--chart-root DIR]"
             exit 0
@@ -118,7 +119,7 @@ if [ "${wiring_errors}" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Lint and render.
+# Lint, render, and validate packages.
 # ---------------------------------------------------------------------------
 
 if ! command -v helm >/dev/null 2>&1; then
@@ -127,40 +128,34 @@ if ! command -v helm >/dev/null 2>&1; then
     exit 1
 fi
 
-# helm dependency build writes charts/*.tgz into the working tree, and adds to
-# an existing charts/ directory rather than replacing it. deploy/helm already
-# has charts/ directories holding vendored subchart sources, so removing the
-# whole directory is not safe. Record the archives present before each fetch
-# and delete only the ones this run added, plus any charts/ directory it
-# created outright. A dirty tree then never leaks into a commit.
-created_dirs=()
-fetched_archives=()
+# Build dependencies and packages in copies. Helm may create Chart.lock or
+# replace an existing dependency archive; neither should mutate the source tree.
+package_work="$(mktemp -d)"
+trap 'rm -rf "${package_work}"' EXIT
 
-archives_in() {  # archives_in <chart dir> -> one archive path per line
-    find "$1/charts" -maxdepth 1 -type f -name '*.tgz' 2>/dev/null | sort
+copy_chart() {
+    local source="$1" destination="$2"
+    mkdir -p "${destination}" || return 1
+    cp -R "${source}/." "${destination}/"
 }
 
-record_new_archives() {  # record_new_archives <chart dir> <before list>
-    local chart_dir="$1" before="$2" archive
-    while IFS= read -r archive; do
-        [ -n "${archive}" ] || continue
-        case $'\n'"${before}"$'\n' in
-            *$'\n'"${archive}"$'\n'*) continue ;;
-        esac
-        fetched_archives+=("${archive}")
-    done < <(archives_in "${chart_dir}")
-}
+if ! command -v go >/dev/null 2>&1; then
+    echo "check-helm-charts: Go is required to build tools/chart-artifact." >&2
+    exit 1
+fi
+go build -C "${repo_root}/tools/chart-artifact" -o "${package_work}/chart-artifact" .
 
-cleanup() {
-    local path
-    for path in ${fetched_archives[@]+"${fetched_archives[@]}"}; do
-        rm -f "${path}"
-    done
-    for path in ${created_dirs[@]+"${created_dirs[@]}"}; do
-        rm -rf "${path}"
-    done
+package_and_check() {
+    local stem="$1" chart_dir="$2" output_dir="${package_work}/$1"
+    mkdir -p "${output_dir}"
+    helm package "${chart_dir}" --destination "${output_dir}" || return 1
+    local packages=("${output_dir}"/*.tgz)
+    if [[ ${#packages[@]} -ne 1 || ! -f "${packages[0]}" ]]; then
+        echo "${stem}: helm package must produce exactly one archive" >&2
+        return 1
+    fi
+    "${package_work}/chart-artifact" validate --metadata "${chart_dir}/Chart.yaml" "${packages[0]}"
 }
-trap cleanup EXIT
 
 run_step() {  # run_step <label> <command...> -> 0 on success, prints output on failure
     local label="$1"; shift
@@ -232,49 +227,71 @@ render_and_check() {  # render_and_check <stem> <chart dir> <values file>
     return "${rc}"
 }
 
+prepare_dependencies() {
+    local chart_dir="$1" stem="$2"
+    if grep -qE '^dependencies:' "${chart_dir}/Chart.yaml"; then
+        run_step "${stem}: helm dependency build" helm dependency build "${chart_dir}" || return 1
+    fi
+}
+
 failed=()
+packaged=()
 
 for stem in "${stems[@]}"; do
-    chart_dir="${chart_root}/$(chart_for "${stem}")"
+    source_chart_dir="${chart_root}/$(chart_for "${stem}")"
+    chart_dir="${package_work}/sources/${stem}"
+    copy_chart "${source_chart_dir}" "${chart_dir}"
     values_file="${values_dir}/${stem}.yaml"
     chart_failed=0
 
-    if grep -qE '^dependencies:' "${chart_dir}/Chart.yaml"; then
-        # The chart declares subcharts. helm lint only warns when they are
-        # absent, so without this fetch helm template fails on a missing
-        # dependency and lint alone would not have caught it.
-        before_archives=""
-        if [ -d "${chart_dir}/charts" ]; then
-            before_archives="$(archives_in "${chart_dir}")"
-        else
-            created_dirs+=("${chart_dir}/charts")
-        fi
-        run_step "${stem}: helm dependency build" \
-            helm dependency build "${chart_dir}" || chart_failed=1
-        # Record after a failed fetch too. helm can leave a partial download
-        # behind on error.
-        record_new_archives "${chart_dir}" "${before_archives}"
-    fi
+    prepare_dependencies "${chart_dir}" "${stem}" || chart_failed=1
 
     if [ "${chart_failed}" -eq 0 ]; then
         run_step "${stem}: helm lint" \
             helm lint "${chart_dir}" -f "${values_file}" || chart_failed=1
         run_step "${stem}: helm template" \
             render_and_check "${stem}" "${chart_dir}" "${values_file}" || chart_failed=1
+        run_step "${stem}: chart package validation" \
+            package_and_check "${stem}" "${chart_dir}" || chart_failed=1
     fi
 
     if [ "${chart_failed}" -eq 0 ]; then
+        packaged+=("${source_chart_dir}")
         printf 'ok   %s (%s)\n' "${stem}" "$(chart_for "${stem}")"
     else
         failed+=("${stem}")
     fi
 done
 
+# Package every source chart in publication scopes, including charts that do not
+# need CI render values. Chart.yaml is authoritative; nested dependency charts
+# are included in the parent package rather than checked as separate releases.
+"${package_work}/chart-artifact" discover "${package_roots[@]}" >"${package_work}/chart-roots"
+extra_index=0
+while IFS= read -r chart_dir; do
+    already_checked=0
+    for checked in "${packaged[@]}"; do
+        if [[ "${checked}" == "${chart_dir}" ]]; then already_checked=1; break; fi
+    done
+    [[ ${already_checked} -eq 0 ]] || continue
+    stem="${chart_dir#"${repo_root}/"}"
+    extra_index=$((extra_index + 1))
+    source_copy="${package_work}/sources/extra-${extra_index}"
+    copy_chart "${chart_dir}" "${source_copy}"
+    if prepare_dependencies "${source_copy}" "${stem}" &&
+       run_step "${stem}: chart package validation" package_and_check "extra-${extra_index}" "${source_copy}"; then
+        packaged+=("${chart_dir}")
+        printf 'ok   package %s\n' "${stem}"
+    else
+        failed+=("${stem}")
+    fi
+done <"${package_work}/chart-roots"
+
 echo
 if [ "${#failed[@]}" -ne 0 ]; then
-    printf 'check-helm-charts: %d of %d charts failed: %s\n' \
-        "${#failed[@]}" "${#stems[@]}" "${failed[*]}" >&2
+    printf 'check-helm-charts: %d chart checks failed: %s\n' \
+        "${#failed[@]}" "${failed[*]}" >&2
     exit 1
 fi
 
-printf 'check-helm-charts: %d charts linted and rendered\n' "${#stems[@]}"
+printf 'check-helm-charts: %d charts linted and rendered; %d chart packages validated\n' "${#stems[@]}" "${#packaged[@]}"

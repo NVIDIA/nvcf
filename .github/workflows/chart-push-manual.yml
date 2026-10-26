@@ -44,6 +44,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Build chart artifact verifier
+        run: go build -C tools/chart-artifact -o "${RUNNER_TEMP}/chart-artifact" .
+
       - name: Validate chart and resolve version
         id: meta
         env:
@@ -73,6 +80,7 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          CHART_ARTIFACT_TOOL: ${{ runner.temp }}/chart-artifact
         run: |
           set -euo pipefail
           if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
@@ -86,6 +94,7 @@ jobs:
             helm dependency build "${CHART_DIR}"
           fi
           out="$(mktemp -d)"
+          trap 'rm -rf "${out}"' EXIT
           helm package "${CHART_DIR}" --version "${VERSION}" -d "${out}"
           shopt -s nullglob
           tgzs=("${out}"/*.tgz)
@@ -94,5 +103,6 @@ jobs:
           fi
           dest="oci://${REGISTRY}"
           echo "[push] ${tgzs[0]} -> ${dest} (version ${VERSION})"
-          helm push "${tgzs[0]}" "${dest}"
+          chart_name="$(helm show chart "${CHART_DIR}" | awk '/^name:/ { print $2; exit }')"
+          bash tools/ci/chart-publication.sh publish-oci "${tgzs[0]}" "${chart_name}" "${VERSION}" "${dest}"
           echo "Pushed $(basename "${tgzs[0]}") to ${dest}"

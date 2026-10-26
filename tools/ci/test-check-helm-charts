@@ -102,10 +102,26 @@ make_fake_helm() {  # make_fake_helm -> directory holding a helm stub, printed t
     local dir; dir="$(mktemp -d)"
     cat >"${dir}/helm" <<'STUB'
 #!/usr/bin/env bash
-# Stub helm: dependency build drops an archive, everything else succeeds.
+# Stub Helm builds real package fixtures; registry dependency fetches stay stubbed.
 if [ "${1:-}" = "dependency" ]; then
     mkdir -p "${3}/charts"
     : >"${3}/charts/fetched-0.1.0.tgz"
+fi
+if [ "${1:-}" = "package" ]; then
+    name="$(awk '/^name:/ { print $2; exit }' "$2/Chart.yaml")"
+    version="$(awk '/^version:/ { print $2; exit }' "$2/Chart.yaml")"
+    stage="$(mktemp -d)"
+    mkdir -p "${stage}/${name}"
+    cp "$2/Chart.yaml" "${stage}/${name}/Chart.yaml"
+    case "${PACKAGE_FIXTURE:-valid}" in
+        missing) rm -rf "${stage}"; exit 0 ;;
+        corrupt) printf 'broken' >"$4/${name}-${version}.tgz" ;;
+        wrong-version)
+            printf 'name: %s\nversion: 9.9.9\n' "${name}" >"${stage}/${name}/Chart.yaml"
+            COPYFILE_DISABLE=1 tar -czf "$4/${name}-${version}.tgz" -C "${stage}" "${name}" ;;
+        *) COPYFILE_DISABLE=1 tar -czf "$4/${name}-${version}.tgz" -C "${stage}" "${name}" ;;
+    esac
+    rm -rf "${stage}"
 fi
 exit 0
 STUB
@@ -179,7 +195,7 @@ rm -rf "${fake_values_dir}" "${fake_chart_root}"
 make_fake_tree
 printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/Chart.yaml"
 run_with_fake_helm
-expect "fetched charts directory is removed" 0 "${fake_chart_count} charts linted and rendered"
+expect "fetched charts directory is removed" 0 "${fake_chart_count} charts linted and rendered; ${fake_chart_count} chart packages validated"
 if [ -e "${fake_chart_root}/openbao/helm/charts" ]; then
     printf 'FAIL created charts directory left behind\n'
     fail=1
@@ -196,7 +212,7 @@ printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/C
 mkdir -p "${fake_chart_root}/openbao/helm/charts/vendored-subchart"
 : >"${fake_chart_root}/openbao/helm/charts/vendored-0.1.0.tgz"
 run_with_fake_helm
-expect "existing charts directory run succeeds" 0 "${fake_chart_count} charts linted and rendered"
+expect "existing charts directory run succeeds" 0 "${fake_chart_count} charts linted and rendered; ${fake_chart_count} chart packages validated"
 if [ -e "${fake_chart_root}/openbao/helm/charts/fetched-0.1.0.tgz" ]; then
     printf 'FAIL fetched archive left in an existing charts directory\n'
     fail=1
@@ -210,6 +226,25 @@ else
     printf 'FAIL cleanup removed pre-existing charts directory contents\n'
     fail=1
 fi
+rm -rf "${fake_values_dir}" "${fake_chart_root}"
+
+
+# A successful helm package command is insufficient when its artifact is absent,
+# unreadable, or identifies a different version than the source chart.
+for fixture in missing corrupt wrong-version; do
+    make_fake_tree
+    export PACKAGE_FIXTURE="${fixture}"
+    run_with_fake_helm
+    expect "${fixture} package fails" 1 "chart package validation"
+    unset PACKAGE_FIXTURE
+    rm -rf "${fake_values_dir}" "${fake_chart_root}"
+done
+
+make_fake_tree
+mkdir -p "${fake_chart_root}/new-source-chart"
+printf 'apiVersion: v2\nname: newly-discovered\nversion: 1.0.0\n' >"${fake_chart_root}/new-source-chart/Chart.yaml"
+run_with_fake_helm
+expect "chart without render values is package-validated" 0 "$((fake_chart_count + 1)) chart packages validated"
 rm -rf "${fake_values_dir}" "${fake_chart_root}"
 
 exit "${fail}"

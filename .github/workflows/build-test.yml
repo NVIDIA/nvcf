@@ -104,6 +104,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
       # Pinned and checksum-verified rather than floating latest, so a chart
       # that renders today keeps rendering the same way tomorrow. helmfile
       # v1.2.0+ processes helmfile.d/ in parallel and breaks the ordering the
@@ -138,10 +142,13 @@ jobs:
           helm version --short
           helmfile --version
 
+      - name: Test chart artifact validation and registry guards
+        run: go test -C tools/chart-artifact ./...
+
       - name: Test the chart mapping guard
         run: bash tools/ci/test-check-helm-charts
 
-      - name: Lint and render every chart with a CI values file
+      - name: Lint, render, and validate chart packages
         run: ./tools/ci/check-helm-charts
 
       - name: Test NVCA chart schema and defaults
@@ -158,10 +165,6 @@ jobs:
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: tools/go-toolchain/go.mod
 
       - name: Verify bundled receipt release inventory
         env:
