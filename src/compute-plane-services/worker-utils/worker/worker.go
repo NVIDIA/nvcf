@@ -568,7 +568,7 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 				}, auth.GrpcTokenFromSource(w.nvcfClient.NvcfTokenProvider))
 				return err
 			}, w.config.FunctionVersionId, connectedRegion.Primary, connectedRegion.Secondaries, w.config.MaxRequestConcurrency)
-		})
+		}, zap.String("function_id", w.config.FunctionId), zap.String("nca_id", w.config.NcaId))
 		stopSetupAfterFunc()
 		cancelSetup()
 		if err != nil {
@@ -654,9 +654,11 @@ const natsConsumerSetupTimeout = 2 * time.Minute
 // maxElapsed passes, or setup fails with an error that retrying cannot fix.
 // Without it, a NATS disconnect longer than the consumer lookup's own short
 // retry window exits the worker process.
-func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, create func() (*consumer.GlobalNatsConsumer, error)) (*consumer.GlobalNatsConsumer, error) {
+func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, create func() (*consumer.GlobalNatsConsumer, error), logFields ...zap.Field) (*consumer.GlobalNatsConsumer, error) {
+	// 4s +/- 25% jitter keeps every wait at or under 5s
 	b := backoff.NewExponentialBackOff(
-		backoff.WithMaxInterval(5*time.Second),
+		backoff.WithMaxInterval(4*time.Second),
+		backoff.WithRandomizationFactor(0.25),
 		backoff.WithMaxElapsedTime(maxElapsed),
 	)
 	attempt := func() (*consumer.GlobalNatsConsumer, error) {
@@ -667,7 +669,8 @@ func newNatsConsumerWithRetry(ctx context.Context, maxElapsed time.Duration, cre
 		return c, err
 	}
 	return backoff.RetryNotifyWithData(attempt, backoff.WithContext(b, ctx), func(err error, next time.Duration) {
-		zap.L().Warn("failed to set up nats consumer, retrying", zap.Error(err), zap.Duration("retryIn", next))
+		fields := append([]zap.Field{zap.Error(err), zap.Duration("retryIn", next)}, logFields...)
+		zap.L().Warn("failed to set up nats consumer, retrying", fields...)
 	})
 }
 

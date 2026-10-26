@@ -26,6 +26,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -84,6 +86,23 @@ func TestNewNatsConsumerWithRetry(t *testing.T) {
 				assert.Equal(t, 1, attempts)
 			})
 		}
+	})
+
+	t.Run("retry warning includes the caller's log fields", func(t *testing.T) {
+		core, logs := observer.New(zap.WarnLevel)
+		t.Cleanup(zap.ReplaceGlobals(zap.New(core)))
+		attempts := 0
+		_, err := newNatsConsumerWithRetry(context.Background(), time.Minute, func() (*consumer.GlobalNatsConsumer, error) {
+			attempts++
+			if attempts < 2 {
+				return nil, errNatsDown
+			}
+			return &consumer.GlobalNatsConsumer{}, nil
+		}, zap.String("function_id", "fn-1"))
+		require.NoError(t, err)
+		entries := logs.FilterMessage("failed to set up nats consumer, retrying").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, "fn-1", entries[0].ContextMap()["function_id"])
 	})
 
 	t.Run("retries unavailable provisioning", func(t *testing.T) {

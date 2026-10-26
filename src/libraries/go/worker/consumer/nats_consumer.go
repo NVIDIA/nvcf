@@ -131,7 +131,7 @@ func getRegionalNatsConsumer(ctx context.Context, js jetstream.JetStream, region
 			consumer, err = js.Consumer(ctx, streamName, consumerName)
 		}
 		return err
-	}, backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(5*time.Second)))
+	}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(5*time.Second)), ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer %s for stream %s: %w", consumerName, streamName, err)
 	}
