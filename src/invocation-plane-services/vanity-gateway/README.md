@@ -686,6 +686,26 @@ are isolated from the primary request. Status codes and bodies are unchanged.
 Because the metric label set depends on the response status, the label values
 cannot be pre-initialized on the first scrape.
 
+### Outbound call classification
+
+The client histogram, `http_client_request_duration_seconds`, adds bounded
+labels to distinguish calls and failures:
+
+- `gateway_call_kind` is `inference` for proxied requests (including shadows)
+  and `health` for upstream readiness checks.
+- `error_source` is present on non-2xx responses. It accepts
+  `invocation_service` or `worker` from the upstream `NVCF-Error-Source`
+  response header. Missing or unrecognized values become `unknown`.
+- `error_type` (`error.type` in OpenTelemetry) classifies calls that return
+  a transport error without a usable HTTP response: `canceled`, `timeout`,
+  or `transport_error`.
+
+Until an upstream emits `NVCF-Error-Source`, its non-2xx responses use
+`unknown`. These labels apply only to client metrics. The server
+`gateway_proxy_outcome` and response-header behavior described above remain
+unchanged. Existing queries that aggregate client metrics by all labels will
+see separate inference, health, and error-source series.
+
 ### Request duration boundaries
 
 `http_server_request_duration_seconds` measures the full handler lifetime,

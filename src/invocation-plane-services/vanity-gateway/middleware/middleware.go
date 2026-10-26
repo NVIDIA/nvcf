@@ -68,7 +68,10 @@ func ServerTelemetryMiddleware(opts ...otelhttp.Option) func(http.Handler) http.
 }
 
 func TracedRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	traced := otelhttp.NewTransport(rt, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	traced := otelhttp.NewTransport(clientMetricsRoundTripper{rt}, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
 	return dispatchRoundTripper{traced}
 }
 
@@ -82,7 +85,7 @@ func (rt dispatchRoundTripper) RoundTrip(r *http.Request) (*http.Response, error
 		}
 		state.record(r.Context(), outcome)
 	}
-	return rt.RoundTripper.RoundTrip(r)
+	return rt.RoundTripper.RoundTrip(r.WithContext(clientMetricContext(r.Context())))
 }
 
 func defaultHTTPServerOptions() []otelhttp.Option {
