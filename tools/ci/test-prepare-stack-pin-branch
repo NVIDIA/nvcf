@@ -13,7 +13,9 @@ trap 'rm -rf -- "${work_dir}"' EXIT
 fail() { echo "test-prepare-stack-pin-branch: $*" >&2; exit 1; }
 
 # Both workflows hand the helper the tool that regenerates their bump commits,
-# and record the release tag in the line the helper reads it back from.
+# with --base so a regenerated bump skips a tag the default branch does not
+# contain, and record the release tag in the line the helper reads it back
+# from.
 workflow_has() {
   local workflow=$1 line=$2
   grep -Fq -- "${line}" "${repo_root}/.github/workflows/${workflow}" \
@@ -23,9 +25,13 @@ workflow_has() {
 # shellcheck disable=SC2016
 {
   workflow_has chart-version-bump.yml \
-    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper'
+    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}"'
+  workflow_has chart-version-bump.yml \
+    'tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}" \'
   workflow_has stack-pin-bump.yml \
-    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver'
+    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}"'
+  workflow_has stack-pin-bump.yml \
+    'tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}" --tag "${TAG}" --write'
   workflow_has chart-version-bump.yml \
     '-m "Opened by the chart version bump workflow on release of ${TAG}."'
   workflow_has stack-pin-bump.yml \
