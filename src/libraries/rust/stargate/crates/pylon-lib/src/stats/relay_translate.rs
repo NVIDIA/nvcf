@@ -387,7 +387,9 @@ fn complete_gauges(
 
 /// The scheduler concurrency of the model's decode-serving pools, known only
 /// when every serving pool is in the catalog and they all reported a complete
-/// view.
+/// view. The Relay sets a pool's limit only when every worker declares one, so
+/// a zero sum is a bad declaration, not a limit: it is unknown, which lets a
+/// configured fallback apply.
 fn max_engine_concurrency(
     catalog: &KvPoolCatalog,
     pools: &HashMap<proto::KvPoolId, LoadPool>,
@@ -405,9 +407,12 @@ fn max_engine_concurrency(
     if selected.is_empty() || !selected.iter().all(|pool| pool.complete) {
         return None;
     }
-    selected.iter().try_fold(0_u64, |total, pool| {
-        total.checked_add(pool.max_concurrency?)
-    })
+    selected
+        .iter()
+        .try_fold(0_u64, |total, pool| {
+            total.checked_add(pool.max_concurrency?)
+        })
+        .filter(|total| *total > 0)
 }
 
 /// Sums two namespaces' gauges. The rate and concurrency stay known only when
@@ -1033,6 +1038,23 @@ mod tests {
         for gauges in gauges(&translated) {
             assert_eq!(gauges.max_engine_concurrency, None);
         }
+    }
+
+    #[test]
+    fn a_zero_concurrency_limit_is_unknown_so_the_fallback_applies() {
+        let pool = || {
+            let mut pool = load_pool(1);
+            pool.deployment.as_mut().unwrap().max_concurrency = Some(0);
+            vec![pool]
+        };
+        let translated = translate_with_rates(&aggregated_catalog(&["model-a"]), pool, || {
+            vec![model_load("model-a", vec![pool_id(1)])]
+        });
+
+        let mut metrics = super::super::aggregator::ModelMetricsState::default();
+        metrics.relay_load = translated.models["model-a"].load.clone();
+        let stats = metrics.relay_stats(std::num::NonZeroU64::new(9));
+        assert_eq!(stats.max_engine_concurrency, Some(9));
     }
 
     #[test]
