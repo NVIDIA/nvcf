@@ -23,7 +23,6 @@ import (
 
 	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/mcp"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
@@ -72,6 +71,10 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 	messages := []models.ChatMessage{}
 
 	for _, item := range items {
+		if item.Raw != nil {
+			messages = append(messages, models.ChatMessage{Raw: item.Raw})
+			continue
+		}
 		switch item.Type {
 		case openairesponses.ItemTypeMessage, "":
 			if item.Role != "" && len(item.MessageContent) > 0 {
@@ -178,6 +181,10 @@ func convertMessageContentToChatContent(inputContent []openairesponses.InputCont
 	content := models.ChatMessageContent{}
 
 	for _, item := range inputContent {
+		if item.Raw != nil {
+			content = append(content, models.ContentPartRaw(item.Raw))
+			continue
+		}
 		switch item.Discriminator() {
 		case openairesponses.ContentTypeInputText:
 			if textContent, ok := item.GetTextContent(); ok && textContent.Text != "" {
@@ -252,22 +259,7 @@ func setServiceTier(
 	req *openairesponses.CreateRequest,
 	chatReq *models.ChatCompletionRequest,
 ) {
-	if req.ServiceTier == nil {
-		return
-	}
-
-	switch ptr.Deref(req.ServiceTier) {
-	case "auto", "default":
-		chatReq.ServiceTier = servicetier.Auto
-	case "on_demand":
-		chatReq.ServiceTier = servicetier.OnDemand
-	case "flex":
-		chatReq.ServiceTier = servicetier.Flex
-	case "batch":
-		chatReq.ServiceTier = servicetier.Batch
-	default:
-		chatReq.ServiceTier = servicetier.Auto
-	}
+	chatReq.ServiceTier = req.ServiceTier
 }
 
 func setMaxTokens(
@@ -332,6 +324,21 @@ func customToolFormatText(reqTools []openairesponses.Tool) string {
 		}
 	}
 	return text.String()
+}
+
+// estimatedTokenCountForRawTools counts tools that the gateway does not model,
+// including those nested in namespaces, by raw size. convertTools skips them.
+func estimatedTokenCountForRawTools(reqTools []openairesponses.Tool) int {
+	totalTokens := 0
+	for _, tool := range reqTools {
+		switch t := tool.(type) {
+		case *openairesponses.RawTool:
+			totalTokens += estimatedTokenCountForRawJSON(t.Raw)
+		case *openairesponses.NamespaceTool:
+			totalTokens += estimatedTokenCountForRawTools(t.Tools)
+		}
+	}
+	return totalTokens
 }
 
 func convertTools(reqTools openairesponses.ToolSlice) []models.ChatTool {

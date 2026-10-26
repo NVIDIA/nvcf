@@ -15,7 +15,7 @@ ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.28
 # ============================================================================
 # Go binaries cross-compile natively on the build host for the target
 # architecture (amd64 system nodes, arm64 Grace GPU nodes).
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm AS go-builder
 ARG TARGETARCH
 
 WORKDIR /app

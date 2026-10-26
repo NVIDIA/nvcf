@@ -210,16 +210,19 @@ The opt-in `umbrella` commands prepare a product manifest independently of docs
 editions. Existing `edition` commands, catalogs, registries, and publication
 defaults keep their current behavior.
 
-Review the exact three-stack catalog at a full source commit. Download the
-inventory asset from each selected stack release into one directory, and fetch
-the corresponding immutable source tags. The command validates those local tags
-and inventory bytes; it does not discover latest versions or publish anything.
+Release each stack independently through its component release workflow. Select
+three public stable releases, download their inventory assets into one directory,
+and fetch their immutable source tags. Use all three version flags to prepare a
+release-local candidate without changing the Development docs catalog:
 
 ```bash
 git fetch origin --tags
 go run -C tools/docs-version-sync . umbrella prepare \
-  --source <full-reviewed-catalog-commit> \
+  --source <full-reviewed-source-commit> \
   --version <umbrella-version> --change initial \
+  --self-managed-version <released-X.Y.Z> \
+  --compute-plane-version <released-X.Y.Z> \
+  --observability-version <released-X.Y.Z> \
   --helm-version <exact-3.x-version> --helmfile-version <exact-1.1.x-version> \
   --inventories /tmp/selected-stack-inventories \
   --out /tmp/umbrella-manifest.json
@@ -228,6 +231,26 @@ go run -C tools/docs-version-sync . umbrella check \
   --manifest /tmp/umbrella-manifest.json \
   --inventories /tmp/selected-stack-inventories
 ```
+
+The tool resolves each conventional stack tag to its commit and hashes the
+original inventory bytes. Do not enter source commits or inventory hashes by
+hand. All three version flags are required together; floating versions,
+prereleases, and build metadata are rejected. Local preparation and checks
+validate the supplied tags and inventories. Candidate CI and the final publisher
+also verify that those exact inventories belong to public stable GitHub releases.
+
+Schema 2 records the selected versions independently of `source_commit`'s
+Development catalog. That commit supplies reviewed provenance, `LICENSE`, and
+`NOTICE`; candidate CI and the final publisher require their target to descend
+from it. Each `compatible_with`
+entry locks an exact selected peer version. These constraints identify the
+combination to test, not evidence of runtime compatibility. No broad compatibility
+range is inferred.
+
+Omit all three version flags to retain schema 1 preparation from the exact
+three-stack catalog at `--source`. Schema 1 validation still requires matching
+catalog source identities and compatibility declarations. Existing manifests
+are not reinterpreted as release-local selections.
 
 The default status is `development`. Supply `--qualification` with the public
 review URL only after the complete combination is qualified. This records the
@@ -239,19 +262,20 @@ predecessor to `umbrella check`. Component downgrades and changes to an existing
 component version's source or inventory are rejected. A component major requires
 an umbrella major; a component minor requires at least an umbrella minor.
 
-Manifest schema version 1 uses these fields:
+Both manifest schemas use these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `version`, `previous_version`, `change` | Product version and deployment-contract transition |
 | `status`, `qualification` | Development candidate or qualified combination with public review |
-| `source_commit` | Reviewed catalog commit used to select the combination |
+| `schema_version` | `1` for catalog selection, `2` for release-local selection |
+| `source_commit` | Reviewed source commit; schema 1 also selects the catalog |
 | `toolchain.helm`, `toolchain.helmfile` | Exact supported render tool versions |
 | `stacks` | Exactly `control-plane`, `compute-plane`, and `observability` |
 | `stacks.<name>.version` | Independent component stack version |
 | `source_tag`, `source_commit` within each stack | Immutable component source identity |
 | `inventory_asset`, `inventory_sha256` within each stack | Canonical released inventory filename and digest of its exact bytes |
-| `compatible_with` within each stack | Reviewed requirements for the other two component stacks |
+| `compatible_with` within each stack | Catalog requirements in schema 1; exact selected peers in schema 2 |
 
 `control-plane` identifies the Self-Managed stack and retains the catalog's
 existing key. The three component versions do not have to match.
@@ -269,7 +293,21 @@ hash of an archive that embeds it.
 
 Documentation corrections do not change this product manifest or its version.
 This preparation command does not change the current immutable-docs-edition
-policy; maintained umbrella documentation requires the separate docs workflow.
+policy. Schema 1 maintained docs retain their separate workflow. Schema 2
+maintained docs preparation and activation are deferred until selected-inventory
+catalog support is available; see [the docs follow-up](https://github.com/NVIDIA/nvcf/issues/2798).
+
+Commit candidate pins at `deploy/releases/X.Y.Z/manifest.json`. Candidate CI
+checks changed manifests on pull requests and the matching `release-nvcf/X.Y.Z`
+branch, then uploads `umbrella-candidate-<sha>-<run-id>-<run-attempt>`. Pull
+request artifacts use the head commit SHA, not a synthetic merge commit. Tooling
+changes also validate existing unpublished manifests.
+Retain that SHA, manifest digest, and archive digest with QA evidence. Component
+release branches can continue independently while the selected combination is
+tested. Package checks do not qualify a product release. After qualification,
+rebuild the final manifest and assets, validate their final bytes, and use the
+existing fixed-target publisher from `main`; see
+[the release procedure](../../docs/dev/umbrella-releases.md).
 
 Run the command-level integration test and existing regressions with:
 
@@ -568,6 +606,10 @@ retries, reads every asset back, checks immutable reruns and corruption, and
 verifies trigger isolation. This test does not publish to GitHub.
 
 ### Same-version umbrella docs revisions
+
+This workflow supports schema 1 product manifests. Schema 2 preparation and
+activation return an error until the selected-inventory docs catalog follow-up
+is complete. Existing published docs and their correction workflow stay in place.
 
 Legacy `docs/releases/X.Y.Z` entries remain immutable. New registry entries
 can use `mode: umbrella` and a maintained `docs/versions/X.Y.Z` source. The

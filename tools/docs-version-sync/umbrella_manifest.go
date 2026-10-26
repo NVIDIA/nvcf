@@ -89,7 +89,7 @@ func marshalUmbrellaManifest(manifest *umbrellaManifest) ([]byte, error) {
 }
 
 func validateUmbrellaManifest(manifest *umbrellaManifest) error {
-	if manifest.SchemaVersion != 1 {
+	if manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2 {
 		return fmt.Errorf("unsupported umbrella manifest schema %d", manifest.SchemaVersion)
 	}
 	if !fullLowercaseCommitSHARe.MatchString(manifest.SourceCommit) {
@@ -109,6 +109,9 @@ func validateUmbrellaManifest(manifest *umbrellaManifest) error {
 		if !ok || !validStableStackVersion(stack.Version) {
 			return fmt.Errorf("umbrella manifest requires an exact stable %s version", name)
 		}
+		if manifest.SchemaVersion == 2 && !validReleaseLocalVersion(stack.Version) {
+			return fmt.Errorf("release-local %s version must be an exact stable X.Y.Z", name)
+		}
 		key, _ := stackKeyForPlane(name)
 		spec, _ := stackInventorySpecByKey(key)
 		if err := validateStackSourceReleaseForSpec(stack.source(), spec); err != nil {
@@ -124,6 +127,9 @@ func validateUmbrellaManifest(manifest *umbrellaManifest) error {
 			if peer != name && stack.CompatibleWith[peer] == "" {
 				return fmt.Errorf("umbrella %s requires compatibility with %s", name, peer)
 			}
+			if manifest.SchemaVersion == 2 && peer != name && stack.CompatibleWith[peer] != manifest.Stacks[peer].Version {
+				return fmt.Errorf("release-local %s requires exact selected %s peer version %s", name, peer, manifest.Stacks[peer].Version)
+			}
 		}
 	}
 	// Use the established combination and SemVer rules without altering a docs catalog.
@@ -135,6 +141,10 @@ func validateUmbrellaManifest(manifest *umbrellaManifest) error {
 
 func (stack umbrellaStack) source() stackSourceRelease {
 	return stackSourceRelease{Version: stack.Version, Tag: stack.SourceTag, Commit: stack.SourceCommit}
+}
+
+func validReleaseLocalVersion(version string) bool {
+	return validStableStackVersion(version) && !strings.Contains(version, "+")
 }
 
 func (manifest *umbrellaManifest) catalog() *Catalog {
@@ -177,19 +187,30 @@ func validateUmbrellaTransition(previous, current *umbrellaManifest) error {
 }
 
 func validateUmbrellaSources(root string, manifest *umbrellaManifest, inventoryDir string) (map[string]resolvedStackInventory, error) {
-	catalog, err := catalogAtCommit(root, manifest.SourceCommit)
-	if err != nil {
-		return nil, fmt.Errorf("umbrella reviewed source: %w", err)
+	var catalog *Catalog
+	if manifest.SchemaVersion == 1 {
+		var err error
+		catalog, err = catalogAtCommit(root, manifest.SourceCommit)
+		if err != nil {
+			return nil, fmt.Errorf("umbrella reviewed source: %w", err)
+		}
+	} else {
+		commit, err := gitOutput(root, "rev-parse", "--verify", manifest.SourceCommit+"^{commit}")
+		if err != nil || trimOutput(commit) != manifest.SourceCommit {
+			return nil, fmt.Errorf("umbrella reviewed source must identify an available commit: %s", manifest.SourceCommit)
+		}
 	}
 	inventories := map[string]resolvedStackInventory{}
 	for _, name := range releaseSetStackNames {
 		stack := manifest.Stacks[name]
-		reviewed, _ := catalog.ReleaseSet.Stacks.byName(name)
-		if reviewed.Version != stack.Version || reviewed.SourceTag != stack.SourceTag || reviewed.SourceCommit != stack.SourceCommit || reviewed.InventoryAsset != stack.InventoryAsset {
-			return nil, fmt.Errorf("umbrella %s differs from the reviewed catalog", name)
-		}
-		if err := validateUmbrellaCompatibilitySource(catalog, name, stack); err != nil {
-			return nil, err
+		if catalog != nil {
+			reviewed, _ := catalog.ReleaseSet.Stacks.byName(name)
+			if reviewed.Version != stack.Version || reviewed.SourceTag != stack.SourceTag || reviewed.SourceCommit != stack.SourceCommit || reviewed.InventoryAsset != stack.InventoryAsset {
+				return nil, fmt.Errorf("umbrella %s differs from the reviewed catalog", name)
+			}
+			if err := validateUmbrellaCompatibilitySource(catalog, name, stack); err != nil {
+				return nil, err
+			}
 		}
 		actual, err := gitOutput(root, "rev-parse", "--verify", "refs/tags/"+stack.SourceTag+"^{commit}")
 		if err != nil {

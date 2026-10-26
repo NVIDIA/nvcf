@@ -111,9 +111,10 @@ not.
    private NGC, gated Hugging Face or S3 artifact would otherwise read it
    without presenting any credential; nothing at admission tells a public
    artifact from a private one. The tenant is the value of the namespace
-   label `agent.modelVolume.tenantLabel`, which the platform that creates
-   namespaces sets and their users cannot edit, so every namespace of one
-   account (each redeploy of a function, for one) shares its volumes.
+   label `agent.tenantLabel` (or `agent.modelVolume.tenantLabel` when
+   set), which the platform that creates namespaces sets and their users
+   cannot edit, so every namespace of one account (each redeploy of a
+   function, for one) shares its volumes.
    With no label configured, or on a namespace without it, the namespace
    is the tenant.
 

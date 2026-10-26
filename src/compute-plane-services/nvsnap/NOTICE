@@ -33,7 +33,7 @@ This project's container images are built from upstream base images. The
 relevant licenses for those base images apply to the resulting container layers:
 
 - ubuntu:22.04                  - https://ubuntu.com/legal/intellectual-property-policy
-- golang:1.24-bookworm           - https://go.dev/LICENSE
+- golang:1.26.10-bookworm        - https://go.dev/LICENSE
 - gcr.io/distroless/static       - https://github.com/GoogleContainerTools/distroless
 
 ================================================================================

@@ -61,6 +61,11 @@ type HashInput struct {
 	// same arch — H100 SXM vs PCIe, both sm_90 — still share a capture.
 	// Empty when the node lookup failed (degrades to the old behavior).
 	GPUComputeCapability string `json:"gpu_compute_capability,omitempty"`
+	// Tenant is the tenant whose pod produced the capture (internal/tenant:
+	// the namespace's tenant label, else the namespace). A capture holds the
+	// tenant's model and data, filled with its credentials: two tenants
+	// running the same image and arguments never share one.
+	Tenant string `json:"tenant,omitempty"`
 
 	CaptureFormatVersion int `json:"capture_format_version"`
 }

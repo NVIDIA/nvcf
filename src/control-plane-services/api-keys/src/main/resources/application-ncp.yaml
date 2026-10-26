@@ -30,7 +30,8 @@ management:
     tracing:
       export:
         otlp:
-          endpoint: https://dummy:8282
+          # No trace backend by default. Trace export is disabled above.
+          endpoint: ""
           headers:
             lightstep-access-token: unused
 

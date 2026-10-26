@@ -45,7 +45,8 @@
             {
               "file": "environments/base.yaml",
               "paths": [
-                "global.nvcaOperator.selfManaged.otelCollector.imageTag"
+                "global.nvcaOperator.selfManaged.otelCollector.imageTag",
+                "global.nvcaOperator.byooOtelCollector.imageTag"
               ]
             }
           ]
@@ -471,7 +472,19 @@
       "service_name": "helm-nvcf-nvct-api",
       "initial_version": "1.4.4",
       "deploys": [
-        "cloud-tasks"
+        "cloud-tasks",
+        {
+          "service": "worker-init",
+          "values_paths": [
+            "nvctApi.remoteConfig.workerImageTags.init"
+          ]
+        },
+        {
+          "service": "worker-task",
+          "values_paths": [
+            "nvctApi.remoteConfig.workerImageTags.task"
+          ]
+        }
       ]
     },
     {
@@ -495,6 +508,24 @@
             "api.image.tag"
           ],
           "app_version": true
+        },
+        {
+          "service": "worker-init",
+          "values_paths": [
+            "api.remoteConfig.workerImageTags.init"
+          ]
+        },
+        {
+          "service": "worker-utils",
+          "values_paths": [
+            "api.remoteConfig.workerImageTags.utils"
+          ]
+        },
+        {
+          "service": "worker-llm-credentials",
+          "values_paths": [
+            "api.remoteConfig.workerImageTags.llmCredentials"
+          ]
         }
       ]
     },

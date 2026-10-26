@@ -309,3 +309,19 @@ func TestDiskUsageCountsAllocatedBlocks(t *testing.T) {
 		t.Errorf("disk usage = %d bytes, want about 1 MiB (holes are free)", got)
 	}
 }
+
+// Model volumes follow the agent's tenant label unless given their own, so
+// one setting scopes captures, caches and model volumes alike.
+func TestModelVolumeTenantLabel(t *testing.T) {
+	for _, tc := range []struct{ agent, volume, want string }{
+		{"", "", ""},
+		{"nca-id", "", "nca-id"},
+		{"nca-id", "account", "account"},
+		{"", "account", "account"},
+	} {
+		a := &Agent{config: Config{TenantLabel: tc.agent, ModelVolume: ModelVolumeConfig{TenantLabel: tc.volume}}}
+		if got := a.modelVolumeTenantLabel(); got != tc.want {
+			t.Errorf("agent %q, volume %q: %q, want %q", tc.agent, tc.volume, got, tc.want)
+		}
+	}
+}

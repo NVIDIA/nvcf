@@ -144,7 +144,7 @@ public class TelemetryMapperService {
         };
     }
 
-    private TelemetryTypeEnum toTelemetryTypeEnum(TelemetryType type) {
+    public TelemetryTypeEnum toTelemetryTypeEnum(TelemetryType type) {
         return switch (type) {
             case LOGS -> TelemetryTypeEnum.LOGS;
             case METRICS -> TelemetryTypeEnum.METRICS;

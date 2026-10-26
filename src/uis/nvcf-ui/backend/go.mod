@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend
 
-go 1.26.2
+go 1.26.10
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1

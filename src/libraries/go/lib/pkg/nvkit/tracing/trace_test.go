@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestSetupOTELTracer_Disabled(t *testing.T) {
@@ -36,11 +37,30 @@ func TestSetupOTELTracer_Disabled(t *testing.T) {
 }
 
 func TestSetupOTELTracer_NoEndpoint(t *testing.T) {
+	for name, endpoint := range map[string]string{
+		"empty":      "",
+		"whitespace": "  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tracer = nil
+			defer func() { tracer = nil }()
+
+			cfg := &OTELConfig{Enabled: true, Endpoint: endpoint, Attributes: Attributes{ServiceName: "test-svc"}}
+			provider, err := SetupOTELTracer(cfg)
+			require.NoError(t, err)
+			assert.IsType(t, noop.TracerProvider{}, provider)
+			assert.Nil(t, tracer, "no SDK tracer provider should be created without an endpoint")
+		})
+	}
+}
+
+func TestSetupOTELTracer_InvalidEndpoint(t *testing.T) {
 	tracer = nil
 	defer func() { tracer = nil }()
-	cfg := &OTELConfig{Enabled: true, Endpoint: ""}
+	cfg := &OTELConfig{Enabled: true, Endpoint: "%zz", Insecure: true}
 	_, err := SetupOTELTracer(cfg)
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.Nil(t, tracer)
 }
 
 func TestShutdown_NilTracer(t *testing.T) {

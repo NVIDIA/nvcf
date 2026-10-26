@@ -990,6 +990,109 @@ func TestRealStackPinsResolve(t *testing.T) {
 	}
 }
 
+func TestWorkerReleasesMoveOnlyTheirOwnAPIChartTags(t *testing.T) {
+	// The API charts compose each worker sidecar reference from one tag key
+	// per worker, and these edges point the bumper at those keys. worker-init
+	// is pinned by both API charts, so its release has to reach both. Each
+	// release must move its own key alone: the API image, appVersion, and the
+	// other workers' tags stay where they were.
+	root := repoRoot(t)
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatalf("checked-in release metadata does not load: %v", err)
+	}
+	want := map[string][]string{
+		"worker-init":            {"cloud-tasks-helm", "cloud-functions-helm"},
+		"worker-utils":           {"cloud-functions-helm"},
+		"worker-llm-credentials": {"cloud-functions-helm"},
+		"worker-task":            {"cloud-tasks-helm"},
+	}
+	for service, charts := range want {
+		t.Run(service, func(t *testing.T) {
+			deploys := m.ChartsDeploying(service)
+			var got []string
+			for _, d := range deploys {
+				got = append(got, d.ID)
+			}
+			if strings.Join(got, ",") != strings.Join(charts, ",") {
+				t.Fatalf("charts deploying %s = %v, want %v", service, got, charts)
+			}
+
+			f := newFixture(t, `{"services":[]}`)
+			copyRepoFile(t, root, f.root, MetadataPath)
+			for _, d := range deploys {
+				chartYAML, valuesYAML := ChartFiles(root, d.Path)
+				for _, file := range []string{chartYAML, valuesYAML} {
+					rel, err := filepath.Rel(root, file)
+					if err != nil {
+						t.Fatal(err)
+					}
+					copyRepoFile(t, root, f.root, rel)
+				}
+			}
+
+			release := "99.0.0"
+			var out, errOut bytes.Buffer
+			code, err := Run(f.root, "src/compute-plane-services/"+service+"/v"+release, true, &out, &errOut)
+			if err != nil || code != 0 {
+				t.Fatalf("want a clean bump, got %d, %v\n%s%s", code, err, out.String(), errOut.String())
+			}
+
+			for _, d := range deploys {
+				if len(d.ValuesPaths) != 1 || len(d.ValuesFiles) != 0 || d.AppVersion {
+					t.Fatalf("%s should own exactly one values path in %s and not appVersion", service, d.ID)
+				}
+				chartYAML, valuesYAML := ChartFiles(root, d.Path)
+				bumpedChartYAML, bumpedValuesYAML := ChartFiles(f.root, d.Path)
+				if readFile(t, bumpedChartYAML) != readFile(t, chartYAML) {
+					t.Errorf("%s: Chart.yaml must not move on a worker release", d.ID)
+				}
+				before := strings.Split(readFile(t, valuesYAML), "\n")
+				after := strings.Split(readFile(t, bumpedValuesYAML), "\n")
+				line, value, err := resolveValuesPath(after, d.ValuesPaths[0])
+				if err != nil {
+					t.Fatalf("%s: %v", d.ID, err)
+				}
+				if value != release {
+					t.Errorf("%s: %s = %s, want %s", d.ID, d.ValuesPaths[0], value, release)
+				}
+				if len(before) != len(after) {
+					t.Fatalf("%s: values.yaml changed length", d.ID)
+				}
+				for i := range before {
+					if i != line && before[i] != after[i] {
+						t.Errorf("%s: line %d moved but belongs to something else:\n-%s\n+%s", d.ID, i+1, before[i], after[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func copyRepoFile(t *testing.T, from, to, rel string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(from, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(to, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func TestBumpWorkflowStagesEveryDeclaredTarget(t *testing.T) {
 	// The compute-plane stack declared its collector pin through values_files
 	// and the bumper rewrote it, but the workflow checked and staged only
