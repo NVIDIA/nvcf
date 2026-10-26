@@ -242,14 +242,14 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 ```bash
 # Set stack versions
 export STACK_VERSION="1.0.7"
-export COMPUTE_STACK_VERSION="1.0.3"
+export COMPUTE_STACK_VERSION="1.0.4"
 export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
 # Publication pending: nvcf-self-managed-stack 1.0.7 is not yet available for download.
 
 # Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 1.0.3 is not yet available for download.
+# Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
 
 # Download a specific observability stack version
 ngc registry resource download-version \
@@ -286,7 +286,7 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-compute-plane-stack 1.0.3 is not yet available for download.
+# Publication pending: nvcf-compute-plane-stack 1.0.4 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}

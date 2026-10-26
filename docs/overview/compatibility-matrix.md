@@ -18,7 +18,7 @@ the three source releases, inventory hashes and artifact pins for this candidate
 | Stack | Selected version | Source tag |
 | --- | --- | --- |
 | [Self-managed (control plane)](../self-managed/installation.md) | `1.0.7` | `deploy/stacks/self-managed/v1.0.7` |
-| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.3` | `deploy/stacks/nvcf-compute-plane/v1.0.3` |
+| [Compute plane](../compute-plane/cluster-management/index.md) | `1.0.4` | `deploy/stacks/nvcf-compute-plane/v1.0.4` |
 | [Observability](../observability/observability.md) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 {/*docs-version-sync:END compatibility-matrix*/}

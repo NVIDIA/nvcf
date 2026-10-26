@@ -1,7 +1,7 @@
 # NVIDIA Cloud Functions
 
 <Warning>
-NVCF 1.0.4 candidate, pending QA: Self-Managed 1.0.7, Compute Plane 1.0.3
+NVCF 1.0.4 candidate, pending QA: Self-Managed 1.0.7, Compute Plane 1.0.4
 and Observability 1.0.0. Start with the
 [upgrade notes](release-notes/1.0.2-to-1.0.4-upgrade.md) and
 [selected artifact manifest](manifest.md). This preview does not activate a

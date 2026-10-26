@@ -8,11 +8,11 @@
   },
   "stacks": {
     "compute-plane": {
-      "version": "1.0.3",
-      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.3",
-      "source_commit": "df5950486340163c7830c31aa99addcd838adb68",
+      "version": "1.0.4",
+      "source_tag": "deploy/stacks/nvcf-compute-plane/v1.0.4",
+      "source_commit": "aae64c9a13f2f3d0192629f2f501ddc59d9f72c9",
       "inventory_asset": "nvcf-compute-plane-stack-inventory.json",
-      "inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/nvcf-compute-plane/v1.0.3/nvcf-compute-plane-stack-inventory.json"
+      "inventory_url": "https://github.com/NVIDIA/nvcf/releases/download/deploy/stacks/nvcf-compute-plane/v1.0.4/nvcf-compute-plane-stack-inventory.json"
     },
     "control-plane": {
       "version": "1.0.7",

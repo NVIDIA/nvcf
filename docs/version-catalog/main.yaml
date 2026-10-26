@@ -17,10 +17,6 @@ registries:
     host: nvcr.io
     namespace: nvidia/nvcf
 publications:
-  - name: samba
-    type: image
-    version: 1.0.8
-    registry: public-images
   - name: byoo-otel-collector
     type: image
     version: 0.160.0-nv-0.2.9
@@ -282,6 +278,7 @@ publication_pending:
   - nvct-service-oss
   - pylon
   - reval-server
+  - samba
   - stargate
 manifest:
   entries:
@@ -930,9 +927,9 @@ release_set:
       documentation_version: dev
       status: development
     compute-plane:
-      version: 1.0.3
-      source_tag: deploy/stacks/nvcf-compute-plane/v1.0.3
-      source_commit: df5950486340163c7830c31aa99addcd838adb68
+      version: 1.0.4
+      source_tag: deploy/stacks/nvcf-compute-plane/v1.0.4
+      source_commit: aae64c9a13f2f3d0192629f2f501ddc59d9f72c9
       inventory_asset: nvcf-compute-plane-stack-inventory.json
       documentation_version: dev
       status: development
@@ -947,17 +944,17 @@ compatibility:
   - stack: control-plane
     version: 1.0.7
     compatible_with:
-      compute-plane: 1.0.3
+      compute-plane: 1.0.4
       observability: 1.0.0
   - stack: compute-plane
-    version: 1.0.3
+    version: 1.0.4
     compatible_with:
       control-plane: 1.0.7
       observability: 1.0.0
   - stack: observability
     version: 1.0.0
     compatible_with:
-      compute-plane: 1.0.3
+      compute-plane: 1.0.4
       control-plane: 1.0.7
 stack:
   name: nvcf-self-managed-stack
@@ -1379,7 +1376,7 @@ artifacts:
   - name: samba
     type: image
     registry: public-images
-    version: 1.0.8
+    version: 1.0.9
     stacks:
       - compute-plane
     requirement: required
@@ -1406,6 +1403,13 @@ artifacts:
     stacks:
       - observability
     requirement: required
+  - name: nvcf-cluster-topology
+    type: chart
+    registry: public-helm
+    version: 0.1.0
+    stacks:
+      - compute-plane
+    requirement: required
   - name: nvcf-default-monitors
     type: chart
     registry: public-helm
@@ -1427,13 +1431,6 @@ artifacts:
     version: 0.1.0
     stacks:
       - self-managed
-    requirement: required
-  - name: nvcf-cluster-topology
-    type: chart
-    registry: public-helm
-    version: 0.1.0
-    stacks:
-      - compute-plane
     requirement: required
   - name: dynamo-platform
     type: chart
@@ -1667,7 +1664,7 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 1.0.3
+    version: 1.0.4
     stacks:
       - compute-plane
   - name: nvcf-observability-stack
