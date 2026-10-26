@@ -26,5 +26,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .compile_protos(&["proto/stargate.proto"], &["proto"])?;
     tonic_prost_build::configure().compile_protos(&["proto/llm_gateway.proto"], &["proto"])?;
+    tonic_prost_build::configure().compile_protos(&["proto/dynamo_kvrelay.proto"], &["proto"])?;
     Ok(())
 }
