@@ -180,8 +180,6 @@ functionAutoscaler:
 # the LLM addon is enabled, the stack defaults the Pylon image from
 # global.sidecars (or global.image) at version 0.25.0.
 api:
-  # Set NVCF_TELEMETRY_ENABLED: "false" in env to reject telemetry creation and
-  # function telemetry links when worker telemetry export is unavailable. Default: true.
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
