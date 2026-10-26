@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -740,7 +741,12 @@ impl StatsAggregator {
                 .metrics
                 .relay_observed_at_unix_ms
                 .max(update.observed_at_unix_ms);
-            updates.push((state.generation.clone(), state.metrics.relay_stats()));
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
         }
     }
 
@@ -754,7 +760,12 @@ impl StatsAggregator {
                 .metrics
                 .relay_observed_at_unix_ms
                 .max(update.observed_at_unix_ms);
-            updates.push((state.generation.clone(), state.metrics.relay_stats()));
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
         }
     }
 
@@ -767,7 +778,12 @@ impl StatsAggregator {
             state.metrics.relay_load = None;
             state.metrics.relay_kv = None;
             state.metrics.relay_observed_at_unix_ms = 0;
-            updates.push((state.generation.clone(), state.metrics.relay_stats()));
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
         }
     }
 
@@ -1285,7 +1301,10 @@ pub(super) struct ModelStatsSnapshotInputs {
 }
 
 impl ModelMetricsState {
-    pub(super) fn relay_stats(&self) -> CurrentModelStats {
+    pub(super) fn relay_stats(
+        &self,
+        fallback_max_engine_concurrency: Option<NonZeroU64>,
+    ) -> CurrentModelStats {
         let mut stats = CurrentModelStats {
             // Capacity evidence still belongs to this local model generation;
             // aggregate Relay rates do not provide calibration samples.
@@ -1323,6 +1342,9 @@ impl ModelMetricsState {
                 .stats_capabilities
                 .push("machine.kv_cache.dynamo_relay".to_string());
         }
+        stats.max_engine_concurrency = stats
+            .max_engine_concurrency
+            .or(fallback_max_engine_concurrency.map(NonZeroU64::get));
         stats
     }
 

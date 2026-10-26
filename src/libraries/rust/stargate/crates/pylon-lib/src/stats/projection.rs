@@ -98,7 +98,9 @@ impl StatsAggregator {
                 .per_model
                 .get(model_id)
                 .map_or_else(CurrentModelStats::default, |state| {
-                    state.metrics.relay_stats()
+                    state
+                        .metrics
+                        .relay_stats(self.config.fallback_max_engine_concurrency)
                 });
         }
         self.local_snapshot(model_id)

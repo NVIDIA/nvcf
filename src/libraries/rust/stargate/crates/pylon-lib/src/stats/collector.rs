@@ -393,16 +393,18 @@ async fn run_stats_collector(
                     &mut stats_aggregator_latest_models,
                 );
                 if rx.is_disconnected() && rx.is_empty() {
-                    aggregator.apply_update_into(
-                        StatsAggregatorUpdate::RelayLost,
+                    publish_relay_loss(
+                        &mut aggregator,
+                        &runtime_state,
                         &mut stats_aggregator_updated_models,
                     );
                     stats_update_rx = None;
+                } else {
+                    publish_model_stats_updates(
+                        &runtime_state,
+                        std::mem::take(&mut stats_aggregator_updated_models),
+                    );
                 }
-                publish_model_stats_updates(
-                    &runtime_state,
-                    std::mem::take(&mut stats_aggregator_updated_models),
-                );
             }
         }
         tokio::select! {
@@ -445,14 +447,10 @@ async fn run_stats_collector(
             } => {
                 let Some(update) = update else {
                     if config.relay_enabled {
-                        stats_aggregator_updated_models.clear();
-                        aggregator.apply_update_into(
-                            StatsAggregatorUpdate::RelayLost,
-                            &mut stats_aggregator_updated_models,
-                        );
-                        publish_model_stats_updates(
+                        publish_relay_loss(
+                            &mut aggregator,
                             &runtime_state,
-                            std::mem::take(&mut stats_aggregator_updated_models),
+                            &mut stats_aggregator_updated_models,
                         );
                     }
                     stats_update_rx = None;
@@ -524,6 +522,16 @@ async fn run_stats_collector(
             }
         }
     }
+}
+
+fn publish_relay_loss(
+    aggregator: &mut StatsAggregator,
+    runtime_state: &PylonRuntimeState,
+    updates: &mut Vec<(ModelGeneration, CurrentModelStats)>,
+) {
+    updates.clear();
+    aggregator.apply_update_into(StatsAggregatorUpdate::RelayLost, updates);
+    publish_model_stats_updates(runtime_state, std::mem::take(updates));
 }
 
 fn publish_observation_event(
@@ -4522,6 +4530,95 @@ mod tests {
                 request_id,
                 RequestObservationState::Queued,
             )
+        }
+
+        #[tokio::test]
+        async fn relay_concurrency_uses_configured_fallback_until_an_engine_limit_arrives() {
+            let collector = RunningCollector::spawn(
+                config!(relay_enabled: true, fallback_max_engine_concurrency: NonZeroU64::new(9)),
+                None,
+                true,
+            );
+            for (observed_at, limit, expected) in [
+                (1_000, None, Some(9)),
+                (2_000, Some(4), Some(4)),
+                (3_000, None, Some(9)),
+            ] {
+                let StatsAggregatorUpdate::RelayLoad(mut update) =
+                    relay_load(observed_at, &[busy("model-a")])
+                else {
+                    unreachable!()
+                };
+                update
+                    .models
+                    .get_mut("model-a")
+                    .unwrap()
+                    .load
+                    .as_mut()
+                    .unwrap()
+                    .max_engine_concurrency = limit;
+                collector
+                    .send_update(StatsAggregatorUpdate::RelayLoad(update))
+                    .await;
+                let stats = collector
+                    .wait_for_stats("Relay limit should be applied", |stats| {
+                        stats.stats_observed_at_unix_ms == observed_at
+                    })
+                    .await;
+                assert_eq!(stats.max_engine_concurrency, expected);
+
+                let generation = collector
+                    .runtime_state
+                    .current_generation("model-a")
+                    .unwrap();
+                let snapshot = collector
+                    .handle
+                    .control()
+                    .flush_and_snapshot(&generation)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(snapshot.max_engine_concurrency, expected);
+            }
+            collector
+                .send_update(StatsAggregatorUpdate::RelayLost)
+                .await;
+            let stats = collector
+                .wait_for_stats("Relay loss clears its observation", |stats| {
+                    stats.stats_observed_at_unix_ms == 0
+                })
+                .await;
+            assert_eq!(stats.max_engine_concurrency, Some(9));
+        }
+
+        #[tokio::test]
+        async fn a_closed_relay_update_channel_clears_stats_and_readiness() {
+            let mut collector = spawn_relay().await;
+            collector
+                .send_update(relay_load(1_000, &[busy("model-a")]))
+                .await;
+            collector
+                .send_update(relay_kv(1_000, &[("model-a", 1_000, 400)]))
+                .await;
+            collector
+                .wait_for_stats("Relay views should arrive before disconnect", |stats| {
+                    stats.queue_size == 7 && stats.kv_cache_capacity_tokens == 1_000
+                })
+                .await;
+
+            drop(collector.stats_update_tx.take());
+            let stats = collector
+                .wait_for_stats("a closed update channel loses the Relay view", |stats| {
+                    stats.queue_size == 0 && stats.kv_cache_capacity_tokens == 0
+                })
+                .await;
+            assert_eq!(stats.stats_observed_at_unix_ms, 0);
+            assert_eq!(
+                collector
+                    .runtime_state
+                    .request_generation_admission("model-a"),
+                RequestGenerationAdmission::Unavailable
+            );
         }
 
         #[tokio::test]
