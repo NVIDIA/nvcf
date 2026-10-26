@@ -4970,51 +4970,64 @@ mod tests {
             collector.shutdown().await;
         }
 
-        /// 13: a request-observation stream that never runs dry must not
-        /// keep Relay updates from being applied.
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn relay_updates_apply_under_a_sustained_observation_flood() {
-            let collector = spawn_relay().await;
-            let runtime_state = collector.runtime_state.clone();
-            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flood = tokio::spawn({
-                let stop = stop.clone();
-                async move {
-                    for sequence in 0_u64.. {
-                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                            return;
-                        }
-                        observe_request_with_test_metadata(
-                            &runtime_state,
-                            queued_locally(&format!("flood-{sequence}")),
-                        );
-                        if sequence % 64 == 0 {
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                }
-            });
-            tokio::task::yield_now().await;
+        /// 13: a queued Relay update is applied ahead of queued local request
+        /// observations. The observation channel ends after its backlog, so
+        /// a collector that worked off every observation before polling for
+        /// Relay updates would stop without ever applying the Relay view.
+        #[tokio::test]
+        async fn a_relay_update_is_applied_ahead_of_queued_observations() {
+            let config = StatsCollectorConfig {
+                relay_enabled: true,
+                ..StatsCollectorConfig::default()
+            };
+            let runtime_state = PylonRuntimeState::new(
+                stargate_proto::pb::InferenceServerStatus::Active,
+                &["model-a".to_string()],
+            );
+            let generation = runtime_state.current_generation("model-a");
+            let (observation_tx, observation_rx) = flume::unbounded();
+            for sequence in 0..32 {
+                observation_tx
+                    .send(RequestObservationEvent {
+                        observation: queued_locally(&format!("queued-{sequence}")),
+                        generation: generation.clone(),
+                        changed_generations: Vec::new(),
+                        input_interval: None,
+                        input_tokens_explicit: false,
+                        cached_input_tokens: None,
+                        input_usage_expected: false,
+                        output_calibration: crate::runtime_state::OutputCalibrationFacts::default(),
+                        upstream_duration: None,
+                    })
+                    .unwrap();
+            }
+            drop(observation_tx);
+            let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(&config);
+            stats_update_tx
+                .send_async(relay_load(1_000, &[busy("model-a")]))
+                .await
+                .unwrap();
 
-            collector
-                .send_update(relay_load(1_000, &[busy("model-a")]))
-                .await;
-            let applied = tokio::time::timeout(seconds(1), async {
-                loop {
-                    if collector
-                        .runtime_state
-                        .model_stats("model-a")
-                        .is_some_and(|stats| stats.queue_size == 7)
-                    {
-                        return;
-                    }
-                    tokio::time::sleep(milliseconds(1)).await;
-                }
-            })
-            .await;
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            flood.await.expect("flood task should not panic");
-            applied.expect("a Relay update should apply despite a continuous observation flood");
+            let mut collector = start_stats_collector_with_engine_stats(
+                config,
+                observation_rx,
+                Some(stats_update_rx),
+                runtime_state.clone(),
+            );
+            tokio::time::timeout(seconds(5), collector.wait_for_exit())
+                .await
+                .expect("the collector should stop once observations end")
+                .expect("the collector should not panic");
+            drop(stats_update_tx);
+
+            let stats = runtime_state
+                .model_stats("model-a")
+                .expect("model-a should stay advertised");
+            assert_eq!(
+                (stats.queue_size, stats.num_running_queries),
+                (7, 3),
+                "the queued Relay update was never applied"
+            );
         }
     }
 }
