@@ -2,10 +2,10 @@
 name: codeql
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
     # Only run when compiled source or this workflow changes. Docs, charts,
     # migrations, and other non-code PRs skip the scan (the Go autobuild is
-    # expensive). The weekly schedule still does a full unconditional scan.
+    # expensive). The weekly schedule scans the default branch unconditionally.
     paths:
       - "**/*.go"
       - "**/*.rs"
@@ -16,7 +16,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/codeql.yml"
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**', 'release/**']
     paths:
       - "**/*.go"
       - "**/*.rs"
@@ -27,7 +27,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/codeql.yml"
   schedule:
-    # Weekly full scan, Monday 03:27 UTC.
+    # Weekly full scan of the default branch, Monday 03:27 UTC.
     - cron: "27 3 * * 1"
 
 concurrency:
@@ -44,7 +44,7 @@ jobs:
   # pre-merge (today Rust; Java joins as build-mode none when it lands). Go is
   # excluded on PRs: its traced autobuild compiles the whole umbrella (~20+ min)
   # for advisory-only feedback (fail-on-findings is false). Go coverage comes
-  # from every push to main and the weekly schedule, which scan everything.
+  # from eligible main/maintenance pushes and the default-branch weekly scan.
   # Emits a dynamic matrix so no job-level `if` referencing `matrix` is needed
   # (that context is not allowed in a job `if`). Uses the GitHub API, not a
   # third-party action (org allowlist).
@@ -68,7 +68,7 @@ jobs:
           go=false; rust=false; java=false
           files=""
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            # Pushes to main and the weekly schedule scan everything, Go included.
+            # Eligible pushes and the weekly schedule scan everything, Go included.
             go=true; rust=true; java=true
           else
             # Never silently skip: if the changed-file lookup fails, scan both
