@@ -245,6 +245,14 @@ vault:
   vaultAddress: https://vault.example.com
   # Used only when vault.enabled=true by the containerd daemonset.
   certLocation: ""
+  # Lifetime requested for the signing intermediate that Vault issues to each
+  # pod. Always sent explicitly: a request with no ttl takes the PKI mount's
+  # default, which Vault rejects whenever that default outlives the signing
+  # CA, and a pod that restarts into that rejection never leaves Init.
+  # The vault-agent sidecar re-issues the certificate at about 80 percent of
+  # this lifetime and reloads nginx without a pod restart, so keep it short
+  # (Vault PKI duration format: 336h is 14 days).
+  intermediateCertTTL: 336h
 
 # CRI-O configuration.
 # When CRI-O is detected on nodes, the DaemonSet configures registry mirrors.
