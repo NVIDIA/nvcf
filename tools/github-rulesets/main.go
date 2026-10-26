@@ -43,6 +43,7 @@ func (g github) request(endpoint, method string, payload Object, paginate bool, 
 	return json.Unmarshal(data, output)
 }
 
+// Snapshot reads only repository-owned rulesets named by the policy.
 func (g github) Snapshot(policy Policy) ([]Object, error) {
 	names := map[string]bool{}
 	for _, desired := range policy.Rulesets {
@@ -73,6 +74,7 @@ func (g github) Snapshot(policy Policy) ([]Object, error) {
 	return selected, nil
 }
 
+// Write creates or updates exactly the ruleset identified by a reviewed change.
 func (g github) Write(change Change) error {
 	endpoint, method := g.endpoint, "POST"
 	if change.ID != nil {

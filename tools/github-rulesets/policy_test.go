@@ -59,6 +59,7 @@ type fakeRulesetAPI struct {
 	writeErr    error
 }
 
+// Snapshot records reads and allows tests to simulate concurrent changes.
 func (f *fakeRulesetAPI) Snapshot(policy Policy) ([]Object, error) {
 	f.reads++
 	if f.beforeRead != nil {
@@ -78,6 +79,7 @@ func (f *fakeRulesetAPI) Snapshot(policy Policy) ([]Object, error) {
 	return result, nil
 }
 
+// Write records a successful update and supports readback-failure injection.
 func (f *fakeRulesetAPI) Write(change Change) error {
 	if f.writeErr != nil {
 		return f.writeErr
