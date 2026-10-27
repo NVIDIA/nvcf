@@ -125,6 +125,10 @@ identity=(-c user.name="Test User" -c user.email="test@example.com")
 new_repo() {
   local dir=$1 version=$2
   git init --quiet --initial-branch=main "${dir}"
+  # The tool commits with the repository's identity, as the workflows set it
+  # before running it. A runner has no global one.
+  git -C "${dir}" config user.name "github-actions[bot]"
+  git -C "${dir}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
   mkdir -p "${dir}/${stack}/helmfile.d" "${dir}/${stack}/tests" "${dir}/deploy/helm/chart"
   printf 'dist/\n' > "${dir}/.gitignore"
   printf 'version: %s\n' "${version}" > "${dir}/${helmfile}"
