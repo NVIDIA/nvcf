@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "api",
+    srcs = [
+        "cluster.go",
+        "errors.go",
+        "mcs.go",
+        "pool.go",
+        "server.go",
+        "validate.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/api",
+    visibility = ["//src/control-plane-services/global-discovery:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
+        "//src/control-plane-services/global-discovery/internal/clock",
+        "//src/control-plane-services/global-discovery/internal/convert",
+        "//src/control-plane-services/global-discovery/internal/registry",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/view",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//protoadapt",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":api",
+    visibility = ["//src/control-plane-services/global-discovery:__subpackages__"],
+)
+
+go_test(
+    name = "api_test",
+    srcs = [
+        "api_test.go",
+        "errors_test.go",
+        "pool_test.go",
+    ],
+    embed = [":api"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
+        "//src/control-plane-services/global-discovery/internal/clock",
+        "//src/control-plane-services/global-discovery/internal/metrics",
+        "//src/control-plane-services/global-discovery/internal/registry",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/store/memory",
+        "//src/control-plane-services/global-discovery/internal/view",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/fieldmaskpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

@@ -80,6 +80,9 @@ JSON follows the proto3 JSON mapping:
   Input accepts lowerCamelCase and the proto names (`pool_id`).
 - Enums are strings with their full names, for example
   `"POOL_STATE_DRAINING"` and `"SERVICE_TYPE_CLUSTER_SET_IP"`.
+- Responses omit fields with default values (empty strings, zero counts,
+  empty lists); read a missing field as its default. Unknown input fields
+  are ignored.
 - `uint64` fields (`generation`, `epoch`) are strings: `"generation": "1761480000000"`.
 - Durations are strings with an `s` suffix (`"leaseTtl": "30s"`); timestamps
   are RFC 3339 strings.
@@ -118,7 +121,124 @@ curl -sX PATCH http://gds:8080/v1/clustersets/prod/pools/7f1c... \
 - A lease expires at read time once `renewed_at + ttl + skew` (skew 2 s) is
   in the past. Nothing writes expiry.
 - `ReplaceEndpoints` replaces the whole endpoint set; there is no
-  per-endpoint write.
+  per-endpoint write. An empty list clears it.
+- A write with `generation` 0 (or none) asks the server to assign
+  `max(stored + 1, unix milliseconds)`. That suits a single writer such as a
+  curl session; controllers and clients send their own.
+- `PutServiceExport` and `ReplaceEndpoints` need a registered cluster
+  (`FAILED_PRECONDITION` `CLUSTER_NOT_REGISTERED`). A heartbeat for an
+  unknown cluster is `NOT_FOUND` `CLUSTER_NOT_REGISTERED`.
+- Defaults: port protocol TCP, session affinity None, and an endpoint
+  address type inferred from its first address (IPv4, IPv6, else FQDN).
+  `spec.type` is required. Without `export_creation_timestamp` the server
+  keeps the stored one, or uses the time of the first write; controllers
+  send the ServiceExport's creationTimestamp.
+
+## ServiceImports
+
+The server merges the exports of one `(namespace, name)` from every cluster
+with the rules of Cilium's MCS implementation:
+
+- Only exports of clusters with an active lease take part, oldest
+  `export_creation_timestamp` first, ties broken by cluster name. The first
+  one wins.
+- Ports are the union by (port, protocol); a name or app protocol
+  disagreement resolves to the oldest export, and a port whose name is
+  already used by another (port, protocol) is skipped.
+- IP families are intersected; an export without a common family is
+  skipped. An export that lists no family does not constrain the result.
+- Type, session affinity and its config, annotations and labels come from
+  the winner.
+
+`conflict` is set when any participating export disagrees with the winner
+(on ports, IP families, type, session affinity, its client IP timeout,
+annotations, labels, internal traffic policy or traffic distribution), with
+the mcs-api reason (`PortConflict`, `TypeConflict`, ...). Each
+`clusters[]` entry carries:
+
+- `participating`: false when the cluster's lease is not active.
+- `conflict`: set when this cluster's own export disagrees with the winner.
+- `conditions`: `Valid` (`True/Valid`), `Ready` (`True/Ready`, or
+  `False/ClusterLeaseExpired`) and `Conflict` (`True` with the import's
+  conflict reason on every participating cluster, as KEP-1645 asks,
+  `False/NoConflicts`, or `Unknown/ClusterLeaseExpired`). Controllers copy
+  them onto their ServiceExports.
+
+`endpoints[]` has one entry per participating cluster, with counts always
+set and the endpoint list only with `include_endpoints`. An import whose
+exporting clusters all expired keeps its shape with no participants and no
+endpoints until compaction removes the records.
+
+## Pools
+
+A pool is identified by `(cluster, name)` and addressed by `pool_id`.
+
+- Label-derived pools: an export whose labels have `gds.nvidia.com/role` set
+  to `pool-frontend` or `kv-relay` and `gds.nvidia.com/pool=<name>` creates
+  or joins the pool `<name>` of the exporting cluster. The frontend export's
+  annotations give `models` (`gds.nvidia.com/pool-models`),
+  `hardware_class` and `location.dc`; the cluster registration gives the
+  region and zones; the exported labels (without the role label) become the
+  pool labels.
+- `pool_id` is the writer's id or, by default, a name-based UUID (version 5)
+  of `clusterset/cluster/name`, the same on every replica, for the
+  label-derived pool and its API registration, and across
+  re-registrations.
+- API overlay: an API record of the same `(cluster, name)` overrides
+  non-empty `location`, `hardware_class` and `models`, adds its labels,
+  frontends and services, and supplies `worker_count`,
+  `ready_worker_count`, `desired_state`, `lease`, `generation` and
+  `owner_id`.
+- `frontends[]` holds one entry per exported Service of the pool: role
+  `FRONTEND_ROLE_OPENAI` for `pool-frontend` (port name from
+  `gds.nvidia.com/http-port-name`, default `http`) and
+  `FRONTEND_ROLE_KV_RELAY` for `kv-relay` (`gds.nvidia.com/grpc-port-name`,
+  default `grpc`), plus the API's URL entries.
+- `endpoints[]` has one entry per Service in `services[]` of the pool's
+  cluster, with zero counts and no endpoints while the cluster lease is not
+  active. `ready_endpoint_count` counts the ready endpoints of the OPENAI
+  Services.
+- State: `REGISTERED` until the pool has started (the first heartbeat after
+  registering for an API-only pool, the first ready endpoint otherwise);
+  then `desired_state` (`ACTIVE` or `DRAINING`) while it is live, `UNHEALTHY`
+  otherwise. A pool with exports or `services[]` is live while its cluster
+  lease is active and at least one of its endpoints is ready; an API-only
+  pool is live while its own lease is active.
+
+Calls:
+
+- `RegisterPool` is idempotent on `(cluster, name)`: it reuses the pool's
+  id, replaces its writer-owned fields, mints a new lease epoch and returns
+  the merged pool without endpoint lists. A different `pool_id` for a taken
+  name, or a `pool_id` that another cluster's pool uses, is
+  `ALREADY_EXISTS` `POOL_NAME_TAKEN`. Lease TTL default 60 s.
+- `UpdatePool` changes the paths in `update_mask` (`name`, `location`,
+  `location.region`, `location.dc`, `location.zones`, `hardware_class`,
+  `models`, `worker_count`, `ready_worker_count`, `frontends`, `services`,
+  `labels`, `desired_state`, `owner_id`); an empty mask replaces them all.
+  `location.cluster` cannot change. On a label-derived pool without an API
+  record it creates the overlay record (without a lease), which is how a
+  labelled pool is drained.
+- `HeartbeatPool` renews the lease of an API registration and applies the
+  optional worker counts and desired state. A pool without an API
+  registration has no lease: `NOT_FOUND`.
+- `DeregisterPool` removes the API registration. A pool without labelled
+  exports turns `GONE`: watchers get a `DELETE` with state `GONE` and
+  `GetPool` returns it for one bookmark interval. A labelled pool stays,
+  without its overlay.
+- `ListPools` and `WatchPools` exclude `GONE` pools unless `states` names
+  it.
+
+## Routers
+
+Every export labelled `gds.nvidia.com/role=router` yields one Router per
+`(cluster, namespace, name)`: the export's type, labels and annotations,
+`grpc_port` and `http_port` from the ports named by
+`gds.nvidia.com/grpc-port-name` (default `grpc`) and
+`gds.nvidia.com/http-port-name` (default `http`), `dial_scheme` from
+`gds.nvidia.com/dial-scheme` (`http` when absent or invalid), the cluster's
+region and lease state, and one replica per endpoint (first address, ready
+flag, hostname, zone) while the cluster lease is active.
 
 ## Watches
 
@@ -143,7 +263,11 @@ never fails and never skips events.
 A watcher that falls 1024 events behind is re-snapshotted, not disconnected.
 A replica serves at most `--max-watchers` (5000) streams; above that a watch
 fails with `TOO_MANY_WATCHERS`. Filters (namespace, selector, region, model,
-`include_endpoints`) apply per subscriber.
+`include_endpoints`) apply per subscriber: an object that stops matching
+arrives as `DELETE` with its new state. A bookmark's revision covers changes
+the filter skipped. A draining replica ends watches with `SHUTTING_DOWN`;
+reconnect, usually to another replica, which sends a new snapshot. See
+`docs/consistency.md` for revisions and resume.
 
 Over REST a watch is a chunked response of newline-delimited JSON objects,
 one per event, each wrapped in `result`:
@@ -179,9 +303,11 @@ reason:
 | `TOO_MANY_WATCHERS` | `RESOURCE_EXHAUSTED` | 429 | The replica is at `--max-watchers`. Back off or try another replica. |
 | `STORE_UNAVAILABLE` | `UNAVAILABLE` | 503 | The store did not answer. Retry with backoff. |
 | `SHUTTING_DOWN` | `UNAVAILABLE` | 503 | The replica is draining. Reconnect; another replica serves. |
+| `INVALID_ARGUMENT` | `INVALID_ARGUMENT` | 400 | Invalid input. A `google.rpc.BadRequest` detail names every invalid field. |
+| `NOT_FOUND` | `NOT_FOUND` | 404 | No such ServiceImport or pool. |
+| `INTERNAL` | `INTERNAL` | 500 | An unexpected server error, logged by the server. |
 
-Other invalid input is `INVALID_ARGUMENT` with a `google.rpc.BadRequest`
-detail naming the fields. The Go constants are in `api/errors.go`.
+The Go constants are in `api/errors.go`.
 
 Example body:
 

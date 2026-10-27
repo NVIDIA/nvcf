@@ -70,6 +70,9 @@ type Config struct {
 	// LeaseEvalInterval is how often leases are re-evaluated between
 	// refreshes.
 	LeaseEvalInterval time.Duration
+	// ClusterSetDiscoveryInterval is how often the store's clustersets are
+	// listed to find new ones.
+	ClusterSetDiscoveryInterval time.Duration
 	// LeaseSkew is the clock skew allowance before a lease counts as expired.
 	LeaseSkew time.Duration
 	// Retention keeps the records of an expired cluster this long before
@@ -156,24 +159,25 @@ func (a *AdvertiseEndpoints) Set(value string) error {
 // Default returns the default configuration.
 func Default() *Config {
 	return &Config{
-		GRPCListenAddress:  ":9090",
-		HTTPListenAddress:  ":8080",
-		AdminListenAddress: ":9091",
-		Store:              StoreMemory,
-		DynamoDBTable:      "gds",
-		RefreshInterval:    2 * time.Second,
-		LeaseEvalInterval:  time.Second,
-		LeaseSkew:          2 * time.Second,
-		Retention:          24 * time.Hour,
-		CompactionInterval: 10 * time.Minute,
-		BookmarkInterval:   5 * time.Second,
-		WatchHistory:       10000,
-		WatchQueueSize:     1024,
-		MaxWatchers:        5000,
-		MaxMessageBytes:    api.MaxMessageBytes,
-		ShutdownDrain:      5 * time.Second,
-		ShutdownTimeout:    25 * time.Second,
-		LogLevel:           "info",
+		GRPCListenAddress:           ":9090",
+		HTTPListenAddress:           ":8080",
+		AdminListenAddress:          ":9091",
+		Store:                       StoreMemory,
+		DynamoDBTable:               "gds",
+		RefreshInterval:             2 * time.Second,
+		LeaseEvalInterval:           time.Second,
+		ClusterSetDiscoveryInterval: 30 * time.Second,
+		LeaseSkew:                   2 * time.Second,
+		Retention:                   24 * time.Hour,
+		CompactionInterval:          10 * time.Minute,
+		BookmarkInterval:            5 * time.Second,
+		WatchHistory:                10000,
+		WatchQueueSize:              1024,
+		MaxWatchers:                 5000,
+		MaxMessageBytes:             api.MaxMessageBytes,
+		ShutdownDrain:               5 * time.Second,
+		ShutdownTimeout:             25 * time.Second,
+		LogLevel:                    "info",
 	}
 }
 
@@ -189,6 +193,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.DynamoDBEndpoint, "dynamodb-endpoint", c.DynamoDBEndpoint, "DynamoDB endpoint override, for dynamodb-local")
 	fs.DurationVar(&c.RefreshInterval, "refresh-interval", c.RefreshInterval, "interval between full reloads of each clusterset")
 	fs.DurationVar(&c.LeaseEvalInterval, "lease-eval-interval", c.LeaseEvalInterval, "interval between lease evaluations")
+	fs.DurationVar(&c.ClusterSetDiscoveryInterval, "clusterset-discovery-interval", c.ClusterSetDiscoveryInterval, "interval between listings of the store's clustersets")
 	fs.DurationVar(&c.LeaseSkew, "lease-skew", c.LeaseSkew, "clock skew allowance before a lease expires")
 	fs.DurationVar(&c.Retention, "retention", c.Retention, "how long records of an expired cluster are kept")
 	fs.DurationVar(&c.CompactionInterval, "compaction-interval", c.CompactionInterval, "interval between compaction runs")
@@ -304,6 +309,7 @@ func (c *Config) Validate() error {
 	}{
 		{"refresh-interval", c.RefreshInterval, 100 * time.Millisecond},
 		{"lease-eval-interval", c.LeaseEvalInterval, 100 * time.Millisecond},
+		{"clusterset-discovery-interval", c.ClusterSetDiscoveryInterval, time.Second},
 		{"retention", c.Retention, 5 * time.Minute},
 		{"compaction-interval", c.CompactionInterval, time.Second},
 		{"bookmark-interval", c.BookmarkInterval, time.Second},

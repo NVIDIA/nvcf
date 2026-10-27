@@ -34,6 +34,8 @@ func TestErrorReasons(t *testing.T) {
 		ReasonStaleGeneration, ReasonLeaseEpochMismatch, ReasonClusterNotRegistered, ReasonPoolNameTaken,
 		ReasonTooManyEndpoints, ReasonTooManyWatchers, ReasonStoreUnavailable, ReasonShuttingDown,
 	})
+	assert.Equal(t, []string{"INVALID_ARGUMENT", "NOT_FOUND", "INTERNAL"},
+		[]string{ReasonInvalidArgument, ReasonNotFound, ReasonInternal})
 }
 
 // The conflict reasons must equal the sigs.k8s.io/mcs-api constants so that
@@ -51,6 +53,10 @@ func TestConditionReasons(t *testing.T) {
 		ConditionReasonAnnotationsConflict, ConditionReasonLabelsConflict,
 		ConditionReasonInternalTrafficPolicyConflict, ConditionReasonTrafficDistributionConflict,
 		ConditionReasonIPFamilyConflict, ConditionReasonClusterLeaseExpired,
+	})
+	assert.Equal(t, []string{"Valid", "Ready", "Pending", "NoService", "InvalidServiceType"}, []string{
+		ConditionReasonValid, ConditionReasonReady, ConditionReasonPending,
+		ConditionReasonNoService, ConditionReasonInvalidServiceType,
 	})
 }
 

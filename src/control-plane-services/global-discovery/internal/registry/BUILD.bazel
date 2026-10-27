@@ -19,6 +19,8 @@ go_library(
     name = "registry",
     srcs = [
         "lease.go",
+        "names.go",
+        "poolid.go",
         "poolstate.go",
         "types.go",
     ],
@@ -35,7 +37,11 @@ alias(
 
 go_test(
     name = "registry_test",
-    srcs = ["registry_test.go"],
+    srcs = [
+        "names_test.go",
+        "poolid_test.go",
+        "registry_test.go",
+    ],
     embed = [":registry"],
     deps = ["@com_github_stretchr_testify//assert"],
 )

@@ -17,10 +17,20 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "gds-admin_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "createtable.go",
+        "main.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/cmd/gds-admin",
     visibility = ["//visibility:private"],
-    deps = ["//src/control-plane-services/global-discovery/cmd/gds-admin/createtable"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/cmd/gds-admin/createtable",
+        "//src/control-plane-services/global-discovery/internal/config",
+        "//src/control-plane-services/global-discovery/internal/registry",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/storefactory",
+    ],
 )
 
 go_binary(
@@ -33,5 +43,13 @@ go_test(
     name = "gds-admin_test",
     srcs = ["main_test.go"],
     embed = [":gds-admin_lib"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/internal/config",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/store/memory",
+        "//src/control-plane-services/global-discovery/internal/storefactory",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

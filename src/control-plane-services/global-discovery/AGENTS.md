@@ -19,8 +19,10 @@ limitations under the License.
 
 Global Discovery Service (GDS): the multi-region pool, router and
 Multi-Cluster Services registry of the Dynamo Global Router. Read
-`README.md` for the layout and `docs/api.md` for the API. The design is
-`docs-gds/global-discovery-service-design.md` at the repository root.
+`README.md` for the layout, flags and operations, `docs/api.md` for the API
+and `docs/consistency.md` for the view, write-through and lease model. The
+design is `docs-gds/global-discovery-service-design.md` at the repository
+root.
 
 ## Build and test
 
@@ -34,6 +36,7 @@ make vet
 make lint
 make proto         # after editing api/proto
 make proto-check   # before committing
+GOWORK=off go run ./cmd/gds-server --log-level=debug   # memory store on :9090, :8080, :9091
 ```
 
 From the repository root:
@@ -45,7 +48,8 @@ bazel mod tidy     # after adding an external import
 ```
 
 Run Gazelle through `//:gazelle` with the module path. This module has no
-local gazelle target on purpose.
+local gazelle target on purpose. Gazelle does not add the license header to
+new BUILD files; copy it from an existing one.
 
 ## API contract
 
@@ -63,12 +67,29 @@ local gazelle target on purpose.
   with the Rust gds-client crate and the Helm charts. Change both sides
   together.
 
+## Server code
+
+- Handlers in `internal/api` validate, write to the store, then apply the
+  stored record to the view (`view.Apply*`) before responding. Reads come
+  from the view only. Return errors through the helpers in
+  `internal/api/errors.go` so every error has an ErrorInfo.
+- Derived objects in `internal/view` are immutable once published. Never
+  modify a message returned by the view; clone it first. When a proto
+  message gains a field, update `liteImport` or `litePool` (a test fails
+  otherwise).
+- Merge rules live in `internal/registry/merge` with the ported Cilium
+  test cases; keep them in step with `sigs.k8s.io/mcs-api` reasons.
+- Time comes from `internal/clock`; tests use `clock.NewFake` and
+  `BlockUntil` before advancing.
+- A new store backend registers its opener in `internal/storefactory` and
+  its admin commands with `registerCommand` in a new file of `cmd/gds-admin`.
+
 ## Store
 
 - Every `Store` implementation must pass `storetest.Run`. Add a conformance
   case for any new store behaviour instead of testing one implementation.
 - Store record types mirror the proto messages but use Kubernetes spellings
-  for enums. The API layer converts.
+  for enums. `internal/convert` maps them.
 - Writes are conditional; see the package comment of `internal/store`.
 - DynamoDB store: `docs/storage.md` is the item catalogue and condition
   table. Change it together with `keys.go`, `codec.go` and `store.go`.
@@ -97,11 +118,12 @@ local gazelle target on purpose.
 
 ## Conventions
 
-- Metrics: `nvcf_gds_*` (server), `nvcf_gds_mcs_controller_*`,
-  `nvcf_gds_client_*`, with pre-initialised counters.
+- Metrics: `nvcf_gds_*` (server, `internal/metrics`), `nvcf_gds_mcs_controller_*`,
+  `nvcf_gds_client_*`, with pre-initialised counters. Add new label values
+  to the initialisation in `internal/metrics`.
+- Logs: zap JSON. Do not log and return the same error; the gRPC logging
+  interceptor logs every failed call.
 - Timestamps given to the store are server time; leases are evaluated at
   read time with `registry.LeaseExpired`.
 - Flags use the standard `flag` package; every flag has a `GDS_` environment
   fallback (`internal/config`).
-- Logging follows the design (zap JSON) once the server lands; the
-  `gds-server` stub uses `log/slog`.

@@ -30,6 +30,15 @@ const (
 	ReasonTooManyWatchers      = "TOO_MANY_WATCHERS"
 	ReasonStoreUnavailable     = "STORE_UNAVAILABLE"
 	ReasonShuttingDown         = "SHUTTING_DOWN"
+
+	// ReasonInvalidArgument accompanies INVALID_ARGUMENT errors other than
+	// TOO_MANY_ENDPOINTS; a google.rpc.BadRequest detail names the fields.
+	ReasonInvalidArgument = "INVALID_ARGUMENT"
+	// ReasonNotFound accompanies NOT_FOUND errors for objects other than
+	// clusters, for example a pool or a ServiceImport.
+	ReasonNotFound = "NOT_FOUND"
+	// ReasonInternal accompanies INTERNAL errors.
+	ReasonInternal = "INTERNAL"
 )
 
 // MetadataCurrentGeneration is the ErrorInfo metadata key that carries the
@@ -43,9 +52,16 @@ const (
 	ConditionConflict = "Conflict"
 )
 
-// Condition reasons. The conflict reasons are the sigs.k8s.io/mcs-api
-// constants; IPFamilyConflict and ClusterLeaseExpired are GDS additions.
+// Condition reasons. The conflict reasons and Valid, Ready, Pending,
+// NoService and InvalidServiceType are the sigs.k8s.io/mcs-api constants;
+// IPFamilyConflict and ClusterLeaseExpired are GDS additions.
 const (
+	ConditionReasonValid              = "Valid"
+	ConditionReasonReady              = "Ready"
+	ConditionReasonPending            = "Pending"
+	ConditionReasonNoService          = "NoService"
+	ConditionReasonInvalidServiceType = "InvalidServiceType"
+
 	ConditionReasonNoConflicts                   = "NoConflicts"
 	ConditionReasonPortConflict                  = "PortConflict"
 	ConditionReasonTypeConflict                  = "TypeConflict"
