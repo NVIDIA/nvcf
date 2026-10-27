@@ -22,7 +22,7 @@ The self-hosted API surface is divided into the following sets of APIs:
 | Function Management   | The creation, modification and deletion of functions                                  |
 | Function Deployment   | Endpoints for creating and managing function deployments.                             |
 | Task Management       | GPU-backed batch jobs via NVIDIA Cloud Tasks (NVCT).                                  |
-| Event Ledger          | Function deployment state and event history.                                          |
+| Event Ledger          | Latest function deployment state and stored event occurrences.                        |
 
 ## API versioning
 

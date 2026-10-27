@@ -167,20 +167,24 @@ without a manual Host header:
 global:
   nvcaOperator:
     selfManaged:
-      eventLedgerServiceURL: https://events.<domain>
+      eventLedgerServiceURL: http://events.<domain>
       otelCollector:
         enabled: true
 ```
 
 The URL is a base URL. NVCA appends `/v3/ledger/k8s-events` for the OTLP export.
-Configure DNS, TLS trust, firewalls, and proxies so Pods in the compute plane can
-reach it.
+Configure DNS, firewalls, and proxies so Pods in the compute plane can reach it.
 
 Apply the compute-plane environment:
 
 ```bash
-cd deploy/stacks/nvcf-compute-plane
-HELMFILE_ENV=<environment-name> helmfile --selector name=nvca-operator apply
+make -C deploy/stacks/nvcf-compute-plane apply \
+  CLUSTER_NAME=<gpu-cluster-name> \
+  HELMFILE_ENV=<environment-name> \
+  NCA_ID=<nca-id> \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
+  HELMFILE_SELECTOR=name=nvca-operator
 ```
 
 ### Verify the collector configuration

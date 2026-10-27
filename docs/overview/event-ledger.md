@@ -192,7 +192,15 @@ nvcf-cli stats get \
 Copy the fields from one `stats get` context into `stages events list`. Include
 only the fields present in that context.
 
-For a Pod or SIS instance context:
+For an SIS instance context:
+
+```bash
+nvcf-cli stages events list \
+  --function-version-id <function-version-id> \
+  --instance-id <instance-id>
+```
+
+For a Pod context that contains all four fields:
 
 ```bash
 nvcf-cli stages events list \
