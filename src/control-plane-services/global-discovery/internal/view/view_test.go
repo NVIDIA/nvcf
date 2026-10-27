@@ -760,3 +760,14 @@ func TestApplyLocal(t *testing.T) {
 	poolOf(t, f.view, "p1")
 	assert.ErrorContains(t, f.view.ApplyLocal("nope"), "cannot apply string")
 }
+
+func TestReplaceIgnoresOlderLoads(t *testing.T) {
+	f := newFixture(t)
+	newer := baseSnapshot()
+	newer.Exports[0].Generation = 2
+	f.view.Replace(newer, t0.Add(time.Second))
+	f.view.Replace(baseSnapshot(), t0)
+	rec, ok := f.view.ExportRecord(exportKey("a", "ns", "web"))
+	require.True(t, ok)
+	assert.Equal(t, uint64(2), rec.Generation, "a load that began earlier does not win")
+}

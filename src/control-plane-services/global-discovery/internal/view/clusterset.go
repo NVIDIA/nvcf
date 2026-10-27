@@ -51,9 +51,10 @@ type clusterSet struct {
 	ring *ring
 	subs map[*subscriber]struct{}
 
-	discovered  bool
-	refreshed   bool
-	lastRefresh time.Time
+	discovered    bool
+	refreshed     bool
+	lastRefresh   time.Time
+	lastLoadStart time.Time
 }
 
 func newClusterSet(name string, history int) *clusterSet {

@@ -321,12 +321,17 @@ func (v *View) Age(now time.Time) time.Duration {
 // Replace replaces the records of a clusterset with a snapshot loaded from
 // the store. loadStart is the time the load began; local writes newer than
 // loadStart minus LocalWriteWindow are kept unless the snapshot holds a
-// newer version.
+// newer version. A snapshot whose load began before the one applied last is
+// ignored, so concurrent loads cannot move the view backwards.
 func (v *View) Replace(snap store.ClusterSetSnapshot, loadStart time.Time) {
 	cs := v.ensure(snap.ClusterSet)
 	now := v.clock.Now()
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	if loadStart.Before(cs.lastLoadStart) {
+		return
+	}
+	cs.lastLoadStart = loadStart
 	cs.replace(snap, loadStart.Add(-v.opts.LocalWriteWindow))
 	cs.refreshed = true
 	cs.lastRefresh = now
