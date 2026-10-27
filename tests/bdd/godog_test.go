@@ -3640,10 +3640,25 @@ func eventLedgerCLIResponder(command string) (harness.Result, bool) {
 			}
 			return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContext: \nNo events found.\n"}, true
 		}
-		return harness.Result{Stdout: `{"namespace":"version-1","context":"` +
-			fakeNVCAContext + `","events":[{"event_name":"ICMSRequest.InstanceStatusUpdate.running",` +
-			`"source":"nvca","details":{"attributes":{"function_id":"function-1",` +
-			`"k8s.event.reason":"InstanceStatusUpdate"}}}]}`}, true
+		for _, required := range []string{
+			"--function-version-id version-1",
+			"--cluster-id c1",
+			"--instance-id i1",
+			"--resource-id r1",
+			"--json",
+		} {
+			if !strings.Contains(command, required) {
+				return harness.Result{Stdout: `{"namespace":"version-1","context":"","events":[]}`}, true
+			}
+		}
+		return harness.Result{Stdout: "{\n" +
+			`  "namespace": "version-1",` + "\n" +
+			`  "context": "` + fakeNVCAContext + `",` + "\n" +
+			`  "events": [{` + "\n" +
+			`    "event_name": "ICMSRequest.InstanceStatusUpdate.running",` + "\n" +
+			`    "source": "nvca",` + "\n" +
+			`    "details": {"attributes":{"function_id":"function-1","k8s.event.reason":"InstanceStatusUpdate"}}` + "\n" +
+			"  }]\n}"}, true
 	}
 
 	if isEmpty {
@@ -3875,11 +3890,20 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 		"stages events list --function-version-id " + eventLedgerEmptyVersionID,
 		"stats get --function-version-id version-1 --json",
 		" stats get --event-filter ICMSRequest.InstanceStatusUpdate.running --json",
-		" stages events list ",
 	} {
 		if !commandRanThatContains(runs, command) {
 			t.Fatalf("Event Ledger CLI command was never invoked: %s", command)
 		}
+	}
+	if !commandRanThatContainsAll(runs,
+		" stages events list ",
+		"--function-version-id version-1",
+		"--cluster-id c1",
+		"--instance-id i1",
+		"--resource-id r1",
+		"--json",
+	) {
+		t.Fatal("Event Ledger CLI event read did not use the complete NVCA context")
 	}
 	for _, secret := range []string{"admin-jwt", "nvapi-test", "nvapi-write"} {
 		if commandRanThatContains(runs, secret) {

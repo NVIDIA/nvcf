@@ -531,8 +531,8 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       And I export the function selected by NVCF CLI to environment variables "BDD_EL_FUNCTION_ID" and "BDD_EL_VERSION_ID"
 
       # Events are stored per context, and stats list every context in the
-      # namespace with its latest event. Find the SIS context with an event
-      # filter, then read its events.
+      # namespace with its latest event. NVCA collector contexts sort before
+      # the SIS context, so filter by event name before reading SIS events.
 
       # SIS writes InstanceReady once the instance is running.
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
@@ -668,6 +668,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | text                                     |
         | ${BDD_EL_CLI_VERSION_ID}                 |
         | ICMSRequest.InstanceStatusUpdate.running |
-        | nvca                                     |
+        | "source": "nvca"                        |
         | ${BDD_EL_CLI_FUNCTION_ID}                |
         | k8s.event.reason                         |
