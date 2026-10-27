@@ -28,6 +28,15 @@ GDS. The design is section 8 of
 Code: `cmd/gds-mcs-controller` and `internal/mcs/*`. Image:
 `//src/control-plane-services/global-discovery:controller_image`.
 
+## Deployment
+
+Install it with the chart `deploy/helm/global-discovery-mcs-controller`, one
+release per member cluster: two replicas with leader election, the CRDs, the
+ClusterRole below trimmed by its values, and the leader election Role. The
+chart README lists every value with the flag it renders, and
+`tests/e2e/global-discovery-k3d` (phases 2 and 3) runs it in two k3d
+clusters against a gds-server hub.
+
 ## Components
 
 All run on one controller-runtime manager. Everything that talks to GDS
