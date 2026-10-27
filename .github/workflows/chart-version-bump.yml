@@ -18,6 +18,12 @@
 # with the charts, so the paths this job checks and stages cover deploy/stacks
 # as well as deploy/helm. tools/chart-version-bumper tests that these paths
 # cover every declared target.
+#
+# A pin on the default branch only moves up. The bumper skips a release whose
+# version is not above the pinned one, and, given --base, a release tagged on a
+# commit the default branch does not contain. A backport cut on a release
+# branch publishes a release too, and its version can sort below what the
+# default branch already pins.
 
 name: chart version bump
 
@@ -142,7 +148,7 @@ jobs:
           # what it keeps, regenerates, drops, and refuses.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}"
 
       - name: Apply the bump
         id: bump
@@ -152,6 +158,7 @@ jobs:
           # whoever pushes it, and ${{ }} interpolation into a run: block is the
           # standard Actions injection shape.
           TAG: ${{ steps.tag.outputs.tag }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set +e
           set -uo pipefail
@@ -159,7 +166,10 @@ jobs:
           # exits 3 when a chart's appVersion and image tag disagree even though
           # it still applied every chart it could move safely. Aborting here
           # would throw those away and leave the refusal as the only outcome.
-          tools/ci/chart-version-bumper \
+          # --base skips a tag the default branch does not contain, such as a
+          # backport cut on a release branch. The checkout above fetched every
+          # tag and branch, and the branch helper refreshed origin/<default>.
+          tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}" \
             --tag "${TAG}" --write >/tmp/bump.out 2>/tmp/refusals
           status=$?
           cat /tmp/bump.out

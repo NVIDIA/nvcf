@@ -20,6 +20,11 @@
 # job checks and stages below therefore cover deploy/stacks as a whole. A
 # narrower path drops the resolver's edit and reports the stack as already
 # pinned. tools/stack-pin-resolver tests that these paths cover every pin.
+#
+# A pin on the default branch only moves up. The resolver skips a release whose
+# version is not above the pinned one, and, given --base, a release tagged on a
+# commit the default branch does not contain, such as a backport cut on a
+# release branch.
 
 name: stack pin bump
 
@@ -123,7 +128,7 @@ jobs:
           # for the release it recorded rather than left as a rebase conflict.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}"
 
       - name: Apply the bump
         id: bump
@@ -133,9 +138,13 @@ jobs:
           # whoever pushes it, and ${{ }} interpolation into a run: block is the
           # standard Actions injection shape.
           TAG: ${{ steps.tag.outputs.tag }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          tools/ci/stack-pin-resolver --tag "${TAG}" --write | tee /tmp/bump.out
+          # --base skips a tag the default branch does not contain, such as a
+          # backport cut on a release branch. The checkout above fetched every
+          # tag and branch, and the branch helper refreshed origin/<default>.
+          tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}" --tag "${TAG}" --write | tee /tmp/bump.out
           # The semver step the pin took, reported by the resolver as
           # "bump: <level>". Empty when the stack already pinned this version.
           echo "level=$(sed -n 's/^bump: //p' /tmp/bump.out | tail -n 1)" >> "${GITHUB_OUTPUT}"
