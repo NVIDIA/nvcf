@@ -984,3 +984,109 @@ Not done in ws5: golangci-lint and staticcheck (not installed; `go vet` and `gof
 clean), regenerating the root `dependencies.md` (the collector needs the Java toolchain), the
 controller chart and the multi-cluster k3d e2e (ws7), CI wiring for `make test-envtest` and
 `codegen-check`.
+
+Workstream 7b (controller chart, e2e phases 2 and 3), branch `feat/gds-ws7b-controller-chart-e2e`:
+
+- Chart `deploy/helm/global-discovery-mcs-controller` (pylon-operator shape): a Deployment with
+  two replicas and leader election (RollingUpdate, maxUnavailable 0; Recreate and one replica
+  without leader election), probes on the health port, the metrics port and a metrics Service,
+  the pylon-operator security context, `automountServiceAccountToken: true`, preferred
+  anti-affinity over nodes; ServiceAccount; ClusterRole and binding; a Role and binding for the
+  Lease `gds-mcs-controller.gds.nvidia.com` and Events in the release namespace; PDB (only with
+  more than one replica); optional ServiceMonitor; NOTES; `values.schema.json` with
+  `additionalProperties: false`; `gds-mcs-controller.validate` (missing image, `gds.urls`, and
+  `clusterset.id`/`cluster.id` with `identity.source: flags`; mixed or unpermitted `http://`
+  URLs; more than one replica without leader election; port and PDB conflicts). Every value maps
+  to a real flag: `gds.urls` (`--gds-url` each), `gds.tlsCaConfigMap` (mounted,
+  `--gds-tls-ca-file`), `gds.allowInsecureHttp`, `clusterset.id`, `cluster.{id,region,labels}`,
+  `identity.{source,writeClusterProperties}`, `lease.ttl`, `deregisterOnShutdown`,
+  `imports.{createNamespaces,adoptUnmanaged}`, `pools.autoExport`, `watchNamespaces`,
+  `endpointsPerSlice`, `maxConcurrentReconciles`, `leaderElection.enabled`, `otel.*`
+  (`--otel-enabled` and `OTEL_*`), `logLevel` (`--zap-log-level`), metrics and health ports;
+  booleans are always rendered with their value; `POD_NAMESPACE` gives `--operator-namespace`.
+- CRDs: `templates/crds/` holds ServiceExport and ServiceImport of `sigs.k8s.io/mcs-api` (the
+  `go.mod` version) and the module's ClusterProperty CRD, written by `scripts/sync-crds.sh`
+  (`make sync-crds`; `make check-crds` and `make test` compare, the latter by version only
+  without Go), gated by `crds.install`, with `helm.sh/resource-policy: keep` and the upstream
+  license header kept on the mcs-api copies.
+- RBAC: `templates/clusterrole.yaml` keeps the rules of `config/rbac/role.yaml`, without
+  namespaces create unless `imports.createNamespaces` and without ClusterProperty create, update
+  and patch unless `identity.writeClusterProperties`. `scripts/check-render.sh` fails unless the
+  render with both on grants exactly the `group|resource|verb` set of `role.yaml`, and unless
+  every rendered flag is defined in `internal/mcs/config/config.go`; it also asserts every flag
+  mapping, leader election, the trimming, PDB, ServiceMonitor, TLS CA mount, CRD presence,
+  opt-out and sync, and the NOTES. CI values
+  `tools/ci/helm-validate-values/global-discovery-mcs-controller.yaml` and the `chart_map` entry
+  in `tools/ci/check-helm-charts`.
+- E2e `tests/e2e/global-discovery-k3d`: phases 2 and 3 as `run_phase_2` and `run_phase_3`,
+  default `E2E_PHASES="1 2 3"`. The hub is `$E2E_CLUSTER` (phase 1's cluster, gds-server as a
+  NodePort); `$E2E_CLUSTER-a` and `-b` have pod and service CIDRs `10.44/10.45` and `10.46/10.47`
+  on the Docker network `$E2E_CLUSTER-net`, with static routes between the node containers
+  (`E2E_CROSS_CLUSTER_ROUTES=1`; without routes the data path checks are recorded as SKIP with
+  the reason). Phase 2 asserts every check of the plan plus own-cluster imports, the pool's OPENAI
+  frontend, the draining pool keeping its export and import, `DeregisterPool` removing the pool's
+  export, the leader Lease, and the derived ClusterIP after a controller restart. Phase 3
+  installs Stargate with the `llm-request-router` chart (one replica, `globalDiscovery` and
+  `export` enabled, open worker auth) in a and a plain Pylon Deployment with `--gds-url` and the
+  OpenAI-compatible sample backend in b, and asserts the router in `ListRouters`, the Pylon log
+  `GDS Stargate seeds changed`, `pylon_registration_stream_connected` and
+  `pylon_reverse_tunnel_connected` for the Stargate pod, Stargate's `/v1/models` listing a
+  healthy server of cluster b, and a streamed chat completion through Stargate answered by the
+  backend in b. Images are built from the Bazel `.tar` targets and loaded under run-specific
+  tags (the `_load` targets share `<package>:latest`), imports are verified per node, a reused
+  gds-server is restarted, cleanup of reused clusters deletes workloads before the controller and
+  the hub, removes routes and network attachments, and `k3d cluster delete` gets a scratch
+  `KUBECONFIG`. New `E2E_BUILD_ONLY` (`make images`); `make check` falls back to the shellcheck
+  image.
+- Executed: full k3d runs on this machine after the two other clusters were stopped (colima,
+  k3d 5.9.0, k3s v1.35.5, bash 3.2): from scratch with the Bazel builds and `E2E_CLEANUP=1`, 100
+  checks passed and everything was removed; with reused clusters and `E2E_SKIP_BUILD=1`, 101
+  passed; `E2E_DEPLOY_ONLY=1`, 28 passed; `E2E_CLEANUP_ONLY=1` for created clusters and for
+  clusters treated as reused (finalizers resolved while the controller ran); `make dry-run`;
+  shellcheck 0.10.0 clean. Chart: `make lint template validate test` (kubeconform 0.6.7 from a
+  scratch directory; it skips the CRDs) and `tools/ci/check-helm-charts` (23 charts). Bazel:
+  `bazel build //src/control-plane-services/global-discovery:controller_image`,
+  `bazel test //src/control-plane-services/global-discovery/... --test_output=errors` (39 pass;
+  the envtest and DynamoDB integration targets skip without `KUBEBUILDER_ASSETS` and a Docker
+  endpoint), `tools/ci/check-gazelle`.
+- Docs: chart README (values, RBAC trimming, CRD ownership and adoption, upgrades), e2e README
+  and AGENTS, module README (status, deployment step 6, controller section), module AGENTS
+  (flags, RBAC and CRDs reaching the chart), `docs/mcs-controller.md` (deployment section),
+  `docs/api.md` (the required `services[].role`), and `docs/dev/global-discovery-quickstart.md`
+  (installing gds-server and the controller from their charts).
+
+Deviations from the plan:
+
+- The CRDs are chart templates under `templates/crds/`, as in pylon-operator, not files in the
+  Helm `crds/` directory: Helm neither templates nor upgrades `crds/`, so `crds.install` and CRD
+  upgrades need templates. Design 11 ("under `crds/`") is read as that shape; the design doc is
+  unchanged.
+- `serviceexports` create and delete are always granted. The controller has no flag to turn off
+  label-driven export, which needs them; only the pool half has `--auto-export-pools`.
+- `identity.source` defaults to `flags` in the chart (the controller's default is `auto`), so a
+  missing cluster id fails the render. `serviceMonitor` is `metrics.serviceMonitor`, as in the
+  server chart.
+- The hub is phase 1's cluster, not a fourth cluster; phases 2 and 3 use their own clusterset
+  `e2e-mcs`, so phase 1's records do not interfere. Phase 3 has one router cluster (a) and the
+  Pylon in b, as the plan says; design 13's variant with Stargate in a and b and the Pylon in a
+  third cluster is not run.
+- Phase 3 sets Stargate's advertised hostname (`kubernetes.advertisedHostnameTemplate`) to
+  `llm-router.a.gds-e2e.test` and maps it to the Stargate pod IP with `hostAliases` in the Pylon
+  pod: without it the reverse tunnel dials the Service name of cluster a, which b cannot resolve
+  (design 4.5 asks deployments to advertise an address the peers reach). TLS between the clients
+  and GDS or Stargate, worker credentials, DynamoDB and multi-node clusters are not covered.
+
+Issues found and not fixed:
+
+- The controller has no switch for label-driven export (see above); a flag such as
+  `--auto-export-services` would let explicit-only clusters drop `serviceexports` create and
+  delete.
+- client-go leader election logs through klog as plain text next to the controller's JSON zap
+  logs; `klog.SetLogger` is not wired to the controller-runtime logger.
+- `RegisterPool` requires `services[].role` (FRONTEND_ROLE_OPENAI or KV_RELAY), which the proto
+  comment and `docs/api.md` did not say; `docs/api.md` now does, the proto comment is unchanged.
+- `k3d image import` reports success when the import into a node fails (for example a
+  multi-platform image from a containerd-backed Docker); `run.sh` verifies every image with
+  `crictl` and lets the cluster pull third-party images it cannot import.
+- ws7's cleanup let `k3d cluster delete` rewrite the default kubeconfig (it removes the cluster's
+  entries from the file it loads, even when there are none); fixed in `run.sh`.
