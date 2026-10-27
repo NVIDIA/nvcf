@@ -13,7 +13,7 @@ The OpenAPI spec linked above documents the full NVCF API surface. Replace the h
 
 </Note>
 
-The NVCF API is divided into the following sets of APIs:
+The self-hosted API surface is divided into the following sets of APIs:
 
 | APIs                  | Usage                                                                                 |
 | --------------------- | ------------------------------------------------------------------------------------- |
@@ -22,26 +22,33 @@ The NVCF API is divided into the following sets of APIs:
 | Function Management   | The creation, modification and deletion of functions                                  |
 | Function Deployment   | Endpoints for creating and managing function deployments.                             |
 | Task Management       | GPU-backed batch jobs via NVIDIA Cloud Tasks (NVCT).                                  |
+| Event Ledger          | Function deployment state and event history.                                          |
 
-**API Versioning**
+## API versioning
 
 All API endpoints include versioning in the path prefix.
 
 ```bash
 /v2/nvcf
+/v3/ledger
 ```
+
+The NVCF OpenAPI specification does not include the separate Event Ledger v3
+API. See [Event Ledger](./event-ledger.md#http-api) for its supported endpoints,
+query parameters, response fields, and producer interfaces.
 
 ## Authorization
 
-Self-hosted NVCF uses three bearer credential types:
+Self-hosted NVCF uses four bearer credential types:
 
 | Credential | CLI source | Typical use |
 | --- | --- | --- |
 | `NVCF_TOKEN` | `nvcf-cli init` | Default CLI credential for management operations and self-hosted cluster management |
 | `NVCF_API_KEY` | `nvcf-cli api-key generate` | Default CLI credential for function invocation, function discovery, and queue status |
 | `NVCF_NVCT_API_KEY` | `nvcf-cli api-key generate` | Credential for task commands (`task create`, `task list`, etc.) |
+| `EVENT_LEDGER_API_KEY` | `nvcf-cli api-key generate --for event-ledger` | Credential for Event Ledger read commands and v3 read endpoints |
 
-All three credential types are sent as bearer credentials:
+All four credential types are sent as bearer credentials:
 
 ```bash
 Authorization: Bearer <credential>
@@ -96,6 +103,10 @@ The task API key (`NVCF_NVCT_API_KEY`) is created with these default scopes:
 - `list_events`
 - `list_results`
 - `update_secrets`
+
+The Event Ledger API key (`EVENT_LEDGER_API_KEY`) is created with the
+`fnds:getEvents` scope. It has an Event Ledger-specific audience. Function and
+task API keys are not used as fallbacks for Event Ledger reads.
 
 NVCF API authorization is scope-based. For the NVCF API endpoints below, either
 `NVCF_TOKEN` or `NVCF_API_KEY` can be used if that bearer includes the required
@@ -169,6 +180,17 @@ endpoints require `NVCF_NVCT_API_KEY` with the listed scope.
 | `GET /v1/nvct/tasks/{taskId}/events` | `NVCF_NVCT_API_KEY` | `list_events` |
 | `GET /v1/nvct/tasks/{taskId}/results` | `NVCF_NVCT_API_KEY` | `list_results` |
 | `PUT /v1/nvct/secrets/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `update_secrets` |
+
+Event Ledger reads use v3 endpoints served through the `events.<domain>`
+gateway route. Both endpoints require `EVENT_LEDGER_API_KEY` with the
+`fnds:getEvents` scope.
+
+| Method and endpoint | Accepted bearer | Scope |
+| --- | --- | --- |
+| `GET /v3/ledger/namespace/{namespace}/stats` | `EVENT_LEDGER_API_KEY` | `fnds:getEvents` |
+| `GET /v3/ledger/namespace/{namespace}/events` | `EVENT_LEDGER_API_KEY` | `fnds:getEvents` |
+
+See [Event Ledger](./event-ledger.md) for context matching and filtering rules.
 
 ### Direct API key creation
 
