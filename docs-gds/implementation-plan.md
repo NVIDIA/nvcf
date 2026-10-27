@@ -801,8 +801,8 @@ Workstream 5 (MCS controller), branch `feat/gds-ws5-controller` (fast-forwarded 
   map, GC after `SNAPSHOT_END`, and an import controller: ServiceImport by server-side apply
   (field manager `gds-mcs-controller`), derived Service, `<derived>-<cluster>-<i>` slices for
   every source cluster, pending namespaces with a Namespace watch, `--create-namespaces`,
-  `--adopt-unmanaged-imports`, repair of deleted managed objects, own-cluster status to the
-  export side.
+  `--adopt-unmanaged-imports`, repair of deleted managed objects, no API calls for an
+  unchanged import, own-cluster status to the export side.
 - `internal/mcs/{convert,metrics,tracing,app,mcstest}`, `cmd/gds-mcs-controller`
   (controller-runtime zap, `/healthz`, `/readyz` = connected once and, on the leader,
   registered), `config/crd` (embedded mcs-api CRDs and a ClusterProperty CRD in
@@ -815,9 +815,10 @@ Workstream 5 (MCS controller), branch `feat/gds-ws5-controller` (fast-forwarded 
   (`make envtest-assets`, `make test-envtest`; Bazel target tagged `external` and
   `requires-kubebuilder` with `env_inherit`) covers export Put and Replace, scaling with a
   higher generation, own-cluster conditions, deletion through the finalizer, an import with
-  derived Service, `spec.ips` and slices, DELETE cascading, GC after a snapshot from a new
-  replica, a pending namespace created later and label-driven export. `make test` stays at
-  95 percent coverage of `internal/`.
+  derived Service, `spec.ips` and slices, repair of a deleted slice, DELETE cascading, GC
+  after a snapshot from a new replica, a pending namespace created later, label-driven export,
+  and the controller against an in-process gds-server (memory store) with a second cluster
+  exporting the same Service. `make test` stays at 95 percent coverage of `internal/`.
 - Bazel: Gazelle BUILD files, `x_defs` on the binary, `controller_image` (`go_oci_image`,
   `/usr/bin/gds-mcs-controller`) with an entrypoint mode test, `io_k8s_sigs_mcs_api` in
   `use_repo`, and a `gazelle_override` (`build_file_generation = "clean"`) for
