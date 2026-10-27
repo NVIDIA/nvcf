@@ -101,6 +101,10 @@ func Resolve(ctx context.Context, r client.Reader, opts Options) (Identity, erro
 			{api.ClusterPropertyClusterSet, "--clusterset-id", &id.ClusterSet},
 			{api.ClusterPropertyClusterID, "--cluster-id", &id.Cluster},
 		} {
+			if opts.Source == config.IdentitySourceAuto && *p.dst != "" {
+				// The flag wins; the property is not needed.
+				continue
+			}
 			value, err := GetClusterProperty(ctx, r, p.name)
 			if err != nil {
 				return Identity{}, err

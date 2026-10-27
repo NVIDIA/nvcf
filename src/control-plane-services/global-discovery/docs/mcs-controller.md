@@ -48,7 +48,8 @@ as a writer or applies imports is leader-only (`--leader-elect`, Lease
 - `--cluster-identity-source=auto` (default): `--clusterset-id` and
   `--cluster-id` win; an id without its flag comes from the ClusterProperty
   `clusterset.k8s.io` or `cluster.clusterset.k8s.io` (`about.k8s.io/v1alpha1`,
-  KEP-2149). A missing ClusterProperty CRD counts as no property.
+  KEP-2149). A property is read only for an id without its flag; a
+  missing ClusterProperty CRD counts as no property.
 - `flags`: both flags are required; ClusterProperty objects are not read.
 - `clusterproperty`: both properties are required; flags, when set, must
   agree with them.

@@ -122,6 +122,9 @@ func TestResolveErrors(t *testing.T) {
 	assert.Equal(t, "a", id.Cluster)
 	_, err = identity.Resolve(ctx, failing, identity.Options{ClusterSetID: "prod"})
 	require.ErrorContains(t, err, "boom")
+	// Auto mode with both flags reads no ClusterProperty either.
+	_, err = identity.Resolve(ctx, failing, identity.Options{ClusterSetID: "prod", ClusterID: "a"})
+	require.NoError(t, err)
 
 	// A missing CRD counts as no ClusterProperty.
 	noCRD := mcstest.FakeClientWith(t, interceptor.Funcs{
