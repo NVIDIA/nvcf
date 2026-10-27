@@ -103,8 +103,20 @@ spec:
 `timeouts.grpcStreamIdle` and `timeouts.invocationStreamIdle` close a stream
 that carries no data in either direction for that long. Without them Envoy
 closes quiet streams after 5 minutes, and a route timeout of `0s` does not
-lift that limit. The defaults match the connection idle timeouts; `0s`
-disables the limit.
+lift that limit. `0s` disables the limit. The defaults match the connection
+idle timeouts:
+
+- `invocationStreamIdle: 3605s` is invocation-service's request timeout: one
+  hour, the longest request and poll it serves, plus 5s so it can still
+  respond at the hour. Envoy should not close a quiet request before the
+  service does. Change it only if that limit changes.
+- `grpcStreamIdle: 1800s` is the gRPC connection idle timeout from the hosted
+  grpc-proxy Envoy (HTTP/3 listener); grpc-proxy itself has no matching
+  limit. Set it to the longest quiet gap expected in a gRPC stream: lower to
+  free quiet streams sooner, higher for functions whose streams stay quiet
+  longer.
+
+Hosted Envoy does not set `stream_idle_timeout`, so it uses the 5m default.
 
 ## Frontend certificate
 
@@ -136,9 +148,10 @@ ports, Service settings, or shutdown timings.
 
 ## Placement
 
-With no custom `affinity` or `topologySpreadConstraints`, the chart renders a
-soft hostname anti-affinity and a soft zone spread. Set
-`defaultPodAntiAffinity` or `defaultZoneSpread` to `false` to drop them.
+The chart renders `affinity` and `topologySpreadConstraints` as given and
+renders neither when empty, like the other NVCF charts. The self-managed stack
+supplies hostname anti-affinity and zone spread from `highAvailability.mode`.
+Standalone installs that run more than one replica should set them.
 
 ## Shutdown
 

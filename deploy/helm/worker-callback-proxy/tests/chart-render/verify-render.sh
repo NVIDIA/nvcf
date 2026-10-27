@@ -153,9 +153,8 @@ expect_eq "invocation route" \
 expect_eq "drain time" "$(pod "${m}" '.containers[0].args | .[(to_entries[] | select(.value == "--drain-time-s") | .key) + 1]')" "30"
 expect_eq "access log format" "$(envoy "${m}" '[.. | select(has("json_format")) | .json_format.x_request_id] | unique | .[]')" \
   "%REQ(X-REQUEST-ID)%"
-expect_eq "affinity default" "$(pod "${m}" '.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey')" \
-  "kubernetes.io/hostname"
-expect_eq "spread default" "$(pod "${m}" '.topologySpreadConstraints[0].topologyKey')" "topology.kubernetes.io/zone"
+expect_eq "no affinity by default" "$(pod "${m}" 'has("affinity")')" "false"
+expect_eq "no spread by default" "$(pod "${m}" 'has("topologySpreadConstraints")')" "false"
 expect_eq "no tracing by default" "$(envoy "${m}" '[.. | select(has("tracing"))] | length')" "0"
 # Without an explicit value Envoy closes quiet streams after 5m.
 stream_idle() {
@@ -199,17 +198,21 @@ render --set workerCallbackProxy.invocation.enabled=false > "${m}"
 check_wiring "${m}"
 expect_eq "no invocation listener" "$(envoy "${m}" '[.static_resources.listeners[] | select(.name == "invocation_worker_tcp")] | length')" "0"
 
-# --- Placement switches and overrides.
-m="${tmp_dir}/no-placement.yaml"
-render --set workerCallbackProxy.defaultPodAntiAffinity=false --set workerCallbackProxy.defaultZoneSpread=false > "${m}"
-expect_eq "affinity off" "$(pod "${m}" 'has("affinity")')" "false"
-expect_eq "spread off" "$(pod "${m}" 'has("topologySpreadConstraints")')" "false"
+# --- Supplied placement renders as given.
 m="${tmp_dir}/custom-placement.yaml"
 render --set 'workerCallbackProxy.topologySpreadConstraints[0].maxSkew=2' \
   --set 'workerCallbackProxy.topologySpreadConstraints[0].topologyKey=kubernetes.io/hostname' \
-  --set 'workerCallbackProxy.topologySpreadConstraints[0].whenUnsatisfiable=DoNotSchedule' > "${m}"
+  --set 'workerCallbackProxy.topologySpreadConstraints[0].whenUnsatisfiable=DoNotSchedule' \
+  --set 'workerCallbackProxy.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=100' \
+  --set 'workerCallbackProxy.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey=kubernetes.io/hostname' > "${m}"
 expect_eq "custom spread" "$(pod "${m}" '.topologySpreadConstraints | length')" "1"
 expect_eq "custom spread key" "$(pod "${m}" '.topologySpreadConstraints[0].topologyKey')" "kubernetes.io/hostname"
+expect_eq "custom affinity" \
+  "$(pod "${m}" '.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey')" \
+  "kubernetes.io/hostname"
+for removed in defaultPodAntiAffinity defaultZoneSpread; do
+  assert_render_fails "${removed}" --set "workerCallbackProxy.${removed}=false"
+done
 
 # --- Single replica: no PDB.
 m="${tmp_dir}/one.yaml"

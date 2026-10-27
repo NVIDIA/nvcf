@@ -224,9 +224,7 @@
         "livenessProbe": { "$ref": "#/definitions/object" },
         "nodeSelector": { "$ref": "#/definitions/stringMap" },
         "tolerations": { "type": "array" },
-        "defaultPodAntiAffinity": { "type": "boolean" },
         "affinity": { "$ref": "#/definitions/object" },
-        "defaultZoneSpread": { "type": "boolean" },
         "topologySpreadConstraints": { "type": "array" }
       }
     }

@@ -212,12 +212,7 @@ workerCallbackProxy:
   nodeSelector: {}
   tolerations: []
 
-  # Pod affinity. When affinity is empty, defaultPodAntiAffinity renders a
-  # soft hostname anti-affinity; set it to false to render no affinity.
-  defaultPodAntiAffinity: true
+  # Rendered as given; empty renders nothing. The self-managed stack supplies
+  # HA placement from highAvailability.mode.
   affinity: {}
-
-  # Zone spread. When topologySpreadConstraints is empty, defaultZoneSpread
-  # renders a soft zone spread; set it to false to render none.
-  defaultZoneSpread: true
   topologySpreadConstraints: []

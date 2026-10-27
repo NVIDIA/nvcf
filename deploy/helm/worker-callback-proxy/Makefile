@@ -31,14 +31,16 @@ OCI_REGISTRY_HOST ?= registry.example.com
 OCI_REGISTRY_NAMESPACE ?= your-org/your-namespace
 
 KUBERNETES_VERSION ?= 1.31.5
-# cert-manager Certificate and Prometheus Operator ServiceMonitor schemas.
-CRD_SCHEMA_LOCATION ?= https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+# cert-manager Certificate and Prometheus Operator ServiceMonitor schemas,
+# generated from the CRD versions NVCF ships; see tests/crd-schemas/PROVENANCE.md.
+CRD_SCHEMA_DIR := $(CURDIR)/tests/crd-schemas
+CRD_SCHEMA_LOCATION ?= $(CRD_SCHEMA_DIR)/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 # CHART_NAME is the chart's Chart.yaml name, including any OCI prefix.
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate validate-envoy test clean package push-oci
+.PHONY: install uninstall status lint template validate validate-envoy crd-schemas verify-crd-schemas test clean package push-oci
 
 install:
 ifndef values
@@ -82,6 +84,17 @@ validate: template
 		-schema-location default \
 		-schema-location '$(CRD_SCHEMA_LOCATION)' \
 		bin/manifest.yaml
+
+# Regenerates the CRD schemas (needs Docker and network access).
+crd-schemas:
+	bash tests/crd-schemas/generate.sh
+
+# Fails if the committed CRD schemas differ from a fresh generation.
+verify-crd-schemas:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	bash tests/crd-schemas/generate.sh "$$tmp" && \
+	diff -r --exclude=generate.sh "$(CRD_SCHEMA_DIR)" "$$tmp" && \
+	echo "CRD schemas match their sources"
 
 # Loads the rendered Envoy config into the chart's Envoy image (needs Docker).
 validate-envoy:
