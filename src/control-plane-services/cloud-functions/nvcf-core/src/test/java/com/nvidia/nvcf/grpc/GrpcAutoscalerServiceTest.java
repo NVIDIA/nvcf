@@ -358,7 +358,7 @@ class GrpcAutoscalerServiceTest {
         try {
             assertThatThrownBy(() -> autoscalerStub.autoscaleFunction(request))
                     .isInstanceOf(StatusRuntimeException.class)
-                    .hasMessageContaining("INVALID_ARGUMENT")
+                    .hasMessageContaining("UNAVAILABLE")
                     .hasMessageContaining("ICMS rejected allocation");
         } finally {
             channel.shutdownNow();
