@@ -139,13 +139,13 @@ merge:
 {{- end -}}
 
 {{/* OpenBao service PKI role allowed_domains: addons.llm.pki.allowedDomains plus
-     the worker callback proxy's frontend and grpc-proxy pod domains when they
-     are not already covered. Only called with the proxy enabled, so the LLM
-     value renders unchanged otherwise. Keep in sync with
+     the worker callback proxy's frontend, grpc-proxy pod and invocation-service
+     pod domains when they are not already covered. Only called with the proxy
+     enabled, so the LLM value renders unchanged otherwise. Keep in sync with
      openbao-migrations-env.yaml.gotmpl. */}}
 {{- define "nvcf.servicePki.allowedDomains" -}}
 {{- $domains := dig "addons" "llm" "pki" "allowedDomains" "" . | toString | trim -}}
-{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" -}}
+{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" "invocation.nvcf.svc.cluster.local" -}}
 {{- range $need := $required -}}
 {{- $covered := false -}}
 {{- range $allowed := splitList "," $domains -}}
@@ -822,8 +822,8 @@ natsAuthCalloutService:
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$" $workerCallbackProxyDomain) }}
 {{- fail (printf "workerCallbackProxy.workerDomain must be a DNS name without a scheme or wildcard, got %q" $workerCallbackProxyDomain) }}
 {{- end }}
-{{- if or $invocationWorkerBaseURL $grpcProxyWorkerConnectBaseURL }}
-{{- fail "workerCallbackProxy.enabled cannot be combined with global.workerEndpoints.invocationServiceURL, global.workerEndpoints.grpcProxyWorkerConnectURL, or grpcproxy.workerConnectBaseURL; workers reach both services through the proxy" }}
+{{- if or $invocationWorkerBaseURL $grpcProxyWorkerConnectBaseURL (dig "env" "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" "" $sizingValues.invocation) }}
+{{- fail "workerCallbackProxy.enabled cannot be combined with global.workerEndpoints.invocationServiceURL, global.workerEndpoints.grpcProxyWorkerConnectURL, grpcproxy.workerConnectBaseURL, or invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS; workers reach both services through the proxy" }}
 {{- end }}
 {{- $grpcProxyWorkerConnectBaseURL = printf "https://%s" $workerCallbackProxyDomain }}
 {{- end }}
@@ -1146,7 +1146,7 @@ invocation:
   {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
   {{- if $workerCallbackProxyEnabled }}
-  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS" (dig "invocationProxyURL" "" $workerEndpoints | default "http://worker-callback-proxy.nvcf.svc.cluster.local:10084") }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS" (dig "invocationProxyURL" "" $workerEndpoints | default (printf "https://invocation.%s:10084" $workerCallbackProxyDomain)) }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   {{- $invocationSelfAddress := index $secretsInvocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" | default (index $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS") }}
@@ -1175,6 +1175,22 @@ invocation:
   replicaCount: 1
   autoscaling:
     enabled: false
+  {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- /* Envoy tunnels workers to this TLS listener, and the worker verifies
+         the pod as <dashed-pod-ip>.invocation.nvcf.svc.cluster.local. */}}
+  workerTls:
+    enabled: true
+    advertise: true
+    tls:
+      certificate:
+        enabled: true
+        issuerRef:
+          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          group: cert-manager.io
+        dnsNames:
+          - "*.invocation.nvcf.svc.cluster.local"
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:

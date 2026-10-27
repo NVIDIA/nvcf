@@ -12,9 +12,12 @@ forwards each one to the pod that holds the request.
 ## How callbacks reach a pod
 
 - **HTTP functions:** invocation-service hands the worker its own address,
-  `<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8080`, and the proxy
-  address. The worker sends the callback through the proxy on TCP 10084. The
-  proxy forwards only addresses of that form.
+  `https://<dashed-pod-ip>.invocation.nvcf.svc.cluster.local:8443`, and the
+  proxy address `https://invocation.<workerDomain>:10084`. The worker opens TLS
+  to the proxy on TCP 10084 and verifies its `*.<workerDomain>` certificate,
+  then runs a second TLS session through the tunnel to the pod's 8443
+  listener and verifies the pod certificate. The proxy forwards only addresses
+  of that form and never sees the callback in plaintext.
 - **gRPC functions:** grpc-proxy serves HTTP/3 callbacks and hands the worker
   `https://<dashed-pod-ip>.<workerDomain>`. DNS resolves that name to the
   proxy. The worker verifies the proxy's `*.<workerDomain>` certificate, and
@@ -27,11 +30,15 @@ forwards each one to the pod that holds the request.
 - OpenBao and cert-manager from the stack (`openbao.enabled` and
   `certManager.enabled`, both on by default). Enabling the proxy provisions the
   OpenBao service PKI and `ClusterIssuer/nvcf-openbao-pki`, which sign the
-  proxy and grpc-proxy certificates. The LLM add-on is not required.
+  proxy, grpc-proxy and invocation-service certificates. The LLM add-on is
+  not required.
+- An invocation-service image with worker TLS support. The stack turns on its
+  8443 worker TLS listener (`invocation.workerTls`) when the proxy is enabled.
 - No split-plane worker URLs: leave
   `global.workerEndpoints.invocationServiceURL`,
-  `global.workerEndpoints.grpcProxyWorkerConnectURL`, and
-  `grpcproxy.workerConnectBaseURL` empty.
+  `global.workerEndpoints.grpcProxyWorkerConnectURL`,
+  `grpcproxy.workerConnectBaseURL`, and
+  `invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS` empty.
 - Access to the Envoy image. The chart pulls `docker.io/envoyproxy/envoy` by
   default. To use a mirror, set `workerCallbackProxy.image.registry` and
   `workerCallbackProxy.image.repository`.
@@ -47,15 +54,18 @@ forwards each one to the pod that holds the request.
      workerDomain: grpc-worker.example.com
      service:
        type: LoadBalancer
-   global:
-     workerEndpoints:
-       invocationProxyURL: http://<proxy-address>:10084
    ```
 
-   `invocationProxyURL` is the address the compute cluster uses to reach the
-   proxy Service on TCP 10084. It defaults to
-   `http://worker-callback-proxy.nvcf.svc.cluster.local:10084`, which resolves
-   only inside the control-plane cluster.
+   Workers reach the invocation tunnel at
+   `https://invocation.<workerDomain>:10084`, which the wildcard DNS record in
+   the next step covers. Set `global.workerEndpoints.invocationProxyURL` only
+   when workers use another name; it must be `https` and covered by the
+   `*.<workerDomain>` certificate.
+
+   Use a private load balancer where you can, and allow only the compute
+   cluster's egress addresses through your load balancer or network controls.
+   Both tunnels are TLS, but any client that reaches the Service can open
+   one.
 
 2. Make `*.<workerDomain>` resolve to the proxy Service from the compute
    cluster, for example with a wildcard DNS record for the load balancer

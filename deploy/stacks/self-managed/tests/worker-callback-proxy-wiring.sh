@@ -125,9 +125,23 @@ render_values invocation-service "$work_dir/inv-on.yaml"
 i="$work_dir/inv-on.yaml"
 test "$(yq -r '.invocation.replicaCount' "$i")" = "2" || fail "invocation: expected 2 replicas"
 test "$(yq -r '.invocation.podDisruptionBudget.enabled' "$i")" = "true" || fail "invocation: expected PDB enabled"
-test "$(yq -r '.invocation.env.WORKER_STREAM_PROPERTIES__PROXY_ADDRESS' "$i")" = "http://worker-callback-proxy.nvcf.svc.cluster.local:10084" ||
-  fail "invocation: expected proxy address"
+test "$(yq -r '.invocation.env.WORKER_STREAM_PROPERTIES__PROXY_ADDRESS' "$i")" = "https://invocation.grpc-worker.example.com:10084" ||
+  fail "invocation: expected the TLS proxy address under the worker domain"
 test "$(yq -r '.invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS // ""' "$i")" = "" || fail "invocation: self address must not be set"
+test "$(yq -r '[.invocation.workerTls.enabled, .invocation.workerTls.advertise, .invocation.workerTls.tls.certificate.enabled] | join(",")' "$i")" = "true,true,true" ||
+  fail "invocation: expected the worker TLS listener advertised with an issued certificate"
+test "$(yq -r '.invocation.workerTls.tls.certificate.issuerRef.name' "$i")" = "nvcf-openbao-pki" ||
+  fail "invocation: expected the OpenBao service PKI issuer"
+
+inv_manifest="$work_dir/inv-manifest.yaml"
+helm template invocation-service "$helm_dir/http-invocation/nvcf-invocation-service" --namespace nvcf --values "$i" >"$inv_manifest" ||
+  fail "invocation-service chart must render with stack values"
+# Charts without invocation.workerTls ignore it and render no Certificate.
+if yq ea -e 'select(.kind == "Certificate")' "$inv_manifest" >/dev/null 2>&1; then
+  inv_dns_names="$(yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "$inv_manifest")"
+  test "$inv_dns_names" = '*.invocation.nvcf.svc.cluster.local' ||
+    fail "invocation: certificate must cover the per-pod names Envoy tunnels to, got $inv_dns_names"
+fi
 
 render_values worker-callback-proxy "$work_dir/wcp-on.yaml"
 w="$work_dir/wcp-on.yaml"
@@ -140,6 +154,9 @@ manifest="$work_dir/wcp-manifest.yaml"
 helm template worker-callback-proxy "$test_helm_dir/worker-callback-proxy/worker-callback-proxy" --namespace nvcf --values "$w" >"$manifest" ||
   fail "proxy chart must render with stack values"
 grep -Fq -- '- "*.grpc-worker.example.com"' "$manifest" || fail "proxy: expected frontend certificate for the worker domain"
+envoy_regex="$(yq ea -r 'select(.kind == "ConfigMap") | .data["envoy.yaml"]' "$manifest" | yq -r '.. | select(has("safe_regex")) | .safe_regex.regex' | sort -u)"
+[[ "$envoy_regex" == *'invocation\.nvcf\.svc\.cluster\.local:8443$' ]] ||
+  fail "proxy: invocation tunnels must target the invocation-service TLS port, got $envoy_regex"
 test "$(yq ea -r 'select(.kind == "Service" and .metadata.name == "worker-callback-proxy") | .metadata.name' "$manifest")" = "worker-callback-proxy" ||
   fail "proxy: Service name must match the invocation proxy address"
 grep -Fq -- "$grpc_cert_secret" "$manifest" ||
@@ -264,5 +281,13 @@ global:
 EOF
 } | write_env
 assert_render_fails split-grpc-endpoint "cannot be combined with global.workerEndpoints.invocationServiceURL"
+
+{ enabled_env preferred; cat <<'EOF'
+invocation:
+  env:
+    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: https://invocation.example.com
+EOF
+} | write_env
+assert_render_fails fixed-self-address "invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS"
 
 echo "worker-callback-proxy-wiring: ok"

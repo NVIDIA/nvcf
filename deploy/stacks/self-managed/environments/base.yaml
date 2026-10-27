@@ -81,8 +81,9 @@ global:
     invocationServiceURL: ""
     # Proxy that workers dial for invocation callbacks
     # (WORKER_STREAM_PROPERTIES__PROXY_ADDRESS). Used only when
-    # workerCallbackProxy.enabled is true; empty uses the worker callback proxy
-    # Service. Set it when workers reach Envoy through another address.
+    # workerCallbackProxy.enabled is true; empty uses
+    # https://invocation.<workerDomain>:10084. Set it when workers reach Envoy
+    # through another https name under *.<workerDomain>.
     invocationProxyURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy. Empty
     # advertises each pod's IP. Every replica advertises a set value, so
