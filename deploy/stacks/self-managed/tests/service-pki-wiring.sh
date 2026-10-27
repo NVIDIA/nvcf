@@ -98,8 +98,8 @@ workerCallbackProxy:
 EOF
 render_values 01-dependencies.yaml.gotmpl openbao-server "$work_dir/partial.yaml"
 actual="$(migration_env NVCF_SERVICE_PKI_ALLOWED_DOMAINS "$work_dir/partial.yaml")"
-test "$actual" = "example.com,grpc-headless.nvcf.svc.cluster.local" ||
-  fail "expected only the uncovered grpc-proxy pod domain added, got $actual"
+test "$actual" = "example.com,grpc-headless.nvcf.svc.cluster.local,invocation.nvcf.svc.cluster.local" ||
+  fail "expected only the uncovered grpc-proxy and invocation-service pod domains added, got $actual"
 
 echo "== LLM and the proxy: the OpenBao migration is the only role writer =="
 write_env <<'EOF'
