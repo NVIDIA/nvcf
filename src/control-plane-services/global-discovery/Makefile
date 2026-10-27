@@ -26,7 +26,10 @@ COVERAGE_MIN ?= 85
 
 # buf and the protoc plugins are installed with `go install` (versions in
 # hack/proto.sh) into $(HOME)/go/bin, which is not always on PATH.
-PROTO_PATH := $(HOME)/go/bin:$(PATH)
+# make proto-tools installs the pinned versions into _output/tools, which
+# comes first.
+PROTO_TOOLS_BIN := $(CURDIR)/_output/tools
+PROTO_PATH := $(PROTO_TOOLS_BIN):$(HOME)/go/bin:$(PATH)
 
 .PHONY: all
 all: build
@@ -75,6 +78,18 @@ lint:
 vet:
 	$(GO) vet ./...
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: files above need formatting" >&2; exit 1; }
+
+# Install buf and the protoc plugins at the versions pinned by the
+# "go install" lines of hack/proto.sh. CI runs
+# tools/ci/check-go-codegen with "make proto-tools proto".
+.PHONY: proto-tools
+proto-tools:
+	@tools="$$(sed -n 's/^#   go install //p' hack/proto.sh)"; \
+	test -n "$${tools}" || { echo "hack/proto.sh pins no tools" >&2; exit 1; }; \
+	for tool in $${tools}; do \
+		echo "go install $${tool}"; \
+		GOBIN="$(PROTO_TOOLS_BIN)" $(GO) install "$${tool}" || exit 1; \
+	done
 
 # Lint the proto contract and regenerate api/gen.
 .PHONY: proto
