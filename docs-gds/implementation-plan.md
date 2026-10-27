@@ -647,3 +647,59 @@ several clusters once. Not done in ws4: an OpenTelemetry stats handler is
 not wired by default (pass it in `DialOptions`), and staticcheck and
 golangci-lint were not run (not installed locally); `go vet` and `gofmt` are
 clean.
+
+Workstream 3 (DynamoDB store), branch `feat/gds-ws3-dynamodb`, delivered under
+`src/control-plane-services/global-discovery`:
+
+- `internal/store/dynamodb`: `Store` on one table with the single-table
+  layout above, protobuf bodies mapped from the store records to
+  `nvidia.gds.v1` messages (`codec.go`), top-level `gen`, `lease_epoch`,
+  `lease_renewed_at`, `owner_id`, `updated_at` and `expires_at`, the designed
+  conditional writes, `TransactWriteItems` for pool names, `DeleteCluster`
+  through prefix queries and `BatchWriteItem` chunks of 25 with retries, and
+  a paginated, eventually consistent `LoadClusterSet` with bounded parallel
+  endpoint partition queries. SDK errors map to `ErrUnavailable` and
+  `ErrTooLarge`. `Options{Client, TableName, QueryConcurrency, Clock,
+  ExpiryAfter}`; `NewClient` builds a client from the default AWS chain for
+  the server wiring.
+- `schema.go`: the table definition (string `pk`/`sk`, KEYS_ONLY LSI
+  `by_updated_at` on `updated_at`, PAY_PER_REQUEST, deletion protection),
+  `CreateTable`, `EnsureTTL` and `EnsurePointInTimeRecovery`;
+  `testdata/create-table.json` is its CLI form.
+- `cmd/gds-admin` with `create-table` (`--table`, `--region`, `--endpoint`,
+  `--deletion-protection`, `--pitr`, `--ttl`, `--wait-timeout`), package
+  `cmd/gds-admin/createtable` with `Run(ctx, args, stdout, stderr)`.
+- Tests: the conformance suite against an in-memory fake of the DynamoDB API
+  in `make test` (coverage gate kept), and against `amazon/dynamodb-local`
+  2.6.1 through testcontainers-go behind the `integration` build tag
+  (`make test-integration`, Bazel `dynamodb_integration_test` and
+  `createtable_integration_test` tagged `external` and `requires-docker`),
+  plus a two-replica test, a multi-page load, stale name reservations and
+  the table definition. Integration tests skip without Docker.
+- Docs: `docs/storage.md`, `docs/iam.md`, `docs/consistency-dynamodb.md`.
+- Bazel: `com_github_aws_aws_sdk_go_v2_service_dynamodb` and
+  `com_github_aws_aws_sdk_go_v2_feature_dynamodb_attributevalue` in
+  `use_repo`; dynamodb v1.57.1 and attributevalue v1.20.37 keep the workspace
+  on aws-sdk-go-v2 v1.41.5.
+
+Deviations from the plan:
+
+- An endpoint partition marker item (`CS#<clusterset>` / `EPX#<cluster>`)
+  lets `LoadClusterSet` find endpoint sets of clusters without a
+  registration, export or pool, which the conformance suite requires.
+- `PutCluster` also pins the generation it read (`attribute_not_exists(pk) OR
+  (lease_epoch < :new AND gen = :seen)`), and `PutPool` and `DeletePool`
+  guard the pool with the generation, body and lease they read instead of
+  `gen < :gen` alone, because they derive fields from the stored item. A pool
+  heartbeat whose patch changes the body is a read plus an `UpdateItem`
+  guarded by the body. A pool name reservation whose pool is gone (TTL) or
+  renamed is taken over.
+- `expires_at` is the last write or heartbeat plus 7 days, on cluster and pool
+  items only. `Ping` uses `GetItem` of a missing key instead of
+  `DescribeTable`, so the server role needs no table management action.
+- The consistency document is `docs/consistency-dynamodb.md`.
+
+Not done in ws3: wiring the store and `create-table` into gds-server (server
+workstream), CI for the Docker-backed targets, replica management in
+`gds-admin` (documented as AWS CLI and CloudFormation), regenerating the
+root `dependencies.md`.
