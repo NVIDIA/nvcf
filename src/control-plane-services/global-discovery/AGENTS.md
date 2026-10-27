@@ -67,6 +67,19 @@ local gazelle target on purpose.
   for enums. The API layer converts.
 - Writes are conditional; see the package comment of `internal/store`.
 
+## Client and fake server
+
+- `pkg/client` is a public API imported by other modules (the MCS
+  controller, Pylon Operator, the LLM API gateway). Keep changes additive and
+  keep `pkg/client/README.md` in step.
+- `pkg/fakegds` is the test server other workstreams import. When the API
+  semantics change (error reasons and details, watch event shape, pool state
+  rules), update the fake and its tests in the same change.
+- Client tests run against `pkg/fakegds` over real loopback listeners and
+  bufconn with the race detector: `go test -race ./pkg/...`. The coverage
+  gate of `make test` covers `internal/` only; keep `pkg/` tests thorough
+  anyway.
+
 ## Conventions
 
 - Metrics: `nvcf_gds_*` (server), `nvcf_gds_mcs_controller_*`,
