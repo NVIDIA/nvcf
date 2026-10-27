@@ -5,11 +5,24 @@ authenticate, introspect, rotate, revoke).
 
 ## Synchronous bulk operations
 
-The trusted management boundary submits `PUT` requests to:
+The customer-operated Trusted Barrier submits `PUT` requests to:
 
 - `/v2/api-keys/key-owner/users/{userId}/key-operations`
 - `/v2/api-keys/account-admin/accounts/{ncaId}/key-operations`
 - `/v2/api-keys/platform-admin/key-operations`
+
+These privileged internal endpoints rely on the Trusted Barrier to authenticate
+the caller, authorize the actor and every selected value, and replace audit
+headers. API Keys validates target data against the route. Keep its service
+ClusterIP-only, with network access restricted to the barrier and approved
+control-plane workloads. A proxy or mesh policy must restrict those workloads
+to evaluation/introspection paths on the shared port.
+
+The gateway-routes chart's API Keys HTTPRoute forwards all paths and provides
+routing only. Keep `nvcfGatewayRoutes.routes.apiKeys.enabled: false` until a
+customer-provided barrier protects that route. In the self-managed stack, set
+`ingress.gatewayApi.routes.apiKeys.enabled: false`. Expose the barrier to external
+clients and connect it to API Keys over the internal network.
 
 Set `operation` to `REVOKED` or `DELETE`. Each dimension not fixed by the route
 requires an `accounts`, `users`, or `issuerServices` array of distinct IDs or
@@ -20,9 +33,12 @@ require `confirm_platform_wide: true`. Configure the array limit with
 HTTP 200 returns `KeyOperationResponse` after processing finishes. Selection
 uses the submission time as its creation cutoff. Processing stops on failure,
 and problem details include `bulkOperation` with `FAILED` status and counts
-for keys visited so far. `partialApplication` indicates that a mutation was
+for eligible keys processed so far. `partialApplication` indicates that a mutation was
 attempted. Earlier writes remain applied. Retries start a new selection with
 a new cutoff.
+
+A legacy key with a missing creation time fails selection because its cutoff
+eligibility cannot be established. Repair the malformed record before retrying.
 
 Bulk mutations clear this instance's key and introspection caches before the
 response, including after partial failure. Other replicas expire cached key

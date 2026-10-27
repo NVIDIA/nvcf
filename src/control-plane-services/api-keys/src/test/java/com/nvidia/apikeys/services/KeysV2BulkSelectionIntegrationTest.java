@@ -24,17 +24,21 @@ import static com.nvidia.apikeys.TestData.SERVICE_ID_1;
 import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.nvidia.apikeys.App;
 import com.nvidia.apikeys.caching.CachingKeysLoader;
 import com.nvidia.apikeys.caching.IntrospectionLocalCache;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
+import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
 import com.nvidia.apikeys.dto.keysV2.KeysOperationType;
 import com.nvidia.apikeys.dto.keysV2.PlatformAdminKeysOperationRequest;
 import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
+import com.nvidia.apikeys.services.SyncKeysV2OperationsService.BulkOperationException;
 import com.nvidia.apikeys.utils.TestClock;
+import com.nvidia.apikeys.vo.KeyOperationStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
@@ -187,6 +191,42 @@ class KeysV2BulkSelectionIntegrationTest {
                 .extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.ACTIVE);
         assertThat(keysDao.getKeyByHash("legacy-later-hash")).get()
                 .extracting(key -> key.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
+    }
+
+    @Test
+    void missingLegacyCreationTimeReportsPartialFailureWithoutSkippingKey() {
+        var valid = key(LEGACY_ACCOUNT, "valid", "nvcf", "valid-key");
+        keysV2Dao.save(valid);
+        var invalid = KEY_VO_1.toBuilder().ownerId("invalid").keyId("invalid-key")
+                .keyHash("invalid-hash").createdAt(null).build();
+        keysDao.save(invalid, KEY_OWNER_VO_1.toBuilder().ownerId("invalid").build());
+        var bulk = new SyncKeysV2OperationsService(keys, services, legacyAccount,
+                new MillisecondPrecisionClock(Clock.fixed(TEST_TIME, ZoneOffset.UTC)), 10, selector(),
+                keyCache, introspectionCache);
+
+        var failure = assertThrows(BulkOperationException.class,
+                () -> bulk.operateAsPlatformAdmin(PlatformAdminKeysOperationRequest.builder()
+                        .operation(KeysOperationType.REVOKED).accounts(List.of(LEGACY_ACCOUNT))
+                        .users(List.of("valid", "invalid")).issuerServices(List.of("nvcf")).build()));
+
+        assertThat(failure.getCause()).isInstanceOf(IllegalStateException.class)
+                .hasMessage("Selected key has no creation time");
+        assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true);
+        var result = (KeyOperationResponse) failure.getBody().getProperties().get("bulkOperation");
+        assertThat(result.getStatus()).isEqualTo(KeyOperationStatus.FAILED);
+        assertThat(result.getMatchedCount()).isOne();
+        assertThat(result.getCompletedCount()).isOne();
+        assertThat(result.getFailedCount()).isZero();
+        assertThat(keysV2Dao.getKeyByHash(valid.getKeyHash())).get()
+                .extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+        assertThat(keysV2Dao.get(LEGACY_ACCOUNT, USER, "valid", "nvcf", valid.getKeyId())).get()
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+        assertThat(keysDao.getKeyByHash(invalid.getKeyHash())).contains(invalid);
+        assertThat(keysDao.getKeyByOwnerAndServiceAndId(USER, "invalid", SERVICE_ID_1, invalid.getKeyId()))
+                .hasValueSatisfying(row -> {
+                    assertThat(row.getCreatedAt()).isNull();
+                    assertThat(row.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
+                });
     }
 
     private List<KeyV2Vo> seedV2() {
