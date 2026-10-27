@@ -933,18 +933,17 @@ func (a *Agent) RegisterWithICMS(ctx context.Context) (*types.ICMSRegistrationRe
 	return res, nil
 }
 
+// Delays between attempts of the initial ICMS registration.
 var (
 	initialICMSRegistrationRetryInterval = 10 * time.Second
 	maxICMSRegistrationRetryInterval     = 5 * time.Minute
 )
 
-// registerWithICMSRetrying retries RegisterWithICMS with backoff until it succeeds or ctx is
-// canceled, instead of returning the first error. A registration failure during initial startup
-// (e.g. an ICMS 409 Conflict because the configured resource overhead would remove an instance
-// type that still has active instances) is a configuration problem, not a crash-worthy defect:
-// the same registration attempt would fail identically on every restart until the configuration
-// changes, so treating it as fatal only produces a crash loop. See the comment at the call site
-// in Start for how the readiness probe keeps this replica out of rotation while retrying.
+// registerWithICMSRetrying calls RegisterWithICMS until it succeeds or ctx is done.
+// A failed initial registration, such as an ICMS 409 for an instance type that still
+// has active instances, fails the same way after a restart, so exiting would only
+// crash-loop. Start arms readiness after registration, so the replica stays NotReady
+// while it retries.
 func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegistrationResponse, error) {
 	log := core.GetLogger(ctx)
 	backoff := newGPURegistrationRetryBackoff(initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval)
@@ -952,6 +951,10 @@ func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegist
 		res, err := a.RegisterWithICMS(ctx)
 		if err == nil {
 			return res, nil
+		}
+		// An attempt cut short by shutdown is not worth a retry warning.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		delay := backoff.next()
 		log.WithError(err).Warnf("Failed to register with ICMS, retrying in %s", delay)
@@ -1332,13 +1335,9 @@ func (a *Agent) Start(ctx context.Context) error {
 			},
 		}
 	} else {
-		// Register with ICMS after health. Retried with backoff instead of
-		// returning fatally on failure: see registerWithICMSRetrying. This
-		// can block Start for as long as registration keeps failing; that is
-		// intentional, since the readiness check is only wired up below
-		// after a successful registration, so this replica stays NotReady
-		// (never crash-looping, never cutting the rolling update over to it)
-		// until registration succeeds or the process is asked to shut down.
+		// Register with ICMS after health. This blocks until registration
+		// succeeds or ctx is done; readiness is armed only afterwards, so a
+		// rolling update does not cut over to this replica while it retries.
 		log.Info("Registering with ICMS")
 		var regErr error
 		res, regErr = a.registerWithICMSRetrying(ctx)

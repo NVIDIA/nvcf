@@ -850,13 +850,10 @@ func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {
 	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
 }
 
-// TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart is a
-// regression test: an initial ICMS registration failure (e.g.
-// an HTTP 409 Conflict because the configured resource overhead would remove an
-// instance type that still has active instances) must not make Start return an
-// error. Start must instead retry with backoff, stay NotReady (so a rolling
-// update never cuts over to this replica) while remaining alive (so it never
-// crash-loops), and return successfully once registration eventually succeeds.
+// TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart checks
+// that a failed initial ICMS registration, such as a 409 for an instance type that
+// still has active instances, does not make Start return. Start retries, stays
+// NotReady but live, and returns once a retry succeeds.
 func TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart(t *testing.T) {
 	logCtx, logHook := core.WithTestingLogger(newTestContext())
 	ctx, cancel := context.WithCancel(logCtx)
@@ -947,6 +944,19 @@ func TestAgentStartRetriesInitialICMSRegistrationFailureInsteadOfFailingStart(t 
 
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusOK)
 	require.Len(t, icmsClient.requests(), 2)
+}
+
+func TestRegisterWithICMSRetryingStopsWithoutRetryWarningOnShutdown(t *testing.T) {
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(logCtx)
+	cancel()
+
+	// Without a cache every attempt fails at once, here after shutdown began.
+	_, err := (&Agent{}).registerWithICMSRetrying(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	for _, entry := range logHook.AllEntries() {
+		assert.NotContains(t, entry.Message, "retrying")
+	}
 }
 
 func TestAgent_getTelemetryAttributes(t *testing.T) {
@@ -3021,14 +3031,10 @@ func (m *mockHealthStatusCache) RefreshStatus(_ context.Context) (types.AgentHea
 	return m.status, nil
 }
 
-// TestStartReadinessNotSetOnICMSRegistrationFailure is a regression test. A
-// persistent ICMS registration failure (e.g. a 409 Conflict
-// because the configured resource overhead would remove an instance type that
-// still has active instances) must not make Start return an error or crash the
-// process: Start retries with backoff instead, and readiness must never be
-// armed while registration keeps failing, so a rolling update never cuts over
-// to this replica. Start only returns once registration succeeds or ctx is
-// canceled (clean shutdown), which this test exercises via cancellation.
+// TestStartReadinessNotSetOnICMSRegistrationFailure checks that while ICMS
+// registration keeps failing, Start keeps retrying without arming readiness, so
+// a rolling update does not cut over to this replica, and that canceling ctx
+// stops the retries.
 func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(newTestContext())
 	t.Cleanup(cancel)
