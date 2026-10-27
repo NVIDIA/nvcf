@@ -1,0 +1,289 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "global-discovery-mcs-controller chart values",
+    "type": "object",
+    "additionalProperties": false,
+    "definitions": {
+        "duration": {
+            "type": "string",
+            "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"
+        },
+        "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+        },
+        "dnsLabelOrEmpty": {
+            "type": "string",
+            "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        },
+        "dnsLabel": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        },
+        "dnsSubdomainOrEmpty": {
+            "type": "string",
+            "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "maxLength": 253
+        },
+        "probe": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "initialDelaySeconds": {"type": "integer", "minimum": 0},
+                "periodSeconds": {"type": "integer", "minimum": 1},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "failureThreshold": {"type": "integer", "minimum": 1},
+                "successThreshold": {"type": "integer", "minimum": 1}
+            }
+        },
+        "intOrPercentOrEmpty": {
+            "anyOf": [
+                {"type": "integer", "minimum": 0},
+                {"type": "string", "pattern": "^$|^[0-9]+%?$"}
+            ]
+        }
+    },
+    "properties": {
+        "global": {
+            "type": "object"
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "gds-mcs-controller image. repository is required; tag defaults to the chart appVersion",
+            "properties": {
+                "repository": {
+                    "type": "string",
+                    "description": "Container registry path, without tag"
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Image tag, or a digest starting with sha256:"
+                },
+                "pullPolicy": {
+                    "type": "string",
+                    "enum": ["Always", "IfNotPresent", "Never"]
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"$ref": "#/definitions/dnsSubdomainOrEmpty"}
+                },
+                "required": ["name"]
+            }
+        },
+        "nameOverride": {"type": "string"},
+        "fullnameOverride": {"type": "string"},
+        "replicaCount": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "gds": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "urls": {
+                    "type": "array",
+                    "description": "GDS gRPC URLs in failover order. Required",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^https?://[^/\\s]+/?$"
+                    }
+                },
+                "tlsCaConfigMap": {"$ref": "#/definitions/dnsSubdomainOrEmpty"},
+                "allowInsecureHttp": {"type": "boolean"}
+            }
+        },
+        "clusterset": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "$ref": "#/definitions/dnsLabelOrEmpty",
+                    "description": "Clusterset id, a DNS label"
+                }
+            }
+        },
+        "cluster": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "id": {
+                    "$ref": "#/definitions/dnsLabelOrEmpty",
+                    "description": "Cluster id, a DNS label unique in the clusterset"
+                },
+                "region": {"type": "string"},
+                "labels": {
+                    "type": "object",
+                    "maxProperties": 64,
+                    "propertyNames": {
+                        "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+                    },
+                    "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+                    }
+                }
+            }
+        },
+        "identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["flags", "auto", "clusterproperty"]
+                },
+                "writeClusterProperties": {"type": "boolean"}
+            }
+        },
+        "lease": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ttl": {"$ref": "#/definitions/duration"}
+            }
+        },
+        "deregisterOnShutdown": {"type": "boolean"},
+        "imports": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "createNamespaces": {"type": "boolean"},
+                "adoptUnmanaged": {"type": "boolean"}
+            }
+        },
+        "pools": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "autoExport": {"type": "boolean"}
+            }
+        },
+        "watchNamespaces": {
+            "type": "array",
+            "items": {"$ref": "#/definitions/dnsLabel"}
+        },
+        "endpointsPerSlice": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+        },
+        "maxConcurrentReconciles": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "leaderElection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"}
+            }
+        },
+        "crds": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "install": {"type": "boolean"}
+            }
+        },
+        "otel": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "endpoint": {"type": "string"},
+                "resourceAttributes": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["string", "number", "boolean"]}
+                }
+            }
+        },
+        "logLevel": {
+            "type": "string",
+            "enum": ["debug", "info", "error"]
+        },
+        "extraArgs": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "extraEnv": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1}
+                },
+                "required": ["name"]
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "create": {"type": "boolean"},
+                "name": {"type": "string"},
+                "annotations": {"type": "object"}
+            }
+        },
+        "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "port": {"$ref": "#/definitions/port"},
+                "serviceMonitor": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {"type": "boolean"},
+                        "interval": {"$ref": "#/definitions/duration"},
+                        "scrapeTimeout": {"$ref": "#/definitions/duration"},
+                        "labels": {"type": "object"}
+                    }
+                }
+            }
+        },
+        "healthProbe": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "port": {"$ref": "#/definitions/port"}
+            }
+        },
+        "probes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "readiness": {"$ref": "#/definitions/probe"},
+                "liveness": {"$ref": "#/definitions/probe"}
+            }
+        },
+        "podDisruptionBudget": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "minAvailable": {"$ref": "#/definitions/intOrPercentOrEmpty"},
+                "maxUnavailable": {"$ref": "#/definitions/intOrPercentOrEmpty"}
+            }
+        },
+        "terminationGracePeriodSeconds": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "resources": {"type": "object"},
+        "podAnnotations": {"type": "object"},
+        "podLabels": {"type": "object"},
+        "podSecurityContext": {"type": "object"},
+        "securityContext": {"type": "object"},
+        "priorityClassName": {"type": "string"},
+        "nodeSelector": {"type": "object"},
+        "tolerations": {"type": "array"},
+        "affinity": {"type": "object"}
+    }
+}
