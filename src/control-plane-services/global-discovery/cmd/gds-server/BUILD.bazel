@@ -22,7 +22,11 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//src/control-plane-services/global-discovery/internal/config",
+        "//src/control-plane-services/global-discovery/internal/server",
+        "//src/control-plane-services/global-discovery/internal/storefactory",
         "//src/control-plane-services/global-discovery/internal/version",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
     ],
 )
 
@@ -44,5 +48,8 @@ go_test(
     name = "gds-server_test",
     srcs = ["main_test.go"],
     embed = [":gds-server_lib"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

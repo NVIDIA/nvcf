@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "gds-admin_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/cmd/gds-admin",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/internal/config",
+        "//src/control-plane-services/global-discovery/internal/registry",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/storefactory",
+    ],
+)
+
+go_binary(
+    name = "gds-admin",
+    embed = [":gds-admin_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gds-admin_test",
+    srcs = ["main_test.go"],
+    embed = [":gds-admin_lib"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/internal/config",
+        "//src/control-plane-services/global-discovery/internal/store",
+        "//src/control-plane-services/global-discovery/internal/store/memory",
+        "//src/control-plane-services/global-discovery/internal/storefactory",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
