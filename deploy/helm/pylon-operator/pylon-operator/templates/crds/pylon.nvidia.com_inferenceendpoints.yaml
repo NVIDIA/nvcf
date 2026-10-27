@@ -267,6 +267,14 @@ spec:
                       open.
                     format: date-time
                     type: string
+                  routers:
+                    description: |-
+                      Routers is the number of routers with a live lease and ready replicas
+                      that the Global Discovery Service lists for the clusterset, with
+                      --router-source=gds. Unset with a static router address and until the
+                      operator first lists the routers.
+                    format: int32
+                    type: integer
                   routersConnected:
                     description: |-
                       RoutersConnected is the number of routers with an open registration

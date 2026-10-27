@@ -71,14 +71,14 @@ func (s *transportStep) Run(ctx context.Context, rc *ReconcileContext) error {
 
 // SetupWithManager owns the transport Deployments, so a change of their
 // status requeues the endpoint. It watches the credential Secret and, when
-// configured, the trust bundle ConfigMap; config.ManagerOptions narrows both
-// caches to those names.
+// configured, the trust bundle or GDS CA ConfigMap; config.ManagerOptions
+// narrows both caches to those names.
 func (s *transportStep) SetupWithManager(_ context.Context, _ ctrl.Manager, b *builder.Builder) error {
 	cfg := s.reconciler.Config()
 	b.Owns(&appsv1.Deployment{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(cfg.ClusterCredentialSecret)))
-	if cfg.TrustBundleConfigMap != "" {
-		b.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(cfg.TrustBundleConfigMap)))
+	if bundle := cfg.CABundleConfigMap(); bundle != "" {
+		b.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(bundle)))
 	}
 	return nil
 }

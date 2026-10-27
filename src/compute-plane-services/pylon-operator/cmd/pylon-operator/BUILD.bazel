@@ -11,6 +11,7 @@ go_library(
     deps = [
         "//src/compute-plane-services/pylon-operator/internal/config",
         "//src/compute-plane-services/pylon-operator/internal/controller",
+        "//src/compute-plane-services/pylon-operator/internal/gds",
         "//src/compute-plane-services/pylon-operator/internal/gpu",
         "//src/compute-plane-services/pylon-operator/internal/metrics",
         "//src/compute-plane-services/pylon-operator/internal/prober",

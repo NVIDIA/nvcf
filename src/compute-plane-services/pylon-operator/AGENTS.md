@@ -21,6 +21,8 @@ code with NVCA.
 - `internal/registration/`: the registration observer (`TransportReady`,
   `Registered`, `status.registration`, `status.servers`) from the transport
   pods' Pylon metrics
+- `internal/gds/`: with `--router-source=gds`, the Global Discovery Service
+  router cache behind the startup check and `status.registration.routers`
 - `internal/metrics/`: Prometheus collectors
 - `internal/config/`: flags, validation and manager options
 - `internal/version/`: build metadata set by Bazel `x_defs`
@@ -106,7 +108,13 @@ bazel mod show_repo @io_k8s_sigs_controller_runtime @io_k8s_api
 `k8s.io/client-go` with replace directives, and the first replace in
 `go.work.bazel` wins. Bazel therefore builds those three at the lib's version
 while plain `go` uses the patch level in this `go.mod`. Do not add replace
-directives here.
+directives for them here.
+
+The one replace in `go.mod` points the Global Discovery Service module
+(`src/control-plane-services/global-discovery`, for `pkg/client` and the test
+server `pkg/fakegds`) at its directory, as `event-ledger` does for its common
+module. Bazel builds it from `go.work.bazel` and the BUILD files name its
+packages by label.
 
 ## Conventions
 
@@ -140,6 +148,21 @@ directives here.
   ConfigMaps with the configured names (`config.ManagerOptions`).
 - The leader election Role (Leases in the operator namespace) is not generated;
   the chart provides it.
+
+## Router source
+
+`--router-source=static` (default) passes `--router-grpc-address` to Pylon as
+`--stargate-address`. `--router-source=gds` passes `--gds-url`,
+`--gds-clusterset` and, with `--gds-tls-ca-configmap`, `--gds-tls-ca-cert-path`
+instead; Pylon follows the router seeds the Global Discovery Service lists, so
+router churn never changes the transport template. `--router-grpc-address` is
+optional there and, when set, is also passed as `--stargate-address`. The GDS
+CA ConfigMap is replicated and mounted like the trust bundle; the ConfigMap
+cache holds one name, so with both flags set they must name the same
+ConfigMap. The operator's own router cache (`internal/gds`) only logs a
+startup error when no router is visible and fills
+`status.registration.routers`; a failure to start it does not stop the
+operator.
 
 ## Registration observer
 

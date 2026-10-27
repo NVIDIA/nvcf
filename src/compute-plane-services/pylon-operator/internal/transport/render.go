@@ -156,17 +156,17 @@ func InferenceServerID(ep *pylonv1alpha1.InferenceEndpoint, clusterID string) st
 // sets it and --quic-insecure with --dev-insecure-transport. status.gpu is
 // not passed to Pylon, so a GPU type change never rolls the transport.
 func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
-	args := []string{
-		"--upstream-http-base-url=" + UpstreamURL(ep),
-		"--stargate-address=" + escape(cfg.RouterGRPCAddress),
-		"--inference-server-id=" + InferenceServerID(ep, cfg.ClusterID),
-		"--cluster-id=" + cfg.ClusterID,
-		"--model-name=" + escape(ep.Spec.ModelName),
-		"--auth-token-file=" + path.Join(CredentialMountPath, CredentialKey),
+	args := []string{"--upstream-http-base-url=" + UpstreamURL(ep)}
+	args = append(args, routerArgs(cfg)...)
+	args = append(args,
+		"--inference-server-id="+InferenceServerID(ep, cfg.ClusterID),
+		"--cluster-id="+cfg.ClusterID,
+		"--model-name="+escape(ep.Spec.ModelName),
+		"--auth-token-file="+path.Join(CredentialMountPath, CredentialKey),
 		"--backend-connectivity=reverse",
-		"--upstream-health-path=" + escape(ep.Spec.Health.Path),
+		"--upstream-health-path="+escape(ep.Spec.Health.Path),
 		"--wait-for-upstream",
-	}
+	)
 	if ep.Spec.MaxEngineConcurrency != nil {
 		args = append(args, fmt.Sprintf("--max-engine-concurrency=%d", *ep.Spec.MaxEngineConcurrency))
 	}
@@ -181,6 +181,29 @@ func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
 	args = append(args, "--initial-input-tps="+strconv.FormatFloat(cfg.InitialInputTPS, 'f', -1, 64))
 	if cfg.DevInsecureTransport {
 		args = append(args, "--quic-insecure")
+	}
+	return args
+}
+
+// routerArgs tell Pylon where the routers are. With the static source it
+// is --stargate-address. With GDS it is the GDS URLs and clusterset, the GDS
+// CA when configured, and --stargate-address only when a router address is
+// also configured; the router seeds then come from GDS at runtime, so router
+// churn never changes the pod template.
+func routerArgs(cfg config.Config) []string {
+	if !cfg.GDS() {
+		return []string{"--stargate-address=" + escape(cfg.RouterGRPCAddress)}
+	}
+	args := make([]string, 0, len(cfg.GDSURLs)+3)
+	for _, u := range cfg.GDSURLs {
+		args = append(args, "--gds-url="+escape(u))
+	}
+	args = append(args, "--gds-clusterset="+escape(cfg.GDSClustersetID))
+	if cfg.GDSTLSCAConfigMap != "" {
+		args = append(args, "--gds-tls-ca-cert-path="+path.Join(TrustBundleMountPath, TrustBundleCAKey))
+	}
+	if cfg.RouterGRPCAddress != "" {
+		args = append(args, "--stargate-address="+escape(cfg.RouterGRPCAddress))
 	}
 	return args
 }
@@ -237,17 +260,22 @@ func podTemplate(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) corev1.
 			DefaultMode: ptr.To(readOnlyFileMode),
 		}},
 	}}
-	if cfg.TrustBundleConfigMap != "" {
-		ca := path.Join(TrustBundleMountPath, TrustBundleCAKey)
-		env = append(env, corev1.EnvVar{Name: EnvTLSCertPath, Value: ca})
-		if RouterUsesTLS(cfg.RouterGRPCAddress) {
-			env = append(env, corev1.EnvVar{Name: EnvGRPCTLSCACertPath, Value: ca})
+	if bundle := cfg.CABundleConfigMap(); bundle != "" {
+		// The router trust bundle, the GDS CA bundle, or one ConfigMap that
+		// holds both. Only a router trust bundle sets the Stargate CA
+		// variables; the GDS CA reaches Pylon as --gds-tls-ca-cert-path.
+		if cfg.TrustBundleConfigMap != "" {
+			ca := path.Join(TrustBundleMountPath, TrustBundleCAKey)
+			env = append(env, corev1.EnvVar{Name: EnvTLSCertPath, Value: ca})
+			if RouterUsesTLS(cfg.RouterGRPCAddress) {
+				env = append(env, corev1.EnvVar{Name: EnvGRPCTLSCACertPath, Value: ca})
+			}
 		}
 		mounts = append(mounts, corev1.VolumeMount{Name: trustBundleVolume, MountPath: TrustBundleMountPath, ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: trustBundleVolume,
 			VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: cfg.TrustBundleConfigMap},
+				LocalObjectReference: corev1.LocalObjectReference{Name: bundle},
 				DefaultMode:          ptr.To(readOnlyFileMode),
 			}},
 		})

@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -866,4 +867,29 @@ func TestDefaults(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), o.now(), time.Minute)
 	assert.WithinDuration(t, time.Now(), (&Observer{}).now(), time.Minute)
 	assert.Equal(t, "http://10.0.0.9:9089/metrics", o.MetricsURL(&corev1.Pod{Status: corev1.PodStatus{PodIP: "10.0.0.9"}}))
+}
+
+func TestSetRouters(t *testing.T) {
+	previous := &pylonv1alpha1.RegistrationStatus{Routers: ptr.To[int32](4)}
+
+	var o Observer
+	r := &pylonv1alpha1.RegistrationStatus{}
+	o.SetRouters(r, previous)
+	assert.Nil(t, r.Routers, "no router count without GDS")
+
+	o.RouterCount = func() (int32, bool) { return 2, true }
+	o.SetRouters(r, previous)
+	assert.Equal(t, ptr.To[int32](2), r.Routers)
+	o.SetRouters(nil, previous)
+
+	o.RouterCount = func() (int32, bool) { return 0, false }
+	r = &pylonv1alpha1.RegistrationStatus{}
+	o.SetRouters(r, previous)
+	assert.Equal(t, ptr.To[int32](4), r.Routers, "an unknown count keeps the previous value")
+	*previous.Routers = 9
+	assert.Equal(t, int32(4), *r.Routers, "a copy, not an alias of the previous status")
+
+	r = &pylonv1alpha1.RegistrationStatus{}
+	o.SetRouters(r, nil)
+	assert.Nil(t, r.Routers)
 }

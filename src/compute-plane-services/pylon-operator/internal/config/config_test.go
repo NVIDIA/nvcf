@@ -80,6 +80,7 @@ func TestDefaults(t *testing.T) {
 	c, err := parse(t)
 	require.NoError(t, err)
 	assert.Equal(t, Config{
+		RouterSource:            RouterSourceStatic,
 		TransportReplicas:       1,
 		ProbeInterval:           10 * time.Second,
 		ScrapeInterval:          5 * time.Second,
@@ -132,6 +133,7 @@ func TestParseAllFlags(t *testing.T) {
 	assert.Equal(t, Config{
 		ClusterID:               "spark-berlin",
 		RouterGRPCAddress:       "llm-request-router.gateway.svc:50071",
+		RouterSource:            RouterSourceStatic,
 		PylonImage:              "nvcr.io/example/pylon:1.0",
 		PylonImagePullPolicy:    "IfNotPresent",
 		PylonImagePullSecrets:   []string{"ngc-pull", "team-pull"},
@@ -245,6 +247,105 @@ func TestValidate(t *testing.T) {
 			args:    []string{"--pylon-image-pull-secrets=ngc-pull,NGC_Pull"},
 			wantErr: []string{`--pylon-image-pull-secrets entry "NGC_Pull" is not a Secret name`},
 		},
+		{
+			name:    "unknown router source",
+			args:    []string{"--router-source=dns"},
+			wantErr: []string{`--router-source must be static or gds, got "dns"`},
+		},
+		{
+			name: "GDS flags need the gds router source",
+			args: []string{"--gds-url=https://gds.example.test", "--gds-clusterset-id=prod"},
+			wantErr: []string{
+				"--gds-url, --gds-clusterset-id and --gds-tls-ca-configmap require --router-source=gds",
+			},
+		},
+		{
+			name: "gds router source",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test,https://gds.us-east-1.example.test:8443/",
+				"--gds-clusterset-id=prod",
+				"--gds-tls-ca-configmap=gds-ca",
+			},
+		},
+		{
+			name:   "gds router source without a router address",
+			args:   []string{"--router-source=gds", "--gds-url=http://gds.gds.svc:9090", "--gds-clusterset-id=dev"},
+			mutate: func(c *Config) { c.RouterGRPCAddress = "" },
+		},
+		{
+			name:   "gds router source needs URLs and a clusterset",
+			args:   []string{"--router-source=gds"},
+			mutate: func(c *Config) { c.RouterGRPCAddress = "" },
+			wantErr: []string{
+				"--router-source=gds requires --gds-url",
+				"--router-source=gds requires --gds-clusterset-id",
+			},
+		},
+		{
+			name: "bad GDS URLs and clusterset",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=gds.example.test:443",
+				"--gds-url=https://",
+				"--gds-url=https://user@gds.example.test",
+				"--gds-url=https://gds.example.test/v1",
+				"--gds-url=https://gds.example.test:0",
+				"--gds-url=https://gds.example.test:99999",
+				"--gds-url=http://[::1",
+				"--gds-clusterset-id=Prod_1",
+			},
+			wantErr: []string{
+				`--gds-url "gds.example.test:443" must start with http:// or https://`,
+				`--gds-url "https://" has no host`,
+				`--gds-url "https://user@gds.example.test" must not carry credentials`,
+				`--gds-url "https://gds.example.test/v1" must not have a path, query or fragment`,
+				`--gds-url "https://gds.example.test:0" has an invalid port`,
+				`--gds-url "https://gds.example.test:99999" has an invalid port`,
+				`--gds-url "http://[::1" is not a URL`,
+				`--gds-clusterset-id "Prod_1" is not a DNS label`,
+			},
+		},
+		{
+			name: "mixed GDS URL schemes",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test,http://gds-b.example.test",
+				"--gds-clusterset-id=prod",
+			},
+			wantErr: []string{`--gds-url "http://gds-b.example.test": every GDS URL must use the scheme https`},
+		},
+		{
+			name: "GDS CA and trust bundle differ",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test",
+				"--gds-clusterset-id=prod",
+				"--gds-tls-ca-configmap=gds-ca",
+				"--trust-bundle-configmap=router-ca",
+			},
+			wantErr: []string{`--gds-tls-ca-configmap "gds-ca" and --trust-bundle-configmap "router-ca" must name the same ConfigMap`},
+		},
+		{
+			name: "GDS CA in the trust bundle",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test",
+				"--gds-clusterset-id=prod",
+				"--gds-tls-ca-configmap=platform-ca",
+				"--trust-bundle-configmap=platform-ca",
+			},
+		},
+		{
+			name: "bad GDS CA name",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test",
+				"--gds-clusterset-id=prod",
+				"--gds-tls-ca-configmap=Not A Name",
+			},
+			wantErr: []string{`--gds-tls-ca-configmap "Not A Name" is not a ConfigMap name`},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -302,6 +403,47 @@ func TestManagerOptions(t *testing.T) {
 	configMaps := byObject[*corev1.ConfigMap](t, opts.Cache.ByObject)
 	assert.Equal(t, fields.OneTermEqualSelector("metadata.name", "router-ca").String(), configMaps.Field.String())
 	assert.Equal(t, secrets.Namespaces, configMaps.Namespaces)
+
+	c = valid(t, "--router-source=gds", "--gds-url=https://gds.example.test",
+		"--gds-clusterset-id=prod", "--gds-tls-ca-configmap=gds-ca")
+	opts = c.ManagerOptions(scheme)
+	configMaps = byObject[*corev1.ConfigMap](t, opts.Cache.ByObject)
+	assert.Equal(t, fields.OneTermEqualSelector("metadata.name", "gds-ca").String(), configMaps.Field.String(),
+		"the GDS CA ConfigMap is cached like the trust bundle")
+}
+
+func TestCABundleConfigMap(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+		gds  bool
+	}{
+		{name: "none"},
+		{name: "trust bundle", args: []string{"--trust-bundle-configmap=router-ca"}, want: "router-ca"},
+		{
+			name: "GDS CA",
+			args: []string{"--router-source=gds", "--gds-tls-ca-configmap=gds-ca"},
+			want: "gds-ca",
+			gds:  true,
+		},
+		{
+			name: "one ConfigMap for both",
+			args: []string{"--router-source=gds", "--gds-tls-ca-configmap=ca", "--trust-bundle-configmap=ca"},
+			want: "ca",
+			gds:  true,
+		},
+		{
+			name: "a GDS CA without the gds source is ignored",
+			args: []string{"--gds-tls-ca-configmap=gds-ca"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := valid(t, tt.args...)
+			assert.Equal(t, tt.want, c.CABundleConfigMap())
+			assert.Equal(t, tt.gds, c.GDS())
+		})
+	}
 }
 
 func byObject[T client.Object](t *testing.T, m map[client.Object]cache.ByObject) cache.ByObject {
@@ -326,6 +468,14 @@ func TestFlagValueStrings(t *testing.T) {
 	assert.Equal(t, "", nilNames.String())
 	names := nameList{"ngc-pull", "team-pull"}
 	assert.Equal(t, "ngc-pull,team-pull", names.String())
+
+	var nilURLs *urlList
+	assert.Equal(t, "", nilURLs.String())
+	urls := urlList{}
+	require.NoError(t, urls.Set(" https://a.example.test, ,https://b.example.test"))
+	require.NoError(t, urls.Set("https://a.example.test,https://c.example.test"))
+	assert.Equal(t, "https://a.example.test,https://b.example.test,https://c.example.test", urls.String(),
+		"values append in order without repeats")
 
 	var nilInt *int32Value
 	assert.Equal(t, "0", nilInt.String())

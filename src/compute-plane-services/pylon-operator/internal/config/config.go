@@ -24,7 +24,9 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +73,13 @@ const (
 	// PodNamespaceEnv is the environment variable, set from the downward
 	// API, that defaults --operator-namespace.
 	PodNamespaceEnv = "POD_NAMESPACE"
+
+	// RouterSourceStatic gives transport pods the static
+	// --router-grpc-address.
+	RouterSourceStatic = "static"
+	// RouterSourceGDS gives transport pods the Global Discovery Service
+	// URLs and clusterset; Pylon follows the router seeds GDS lists.
+	RouterSourceGDS = "gds"
 )
 
 // serviceAccountNamespaceFile is the fallback for --operator-namespace when
@@ -82,7 +91,25 @@ type Config struct {
 	// ClusterID is the installation's cluster name, a DNS label.
 	ClusterID string
 	// RouterGRPCAddress is the router's registration address given to Pylon.
+	// Required with RouterSourceStatic; optional with RouterSourceGDS, where
+	// Pylon watches it in addition to the GDS router seeds.
 	RouterGRPCAddress string
+	// RouterSource is RouterSourceStatic or RouterSourceGDS.
+	RouterSource string
+	// GDSURLs are the Global Discovery Service gRPC URLs in failover order,
+	// passed to Pylon as --gds-url. Used with RouterSourceGDS.
+	GDSURLs []string
+	// GDSClustersetID is the GDS clusterset, passed to Pylon as
+	// --gds-clusterset. Required with RouterSourceGDS.
+	GDSClustersetID string
+	// GDSTLSCAConfigMap is the ConfigMap in OperatorNamespace whose ca.crt
+	// key holds the CA bundle of the GDS server certificate. The operator
+	// replicates and mounts it like the trust bundle and passes it to Pylon
+	// as --gds-tls-ca-cert-path. Empty trusts the system roots. When
+	// TrustBundleConfigMap is also set the two must name the same ConfigMap,
+	// whose ca.crt then holds both CAs: the operator caches ConfigMaps by a
+	// single name.
+	GDSTLSCAConfigMap string
 	// PylonImage is the image of the transport pods.
 	PylonImage string
 	// PylonDisableQuicGSO disables UDP segmentation offload on transport pods.
@@ -130,7 +157,11 @@ type Config struct {
 // BindFlags registers every flag on fs with its default.
 func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ClusterID, "cluster-id", "", "Name of this installation's cluster, a DNS label. Required.")
-	fs.StringVar(&c.RouterGRPCAddress, "router-grpc-address", "", "gRPC address of the LLM request router that transport pods register with. Required.")
+	fs.StringVar(&c.RouterGRPCAddress, "router-grpc-address", "", "gRPC address of the LLM request router that transport pods register with. Required with --router-source=static; optional with gds, where Pylon watches it in addition to the GDS router seeds.")
+	fs.StringVar(&c.RouterSource, "router-source", RouterSourceStatic, "Where transport pods find routers: static (--router-grpc-address) or gds (the Global Discovery Service).")
+	fs.Var((*urlList)(&c.GDSURLs), "gds-url", "Global Discovery Service gRPC URL, http:// or https://; repeatable or comma-separated, in failover order. Used with --router-source=gds.")
+	fs.StringVar(&c.GDSClustersetID, "gds-clusterset-id", "", "Global Discovery Service clusterset id. Required with --router-source=gds.")
+	fs.StringVar(&c.GDSTLSCAConfigMap, "gds-tls-ca-configmap", "", "ConfigMap in the operator namespace whose ca.crt key is the CA bundle of the GDS server certificate. Must equal --trust-bundle-configmap when both are set. Empty trusts the system roots.")
 	fs.StringVar(&c.PylonImage, "pylon-image", "", "Container image of the Pylon transport pods. Required.")
 	fs.BoolVar(&c.PylonDisableQuicGSO, "pylon-disable-quic-gso", false, "Disable QUIC UDP segmentation offload on networks that drop GSO batches.")
 	fs.StringVar(&c.PylonImagePullPolicy, "pylon-image-pull-policy", "", "imagePullPolicy of the Pylon transport container: Always, IfNotPresent or Never. Empty uses the Kubernetes default.")
@@ -171,9 +202,7 @@ func (c *Config) Validate() error {
 	} else if msgs := validation.IsDNS1123Label(c.ClusterID); len(msgs) > 0 {
 		errs = append(errs, fmt.Errorf("--cluster-id %q is not a DNS label: %s", c.ClusterID, strings.Join(msgs, "; ")))
 	}
-	if c.RouterGRPCAddress == "" {
-		errs = append(errs, errors.New("--router-grpc-address is required"))
-	}
+	errs = append(errs, c.validateRouterSource()...)
 	if c.PylonImage == "" {
 		errs = append(errs, errors.New("--pylon-image is required"))
 	}
@@ -214,6 +243,15 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("--trust-bundle-configmap %q is not a ConfigMap name: %s", c.TrustBundleConfigMap, strings.Join(msgs, "; ")))
 		}
 	}
+	if c.GDSTLSCAConfigMap != "" {
+		if msgs := validation.IsDNS1123Subdomain(c.GDSTLSCAConfigMap); len(msgs) > 0 {
+			errs = append(errs, fmt.Errorf("--gds-tls-ca-configmap %q is not a ConfigMap name: %s", c.GDSTLSCAConfigMap, strings.Join(msgs, "; ")))
+		}
+		if c.TrustBundleConfigMap != "" && c.TrustBundleConfigMap != c.GDSTLSCAConfigMap {
+			errs = append(errs, fmt.Errorf("--gds-tls-ca-configmap %q and --trust-bundle-configmap %q must name the same ConfigMap; put both CAs in its ca.crt",
+				c.GDSTLSCAConfigMap, c.TrustBundleConfigMap))
+		}
+	}
 	if !(c.InitialInputTPS > 0) || math.IsInf(c.InitialInputTPS, 0) {
 		errs = append(errs, fmt.Errorf("--initial-input-tps must be a positive number, got %v", c.InitialInputTPS))
 	}
@@ -252,10 +290,96 @@ func (c *Config) ManagerOptions(scheme *runtime.Scheme) ctrl.Options {
 		&corev1.Pod{}:        {Label: managed},
 		&corev1.Secret{}:     c.sourceAndReplicas(c.ClusterCredentialSecret),
 	}
-	if c.TrustBundleConfigMap != "" {
-		opts.Cache.ByObject[&corev1.ConfigMap{}] = c.sourceAndReplicas(c.TrustBundleConfigMap)
+	if name := c.CABundleConfigMap(); name != "" {
+		opts.Cache.ByObject[&corev1.ConfigMap{}] = c.sourceAndReplicas(name)
 	}
 	return opts
+}
+
+// GDS reports whether transport pods find routers through the Global
+// Discovery Service.
+func (c *Config) GDS() bool {
+	return c.RouterSource == RouterSourceGDS
+}
+
+// CABundleConfigMap is the one ConfigMap the operator replicates and mounts:
+// the router trust bundle, the GDS CA bundle, or both when they are the
+// same. Empty when neither is configured.
+func (c *Config) CABundleConfigMap() string {
+	if c.TrustBundleConfigMap != "" {
+		return c.TrustBundleConfigMap
+	}
+	if c.GDS() {
+		return c.GDSTLSCAConfigMap
+	}
+	return ""
+}
+
+// validateRouterSource checks the router address or the GDS settings,
+// whichever the router source uses, and rejects the GDS flags with the
+// static source.
+func (c *Config) validateRouterSource() []error {
+	var errs []error
+	switch c.RouterSource {
+	case RouterSourceStatic:
+		if c.RouterGRPCAddress == "" {
+			errs = append(errs, errors.New("--router-grpc-address is required"))
+		}
+		if len(c.GDSURLs) > 0 || c.GDSClustersetID != "" || c.GDSTLSCAConfigMap != "" {
+			errs = append(errs, errors.New("--gds-url, --gds-clusterset-id and --gds-tls-ca-configmap require --router-source=gds"))
+		}
+	case RouterSourceGDS:
+		if len(c.GDSURLs) == 0 {
+			errs = append(errs, errors.New("--router-source=gds requires --gds-url"))
+		}
+		scheme := ""
+		for _, raw := range c.GDSURLs {
+			s, err := gdsURLScheme(raw)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if scheme == "" {
+				scheme = s
+			} else if s != scheme {
+				errs = append(errs, fmt.Errorf("--gds-url %q: every GDS URL must use the scheme %s", raw, scheme))
+			}
+		}
+		if c.GDSClustersetID == "" {
+			errs = append(errs, errors.New("--router-source=gds requires --gds-clusterset-id"))
+		} else if msgs := validation.IsDNS1123Label(c.GDSClustersetID); len(msgs) > 0 {
+			errs = append(errs, fmt.Errorf("--gds-clusterset-id %q is not a DNS label: %s", c.GDSClustersetID, strings.Join(msgs, "; ")))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("--router-source must be %s or %s, got %q", RouterSourceStatic, RouterSourceGDS, c.RouterSource))
+	}
+	return errs
+}
+
+// gdsURLScheme returns the scheme of a GDS URL: http or https, a host, an
+// optional port and no path, query, fragment or credentials, as the GDS
+// clients accept.
+func gdsURLScheme(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("--gds-url %q is not a URL: %w", raw, err)
+	}
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "", fmt.Errorf("--gds-url %q must start with http:// or https://", raw)
+	case u.Hostname() == "":
+		return "", fmt.Errorf("--gds-url %q has no host", raw)
+	case u.User != nil:
+		return "", fmt.Errorf("--gds-url %q must not carry credentials", raw)
+	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
+		return "", fmt.Errorf("--gds-url %q must not have a path, query or fragment", raw)
+	}
+	if p := u.Port(); p != "" {
+		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("--gds-url %q has an invalid port", raw)
+		}
+	}
+	return u.Scheme, nil
 }
 
 // sourceAndReplicas caches the objects called name in the watched namespaces
@@ -329,6 +453,27 @@ func (l *nameList) Set(value string) error {
 		out = append(out, name)
 	}
 	*l = out
+	return nil
+}
+
+// urlList is a flag.Value for repeated, comma-separated URLs. Values append
+// in order; empty entries and repeats are dropped.
+type urlList []string
+
+func (l *urlList) String() string {
+	if l == nil {
+		return ""
+	}
+	return strings.Join(*l, ",")
+}
+
+func (l *urlList) Set(value string) error {
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw != "" && !slices.Contains(*l, raw) {
+			*l = append(*l, raw)
+		}
+	}
 	return nil
 }
 

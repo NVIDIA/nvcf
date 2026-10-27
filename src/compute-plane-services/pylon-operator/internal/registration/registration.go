@@ -120,6 +120,11 @@ type Observer struct {
 	Now func() time.Time
 	// Rand returns a number in [0, 1) for the requeue jitter.
 	Rand func() float64
+	// RouterCount returns the number of routers the Global Discovery
+	// Service lists for the clusterset and whether that list is known. Nil
+	// with a static router address; then status.registration.routers stays
+	// unset.
+	RouterCount func() (int32, bool)
 	// Started is when the observer began. The closure counters of a pod
 	// that started before it are taken as the baseline at first sight,
 	// since the observer cannot tell when they rose; the counters of a pod
@@ -195,6 +200,23 @@ func Idle(previous *pylonv1alpha1.RegistrationStatus, clusterID string) *pylonv1
 		r.LastRegisteredTime = previous.LastRegisteredTime
 	}
 	return r
+}
+
+// SetRouters fills r.Routers from RouterCount. While the count is unknown,
+// for example before the first GDS list after an operator restart, it keeps
+// the previous value instead of clearing it.
+func (o *Observer) SetRouters(r, previous *pylonv1alpha1.RegistrationStatus) {
+	if o.RouterCount == nil || r == nil {
+		return
+	}
+	if n, ok := o.RouterCount(); ok {
+		r.Routers = &n
+		return
+	}
+	if previous != nil && previous.Routers != nil {
+		n := *previous.Routers
+		r.Routers = &n
+	}
 }
 
 func (o *Observer) now() time.Time {
