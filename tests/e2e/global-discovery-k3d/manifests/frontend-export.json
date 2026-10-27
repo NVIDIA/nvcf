@@ -1,0 +1,16 @@
+{
+  "spec": {
+    "type": "SERVICE_TYPE_CLUSTER_SET_IP",
+    "ports": [
+      {"name": "http", "protocol": "PROTOCOL_TCP", "port": 8000}
+    ],
+    "labels": {
+      "gds.nvidia.com/role": "pool-frontend",
+      "gds.nvidia.com/pool": "green"
+    },
+    "annotations": {
+      "gds.nvidia.com/pool-models": "llama-3",
+      "gds.nvidia.com/hardware-class": "h100"
+    }
+  }
+}

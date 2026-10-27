@@ -24,7 +24,8 @@
 #
 # buf and the plugins are local binaries found on PATH. The checked-in code was
 # generated with the versions below; other versions change the version lines
-# in the generated headers and fail the check:
+# in the generated headers and fail the check. make proto-tools runs these
+# lines (into _output/tools), so keep their format:
 #
 #   go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 #   go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12

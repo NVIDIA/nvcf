@@ -1,0 +1,269 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Values marked required have no default and fail the render when empty.
+# Every gds-server flag is documented in
+# src/control-plane-services/global-discovery/README.md.
+
+# gds-server image. repository is required. tag defaults to the chart
+# appVersion; a value starting with sha256: is used as a digest.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Image pull Secrets of the server pods, as {name: <Secret>} entries.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Region this deployment serves, for example us-east-1, or a local name such
+# as local on a development cluster. Required. Set as GDS_REGION (--region,
+# reported by GetServerInfo) and AWS_REGION (the DynamoDB client region).
+region: ""
+
+# Server replicas. Every replica serves every call from the same replicated
+# store, so three replicas spread over zones keep a region available through
+# a zone loss and a rolling update. Ignored when autoscaling.enabled is true.
+replicaCount: 3
+
+store:
+  # Store backend, passed as --store: dynamodb (the Global Table) or memory.
+  # memory keeps everything in the pod and loses it on restart; each replica
+  # would hold its own registry, so the chart allows it with one replica only.
+  kind: dynamodb
+  dynamodb:
+    # Global Table name, passed as --dynamodb-table. Create it with
+    # gds-admin create-table (docs/storage.md in the module).
+    table: gds
+    # Endpoint override, passed as --dynamodb-endpoint, for dynamodb-local.
+    # Empty uses the regional AWS endpoint.
+    endpoint: ""
+
+# Full reload interval of each clusterset from the store. Passed as
+# --refresh-interval. Sibling replicas converge within one interval.
+refreshInterval: 2s
+# Interval between listings of the store's clustersets. Passed as
+# --clusterset-discovery-interval.
+clustersetDiscoveryInterval: 30s
+
+# Lease evaluation. Writers choose their lease TTLs (clamped to 10s..5m); the
+# server evaluates them at read time.
+lease:
+  # Clock skew allowance before a lease expires. Passed as --lease-skew.
+  skew: 2s
+  # Lease evaluation interval between refreshes. Passed as
+  # --lease-eval-interval.
+  evalInterval: 1s
+
+# Records of a dead cluster or pool are kept this long. Passed as --retention.
+retention: 24h
+# Interval of the retention cleanup. Passed as --compaction-interval.
+compactionInterval: 10m
+
+watch:
+  # Watch BOOKMARK interval. Keeps idle streams under the 350 s NLB idle
+  # timeout. Passed as --bookmark-interval.
+  bookmarkInterval: 5s
+  # Events kept per clusterset for resume. Passed as --watch-history.
+  history: 10000
+  # Per-watcher queue; an overflowing watcher is re-snapshotted. Passed as
+  # --watch-queue-size.
+  queueSize: 1024
+  # Concurrent watch streams per replica. Passed as --max-watchers.
+  maxWatchers: 5000
+
+# Fallback endpoints returned by GetServerInfo, tried by clients after their
+# configured URLs. Usually one entry per GDS region with its per-region name,
+# for example:
+#   - region: us-east-1
+#     grpcUrl: http://gds.us-east-1.prod.internal:9090
+#     httpUrl: http://gds.us-east-1.prod.internal:8080
+#     primary: true
+#   - region: us-west-2
+#     grpcUrl: http://gds.us-west-2.prod.internal:9090
+# Passed as --advertise-endpoints (JSON).
+advertiseEndpoints: []
+
+# TLS on the gRPC and REST listeners. The admin port stays plain HTTP for
+# the probes and the load balancer health check.
+tls:
+  # Existing kubernetes.io/tls Secret in the release namespace. Mounted at
+  # /etc/gds/tls and passed as --tls-cert-file and --tls-key-file. Empty
+  # serves h2c and plain HTTP.
+  existingSecret: ""
+
+shutdown:
+  # Time the replica reports not ready before it stops serving, so the load
+  # balancer deregisters it. Passed as --shutdown-drain.
+  drain: 5s
+  # Graceful stop of the gRPC and REST servers. Passed as --shutdown-timeout.
+  timeout: 25s
+
+# Must exceed shutdown.drain plus shutdown.timeout plus the trace flush (5s).
+terminationGracePeriodSeconds: 40
+
+otel:
+  # OpenTelemetry tracing over OTLP/gRPC. Passed as --otel-enabled.
+  enabled: false
+  # OTEL_EXPORTER_OTLP_ENDPOINT, for example http://otel-collector:4317.
+  # Empty uses the SDK default (localhost:4317).
+  endpoint: ""
+  # Extra OTEL_RESOURCE_ATTRIBUTES entries. The chart always adds
+  # k8s.pod.name, k8s.namespace.name and cloud.region.
+  resourceAttributes: {}
+
+# Server log level, passed as --log-level: debug, info, warn or error.
+logLevel: info
+
+# Additional server arguments, appended after the chart's arguments. A flag
+# given twice takes its last value.
+extraArgs: []
+# Additional container environment variables, as Kubernetes EnvVar objects.
+extraEnv: []
+
+ports:
+  # gRPC listener (h2c, or TLS). The load balancer target.
+  grpc: 9090
+  # REST gateway listener.
+  http: 8080
+  # /metrics, /healthz, /readyz and /debug/pprof.
+  admin: 9091
+
+# ClusterIP Service with the gRPC, REST and admin ports, for in-cluster
+# clients and the ServiceMonitor.
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Optional Service of type LoadBalancer: the regional internal NLB that
+# clients in peered VPCs reach through the Route53 names (README.md,
+# docs/networking.md in the module).
+externalService:
+  enabled: false
+  # spec.loadBalancerClass, for example service.k8s.aws/nlb. Empty leaves the
+  # choice to the aws-load-balancer-type annotation.
+  loadBalancerClass: ""
+  # NLB listener ports. httpPort 0 exposes gRPC only.
+  grpcPort: 9090
+  httpPort: 8080
+  # Source CIDRs allowed through the load balancer, usually the peered
+  # consumer VPC CIDRs. Empty allows the whole VPC.
+  loadBalancerSourceRanges: []
+  # AWS Load Balancer Controller annotations for an internal NLB with IP
+  # targets, cross-zone load balancing and a health check of /readyz on the
+  # admin port. Set enabled to false on other clouds.
+  awsNlb:
+    enabled: true
+    scheme: internal
+    crossZone: true
+    # Seconds a deregistered target keeps its connections. Shorter than
+    # terminationGracePeriodSeconds.
+    deregistrationDelaySeconds: 30
+    healthCheck:
+      intervalSeconds: 10
+      timeoutSeconds: 5
+      healthyThreshold: 2
+      unhealthyThreshold: 2
+  # Annotations merged over the generated ones; a key set here wins.
+  annotations: {}
+
+serviceAccount:
+  # Create the server ServiceAccount.
+  create: true
+  # Name of the ServiceAccount. Defaults to the release full name.
+  name: ""
+  # IAM role for service accounts (IRSA) on EKS: the role with the DynamoDB
+  # policy of docs/iam.md in the module. Rendered as the
+  # eks.amazonaws.com/role-arn annotation, for example
+  # arn:aws:iam::123456789012:role/gds-server.
+  irsaRoleArn: ""
+  annotations: {}
+
+podDisruptionBudget:
+  enabled: true
+  # Set exactly one of minAvailable or maxUnavailable.
+  minAvailable: 1
+  maxUnavailable: ""
+
+autoscaling:
+  # HorizontalPodAutoscaler on CPU, and memory when set. The Deployment then
+  # leaves spec.replicas to the HPA.
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 9
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: ""
+
+metrics:
+  serviceMonitor:
+    # Prometheus Operator ServiceMonitor scraping /metrics on the admin port.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Extra labels, for example the selector label of your Prometheus.
+    labels: {}
+
+probes:
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 2
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  # The distroless base image runs as the non-numeric user nvs (uid 1000).
+  # runAsNonRoot needs a numeric uid to verify.
+  runAsUser: 1000
+  runAsGroup: 1000
+
+# Spread replicas over zones. The chart adds a labelSelector with the pod's
+# selector labels to every entry that has none. An empty list disables it.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}

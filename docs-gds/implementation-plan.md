@@ -837,3 +837,70 @@ Deviations from the plan:
 Not done in ws8: a GDS client in `stargate-k8s-router` (pylons that dial the backend router
 without `--gds-url` learn no remote clusters through it); the e2e phase 3, which needs the
 serving `gds-server` and the MCS controller; Cargo commands, since the machine has no cargo.
+
+Workstream 7 (chart, images, CI, e2e phase 1), branch `feat/gds-ws7-chart-e2e`:
+
+- Images: `go_oci_image` targets `:image` (gds-server at `/usr/bin/gds-server`,
+  Bazel tag `nvcf-global-discovery`) and `:admin_image` (gds-admin at
+  `/usr/bin/gds-admin`) on `@distroless_go` in the module `BUILD.bazel`, with
+  one `image_entrypoint_mode_test` per image (a parameterised copy of
+  pylon-operator's script). `bazel build ...:image_index ...:admin_image_index`
+  and `bazel run ...:image_load` work.
+- Chart `deploy/helm/global-discovery/global-discovery` per design 11:
+  Deployment (3 replicas, maxUnavailable 0 / maxSurge 1, `/readyz` and
+  `/healthz` on the admin port, grace 40 s, `GDS_REGION`, `AWS_REGION`,
+  `POD_NAME`, `POD_NAMESPACE`, every server flag from values, extraArgs and
+  extraEnv, zone topology spread), ClusterIP Service (9090, 8080, 9091),
+  optional `<fullname>-external` LoadBalancer with generated AWS Load
+  Balancer Controller annotations (internal, IP targets, cross-zone, HTTP
+  `/readyz` health check on the admin port, 30 s deregistration delay),
+  ServiceAccount with `serviceAccount.irsaRoleArn`, PDB (minAvailable 1),
+  optional HPA and ServiceMonitor, NOTES, `values.schema.json` with
+  `additionalProperties: false`, `global-discovery.validate`, a Makefile
+  copied from pylon-operator (without the CRD targets) and
+  `scripts/check-render.sh`. CI values
+  `tools/ci/helm-validate-values/global-discovery.yaml` and the `chart_map`
+  entry in `tools/ci/check-helm-charts`.
+- CI: a `global-discovery` row in `.github/workflows/bazel.yml` (docker-host
+  lane, because of the requires-docker DynamoDB tests; before it no row
+  selected the module) and a `global-discovery codegen` job in
+  `.github/workflows/build-test.yml` running `tools/ci/check-go-codegen
+  src/control-plane-services/global-discovery --command 'make proto-tools
+  proto'`. `make proto-tools` installs the versions pinned in
+  `hack/proto.sh` into `_output/tools`.
+- E2e `tests/e2e/global-discovery-k3d` phase 1 (Makefile, bash 3.2
+  `run.sh`, manifests, README, AGENTS): k3d cluster `gds-e2e`, image built
+  with Bazel and imported, chart with the memory store and one replica,
+  REST and admin port-forward, 39 REST and admin checks (README lists
+  them). Phases are `run_phase_<n>` functions selected by `E2E_PHASES`.
+- Docs: `docs/networking.md`, the deployment and image sections of the
+  module README, the IRSA value in `docs/iam.md`, the chart README.
+
+Deviations from the plan:
+
+- The chart refuses `store.kind: memory` with more than one replica or the
+  HPA (each pod would hold its own registry), so the CI values set
+  `replicaCount: 1`; `check-render.sh` restores the production defaults for
+  its DynamoDB, NLB, IRSA, PDB and HPA cases.
+- Lease TTLs are chosen by writers and clamped in the server, so the chart
+  exposes `lease.skew` and `lease.evalInterval` rather than TTLs. The region
+  reaches the server through `GDS_REGION`, not `--region`.
+- The pod mounts no service account token and disables Service links (a
+  release named `gds` would otherwise inject `GDS_*` variables).
+- `run.sh` creates its clusters itself (names `gds-e2e*` only), uses its own
+  kubeconfig files instead of the current kube context, and deletes only the
+  clusters it recorded as created; the inference-endpoints harness instead
+  requires an existing cluster and the current context.
+- `tools/ci/subproject-validations.yaml` (and the GitLab release jobs) are
+  internal-only and absent from this snapshot; no GitHub release metadata
+  (`tools/ci/github-release-subprojects.json`) was added, so nothing is
+  published yet.
+
+Not done in ws7: a full k3d run on the development machine. Two other k3d
+clusters used up the Docker VM's inotify instances
+(`fs.inotify.max_user_instances` 128), so containerd in the new k3s node
+failed with "too many open files"; raising the limit needs a change on the
+Docker host. `run.sh` now detects this and says so. The 39 REST and admin
+checks passed against the same image in plain Docker; the chart install and
+port-forward steps have not run on a cluster yet. kubeconform was not on
+PATH for `make validate` (it skips); version 0.6.7 validated the renders.

@@ -38,19 +38,19 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   `docs/consistency-dynamodb.md` describe the table, its IAM policies and its
   cross-region behaviour.
 - Lease math, writer generations and pool state derivation.
-- The `gds-server` configuration. `gds-server` validates its flags and exits;
-  it does not serve yet.
 - The Go client `pkg/client` (failover, typed calls, watch loop, pool and
   router caches, metrics) and the in-memory test server `pkg/fakegds`.
 
-- `gds-server` serves every service over gRPC and REST with the in-memory
-  store: cluster leases, ServiceExports and endpoint sets, merged
+- `gds-server` serves every service over gRPC and REST with the memory or
+  DynamoDB store: cluster leases, ServiceExports and endpoint sets, merged
   ServiceImports with conflict resolution, pools derived from labelled
   exports with the API overlay, routers, and watches with resume.
 - `gds-admin` inspects a store and deletes clusters.
-- Not yet: the DynamoDB store (`--store=dynamodb` fails with a clear error
-  until it is built in), the Go client, the MCS controller and the Rust
-  crate.
+- Packaging: the `nvcf-global-discovery` and gds-admin OCI images, the
+  `deploy/helm/global-discovery` chart, `docs/networking.md`, and phase 1 of
+  the k3d end-to-end test in `tests/e2e/global-discovery-k3d`.
+- Not yet: the MCS controller, its chart and the multi-cluster end-to-end
+  phases.
 
 ## Layout
 
@@ -113,6 +113,8 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
 
 - `docs/api.md`: REST paths, JSON and stream shapes, errors and limits.
 - `docs/consistency.md`: write-through, refresh, leases and revisions.
+- `docs/networking.md`: the regional internal NLB, Route53 names, health
+  checks, TTLs and client failover.
 - `hack/proto.sh`: proto lint and code generation.
 
 ## Run locally
@@ -203,6 +205,42 @@ without active streams.
   gateway forwards `traceparent`, `tracestate`, `baggage` and
   `x-request-id` to the gRPC call.
 
+## Deployment
+
+The chart is `deploy/helm/global-discovery/global-discovery`; its README
+lists every value. Per GDS region:
+
+1. Create the DynamoDB table once and add a replica in every GDS region
+   (`gds-admin create-table`, `docs/storage.md`).
+2. Create the server IAM role with the policy and IRSA trust policy of
+   `docs/iam.md`.
+3. Install the chart in the region's GDS cluster with the image, the
+   region, the role and the internal NLB:
+
+   ```yaml
+   image:
+     repository: <registry>/nvcf-global-discovery
+   region: us-east-1
+   serviceAccount:
+     irsaRoleArn: arn:aws:iam::<account>:role/gds-server
+   externalService:
+     enabled: true
+   advertiseEndpoints:
+     - {region: us-east-1, grpcUrl: "http://gds.us-east-1.prod.internal:9090"}
+     - {region: us-west-2, grpcUrl: "http://gds.us-west-2.prod.internal:9090"}
+   ```
+
+4. Point the Route53 records at the region's NLB: the per-region name and
+   the region's entry of the global latency name (`docs/networking.md`).
+5. Configure clients with the global name first (`docs/networking.md`,
+   Clients).
+
+The chart runs three replicas spread over zones with a zero-unavailable
+rolling update, readiness on `/readyz` and liveness on `/healthz` of the
+admin port, a 40 s termination grace period, a PodDisruptionBudget and
+optional HPA and ServiceMonitor. With `store.kind: memory` it allows one
+replica only; `tests/e2e/global-discovery-k3d` installs it that way on k3d.
+
 ## gds-admin
 
 ```bash
@@ -228,6 +266,7 @@ make test          # unit tests with -race; fails below 85 percent coverage of i
 make test-integration  # DynamoDB store and gds-admin against dynamodb-local (Docker)
 make vet           # go vet and gofmt
 make lint          # golangci-lint with .golangci.yml
+make proto-tools   # install the pinned buf and protoc plugins into _output/tools
 make proto         # buf lint, then regenerate api/gen
 make proto-check   # buf lint, then fail when api/gen is stale
 make proto-breaking AGAINST=origin/main   # buf breaking against a git ref
@@ -255,6 +294,21 @@ bazel run //src/control-plane-services/global-discovery/cmd/gds-admin -- create-
 bazel run //:gazelle -- src/control-plane-services/global-discovery
 bazel mod tidy     # after adding an external import
 ```
+
+Images (multi-arch indexes for the release pipeline, host-arch images for
+local use):
+
+```bash
+bazel build //src/control-plane-services/global-discovery:image_index        # gds-server
+bazel build //src/control-plane-services/global-discovery:admin_image_index  # gds-admin
+bazel run //src/control-plane-services/global-discovery:image_load           # into Docker
+```
+
+Both load targets tag `src/control-plane-services/global-discovery:latest`;
+retag the first before loading the second. The binaries are at
+`/usr/bin/gds-server` and `/usr/bin/gds-admin`, which
+`image_entrypoint_mode_test` and `admin_image_entrypoint_mode_test` check
+are executable.
 
 The DynamoDB integration targets (`dynamodb_integration_test`,
 `createtable_integration_test`) are tagged `external` and `requires-docker`

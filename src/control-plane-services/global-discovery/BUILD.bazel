@@ -26,3 +26,50 @@
 # gazelle:go_naming_convention import_alias
 # gazelle:exclude _output
 # gazelle:exclude hack
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# Build/load/index/tar targets. Publishing is owned by the release pipeline,
+# which copies :image_index and :admin_image_index by digest. Both load
+# targets tag the image src/control-plane-services/global-discovery:latest,
+# so load one, retag it, then load the other.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = "//src/control-plane-services/global-discovery/cmd/gds-server",
+    binary_path = "/usr/bin/gds-server",
+    tags = ["nvcf-global-discovery"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_image(
+    name = "admin_image",
+    base = "@distroless_go",
+    binary = "//src/control-plane-services/global-discovery/cmd/gds-admin",
+    binary_path = "/usr/bin/gds-admin",
+    tags = ["nvcf-global-discovery-admin"],
+    visibility = ["//visibility:public"],
+)
+
+# Regression guards for the rules_pkg default-0644 startup failure: each fails
+# when the entrypoint in the image layer is not executable.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :image.tar)",
+        "usr/bin/gds-server",
+    ],
+    data = [":image.tar"],
+)
+
+sh_test(
+    name = "admin_image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :admin_image.tar)",
+        "usr/bin/gds-admin",
+    ],
+    data = [":admin_image.tar"],
+)

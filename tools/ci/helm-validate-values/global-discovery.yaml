@@ -1,0 +1,12 @@
+# CI-only values for helm lint/template validation.
+image:
+  repository: example.com/nvcf/nvcf-global-discovery
+
+region: us-east-1
+
+# The memory store keeps the registry in the pod, so the chart allows it
+# with one replica only.
+store:
+  kind: memory
+
+replicaCount: 1

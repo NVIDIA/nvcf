@@ -81,6 +81,24 @@ jobs:
       - name: Run go-lib codegen freshness check
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
 
+  global-discovery-codegen:
+    name: global-discovery codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      # make proto-tools installs buf and the protoc plugins at the versions
+      # hack/proto.sh pins; make proto lints the contract and regenerates
+      # api/gen, which must match the checked-in code.
+      - name: Run global-discovery proto codegen freshness check
+        run: ./tools/ci/check-go-codegen src/control-plane-services/global-discovery --command 'make proto-tools proto'
+
   helm-charts:
     name: helm charts
     runs-on: ubuntu-latest

@@ -1,0 +1,349 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "global-discovery chart values",
+    "type": "object",
+    "additionalProperties": false,
+    "definitions": {
+        "duration": {
+            "type": "string",
+            "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"
+        },
+        "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+        },
+        "dnsLabel": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        },
+        "dnsSubdomainOrEmpty": {
+            "type": "string",
+            "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+            "maxLength": 253
+        },
+        "httpUrl": {
+            "type": "string",
+            "pattern": "^https?://[^/\\s]+(/.*)?$"
+        },
+        "probe": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "initialDelaySeconds": {"type": "integer", "minimum": 0},
+                "periodSeconds": {"type": "integer", "minimum": 1},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "failureThreshold": {"type": "integer", "minimum": 1},
+                "successThreshold": {"type": "integer", "minimum": 1}
+            }
+        },
+        "intOrPercentOrEmpty": {
+            "anyOf": [
+                {"type": "integer", "minimum": 0},
+                {"type": "string", "pattern": "^$|^[0-9]+%?$"}
+            ]
+        }
+    },
+    "properties": {
+        "global": {
+            "type": "object"
+        },
+        "image": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "gds-server image. repository is required; tag defaults to the chart appVersion",
+            "properties": {
+                "repository": {
+                    "type": "string",
+                    "description": "Container registry path, without tag"
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Image tag, or a digest starting with sha256:"
+                },
+                "pullPolicy": {
+                    "type": "string",
+                    "enum": ["Always", "IfNotPresent", "Never"]
+                }
+            }
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"$ref": "#/definitions/dnsSubdomainOrEmpty"}
+                },
+                "required": ["name"]
+            }
+        },
+        "nameOverride": {"type": "string"},
+        "fullnameOverride": {"type": "string"},
+        "region": {
+            "type": "string",
+            "description": "Region this deployment serves, for example us-east-1. Required",
+            "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        },
+        "replicaCount": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "store": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["dynamodb", "memory"]
+                },
+                "dynamodb": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "table": {
+                            "type": "string",
+                            "pattern": "^$|^[a-zA-Z0-9_.-]{3,255}$"
+                        },
+                        "endpoint": {
+                            "anyOf": [
+                                {"type": "string", "maxLength": 0},
+                                {"$ref": "#/definitions/httpUrl"}
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "refreshInterval": {"$ref": "#/definitions/duration"},
+        "clustersetDiscoveryInterval": {"$ref": "#/definitions/duration"},
+        "lease": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "skew": {"$ref": "#/definitions/duration"},
+                "evalInterval": {"$ref": "#/definitions/duration"}
+            }
+        },
+        "retention": {"$ref": "#/definitions/duration"},
+        "compactionInterval": {"$ref": "#/definitions/duration"},
+        "watch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bookmarkInterval": {"$ref": "#/definitions/duration"},
+                "history": {"type": "integer", "minimum": 1},
+                "queueSize": {"type": "integer", "minimum": 1},
+                "maxWatchers": {"type": "integer", "minimum": 1}
+            }
+        },
+        "advertiseEndpoints": {
+            "type": "array",
+            "description": "Fallback endpoints returned by GetServerInfo",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "region": {"type": "string", "minLength": 1},
+                    "grpcUrl": {"$ref": "#/definitions/httpUrl"},
+                    "httpUrl": {"$ref": "#/definitions/httpUrl"},
+                    "primary": {"type": "boolean"}
+                },
+                "required": ["region"]
+            }
+        },
+        "tls": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "existingSecret": {"$ref": "#/definitions/dnsSubdomainOrEmpty"}
+            }
+        },
+        "shutdown": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "drain": {"$ref": "#/definitions/duration"},
+                "timeout": {"$ref": "#/definitions/duration"}
+            }
+        },
+        "terminationGracePeriodSeconds": {
+            "type": "integer",
+            "minimum": 1
+        },
+        "otel": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "endpoint": {"type": "string"},
+                "resourceAttributes": {
+                    "type": "object",
+                    "additionalProperties": {"type": ["string", "number", "boolean"]}
+                }
+            }
+        },
+        "logLevel": {
+            "type": "string",
+            "enum": ["debug", "info", "warn", "error"]
+        },
+        "extraArgs": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "extraEnv": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1}
+                },
+                "required": ["name"]
+            }
+        },
+        "ports": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "grpc": {"$ref": "#/definitions/port"},
+                "http": {"$ref": "#/definitions/port"},
+                "admin": {"$ref": "#/definitions/port"}
+            }
+        },
+        "service": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["ClusterIP", "NodePort"]
+                },
+                "annotations": {"type": "object"}
+            }
+        },
+        "externalService": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "loadBalancerClass": {"type": "string"},
+                "grpcPort": {"$ref": "#/definitions/port"},
+                "httpPort": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "description": "REST listener port of the load balancer; 0 exposes gRPC only"
+                },
+                "loadBalancerSourceRanges": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                },
+                "awsNlb": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {"type": "boolean"},
+                        "scheme": {
+                            "type": "string",
+                            "enum": ["internal", "internet-facing"]
+                        },
+                        "crossZone": {"type": "boolean"},
+                        "deregistrationDelaySeconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3600
+                        },
+                        "healthCheck": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "intervalSeconds": {"type": "integer", "minimum": 5, "maximum": 300},
+                                "timeoutSeconds": {"type": "integer", "minimum": 2, "maximum": 120},
+                                "healthyThreshold": {"type": "integer", "minimum": 2, "maximum": 10},
+                                "unhealthyThreshold": {"type": "integer", "minimum": 2, "maximum": 10}
+                            }
+                        }
+                    }
+                },
+                "annotations": {"type": "object"}
+            }
+        },
+        "serviceAccount": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "create": {"type": "boolean"},
+                "name": {"type": "string"},
+                "irsaRoleArn": {
+                    "type": "string",
+                    "pattern": "^$|^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/.+$"
+                },
+                "annotations": {"type": "object"}
+            }
+        },
+        "podDisruptionBudget": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "minAvailable": {"$ref": "#/definitions/intOrPercentOrEmpty"},
+                "maxUnavailable": {"$ref": "#/definitions/intOrPercentOrEmpty"}
+            }
+        },
+        "autoscaling": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "minReplicas": {"type": "integer", "minimum": 1},
+                "maxReplicas": {"type": "integer", "minimum": 1},
+                "targetCPUUtilizationPercentage": {"type": "integer", "minimum": 1, "maximum": 100},
+                "targetMemoryUtilizationPercentage": {
+                    "anyOf": [
+                        {"type": "integer", "minimum": 1, "maximum": 100},
+                        {"type": "string", "maxLength": 0}
+                    ]
+                }
+            }
+        },
+        "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "serviceMonitor": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {"type": "boolean"},
+                        "interval": {"$ref": "#/definitions/duration"},
+                        "scrapeTimeout": {"$ref": "#/definitions/duration"},
+                        "labels": {"type": "object"}
+                    }
+                }
+            }
+        },
+        "probes": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "readiness": {"$ref": "#/definitions/probe"},
+                "liveness": {"$ref": "#/definitions/probe"}
+            }
+        },
+        "resources": {"type": "object"},
+        "podAnnotations": {"type": "object"},
+        "podLabels": {"type": "object"},
+        "podSecurityContext": {"type": "object"},
+        "securityContext": {"type": "object"},
+        "topologySpreadConstraints": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["maxSkew", "topologyKey", "whenUnsatisfiable"]
+            }
+        },
+        "priorityClassName": {"type": "string"},
+        "nodeSelector": {"type": "object"},
+        "tolerations": {"type": "array"},
+        "affinity": {"type": "object"}
+    }
+}
