@@ -247,7 +247,9 @@ sample.
 All deterministic methods use SHA-256, the first 8 digest bytes as a big-endian
 integer, and modulo 100. Missing bearer credentials now reach the implicit
 `random` fallback for scalar `perBearerKey` configuration instead of skipping
-the target. Sampling does not change forwarded request bytes. Raw credentials,
+the target. `perBearerKey` reads only `Authorization: Bearer` and never
+`x-api-key`, including on `anthropicMessages` routes, so those requests use the
+next configured method or the implicit `random` fallback. Sampling does not change forwarded request bytes. Raw credentials,
 prompt cache keys, and message content are not added to telemetry.
 
 ## Notes

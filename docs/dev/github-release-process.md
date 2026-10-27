@@ -258,9 +258,30 @@ branch.
   pins that chart, such as `helm-nvca-operator` in the compute-plane
   stack.
 
-A compute-plane bump also needs its golden render fixtures refreshed
-with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
-merge.
+When a bump changes anything under `deploy/stacks/nvcf-compute-plane`,
+the workflow renders that stack's golden fixtures again with
+`tools/ci/refresh-compute-plane-goldens` and commits them on top of the
+bumps. Each run drops the previous fixture commit and renders them again
+for what the branch then pins. If the render fails, the pull request says
+so and the run fails. Render them by hand with
+`make -C deploy/stacks/nvcf-compute-plane generate-golden`, or let the
+next bump run render them again. A chart reaches its registry after its
+GitHub release, so the first render after a chart release can fail this
+way.
+
+The `compute-plane goldens` workflow renders the stack and compares the
+result with the fixtures. It runs for:
+
+- Pull requests that target `main`, `release-**`, or `release/**`.
+- Pushes to `main`.
+- Manual runs through `workflow_dispatch`.
+
+Pull requests and pushes run it only when they change
+`deploy/stacks/nvcf-compute-plane/`,
+`.github/workflows/compute-plane-goldens.yml`, or
+`tools/ci/refresh-compute-plane-goldens`. A pull request from a fork gets
+a notice instead. The check fails when the fixtures do not match, or when
+the chart registry secrets are not set.
 
 ## Release branches
 

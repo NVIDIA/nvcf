@@ -20,3 +20,13 @@ bazel test //src/invocation-plane-services/vanity-gateway/middleware:middleware_
 Keep new Go files and test dependencies in the adjacent `BUILD.bazel` files.
 Regression tests for proxy timing should use gated transports and readers.
 Keep shadow replay contexts separate from mutable primary telemetry.
+
+For shadow sampling or OpenAI route changes, also run the single-cluster
+Helmfile BDD suite, which covers sticky sampling through the gateway's
+metrics. See [BDD prerequisites](../../../tests/bdd/README.md). From the
+repository root, run:
+
+```sh
+cd tests/bdd
+go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
+```

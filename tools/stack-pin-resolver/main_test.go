@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,7 +65,7 @@ func (f *stackFixture) audit(t *testing.T) (int, string, string) {
 func (f *stackFixture) bump(t *testing.T, tag string, write bool) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code, err := Bump(f.root, tag, write, &out, &errOut)
+	code, err := Bump(f.root, tag, "", write, &out, &errOut)
 	if err != nil {
 		errOut.WriteString(err.Error())
 	}
@@ -719,5 +720,77 @@ func TestWritePinRefusesADigExpressionEditedSinceLoadStack(t *testing.T) {
 	}
 	if got := f.read(t, "00-stack.yaml.gotmpl"); !strings.Contains(got, `"9.9.9"`) {
 		t.Fatalf("the edited line must be left alone:\n%s", got)
+	}
+}
+
+func TestChartReleaseNeverLowersAPin(t *testing.T) {
+	const file = "releases:\n  - name: alpha\n    version: 1.2.0\n"
+	for _, c := range []struct{ tag, want, pinned string }{
+		{"deploy/helm/alpha/v1.1.9", "alpha: skipped older release 1.1.9; keeping 1.2.0", "1.2.0"},
+		// Same core: only full SemVer precedence sees a pre-release as older.
+		{"deploy/helm/alpha/v1.2.0-rc.1", "alpha: skipped older release 1.2.0-rc.1; keeping 1.2.0", "1.2.0"},
+		{"deploy/helm/alpha/v1.2.0", "alpha: already 1.2.0", "1.2.0"},
+		{"deploy/helm/alpha/v1.2.1", "alpha: 1.2.0 -> 1.2.1", "1.2.1"},
+	} {
+		t.Run(c.tag, func(t *testing.T) {
+			f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": file})
+			code, out, errOut := f.bump(t, c.tag, true)
+			if code != 0 || !strings.Contains(out, c.want) {
+				t.Fatalf("want %q: code=%d\n%s%s", c.want, code, out, errOut)
+			}
+			if got := f.read(t, "00-stack.yaml.gotmpl"); !strings.Contains(got, "version: "+c.pinned+"\n") {
+				t.Fatalf("pin should be %s:\n%s", c.pinned, got)
+			}
+		})
+	}
+}
+
+func TestReleaseBranchChartTagIsSkipped(t *testing.T) {
+	// A chart release cut on a release branch is that branch's release, so
+	// it moves no pin on main even when its version is higher.
+	const file = "releases:\n  - name: alpha\n    version: 1.0.0\n"
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": file})
+	git := func(args ...string) {
+		t.Helper()
+		args = append([]string{"-C", f.root, "-c", "user.name=Test", "-c", "user.email=test@example.com"}, args...)
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	git("init", "--quiet", "--initial-branch=main")
+	git("add", ".")
+	git("commit", "--quiet", "-m", "fixture")
+	git("tag", "deploy/helm/alpha/v1.0.1")
+	git("switch", "--quiet", "-c", "release-1")
+	git("commit", "--quiet", "--allow-empty", "-m", "backport")
+	git("tag", "deploy/helm/alpha/v2.0.0")
+	git("switch", "--quiet", "main")
+
+	bump := func(tag string) (int, string, string) {
+		var out, errOut bytes.Buffer
+		code, err := Bump(f.root, tag, "main", true, &out, &errOut)
+		if err != nil {
+			errOut.WriteString(err.Error())
+		}
+		return code, out.String(), errOut.String()
+	}
+
+	code, out, errOut := bump("deploy/helm/alpha/v2.0.0")
+	if code != 0 || !strings.Contains(out, "deploy/helm/alpha/v2.0.0: skipped, its commit is not on main") {
+		t.Fatalf("a release-branch tag must be skipped with a reason: code=%d\n%s%s", code, out, errOut)
+	}
+	if got := f.read(t, "00-stack.yaml.gotmpl"); got != file {
+		t.Fatalf("a release-branch tag moved a pin:\n%s", got)
+	}
+
+	// A normal chart release on main still bumps through the same check.
+	code, out, errOut = bump("deploy/helm/alpha/v1.0.1")
+	if code != 0 || !strings.Contains(out, "alpha: 1.0.0 -> 1.0.1") || !strings.Contains(out, "bump: patch") {
+		t.Fatalf("a chart release on main must bump: code=%d\n%s%s", code, out, errOut)
+	}
+	if got := f.read(t, "00-stack.yaml.gotmpl"); !strings.Contains(got, "version: 1.0.1\n") {
+		t.Fatalf("pin did not move:\n%s", got)
 	}
 }
