@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "uploadertest",
+    srcs = [
+        "crash.go",
+        "doc.go",
+        "fixtures.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/uploadertest",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/record"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":uploadertest",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "uploadertest_test",
+    srcs = [
+        "crash_internal_test.go",
+        "crash_test.go",
+        "fixtures_test.go",
+        "harness_test.go",
+    ],
+    embed = [":uploadertest"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/backend/backendtest",
+        "//src/compute-plane-services/request-trace-uploader/record",
+        "//src/compute-plane-services/request-trace-uploader/segment",
+    ],
+)
