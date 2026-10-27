@@ -25,7 +25,7 @@ use stargate_proto::pb::{WatchStargatesRequest, WatchStargatesResponse};
 use stargate_protocol::parse_explicit_http_uri;
 
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::grpc_endpoint::{
     StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure, grpc_error_chain,
@@ -54,13 +54,18 @@ pub(super) struct WatchedEndpoint {
 
 const INITIAL_WATCH_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Watches every seed and, recursively, the `watch_stargate_urls` they
+/// return, and publishes the registration routers they report. A change of
+/// `seeds_rx` starts watches for new seeds and stops the watches no longer
+/// reachable from any seed; a closed sender keeps the last seed set.
 pub(super) async fn run_watch_stargate_discovery(
-    seeds: Vec<String>,
+    mut seeds_rx: watch::Receiver<BTreeSet<String>>,
     grpc_tls_ca_cert_pem: Option<Vec<u8>>,
     topology_tx: watch::Sender<RegistrationRouterTopology>,
     stop: CancellationToken,
 ) {
-    let seeds = normalize_string_set(seeds);
+    let mut seeds = normalize_string_set(&seeds_rx.borrow_and_update());
+    let mut seeds_open = true;
     let (endpoint_updates_tx, mut endpoint_updates_rx) = mpsc::channel::<WatchEndpointUpdate>(32);
     let mut watched: HashMap<String, WatchedEndpoint> = HashMap::new();
     let mut next_generation = 0_u64;
@@ -132,6 +137,22 @@ pub(super) async fn run_watch_stargate_discovery(
         tokio::select! {
             Some(update) = endpoint_updates_rx.recv() => {
                 apply_watch_endpoint_update(&mut watched, update);
+            }
+            changed = seeds_rx.changed(), if seeds_open => {
+                if changed.is_ok() {
+                    let next = normalize_string_set(&seeds_rx.borrow_and_update());
+                    if next != seeds {
+                        info!(
+                            seed_count = next.len(),
+                            added = next.difference(&seeds).count(),
+                            removed = seeds.difference(&next).count(),
+                            "Stargate watch seeds changed"
+                        );
+                        seeds = next;
+                    }
+                } else {
+                    seeds_open = false;
+                }
             }
             _ = stop.cancelled() => break,
             _ = &mut initial_discovery_timeout, if awaiting_initial_timeout => {
@@ -411,9 +432,9 @@ pub(super) fn watched_endpoint_snapshots(
         .filter_map(|endpoint| endpoint.snapshot.as_ref())
 }
 
-fn normalize_string_set(values: Vec<String>) -> BTreeSet<String> {
+fn normalize_string_set(values: &BTreeSet<String>) -> BTreeSet<String> {
     values
-        .into_iter()
+        .iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()

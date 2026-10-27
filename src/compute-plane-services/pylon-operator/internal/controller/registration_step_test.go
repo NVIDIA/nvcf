@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -186,6 +187,42 @@ func TestRegistrationStepFastNegativeReportsNoRouters(t *testing.T) {
 	assert.Nil(t, ep.Status.Servers)
 	assert.Equal(t, probeInterval, rc.requeueAfter, "no scrape requeue")
 	assert.Empty(t, rc.events)
+}
+
+func TestRegistrationStepReportsGDSRouters(t *testing.T) {
+	f := newFixture(t, withObjects(append(healthyObjects(), transportPod(testPod))...))
+	f.pylon.set(steadyPylon)
+	f.mustReconcile()
+	assert.Nil(t, f.endpoint().Status.Registration.Routers, "unset with a static router address")
+
+	count, known := int32(3), true
+	f.observer.RouterCount = func() (int32, bool) { return count, known }
+	f.mustReconcile()
+	require.NotNil(t, f.endpoint().Status.Registration.Routers)
+	assert.Equal(t, int32(3), *f.endpoint().Status.Registration.Routers)
+
+	// An unknown count, as after an operator restart, keeps the last value.
+	known = false
+	f.mustReconcile()
+	require.NotNil(t, f.endpoint().Status.Registration.Routers)
+	assert.Equal(t, int32(3), *f.endpoint().Status.Registration.Routers)
+
+	count, known = 0, true
+	f.mustReconcile()
+	assert.Equal(t, int32(0), *f.endpoint().Status.Registration.Routers)
+}
+
+func TestRegistrationStepFastNegativeKeepsGDSRouters(t *testing.T) {
+	ep := inferenceEndpoint(1)
+	ep.Status.Registration = &pylonv1alpha1.RegistrationStatus{ClusterID: "spark-berlin", Routers: ptr.To[int32](2)}
+	rc := newReconcileContext(ep, testConfig())
+	rc.Transport = &transport.State{DeploymentName: "pylon-llama", ScaledToZero: true}
+	observer := registration.New(nil, nil)
+	observer.RouterCount = func() (int32, bool) { return 5, true }
+
+	step := &registrationStep{observer: observer}
+	require.NoError(t, step.Run(context.Background(), rc))
+	assert.Equal(t, &pylonv1alpha1.RegistrationStatus{ClusterID: "spark-berlin", Routers: ptr.To[int32](5)}, ep.Status.Registration)
 }
 
 func TestRegistrationStepListError(t *testing.T) {

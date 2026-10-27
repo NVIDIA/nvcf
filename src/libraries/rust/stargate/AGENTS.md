@@ -61,6 +61,32 @@ cargo test --locked -p gds-client --all-features
 cargo clippy --locked -p gds-client --all-features --all-targets -- -D warnings
 ```
 
+## Global Discovery Service integration
+
+Stargate and Pylon read routers from GDS through `crates/gds-client`. See
+`docs/dev/global-discovery-quickstart.md` at the repository root.
+
+- Stargate: `discovery/gds.rs` wraps the DNS or self-only discovery in
+  `GdsDiscovery`; local discovery stays authoritative for this cluster's
+  Stargates. The `Discovery` trait's defaulted `discover_remote_watch_urls`
+  returns the GDS `remote_watch_urls` of the other clusters, and
+  `control_plane/watch_stargates.rs` unions them with `--remote-stargate-url`
+  on every poll tick. Stargate advertises `--grpc-pylon-dial-addr` unchanged.
+- `stargate-k8s-router` has no GDS client: it answers `WatchStargates` from
+  EndpointSlices with its static remote URLs only.
+- Pylon: `InferenceServerRegistrationConfig.seeds` is a
+  `watch::Receiver<BTreeSet<String>>`. `run_watch_stargate_discovery` follows
+  changes while the sender lives; a closed sender keeps the last set, and
+  only a closed, empty source is a configuration error. Use
+  `pylon_lib::static_seeds` for a fixed set. `crates/pylon/src/gds.rs` feeds
+  `pylon_seed_urls` from a `RouterCache`, unioned with `--stargate-address`.
+- Bazel: `stargate` links `gds-client-stargate`, `pylon` links `gds-client`.
+  Keep `gds-client` out of `pylon-lib`: `stargate_test` links
+  `pylon-lib-test-support` next to `gds-client-stargate`, and two crates
+  named `gds_client` would collide.
+- `stargate_bin_test` runs the unit tests of the Stargate binary crate
+  (`src/main.rs`, `src/main/`) under Bazel.
+
 ## Code style
 
 Use Rust 2024 and the workspace formatter and Clippy rules. Match existing

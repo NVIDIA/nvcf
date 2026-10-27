@@ -1385,7 +1385,7 @@ fn test_registration_config(
     reverse_tunnel: bool,
 ) -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
-        seeds,
+        seeds: pylon_lib::static_seeds(seeds),
         inference_server_id: inference_server_id.to_string(),
         cluster_id: String::new(),
         inference_server_url,

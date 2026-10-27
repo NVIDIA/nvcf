@@ -2493,6 +2493,7 @@ dependencies = [
  "axum",
  "clap",
  "flume",
+ "gds-client",
  "pylon-lib",
  "quinn",
  "rcgen",
@@ -2508,6 +2509,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tracing",
 ]
@@ -3408,6 +3410,7 @@ dependencies = [
  "clap",
  "flume",
  "futures",
+ "gds-client",
  "git2 0.20.4",
  "h3",
  "h3-quinn",

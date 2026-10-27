@@ -33,6 +33,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/controller"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/gds"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/gpu"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/prober"
@@ -60,6 +61,9 @@ func main() {
 	}
 	setupLog.Info("Starting pylon-operator", append(version.KeysAndValues(),
 		"clusterId", cfg.ClusterID,
+		"routerSource", cfg.RouterSource,
+		"gdsURLs", cfg.GDSURLs,
+		"gdsClustersetId", cfg.GDSClustersetID,
 		"operatorNamespace", cfg.OperatorNamespace,
 		"watchNamespaces", cfg.WatchNamespaces,
 		"pylonImagePullSecrets", cfg.PylonImagePullSecrets,
@@ -89,6 +93,19 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
+	observer := registration.New(mgr.GetClient(), m)
+	if cfg.GDS() {
+		// The router view is diagnostic: without it transport pods still
+		// find their routers through GDS, so a failure only disables the
+		// startup check and status.registration.routers.
+		routers, err := startGDS(ctx, mgr, cfg)
+		if err != nil {
+			ctrl.Log.WithName("gds").Error(err, "GDS router view disabled; status.registration.routers stays unset")
+		} else {
+			observer.RouterCount = routers.RouterCount
+		}
+	}
+
 	reconciler := controller.NewReconciler(controller.Options{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorderFor(eventSource),
@@ -99,7 +116,7 @@ func run(ctx context.Context, cfg config.Config) error {
 			prober.New(m),
 			&gpu.Resolver{Reader: mgr.GetClient()},
 			transport.New(mgr.GetClient(), cfg),
-			registration.New(mgr.GetClient(), m),
+			observer,
 		),
 	})
 	if err := reconciler.SetupWithManager(ctx, mgr); err != nil {
@@ -112,4 +129,26 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	return mgr.Start(ctx)
+}
+
+// startGDS connects to the Global Discovery Service with the GDS CA from the
+// operator namespace and adds the router cache to the manager. The cache only
+// feeds a startup warning and status.registration.routers; transport pods
+// find their routers themselves.
+func startGDS(ctx context.Context, mgr ctrl.Manager, cfg config.Config) (*gds.Routers, error) {
+	ca, err := gds.LoadCA(ctx, mgr.GetAPIReader(), cfg.OperatorNamespace, cfg.GDSTLSCAConfigMap)
+	if err != nil {
+		return nil, err
+	}
+	routers, err := gds.New(ctx, cfg, ca, gds.Options{
+		Registerer: ctrlmetrics.Registry,
+		Logger:     ctrl.Log.WithName("gds"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := mgr.Add(routers); err != nil {
+		return nil, err
+	}
+	return routers, nil
 }

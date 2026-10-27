@@ -678,6 +678,36 @@ func TestReconcileTrustBundle(t *testing.T) {
 	})
 }
 
+func TestReconcileGDSCABundle(t *testing.T) {
+	cfg := gdsConfig()
+	cfg.GDSTLSCAConfigMap = "gds-ca"
+
+	t.Run("missing", func(t *testing.T) {
+		f := newFixture(t, cfg, credential(testToken))
+		ep := endpoint()
+		st := f.reconcile(ep)
+		require.NotNil(t, st.Problem)
+		assert.Equal(t, EventReasonTrustBundleMissing, st.Problem.EventReason)
+		assert.Contains(t, st.Problem.Message, "pylon-operator/gds-ca not found")
+		f.noDeployment(ep)
+	})
+
+	t.Run("replicated", func(t *testing.T) {
+		f := newFixture(t, cfg, credential(testToken), trustBundle("gds-ca"))
+		ep := endpoint()
+		st := f.reconcile(ep)
+		assert.Nil(t, st.Problem)
+		assert.Equal(t, []string{
+			"create Secret models/pylon-operator-cluster-credential",
+			"create ConfigMap models/gds-ca",
+			"create Deployment models/pylon-llama",
+		}, f.takeWrites())
+		assert.Contains(t, f.deployment(ep).Spec.Template.Spec.Containers[0].Args,
+			"--gds-tls-ca-cert-path=/etc/pylon-operator/tls/ca.crt")
+		f.assertNoSecretMaterialLogged()
+	})
+}
+
 func TestReconcileConflicts(t *testing.T) {
 	foreignSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: config.DefaultClusterCredentialSecret, Namespace: testNamespace},

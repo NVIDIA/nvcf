@@ -23,7 +23,8 @@ use stargate::auth::{
     GrpcWorkerAuthenticator, OpenAuthenticator, StaticClusterAuthenticator, WorkerAuthenticator,
 };
 use stargate::discovery::{
-    Discovery, DnsDiscovery, HeadlessDnsDiscovery, HeadlessDnsDiscoveryConfig, SelfOnlyDiscovery,
+    Discovery, DnsDiscovery, GdsDiscovery, HeadlessDnsDiscovery, HeadlessDnsDiscoveryConfig,
+    SelfOnlyDiscovery,
 };
 use stargate::proxy::{ProxyRetryConfig, ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
@@ -224,7 +225,64 @@ pub(super) fn make_discovery_with_resolver_and_addresses(
     make_resolver: impl FnOnce(Duration) -> Result<hickory_resolver::TokioAsyncResolver>,
 ) -> Result<DiscoveryAndForwarding> {
     validate_discovery_args(args)?;
+    let (local, forwarding) =
+        make_local_discovery(args, advertise_addr, http_listen_addr, make_resolver)?;
+    Ok((with_global_discovery(args, local)?, forwarding))
+}
 
+/// Wraps the local peer discovery with GDS remote router discovery when
+/// `--gds-url` is set. Local discovery stays authoritative for this
+/// cluster's Stargates. Spawns the router cache, so it needs a Tokio runtime.
+fn with_global_discovery(args: &Args, local: Box<dyn Discovery>) -> Result<Box<dyn Discovery>> {
+    let Some(config) = gds_client_config_from_args(args)? else {
+        return Ok(local);
+    };
+    let clusterset = args.gds_clusterset.as_deref().unwrap_or_default().trim();
+    let cluster_id = args.gds_cluster_id.as_deref().unwrap_or_default().trim();
+    let urls = config.urls.clone();
+    let client = gds_client::GdsClient::new(config).context("invalid GDS client configuration")?;
+    tracing::info!(
+        gds_urls = ?urls,
+        clusterset,
+        cluster_id,
+        "discovering remote routers through GDS"
+    );
+    Ok(Box::new(GdsDiscovery::spawn(
+        local, client, clusterset, cluster_id,
+    )))
+}
+
+/// The GDS client configuration, `None` without `--gds-url`.
+pub(super) fn gds_client_config_from_args(
+    args: &Args,
+) -> Result<Option<gds_client::GdsClientConfig>> {
+    if !gds_configured(args) {
+        return Ok(None);
+    }
+    let tls = args
+        .gds_tls_ca_cert_path
+        .as_ref()
+        .map(gds_client::TlsOptions::from_ca_file)
+        .transpose()
+        .context("invalid --gds-tls-ca-cert-path")?
+        .unwrap_or_default();
+    Ok(Some(gds_client::GdsClientConfig {
+        urls: args.gds_url.clone(),
+        tls,
+        policy: gds_client::ConnectPolicy {
+            allow_insecure_http: args.allow_insecure_remote_watch_http,
+            user_agent: Some(format!("stargate/{}", super::BUILD_VERSION)),
+            ..gds_client::ConnectPolicy::default()
+        },
+    }))
+}
+
+fn make_local_discovery(
+    args: &Args,
+    advertise_addr: SocketAddr,
+    http_listen_addr: SocketAddr,
+    make_resolver: impl FnOnce(Duration) -> Result<hickory_resolver::TokioAsyncResolver>,
+) -> Result<DiscoveryAndForwarding> {
     if args.disable_dns_discovery {
         return Ok((
             Box::new(SelfOnlyDiscovery::new(
@@ -289,6 +347,7 @@ pub(super) fn validate_discovery_args(args: &Args) -> Result<()> {
                 .any(|url| url.starts_with("http://")),
         "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
     );
+    validate_gds_args(args)?;
     ensure!(
         !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
         "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"
@@ -298,6 +357,44 @@ pub(super) fn validate_discovery_args(args: &Args) -> Result<()> {
             || (args.pod_name.is_some() && args.pod_namespace.is_some()),
         "--enable-dev-peer-forwarding requires both --pod-name and --pod-namespace"
     );
+    Ok(())
+}
+
+/// Whether `--gds-url` names at least one URL.
+fn gds_configured(args: &Args) -> bool {
+    args.gds_url.iter().any(|url| !url.trim().is_empty())
+}
+
+fn validate_gds_args(args: &Args) -> Result<()> {
+    let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+    if !gds_configured(args) {
+        ensure!(
+            !set(&args.gds_clusterset)
+                && !set(&args.gds_cluster_id)
+                && args.gds_tls_ca_cert_path.is_none(),
+            "--gds-clusterset, --gds-cluster-id and --gds-tls-ca-cert-path require --gds-url"
+        );
+        return Ok(());
+    }
+    ensure!(
+        set(&args.gds_clusterset),
+        "--gds-url requires --gds-clusterset"
+    );
+    ensure!(
+        set(&args.gds_cluster_id),
+        "--gds-url requires --gds-cluster-id"
+    );
+    ensure!(
+        args.allow_insecure_remote_watch_http
+            || !args
+                .gds_url
+                .iter()
+                .flat_map(|urls| urls.split(','))
+                .any(|url| url.trim().to_ascii_lowercase().starts_with("http://")),
+        "http:// GDS URLs require --allow-insecure-remote-watch-http"
+    );
+    gds_client::EndpointSet::parse(&args.gds_url, args.allow_insecure_remote_watch_http)
+        .context("invalid --gds-url")?;
     Ok(())
 }
 

@@ -1,0 +1,68 @@
+{
+    "title": "Chart Values",
+    "description": "Validates llmRequestRouter.globalDiscovery. The templates validate the other values.",
+    "type": "object",
+    "properties": {
+        "llmRequestRouter": {
+            "type": "object",
+            "properties": {
+                "globalDiscovery": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Render the Stargate GDS flags",
+                            "default": false
+                        },
+                        "urls": {
+                            "type": "array",
+                            "description": "GDS gRPC URLs in failover order. Required when enabled",
+                            "items": {
+                                "type": "string",
+                                "pattern": "^https?://([A-Za-z0-9._~-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?/?$"
+                            },
+                            "default": []
+                        },
+                        "clustersetId": {
+                            "type": "string",
+                            "description": "GDS clusterset id, a DNS label. Required when enabled",
+                            "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+                            "default": ""
+                        },
+                        "clusterId": {
+                            "type": "string",
+                            "description": "This cluster's id in the clusterset, a DNS label. Required when enabled",
+                            "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+                            "default": ""
+                        },
+                        "tlsCaConfigMap": {
+                            "type": "string",
+                            "description": "Existing ConfigMap whose ca.crt key holds the GDS CA bundle. Empty trusts the system roots",
+                            "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                            "maxLength": 253,
+                            "default": ""
+                        },
+                        "export": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "description": "Label the Service pylons dial for export as this cluster's router",
+                                    "default": false
+                                }
+                            }
+                        },
+                        "dialScheme": {
+                            "type": "string",
+                            "description": "Scheme of this cluster's router seeds",
+                            "enum": ["http", "https"],
+                            "default": "http"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

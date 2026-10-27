@@ -55,7 +55,7 @@ pub use quic_http_tunnel::{
     UpstreamBackend, start_quic_http_tunnel, start_reverse_quic_tunnel,
 };
 pub use registration::{
-    ClientError, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
+    ClientError, InferenceServerRegistrationClient, InferenceServerRegistrationConfig, static_seeds,
 };
 pub use request_observer::{
     RequestObservation, RequestObservationEndpoint, RequestObservationState,

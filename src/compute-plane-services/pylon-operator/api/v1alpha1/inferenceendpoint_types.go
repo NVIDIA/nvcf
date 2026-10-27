@@ -170,6 +170,13 @@ type RegistrationStatus struct {
 	// open.
 	// +optional
 	LastRegisteredTime *metav1.Time `json:"lastRegisteredTime,omitempty"`
+
+	// Routers is the number of routers with a live lease and ready replicas
+	// that the Global Discovery Service lists for the clusterset, with
+	// --router-source=gds. Unset with a static router address and until the
+	// operator first lists the routers.
+	// +optional
+	Routers *int32 `json:"routers,omitempty"`
 }
 
 // ServerStatus is the per-transport-pod view of one inference server.

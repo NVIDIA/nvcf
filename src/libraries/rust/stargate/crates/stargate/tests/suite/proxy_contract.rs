@@ -2280,7 +2280,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
     );
     fixture.register(
         InferenceServerRegistrationConfig {
-            seeds: vec![grpc_addr.to_string()],
+            seeds: pylon_lib::static_seeds([grpc_addr.to_string()]),
             inference_server_id: "shared-backend-a-bad".to_string(),
             cluster_id: "shared-failover-cluster".to_string(),
             inference_server_url: "http://127.0.0.1:1".to_string(),

@@ -18,6 +18,8 @@
 {{- fail (printf "llmRequestRouter.workload.kind must be Deployment or StatefulSet, got %q" $workloadKind) -}}
 {{- end }}
 {{- include "llm-request-router.validateRemoteWatchUrls" . }}
+{{- include "llm-request-router.validateGlobalDiscovery" . }}
+{{- $globalDiscovery := .Values.llmRequestRouter.globalDiscovery | default dict }}
 apiVersion: apps/v1
 kind: {{ $workloadKind }}
 metadata:
@@ -137,6 +139,16 @@ spec:
             {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
             - --allow-insecure-remote-watch-http
             {{- end }}
+            {{- if $globalDiscovery.enabled }}
+            {{- range $globalDiscovery.urls }}
+            - --gds-url={{ . | toString | trim }}
+            {{- end }}
+            - --gds-clusterset={{ $globalDiscovery.clustersetId }}
+            - --gds-cluster-id={{ $globalDiscovery.clusterId }}
+            {{- if $globalDiscovery.tlsCaConfigMap }}
+            - --gds-tls-ca-cert-path={{ include "llm-request-router.gdsTlsMountPath" . }}/ca.crt
+            {{- end }}
+            {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
             {{- with $readinessWarmupMs }}
             - --readiness-warmup-ms={{ . }}
@@ -251,6 +263,11 @@ spec:
               mountPath: {{ $workerAuthMountPath }}
               readOnly: true
             {{- end }}
+            {{- if and $globalDiscovery.enabled $globalDiscovery.tlsCaConfigMap }}
+            - name: gds-tls
+              mountPath: {{ include "llm-request-router.gdsTlsMountPath" . }}
+              readOnly: true
+            {{- end }}
             {{- $tlsSecretNameMount := include "llm-request-router.tlsSecretName" . }}
             {{- if and $tlsSecretNameMount .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}
             {{- include "llm-request-router.validateTlsCertKeyDir" . }}
@@ -288,6 +305,14 @@ spec:
             items:
               - key: {{ .Values.llmRequestRouter.auth.credentialsSecret.key | quote }}
                 path: {{ .Values.llmRequestRouter.auth.credentialsSecret.key | quote }}
+        {{- end }}
+        {{- if and $globalDiscovery.enabled $globalDiscovery.tlsCaConfigMap }}
+        - name: gds-tls
+          configMap:
+            name: {{ $globalDiscovery.tlsCaConfigMap | toString | trim | quote }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
         {{- $tlsSecretNameVolume := include "llm-request-router.tlsSecretName" . }}
         {{- if and $tlsSecretNameVolume .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}

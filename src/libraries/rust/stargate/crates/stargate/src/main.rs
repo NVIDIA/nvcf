@@ -119,6 +119,18 @@ struct Args {
         env = "STARGATE_ALLOW_INSECURE_REMOTE_WATCH_HTTP"
     )]
     allow_insecure_remote_watch_http: bool,
+    /// Global Discovery Service (GDS) gRPC URL, in failover order; repeatable. Enables remote router discovery: WatchStargates adds the router replica seeds of the other clusters of the clusterset to its remote Watch URLs. http:// requires `--allow-insecure-remote-watch-http`.
+    #[arg(long, env = "GDS_URLS", value_delimiter = ',', value_name = "URL")]
+    gds_url: Vec<String>,
+    /// GDS clusterset id. Required with `--gds-url`.
+    #[arg(long, env = "GDS_CLUSTERSET_ID", value_name = "ID")]
+    gds_clusterset: Option<String>,
+    /// This cluster's id in the GDS clusterset; its own routers are not remote Watch URLs. Required with `--gds-url`.
+    #[arg(long, env = "GDS_CLUSTER_ID", value_name = "ID")]
+    gds_cluster_id: Option<String>,
+    /// PEM CA bundle trusted for https:// GDS URLs in addition to the system roots.
+    #[arg(long, env = "GDS_TLS_CA_CERT_PATH", value_name = "PATH")]
+    gds_tls_ca_cert_path: Option<PathBuf>,
     /// Optional TCP load-balancer dial address for pylons; per-pod addresses remain the advertised gRPC authority/SNI identity.
     #[arg(long, value_parser = parse_grpc_pylon_dial_uri, value_name = "URI")]
     grpc_pylon_dial_addr: Option<String>,
@@ -1448,5 +1460,139 @@ mod tests {
             std::time::Duration::from_millis(250)
         );
         assert_eq!(config.warmup.stabilization_window, 7);
+    }
+
+    const GDS_ARGS: &str = "--gds-url https://gds.example.test \
+         --gds-url https://gds.us-east-1.example.test \
+         --gds-clusterset prod --gds-cluster-id cluster-a";
+
+    #[test]
+    fn gds_flags_parse_and_default_to_disabled() {
+        let defaults = parse_args("");
+        assert!(defaults.gds_url.is_empty());
+        assert_eq!(defaults.gds_clusterset, None);
+        assert_eq!(defaults.gds_cluster_id, None);
+        assert_eq!(defaults.gds_tls_ca_cert_path, None);
+        startup::validate_discovery_args(&defaults).expect("GDS is optional");
+
+        let args = parse_args(&format!(
+            "{GDS_ARGS} --gds-tls-ca-cert-path /etc/stargate/gds-tls/ca.crt"
+        ));
+        assert_eq!(
+            args.gds_url,
+            [
+                "https://gds.example.test",
+                "https://gds.us-east-1.example.test"
+            ]
+        );
+        assert_eq!(args.gds_clusterset.as_deref(), Some("prod"));
+        assert_eq!(args.gds_cluster_id.as_deref(), Some("cluster-a"));
+        assert_eq!(
+            args.gds_tls_ca_cert_path,
+            Some(PathBuf::from("/etc/stargate/gds-tls/ca.crt"))
+        );
+        startup::validate_discovery_args(&args).expect("complete GDS flags should validate");
+
+        let comma_separated = parse_args(
+            "--gds-url https://gds-a.example.test,https://gds-b.example.test \
+             --gds-clusterset prod --gds-cluster-id cluster-a",
+        );
+        assert_eq!(comma_separated.gds_url.len(), 2);
+    }
+
+    #[test]
+    fn gds_flags_are_validated_together() {
+        for (flags, expected) in [
+            (
+                "--gds-url https://gds.example.test --gds-cluster-id cluster-a",
+                "--gds-url requires --gds-clusterset",
+            ),
+            (
+                "--gds-url https://gds.example.test --gds-clusterset prod",
+                "--gds-url requires --gds-cluster-id",
+            ),
+            (
+                "--gds-clusterset prod",
+                "--gds-clusterset, --gds-cluster-id and --gds-tls-ca-cert-path require --gds-url",
+            ),
+            ("--gds-cluster-id cluster-a", "require --gds-url"),
+            (
+                "--gds-tls-ca-cert-path /etc/stargate/gds-tls/ca.crt",
+                "require --gds-url",
+            ),
+            (
+                "--gds-url http://gds.example.test --gds-clusterset prod --gds-cluster-id a",
+                "http:// GDS URLs require --allow-insecure-remote-watch-http",
+            ),
+            (
+                "--gds-url ftp://gds.example.test --gds-clusterset prod --gds-cluster-id a",
+                "invalid --gds-url",
+            ),
+        ] {
+            let error = startup::validate_discovery_args(&parse_args(flags))
+                .expect_err("incomplete GDS flags should be rejected");
+            assert_error_contains(&error, expected);
+        }
+
+        let development = parse_args(
+            "--gds-url http://127.0.0.1:9090 --gds-clusterset dev --gds-cluster-id a \
+             --allow-insecure-remote-watch-http",
+        );
+        startup::validate_discovery_args(&development)
+            .expect("the development opt-in should permit a plaintext GDS URL");
+    }
+
+    #[test]
+    fn gds_client_config_carries_urls_ca_and_plaintext_opt_in() {
+        assert!(
+            startup::gds_client_config_from_args(&parse_args(""))
+                .expect("no GDS configuration")
+                .is_none()
+        );
+
+        let mut ca = tempfile::NamedTempFile::new().expect("CA file should be creatable");
+        ca.write_all(b"-----BEGIN CERTIFICATE-----\n")
+            .expect("CA file should be writable");
+        let args = parse_args(&format!(
+            "{GDS_ARGS} --allow-insecure-remote-watch-http --gds-tls-ca-cert-path {}",
+            ca.path().display()
+        ));
+        let config = startup::gds_client_config_from_args(&args)
+            .expect("GDS configuration should build")
+            .expect("GDS is configured");
+        assert_eq!(config.urls, args.gds_url);
+        assert!(config.tls.ca_certificate_pem.is_some());
+        assert!(config.policy.allow_insecure_http);
+        assert_eq!(
+            config.policy.user_agent,
+            Some(format!("stargate/{BUILD_VERSION}"))
+        );
+
+        let missing_ca = parse_args(&format!(
+            "{GDS_ARGS} --gds-tls-ca-cert-path /nonexistent/gds-ca.crt"
+        ));
+        let error = startup::gds_client_config_from_args(&missing_ca)
+            .expect_err("a missing GDS CA should be rejected");
+        assert_error_contains(&format!("{error:#}"), "/nonexistent/gds-ca.crt");
+    }
+
+    #[tokio::test]
+    async fn gds_discovery_wraps_local_discovery() {
+        let args = parse_args(&format!(
+            "--disable-dns-discovery --http-listen-addr 127.0.0.1:18000 \
+             --allow-insecure-remote-watch-http {}",
+            "--gds-url http://127.0.0.1:1 --gds-clusterset prod --gds-cluster-id cluster-a"
+        ));
+        let (discovery, forwarding) = make_discovery_with_resolver(&args, make_resolver)
+            .expect("GDS discovery should build without contacting GDS");
+        assert!(forwarding.is_none());
+        let initial = discovery.initial_stargates();
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].stargate_id, "sg-test");
+        assert_eq!(discovery.discover_stargates().await, initial);
+        assert!(
+            discovery.discover_remote_watch_urls().await.is_empty(),
+            "no remote routers before GDS answers"
+        );
     }
 }

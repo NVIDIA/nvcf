@@ -37,8 +37,9 @@ import (
 // notCreatedSuffix ends the message of a missing source.
 const notCreatedSuffix = "; the transport Deployment is not created or updated until it exists"
 
-// replicate copies the cluster credential, and the trust bundle when
-// configured, from the operator namespace into the endpoint's namespace. It
+// replicate copies the cluster credential, and the trust bundle or GDS CA
+// bundle when configured, from the operator namespace into the endpoint's
+// namespace. It
 // returns a Problem when a source is missing or a copy's name is taken.
 //
 // Nothing here logs, wraps into an error or puts into a message the content
@@ -47,7 +48,7 @@ func (r *Reconciler) replicate(ctx context.Context, ep *pylonv1alpha1.InferenceE
 	if p, err := r.replicateCredential(ctx, ep); p != nil || err != nil {
 		return p, err
 	}
-	if r.config.TrustBundleConfigMap == "" {
+	if r.config.CABundleConfigMap() == "" {
 		return nil, nil
 	}
 	return r.replicateTrustBundle(ctx, ep)
@@ -92,7 +93,7 @@ func (r *Reconciler) replicateCredential(ctx context.Context, ep *pylonv1alpha1.
 }
 
 func (r *Reconciler) replicateTrustBundle(ctx context.Context, ep *pylonv1alpha1.InferenceEndpoint) (*Problem, error) {
-	key := client.ObjectKey{Namespace: r.config.OperatorNamespace, Name: r.config.TrustBundleConfigMap}
+	key := client.ObjectKey{Namespace: r.config.OperatorNamespace, Name: r.config.CABundleConfigMap()}
 	src := &corev1.ConfigMap{}
 	if err := r.client.Get(ctx, key, src); err != nil {
 		if apierrors.IsNotFound(err) {

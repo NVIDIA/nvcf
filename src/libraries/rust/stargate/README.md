@@ -166,6 +166,32 @@ every second as well.
 when the CA is set and the address is `http://` or has no scheme, Pylon exits
 at startup with an error before it contacts Stargate.
 
+## Global Discovery Service
+
+Stargate and Pylon can find routers through the Global Discovery Service
+(GDS) instead of static address lists. The setup, prerequisites and chart
+values are in `docs/dev/global-discovery-quickstart.md` at the repository
+root; the client is `crates/gds-client`.
+
+- Stargate: `--gds-url` (repeatable, `GDS_URLS`), `--gds-clusterset`
+  (`GDS_CLUSTERSET_ID`), `--gds-cluster-id` (`GDS_CLUSTER_ID`) and
+  `--gds-tls-ca-cert-path`. Every `WatchStargates` poll tick adds the router
+  replica seeds of the other clusters of the clusterset to
+  `watch_stargate_urls`, unioned with `--remote-stargate-url`. Local peers
+  still come from DNS discovery, and `--grpc-pylon-dial-addr` is advertised
+  unchanged. An `http://` GDS URL requires
+  `--allow-insecure-remote-watch-http`.
+- Pylon: `--gds-url`, `--gds-clusterset` and `--gds-tls-ca-cert-path`. Pylon
+  watches the seeds of every router cluster with a live lease and follows
+  changes without a restart: new seeds start `WatchStargates`, removed seeds
+  stop it and close the registrations they led to. `--stargate-address` is
+  optional with `--gds-url` and is watched in addition; without `--gds-url`
+  it keeps its `127.0.0.1:50071` default.
+
+`stargate-k8s-router` answers `WatchStargates` from its EndpointSlices and
+publishes only its static remote URLs, so pylons that dial the backend router
+learn the other clusters through their own `--gds-url`.
+
 ## Load balancing
 
 Use `wait-and-widen` with `cache_affinity_wait_ms` to keep requests in their

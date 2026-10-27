@@ -334,6 +334,103 @@ func TestTrustBundleWithPlaintextRouter(t *testing.T) {
 	}
 }
 
+// gdsConfig is testConfig with the GDS router source and no router address.
+func gdsConfig() config.Config {
+	cfg := testConfig()
+	cfg.RouterSource = config.RouterSourceGDS
+	cfg.RouterGRPCAddress = ""
+	cfg.GDSURLs = []string{"https://gds.example.test", "https://gds.us-east-1.example.test"}
+	cfg.GDSClustersetID = "prod"
+	return cfg
+}
+
+func TestGDSArgs(t *testing.T) {
+	gdsArgs := []string{
+		"--gds-url=https://gds.example.test",
+		"--gds-url=https://gds.us-east-1.example.test",
+		"--gds-clusterset=prod",
+	}
+	withRouterArgs := func(router ...string) []string {
+		a := append([]string{minimalArgs[0]}, router...)
+		return append(a, minimalArgs[2:]...)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+		want   []string
+	}{
+		{
+			name: "GDS flags instead of the router address",
+			want: withRouterArgs(gdsArgs...),
+		},
+		{
+			name:   "GDS CA",
+			mutate: func(c *config.Config) { c.GDSTLSCAConfigMap = "gds-ca" },
+			want:   withRouterArgs(append(gdsArgs, "--gds-tls-ca-cert-path=/etc/pylon-operator/tls/ca.crt")...),
+		},
+		{
+			name:   "a router address is watched in addition",
+			mutate: func(c *config.Config) { c.RouterGRPCAddress = testRouter },
+			want:   withRouterArgs(append(gdsArgs, "--stargate-address="+testRouter)...),
+		},
+		{
+			name: "dollar signs are escaped",
+			mutate: func(c *config.Config) {
+				c.GDSURLs = []string{"https://gds$.example.test"}
+				c.GDSClustersetID = "pr$od"
+			},
+			want: withRouterArgs("--gds-url=https://gds$$.example.test", "--gds-clusterset=pr$$od"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := gdsConfig()
+			if tt.mutate != nil {
+				tt.mutate(&cfg)
+			}
+			assert.Equal(t, tt.want, Args(endpoint(), cfg))
+		})
+	}
+}
+
+// TestGDSCABundle checks that the GDS CA is mounted like the trust bundle
+// and reaches Pylon only as --gds-tls-ca-cert-path, and that one ConfigMap
+// can carry both CAs.
+func TestGDSCABundle(t *testing.T) {
+	podName := corev1.EnvVar{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.name"}}}
+	mount := corev1.VolumeMount{Name: "trust-bundle", MountPath: "/etc/pylon-operator/tls", ReadOnly: true}
+
+	cfg := gdsConfig()
+	cfg.GDSTLSCAConfigMap = "gds-ca"
+	spec := Deployment(endpoint(), cfg, 1).Spec.Template.Spec
+	c := spec.Containers[0]
+	assert.Equal(t, []corev1.EnvVar{podName}, c.Env, "no Stargate CA variables without a router trust bundle")
+	assert.Contains(t, c.VolumeMounts, mount)
+	require.Len(t, spec.Volumes, 2)
+	assert.Equal(t, "gds-ca", spec.Volumes[1].ConfigMap.Name)
+	assert.Contains(t, c.Args, "--gds-tls-ca-cert-path=/etc/pylon-operator/tls/ca.crt")
+
+	cfg.TrustBundleConfigMap = "gds-ca"
+	cfg.RouterGRPCAddress = "https://" + testRouter
+	spec = Deployment(endpoint(), cfg, 1).Spec.Template.Spec
+	c = spec.Containers[0]
+	assert.Equal(t, []corev1.EnvVar{
+		podName,
+		{Name: "STARGATE_TLS_CERT_PATH", Value: "/etc/pylon-operator/tls/ca.crt"},
+		{Name: "STARGATE_GRPC_TLS_CA_CERT_PATH", Value: "/etc/pylon-operator/tls/ca.crt"},
+	}, c.Env)
+	require.Len(t, spec.Volumes, 2, "one ConfigMap serves both CAs")
+	assert.Equal(t, []corev1.VolumeMount{
+		{Name: "cluster-credential", MountPath: "/var/run/pylon-operator", ReadOnly: true},
+		mount,
+	}, c.VolumeMounts)
+
+	static := testConfig()
+	static.GDSTLSCAConfigMap = "gds-ca"
+	assert.Len(t, Deployment(endpoint(), static, 1).Spec.Template.Spec.Volumes, 1,
+		"the static router source ignores the GDS CA")
+}
+
 func TestRouterUsesTLS(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"router.ns.svc:50071":          false,
@@ -420,6 +517,7 @@ func TestSpecHash(t *testing.T) {
 		{"initial input tps", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.InitialInputTPS = 50 }},
 		{"trust bundle", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.TrustBundleConfigMap = "ca" }},
 		{"credential secret", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.ClusterCredentialSecret = "cred" }},
+		{"router source", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { *c = gdsConfig() }},
 	}
 	for _, tt := range rolls {
 		t.Run(tt.name+" rolls", func(t *testing.T) {
@@ -448,6 +546,12 @@ func TestSpecHash(t *testing.T) {
 		}},
 		{"generation", func(ep *pylonv1alpha1.InferenceEndpoint, _ *config.Config) int32 { ep.Generation = 7; return 1 }},
 		{"probe interval", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) int32 { c.ProbeInterval = 99; return 1 }},
+		{"GDS settings with the static source", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) int32 {
+			c.RouterSource = config.RouterSourceStatic
+			c.GDSURLs = []string{"https://gds.example.test"}
+			c.GDSClustersetID = "prod"
+			return 1
+		}},
 	}
 	for _, tt := range keeps {
 		t.Run(tt.name+" keeps", func(t *testing.T) {

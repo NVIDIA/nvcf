@@ -28,7 +28,7 @@ mod types;
 mod urls;
 
 pub use client::InferenceServerRegistrationClient;
-pub use types::{ClientError, InferenceServerRegistrationConfig};
+pub use types::{ClientError, InferenceServerRegistrationConfig, static_seeds};
 
 use urls::normalize_addr;
 

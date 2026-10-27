@@ -170,7 +170,11 @@ types, the `clusterId` and namespace formats and the durations.
 | `image.pullPolicy` | `IfNotPresent` | Operator image pull policy. |
 | `imagePullSecrets` | `[]` | Pull Secrets for the operator pod, as `{name: <Secret>}` entries. They must exist in the release namespace. |
 | `clusterId` | `""` | Cluster name, a DNS label. Required. `--cluster-id`. |
-| `router.grpcAddress` | `""` | Router gRPC address that transport pods register with. Required. `--router-grpc-address`. |
+| `router.source` | `static` | Where transport pods find routers: `static` (`router.grpcAddress`) or `gds` (the Global Discovery Service). `--router-source`. See [Routers from the Global Discovery Service](#routers-from-the-global-discovery-service). |
+| `router.grpcAddress` | `""` | Router gRPC address that transport pods register with. Required with `router.source=static`; optional with `gds`, where it is watched in addition. `--router-grpc-address`. |
+| `globalDiscovery.urls` | `[]` | GDS gRPC URLs in failover order, all `http://` or all `https://`. Required with `router.source=gds`. One `--gds-url` each. |
+| `globalDiscovery.clustersetId` | `""` | GDS clusterset id, a DNS label. Required with `router.source=gds`. `--gds-clusterset-id`. |
+| `globalDiscovery.trustBundle.configMap` | `""` | Existing ConfigMap in the release namespace whose `ca.crt` key holds the GDS CA bundle. Empty trusts the system roots. Must equal `trustBundle.configMap` when both are set. `--gds-tls-ca-configmap`. |
 | `pylon.image.repository` | `""` | Pylon transport image repository. Required. |
 | `pylon.image.tag` | `""` | Pylon transport image tag or `sha256:` digest. Required. With the repository, `--pylon-image`. |
 | `pylon.image.pullPolicy` | `IfNotPresent` | Transport container pull policy. `--pylon-image-pull-policy`. |
@@ -203,7 +207,7 @@ types, the `clusterId` and namespace formats and the durations.
 The operator always receives `--cluster-credential-secret` with the Secret name
 the chart resolved. `POD_NAMESPACE`, set from the downward API, gives the
 operator its own namespace (`--operator-namespace`), where it reads the
-credential Secret and the trust bundle ConfigMap.
+credential Secret and the trust bundle and GDS CA ConfigMaps.
 
 ## Image pull Secrets
 
@@ -296,6 +300,46 @@ mounts it. While it or its `ca.crt` key is missing, the operator emits Warning
 Events with reason `TrustBundleMissing` and creates no transport Deployments.
 `devInsecureTransport` skips verification instead, for local k3d clusters
 only.
+
+## Routers from the Global Discovery Service
+
+With `router.source=gds` transport pods do not register with one fixed
+address. Pylon asks the Global Discovery Service (GDS) for the routers of the
+clusterset, the replica addresses of every router cluster that exports its
+router Service, and follows them as routers scale or clusters join and leave.
+Router churn does not change the transport template, so it never rolls
+transport pods.
+
+```yaml
+router:
+  source: gds
+globalDiscovery:
+  urls:
+    - https://gds.example.internal
+  clustersetId: prod
+  trustBundle:
+    configMap: platform-ca
+trustBundle:
+  configMap: platform-ca
+```
+
+- Each router cluster exports its router Service through the
+  `llm-request-router` chart (`llmRequestRouter.globalDiscovery.export`) and
+  runs the GDS MCS controller. Pod IPs of the router clusters must be routable
+  from this cluster.
+- Transport pods register with every listed router cluster, so the worker
+  auth file of each router cluster needs this cluster's credential entry (see
+  [Cluster credential](#cluster-credential)); otherwise that router rejects
+  the streams and the endpoint reports the rejection.
+- The operator caches ConfigMaps by one name, so when the GDS CA and the
+  router CA are both needed, put both certificates in the `ca.crt` of one
+  ConfigMap and name it in both values. The operator replicates and mounts it
+  like the trust bundle, and passes it to Pylon as `--gds-tls-ca-cert-path`.
+- The operator logs an error at startup when GDS lists no router with a live
+  lease and ready replicas, and reports the count in
+  `status.registration.routers` of every InferenceEndpoint.
+
+See `docs/dev/global-discovery-quickstart.md` for the whole setup.
 
 ## CRD and RBAC
 

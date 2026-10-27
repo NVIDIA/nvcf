@@ -15,6 +15,8 @@ load("//rules/oci:defs.bzl", "rust_oci_image")
 # `workspace = true` references against own-workspace members are not in
 # that set).
 _WORKSPACE_DEPS = [
+    # gds-client with the metrics and stargate features, as Cargo.toml asks.
+    "//src/libraries/rust/stargate/crates/gds-client:gds-client-stargate",
     "//src/libraries/rust/stargate/crates/proto:stargate-proto",
     "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
     "//src/libraries/rust/stargate/crates/stargate-auth:stargate-auth",
@@ -124,6 +126,20 @@ rust_test(
     deps = _WORKSPACE_DEPS + [
         "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib-test-support",
     ] + all_crate_deps(normal_dev = True),
+)
+
+# Unit tests of the binary crate: argument parsing, validation and startup
+# wiring in src/main.rs and src/main/. build_identity_matches_checked_out_commit
+# runs git and compares the commit the build script embedded, which the Bazel
+# sandbox does not provide (see build_script above); `cargo test` keeps it.
+rust_test(
+    name = "stargate_bin_test",
+    args = [
+        "--skip",
+        "tests::build_identity_matches_checked_out_commit",
+    ],
+    crate = ":stargate",
+    deps = all_crate_deps(normal_dev = True),
 )
 
 # Multi-arch OCI image. distroless/cc base, single stargate binary at

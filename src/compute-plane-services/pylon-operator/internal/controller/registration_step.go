@@ -43,8 +43,10 @@ func (s *registrationStep) Name() string { return StepRegistrationObserver }
 // scrape interval, with jitter.
 func (s *registrationStep) Run(ctx context.Context, rc *ReconcileContext) error {
 	status := &rc.Endpoint.Status
+	previous := status.Registration
 	if _, ok := rc.TransportFastNegative(); ok {
-		status.Registration = registration.Idle(status.Registration, rc.Config.ClusterID)
+		status.Registration = registration.Idle(previous, rc.Config.ClusterID)
+		s.observer.SetRouters(status.Registration, previous)
 		status.Servers = nil
 		return nil
 	}
@@ -59,6 +61,7 @@ func (s *registrationStep) Run(ctx context.Context, rc *ReconcileContext) error 
 	rc.SetTransportReady(res.TransportReady.Status, res.TransportReady.Reason, res.TransportReady.Message)
 	rc.SetRegistered(res.Registered.Status, res.Registered.Reason, res.Registered.Message)
 	status.Registration = &res.Registration
+	s.observer.SetRouters(status.Registration, previous)
 	status.Servers = res.Servers
 	if res.Rejected != "" {
 		rc.Event(corev1.EventTypeWarning, registration.EventReasonRegistrationStreamRejected, "%s", res.Rejected)
