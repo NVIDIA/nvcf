@@ -23,7 +23,6 @@ package lease
 
 import (
 	"context"
-	"errors"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -302,6 +301,3 @@ func lost(err error) bool {
 func jittered(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (1 + Jitter*(2*rand.Float64()-1)))
 }
-
-// ErrNotRegistered is returned by writers that need a registered cluster.
-var ErrNotRegistered = errors.New("cluster is not registered with GDS")
