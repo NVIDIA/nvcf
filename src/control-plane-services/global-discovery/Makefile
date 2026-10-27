@@ -49,6 +49,23 @@ test:
 		echo "coverage of internal/ is $${pct}%, below $(COVERAGE_MIN)%" >&2; exit 1; \
 	fi
 
+# Integration tests (build tag "integration"): the DynamoDB store
+# conformance and multi-replica tests against amazon/dynamodb-local, started
+# through testcontainers-go. They skip when no Docker daemon is reachable. DOCKER_HOST defaults to the endpoint of the
+# current docker context, and colima gets the Ryuk socket override it needs.
+# GDS_TEST_DYNAMODB_ENDPOINT=http://host:port uses a running endpoint instead
+# of a container.
+INTEGRATION_PKGS ?= ./internal/store/dynamodb/...
+
+.PHONY: test-integration
+test-integration:
+	@docker_host="$${DOCKER_HOST:-$$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)}"; \
+	socket_override="$${TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE:-}"; \
+	case "$${docker_host}" in *colima*) socket_override="$${socket_override:-/var/run/docker.sock}" ;; esac; \
+	echo "DOCKER_HOST=$${docker_host} $(GO) test -race -count=1 -tags=integration $(INTEGRATION_PKGS)"; \
+	DOCKER_HOST="$${docker_host}" TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE="$${socket_override}" \
+		$(GO) test -race -count=1 -tags=integration $(INTEGRATION_PKGS)
+
 .PHONY: lint
 lint:
 	$(GOLANGCI_LINT) run -c .golangci.yml --timeout 10m
