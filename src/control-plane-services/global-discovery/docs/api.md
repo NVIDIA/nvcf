@@ -227,3 +227,7 @@ Clients dial an import through its derived Service,
 `derived-<hash>.<namespace>.svc.cluster.local`, where the name is
 `api.DerivedServiceName(namespace, name)`, the same algorithm as
 `sigs.k8s.io/mcs-api`.
+Router seeds are the exception: exports of one namespace and name from
+several clusters share one import, so pylons dial the ready replicas of each
+Router record, `<dial_scheme>://<address>:<grpc_port>`, instead of its
+derived Service (`pkg/client/README.md`, Seed URLs).

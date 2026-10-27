@@ -1,8 +1,9 @@
 # Global Discovery Service (GDS): Design
 
-Status: Draft v0.2, 2026-10-26 (v0.1 initial design; v0.2 adds the cross-region request path
+Status: Draft v0.3, 2026-10-26 (v0.1 initial design; v0.2 adds the cross-region request path
 flow and its prerequisites, the explicit pool dispatch address, the draining order and the
-registration-direction neutrality, from `network-interaction-comparison.md`). Author:
+registration-direction neutrality, from `network-interaction-comparison.md`; v0.3 replaces the
+derived-VIP pylon seed with per-cluster router replica seeds, 4.5). Author:
 E. Stroczynski. Design for the Global Discovery Service
 of the Dynamo Global Router (Global Router HLD, Kiro edition, section 2.4 "Discovery", and the
 "LLD: The Global View" GDS requirements), scoped by the "Global Discovery Service" workstreams of
@@ -40,9 +41,10 @@ DynamoDB Global Tables" as the alternative. This document designs that alternati
    failover, typed calls, a TTL-cached PoolState with watch-driven updates and a router cache.
 
 GDS runs in its own VPC and clusters. Consumers reach it through a global Route53 name over VPC
-peering. Consumers reach each other (pylon to router, router to pool frontend) through the MCS
-objects the controller materialises, which resolve to a local VIP that kube-proxy routes to the
-remote pod IPs over the same peering.
+peering. Routers reach pool frontends through the MCS objects the controller materialises,
+which resolve to a local VIP that kube-proxy routes to the remote pod IPs over the same peering.
+Pylons reach routers through the ready replica addresses GDS reports for each router cluster
+(4.5), over the same peering.
 
 ## 1. Requirements
 
@@ -203,9 +205,9 @@ and fetch router endpoints on startup.
    configuration.
 2. Nothing represents a Pool as an entity with location, hardware and models.
 3. Cloud Map would make one region the discovery point of failure.
-4. Each router replica is a separate registration target, so pylons in other clusters need a
-   dialable address per router cluster plus the per-replica identities Stargate already
-   publishes.
+4. Each router replica is a separate registration target, so pylons in other clusters need
+   dialable addresses that each reach one router cluster, plus the per-replica identities
+   Stargate already publishes.
 
 ## 3. Identifiers and well-known names
 
@@ -214,7 +216,7 @@ and fetch router endpoints on startup.
 | `clusterset` | Name of the trust and namespace-sameness domain, a DNS label. One per Kiro environment. | Every GDS key; controller flag or ClusterProperty `clusterset.k8s.io` |
 | `cluster` | KEP cluster id, a DNS label, unique within the clusterset. Equals the LLM stack `clusterId` of that cluster. | Export and pool keys; label `multicluster.kubernetes.io/source-cluster`; controller flag or ClusterProperty `cluster.clusterset.k8s.io` |
 | `(namespace, name)` | Exported Service identity, clusterset-wide by namespace sameness. | ServiceExport, ServiceImport, derived Service |
-| derived Service name | `derived-` + first 10 chars of lowercase base32hex (no padding) of SHA-256 of `namespace/name`. Deterministic, identical to mcs-api. | Importing clusters; computed client side for seeds |
+| derived Service name | `derived-` + first 10 chars of lowercase base32hex (no padding) of SHA-256 of `namespace/name`. Deterministic, identical to mcs-api. | Importing clusters; computed client side for pool frontends (not for router seeds, 4.5) |
 | pool name | Client-chosen DNS label, unique within (clusterset, cluster). From label `gds.nvidia.com/pool` or `RegisterPool`. | Pool records, API overlay join key |
 | `pool_id` | Server-assigned UUID unless provided; stable for the pool's life. | Pool API paths |
 | `generation` | Writer-supplied monotonic integer per record, `max(previous+1, unix_ms)`. | Export and endpoint writes |
@@ -231,7 +233,7 @@ Well-known labels and annotations (constants in `api/labels.go`, mirrored in the
 | `gds.nvidia.com/pool-models` | Service annotation | comma list of model ids | Pool metadata |
 | `gds.nvidia.com/hardware-class` | Service annotation | free string, e.g. `b200-ib` | Pool metadata |
 | `gds.nvidia.com/dc` | Service annotation | DC name | Pool location |
-| `gds.nvidia.com/dial-scheme` | Service annotation | `http`, `https` | Scheme clients use for the derived VIP |
+| `gds.nvidia.com/dial-scheme` | Service annotation | `http`, `https` | Scheme clients use for router seeds and the derived VIP |
 | `gds.nvidia.com/grpc-port-name`, `gds.nvidia.com/http-port-name` | Service annotation | port names, default `grpc`, `http` | Which Service ports carry gRPC and HTTP |
 | `gds.nvidia.com/managed-by` | label on objects the controller creates | `gds-mcs-controller` | Ownership marker |
 | `gds.nvidia.com/clusterset` | label on objects the controller creates | clusterset | Scoping |
@@ -341,19 +343,19 @@ sequenceDiagram
     participant R as backend-router Service (A), labelled role=router
     participant G as GDS
     participant P as Pylon (B), gds-client
-    participant V as derived VIP (B) -> stargate-k8s-router pods (A)
+    participant K as stargate-k8s-router pods (A), the seeds
     participant X as Stargate pods (A)
     R->>G: exported by controller A (ports grpc, quic; annotations dial-scheme)
     P->>G: WatchRouters (RouterCache)
-    G-->>P: Router{cluster A, namespace, name, grpc_port, replicas...}
-    P->>P: seed = https://derived-<hash>.<ns>.svc.cluster.local:50071
-    P->>V: WatchStargates(seed)
-    V->>X: forward (any pod)
+    G-->>P: Router{cluster A, namespace, name, grpc_port, replicas[]}
+    P->>P: seeds = https://<replica address>:50071 per ready replica of A
+    P->>K: WatchStargates, one stream per seed
+    K->>X: forward (any Stargate pod of A)
     X-->>P: stargates[] with per-pod authorities, grpc_pylon_dial_addr
-    P->>V: RegisterInferenceServer stream per replica, authority = per-pod hostname
-    V->>X: k8s-router forwards by authority to the named pod
-    P->>V: QUIC tunnel per replica, SNI = routing target
-    V->>X: k8s-router forwards by SNI
+    P->>K: RegisterInferenceServer stream per replica to A's dial address, authority = per-pod hostname
+    K->>X: k8s-router forwards by authority to the named pod
+    P->>K: QUIC tunnel per replica, SNI = routing target
+    K->>X: k8s-router forwards by SNI
 ```
 
 Pool path (a Global Router learning pools):
@@ -480,20 +482,45 @@ backend-router Service when replicas exceed one, else the ClusterIP Service) wit
 `gds.nvidia.com/dial-scheme`. GDS produces one Router per (cluster, namespace, name) with the
 port numbers and the replica list from the EndpointSlices.
 
-A pylon in cluster B needs one dialable address per router cluster, because `WatchStargates`
-supplies the per-replica identities and Stargate's k8s-router forwards by authority and SNI. The
-client computes that address locally as the derived Service of the import,
-`<scheme>://derived-<hash>.<ns>.svc.cluster.local:<grpc_port>`, with no dependency on
-`clusterset.local` DNS. From there the existing Pylon machinery is unchanged: it opens
-`WatchStargates` on the seed, receives per-pod authorities and `grpc_pylon_dial_addr`, and opens
-one stream and one tunnel per replica through the VIP. MCS preserves `sessionAffinity: ClientIP`
-on the derived Service, so QUIC sessions stay pinned to one k8s-router replica as they do today.
-TLS verification is unchanged because the authority and SNI are the same per-pod names the
-certificate already covers.
+A pylon needs addresses that reach each router cluster, because `WatchStargates` supplies the
+per-replica identities and a cluster's stargate-k8s-router forwards by authority and SNI only to
+the Stargate pods of its own cluster. The seeds are therefore per cluster: for each Router
+record the clients return `<scheme>://<replica address>:<grpc_port>` for every ready replica
+(IPv6 addresses in brackets), with the scheme from `gds.nvidia.com/dial-scheme` (`https` when
+unset), and skip routers whose cluster lease expired. A router cluster contributes N seeds, the
+addresses of its k8s-router pods (or of its Stargate pods when the ClusterIP Service selects
+them directly), and Pylon already watches several seeds and fails over between them. The port is
+the Service's gRPC port, so the router Service keeps its port equal to its target port, as the
+llm-request-router chart does. Replica addresses are pod IPs: this path has the routability
+prerequisite of ClusterSetIP imports (4.4) and needs no `clusterset.local` DNS.
+
+From there the existing Pylon machinery is unchanged: it opens `WatchStargates` on each seed,
+receives per-pod authorities and `grpc_pylon_dial_addr`, and opens one registration stream and
+one QUIC tunnel per Stargate replica to that dial address, with the per-pod name as authority
+and SNI. The dial address a router cluster advertises must therefore also be specific to that
+cluster and reachable from the others (empty, so that pylons dial the Stargate pod address, or a
+per-cluster address of its k8s-router); the Stargate integration (section 10) settles it. With
+dial scheme `https` the router certificate must cover the address a pylon dials. The chart
+issues DNS-name certificates today, so the integration either adds the pod IPs to the
+k8s-router certificate, exports dial scheme `http` inside the peered network, or verifies seeds
+against a configured server name.
+
+Why not the derived VIP. Every cluster deploys the same router Service (for example
+`nvcf/llm-request-router-backend`), and by MCS semantics exports of one namespace and name merge
+into one ServiceImport. Its derived Service in any cluster spreads across the k8s-router pods
+of all router clusters, so a pylon could reach cluster B's k8s-router while registering with a
+Stargate pod of cluster A, which B cannot forward to; ClientIP affinity does not help, since it
+pins a client to a pod, not to a cluster. Two ways to keep a VIP per router cluster were
+rejected: a derived Service per source cluster deviates from KEP-1645, which defines one derived
+Service per import, and a unique router Service name per cluster is an operational burden
+(per-cluster names and chart values in every deployment). The derived VIP remains the path for pool frontends (4.3,
+4.6), whose consumers want any ready replica behind the import, and both clients keep a helper
+for it (`RouterState.DerivedServiceURL`, `derived_service_url`) for callers that deliberately
+want the merged VIP; it is never returned as a seed.
 
 A Stargate learns other clusters' routers the same way (for `watch_stargate_urls`): the Rust
-client's `remote_watch_urls` yields one URL per other router cluster, which `WatchStargates`
-unions with the static `--remote-stargate-url` list every poll tick.
+client's `remote_watch_urls` returns the replica seeds of every router in another cluster, which
+`WatchStargates` unions with the static `--remote-stargate-url` list every poll tick.
 
 Why not explicit registration by Stargate: it would add a GDS write path, a second lease and
 exact advertised addresses that pylons do not need, since they never resolve per-pod hostnames.
@@ -511,7 +538,7 @@ HLD's open question 7) can address each one. GDS returns both the derivable VIP 
 per-replica endpoints; the consumer picks.
 
 Pylon high availability in the LLM stack is unchanged: N transport pods, each with its own
-`inference_server_id`, each registering with every router replica through the seed above. No
+`inference_server_id`, each registering with every router replica through the seeds above. No
 Service fronts them and none is needed.
 
 Every pool record carries an explicit dispatch address for routers: a `frontends[]` entry with
@@ -824,8 +851,10 @@ merges `GetServerInfo.endpoints` after the configured list, and periodically ret
 primary. One `ClientConn` serves unary calls and streams. Helpers: `WatchLoop[T]` (reconnect with
 backoff, snapshot handling, resync callback), `PoolCache` and `RouterCache` (initial list, watch
 deltas, anti-entropy full list every TTL, `Stale` after two TTLs, `Snapshot`, `Updates`,
-`WaitSynced`), a monotonic generation helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*`
-through interceptors. Consumers: the controller, Pylon Operator, optionally the gateway.
+`WaitSynced`), router seeds (`RouterState.SeedURLs`, `RouterSeedURLs` and `SeedRouters`, one URL
+per ready replica as in 4.5, and `DerivedServiceURL` for the merged VIP), a monotonic generation
+helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*` through interceptors. Consumers: the
+controller, Pylon Operator, optionally the gateway.
 
 ### 9.2 Rust (`crates/gds-client`)
 
@@ -842,8 +871,11 @@ return-to-primary timer, ServerInfo fallbacks, connection state watch); `client`
 calls for pools, routers, clusters, service imports, server info; retries on UNAVAILABLE and
 DEADLINE_EXCEEDED); `cache` (`PoolState` with by-cluster, by-model and active iterators;
 `PoolCache::spawn` publishing `watch::Receiver<Arc<PoolState>>`, list then watch deltas then a
-full re-list every TTL, stale flag); `routers` (`RouterCache`, `seed_url(router)`,
-`remote_watch_urls(state, own_cluster)`, `pylon_seed_urls(state)`); `derived`
+full re-list every TTL, stale flag); `routers` (`RouterCache`; `router_seed_urls(router)`, one
+`<scheme>://<replica address>:<grpc_port>` per ready replica; `pylon_seed_urls(state)` and
+`remote_watch_urls(state, own_cluster)`, the replica seeds of every router cluster, or of every
+other one, whose lease has not expired; `derived_service_url(router)`, the merged VIP of the
+router's import, never a seed, per 4.5); `derived`
 (`derived_service_name`, golden-tested against the Go implementation); `register`
 (`PoolRegistration::register` with a heartbeat task, `set_desired_state`, `update`, graceful
 `shutdown` that drains then deregisters, cancellation through `CancellationToken`); `stargate`
@@ -916,8 +948,9 @@ propagated. Logs: zap JSON with `clusterset`, `cluster`, `namespace`, `name`, `p
   assert ServiceImport, derived Service and EndpointSlices in B, conditions in A, a successful
   curl through the derived VIP, scale-down propagation, a labelled pool appearing in `ListPools`,
   the DRAINING overlay, an API-registered pool creating a labelled export, survival of a
-  controller restart, and removal when the label is removed. Phase 3: Stargate exported from A,
-  Pylon in B registering through the derived VIP.
+  controller restart, and removal when the label is removed. Phase 3: Stargate exported from A
+  and B under the same router Service name, Pylon in C registering with the Stargates of both
+  through their replica seeds.
 - HLD acceptance cases. Blue/green: two pools with the same model, one DRAINING; `ListPools`
   reports both states and the router's cost function reads them. Pool failure: cluster lease or
   endpoint readiness loss turns the pool UNHEALTHY within ttl plus skew. PoolRelay replica
@@ -975,6 +1008,10 @@ The approved step list with files and tests is in the implementation plan.
   loses the catalog until pools re-register; no MCS objects for other consumers.
 - Explicit router registration by Stargate. Not needed because pylons never resolve per-pod
   hostnames; kept as an extension point.
+- The derived VIP of the router import as the pylon seed. Rejected: same-named router Services
+  of all clusters merge into one import whose VIP spans every cluster's k8s-routers (4.5). A
+  derived Service per source cluster (a KEP-1645 deviation) and unique router Service names per
+  cluster (operational burden) were rejected as fixes; seeds are the per-cluster replicas.
 - API-first pools (RegisterPool creates the ServiceExport). Replaced by label-driven exports with
   the API as an overlay, so a pool chart is declarative and the same mechanism serves routers.
 - Per-endpoint upserts. Rejected for leak risk and reconciliation complexity; full-set replace

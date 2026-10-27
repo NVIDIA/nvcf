@@ -19,10 +19,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gds_client::v1::{LeaseState, Router};
+use gds_client::v1::{LeaseState, Router, RouterReplica};
 use gds_client::{
-    GdsClient, RouterCache, RouterCacheConfig, RouterState, pylon_seed_urls, remote_watch_urls,
-    seed_url,
+    GdsClient, RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls,
+    remote_watch_urls, router_seed_urls,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +43,23 @@ fn router(cluster: &str, namespace: &str, name: &str, scheme: &str, grpc_port: i
     }
 }
 
+/// `router` with one ready replica per address.
+fn with_replicas(mut router: Router, addresses: &[&str]) -> Router {
+    router.replicas = addresses
+        .iter()
+        .map(|address| replica(address, true))
+        .collect();
+    router
+}
+
+fn replica(address: &str, ready: bool) -> RouterReplica {
+    RouterReplica {
+        address: address.to_string(),
+        ready,
+        ..RouterReplica::default()
+    }
+}
+
 fn state(routers: Vec<Router>) -> RouterState {
     RouterState {
         routers: routers
@@ -59,9 +76,52 @@ fn set(urls: &[&str]) -> BTreeSet<String> {
 }
 
 #[test]
-fn seed_url_is_the_derived_service() {
+fn router_seed_urls_are_the_ready_replicas() {
+    let mut r = router("a", "llm", "llm-request-router-backend", "https", 50071);
+    r.replicas = vec![
+        replica("10.0.0.2", true),
+        replica("10.0.0.1", true),
+        replica("10.0.0.1", true),
+        replica("10.0.0.3", false),
+        replica("2001:db8::1", true),
+        replica("fe80::1%eth0", true),
+        replica("router-0.example.internal", true),
+        replica("bad:host", true),
+        replica(" ", true),
+    ];
     assert_eq!(
-        seed_url(&router(
+        router_seed_urls(&r),
+        vec![
+            "https://10.0.0.1:50071",
+            "https://10.0.0.2:50071",
+            "https://[2001:db8::1]:50071",
+            "https://router-0.example.internal:50071",
+        ],
+        "ready replicas only, IPv6 bracketed, sorted, once each"
+    );
+
+    r.dial_scheme = "HTTP".to_string();
+    assert_eq!(router_seed_urls(&r)[0], "http://10.0.0.1:50071");
+    r.dial_scheme = String::new();
+    assert_eq!(
+        router_seed_urls(&r)[0],
+        "https://10.0.0.1:50071",
+        "the scheme defaults to https"
+    );
+    r.dial_scheme = "grpc".to_string();
+    assert!(router_seed_urls(&r).is_empty(), "unknown dial scheme");
+    r.dial_scheme = "https".to_string();
+    for port in [0, 70000] {
+        r.grpc_port = port;
+        assert!(router_seed_urls(&r).is_empty(), "gRPC port {port}");
+    }
+    assert!(router_seed_urls(&router("a", "llm", "r", "https", 50071)).is_empty());
+}
+
+#[test]
+fn derived_service_url_is_the_shared_vip() {
+    assert_eq!(
+        derived_service_url(&router(
             "a",
             "llm",
             "llm-request-router-backend",
@@ -72,61 +132,96 @@ fn seed_url_is_the_derived_service() {
         Some("https://derived-b756q8b74k.llm.svc.cluster.local:50071")
     );
     assert_eq!(
-        seed_url(&router("a", "llm-stack", "backend-router", "http", 50071)).as_deref(),
+        derived_service_url(&router("a", "llm-stack", "backend-router", "http", 50071)).as_deref(),
         Some("http://derived-t1d4et30ia.llm-stack.svc.cluster.local:50071")
     );
     assert_eq!(
-        seed_url(&router("a", "llm-stack", "backend-router", "", 443)).as_deref(),
+        derived_service_url(&router("a", "llm-stack", "backend-router", "", 443)).as_deref(),
         Some("https://derived-t1d4et30ia.llm-stack.svc.cluster.local:443"),
         "the scheme defaults to https"
     );
     assert_eq!(
-        seed_url(&router("a", "llm-stack", "backend-router", "HTTPS", 443)).as_deref(),
+        derived_service_url(&router("a", "llm-stack", "backend-router", "HTTPS", 443)).as_deref(),
         Some("https://derived-t1d4et30ia.llm-stack.svc.cluster.local:443")
     );
-    assert!(seed_url(&router("a", "llm", "r", "grpc", 50071)).is_none());
-    assert!(seed_url(&router("a", "llm", "r", "https", 0)).is_none());
-    assert!(seed_url(&router("a", "llm", "r", "https", 70000)).is_none());
-    assert!(seed_url(&router("a", "", "r", "https", 50071)).is_none());
+    assert!(derived_service_url(&router("a", "llm", "r", "grpc", 50071)).is_none());
+    assert!(derived_service_url(&router("a", "llm", "r", "https", 0)).is_none());
+    assert!(derived_service_url(&router("a", "llm", "r", "https", 70000)).is_none());
+    assert!(derived_service_url(&router("a", "", "r", "https", 50071)).is_none());
 }
 
 #[test]
 fn remote_and_pylon_seeds() {
-    let mut expired = router("d", "llm", "router-d", "https", 50071);
+    let mut expired = with_replicas(
+        router("d", "llm", "router-d", "https", 50071),
+        &["10.3.0.1"],
+    );
     expired.cluster_lease_state = LeaseState::Expired as i32;
     let state = state(vec![
-        router("a", "llm", "router-a", "https", 50071),
-        router("b", "llm", "router-b", "https", 50071),
-        router("c", "llm", "router-c", "http", 50072),
+        with_replicas(
+            router("a", "llm", "router-a", "https", 50071),
+            &["10.0.0.1"],
+        ),
+        with_replicas(
+            router("b", "llm", "router-b", "https", 50071),
+            &["10.1.0.1", "10.1.0.2"],
+        ),
+        with_replicas(router("c", "llm", "router-c", "http", 50072), &["fd00::5"]),
         expired,
-        router("e", "llm", "no-grpc", "https", 0),
+        with_replicas(router("e", "llm", "no-grpc", "https", 0), &["10.4.0.1"]),
+        router("f", "llm", "no-replicas", "https", 50071),
     ]);
-    let a = seed_url(&router("a", "llm", "router-a", "https", 50071)).expect("a");
-    let b = seed_url(&router("b", "llm", "router-b", "https", 50071)).expect("b");
-    let c = seed_url(&router("c", "llm", "router-c", "http", 50072)).expect("c");
-    assert!(c.starts_with("http://derived-") && c.ends_with(".llm.svc.cluster.local:50072"));
+    let a = "https://10.0.0.1:50071";
+    let b = ["https://10.1.0.1:50071", "https://10.1.0.2:50071"];
+    let c = "http://[fd00::5]:50072";
 
-    assert_eq!(remote_watch_urls(&state, "a"), set(&[&b, &c]));
-    assert_eq!(remote_watch_urls(&state, "z"), set(&[&a, &b, &c]));
-    assert_eq!(pylon_seed_urls(&state), set(&[&a, &b, &c]));
-    assert_eq!(state.clusters().len(), 5);
+    assert_eq!(remote_watch_urls(&state, "a"), set(&[b[0], b[1], c]));
+    assert_eq!(remote_watch_urls(&state, "z"), set(&[a, b[0], b[1], c]));
+    assert_eq!(pylon_seed_urls(&state), set(&[a, b[0], b[1], c]));
+    assert_eq!(state.clusters().len(), 6);
 }
 
 #[test]
-fn routers_sharing_a_name_share_one_seed() {
-    // Same namespace and name in two clusters: one derived Service, one URL.
-    let state = state(vec![
-        router("a", "llm", "backend-router", "https", 50071),
-        router("b", "llm", "backend-router", "https", 50071),
-    ]);
-    assert_eq!(pylon_seed_urls(&state).len(), 1);
-    assert_eq!(remote_watch_urls(&state, "a").len(), 1);
+fn routers_sharing_a_name_keep_their_own_seeds() {
+    // Same namespace and name in two clusters: one import and one derived
+    // VIP that spans both, but each cluster's replicas stay separate seeds.
+    let a = with_replicas(
+        router("a", "nvcf", "llm-request-router-backend", "https", 50071),
+        &["10.0.0.1", "10.0.0.2"],
+    );
+    let b = with_replicas(
+        router("b", "nvcf", "llm-request-router-backend", "https", 50071),
+        &["10.1.0.1"],
+    );
+    assert_eq!(derived_service_url(&a), derived_service_url(&b));
+    let state = state(vec![a, b]);
+    assert_eq!(
+        pylon_seed_urls(&state),
+        set(&[
+            "https://10.0.0.1:50071",
+            "https://10.0.0.2:50071",
+            "https://10.1.0.1:50071",
+        ])
+    );
+    assert_eq!(
+        remote_watch_urls(&state, "a"),
+        set(&["https://10.1.0.1:50071"]),
+        "a Stargate in a watches only b's replicas"
+    );
+    let vip = derived_service_url(state.iter().next().expect("router")).expect("vip");
+    assert!(
+        !pylon_seed_urls(&state).contains(&vip),
+        "the derived VIP is not a seed"
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn router_cache_feeds_seed_urls() {
     let fake = FakeGds::new("r");
-    fake.upsert_router(router("a", "llm", "router", "https", 50071));
+    fake.upsert_router(with_replicas(
+        router("a", "llm", "router", "https", 50071),
+        &["10.0.0.1"],
+    ));
     let (channel, _server) = fake.in_memory_channel();
     let client = GdsClient::from_channel_with_policy(channel, fast_policy());
     let stop = CancellationToken::new();
@@ -135,10 +230,13 @@ async fn router_cache_feeds_seed_urls() {
     let state = cache.wait_synced().await.expect("synced");
     assert_eq!(state.len(), 1);
     assert!(remote_watch_urls(&state, "a").is_empty());
-    assert_eq!(pylon_seed_urls(&state).len(), 1);
+    assert_eq!(pylon_seed_urls(&state), set(&["https://10.0.0.1:50071"]));
 
-    let remote = router("b", "llm", "router-b", "https", 50071);
-    let remote_seed = seed_url(&remote).expect("seed");
+    let remote = with_replicas(
+        router("b", "llm", "router-b", "https", 50071),
+        &["10.1.0.1", "10.1.0.2"],
+    );
+    let remote_seeds: BTreeSet<String> = router_seed_urls(&remote).into_iter().collect();
     fake.upsert_router(remote);
     let mut rx = cache.subscribe();
     let state = tokio::time::timeout(
@@ -149,7 +247,8 @@ async fn router_cache_feeds_seed_urls() {
     .expect("delta in time")
     .expect("running")
     .clone();
-    assert_eq!(remote_watch_urls(&state, "a"), set(&[&remote_seed]));
+    assert_eq!(remote_watch_urls(&state, "a"), remote_seeds);
+    assert_eq!(pylon_seed_urls(&state).len(), 3);
     assert_eq!(state.by_cluster("b").count(), 1);
 
     fake.remove_router("b", "llm", "router-b");

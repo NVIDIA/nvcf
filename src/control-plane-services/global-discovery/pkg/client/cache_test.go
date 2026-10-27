@@ -185,20 +185,27 @@ func TestPoolCacheStale(t *testing.T) {
 	assert.NoError(t, pc.LastError())
 }
 
+// TestRouterCacheSeedURLs runs a RouterCache over routers that several
+// clusters export under one namespace and name, and expects one seed per
+// ready replica of each cluster instead of the shared derived VIP.
 func TestRouterCacheSeedURLs(t *testing.T) {
 	f := startFake(t, "r")
+	notReady := &gdsv1.Endpoint{Addresses: []string{"10.1.0.9"}, Conditions: &gdsv1.EndpointConditions{}}
 	f.srv.PutExport(testClusterset, "a", "llm", "backend-router", fakegds.RouterSpec(50071, 8080, "https"), fakegds.ReadyEndpoints("10.0.0.1"))
-	f.srv.PutExport(testClusterset, "b", "llm", "backend-router", fakegds.RouterSpec(50071, 8080, "https"), fakegds.ReadyEndpoints("10.1.0.1"))
-	f.srv.PutExport(testClusterset, "c", "edge", "router", fakegds.RouterSpec(50072, 0, "http"), nil)
+	f.srv.PutExport(testClusterset, "b", "llm", "backend-router", fakegds.RouterSpec(50071, 8080, "https"),
+		append(fakegds.ReadyEndpoints("10.1.0.2", "10.1.0.1"), notReady))
+	f.srv.PutExport(testClusterset, "c", "edge", "router", fakegds.RouterSpec(50072, 0, "http"), fakegds.ReadyEndpoints("fd00::5"))
 	f.srv.PutExport(testClusterset, "c", "edge", "router2", fakegds.RouterSpec(50073, 0, "http"), nil)
 	noGRPC := fakegds.RouterSpec(50071, 0, "")
 	noGRPC.Ports[0].Name = "other"
-	f.srv.PutExport(testClusterset, "d", "llm", "nogrpc", noGRPC, nil)
+	f.srv.PutExport(testClusterset, "d", "llm", "nogrpc", noGRPC, fakegds.ReadyEndpoints("10.3.0.1"))
 	dns := newFakeResolver(map[string]string{"gds.test": "127.0.0.1"})
 	c := newTestClient(t, Config{URLs: []string{f.url("gds.test")}, Resolver: dns})
 
 	_, err := NewRouterCache(c, RouterCacheConfig{Filter: &gdsv1.ListRoutersRequest{}})
 	assert.Error(t, err)
+	_, err = NewRouterCache(c, RouterCacheConfig{Filter: &gdsv1.ListRoutersRequest{Clusterset: testClusterset}, DefaultScheme: "grpc"})
+	assert.Error(t, err, "the default scheme is http or https")
 	rc, err := NewRouterCache(c, RouterCacheConfig{Filter: &gdsv1.ListRoutersRequest{Clusterset: testClusterset}, TTL: time.Hour})
 	require.NoError(t, err)
 	updates := rc.Updates()
@@ -207,31 +214,98 @@ func TestRouterCacheSeedURLs(t *testing.T) {
 	st := rc.Snapshot()
 	require.Len(t, st.Routers, 5)
 	assert.Len(t, st.ByCluster("c"), 2)
-	llm := "https://" + api.DerivedServiceName("llm", "backend-router") + ".llm.svc.cluster.local:50071"
-	edge := "http://" + api.DerivedServiceName("edge", "router") + ".edge.svc.cluster.local:50072"
-	assert.Equal(t, llm, st.SeedURL(st.ByCluster("a")[0]))
-	assert.Equal(t, []string{llm, edge}, st.SeedURLs(),
-		"one URL per router cluster; a and b share the derived Service; d has no gRPC port")
+	assert.Equal(t, []string{"https://10.1.0.1:50071", "https://10.1.0.2:50071"}, st.RouterSeedURLs(st.ByCluster("b")[0]),
+		"one URL per ready replica, sorted")
+	assert.Equal(t, []string{
+		"https://10.0.0.1:50071",
+		"https://10.1.0.1:50071",
+		"https://10.1.0.2:50071",
+		"http://[fd00::5]:50072",
+	}, st.SeedURLs(), "a and b keep separate seeds; c/router2 has no replica; d has no gRPC port")
+	assert.Equal(t, []string{"a", "b", "c"}, routerClusters(st.SeedRouters()))
 
-	f.srv.PutExport(testClusterset, "e", "llm", "late", fakegds.RouterSpec(50074, 0, "https"), nil)
+	vip := "https://" + api.DerivedServiceName("llm", "backend-router") + ".llm.svc.cluster.local:50071"
+	assert.Equal(t, vip, st.DerivedServiceURL(st.ByCluster("a")[0]))
+	assert.Equal(t, vip, st.DerivedServiceURL(st.ByCluster("b")[0]), "a and b share one import and its derived VIP")
+
+	f.srv.PutExport(testClusterset, "e", "llm", "late", fakegds.RouterSpec(50074, 0, "https"), fakegds.ReadyEndpoints("10.4.0.1"))
 	waitUpdate(t, updates)
-	require.Eventually(t, func() bool { return len(rc.Snapshot().SeedURLs()) == 3 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return len(rc.Snapshot().SeedURLs()) == 5 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, "https://10.4.0.1:50074", rc.Snapshot().SeedURLs()[4])
 	require.NoError(t, rc.Refresh(testCtx(t)))
 	assert.NoError(t, rc.LastError())
 }
 
-func TestRouterStateSeedURL(t *testing.T) {
-	r := &gdsv1.Router{Cluster: "a", Namespace: "ns", Name: "r", GrpcPort: 443}
-	name := api.DerivedServiceName("ns", "r")
-	assert.Equal(t, "https://"+name+".ns.svc.cluster.local:443", (&RouterState{}).SeedURL(r))
-	st := &RouterState{ClusterDomain: "corp.example", DefaultScheme: "http"}
-	assert.Equal(t, "http://"+name+".ns.svc.corp.example:443", st.SeedURL(r))
-	r.DialScheme = "https"
-	assert.Equal(t, "https://"+name+".ns.svc.corp.example:443", st.SeedURL(r))
-	assert.Empty(t, st.SeedURL(&gdsv1.Router{Namespace: "ns", Name: "r"}))
+func routerClusters(routers []*gdsv1.Router) []string {
+	var out []string
+	for _, r := range routers {
+		out = append(out, r.GetCluster())
+	}
+	return out
+}
 
-	expired := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "dead", GrpcPort: 1, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_EXPIRED}
-	alive := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "zz", GrpcPort: 2, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_ACTIVE}
-	st = &RouterState{Routers: []*gdsv1.Router{expired, alive}}
-	assert.Equal(t, []string{st.SeedURL(alive)}, st.SeedURLs(), "routers of expired clusters are skipped")
+func replica(address string, ready bool) *gdsv1.RouterReplica {
+	return &gdsv1.RouterReplica{Address: address, Ready: ready}
+}
+
+func TestRouterStateRouterSeedURLs(t *testing.T) {
+	r := &gdsv1.Router{Cluster: "a", Namespace: "ns", Name: "r", GrpcPort: 443, Replicas: []*gdsv1.RouterReplica{
+		replica("10.0.0.2", true),
+		replica("10.0.0.1", true),
+		replica("10.0.0.1", true),
+		replica("10.0.0.3", false),
+		replica("2001:db8::1", true),
+		replica("fe80::1%eth0", true),
+		replica("router-0.example.internal", true),
+		replica("bad:host", true),
+		replica(" ", true),
+	}}
+	assert.Equal(t, []string{
+		"https://10.0.0.1:443",
+		"https://10.0.0.2:443",
+		"https://[2001:db8::1]:443",
+		"https://router-0.example.internal:443",
+	}, (&RouterState{}).RouterSeedURLs(r), "ready replicas only, IPv6 bracketed, sorted, once each")
+
+	st := &RouterState{DefaultScheme: "HTTP"}
+	assert.Equal(t, "http://10.0.0.1:443", st.RouterSeedURLs(r)[0], "the default scheme applies without a dial scheme")
+	r.DialScheme = " HTTPS "
+	assert.Equal(t, "https://10.0.0.1:443", st.RouterSeedURLs(r)[0], "the router's dial scheme wins")
+	r.DialScheme = "grpc"
+	assert.Nil(t, st.RouterSeedURLs(r), "unknown dial scheme")
+	assert.Nil(t, (&RouterState{DefaultScheme: "grpc"}).RouterSeedURLs(&gdsv1.Router{GrpcPort: 1, Replicas: r.Replicas}))
+	assert.Nil(t, st.RouterSeedURLs(&gdsv1.Router{Namespace: "ns", Name: "r", Replicas: r.Replicas}), "no gRPC port")
+	assert.Nil(t, st.RouterSeedURLs(&gdsv1.Router{GrpcPort: 1}), "no replica")
+}
+
+func TestRouterStateSeedURLsSkipExpiredClusters(t *testing.T) {
+	expired := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "dead", GrpcPort: 1, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_EXPIRED,
+		Replicas: []*gdsv1.RouterReplica{replica("10.9.0.1", true)}}
+	alive := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "zz", GrpcPort: 2, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_ACTIVE,
+		Replicas: []*gdsv1.RouterReplica{replica("10.9.0.2", true), replica("10.9.0.3", true)}}
+	empty := &gdsv1.Router{Cluster: "y", Namespace: "ns", Name: "r", GrpcPort: 2}
+	shared := &gdsv1.Router{Cluster: "z", Namespace: "ns", Name: "r", GrpcPort: 2, Replicas: []*gdsv1.RouterReplica{replica("10.9.0.2", true)}}
+	st := &RouterState{Routers: []*gdsv1.Router{expired, alive, empty, shared}}
+	assert.Equal(t, []string{"https://10.9.0.2:2", "https://10.9.0.3:2"}, st.SeedURLs(),
+		"routers of expired clusters are skipped and a URL is listed once")
+	assert.Equal(t, []*gdsv1.Router{alive, shared}, st.SeedRouters())
+	assert.Empty(t, (&RouterState{}).SeedURLs())
+}
+
+func TestRouterStateDerivedServiceURL(t *testing.T) {
+	r := &gdsv1.Router{Cluster: "a", Namespace: "ns", Name: "r", GrpcPort: 443, Replicas: []*gdsv1.RouterReplica{replica("10.0.0.1", true)}}
+	name := api.DerivedServiceName("ns", "r")
+	assert.Equal(t, "https://"+name+".ns.svc.cluster.local:443", (&RouterState{}).DerivedServiceURL(r))
+	st := &RouterState{ClusterDomain: "corp.example.", DefaultScheme: "http"}
+	assert.Equal(t, "http://"+name+".ns.svc.corp.example:443", st.DerivedServiceURL(r))
+	r.DialScheme = "https"
+	assert.Equal(t, "https://"+name+".ns.svc.corp.example:443", st.DerivedServiceURL(r))
+	r.DialScheme = "grpc"
+	assert.Empty(t, st.DerivedServiceURL(r))
+	assert.Empty(t, st.DerivedServiceURL(&gdsv1.Router{Namespace: "ns", Name: "r"}), "no gRPC port")
+	assert.Empty(t, st.DerivedServiceURL(&gdsv1.Router{GrpcPort: 1}), "no namespace and name")
+
+	r.DialScheme = ""
+	st = &RouterState{Routers: []*gdsv1.Router{r}}
+	assert.Equal(t, []string{"https://10.0.0.1:443"}, st.SeedURLs(), "the derived VIP is not a seed")
 }

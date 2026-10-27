@@ -20,8 +20,12 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +35,7 @@ import (
 	gdsv1 "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1"
 )
 
-// Defaults of the router seed URLs.
+// Defaults of the router seed and derived Service URLs.
 const (
 	// DefaultClusterDomain is the Kubernetes cluster domain of derived
 	// Service names.
@@ -54,10 +58,11 @@ type RouterCacheConfig struct {
 	IdleTimeout time.Duration
 	// Name labels the watch and cache metrics. Default "routers".
 	Name string
-	// ClusterDomain of the seed URLs. Default "cluster.local".
+	// ClusterDomain of DerivedServiceURL. Default "cluster.local". Seed
+	// URLs do not use it.
 	ClusterDomain string
-	// DefaultScheme of the seed URLs of routers without a dial scheme.
-	// Default https.
+	// DefaultScheme of the seed and derived Service URLs of routers without
+	// a dial scheme: http or https. Default https.
 	DefaultScheme string
 }
 
@@ -74,28 +79,97 @@ type RouterState struct {
 	Synced bool
 	// Stale is set when nothing succeeded for StaleAfter.
 	Stale bool
-	// ClusterDomain and DefaultScheme shape SeedURL; empty values take
-	// DefaultClusterDomain and DefaultDialScheme.
+	// ClusterDomain and DefaultScheme shape the seed and derived Service
+	// URLs; empty values take DefaultClusterDomain and DefaultDialScheme.
 	ClusterDomain string
 	DefaultScheme string
 }
 
-// SeedURL returns the URL a pylon dials to reach a router from its own
-// cluster: the derived Service of the router's import,
+// SeedURLs returns the seeds a pylon dials: the RouterSeedURLs of every
+// router whose cluster lease has not expired, in router order (cluster,
+// namespace, name), each URL once. A router cluster contributes one URL per
+// ready replica of its router Service (its stargate-k8s-router or Stargate
+// pods), so a seed always reaches the routers of one cluster, even when
+// several clusters export the same namespace and name into one shared
+// import.
+func (s *RouterState) SeedURLs() []string {
+	var urls []string
+	seen := map[string]bool{}
+	for _, r := range s.Routers {
+		if r.GetClusterLeaseState() == gdsv1.LeaseState_LEASE_STATE_EXPIRED {
+			continue
+		}
+		for _, u := range s.RouterSeedURLs(r) {
+			if !seen[u] {
+				seen[u] = true
+				urls = append(urls, u)
+			}
+		}
+	}
+	return urls
+}
+
+// SeedRouters returns the routers that contribute to SeedURLs: those whose
+// cluster lease has not expired and that have at least one seed URL, in
+// router order.
+func (s *RouterState) SeedRouters() []*gdsv1.Router {
+	var out []*gdsv1.Router
+	for _, r := range s.Routers {
+		if r.GetClusterLeaseState() != gdsv1.LeaseState_LEASE_STATE_EXPIRED && len(s.RouterSeedURLs(r)) > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// RouterSeedURLs returns the seed URLs of one router, one per ready
+// replica, sorted and without duplicates:
+// <scheme>://<replica address>:<grpc_port>, with IPv6 addresses in
+// brackets. The scheme is the router's dial scheme, else DefaultScheme,
+// else DefaultDialScheme. It returns nil when the router has no gRPC port or
+// the scheme is neither http nor https. Replicas that are not ready or whose
+// address is empty, an IPv6 address with a zone or otherwise contains a
+// colon are skipped. The cluster lease is not checked; SeedURLs checks it.
+//
+// The port is the router Service's gRPC port, so the Service must use the
+// same number for the port and its target port, as the llm-request-router
+// chart does.
+func (s *RouterState) RouterSeedURLs(r *gdsv1.Router) []string {
+	scheme, ok := s.scheme(r)
+	if !ok || r.GetGrpcPort() <= 0 {
+		return nil
+	}
+	port := strconv.Itoa(int(r.GetGrpcPort()))
+	var urls []string
+	for _, replica := range r.GetReplicas() {
+		if !replica.GetReady() {
+			continue
+		}
+		host, ok := seedHost(replica.GetAddress())
+		if !ok {
+			continue
+		}
+		urls = append(urls, scheme+"://"+net.JoinHostPort(host, port))
+	}
+	slices.Sort(urls)
+	return slices.Compact(urls)
+}
+
+// DerivedServiceURL returns the URL of the derived Service of the router's
+// import in the caller's cluster,
 // <scheme>://derived-<hash>.<namespace>.svc.<cluster domain>:<grpc_port>.
-// It returns "" when the router has no gRPC port.
-func (s *RouterState) SeedURL(r *gdsv1.Router) string {
-	if r.GetGrpcPort() <= 0 {
+// Every cluster that exports the router's namespace and name joins that one
+// import, so this VIP spreads over the router replicas of all of them. It is
+// not a pylon seed (a pylon could reach another cluster's k8s-router than
+// the Stargate it registers with); use it only where the merged VIP is
+// wanted. It returns "" when the router has no gRPC port, namespace or name,
+// or the scheme is neither http nor https.
+func (s *RouterState) DerivedServiceURL(r *gdsv1.Router) string {
+	scheme, ok := s.scheme(r)
+	if !ok || r.GetGrpcPort() <= 0 || r.GetNamespace() == "" || r.GetName() == "" {
 		return ""
 	}
-	scheme := r.GetDialScheme()
-	if scheme == "" {
-		scheme = s.DefaultScheme
-	}
-	if scheme == "" {
-		scheme = DefaultDialScheme
-	}
-	domain := s.ClusterDomain
+	domain := strings.Trim(s.ClusterDomain, ".")
 	if domain == "" {
 		domain = DefaultClusterDomain
 	}
@@ -103,30 +177,32 @@ func (s *RouterState) SeedURL(r *gdsv1.Router) string {
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(r.GetGrpcPort())))
 }
 
-// SeedURLs returns one seed URL per router cluster, in cluster order: the
-// SeedURL of the cluster's first router (by namespace and name) whose
-// cluster lease has not expired and that has a gRPC port. Clusters that
-// export the same namespace and name share one derived Service, so their
-// URLs are equal and listed once.
-func (s *RouterState) SeedURLs() []string {
-	var urls []string
-	seen := map[string]bool{}
-	done := map[string]bool{}
-	for _, r := range s.Routers {
-		if done[r.GetCluster()] || r.GetClusterLeaseState() == gdsv1.LeaseState_LEASE_STATE_EXPIRED {
-			continue
-		}
-		u := s.SeedURL(r)
-		if u == "" {
-			continue
-		}
-		done[r.GetCluster()] = true
-		if !seen[u] {
-			seen[u] = true
-			urls = append(urls, u)
-		}
+// scheme returns the router's dial scheme, else the state's default scheme,
+// else DefaultDialScheme, lower-cased; ok is false unless it is http or
+// https.
+func (s *RouterState) scheme(r *gdsv1.Router) (string, bool) {
+	scheme := strings.ToLower(strings.TrimSpace(r.GetDialScheme()))
+	if scheme == "" {
+		scheme = strings.ToLower(strings.TrimSpace(s.DefaultScheme))
 	}
-	return urls
+	if scheme == "" {
+		scheme = DefaultDialScheme
+	}
+	return scheme, scheme == api.DialSchemeHTTP || scheme == api.DialSchemeHTTPS
+}
+
+// seedHost returns the host of a replica address for a URL: an IP address
+// or a host name, unbracketed. ok is false for an empty address, an IPv6
+// address with a zone, or a non-IP address that contains a colon.
+func seedHost(address string) (string, bool) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", false
+	}
+	if ip, err := netip.ParseAddr(address); err == nil {
+		return address, ip.Zone() == ""
+	}
+	return address, !strings.Contains(address, ":")
 }
 
 // ByCluster returns the routers of a cluster.
@@ -146,7 +222,7 @@ func routerKey(r *gdsv1.Router) string {
 
 // RouterCache keeps the routers matching a filter, with the same list,
 // watch, TTL and stale behaviour as PoolCache. Pylons and Pylon Operator
-// use it for router seeds.
+// use it for router seeds (RouterState.SeedURLs).
 type RouterCache struct {
 	core  *cache[*gdsv1.Router]
 	state atomic.Pointer[RouterState]
@@ -156,6 +232,9 @@ type RouterCache struct {
 func NewRouterCache(c *Client, cfg RouterCacheConfig) (*RouterCache, error) {
 	if cfg.Filter.GetClusterset() == "" {
 		return nil, errors.New("gds: RouterCacheConfig.Filter.Clusterset is required")
+	}
+	if ds := strings.ToLower(strings.TrimSpace(cfg.DefaultScheme)); ds != "" && ds != api.DialSchemeHTTP && ds != api.DialSchemeHTTPS {
+		return nil, fmt.Errorf("gds: RouterCacheConfig.DefaultScheme %q is neither http nor https", cfg.DefaultScheme)
 	}
 	if cfg.Name == "" {
 		cfg.Name = WatchRouters

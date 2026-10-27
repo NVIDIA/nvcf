@@ -17,14 +17,20 @@
 //! seed URLs pylons and Stargates derive from it.
 //!
 //! Routers are derived by GDS from Services labelled
-//! `gds.nvidia.com/role=router`. A consumer never dials a router replica
-//! directly: it dials the derived Service that the MCS controller of its own
-//! cluster creates for the import,
-//! `<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`,
-//! and Stargate's `WatchStargates` reports the per-replica identities from
-//! there.
+//! `gds.nvidia.com/role=router`, one [`Router`] per cluster, namespace and
+//! name. The seeds of a router are its ready replicas,
+//! `<scheme>://<replica address>:<grpc_port>` ([`router_seed_urls`]), so a
+//! seed always reaches the routers of one cluster, and Stargate's
+//! `WatchStargates` on a seed reports the per-replica identities from there.
+//!
+//! The derived Service of a router's import ([`derived_service_url`]) is not
+//! a seed. Every cluster deploys the same router Service, by MCS semantics
+//! their exports merge into one import, and its VIP spreads over the
+//! k8s-router pods of all router clusters: a pylon dialing it could reach
+//! another cluster's k8s-router than the Stargate it registers with.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -90,21 +96,75 @@ pub fn router_key(router: &Router) -> String {
     format!("{}/{}/{}", router.cluster, router.namespace, router.name)
 }
 
-/// The URL a consumer in any cluster of the clusterset dials to reach
-/// `router`: `<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`.
-/// The scheme is the router's dial scheme, [`DEFAULT_DIAL_SCHEME`] when
-/// unset. Returns `None` when the router has no gRPC port, no namespace or
-/// name, or an unknown dial scheme.
-pub fn seed_url(router: &Router) -> Option<String> {
-    let scheme = match router.dial_scheme.trim().to_ascii_lowercase().as_str() {
-        "" => DEFAULT_DIAL_SCHEME,
-        DIAL_SCHEME_HTTPS => DIAL_SCHEME_HTTPS,
-        DIAL_SCHEME_HTTP => DIAL_SCHEME_HTTP,
-        _ => return None,
-    };
-    let port = u16::try_from(router.grpc_port)
+/// The scheme of `router`'s URLs: its dial scheme, [`DEFAULT_DIAL_SCHEME`]
+/// when unset. `None` for a scheme other than `http` and `https`.
+fn dial_scheme(router: &Router) -> Option<&'static str> {
+    match router.dial_scheme.trim().to_ascii_lowercase().as_str() {
+        "" => Some(DEFAULT_DIAL_SCHEME),
+        DIAL_SCHEME_HTTPS => Some(DIAL_SCHEME_HTTPS),
+        DIAL_SCHEME_HTTP => Some(DIAL_SCHEME_HTTP),
+        _ => None,
+    }
+}
+
+/// The gRPC port of `router`, `None` when unset or out of range.
+fn grpc_port(router: &Router) -> Option<u16> {
+    u16::try_from(router.grpc_port)
         .ok()
-        .filter(|port| *port != 0)?;
+        .filter(|port| *port != 0)
+}
+
+/// The host of a seed URL for a replica address: an IPv4 address or a host
+/// name as is, an IPv6 address in brackets. `None` for an empty address, an
+/// IPv6 address with a zone, or another address that contains a colon.
+fn seed_host(address: &str) -> Option<String> {
+    let address = address.trim();
+    match address.parse::<IpAddr>() {
+        Ok(IpAddr::V4(_)) => Some(address.to_string()),
+        Ok(IpAddr::V6(_)) => Some(format!("[{address}]")),
+        Err(_) if address.is_empty() || address.contains(':') => None,
+        Err(_) => Some(address.to_string()),
+    }
+}
+
+/// The seed URLs of `router`, one per ready replica, sorted and without
+/// duplicates: `<scheme>://<replica address>:<grpc_port>`, with IPv6
+/// addresses in brackets. The scheme is the router's dial scheme,
+/// [`DEFAULT_DIAL_SCHEME`] when unset. Empty when the router has no gRPC port
+/// or an unknown dial scheme. Replicas that are not ready, or whose address
+/// is empty, an IPv6 address with a zone or otherwise contains a colon, are
+/// skipped. The cluster lease is not checked; [`pylon_seed_urls`] and
+/// [`remote_watch_urls`] check it.
+///
+/// The port is the router Service's gRPC port, so the Service must use the
+/// same number for the port and its target port, as the llm-request-router
+/// chart does.
+pub fn router_seed_urls(router: &Router) -> Vec<String> {
+    let (Some(scheme), Some(port)) = (dial_scheme(router), grpc_port(router)) else {
+        return Vec::new();
+    };
+    router
+        .replicas
+        .iter()
+        .filter(|replica| replica.ready)
+        .filter_map(|replica| seed_host(&replica.address))
+        .map(|host| format!("{scheme}://{host}:{port}"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The URL of the derived Service of `router`'s import in the caller's
+/// cluster: `<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`.
+/// Every cluster that exports the router's namespace and name joins that one
+/// import, so this VIP spreads over the router replicas of all of them. It
+/// is not a seed (a pylon could reach another cluster's k8s-router than the
+/// Stargate it registers with); use it only where the merged VIP is wanted.
+/// Returns `None` when the router has no gRPC port, no namespace or name, or
+/// an unknown dial scheme.
+pub fn derived_service_url(router: &Router) -> Option<String> {
+    let scheme = dial_scheme(router)?;
+    let port = grpc_port(router)?;
     if router.namespace.is_empty() || router.name.is_empty() {
         return None;
     }
@@ -114,35 +174,33 @@ pub fn seed_url(router: &Router) -> Option<String> {
     ))
 }
 
-/// Whether a router can be offered as a seed: its cluster lease is not
-/// expired and it has a dialable seed URL.
-fn usable(router: &Router) -> bool {
-    router.cluster_lease_state != LeaseState::Expired as i32 && seed_url(router).is_some()
+/// Whether the cluster lease of `router` has not expired.
+fn lease_live(router: &Router) -> bool {
+    router.cluster_lease_state != LeaseState::Expired as i32
 }
 
 /// The `WatchStargates` URLs a Stargate in `own_cluster` adds to its
-/// `watch_stargate_urls`: one seed URL per router Service of every other
-/// cluster. Routers whose cluster lease expired are skipped.
-///
-/// The derived name depends only on the namespace and name, so routers
-/// exported under the same namespace and name from several clusters share one
-/// derived Service (and one URL) whose VIP spans all of them.
+/// `watch_stargate_urls`: the [`router_seed_urls`] of every router in
+/// another cluster whose cluster lease has not expired. Each remote router
+/// cluster contributes one URL per ready replica.
 pub fn remote_watch_urls(state: &RouterState, own_cluster: &str) -> BTreeSet<String> {
     state
         .iter()
-        .filter(|router| router.cluster != own_cluster && usable(router))
-        .filter_map(|router| seed_url(router))
+        .filter(|router| router.cluster != own_cluster && lease_live(router))
+        .flat_map(|router| router_seed_urls(router))
         .collect()
 }
 
-/// The seeds a pylon passes to its registration loop: one seed URL per
-/// router Service of every cluster, its own included. Routers whose cluster
-/// lease expired are skipped.
+/// The seeds a pylon passes to its registration loop: the
+/// [`router_seed_urls`] of every router whose cluster lease has not expired,
+/// its own cluster included. Each router cluster contributes one URL per
+/// ready replica (its stargate-k8s-router or Stargate pods); the pylon opens
+/// `WatchStargates` on each and fails over between them.
 pub fn pylon_seed_urls(state: &RouterState) -> BTreeSet<String> {
     state
         .iter()
-        .filter(|router| usable(router))
-        .filter_map(|router| seed_url(router))
+        .filter(|router| lease_live(router))
+        .flat_map(|router| router_seed_urls(router))
         .collect()
 }
 

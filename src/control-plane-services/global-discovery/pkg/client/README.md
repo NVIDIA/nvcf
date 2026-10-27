@@ -235,7 +235,7 @@ go routers.Run(ctx)
 if err := routers.WaitSynced(ctx); err == nil && len(routers.Snapshot().SeedURLs()) == 0 {
 	log.Warn("GDS knows no router; pylons will wait")
 }
-status.Registration.Routers = len(routers.Snapshot().SeedURLs())
+status.Registration.Routers = len(routers.Snapshot().SeedRouters())
 ```
 
 ### MCS controller
@@ -248,23 +248,47 @@ collecting in `Synced`.
 
 ## Seed URLs
 
-A pylon in cluster B reaches the routers of cluster A through the derived
-Service of A's router import in B (design 4.5):
+A pylon reaches the routers of a cluster through the ready replicas of that
+cluster's Router record (design 4.5). Each replica is one seed:
+
+```text
+<scheme>://<replica address>:<grpc_port>
+```
+
+IPv6 addresses are bracketed. The scheme is the router's `dial_scheme`, else
+`RouterCacheConfig.DefaultScheme` (default https); a scheme other than http
+or https yields no seeds. The port is the router Service's gRPC port, so the
+Service must use the same number for the port and its target port (the
+llm-request-router chart does).
+
+- `RouterState.RouterSeedURLs(router)` returns the seeds of one router, one
+  per ready replica, sorted and without duplicates. Replicas that are not
+  ready or have an unusable address are skipped.
+- `RouterState.SeedURLs()` returns the seeds of every router whose cluster
+  lease has not expired, in router order (cluster, namespace, name), each URL
+  once. A router cluster therefore contributes N URLs, one per
+  stargate-k8s-router pod (or Stargate pod when the router Service selects
+  Stargate directly). The pylon opens `WatchStargates` on each of them and
+  fails over between them.
+- `RouterState.SeedRouters()` returns the routers that contribute seeds, for
+  example to report a router count.
+
+Seeds are per cluster on purpose. Every cluster deploys the same router
+Service (for example `nvcf/llm-request-router-backend`), and by MCS semantics
+exports of one namespace and name merge into one ServiceImport. Its derived
+Service therefore spreads over the k8s-router pods of all router clusters,
+and a pylon dialing it could reach cluster B's k8s-router while registering
+with a Stargate pod of cluster A, which B cannot forward to.
+
+`RouterState.DerivedServiceURL(router)` still returns that derived Service,
 
 ```text
 <scheme>://<api.DerivedServiceName(namespace, name)>.<namespace>.svc.<cluster domain>:<grpc_port>
 ```
 
-`RouterState.SeedURL(router)` computes it. The scheme is the router's
-`dial_scheme`, else `RouterCacheConfig.DefaultScheme` (default https); the
-cluster domain is `RouterCacheConfig.ClusterDomain` (default
-`cluster.local`). It returns "" for a router without a gRPC port.
-
-`RouterState.SeedURLs()` returns one URL per router cluster in cluster order:
-the URL of the cluster's first router (by namespace and name) whose cluster
-lease has not expired and that has a gRPC port. Clusters that export the same
-namespace and name share one import and therefore one derived Service; their
-URL is listed once.
+with the cluster domain from `RouterCacheConfig.ClusterDomain` (default
+`cluster.local`). Use it only where the merged VIP is wanted; it is never a
+seed.
 
 ## Metrics
 

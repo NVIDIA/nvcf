@@ -45,8 +45,9 @@ limitations under the License.
 //     when the server sends a new snapshot.
 //   - PoolCache and RouterCache: an initial list, watch deltas, a full list
 //     every TTL (anti-entropy) and a Stale flag after 2 x TTL without
-//     success; Snapshot, Updates and WaitSynced. RouterState.SeedURL
-//     computes the derived Service URL a pylon dials.
+//     success; Snapshot, Updates and WaitSynced. RouterState.SeedURLs
+//     returns the pylon seeds, one URL per ready router replica of every
+//     router cluster.
 //   - NextGeneration and Generation for writer generations,
 //     max(previous + 1, unix milliseconds), and StaleGeneration and Reason
 //     to read GDS error details.
