@@ -57,7 +57,7 @@ other pod across regions. The PoolRelay is off the request path.
 | Why that direction | Reverse tunnel lets NAT'd or firewalled pools work and keeps inbound credentials off the router | Flat peering assumed; a pool that cannot accept inbound connections breaks pull | The design stays neutral. If a pool may be unreachable inbound, push (the Pylon pattern) is the robust choice |
 | Request path | Through the control-plane connection: Stargate proxies over the pylon-initiated QUIC tunnel | Separate: Global Router dispatches HTTP directly to the Pool Frontend; the relay carries no requests | Cross-region requests need a routable Pool Frontend address (section 5) |
 | State carried | Per server every 1 s in the registration stream and tunnel heartbeats; per-pod memory | Per pool, aggregated by the relay; revisioned snapshots and deltas; replicas sync reserved load and sessions | GDS carries none of it: membership and metadata only, with a 5 s target |
-| Fan-out | pylon pods times router replicas; the k8s-router gives one dial address per router cluster | pools times router replicas (all-to-all) or hierarchical; one relay per pool | Same shape; the derived VIP of the backend-router or relay Service is the one-address-per-cluster MCS gives both |
+| Fan-out | pylon pods times router replicas; the k8s-router gives one dial address per router cluster | pools times router replicas (all-to-all) or hierarchical; one relay per pool | Same shape; for routers GDS hands pylons the per-cluster k8s-router replica addresses (same-named exports merge into one import, so a shared VIP would span clusters); for pools the derived VIP of the frontend Service is the one-address-per-cluster MCS gives |
 | Discovery of the other side | Static seed plus recursive `WatchStargates`; peers by headless DNS | GDS (FR7) | GDS replaces the static seed for Pylon, the static remote list for Stargate and the static JSON pool list for the Global Router |
 | Per-replica identity | Per-pod hostname as authority and SNI, never resolved; k8s-router forwards | Per-replica streams from each relay; no addressing scheme specified | Routers in GDS are per cluster with replica lists; Stargate consumers need only the cluster address, Dynamo consumers can use replica endpoints |
 | Liveness | Stream close and idle timeouts (60 s, 300 s max); registration SRD adds a grace TTL | Relay heartbeats, lease expiry, draining before frontends stop | GDS cluster lease (30 s) plus ready endpoints; pool overlay for DRAINING; hot-path liveness stays on direct streams |
@@ -69,7 +69,7 @@ other pod across regions. The PoolRelay is off the request path.
 
 1. The design already matches the one pattern both systems share: one relay-like client per
    pool fanning out to every router replica through a single dialable address per router
-   cluster. The derived VIP plus k8s-router authority forwarding preserves Stargate's mechanics,
+   cluster. Per-cluster k8s-router replica seeds plus authority forwarding preserve Stargate's mechanics,
    and the same VIP serves a Dynamo PoolRelay pushing to Global Routers.
 2. Direction is the real divergence and GDS is neutral on it. Pull needs the relay Service
    exported and reachable inbound; push needs routers exported. Both roles are exported, so

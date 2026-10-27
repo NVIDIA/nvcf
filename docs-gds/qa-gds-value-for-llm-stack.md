@@ -57,11 +57,12 @@ Yes, and the design already contains this path: `RouterCache` feeding `pylon_see
 Stargate's `discover_remote_watch_urls`. GDS becomes the replicated, multi-region, lease-backed
 seed source, and routers stop carrying remote lists.
 
-The only thing MCS contributes to that path is the address: the design computes the derived
-VIP, which presumes an MCS import in the pylon's cluster. Without MCS, GDS would instead hand
-out a dialable URL per router cluster. That is a small extension (an annotation such as a pylon
-dial address on the exported Service, forwarded like `gds.nvidia.com/dial-scheme`), and pylons
-would dial each router cluster's internal NLB exactly as they do today across regions.
+MCS contributes nothing to that path any more: since design v0.3 the seeds are the per-cluster
+k8s-router replica pod addresses GDS already carries (reachable over VPC peering), not an MCS
+VIP. Without MCS the same seeds work; if pod IPs were not routable, GDS could instead hand out
+a dialable URL per router cluster (an annotation such as a pylon dial address on the exported
+Service, forwarded like `gds.nvidia.com/dial-scheme`), and pylons would dial each router
+cluster's internal NLB exactly as they do today across regions.
 Everything else (TLS, authority and SNI forwarding, ClientIP affinity) is unchanged. For the
 LLM stack alone, GDS without MCS is a coherent and smaller deployment.
 
