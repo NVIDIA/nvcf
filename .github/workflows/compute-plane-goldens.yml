@@ -94,24 +94,22 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Log in to the chart registry
-        id: registry
         # The render pulls the charts the stack pins from this registry. Same
-        # login as chart-push-manual.yml.
+        # login as chart-push-manual.yml. This job only runs where the
+        # secrets are provided, so a missing one is a configuration error and
+        # fails the check rather than passing it unchecked.
         env:
           NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
         run: |
           set -euo pipefail
           if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
-            echo "::warning::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set, so the compute-plane goldens are not checked"
-            echo "ready=false" >> "${GITHUB_OUTPUT}"
-            exit 0
+            echo "::error::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set, so the compute-plane goldens cannot be checked"
+            exit 1
           fi
           REGISTRY="${REGISTRY%/}"
           host="${REGISTRY%%/*}"
           printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
-          echo "ready=true" >> "${GITHUB_OUTPUT}"
 
       - name: Compare the goldens with a fresh render
-        if: steps.registry.outputs.ready == 'true'
         run: tools/ci/refresh-compute-plane-goldens check

@@ -44,6 +44,8 @@ workflow_has() {
     workflow_has "${workflow}" 'tools/ci/refresh-compute-plane-goldens commit "origin/${BASE_BRANCH}"'
   done
   workflow_has compute-plane-goldens.yml "run: tools/ci/refresh-compute-plane-goldens check"
+  # Without the registry secrets the check fails; it never passes unchecked.
+  workflow_has compute-plane-goldens.yml "::error::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set"
   workflow_has compute-plane-goldens.yml "- '${stack}/**'"
   workflow_has compute-plane-goldens.yml "- 'tools/ci/refresh-compute-plane-goldens'"
 }

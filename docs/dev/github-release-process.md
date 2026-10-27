@@ -270,8 +270,9 @@ GitHub release, so the first render after a chart release can fail this
 way.
 
 The `compute-plane goldens` workflow renders the stack for every pull
-request and `main` push that changes it, and fails when the fixtures do
-not match.
+request from a branch of this repository and every `main` push that
+changes it. It fails when the fixtures do not match, or when the chart
+registry secrets are not set.
 
 ## Release branches
 
