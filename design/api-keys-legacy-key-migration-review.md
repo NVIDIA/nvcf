@@ -84,12 +84,15 @@ by all replicas through Cassandra.
 - Open: `createKey`, owner status updates, reads, listing, introspection, and
   every other account.
 - Run flow:
-  1. Take the lease. Blocked calls start returning 503.
-  2. Wait `maintenance-grace-period` (`PT15S`, longer than the Cassandra
+  1. If the completion marker exists, end the run without taking the lease.
+     See Completion marker.
+  2. Take the lease. Blocked calls start returning 503.
+  3. Wait `maintenance-grace-period` (`PT15S`, longer than the Cassandra
      request timeout) so in-flight writes finish.
-  3. Copy in batches. Renew the lease before each batch and stop if renewal
+  4. Copy in batches. Renew the lease before each batch and stop if renewal
      fails.
-  4. Release the lease. Writes resume. If the task crashes, the lease TTL
+  5. If the run was clean, write the completion marker.
+  6. Release the lease. Writes resume. If the task crashes, the lease TTL
      expires and writes resume on their own.
 - Residual risk: if the lease is lost mid-batch, writes reopen while the task
   finishes that batch. Renewal per batch limits this to one batch.
@@ -125,10 +128,37 @@ These apply to both options:
 - Keys are decrypted with the raw converter, so stored `ACTIVE` status is not
   rewritten as `EXPIRED`. Expired keys are copied as they are.
 - Keys with an issuer service missing from `apikeys.service-id-map` are skipped
-  with a warning.
+  with a warning. They stay served by the legacy fallback and do not block
+  completion, because no later run can copy them.
 - Both v2 rows are written in one logged batch with `KeysV2Dao.save`.
-- The task stops scheduling on a replica after a clean run: `completed`, with
-  no `migrated`, `failed`, or `skipped` keys.
+- A clean run is `completed` with no `migrated` or `failed` keys. The task
+  stops scheduling on a replica after a clean run, or after a run that finds
+  the completion marker (outcome `already_completed`).
+
+## Completion marker
+
+Without a marker, every replica needs its own clean run before it stops, and
+every restart schedules again. Each of those runs takes the lease and opens a
+new 503 window, even when nothing is left to copy.
+
+- Record: `("legacy_key_migration", "completed")` in `row_update_lock`, next to
+  the lease row. No schema change.
+- Written with the existing `lock` query and TTL `0`, so it never expires.
+- Written only after a clean run, while the lease is still held, so no replica
+  starts another pass between the end of the run and the write.
+- Every run reads it before taking the lease. If it exists, the run ends with
+  outcome `already_completed`, takes no lease, and opens no 503 window.
+- It does not block writes. Only the lease row does.
+- If the write fails, the run still ends clean on that replica, and another
+  replica records the marker on its next clean run.
+- The check and the lease are not atomic. Two replicas that check at the same
+  moment can run one extra pass. That costs one extra window, not data.
+- To run the migration again, delete the row:
+
+  ```sql
+  DELETE FROM row_update_lock
+  WHERE table_name = 'legacy_key_migration' AND record_key = 'completed';
+  ```
 - The authorization throttle always uses the `keys_v2` lock name, so a migrated
   key keeps its update interval.
 
@@ -157,7 +187,8 @@ apikeys:
 - Span `apikeys.legacy-key-migration.run` with `nvcf.org.id`.
 - Metrics, pre-initialized to zero:
   - `nvcf_api_keys_legacy_key_migration_keys_total{result}`
-  - `nvcf_api_keys_legacy_key_migration_runs_total{outcome}`
+  - `nvcf_api_keys_legacy_key_migration_runs_total{outcome}`, including
+    `already_completed`
   - `nvcf_api_keys_legacy_key_migration_run_duration_seconds`
   - `nvcf_api_keys_legacy_key_migration_completed` gauge
 
@@ -167,10 +198,12 @@ apikeys:
    every replica whether or not the task is enabled, so every pod must run
    this release before any run starts.
 2. Turn the task on in one environment. Watch run summaries and metrics.
-3. Confirm the `completed` gauge on every replica.
+3. Confirm the completion marker row exists and the `completed` gauge is `1`
+   on every replica. Check the `skipped` count and the skip warnings for keys
+   whose issuer service needs a mapping.
 4. Set `enabled=false` at the next deploy.
 5. Remove the task and the write check in one release, tracked in a public
-   issue.
+   issue. The marker row can be deleted then; leaving it is harmless.
 6. Removing the legacy fallback and tables is follow-up work.
 
 ## Questions for review

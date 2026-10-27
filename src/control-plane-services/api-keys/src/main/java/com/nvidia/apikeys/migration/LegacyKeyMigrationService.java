@@ -48,6 +48,9 @@ import org.springframework.stereotype.Service;
  * deletes for the legacy account are rejected while it copies. It waits for the grace period
  * before the first write, so requests that passed the maintenance check before the lease was
  * taken can finish. Only one replica runs at a time. The lease is renewed before every page.
+ *
+ * <p>A clean run records a completion marker before it releases the lease. Every later run on any
+ * replica finds the marker and ends without taking the lease.
  */
 @Slf4j
 @Service
@@ -97,6 +100,10 @@ public class LegacyKeyMigrationService {
     }
 
     private RunOutcome runWithLease(Map<KeyResult, Integer> counts) {
+        if (maintenance.isCompleted()) {
+            log.info("Legacy key migration already completed, ncaId={}", nakProperties.getNcaId());
+            return RunOutcome.ALREADY_COMPLETED;
+        }
         var token = clock.instant();
         if (!maintenance.acquire(token)) {
             log.info("Legacy key migration lease held by another replica, ncaId={}",
@@ -106,7 +113,12 @@ public class LegacyKeyMigrationService {
         log.info("Legacy key migration started, ncaId={}", nakProperties.getNcaId());
         try {
             sleep(settings().getMaintenanceGracePeriod());
-            return copyAll(token, counts);
+            var outcome = copyAll(token, counts);
+            if (new RunResult(outcome, counts).isClean()) {
+                // Written while the lease is held, so no replica starts another pass first.
+                markCompleted();
+            }
+            return outcome;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.info("Legacy key migration interrupted, ncaId={}", nakProperties.getNcaId());
@@ -192,6 +204,16 @@ public class LegacyKeyMigrationService {
         return keysV2Dao.getKeyByHash(key.getKeyHash()).isPresent()
                 && keysV2Dao.get(key.getNcaId(), key.getOwnerType(), key.getOwnerId(),
                                  key.getIssuerServiceId(), key.getKeyId()).isPresent();
+    }
+
+    private void markCompleted() {
+        try {
+            maintenance.markCompleted(clock.instant());
+            log.info("Legacy key migration recorded completion, ncaId={}", nakProperties.getNcaId());
+        } catch (RuntimeException e) {
+            log.warn("Legacy key migration failed to record completion, other replicas run again, "
+                             + "ncaId={}", nakProperties.getNcaId(), e);
+        }
     }
 
     private void release(Instant token) {

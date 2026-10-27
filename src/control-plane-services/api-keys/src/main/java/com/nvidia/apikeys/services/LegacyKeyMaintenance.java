@@ -39,6 +39,8 @@ public class LegacyKeyMaintenance {
 
     public static final String LEASE_TABLE = "legacy_key_migration";
     public static final String LEASE_KEY = "leader";
+    public static final String COMPLETED_KEY = "completed";
+    private static final int NO_TTL = 0;
     static final String MESG_MAINTENANCE = "Key maintenance in progress";
 
     private final RowUpdateLockDao rowUpdateLockDao;
@@ -68,6 +70,22 @@ public class LegacyKeyMaintenance {
 
     public boolean release(Instant token) {
         return rowUpdateLockDao.unlock(LEASE_TABLE, LEASE_KEY, token);
+    }
+
+    /**
+     * True once a clean run has recorded that every legacy key is copied. Every replica checks it
+     * before taking the lease, so a finished migration never opens another maintenance window.
+     */
+    public boolean isCompleted() {
+        return rowUpdateLockDao.isLocked(LEASE_TABLE, COMPLETED_KEY);
+    }
+
+    /**
+     * Records the completion marker with no TTL. It stays until an operator deletes the row to
+     * run the migration again.
+     */
+    public void markCompleted(Instant at) {
+        rowUpdateLockDao.lock(LEASE_TABLE, COMPLETED_KEY, at, NO_TTL);
     }
 
     private int leaseTtlSeconds() {

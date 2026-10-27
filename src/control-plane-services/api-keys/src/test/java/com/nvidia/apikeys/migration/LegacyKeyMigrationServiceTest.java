@@ -24,6 +24,8 @@ import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -137,6 +139,7 @@ class LegacyKeyMigrationServiceTest {
         assertThat(result.isClean()).isFalse();
         verify(keysV2Dao).save(MIGRATED_KEY_1);
         verify(maintenance).release(TEST_TIME);
+        verify(maintenance, never()).markCompleted(any());
         assertThat(keyCount(KeyResult.MIGRATED)).isEqualTo(1);
         assertThat(runCount(RunOutcome.COMPLETED)).isEqualTo(1);
     }
@@ -181,14 +184,66 @@ class LegacyKeyMigrationServiceTest {
     }
 
     @Test
-    void keyWithUnmappedIssuerIsSkipped() {
+    void keyWithUnmappedIssuerIsSkippedAndDoesNotBlockCompletion() {
         stubPages(List.of(stubRow(KEY_VO_1.toBuilder().issuerServiceId("unmapped").build())));
 
         var result = service.run();
 
         assertThat(result.count(KeyResult.SKIPPED)).isEqualTo(1);
-        assertThat(result.isClean()).isFalse();
+        assertThat(result.isClean()).isTrue();
         verify(keysV2Dao, never()).save(any());
+        verify(maintenance).markCompleted(TEST_TIME);
+    }
+
+    @Test
+    void cleanRunRecordsCompletionBeforeReleasingTheLease() {
+        stubPages(List.of());
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.COMPLETED);
+        assertThat(result.isClean()).isTrue();
+        var order = inOrder(maintenance);
+        order.verify(maintenance).acquire(TEST_TIME);
+        order.verify(maintenance).markCompleted(TEST_TIME);
+        order.verify(maintenance).release(TEST_TIME);
+    }
+
+    @Test
+    void runWithFailedKeyDoesNotRecordCompletion() {
+        var broken = mock(KeyModel.class);
+        when(scanDao.decrypt(broken)).thenThrow(new IllegalStateException("decrypt failed"));
+        stubPages(List.of(broken));
+
+        var result = service.run();
+
+        assertThat(result.isClean()).isFalse();
+        verify(maintenance, never()).markCompleted(any());
+    }
+
+    @Test
+    void runEndsWithoutLeaseWhenCompletionIsRecorded() {
+        when(maintenance.isCompleted()).thenReturn(true);
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.ALREADY_COMPLETED);
+        assertThat(result.isClean()).isTrue();
+        verify(maintenance, never()).acquire(any());
+        verify(scanDao, never()).page(anyInt(), any());
+        assertThat(runCount(RunOutcome.ALREADY_COMPLETED)).isEqualTo(1);
+    }
+
+    @Test
+    void failureToRecordCompletionStillReleasesTheLease() {
+        stubPages(List.of());
+        doThrow(new IllegalStateException("write timeout")).when(maintenance).markCompleted(TEST_TIME);
+
+        var result = service.run();
+
+        assertThat(result.outcome()).isEqualTo(RunOutcome.COMPLETED);
+        assertThat(result.isClean()).isTrue();
+        verify(maintenance).release(TEST_TIME);
     }
 
     @Test

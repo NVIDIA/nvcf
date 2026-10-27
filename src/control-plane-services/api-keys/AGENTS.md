@@ -71,6 +71,9 @@ an encrypted model also needs that field on its `@ValueObject`.
 `KeysV2Service` returns 503 for legacy-account key updates and deletes on every
 replica, whether or not the task is enabled there. Ship the 503 check with the
 task disabled first, and enable it only after every replica runs that build.
+A clean run writes a `("legacy_key_migration", "completed")` row with no TTL
+before it releases the lease. Every later run finds it and ends without taking
+the lease. Delete that row to run the migration again.
 The authorization throttle always uses the `keys_v2` lock name, so a migrated
 key keeps its interval.
 

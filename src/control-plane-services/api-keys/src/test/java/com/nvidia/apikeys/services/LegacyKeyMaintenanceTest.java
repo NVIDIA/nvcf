@@ -20,6 +20,7 @@ package com.nvidia.apikeys.services;
 import static com.nvidia.apikeys.TestData.NCA_ID_1;
 import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static com.nvidia.apikeys.services.LegacyAccountTranslatorTest.LEGACY_NCA_ID;
+import static com.nvidia.apikeys.services.LegacyKeyMaintenance.COMPLETED_KEY;
 import static com.nvidia.apikeys.services.LegacyKeyMaintenance.LEASE_KEY;
 import static com.nvidia.apikeys.services.LegacyKeyMaintenance.LEASE_TABLE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,5 +98,19 @@ class LegacyKeyMaintenanceTest {
         maintenance.release(TEST_TIME);
 
         verify(rowUpdateLockDao).unlock(LEASE_TABLE, LEASE_KEY, TEST_TIME);
+    }
+
+    @Test
+    void completionMarkerIsWrittenWithoutTtl() {
+        maintenance.markCompleted(TEST_TIME);
+
+        verify(rowUpdateLockDao).lock(LEASE_TABLE, COMPLETED_KEY, TEST_TIME, 0);
+    }
+
+    @Test
+    void completionIsReadFromTheMarkerRow() {
+        when(rowUpdateLockDao.isLocked(LEASE_TABLE, COMPLETED_KEY)).thenReturn(true);
+
+        assertThat(maintenance.isCompleted()).isTrue();
     }
 }

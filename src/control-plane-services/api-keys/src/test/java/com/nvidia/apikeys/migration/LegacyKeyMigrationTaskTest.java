@@ -99,6 +99,17 @@ class LegacyKeyMigrationTaskTest {
     }
 
     @Test
+    void alreadyCompletedRunCancelsTheSchedule() {
+        var runnable = start();
+        when(migrationService.run()).thenReturn(new RunResult(RunOutcome.ALREADY_COMPLETED, Map.of()));
+
+        runnable.run();
+
+        verify(future).cancel(false);
+        assertThat(registry.get(LegacyKeyMigrationMetrics.COMPLETED).gauge().value()).isEqualTo(1);
+    }
+
+    @Test
     void runWithWorkKeepsTheSchedule() {
         var runnable = start();
         when(migrationService.run()).thenReturn(MIGRATED);

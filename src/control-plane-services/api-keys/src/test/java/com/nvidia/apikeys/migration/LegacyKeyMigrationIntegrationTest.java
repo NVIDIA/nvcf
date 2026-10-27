@@ -133,21 +133,43 @@ class LegacyKeyMigrationIntegrationTest {
         assertThat(rowUpdateLockDao.isLocked(
                 LegacyKeyMaintenance.LEASE_TABLE, LegacyKeyMaintenance.LEASE_KEY)).isFalse();
 
+        assertThat(maintenance.isCompleted()).isFalse();
+
         var second = migrationService.run();
 
         assertThat(second.count(KeyResult.ALREADY_MIGRATED)).isEqualTo(3);
         assertThat(second.isClean()).isTrue();
+        assertThat(maintenance.isCompleted()).isTrue();
+        assertThat(completionMarkerTtl()).isNull();
+
+        var third = migrationService.run();
+
+        assertThat(third.outcome()).isEqualTo(RunOutcome.ALREADY_COMPLETED);
+        assertThat(third.counts()).isEmpty();
+        assertThat(rowUpdateLockDao.isLocked(
+                LegacyKeyMaintenance.LEASE_TABLE, LegacyKeyMaintenance.LEASE_KEY)).isFalse();
     }
 
     @Test
-    void legacyKeyWithUnmappedIssuerIsSkipped() {
+    void legacyKeyWithUnmappedIssuerIsSkippedAndCompletionIsRecorded() {
         keysDao.save(KEY_VO_1.toBuilder().issuerServiceId("unmapped-service").build(), KEY_OWNER_VO_1);
 
         var result = migrationService.run();
 
         assertThat(result.count(KeyResult.SKIPPED)).isEqualTo(1);
-        assertThat(result.isClean()).isFalse();
+        assertThat(result.isClean()).isTrue();
+        assertThat(maintenance.isCompleted()).isTrue();
         assertThat(countRows("keys_v2")).isZero();
+    }
+
+    @Test
+    void completionMarkerDoesNotBlockLegacyAccountWrites() {
+        keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
+        maintenance.markCompleted(TEST_TIME);
+
+        assertThat(keysV2Service.updateKeyStatus(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1, KeyStatus.SUSPENDED)
+                .getKeyStatus()).isEqualTo(KeyStatus.SUSPENDED);
     }
 
     @Test
@@ -204,6 +226,14 @@ class LegacyKeyMigrationIntegrationTest {
     private static long countRows(String table) {
         return IntegrationTestConfiguration.CQL_SESSION.execute(
                 "SELECT COUNT(*) FROM " + KEY_SPACE + "." + table).one().getLong(0);
+    }
+
+    private static Integer completionMarkerTtl() {
+        var row = IntegrationTestConfiguration.CQL_SESSION.execute(
+                "SELECT TTL(updated_at) FROM " + KEY_SPACE + ".row_update_lock"
+                        + " WHERE table_name = ? AND record_key = ?",
+                LegacyKeyMaintenance.LEASE_TABLE, LegacyKeyMaintenance.COMPLETED_KEY).one();
+        return row.isNull(0) ? null : row.getInt(0);
     }
 
     private static String storedV2Status(String keyHash) {

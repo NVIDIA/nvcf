@@ -33,12 +33,16 @@ public record RunResult(RunOutcome outcome, Map<KeyResult, Integer> counts) {
     }
 
     /**
-     * A full pass that found nothing left to copy. The task stops scheduling itself after it.
+     * A full pass that found nothing left to copy, or a run that found the completion marker. The
+     * task stops scheduling itself after it. Skipped keys do not count against it, because no
+     * later run can copy a key whose issuer service is unmapped.
      */
     public boolean isClean() {
+        if (outcome == RunOutcome.ALREADY_COMPLETED) {
+            return true;
+        }
         return outcome == RunOutcome.COMPLETED
                 && count(KeyResult.MIGRATED) == 0
-                && count(KeyResult.SKIPPED) == 0
                 && count(KeyResult.FAILED) == 0;
     }
 }

@@ -19,6 +19,7 @@ package com.nvidia.apikeys.migration;
 
 public enum RunOutcome {
     COMPLETED,
+    ALREADY_COMPLETED,
     LEASE_NOT_ACQUIRED,
     LEASE_LOST,
     FAILED,
