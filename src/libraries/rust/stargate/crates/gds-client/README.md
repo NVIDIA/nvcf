@@ -70,9 +70,9 @@ connector, in-process transport); retries apply, failover does not.
 
 ### Stargate: remote watch URLs
 
-A Stargate adds one `WatchStargates` URL per router cluster other than its own
-to `watch_stargate_urls`, unioned with the static `--remote-stargate-url`
-list on every poll tick.
+A Stargate adds the seed URLs of every router cluster other than its own (one
+per ready router replica) to `watch_stargate_urls`, unioned with the static
+`--remote-stargate-url` list on every poll tick.
 
 ```rust
 use gds_client::{RouterCache, RouterCacheConfig, remote_watch_urls};
@@ -84,7 +84,7 @@ let dynamic_urls = remote_watch_urls(&routers.snapshot(), "cluster-a");
 
 ### Pylon: dynamic seeds
 
-A pylon opens `WatchStargates` on one seed per router cluster, its own
+A pylon opens `WatchStargates` on the seeds of every router cluster, its own
 included. Feed the seeds into a watch channel and let the registration loop
 react to changes.
 
@@ -113,14 +113,26 @@ tokio::spawn(async move {
 });
 ```
 
-A seed is the derived Service the MCS controller creates in the pylon's own
-cluster for the router's import:
-`<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`. The
-scheme is the router's `gds.nvidia.com/dial-scheme` (`https` when unset).
-Routers whose cluster lease expired and routers without a gRPC port are
-skipped. Routers exported under the same namespace and name from several
-clusters share one derived Service, so they yield one URL whose VIP spans all
-of them.
+A seed is one ready replica of a router, as GDS reports it:
+`<scheme>://<replica address>:<grpc_port>`, with IPv6 addresses in brackets
+(`router_seed_urls(router)`). The scheme is the router's
+`gds.nvidia.com/dial-scheme` (`https` when unset; other values yield no
+seeds). The port is the router Service's gRPC port, so the Service must use
+the same number for the port and its target port, as the llm-request-router
+chart does. Replicas that are not ready, routers without a gRPC port and
+routers whose cluster lease expired are skipped. Each router cluster
+contributes one URL per stargate-k8s-router (or Stargate) pod; the pylon
+watches all of them and fails over between them.
+
+Seeds are per cluster on purpose. Every cluster deploys the same router
+Service (for example `nvcf/llm-request-router-backend`), and by MCS semantics
+exports of one namespace and name merge into one import. Its derived Service
+spreads over the k8s-router pods of all router clusters, so a pylon dialing
+it could reach cluster B's k8s-router while registering with a Stargate pod
+of cluster A, which B cannot forward to. `derived_service_url(router)` still
+returns that merged VIP,
+`<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`, for
+callers that want it; it is never a seed.
 
 ### Dynamo PoolRelay: pool registration
 

@@ -17,22 +17,24 @@
 //!
 //! These are for diagnostics, for example listing GDS routers next to the
 //! `WatchStargates` view. They are not registration targets: a pylon reaches
-//! a router cluster through its seed URL and learns the per-replica
-//! identities from `WatchStargates` on that seed.
+//! a router cluster through the per-replica seed URLs
+//! ([`crate::routers::router_seed_urls`]) and learns the per-replica
+//! identities from `WatchStargates` on those seeds.
 
 use stargate_proto::pb::StargateInfo;
 
 use crate::derived::derived_service_host;
 use crate::labels::DIAL_SCHEME_HTTP;
 use crate::proto::v1::Router;
-use crate::routers::{DEFAULT_DIAL_SCHEME, RouterState, router_key, seed_url};
+use crate::routers::{DEFAULT_DIAL_SCHEME, RouterState, derived_service_url, router_key};
 
 /// Describes `router` as a [`StargateInfo`]: `stargate_id` is
-/// `gds:<cluster>/<namespace>/<name>`, `advertise_addr` the seed URL and
-/// `http_advertise_addr` the derived Service URL of the HTTP port. Returns
-/// `None` when the router has no seed URL.
+/// `gds:<cluster>/<namespace>/<name>`, `advertise_addr` the derived Service
+/// URL of the gRPC port ([`derived_service_url`]) and `http_advertise_addr`
+/// the derived Service URL of the HTTP port. Returns `None` when the router
+/// has no derived Service URL.
 pub fn router_to_stargate_info(router: &Router) -> Option<StargateInfo> {
-    let advertise_addr = seed_url(router)?;
+    let advertise_addr = derived_service_url(router)?;
     let http_advertise_addr = u16::try_from(router.http_port)
         .ok()
         .filter(|port| *port != 0)

@@ -64,5 +64,6 @@ pub use register::{
     DesiredState, PoolRegistration, PoolSpec, PoolUpdate, RegistrationState, next_generation,
 };
 pub use routers::{
-    RouterCache, RouterCacheConfig, RouterState, pylon_seed_urls, remote_watch_urls, seed_url,
+    RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls,
+    remote_watch_urls, router_seed_urls,
 };

@@ -43,7 +43,8 @@ pub const ANNOTATION_POOL_MODELS: &str = "gds.nvidia.com/pool-models";
 pub const ANNOTATION_HARDWARE_CLASS: &str = "gds.nvidia.com/hardware-class";
 /// Service annotation: data center.
 pub const ANNOTATION_DC: &str = "gds.nvidia.com/dc";
-/// Service annotation: scheme clients use for the derived VIP.
+/// Service annotation: scheme clients dial the exported Service with, through
+/// router seeds or the derived VIP.
 pub const ANNOTATION_DIAL_SCHEME: &str = "gds.nvidia.com/dial-scheme";
 /// Service annotation: name of the port that carries gRPC.
 pub const ANNOTATION_GRPC_PORT_NAME: &str = "gds.nvidia.com/grpc-port-name";
