@@ -27,11 +27,20 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-type healthCallContextKey struct{}
+// Bounded values of the gateway_call_kind client metric label.
+const (
+	CallKindInference = "inference"
+	CallKindPoll      = "poll"
+	CallKindHealth    = "health"
+)
 
-// ContextWithHealthCall marks an outbound readiness probe for client metrics.
-func ContextWithHealthCall(ctx context.Context) context.Context {
-	return context.WithValue(ctx, healthCallContextKey{}, true)
+type callKindContextKey struct{}
+
+// ContextWithCallKind marks an outbound call for client metrics. Only
+// CallKindPoll and CallKindHealth change the label; any other value is
+// recorded as CallKindInference.
+func ContextWithCallKind(ctx context.Context, kind string) context.Context {
+	return context.WithValue(ctx, callKindContextKey{}, kind)
 }
 
 func clientMetricContext(ctx context.Context) context.Context {
@@ -42,9 +51,10 @@ func clientMetricContext(ctx context.Context) context.Context {
 	if parent, ok := otelhttp.LabelerFromContext(ctx); ok {
 		labeler.Add(parent.Get()...)
 	}
-	kind := "inference"
-	if health, _ := ctx.Value(healthCallContextKey{}).(bool); health {
-		kind = "health"
+	kind := CallKindInference
+	switch marked, _ := ctx.Value(callKindContextKey{}).(string); marked {
+	case CallKindPoll, CallKindHealth:
+		kind = marked
 	}
 	labeler.Add(attribute.String("gateway_call_kind", kind))
 	return otelhttp.ContextWithLabeler(ctx, labeler)
@@ -68,7 +78,7 @@ func (rt clientMetricsRoundTripper) RoundTrip(r *http.Request) (*http.Response, 
 	} else if response != nil && (response.StatusCode < 200 || response.StatusCode >= 300) {
 		source := response.Header.Get(ErrorSourceHeader)
 		switch source {
-		case "invocation_service", "worker":
+		case ErrorSourceInvocationService, ErrorSourceWorker:
 		default:
 			source = "unknown"
 		}

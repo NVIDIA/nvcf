@@ -52,8 +52,18 @@ const (
 )
 
 // ErrorSourceHeader is added to non-2xx responses so clients and support can
-// tell where the status came from. Its value is a GatewayProxyOutcome.
+// tell where the status came from. On responses the gateway returns, its value
+// is a GatewayProxyOutcome. On upstream responses the gateway reads, the only
+// recognized values are ErrorSourceInvocationService and ErrorSourceWorker;
+// the gateway records them on client metrics and replaces the header before
+// returning the response.
 const ErrorSourceHeader = "NVCF-Error-Source"
+
+// Values an upstream service may send in ErrorSourceHeader.
+const (
+	ErrorSourceInvocationService = "invocation_service"
+	ErrorSourceWorker            = "worker"
+)
 
 var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
 	return r.URL.Path

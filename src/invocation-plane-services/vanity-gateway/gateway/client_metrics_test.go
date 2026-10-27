@@ -78,6 +78,22 @@ func TestUpstreamHealthCheckClientMetricLabels(t *testing.T) {
 	}
 }
 
+func TestPollingClientMetricCallKind(t *testing.T) {
+	reader := processingReader(t)
+	director, err := NewVanityDirector("https://nvcf.example.test", middleware.TracedRoundTripper(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
+	})))
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	director.ServePolling(rec, httptest.NewRequest(http.MethodGet, "/v1/status/abc", nil))
+	require.Equal(t, 200, rec.Code)
+	clients := metricPoints(t, reader, "http.client.request.duration")
+	require.Len(t, clients, 1)
+	kind, ok := clients[0].Attributes.Value("gateway_call_kind")
+	require.True(t, ok)
+	require.Equal(t, "poll", kind.AsString())
+}
+
 func TestProxyClientMetricLabelsStaySeparateFromServer(t *testing.T) {
 	for _, kind := range []config.FunctionType{"", config.FunctionTypeLLM} {
 		t.Run(string(kind), func(t *testing.T) {

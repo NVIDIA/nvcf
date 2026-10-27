@@ -27,6 +27,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,59 @@ func TestClientMetricClassification(t *testing.T) {
 					require.Equal(t, want, got.AsString(), "%s", key)
 				}
 			}
+		})
+	}
+}
+
+func TestClientMetricHTTPClientTimeout(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := newHTTPMeterProvider(reader)
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() { otel.SetMeterProvider(previous); require.NoError(t, provider.Shutdown(context.Background())) })
+	// http.Client.Timeout cancels the request context and the transport reports
+	// a plain request canceled error that matches neither context sentinel.
+	client := &http.Client{Timeout: 20 * time.Millisecond, Transport: TracedRoundTripper(clientMetricTestTransport(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, errors.New("net/http: request canceled")
+	}))}
+	_, err := client.Get("http://upstream.test/slow")
+	require.Error(t, err)
+	require.True(t, hasMetricPointWithAttributes(collectMetrics(t, reader), "http.client.request.duration", map[attribute.Key]attribute.Value{
+		"error.type": attribute.StringValue("timeout"),
+	}))
+}
+
+func TestClientMetricCallKind(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, want string
+		mark             bool
+	}{
+		{name: "unmarked", want: CallKindInference},
+		{name: "poll", kind: CallKindPoll, want: CallKindPoll, mark: true},
+		{name: "health", kind: CallKindHealth, want: CallKindHealth, mark: true},
+		{name: "unrecognized", kind: "arbitrary", want: CallKindInference, mark: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			provider := newHTTPMeterProvider(reader)
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(provider)
+			t.Cleanup(func() { otel.SetMeterProvider(previous); require.NoError(t, provider.Shutdown(context.Background())) })
+			ctx := context.Background()
+			if tc.mark {
+				ctx = ContextWithCallKind(ctx, tc.kind)
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://upstream.test", nil)
+			require.NoError(t, err)
+			res, err := TracedRoundTripper(clientMetricTestTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
+			})).RoundTrip(req)
+			require.NoError(t, err)
+			require.NoError(t, res.Body.Close())
+			require.True(t, hasMetricPointWithAttributes(collectMetrics(t, reader), "http.client.request.duration", map[attribute.Key]attribute.Value{
+				"gateway_call_kind": attribute.StringValue(tc.want),
+			}))
 		})
 	}
 }

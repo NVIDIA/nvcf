@@ -691,8 +691,9 @@ cannot be pre-initialized on the first scrape.
 The client histogram, `http_client_request_duration_seconds`, adds bounded
 labels to distinguish calls and failures:
 
-- `gateway_call_kind` is `inference` for proxied requests (including shadows)
-  and `health` for upstream readiness checks.
+- `gateway_call_kind` is `inference` for proxied requests (including shadows),
+  `poll` for status polls on `/v1/status/{requestId}`, which can long-poll for
+  minutes, and `health` for upstream readiness checks.
 - `error_source` is present on non-2xx responses. It accepts
   `invocation_service` or `worker` from the upstream `NVCF-Error-Source`
   response header. Missing or unrecognized values become `unknown`.
@@ -709,7 +710,9 @@ drops any value supplied by a worker.
 These labels apply only to client metrics. The server
 `gateway_proxy_outcome` and response-header behavior described above remain
 unchanged. Existing queries that aggregate client metrics by all labels will
-see separate inference, health, and error-source series.
+see separate call-kind and error-source series. The same labels are also
+recorded on `http_client_request_body_size_bytes`, so queries that aggregate
+that metric by all labels will see extra series too.
 
 ### Request duration boundaries
 

@@ -66,7 +66,7 @@ func upstreamHealthCheck(client http.Client, name string, endpoint string, path 
 		Name:    name,
 		Timeout: 5 * time.Second,
 		Check: func(ctx context.Context) error {
-			request, err := http.NewRequestWithContext(middleware.ContextWithHealthCall(ctx), http.MethodGet, healthUrl, nil)
+			request, err := http.NewRequestWithContext(middleware.ContextWithCallKind(ctx, middleware.CallKindHealth), http.MethodGet, healthUrl, nil)
 			if err != nil {
 				return err
 			}
