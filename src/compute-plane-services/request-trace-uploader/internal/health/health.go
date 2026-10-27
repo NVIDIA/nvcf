@@ -5,6 +5,9 @@
 package health
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 )
@@ -37,4 +40,34 @@ func (h *Handler) Ready(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// Step is one local startup action that must finish before the uploader
+// reports ready, such as taking the spool lock or loading the journal.
+type Step struct {
+	Name string
+	Run  func(context.Context) error
+}
+
+// Start runs steps in order and marks the handler ready only after all of them
+// succeed. Serve the handler before calling Start, so liveness answers while a
+// slow step runs on a large backlog. A failing step, or a context that ends
+// between steps, stops the sequence and leaves the handler unready; the caller
+// exits non-zero. Remote destinations and telemetry never belong in a step.
+func (h *Handler) Start(ctx context.Context, steps ...Step) error {
+	for _, step := range steps {
+		if step.Name == "" || step.Run == nil {
+			return errors.New("startup step needs a name and a function")
+		}
+	}
+	for _, step := range steps {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup stopped before %s: %w", step.Name, err)
+		}
+		if err := step.Run(ctx); err != nil {
+			return fmt.Errorf("startup step %s: %w", step.Name, err)
+		}
+	}
+	h.SetReady(true)
+	return nil
 }
