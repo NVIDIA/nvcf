@@ -13,6 +13,9 @@ in ~/projects/nvidia are left untouched.
   cross-region request path.
 - `qa-gds-value-for-llm-stack.md`: Q&A on why GDS and MCS help the unmodified LLM stack and
   whether GDS can be consumed without MCS (discussion note, no design change).
+- `upstream-dynamo-comparison.md`: the open upstream Dynamo discovery work (DEP 103, the
+  global-discovery PRs, the global-router-v2 branch) compared with the GDS design and
+  implementation, with recommendations and open questions (discussion note, no design change).
 
 This directory lives in the nvcf monorepo on branch
 `feat/global-discovery-service`, to be ported to `github.com/ai-dynamo/stargate`.
