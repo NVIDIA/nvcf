@@ -746,3 +746,67 @@ advertises must be specific to that cluster and reachable from the others (empty
 the Stargate pod, or a per-cluster k8s-router address); with dial scheme https the router
 certificate must cover the dialed address (the chart issues DNS-name certificates only); the
 router Service's gRPC port must equal its target port.
+
+Workstream 8 (LLM stack integration), branch `feat/gds-ws8-integration`, connects Stargate,
+Pylon, Pylon Operator and their charts to GDS (design 4.5 and 10):
+
+- Stargate (`crates/stargate`): flags `--gds-url` (repeatable, `GDS_URLS`), `--gds-clusterset`
+  (`GDS_CLUSTERSET_ID`), `--gds-cluster-id` (`GDS_CLUSTER_ID`) and `--gds-tls-ca-cert-path`,
+  validated in `validate_discovery_args` (clusterset and cluster id required with `--gds-url` and
+  rejected without it; `http://` needs `--allow-insecure-remote-watch-http`). `discovery.rs` moved
+  to `discovery/mod.rs`; `discovery/gds.rs` adds `GdsDiscovery` (inner discovery plus a
+  `RouterCache`), the trait gains the defaulted `discover_remote_watch_urls`, and the
+  `WatchStargates` publisher unions the dynamic URLs with `--remote-stargate-url` every poll
+  tick, normalized and de-duplicated by endpoint. The crate links `gds-client-stargate`; a new
+  `stargate_bin_test` Bazel target runs the binary crate's unit tests.
+- Pylon (`crates/pylon-lib`, `crates/pylon`): `seeds` is a `watch::Receiver<BTreeSet<String>>`
+  with `static_seeds` for fixed sets; `run_watch_stargate_discovery` follows seed changes. Flags
+  `--gds-url`, `--gds-clusterset`, `--gds-tls-ca-cert-path`; `--stargate-address` is optional with
+  `--gds-url` (unioned with the GDS seeds) and keeps its default without it. `crates/pylon/src/gds.rs`
+  feeds `pylon_seed_urls` from a `RouterCache`.
+- Pylon Operator: `--router-source=static|gds`, `--gds-url`, `--gds-clusterset-id`,
+  `--gds-tls-ca-configmap`; the transport renderer passes the GDS flags (and the CA mount)
+  instead of `--stargate-address`; `internal/gds` runs a `pkg/client` `RouterCache` for a startup
+  error when no router is visible and the new optional `status.registration.routers`. The GDS
+  module is a `go.mod` requirement with a relative replace, as `event-ledger` does.
+- Charts: `llm-request-router` values `globalDiscovery.{enabled, urls, clustersetId, clusterId,
+  tlsCaConfigMap, export.enabled, dialScheme}` (Stargate flags, CA mount, export labels and the
+  dial-scheme annotation on the backend-router Service or, without the backend router, the
+  ClusterIP Service); `pylon-operator` values `router.source` and `globalDiscovery.{urls,
+  clustersetId, trustBundle.configMap}`. Both have render checks in `make test`.
+- Docs: `docs/dev/global-discovery-quickstart.md`, the Stargate and Pylon Operator `AGENTS.md`,
+  the Stargate README and both chart READMEs; design 4.5, 10 and the router path diagram.
+- Decisions: Stargate and the k8s-router advertise their configured `grpc_pylon_dial_addr`
+  unchanged. Cross-cluster pylons need `backendRouter.pylonGrpcDialAddress` and
+  `pylonReverseTunnelDialAddress` (or the advertised hostname without the backend router) set to
+  addresses the peers reach; the in-cluster defaults resolve to each cluster's own router. The
+  gRPC listeners are plaintext on the pod port, so the router chart exports dial scheme `http`
+  by default and the seeds need no certificate covering pod IPs.
+- Verified: `bazel test //src/libraries/rust/stargate/...`, rustfmt and clippy (`-D clippy::all
+  -D warnings`) through the rules_rust aspects on `stargate`, `pylon` and `pylon-lib`; the
+  Cargo-only integration suites (`crates/stargate/tests`, `crates/pylon-lib/tests`) through a
+  temporary Bazel target; `GOWORK=off make test` (98.5 percent of `internal/`), `make vet` and
+  `make codegen-check` in pylon-operator; `bazel test //src/compute-plane-services/pylon-operator/...`;
+  `make lint template validate test` for both charts with the CI values and kubeconform;
+  `tools/ci/check-helm-charts` and the `llm-gateway-stack` chart test.
+
+Deviations from the plan:
+
+- The operator caches ConfigMaps by one name, so `--gds-tls-ca-configmap` and
+  `--trust-bundle-configmap` must name the same ConfigMap when both are set (its `ca.crt` holds
+  both CAs). The operator reads the GDS CA for its own client once at startup; a failure to start
+  the router view is logged and only disables `status.registration.routers`.
+- Stargate passes GDS remote URLs through with the scheme the router exports; only `http://` GDS
+  URLs need the development opt-in. Pylon accepts `http://` GDS URLs as it accepts plaintext
+  Stargate addresses.
+- `llm-request-router` had no `values.schema.json`; a new one validates only
+  `llmRequestRouter.globalDiscovery`.
+- The Stargate and Pylon GDS clients register no `nvcf_gds_client_*` metrics: the Stargate
+  registry is created inside the runtime after discovery is built. Pylon Operator registers them
+  on the controller-runtime registry.
+- The design's router path showed the k8s-router forwarding `WatchStargates` to a Stargate pod;
+  it answers from its EndpointSlices with its static remote URLs, which the design now shows.
+
+Not done in ws8: a GDS client in `stargate-k8s-router` (pylons that dial the backend router
+without `--gds-url` learn no remote clusters through it); the e2e phase 3, which needs the
+serving `gds-server` and the MCS controller; Cargo commands, since the machine has no cargo.

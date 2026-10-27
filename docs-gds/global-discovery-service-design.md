@@ -1,9 +1,10 @@
 # Global Discovery Service (GDS): Design
 
-Status: Draft v0.3, 2026-10-26 (v0.1 initial design; v0.2 adds the cross-region request path
+Status: Draft v0.4, 2026-10-27 (v0.1 initial design; v0.2 adds the cross-region request path
 flow and its prerequisites, the explicit pool dispatch address, the draining order and the
 registration-direction neutrality, from `network-interaction-comparison.md`; v0.3 replaces the
-derived-VIP pylon seed with per-cluster router replica seeds, 4.5). Author:
+derived-VIP pylon seed with per-cluster router replica seeds, 4.5; v0.4 records the integration
+decisions on the advertised dial address and the seed scheme, 4.5 and 10). Author:
 E. Stroczynski. Design for the Global Discovery Service
 of the Dynamo Global Router (Global Router HLD, Kiro edition, section 2.4 "Discovery", and the
 "LLD: The Global View" GDS requirements), scoped by the "Global Discovery Service" workstreams of
@@ -348,10 +349,10 @@ sequenceDiagram
     R->>G: exported by controller A (ports grpc, quic; annotations dial-scheme)
     P->>G: WatchRouters (RouterCache)
     G-->>P: Router{cluster A, namespace, name, grpc_port, replicas[]}
-    P->>P: seeds = https://<replica address>:50071 per ready replica of A
+    P->>P: seeds = <dial scheme>://<replica address>:50071 per ready replica of A
     P->>K: WatchStargates, one stream per seed
-    K->>X: forward (any Stargate pod of A)
-    X-->>P: stargates[] with per-pod authorities, grpc_pylon_dial_addr
+    K->>K: snapshot of A's Stargate pods from the headless Service's EndpointSlices
+    K-->>P: stargates[] with per-pod authorities, grpc_pylon_dial_addr
     P->>K: RegisterInferenceServer stream per replica to A's dial address, authority = per-pod hostname
     K->>X: k8s-router forwards by authority to the named pod
     P->>K: QUIC tunnel per replica, SNI = routing target
@@ -498,12 +499,16 @@ From there the existing Pylon machinery is unchanged: it opens `WatchStargates` 
 receives per-pod authorities and `grpc_pylon_dial_addr`, and opens one registration stream and
 one QUIC tunnel per Stargate replica to that dial address, with the per-pod name as authority
 and SNI. The dial address a router cluster advertises must therefore also be specific to that
-cluster and reachable from the others (empty, so that pylons dial the Stargate pod address, or a
-per-cluster address of its k8s-router); the Stargate integration (section 10) settles it. With
-dial scheme `https` the router certificate must cover the address a pylon dials. The chart
-issues DNS-name certificates today, so the integration either adds the pod IPs to the
-k8s-router certificate, exports dial scheme `http` inside the peered network, or verifies seeds
-against a configured server name.
+cluster and reachable from the others. The integration (section 10) keeps the existing
+configuration: Stargate and the k8s-router advertise `--grpc-pylon-dial-addr` (chart
+`backendRouter.pylonGrpcDialAddress`, with `pylonReverseTunnelDialAddress` for QUIC) unchanged,
+or the advertised hostname without the backend router. Their in-cluster defaults resolve in every
+cluster to that cluster's own router, so a router cluster that serves pylons of other clusters
+sets them to addresses the peers reach, such as its gateway listener; no new networking is
+added. The Stargate and k8s-router gRPC listeners serve plaintext gRPC on the pod port, so the
+chart exports dial scheme `http` by default and the seeds need no router certificate covering
+pod IPs; registration and tunnel traffic keep their own TLS on the dial addresses. `https`
+seeds would need TLS terminated on the pod port with a certificate covering the pod IPs.
 
 Why not the derived VIP. Every cluster deploys the same router Service (for example
 `nvcf/llm-request-router-backend`), and by MCS semantics exports of one namespace and name merge
@@ -887,17 +892,23 @@ router's import, never a seed, per 4.5); `derived`
   `--gds-cluster-id`, `--gds-tls-ca-cert-path`. A `GdsDiscovery` wraps the existing DNS or
   self-only discovery (which stays authoritative for local peers) and implements a new defaulted
   trait method `discover_remote_watch_urls`; the `WatchStargates` publisher unions those URLs with
-  the static `--remote-stargate-url` list every poll tick. Chart values `globalDiscovery.{urls,
-  clustersetId, clusterId, tlsCaConfigMap, export.enabled}` add the export and role labels and
-  the dial-scheme annotation to the Service pylons dial. No ServiceExport template is needed.
+  the static `--remote-stargate-url` list every poll tick. Chart values
+  `globalDiscovery.{enabled, urls, clustersetId, clusterId, tlsCaConfigMap}` render the flags,
+  and `globalDiscovery.export.enabled` and `dialScheme` (default `http`) add the export and role
+  labels and the dial-scheme annotation to the Service pylons dial. No ServiceExport template is
+  needed. Stargate advertises its `--grpc-pylon-dial-addr` unchanged (4.5). The k8s-router has no
+  GDS client and answers `WatchStargates` with its static remote URLs, so the GDS remote URLs
+  reach pylons that watch a Stargate pod; pylons with `--gds-url` read every router cluster from
+  GDS directly.
 - Pylon. `InferenceServerRegistrationConfig.seeds` becomes a watch receiver of a URL set; the
   watch discovery loop reacts to changes (it already diffs desired watch URLs each iteration).
   `--stargate-address` becomes optional when `--gds-url` is set; both are unioned when present.
   Existing tests asserting `seeds` are updated.
-- Pylon Operator. `--router-source=static|gds` with `--gds-url`, `--gds-clusterset-id` and a
-  trust bundle ConfigMap. In `gds` mode the transport renderer passes the GDS flags to Pylon
-  instead of `--stargate-address`, so router churn never rolls transport pods; the operator uses
-  a `RouterCache` only for a startup warning and a routers count in status.
+- Pylon Operator. `--router-source=static|gds` with `--gds-url`, `--gds-clusterset-id` and
+  `--gds-tls-ca-configmap` (the same ConfigMap as the router trust bundle when both are set). In
+  `gds` mode the transport renderer passes the GDS flags to Pylon instead of `--stargate-address`,
+  so router churn never rolls transport pods; the operator uses a `RouterCache` only for a startup
+  warning and `status.registration.routers`.
 - Dynamo. Pool charts label their frontend and PoolRelay Services; the PoolRelay may use
   `PoolRegistration` for worker counts and draining and `RouterCache` to find Global Routers.
   Those changes land in the Dynamo repository.
