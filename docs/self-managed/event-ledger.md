@@ -178,12 +178,12 @@ global:
 The URL is a base URL. NVCA appends `/v3/ledger/k8s-events` for the OTLP export.
 Configure DNS, firewalls, and proxies so Pods in the compute plane can reach it.
 
-The collector sends the NVCA projected service account token on every export, so
-plain HTTP exposes that token on the network. The default Gateway from the
-quickstart has no HTTPS listener. When the compute plane reaches the control
-plane over a network you do not trust, terminate TLS at the Gateway, attach the
-Event Ledger route to that listener, and use an `https://` URL. The token can
-write events but cannot read them.
+The collector sends the NVCA projected service account token (PSAT) on every
+export, so plain HTTP exposes that token on the network. The default Gateway
+from the quickstart has no HTTPS listener. When the compute plane reaches the
+control plane over a network you do not trust, terminate TLS at the Gateway,
+attach the Event Ledger route to that listener, and use an `https://` URL. The
+token can write events but cannot read them.
 
 Apply the compute-plane environment:
 
