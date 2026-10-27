@@ -21,10 +21,21 @@ use tracing::warn;
 
 use stargate_proto::pb::StargateInfo;
 
+mod gds;
+
+pub use gds::GdsDiscovery;
+
 #[async_trait::async_trait]
 pub trait Discovery: Send + Sync + 'static {
     fn initial_stargates(&self) -> Vec<StargateInfo>;
     async fn discover_stargates(&self) -> Vec<StargateInfo>;
+
+    /// `WatchStargates` URLs learned at runtime, which the publisher unions
+    /// with the static `--remote-stargate-url` list on every poll tick.
+    /// Local peer discovery learns none.
+    async fn discover_remote_watch_urls(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[async_trait::async_trait]
@@ -35,6 +46,10 @@ impl Discovery for Box<dyn Discovery> {
 
     async fn discover_stargates(&self) -> Vec<StargateInfo> {
         (**self).discover_stargates().await
+    }
+
+    async fn discover_remote_watch_urls(&self) -> Vec<String> {
+        (**self).discover_remote_watch_urls().await
     }
 }
 

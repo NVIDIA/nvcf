@@ -72,10 +72,20 @@ pub(super) fn spawn_watch_stargates_publisher(
 
             let event = tokio::select! {
                 _ = stop.cancelled() => break,
-                stargates = discovery.discover_stargates() => {
+                (stargates, dynamic_watch_urls) = async {
+                    tokio::join!(
+                        discovery.discover_stargates(),
+                        discovery.discover_remote_watch_urls(),
+                    )
+                } => {
+                    let remote_watch_urls = union_remote_watch_urls(
+                        &remote_watch_stargate_urls,
+                        dynamic_watch_urls,
+                        &local_watch_endpoint_keys,
+                    );
                     build_watch_stargates_response(
                         stargates,
-                        &remote_watch_stargate_urls,
+                        &remote_watch_urls,
                         grpc_pylon_dial_addr.as_deref(),
                     )
                 },
@@ -149,8 +159,25 @@ fn normalize_stargates(stargates: Vec<StargateInfo>) -> Vec<StargateInfo> {
     deduped.into_values().collect()
 }
 
+/// The static remote Watch URLs, already normalized, plus the URLs discovery
+/// learned at runtime, normalized the same way. A dynamic URL for the same
+/// endpoint as a static one is dropped, so the static spelling wins.
+fn union_remote_watch_urls(
+    static_urls: &[String],
+    dynamic_urls: Vec<String>,
+    excluded_endpoint_keys: &BTreeSet<String>,
+) -> Vec<String> {
+    if dynamic_urls.is_empty() {
+        return static_urls.to_vec();
+    }
+    normalize_remote_watch_urls(
+        static_urls.iter().cloned().chain(dynamic_urls),
+        excluded_endpoint_keys,
+    )
+}
+
 fn normalize_remote_watch_urls(
-    urls: Vec<String>,
+    urls: impl IntoIterator<Item = String>,
     excluded_endpoint_keys: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut deduped: BTreeMap<String, String> = BTreeMap::new();
@@ -231,7 +258,10 @@ fn watch_response_has_entries(response: &WatchStargatesResponse) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::{Stream, StreamExt};
+    use parking_lot::Mutex;
 
     use super::*;
 
@@ -332,6 +362,127 @@ mod tests {
             urls,
             vec!["http://remote-a:50071", "https://remote-b:50071"]
         );
+    }
+
+    #[test]
+    fn dynamic_remote_watch_urls_are_unioned_with_the_static_list() {
+        let excluded = local_watch_endpoint_keys(
+            "10.0.0.1:50071".parse().unwrap(),
+            "stargate-headless.ns.svc.cluster.local",
+        );
+        let static_urls =
+            normalize_remote_watch_urls(vec!["https://remote-b:50071".to_string()], &excluded);
+
+        assert_eq!(
+            union_remote_watch_urls(&static_urls, Vec::new(), &excluded),
+            static_urls
+        );
+        assert_eq!(
+            union_remote_watch_urls(
+                &static_urls,
+                vec![
+                    "http://10.2.0.2:50071".to_string(),
+                    // Same endpoint as a static URL: the static spelling wins.
+                    "http://remote-b:50071".to_string(),
+                    // This Stargate itself.
+                    "http://10.0.0.1:50071".to_string(),
+                    "not a uri".to_string(),
+                    "https://[fd00::1]:50071".to_string(),
+                    "http://10.2.0.2:50071".to_string(),
+                ],
+                &excluded,
+            ),
+            vec![
+                "http://10.2.0.2:50071",
+                "https://[fd00::1]:50071",
+                "https://remote-b:50071",
+            ]
+        );
+    }
+
+    struct FakeDiscovery {
+        stargates: Vec<StargateInfo>,
+        remote_watch_urls: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Discovery for FakeDiscovery {
+        fn initial_stargates(&self) -> Vec<StargateInfo> {
+            self.stargates.clone()
+        }
+
+        async fn discover_stargates(&self) -> Vec<StargateInfo> {
+            self.stargates.clone()
+        }
+
+        async fn discover_remote_watch_urls(&self) -> Vec<String> {
+            self.remote_watch_urls.lock().clone()
+        }
+    }
+
+    async fn next_watch_urls(
+        rx: &mut watch::Receiver<WatchStargatesResponse>,
+        expected: &[&str],
+    ) -> WatchStargatesResponse {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let current = rx.borrow_and_update().clone();
+                if current.watch_stargate_urls == expected {
+                    return current;
+                }
+                rx.changed().await.expect("publisher should be running");
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("watch_stargate_urls never became {expected:?}"))
+    }
+
+    #[tokio::test]
+    async fn publisher_unions_dynamic_remote_watch_urls_every_poll_tick() {
+        let remote_watch_urls = Arc::new(Mutex::new(vec![
+            "http://10.2.0.1:50071".to_string(),
+            "http://10.0.0.1:50071".to_string(),
+        ]));
+        let (tasks, _failures) = CriticalTaskGroup::new("watch-stargates-test");
+        let mut rx = spawn_watch_stargates_publisher(WatchStargatesPublisherConfig {
+            advertise_addr: "10.0.0.1:50071".parse().unwrap(),
+            discovery_dns_name: "stargate-headless.ns.svc.cluster.local".to_string(),
+            discovery: Box::new(FakeDiscovery {
+                stargates: vec![stargate("stargate-0", "10.0.0.1:50071", "")],
+                remote_watch_urls: remote_watch_urls.clone(),
+            }),
+            remote_watch_stargate_urls: vec!["https://remote-b.stargate:50071".to_string()],
+            grpc_pylon_dial_addr: None,
+            discovery_poll_interval: Duration::from_millis(10),
+            watch_heartbeat_interval: Duration::from_secs(60),
+            tasks: tasks.clone(),
+        });
+
+        let first = next_watch_urls(
+            &mut rx,
+            &["http://10.2.0.1:50071", "https://remote-b.stargate:50071"],
+        )
+        .await;
+        assert_eq!(first.stargates.len(), 1);
+
+        remote_watch_urls
+            .lock()
+            .push("http://10.3.0.1:50071".to_string());
+        next_watch_urls(
+            &mut rx,
+            &[
+                "http://10.2.0.1:50071",
+                "http://10.3.0.1:50071",
+                "https://remote-b.stargate:50071",
+            ],
+        )
+        .await;
+
+        remote_watch_urls.lock().clear();
+        next_watch_urls(&mut rx, &["https://remote-b.stargate:50071"]).await;
+
+        tasks.begin_shutdown();
+        tasks.wait().await;
     }
 
     #[test]
