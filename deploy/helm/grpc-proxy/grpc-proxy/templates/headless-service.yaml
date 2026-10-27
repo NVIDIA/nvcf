@@ -25,7 +25,7 @@ metadata:
 spec:
   clusterIP: None  # This makes it a headless service
   ports:
-    {{- range .Values.grpcproxy.ports }}
+    {{- range include "grpc-proxy.ports" . | fromJsonArray }}
     - name: {{ .name }}
       port: {{ .containerPort }}
       targetPort: {{ .containerPort }}

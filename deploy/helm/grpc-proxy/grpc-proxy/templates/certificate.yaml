@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- $certificate := dig "http3" "tls" "certificate" dict .Values.grpcproxy }}
+{{- if and (dig "http3" "enabled" false .Values.grpcproxy) (dig "enabled" false $certificate) }}
+{{- $issuerRef := dig "issuerRef" dict $certificate }}
+{{- $dnsNames := include "grpc-proxy.http3DnsNames" . | fromJsonArray }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "grpc-proxy.http3SecretName" . | quote }}
+  namespace: {{ include "grpc-proxy.namespace" . }}
+  labels:
+    {{- include "grpc-proxy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "grpc-proxy.http3SecretName" . | quote }}
+  {{- with dig "duration" "" $certificate }}
+  duration: {{ . | quote }}
+  {{- end }}
+  {{- with dig "renewBefore" "" $certificate }}
+  renewBefore: {{ . | quote }}
+  {{- end }}
+  dnsNames:
+    {{- toYaml $dnsNames | nindent 4 }}
+  usages:
+    - server auth
+  issuerRef:
+    kind: {{ dig "kind" "ClusterIssuer" $issuerRef | quote }}
+    name: {{ required "grpcproxy.http3.tls.certificate.issuerRef.name is required when grpcproxy.http3.tls.certificate.enabled is true" (dig "name" "" $issuerRef) | quote }}
+    {{- with dig "group" "" $issuerRef }}
+    group: {{ . | quote }}
+    {{- end }}
+{{- end }}
