@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cleanup",
+    srcs = ["cleanup.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/cleanup",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cleanup",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+go_test(
+    name = "cleanup_test",
+    srcs = [
+        "cleanup_test.go",
+        "contract_test.go",
+    ],
+    deps = [
+        ":cleanup",
+        "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
+    ],
+)
