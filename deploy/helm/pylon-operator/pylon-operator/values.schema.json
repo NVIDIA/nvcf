@@ -71,10 +71,50 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Where transport pods find routers: static (grpcAddress) or gds (globalDiscovery)",
+                    "enum": ["static", "gds"],
+                    "default": "static"
+                },
                 "grpcAddress": {
                     "type": "string",
-                    "description": "gRPC address of the LLM request router that transport pods register with. Required",
+                    "description": "gRPC address of the LLM request router that transport pods register with. Required with source static, optional with gds",
                     "default": ""
+                }
+            }
+        },
+        "globalDiscovery": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "urls": {
+                    "type": "array",
+                    "description": "GDS gRPC URLs in failover order, http:// or https:// with one scheme. Required with router.source=gds",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^https?://[^/?#@]+/?$"
+                    },
+                    "default": []
+                },
+                "clustersetId": {
+                    "type": "string",
+                    "description": "GDS clusterset id, a DNS label. Required with router.source=gds",
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+                    "default": ""
+                },
+                "trustBundle": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "configMap": {
+                            "type": "string",
+                            "description": "Existing ConfigMap in the release namespace whose ca.crt key holds the GDS CA bundle; must equal trustBundle.configMap when both are set",
+                            "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                            "maxLength": 253,
+                            "default": ""
+                        }
+                    }
                 }
             }
         },

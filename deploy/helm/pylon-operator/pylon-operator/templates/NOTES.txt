@@ -11,7 +11,14 @@ SPDX-License-Identifier: Apache-2.0
 Pylon Operator {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }} in namespace {{ $ns }}.
 
   Cluster id:           {{ .Values.clusterId }}
+{{- if eq (include "pylon-operator.routerSource" .) "gds" }}
+  Router source:        Global Discovery Service {{ join ", " .Values.globalDiscovery.urls }}, clusterset {{ .Values.globalDiscovery.clustersetId }}
+{{- with .Values.router.grpcAddress }}
+  Router gRPC address:  {{ . }} (watched in addition to the GDS routers)
+{{- end }}
+{{- else }}
   Router gRPC address:  {{ .Values.router.grpcAddress }}
+{{- end }}
   Watched namespaces:   {{ if .Values.watchNamespaces }}{{ join ", " .Values.watchNamespaces }}{{ else }}all{{ end }}
 {{- if .Values.devInsecureTransport }}
   Transport TLS:        verification disabled (--dev-insecure-transport). For local k3d clusters only.
@@ -76,6 +83,19 @@ transport Deployments.
 No trust bundle is configured, so transport pods use Pylon's default TLS trust
 for the router. When a private CA issues the router certificate, put the CA in
 key ca.crt of a ConfigMap in namespace {{ $ns }} and set trustBundle.configMap.
+{{- end }}
+{{- if eq (include "pylon-operator.routerSource" .) "gds" }}
+
+Global Discovery Service
+------------------------
+Transport pods watch the routers GDS lists for clusterset
+{{ .Values.globalDiscovery.clustersetId }} and follow them as they change.
+{{- with .Values.globalDiscovery.trustBundle.configMap }}
+They trust the GDS CA bundle in key ca.crt of ConfigMap {{ . }} in namespace
+{{ $ns }}.
+{{- end }}
+The operator logs an error at startup when GDS lists no router, and reports
+the routers it sees in status.registration.routers of each InferenceEndpoint.
 {{- end }}
 {{- if not .Values.installCRDs }}
 

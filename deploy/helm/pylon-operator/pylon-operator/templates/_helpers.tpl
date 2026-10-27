@@ -143,8 +143,15 @@ is reported at once. Renders nothing.
 {{- if not .Values.clusterId -}}
 {{- $missing = append $missing "clusterId" -}}
 {{- end -}}
-{{- if not .Values.router.grpcAddress -}}
+{{- $gds := eq (include "pylon-operator.routerSource" .) "gds" -}}
+{{- if and (not $gds) (not .Values.router.grpcAddress) -}}
 {{- $missing = append $missing "router.grpcAddress" -}}
+{{- end -}}
+{{- if and $gds (not .Values.globalDiscovery.urls) -}}
+{{- $missing = append $missing "globalDiscovery.urls" -}}
+{{- end -}}
+{{- if and $gds (not .Values.globalDiscovery.clustersetId) -}}
+{{- $missing = append $missing "globalDiscovery.clustersetId" -}}
 {{- end -}}
 {{- if not .Values.pylon.image.repository -}}
 {{- $missing = append $missing "pylon.image.repository" -}}
@@ -173,4 +180,24 @@ is reported at once. Renders nothing.
 {{- if ne .Values.credential.key "cluster-token" -}}
 {{- fail (printf "pylon-operator: credential.key must be cluster-token, got %q; the operator reads only that key" .Values.credential.key) -}}
 {{- end -}}
+{{- if $gds -}}
+{{- $schemes := dict -}}
+{{- range .Values.globalDiscovery.urls -}}
+{{- $_ := set $schemes (regexFind "^https?" .) true -}}
+{{- end -}}
+{{- if gt (len $schemes) 1 -}}
+{{- fail "pylon-operator: globalDiscovery.urls must all use one scheme, http:// or https://" -}}
+{{- end -}}
+{{- $gdsCA := .Values.globalDiscovery.trustBundle.configMap -}}
+{{- if and $gdsCA .Values.trustBundle.configMap (ne $gdsCA .Values.trustBundle.configMap) -}}
+{{- fail (printf "pylon-operator: globalDiscovery.trustBundle.configMap %q and trustBundle.configMap %q must name the same ConfigMap; put both CAs in its ca.crt" $gdsCA .Values.trustBundle.configMap) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The router source, static unless router.source is gds.
+*/}}
+{{- define "pylon-operator.routerSource" -}}
+{{- .Values.router.source | default "static" -}}
 {{- end -}}

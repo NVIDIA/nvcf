@@ -43,7 +43,21 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - {{ printf "--cluster-id=%s" .Values.clusterId | quote }}
+            {{- if eq (include "pylon-operator.routerSource" .) "gds" }}
+            - "--router-source=gds"
+            {{- range .Values.globalDiscovery.urls }}
+            - {{ printf "--gds-url=%s" . | quote }}
+            {{- end }}
+            - {{ printf "--gds-clusterset-id=%s" .Values.globalDiscovery.clustersetId | quote }}
+            {{- with .Values.globalDiscovery.trustBundle.configMap }}
+            - {{ printf "--gds-tls-ca-configmap=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.router.grpcAddress }}
+            - {{ printf "--router-grpc-address=%s" . | quote }}
+            {{- end }}
+            {{- else }}
             - {{ printf "--router-grpc-address=%s" .Values.router.grpcAddress | quote }}
+            {{- end }}
             - {{ printf "--pylon-image=%s" (include "pylon-operator.pylonImage" .) | quote }}
             {{- if .Values.pylon.disableQuicGso }}
             - --pylon-disable-quic-gso
@@ -81,7 +95,7 @@ spec:
             {{- end }}
           env:
             # Defaults --operator-namespace, where the credential Secret and
-            # the trust bundle ConfigMap live.
+            # the trust bundle and GDS CA ConfigMaps live.
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

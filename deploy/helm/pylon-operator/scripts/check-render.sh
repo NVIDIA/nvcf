@@ -118,6 +118,34 @@ assert_render_fails "'/trustBundle/configMap': 'Router_CA' does not match patter
 assert_render_fails "'/pylon/imagePullSecrets/0/name': 'NGC_Pull' does not match pattern" \
   --values "${ci_values}" \
   --set 'pylon.imagePullSecrets[0].name=NGC_Pull'
+assert_render_fails "at '/router/source': value must be one of 'static', 'gds'" \
+  --values "${ci_values}" \
+  --set router.source=dns
+assert_render_fails "set the required values: globalDiscovery.urls, globalDiscovery.clustersetId" \
+  --values "${ci_values}" \
+  --set router.source=gds
+assert_render_fails "'/globalDiscovery/urls/0': 'gds.example.test:443' does not match pattern" \
+  --values "${ci_values}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={gds.example.test:443}' \
+  --set globalDiscovery.clustersetId=prod
+assert_render_fails "'/globalDiscovery/clustersetId': 'Prod_1' does not match pattern" \
+  --values "${ci_values}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=Prod_1
+assert_render_fails "globalDiscovery.urls must all use one scheme" \
+  --values "${ci_values}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={https://gds.example.test,http://gds-b.example.test}' \
+  --set globalDiscovery.clustersetId=prod
+assert_render_fails 'globalDiscovery.trustBundle.configMap "gds-ca" and trustBundle.configMap "router-ca" must name the same ConfigMap' \
+  --values "${ci_values}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod \
+  --set globalDiscovery.trustBundle.configMap=gds-ca \
+  --set trustBundle.configMap=router-ca
 
 # CI values render.
 default_manifest="${tmp_dir}/default.yaml"
@@ -221,6 +249,46 @@ trust_manifest="${tmp_dir}/trust.yaml"
 render "${trust_manifest}" --set trustBundle.configMap=router-ca
 has_arg "$(args_of "${trust_manifest}")" "--trust-bundle-configmap=router-ca" || fail "trustBundle.configMap must reach --trust-bundle-configmap"
 
+# router.source=gds renders the GDS flags instead of a required router
+# address; one ConfigMap may carry the router and GDS CAs.
+gds_manifest="${tmp_dir}/gds.yaml"
+render "${gds_manifest}" \
+  --set router.source=gds \
+  --set-string router.grpcAddress= \
+  --set 'globalDiscovery.urls={https://gds.example.test,https://gds.us-east-1.example.test}' \
+  --set globalDiscovery.clustersetId=prod \
+  --set globalDiscovery.trustBundle.configMap=platform-ca \
+  --set trustBundle.configMap=platform-ca
+gds_args="$(args_of "${gds_manifest}")"
+has_arg "${gds_args}" "--router-source=gds" || fail "router.source=gds must reach --router-source"
+has_arg "${gds_args}" "--gds-url=https://gds.example.test" || fail "globalDiscovery.urls must reach --gds-url"
+has_arg "${gds_args}" "--gds-url=https://gds.us-east-1.example.test" || fail "every GDS URL must reach --gds-url"
+[ "$(printf '%s\n' "${gds_args}" | grep -c -- '^--gds-url=')" = "2" ] || fail "one --gds-url per URL"
+has_arg "${gds_args}" "--gds-clusterset-id=prod" || fail "globalDiscovery.clustersetId must reach --gds-clusterset-id"
+has_arg "${gds_args}" "--gds-tls-ca-configmap=platform-ca" ||
+  fail "globalDiscovery.trustBundle.configMap must reach --gds-tls-ca-configmap"
+has_arg "${gds_args}" "--trust-bundle-configmap=platform-ca" || fail "the shared CA ConfigMap must stay the trust bundle"
+! has_arg_prefix "${gds_args}" "--router-grpc-address" || fail "an empty router address must not render with router.source=gds"
+
+gds_router_manifest="${tmp_dir}/gds-router.yaml"
+render "${gds_router_manifest}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={http://gds.gds.svc.cluster.local:9090}' \
+  --set globalDiscovery.clustersetId=dev
+gds_router_args="$(args_of "${gds_router_manifest}")"
+has_arg "${gds_router_args}" "--router-grpc-address=${ci_router}" ||
+  fail "a router address must still render with router.source=gds"
+! has_arg_prefix "${gds_router_args}" "--gds-tls-ca-configmap" || fail "no GDS CA unless configured"
+
+static_gds_values_manifest="${tmp_dir}/static-gds-values.yaml"
+render "${static_gds_values_manifest}" \
+  --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod
+static_gds_values_args="$(args_of "${static_gds_values_manifest}")"
+! has_arg_prefix "${static_gds_values_args}" "--router-source" || fail "the static source must not render --router-source"
+! has_arg_prefix "${static_gds_values_args}" "--gds-" || fail "the static source must not render GDS flags"
+! has_arg_prefix "${default_args}" "--gds-" || fail "default must not render GDS flags"
+
 # watchNamespaces renders one comma-separated flag.
 watch_manifest="${tmp_dir}/watch.yaml"
 render "${watch_manifest}" --set 'watchNamespaces={team-b,team-a}'
@@ -315,5 +383,13 @@ printf '%s\n' "${notes}" | grep -qF 'TOKEN_HASH="sha256:$(kubectl' ||
 printf '%s\n' "${notes}" | grep -qF "printf 'clusters:\\n  ${cluster_id}:\\n    - %s\\n' \"\${TOKEN_HASH}\" > credentials.yaml" ||
   fail "NOTES must show the YAML worker auth file for clusterId"
 ! printf '%s\n' "${notes}" | grep -qF 'credentials.json' || fail "NOTES must not describe the JSON credentials file"
+! printf '%s\n' "${notes}" | grep -qF 'Global Discovery Service' || fail "static NOTES must not describe GDS"
+gds_notes="$(helm template "${release}" "${notes_chart}" --namespace "${namespace}" --values "${ci_values}" \
+  --set router.source=gds --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod --set globalDiscovery.trustBundle.configMap=gds-ca \
+  --show-only templates/zz-notes.yaml | yq -r '.notes')"
+printf '%s\n' "${gds_notes}" | grep -qF 'Router source:        Global Discovery Service https://gds.example.test, clusterset prod' ||
+  fail "GDS NOTES must name the GDS URLs and clusterset"
+printf '%s\n' "${gds_notes}" | grep -qF 'ConfigMap gds-ca' || fail "GDS NOTES must name the GDS CA ConfigMap"
 
 echo "pylon-operator render checks passed"

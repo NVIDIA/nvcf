@@ -24,12 +24,37 @@ fullnameOverride: ""
 clusterId: ""
 
 router:
+  # Where transport pods find routers. Passed as --router-source.
+  #   static - the router at grpcAddress.
+  #   gds    - every router cluster the Global Discovery Service lists for
+  #            globalDiscovery.clustersetId. Pylon follows them at runtime, so
+  #            router churn does not roll transport pods.
+  source: static
   # gRPC address of the LLM request router that transport pods register with.
-  # Required. Passed as --router-grpc-address. A bare host:port or an http://
-  # address is plaintext; only an https:// address uses TLS, verified against
-  # trustBundle.configMap.
+  # Required with source static; optional with gds, where transport pods watch
+  # it in addition to the GDS routers. Passed as --router-grpc-address. A bare
+  # host:port or an http:// address is plaintext; only an https:// address
+  # uses TLS, verified against trustBundle.configMap.
   # Example: llm-request-router.nvcf.svc.cluster.local:50071
   grpcAddress: ""
+
+# Global Discovery Service (GDS), used with router.source=gds.
+globalDiscovery:
+  # GDS gRPC URLs in failover order, the global name first. Each is http:// or
+  # https://, all with one scheme. Required with router.source=gds. Passed as
+  # --gds-url and given to transport pods.
+  urls: []
+  # GDS clusterset id, a DNS label. Required with router.source=gds. Passed as
+  # --gds-clusterset-id.
+  clustersetId: ""
+  trustBundle:
+    # Existing ConfigMap in the release namespace whose ca.crt key holds the CA
+    # bundle that signs the GDS server certificate. The operator replicates
+    # and mounts it like trustBundle.configMap. Empty trusts the system roots.
+    # When trustBundle.configMap is also set, both must name the same
+    # ConfigMap, whose ca.crt then holds both CAs. Passed as
+    # --gds-tls-ca-configmap.
+    configMap: ""
 
 pylon:
   # Enable only on networks that drop UDP segmentation offload batches.
