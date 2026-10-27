@@ -243,6 +243,49 @@ llmRequestRouter:
     remoteWatchUrls: []
     allowInsecureRemoteWatchHttp: false
 
+  # Global Discovery Service (GDS). See docs/dev/global-discovery-quickstart.md.
+  globalDiscovery:
+    # Render the Stargate GDS flags: Stargate adds the router replica seeds of
+    # the other clusters of the clusterset to its WatchStargates remote URLs,
+    # next to discovery.remoteWatchUrls. Local peers still come from DNS.
+    enabled: false
+    # GDS gRPC URLs in failover order, the global name first. Each must be an
+    # explicit https:// URI; http:// needs
+    # discovery.allowInsecureRemoteWatchHttp=true and is for development only.
+    urls: []
+    # GDS clusterset id, a DNS label. Required when enabled.
+    clustersetId: ""
+    # This cluster's id in the clusterset, the cluster id the GDS MCS
+    # controller of this cluster registers. Its own routers are not remote
+    # Watch URLs. Required when enabled.
+    clusterId: ""
+    # Existing ConfigMap in the release namespace whose ca.crt key holds the CA
+    # bundle that signs the GDS server certificate, trusted in addition to the
+    # system roots. Empty trusts the system roots.
+    tlsCaConfigMap: ""
+    export:
+      # Label the Service pylons dial (the backend-router Service when the
+      # backend router is enabled, else the ClusterIP Service) with
+      # gds.nvidia.com/export=true and gds.nvidia.com/role=router, and annotate
+      # it with gds.nvidia.com/dial-scheme. The GDS MCS controller of this
+      # cluster then exports it, and GDS lists this cluster's router replicas
+      # as seeds for pylons and remote Stargates. Independent of enabled.
+      #
+      # Pylons in other clusters dial the router replica pod IPs on the gRPC
+      # port, so pod IPs must be routable between the clusters. They then
+      # register through backendRouter.pylonGrpcDialAddress and
+      # pylonReverseTunnelDialAddress (with the backend router) or the
+      # advertised hostname (without it). The in-cluster defaults resolve in
+      # every cluster to that cluster's own router, so for cross-cluster pylons
+      # set them to addresses of this cluster's router that the peer clusters
+      # can reach, for example an internal load balancer.
+      enabled: false
+    # Scheme of this cluster's router seeds, the gds.nvidia.com/dial-scheme
+    # annotation: http or https. The Stargate and backend router gRPC
+    # listeners serve plaintext gRPC on the pod port, so keep http unless TLS
+    # is terminated on that port.
+    dialScheme: http
+
   transport:
     # Enable only on networks that drop UDP segmentation offload batches.
     disableQuicGso: false

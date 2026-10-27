@@ -20,6 +20,18 @@ metadata:
   namespace: {{ include "llm-request-router.namespace" . }}
   labels:
     {{- include "llm-request-router.labels" . | nindent 4 }}
+    {{- /* With the backend router, pylons dial its Service, which GDS exports instead. */}}
+    {{- if ne (include "llm-request-router.backendRouterEnabled" .) "true" }}
+    {{- with include "llm-request-router.gdsExportLabels" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  {{- if ne (include "llm-request-router.backendRouterEnabled" .) "true" }}
+  {{- with include "llm-request-router.gdsExportAnnotations" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- end }}
 spec:
   type: {{ .Values.llmRequestRouter.service.type }}
   selector:

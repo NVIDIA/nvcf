@@ -13,6 +13,13 @@ metadata:
   namespace: {{ include "llm-request-router.namespace" . }}
   labels:
     {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+    {{- with include "llm-request-router.gdsExportLabels" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
+  {{- with include "llm-request-router.gdsExportAnnotations" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   {{- /*
   Each router replica terminates QUIC itself and cannot resume a session that

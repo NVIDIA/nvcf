@@ -106,6 +106,71 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{/*
+Global Discovery Service values. Stargate rejects an incomplete GDS
+configuration at startup, so the chart rejects it at render time.
+*/}}
+{{- define "llm-request-router.validateGlobalDiscovery" -}}
+{{- $gds := .Values.llmRequestRouter.globalDiscovery | default dict -}}
+{{- if $gds.enabled -}}
+{{- $urls := $gds.urls | default list -}}
+{{- if not $urls -}}
+{{- fail "llmRequestRouter.globalDiscovery.urls is required when globalDiscovery.enabled is true" -}}
+{{- end -}}
+{{- $allowHttp := dig "discovery" "allowInsecureRemoteWatchHttp" false .Values.llmRequestRouter -}}
+{{- range $url := $urls -}}
+{{- $url = $url | toString | trim -}}
+{{- if ne (include "llm-request-router.isExplicitHttpUri" $url) "true" -}}
+{{- fail "llmRequestRouter.globalDiscovery.urls entries must be explicit http:// or https:// URIs" -}}
+{{- end -}}
+{{- if and (hasPrefix "http://" $url) (not $allowHttp) -}}
+{{- fail "llmRequestRouter.globalDiscovery.urls requires https://; set discovery.allowInsecureRemoteWatchHttp=true only for development plaintext endpoints" -}}
+{{- end -}}
+{{- end -}}
+{{- $dnsLabel := "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" -}}
+{{- range $key := list "clustersetId" "clusterId" -}}
+{{- $value := get $gds $key | default "" | toString -}}
+{{- if not $value -}}
+{{- fail (printf "llmRequestRouter.globalDiscovery.%s is required when globalDiscovery.enabled is true" $key) -}}
+{{- end -}}
+{{- if not (regexMatch $dnsLabel $value) -}}
+{{- fail (printf "llmRequestRouter.globalDiscovery.%s %q must be a DNS label" $key $value) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if dig "export" "enabled" false $gds -}}
+{{- if not (has (include "llm-request-router.gdsDialScheme" .) (list "http" "https")) -}}
+{{- fail (printf "llmRequestRouter.globalDiscovery.dialScheme must be http or https, got %q" (include "llm-request-router.gdsDialScheme" .)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "llm-request-router.gdsDialScheme" -}}
+{{- dig "dialScheme" "http" (.Values.llmRequestRouter.globalDiscovery | default dict) | toString | trim -}}
+{{- end -}}
+
+{{- define "llm-request-router.gdsTlsMountPath" -}}
+/etc/stargate/gds-tls
+{{- end -}}
+
+{{/*
+Labels and annotation that make the GDS MCS controller export the Service
+pylons dial as this cluster's router. Rendered on the backend-router Service
+when the backend router is enabled, else on the ClusterIP Service.
+*/}}
+{{- define "llm-request-router.gdsExportLabels" -}}
+{{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
+gds.nvidia.com/export: "true"
+gds.nvidia.com/role: router
+{{- end -}}
+{{- end -}}
+
+{{- define "llm-request-router.gdsExportAnnotations" -}}
+{{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
+gds.nvidia.com/dial-scheme: {{ include "llm-request-router.gdsDialScheme" . | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 An unset backendRouter.enabled follows the workload contract: a multi-replica
 Deployment needs the EndpointSlice router, while StatefulSet and single-replica
 direct modes retain their previous behavior. An explicit boolean always wins;

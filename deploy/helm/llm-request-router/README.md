@@ -131,6 +131,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.tls.mode` to choose the source of the QUIC server identity. `certManager` (default) mounts the Secret cert-manager writes for `certificate.*`. `existingSecret` mounts a pre-created Secret instead: the chart renders no `Certificate` and adds no issuer dependency, `certificate.enabled` must stay `false`, `tls.secretName`, `tls.certPath`, and `tls.keyPath` are required, and the operator owns issuance, renewal, rotation, and recovery. The Secret must provide the `tls.crt` and `tls.key` entries. The chart cannot read a pre-created Secret, so it does not validate its SANs or expiry.
 - `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint. Typically this is `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
 - `llmRequestRouter.auth.*` to select how the router authenticates workers; see [Worker Authentication](#worker-authentication)
+- `llmRequestRouter.globalDiscovery.*` to discover and export routers through the Global Discovery Service; see [Global Discovery Service](#global-discovery-service)
 - `llmRequestRouter.vault.audience` for the projected ServiceAccount token audience used to authenticate to OpenBao
 - `llmRequestRouter.vault.noVaultAnnotations` to disable Vault Agent injection (useful for local testing without OpenBao)
 
@@ -194,6 +195,73 @@ Stargate and the backend router poll the mounted TLS certificate and key and
 reload the server identity for new connections. Client trust-bundle changes
 are not hot-reloaded; roll out workers and other Pylon clients after changing
 the CA bundle they use to verify the router.
+
+## Global Discovery Service
+
+The Global Discovery Service (GDS) lets pylons and Stargates of one clusterset
+find the routers of every cluster without static address lists. Two
+independent parts of the chart take part.
+
+Export makes this cluster's router visible in GDS. With
+`globalDiscovery.export.enabled=true` the chart labels the Service pylons dial
+with `gds.nvidia.com/export: "true"` and `gds.nvidia.com/role: router` and
+annotates it with `gds.nvidia.com/dial-scheme`. That Service is the
+backend-router Service when the backend router runs, else the ClusterIP
+Service. The GDS MCS controller of this cluster exports it, and GDS lists one
+seed per ready replica: `<dialScheme>://<pod IP>:<gRPC port>`. The Stargate
+and backend router gRPC listeners serve plaintext gRPC on the pod port, so
+keep `dialScheme: http` unless TLS is terminated on that port.
+
+```yaml
+llmRequestRouter:
+  globalDiscovery:
+    enabled: true
+    urls:
+      - https://gds.example.internal
+    clustersetId: prod
+    clusterId: cluster-a
+    tlsCaConfigMap: gds-ca
+    export:
+      enabled: true
+  backendRouter:
+    pylonGrpcDialAddress: https://llm-router.cluster-a.example.internal:443
+    pylonReverseTunnelDialAddress: llm-router.cluster-a.example.internal:8080
+```
+
+Cross-cluster pylons need these prerequisites:
+
+- Pod IPs of the router clusters are routable from the pylon clusters, for
+  example over VPC peering with non-overlapping pod CIDRs, and network
+  policies allow the gRPC port.
+- After `WatchStargates` on a seed, a pylon registers and opens its tunnel
+  through the addresses the router advertises:
+  `backendRouter.pylonGrpcDialAddress` and `pylonReverseTunnelDialAddress`
+  with the backend router, or the advertised hostname
+  (`kubernetes.advertisedHostnameTemplate`) without it. Their in-cluster
+  defaults resolve in every cluster to that cluster's own router, which
+  cannot forward to another cluster's Stargate pods. Set them to addresses of
+  this cluster's router that the peer clusters can reach, such as the
+  gateway listener described in [Backend Worker Routing](#backend-worker-routing).
+  Pylons in this cluster keep working with the defaults.
+- The router QUIC certificate covers the advertised hostname, as for any
+  worker.
+- The worker auth file accepts the credentials of every cluster whose pylons
+  register here.
+
+`globalDiscovery.enabled=true` renders the Stargate flags `--gds-url`,
+`--gds-clusterset`, `--gds-cluster-id` and, with `tlsCaConfigMap`,
+`--gds-tls-ca-cert-path` (the ConfigMap's `ca.crt`, mounted at
+`/etc/stargate/gds-tls`). Stargate then adds the seeds of every router in the
+other clusters to the `watch_stargate_urls` of its `WatchStargates` responses,
+next to `discovery.remoteWatchUrls`, on every poll tick. Its own cluster's
+Stargates still come from DNS discovery. `http://` GDS URLs need
+`discovery.allowInsecureRemoteWatchHttp=true` and are for development only.
+
+The backend router answers `WatchStargates` itself and publishes only
+`discovery.remoteWatchUrls`, so the GDS remote URLs reach pylons that watch a
+Stargate pod directly. Pylons started with `--gds-url`, which the Pylon
+Operator passes with `router.source=gds`, read every router cluster from GDS
+and do not depend on them.
 
 ## Worker Authentication
 
