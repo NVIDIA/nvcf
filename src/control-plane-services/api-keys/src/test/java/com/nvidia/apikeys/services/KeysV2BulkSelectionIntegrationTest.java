@@ -25,6 +25,8 @@ import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 
 import com.nvidia.apikeys.App;
 import com.nvidia.apikeys.caching.CachingKeysLoader;
@@ -41,6 +43,7 @@ import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
+import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import java.time.Clock;
 import java.time.ZoneOffset;
@@ -58,6 +61,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @ExtendWith(TestCleanerExtension.class)
 @AutoConfigureTestRestTemplate
@@ -76,7 +80,7 @@ class KeysV2BulkSelectionIntegrationTest {
 
     @Autowired
     private KeysV2Dao keysV2Dao;
-    @Autowired
+    @MockitoSpyBean
     private KeysDao keysDao;
     @Autowired
     private KeysV2Service keys;
@@ -227,6 +231,72 @@ class KeysV2BulkSelectionIntegrationTest {
                     assertThat(row.getCreatedAt()).isNull();
                     assertThat(row.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
                 });
+    }
+
+    @ParameterizedTest
+    @EnumSource(KeysOperationType.class)
+    void retriesMigratedKeyAfterLegacyMutationFails(KeysOperationType operation) {
+        var migrated = key(LEGACY_ACCOUNT, "u1", "nvcf", "migrated");
+        keysV2Dao.save(migrated);
+        var legacy = KEY_VO_1.toBuilder().ownerId("u1").keyId(migrated.getKeyId())
+                .keyHash(migrated.getKeyHash()).build();
+        keysDao.save(legacy, KEY_OWNER_VO_1.toBuilder().ownerId("u1").build());
+        var writeFailure = new IllegalStateException("legacy write failed");
+        if (operation == KeysOperationType.REVOKED) {
+            doThrow(writeFailure).doCallRealMethod().when(keysDao).save(any(KeyVo.class), any());
+        } else {
+            doThrow(writeFailure).doCallRealMethod().when(keysDao).deleteKey(any());
+        }
+        var bulk = new SyncKeysV2OperationsService(keys, services, legacyAccount,
+                new MillisecondPrecisionClock(Clock.fixed(TEST_TIME, ZoneOffset.UTC)), 10, selector(),
+                keyCache, introspectionCache);
+        var request = PlatformAdminKeysOperationRequest.builder().operation(operation)
+                .accounts(List.of(LEGACY_ACCOUNT)).users(List.of("u1"))
+                .issuerServices(List.of("nvcf")).build();
+
+        var failure = assertThrows(BulkOperationException.class, () -> bulk.operateAsPlatformAdmin(request));
+
+        assertThat(failure.getCause()).isSameAs(writeFailure);
+        assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true);
+        var failed = (KeyOperationResponse) failure.getBody().getProperties().get("bulkOperation");
+        assertThat(failed.getStatus()).isEqualTo(KeyOperationStatus.FAILED);
+        assertThat(failed.getMatchedCount()).isOne();
+        assertThat(failed.getCompletedCount()).isZero();
+        assertThat(failed.getFailedCount()).isOne();
+        assertV2MutationApplied(operation, migrated);
+        assertThat(keysDao.getKeyByHash(legacy.getKeyHash())).contains(legacy);
+        assertThat(keysDao.getKeyByOwnerAndServiceAndId(USER, "u1", SERVICE_ID_1, legacy.getKeyId()))
+                .get().extracting(row -> row.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
+
+        var retried = bulk.operateAsPlatformAdmin(request);
+
+        assertThat(retried.getStatus()).isEqualTo(KeyOperationStatus.COMPLETED);
+        assertThat(retried.getMatchedCount()).isOne();
+        assertThat(retried.getCompletedCount()).isOne();
+        assertThat(retried.getFailedCount()).isZero();
+        assertV2MutationApplied(operation, migrated);
+        var legacyLookup = keysDao.getKeyByHash(legacy.getKeyHash());
+        var legacyManagement = keysDao.getKeyByOwnerAndServiceAndId(USER, "u1", SERVICE_ID_1, legacy.getKeyId());
+        if (operation == KeysOperationType.DELETE) {
+            assertThat(legacyLookup).isEmpty();
+            assertThat(legacyManagement).isEmpty();
+        } else {
+            assertThat(legacyLookup).get().extracting(KeyVo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+            assertThat(legacyManagement).get().extracting(row -> row.getKeyStatus()).isEqualTo(KeyStatus.REVOKED);
+        }
+    }
+
+    private void assertV2MutationApplied(KeysOperationType operation, KeyV2Vo key) {
+        var lookup = keysV2Dao.getKeyByHash(key.getKeyHash());
+        var management = keysV2Dao.get(key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId());
+        if (operation == KeysOperationType.DELETE) {
+            assertThat(lookup).isEmpty();
+            assertThat(management).isEmpty();
+        } else {
+            assertThat(lookup).get().extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+            assertThat(management).get().extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus)
+                    .isEqualTo(KeyStatus.REVOKED);
+        }
     }
 
     private List<KeyV2Vo> seedV2() {

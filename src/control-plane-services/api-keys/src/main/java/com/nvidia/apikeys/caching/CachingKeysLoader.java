@@ -71,6 +71,7 @@ public class CachingKeysLoader {
     }
 
     public void invalidate() {
+        invalidKeysCache.invalidateAll();
         prefetchingCache.invalidate();
     }
 }

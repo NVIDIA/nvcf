@@ -37,6 +37,10 @@ for eligible keys processed so far. `partialApplication` indicates that a mutati
 attempted. Earlier writes remain applied. Retries start a new selection with
 a new cutoff.
 
+A failure between v2 and legacy writes can partially update one migrated key.
+The operation reports failure until both representations are updated. Retrying
+repeats the per-key mutation to repair partial writes.
+
 A legacy key with a missing creation time fails selection because its cutoff
 eligibility cannot be established. Repair the malformed record before retrying.
 
