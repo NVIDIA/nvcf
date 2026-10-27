@@ -36,6 +36,10 @@ clients build on:
 - The well-known label, annotation, error reason and limit constants, and the
   derived Service name of an import.
 - The store contract, the in-memory store and the store conformance suite.
+- The DynamoDB store (one table, replicated as a Global Table) and
+  `gds-admin create-table`. `docs/storage.md`, `docs/iam.md` and
+  `docs/consistency-dynamodb.md` describe the table, its IAM policies and its
+  cross-region behaviour.
 - Lease math, writer generations and pool state derivation.
 - The `gds-server` configuration. `gds-server` validates its flags and exits;
   it does not serve yet.
@@ -52,13 +56,23 @@ clients build on:
 - `internal/store/`: `Store` and its per-aggregate interfaces, record types
   and typed errors.
 - `internal/store/memory/`: in-memory `Store`.
+- `internal/store/dynamodb/`: DynamoDB `Store` (`store.go`), item keys
+  (`keys.go`), record codec (`codec.go`), table definition and creation
+  (`schema.go`), client construction (`client.go`).
+- `internal/store/dynamodb/dynamodblocal/`: starts `amazon/dynamodb-local`
+  for integration tests.
 - `internal/store/storetest/`: conformance suite every `Store` must pass.
 - `internal/registry/`: lease evaluation, TTL bounds, generations, roles and
   pool state derivation.
 - `internal/config/`: `gds-server` flags with `GDS_` environment fallbacks.
 - `internal/version/`: build metadata set by Bazel `x_defs`.
 - `cmd/gds-server/`: server entrypoint (configuration only for now).
+- `cmd/gds-admin/`: admin CLI; `create-table` is in `cmd/gds-admin/createtable`.
 - `docs/api.md`: REST paths, JSON and stream shapes, errors and limits.
+- `docs/storage.md`: DynamoDB item catalogue, conditional writes, table
+  definition, Global Table replicas, TTL, PITR, capacity and limits.
+- `docs/iam.md`: server and admin IAM policies, IRSA trust policy.
+- `docs/consistency-dynamodb.md`: cross-region last-writer-wins reasoning.
 - `hack/proto.sh`: proto lint and code generation.
 
 ## Make targets
@@ -66,14 +80,21 @@ clients build on:
 Run from this directory. The Makefile sets `GOWORK=off`.
 
 ```bash
-make build         # go build ./... and _output/bin/gds-server
+make build         # go build ./..., _output/bin/gds-server and _output/bin/gds-admin
 make test          # unit tests with -race; fails below 85 percent coverage of internal/
+make test-integration  # DynamoDB store and gds-admin against dynamodb-local (Docker)
 make vet           # go vet and gofmt
 make lint          # golangci-lint with .golangci.yml
 make proto         # buf lint, then regenerate api/gen
 make proto-check   # buf lint, then fail when api/gen is stale
 make proto-breaking AGAINST=origin/main   # buf breaking against a git ref
 ```
+
+`make test-integration` starts `amazon/dynamodb-local` through
+testcontainers-go and skips when Docker is unreachable. It takes
+`DOCKER_HOST` from the current docker context (colima, Docker Desktop);
+`GDS_TEST_DYNAMODB_ENDPOINT=http://localhost:8000` uses a running endpoint
+instead.
 
 `make proto` needs buf and the protoc plugins in `$HOME/go/bin`; the pinned
 versions are listed in `hack/proto.sh`. `go generate ./api` runs the same
@@ -87,9 +108,16 @@ From the repository root:
 bazel build //src/control-plane-services/global-discovery/...
 bazel test //src/control-plane-services/global-discovery/... --test_output=errors
 bazel run //src/control-plane-services/global-discovery/cmd/gds-server -- --help
+bazel run //src/control-plane-services/global-discovery/cmd/gds-admin -- create-table -h
 bazel run //:gazelle -- src/control-plane-services/global-discovery
 bazel mod tidy     # after adding an external import
 ```
+
+The DynamoDB integration targets (`dynamodb_integration_test`,
+`createtable_integration_test`) are tagged `external` and `requires-docker`
+and run unsandboxed. Pass the Docker endpoint through, for example
+`DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')`,
+or skip them with `--test_tag_filters=-requires-docker`.
 
 The generated Go package is a plain `go_library`
 (`//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds`);

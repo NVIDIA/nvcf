@@ -29,6 +29,7 @@ From this directory (the Makefile sets `GOWORK=off`):
 ```bash
 make build
 make test          # -race, coverage of internal/ must stay at or above 85 percent
+make test-integration  # DynamoDB store and gds-admin against dynamodb-local; needs Docker
 make vet
 make lint
 make proto         # after editing api/proto
@@ -66,6 +67,17 @@ local gazelle target on purpose.
 - Store record types mirror the proto messages but use Kubernetes spellings
   for enums. The API layer converts.
 - Writes are conditional; see the package comment of `internal/store`.
+- DynamoDB store: `docs/storage.md` is the item catalogue and condition
+  table. Change it together with `keys.go`, `codec.go` and `store.go`.
+  Table definition changes go to `schema.go`,
+  `internal/store/dynamodb/testdata/create-table.json` and
+  `docs/storage.md` together.
+- The unit tests run the DynamoDB store against an in-memory fake of the
+  DynamoDB API (`fake_test.go`). It rejects unused expression placeholders,
+  as DynamoDB does, but it does not prove DynamoDB semantics: run
+  `make test-integration` after any change to a request or condition.
+- Integration tests use the build tag `integration`. Gazelle leaves those
+  files out, so their Bazel `go_test` targets are kept by hand (`# keep`).
 
 ## Conventions
 
