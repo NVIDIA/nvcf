@@ -22,10 +22,14 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      # The NVCA OTel collector is off by default. It publishes NVCA's Kubernetes
+      # events to the ledger, so the NVCA scenarios need it on; the image must be
+      # published under global.image.
       And I prepare Helmfile environment "local-bdd-event-ledger" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
-        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
-        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.imagePullSecrets[0].name                       | nvcr-pull-secret                     |
+        | global.helm.sources.repository                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository                               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.nvcaOperator.selfManaged.otelCollector.enabled | true                                 |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-event-ledger-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker callback port
@@ -64,6 +68,13 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       # The checks below create API keys, which needs the admin token.
       When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init"
 
+    Scenario: SIS is configured to send events to the event ledger
+      When I successfully run command "kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml"
+      Then the command output should contain all:
+        | text                                  |
+        | ICMS_FNDS_MESSAGES_ENABLED: "true"    |
+        | ICMS_FNDS_MESSAGES_V3_ENABLED: "true" |
+
   Rule: The event ledger is reachable, protected, and readable
 
     Background:
@@ -91,13 +102,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
 
       When I send a "GET" request to "http://events.localhost:8080/health"
       Then the HTTP status should be 200
-
-    Scenario: SIS is configured to send events to the event ledger
-      When I successfully run command "kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml"
-      Then the command output should contain all:
-        | text                                  |
-        | ICMS_FNDS_MESSAGES_ENABLED: "true"    |
-        | ICMS_FNDS_MESSAGES_V3_ENABLED: "true" |
 
     # A missing or JWT-shaped invalid credential is rejected with 401. An opaque
     # token is not a JWT, so it goes to the api-keys policy evaluator, which
@@ -336,6 +340,63 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/stats"
       Then the HTTP status should be 403
 
+  Rule: nvcf-cli reads the event ledger
+
+    Background:
+      Given these environment variables are set:
+        | name      |
+        | NVCF_CLI  |
+        | REPO_ROOT |
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+    # The ledger URL is not configured: the CLI derives events.localhost from
+    # base_http_url. The key lives until it expires (1h) and in the CLI state file,
+    # which suite teardown restores. A fresh version id has no events, so an
+    # empty result must still exit 0.
+    Scenario: The CLI reads the ledger with a generated Event Ledger key
+      When I successfully generate an Event Ledger API key with CLI options:
+        | option       | value |
+        | --expires-in | 1h    |
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id 00000000-0000-4000-8000-00000000e1de"
+      Then the command output should contain "Function version: 00000000-0000-4000-8000-00000000e1de"
+      And the command output should contain "Contexts: 0"
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id 00000000-0000-4000-8000-00000000e1de --json"
+      Then the command output should contain "00000000-0000-4000-8000-00000000e1de"
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id 00000000-0000-4000-8000-00000000e1de --event-filter InstanceReady,NoSuchEvent"
+      Then the command output should contain "Contexts: 0"
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stages events list --function-version-id 00000000-0000-4000-8000-00000000e1de"
+      Then the command output should contain "No events found."
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stages events list --function-version-id 00000000-0000-4000-8000-00000000e1de --deployment-id bdd-deployment --gpu-specification-id bdd-gpu --cluster-id bdd-cluster --instance-id bdd-instance --resource-id bdd-resource --json"
+      Then the command output should contain "00000000-0000-4000-8000-00000000e1de"
+
+    # Each rejection happens in the CLI before any request is sent, except the
+    # missing key, which the config without a saved key reaches.
+    Scenario: The CLI rejects bad input and a missing key
+      When I run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id not-a-uuid"
+      Then the command should fail
+      And the command output should contain "must be a UUID"
+
+      When I run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stages events list --function-version-id 00000000-0000-4000-8000-00000000e1de --attribute-key only-a-key"
+      Then the command should fail
+      And the command output should contain "--attribute-key and --attribute-value must be used together"
+
+      When I run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local-no-key.yaml stats get"
+      Then the command should fail
+      And the command output should contain "--function-version-id is required"
+
+      When I run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local-no-key.yaml stats get --function-version-id 00000000-0000-4000-8000-00000000e1de"
+      Then the command should fail
+      And the command output should contain "api-key generate --for event-ledger"
+
+      When I run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local-no-key.yaml stages events list --function-version-id 00000000-0000-4000-8000-00000000e1de"
+      Then the command should fail
+      And the command output should contain "api-key generate --for event-ledger"
+
   Rule: Helmfile installs NVCA on the same local cluster after registration
 
     Background:
@@ -501,3 +562,119 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       And the HTTP response body should contain "InstanceReady"
       And the HTTP response body should contain "InstanceDestroyed"
+
+  Rule: NVCA publishes events for a function deployment
+
+    Background:
+      Given these environment variables are set:
+        | name            |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
+        | NVCF_CLI        |
+        | REPO_ROOT       |
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+    # NVCA's OTel collector forwards Pod events and NVCA's own ICMSRequest events
+    # to the ledger, authenticating with the NVCA service account token. The
+    # ledger takes cluster_id from that identity, so every NVCA context carries
+    # it, while SIS contexts do not. This scenario depends on the earlier
+    # control-plane install and NVCA registration scenarios in the same feature
+    # run. It checks stats only: stats keep the latest event of each context, so
+    # which event names show up depends on how far the deployment got.
+    @compute-plane @function-lifecycle
+    Scenario: NVCA events from a function deployment reach the ledger and the CLI
+      When I successfully run command:
+        """
+        /bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'
+        """
+      And I export command output to environment variable "BDD_EL_KEY_EXPIRES"
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      When I send a "POST" request to "http://api-keys.localhost:8080/v1/keys" with body:
+        """
+        {
+          "description": "bdd-event-ledger-nvca",
+          "expires_at": "${BDD_EL_KEY_EXPIRES}",
+          "authorizations": {
+            "policies": [
+              {
+                "aud": "nvidia-event-ledger-ncp-service-id-ckozoh6f",
+                "auds": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"],
+                "product": "nv-cloud-functions",
+                "resources": [{"id": "*", "type": "account-functions"}],
+                "scopes": ["fnds:getEvents", "fnds:getStats"]
+              }
+            ]
+          },
+          "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
+        }
+        """
+      When I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      # Delete the key when the scenario ends, even if it fails.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
+      Then the HTTP status should be 200
+      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
+
+      When I successfully run command "kubectl --context k3d-ncp-local --namespace nvca-system get pods --selector app.kubernetes.io/name=nvca -o jsonpath={..name}"
+      Then the command output should contain "nvca-otel-collector"
+
+      When I successfully create function "bdd-event-ledger-nvca" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+        | option           | value   |
+        | --inference-url  | /echo   |
+        | --inference-port | 8000    |
+        | --health-uri     | /health |
+        | --health-port    | 8000    |
+        | --health-timeout | PT30S   |
+      # Delete the function and undeploy it when the scenario ends, even if the
+      # deploy fails. The undeploy runs first and does nothing if nothing deployed.
+      And the function selected by NVCF CLI is deleted at scenario teardown
+      And the function selected by NVCF CLI is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+      And I export the function selected by NVCF CLI to environment variables "BDD_EL_NVCA_FUNCTION_ID" and "BDD_EL_NVCA_VERSION_ID"
+
+      # NVCA's ICMSRequest events, then the Pod events of the function's pods.
+      Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+      When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_NVCA_VERSION_ID}/stats" for up to 300 seconds until the HTTP response body contains "ICMSRequest."
+      Then the HTTP status should be 200
+
+      Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+      When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_NVCA_VERSION_ID}/stats" for up to 300 seconds until the HTTP response body contains "Pod."
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "namespace" should equal "${BDD_EL_NVCA_VERSION_ID}"
+      And the HTTP response body should contain "cluster_id="
+
+      # The same stats through the CLI, with a key the CLI generated.
+      When I successfully generate an Event Ledger API key with CLI options:
+        | option       | value |
+        | --expires-in | 1h    |
+      And I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id ${BDD_EL_NVCA_VERSION_ID}"
+      Then the command output should contain "Function version: ${BDD_EL_NVCA_VERSION_ID}"
+      And the command output should contain "ICMSRequest."
+      And the command output should contain "Pod."
+      And the command output should contain "cluster_id="
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id ${BDD_EL_NVCA_VERSION_ID} --json"
+      Then the command output should contain "ICMSRequest."
+
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stats get --function-version-id ${BDD_EL_NVCA_VERSION_ID} --event-filter NoSuchEvent"
+      Then the command output should not contain "ICMSRequest."
+
+      # A deployment id that no context carries has no events, which is not an error.
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml stages events list --function-version-id ${BDD_EL_NVCA_VERSION_ID} --deployment-id 00000000-0000-4000-8000-000000000000"
+      Then the command output should contain "No events found."

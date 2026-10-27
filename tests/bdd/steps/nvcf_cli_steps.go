@@ -52,6 +52,7 @@ func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the task selected by NVCF CLI should reach status "([^"]*)" within "([^"]*)" seconds, polling every "([^"]*)" seconds$`, sc.selectedTaskShouldReachStatus)
 	ctx.Step(`^I successfully delete the task selected by NVCF CLI$`, sc.iSuccessfullyDeleteSelectedTask)
 	ctx.Step(`^I successfully generate a function API key with CLI options:$`, sc.iSuccessfullyGenerateFunctionAPIKey)
+	ctx.Step(`^I successfully generate an Event Ledger API key with CLI options:$`, sc.iSuccessfullyGenerateEventLedgerAPIKey)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over HTTP with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionHTTP)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over plaintext gRPC service "([^"]*)" method "([^"]*)" with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionGRPC)
 	ctx.Step(`^I successfully invoke model "([^"]*)" at "([^"]*)" with timeout "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeModel)
@@ -95,6 +96,10 @@ func (sc *ScenarioContext) iSuccessfullyDeploySelectedFunction(ctx context.Conte
 
 func (sc *ScenarioContext) iSuccessfullyGenerateFunctionAPIKey(ctx context.Context, table *godog.Table) error {
 	return sc.generateAPIKey(ctx, "function", table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyGenerateEventLedgerAPIKey(ctx context.Context, table *godog.Table) error {
+	return sc.generateAPIKey(ctx, "event-ledger", table)
 }
 
 func (sc *ScenarioContext) iSuccessfullyGenerateTaskAPIKey(ctx context.Context, table *godog.Table) error {

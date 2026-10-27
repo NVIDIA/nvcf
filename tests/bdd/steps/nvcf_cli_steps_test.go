@@ -366,6 +366,30 @@ func TestFunctionAPIKeyGenerationSuppressesSecretBearingStdout(t *testing.T) {
 	}
 }
 
+func TestEventLedgerAPIKeyGenerationSuppressesSecretBearingStdout(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--expires-in", "1h"},
+	})
+
+	if err := sc.iSuccessfullyGenerateEventLedgerAPIKey(context.Background(), options); err != nil {
+		t.Fatalf("generate Event Ledger API key: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %+v, want one request", fake.runs)
+	}
+	command := fake.runs[0].command
+	for _, expected := range []string{"/bin/sh -c", `exec "$@" >/dev/null`, "api-key generate --for event-ledger", "--expires-in 1h"} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("command = %q, want %q", command, expected)
+		}
+	}
+}
+
 func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
 	previousInterval := modelInvocationRetryInterval
 	modelInvocationRetryInterval = time.Nanosecond

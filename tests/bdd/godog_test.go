@@ -3533,6 +3533,7 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 // collector is enabled. The scenario must still pick the SIS context.
 const (
 	fakeNVCAContext = "cluster_id=c1,instance_id=i1,resource_id=r1"
+	fakePodContext  = "cluster_id=c1,deployment_id=d1,instance_id=i1"
 	fakeSISContext  = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
 )
 
@@ -3545,6 +3546,7 @@ func (f *eventLedgerHTTPFake) contextEvents() map[string][]fakeEvent {
 	}
 	return map[string][]fakeEvent{
 		fakeNVCAContext: {{"ICMSRequest.InstanceStatusUpdate.running", "nvca"}},
+		fakePodContext:  {{"Pod.Scheduled", "nvca"}},
 		fakeSISContext:  sis,
 	}
 }
@@ -3558,7 +3560,7 @@ func (f *eventLedgerHTTPFake) stats(namespace, eventFilter string) harness.HTTPR
 	byEvent := map[string]int{}
 	if namespace == "version-1" {
 		events := f.contextEvents()
-		for _, ctx := range []string{fakeNVCAContext, fakeSISContext} {
+		for _, ctx := range []string{fakeNVCAContext, fakePodContext, fakeSISContext} {
 			latest := events[ctx][len(events[ctx])-1].name
 			if eventFilter != "" && !strings.Contains(","+eventFilter+",", ","+latest+",") {
 				continue
@@ -3597,6 +3599,44 @@ func (f *eventLedgerHTTPFake) events(namespace string, params url.Values) harnes
 	body, _ := json.Marshal(map[string]any{"namespace": namespace, "context": eventContext, "events": events})
 	return harness.HTTPResponse{Status: 200, Body: string(body)}
 }
+
+// eventLedgerCLIResponder answers the nvcf-cli Event Ledger commands the way
+// the CLI is expected to: input errors and a missing key fail, and the
+// function version "version-1" has the NVCA contexts the HTTP fake serves.
+func eventLedgerCLIResponder(command string) (harness.Result, bool) {
+	failure := func(message string) (harness.Result, bool) {
+		return harness.Result{ExitCode: 1, Stderr: "Error: " + message + "\n"}, true
+	}
+	isStats := strings.Contains(command, " stats get")
+	isEvents := strings.Contains(command, " stages events list")
+	if !isStats && !isEvents {
+		return harness.Result{}, false
+	}
+	switch {
+	case strings.Contains(command, "not-a-uuid"):
+		return failure(`invalid function version ID "not-a-uuid": must be a UUID`)
+	case strings.Contains(command, "--attribute-key") && !strings.Contains(command, "--attribute-value"):
+		return failure("--attribute-key and --attribute-value must be used together")
+	case isStats && strings.HasSuffix(command, "stats get"):
+		return failure("--function-version-id is required")
+	case strings.Contains(command, "nvcf-cli-local-no-key.yaml"):
+		return failure("no Event Ledger API key configured, run 'nvcf-cli api-key generate --for event-ledger'")
+	}
+	if isEvents {
+		return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContext: \nNo events found.\n"}, true
+	}
+	if strings.Contains(command, " --event-filter ") {
+		return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContexts: 0\n"}, true
+	}
+	if strings.Contains(command, "version-1") {
+		return harness.Result{Stdout: "Function version: version-1\nContexts: 3\n\n" +
+			fakeNVCAContext + "  ICMSRequest.InstanceStatusUpdate.running\n" +
+			fakePodContext + "  Pod.Scheduled\n"}, true
+	}
+	return harness.Result{Stdout: "Function version: " + eventLedgerEmptyVersionID + "\nContexts: 0\n"}, true
+}
+
+const eventLedgerEmptyVersionID = "00000000-0000-4000-8000-00000000e1de"
 
 func eventLedgerHelmListJSON() string {
 	return `[
@@ -3718,6 +3758,10 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "api-port metrics",
 		},
+		"kubectl --context k3d-ncp-local --namespace nvca-system get pods --selector app.kubernetes.io/name=nvca -o jsonpath={..name}": {
+			ExitCode: 0,
+			Stdout:   "nvca nvca-otel-collector",
+		},
 		"kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml": {
 			ExitCode: 0,
 			Stdout:   "  ICMS_FNDS_MESSAGES_ENABLED: \"true\"\n  ICMS_FNDS_MESSAGES_V3_ENABLED: \"true\"\n",
@@ -3729,6 +3773,7 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 		}
 		return nil
 	}
+	runner.respond = eventLedgerCLIResponder
 	suite := newWiringSuite(t, runner)
 	httpFake := &eventLedgerHTTPFake{destroyed: &destroyed}
 	suite.HTTP = httpFake
@@ -3787,8 +3832,17 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			writeKeyDeletes++
 		}
 	}
-	if readKeyDeletes != 3 || writeKeyDeletes != 1 {
-		t.Fatalf("keys deleted: read = %d (want 3), write = %d (want 1)", readKeyDeletes, writeKeyDeletes)
+	if readKeyDeletes != 4 || writeKeyDeletes != 1 {
+		t.Fatalf("keys deleted: read = %d (want 4), write = %d (want 1)", readKeyDeletes, writeKeyDeletes)
+	}
+	for _, command := range []string{
+		"api-key generate --for event-ledger",
+		" stats get --function-version-id ",
+		" stages events list --function-version-id ",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("nvcf-cli command was never invoked: %s", command)
+		}
 	}
 }
 

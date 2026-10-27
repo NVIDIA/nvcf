@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Same endpoints as nvcf-cli-local.yaml. The CLI keeps its saved keys in a state
+# file named after the config file, so this config starts with no saved
+# Event Ledger key and nothing in the suite ever writes one for it.
+base_http_url: "http://api.localhost:8080"
+api_host: "api.localhost"
