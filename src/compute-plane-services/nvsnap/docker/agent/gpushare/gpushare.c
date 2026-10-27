@@ -420,6 +420,7 @@ struct mcobj {
     int app_released, released, dead;    /* dead: app done with it */
     int fab;                             /* imported as a fabric handle */
     CUmemFabricHandle fh;                /* from another node: its handle */
+    int ufd;                             /* creator not found yet: a dup of the fd (0 = none) */
 };
 /* Memory this process bound to a multicast object. */
 struct mcbind {
@@ -959,7 +960,7 @@ static int find_exporter(const char *req, int fd, unsigned long long *key, int *
 /* Look up the exporter of an import made before the exporter registered it
  * (mu held: the peers' replies do not need it, and the tool asks one
  * process at a time). */
-static void resolve_import(struct imp *im)
+static void resolve_import(struct imp *im, int *mc_out)
 {
     unsigned long long key = 0;
     int mc = 0;
@@ -974,6 +975,20 @@ static void resolve_import(struct imp *im)
     im->key = key;
     if (im->ufd) close(im->ufd);
     im->ufd = 0;
+    *mc_out = mc;
+}
+
+/* The same for a multicast object imported before its creator registered
+ * the export (see imp_to_mc). */
+static void resolve_mc(struct mcobj *m)
+{
+    unsigned long long key = 0;
+    int mc = 0;
+    m->peer = find_exporter("whose", m->ufd, &key, &mc);
+    if (!m->peer) return;
+    m->key = key;
+    close(m->ufd);
+    m->ufd = 0;
 }
 
 /* Is the multicast object still in use by the app (mu held)? */
@@ -1113,8 +1128,18 @@ static void do_quiesce(char *reply, size_t n)
         return;
     }
     reply[0] = 0;
-    for (int i = 0; i < n_imps; i++)
-        if (!imps[i].peer && !imps[i].released && imp_live(i)) resolve_import(&imps[i]);
+    for (int i = 0; i < n_imps; i++) {
+        int mc = 0;
+        if (!imps[i].peer && !imps[i].released && imp_live(i)) resolve_import(&imps[i], &mc);
+        /* A multicast object the app joins is tracked as one (imp_to_mc):
+         * remapped as an import, its mapping would wait for every device
+         * of the group, this one included, and never return. */
+        if (mc && !reply[0])
+            snprintf(reply, n, "err import of handle %llu is multicast object %llu of pid %d, which this process "
+                     "never joined", (unsigned long long)imps[i].app_h, imps[i].key, imps[i].peer);
+    }
+    for (int i = 0; i < n_mcs; i++)
+        if (!mcs[i].creator && !mcs[i].peer && mcs[i].ufd && !mcs[i].dead && mc_live(i)) resolve_mc(&mcs[i]);
     if (r != CUDA_SUCCESS)
         snprintf(reply, n, "err synchronize: %s", errstr(r));
     else if (n_legacy)
@@ -1225,6 +1250,10 @@ static void do_release(char *reply, size_t n, const char *args)
             if ((r = REAL(r_unmap, "cuMemUnmap")(maps[i].va, maps[i].size)) == CUDA_SUCCESS) maps[i].down = 1;
             nm++;
         }
+    for (int i = 0; i < n_mcs; i++) {
+        if (mcs[i].ufd) close(mcs[i].ufd);  /* as below */
+        mcs[i].ufd = 0;
+    }
     for (int i = 0; r == CUDA_SUCCESS && i < n_imps; i++) {
         if (imps[i].ufd) close(imps[i].ufd);  /* would pin the exporter's memory */
         imps[i].ufd = 0;
@@ -3153,16 +3182,19 @@ static CUresult w_mc_create(CUmemGenericAllocationHandle *h, const CUmulticastOb
     return r;
 }
 
-/* A fabric handle imported from another node is not known to be a
- * multicast object until the app joins it: track it as one from then on
- * (mu held). */
+/* An import whose exporter was not found is not known to be a multicast
+ * object until the app joins or binds it: a fabric handle from another
+ * node, or an fd imported before its creator registered the export (seen
+ * with vLLM 0.31 at TP=2). Track it as one from then on (mu held). */
 static int imp_to_mc(CUmemGenericAllocationHandle h)
 {
     int i = find_imp(h);
-    if (i < 0 || !imps[i].fab || imps[i].peer) return -1;
+    if (i < 0 || imps[i].peer) return -1;
     for (int j = 0; j < n_maps; j++)
         if (maps[j].imp == i) return -1;
-    PUSH(mcs, ((struct mcobj){ .app_h = imps[i].app_h, .cur_h = imps[i].cur_h, .fab = 1, .fh = imps[i].fh }));
+    PUSH(mcs, ((struct mcobj){ .app_h = imps[i].app_h, .cur_h = imps[i].cur_h, .fab = imps[i].fab,
+                               .fh = imps[i].fh, .ufd = imps[i].ufd }));
+    imps[i].ufd = 0;  /* the multicast object's now */
     imps[i].app_h = imps[i].cur_h = 0;  /* no longer an import */
     imps[i].app_released = 1;
     return n_mcs - 1;
