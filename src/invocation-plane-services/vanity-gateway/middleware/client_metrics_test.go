@@ -140,6 +140,40 @@ func TestClientMetricHTTPClientTimeout(t *testing.T) {
 	}))
 }
 
+func TestClientMetricContextCancellation(t *testing.T) {
+	for _, transportError := range []error{io.EOF, errors.New("net/http: request canceled"), fmt.Errorf("read: %w", io.EOF)} {
+		t.Run(transportError.Error(), func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			provider := newHTTPMeterProvider(reader)
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(provider)
+			t.Cleanup(func() { otel.SetMeterProvider(previous); require.NoError(t, provider.Shutdown(context.Background())) })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			started := make(chan struct{})
+			transport := TracedRoundTripper(clientMetricTestTransport(func(r *http.Request) (*http.Response, error) {
+				close(started)
+				<-r.Context().Done()
+				return nil, transportError
+			}))
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://upstream.test/slow", nil)
+			require.NoError(t, err)
+			result := make(chan error, 1)
+			go func() {
+				_, err := transport.RoundTrip(req)
+				result <- err
+			}()
+			<-started
+			cancel()
+			require.ErrorIs(t, <-result, transportError)
+			require.True(t, hasMetricPointWithAttributes(collectMetrics(t, reader), "http.client.request.duration", map[attribute.Key]attribute.Value{
+				"error.type": attribute.StringValue("canceled"),
+			}))
+		})
+	}
+}
+
 func TestClientMetricCallKind(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind, want string

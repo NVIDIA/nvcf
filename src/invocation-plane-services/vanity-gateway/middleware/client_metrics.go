@@ -69,7 +69,7 @@ func (rt clientMetricsRoundTripper) RoundTrip(r *http.Request) (*http.Response, 
 		kind := "transport_error"
 		var networkError net.Error
 		switch {
-		case errors.Is(err, context.Canceled):
+		case errors.Is(err, context.Canceled), errors.Is(r.Context().Err(), context.Canceled):
 			kind = "canceled"
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.DeadlineExceeded), errors.As(err, &networkError) && networkError.Timeout():
 			kind = "timeout"
