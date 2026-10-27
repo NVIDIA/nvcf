@@ -372,8 +372,9 @@ func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
 	t.Cleanup(func() { modelInvocationRetryInterval = previousInterval })
 
 	for name, stderr := range map[string]string{
-		"router code":    `API error 404: {"code":"no_eligible_candidates"}`,
-		"router message": `API error 404: {"message":"no eligible candidates"}`,
+		"router code":               `API error 404: {"code":"no_eligible_candidates"}`,
+		"router message":            `API error 404: {"message":"no eligible candidates"}`,
+		"backend still calibrating": `API error 503: {"message":"Service Unavailable"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			sc, fake := newScenarioContext(t)
