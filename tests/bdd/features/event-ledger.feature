@@ -65,15 +65,14 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | event-ledger   | nvcf                 |
         | ingress        | envoy-gateway-system |
 
-      # The checks below create API keys, which needs the admin token.
-      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init"
-
-    Scenario: SIS is configured to send events to the event ledger
       When I successfully run command "kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml"
       Then the command output should contain all:
         | text                                  |
         | ICMS_FNDS_MESSAGES_ENABLED: "true"    |
         | ICMS_FNDS_MESSAGES_V3_ENABLED: "true" |
+
+      # The checks below create API keys, which needs the admin token.
+      When I successfully run command "${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init"
 
   Rule: The event ledger is reachable, protected, and readable
 
