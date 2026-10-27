@@ -688,6 +688,15 @@ static char store[400];       /* chunk store directory (see valloc_drop) */
 static char cache[400];       /* optional node-local cache of the store (same layout) */
 static FILE *chunk_list;      /* this checkpoint's chunks, for accounting/GC */
 static size_t st_written, st_dedup, st_zero, st_hit, st_miss;
+/* "load-from" (see gpu_from): chunks the node cache lacks are written into
+ * the re-created allocations by a server over RDMA, not read from the store. */
+static char gf_sock[108];     /* the server's unix socket ("" otherwise) */
+static int gf_verify;         /* hash the server's chunks after it is done */
+static size_t st_ext;
+struct gf_chunk { size_t off, len; struct chunk c; };
+struct gf_alloc { CUdeviceptr va; size_t size; CUdevice dev; struct gf_chunk *ch; int n, cap; };
+VEC(struct gf_alloc, gfas);
+static CUresult gpu_from(char *reply, size_t n, double *secs_out);
 static __typeof__(&cuMemAllocHost) r_alloc_host;
 static __typeof__(&cuMemFreeHost) r_free_host;
 
@@ -1430,13 +1439,20 @@ static double prefault_wait(double *ran)
     return secs() - t;
 }
 
-static void do_load(char *reply, size_t n, const char *cache_dir)
+static void do_load(char *reply, size_t n, const char *cache_dir, const char *from, int verify)
 {
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     snprintf(cache, sizeof(cache), "%s", cache_dir ? cache_dir : "");
+    if (from && strlen(from) >= sizeof(gf_sock)) {
+        snprintf(reply, n, "err load-from: socket path too long (%zu bytes, at most %zu)", strlen(from), sizeof(gf_sock) - 1);
+        pthread_mutex_unlock(&mu);
+        return;
+    }
+    snprintf(gf_sock, sizeof(gf_sock), "%s", from ? from : "");
+    gf_verify = verify;
     imex_resubscribe();  /* before any fabric use (see "IMEX channel") */
     if (!pf_nt) prefault_start();
-    st_hit = st_miss = 0;
+    st_hit = st_miss = st_ext = 0;
     int dev = push_any_ctx(), nl = 0;
     size_t nb = 0;
     double t0 = secs();
@@ -1454,6 +1470,11 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
     if (r == CUDA_SUCCESS) r = xdrop_load_all(&nx, &nxb, reply, n);
     nl += nx;
     nb += nxb;
+    double tx = 0;
+    if (r == CUDA_SUCCESS) r = gpu_from(reply, n, &tx);
+    for (int i = 0; i < n_gfas; i++) free(gfas[i].ch);
+    n_gfas = 0;
+    gf_sock[0] = 0;
     stage_put();
     for (int i = 0; r == CUDA_SUCCESS && i < n_fexps; i++) {  /* see struct fabmap */
         CUmemFabricHandle old = fexps[i].fh, nf;
@@ -1482,7 +1503,11 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
         for (int j = i; j < n_fexps; j++)
             if (!memcmp(fexps[j].fh.data, old.data, sizeof(old.data))) fexps[j].fh = nf;
     }
-    if (r == CUDA_SUCCESS)
+    if (r == CUDA_SUCCESS && st_ext)
+        snprintf(reply, n, "ok loaded %d allocation(s) (%zu MiB) in %.1fs: %zu MiB from cache, %zu MiB from store, "
+                 "%zu MiB from the server in %.1fs%s", nl, nb >> 20, secs() - t0, st_hit >> 20, st_miss >> 20,
+                 st_ext >> 20, tx, verify ? " (verified)" : "");
+    else if (r == CUDA_SUCCESS)
         snprintf(reply, n, "ok loaded %d allocation(s) (%zu MiB) in %.1fs: %zu MiB from cache, %zu MiB from store",
                  nl, nb >> 20, secs() - t0, st_hit >> 20, st_miss >> 20);
     pop_ctx(dev);
@@ -2055,8 +2080,17 @@ static void serve(int s)
     else if (!strcmp(buf, "release")) { do_release(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "release ", 8)) { do_release(rep, sizeof(rep), buf + 8); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "numa ", 5)) { do_numa(rep, sizeof(rep), buf + 5); msg_send(s, rep, -1); }
-    else if (!strcmp(buf, "load")) { do_load(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
-    else if (!strncmp(buf, "load ", 5)) { do_load(rep, sizeof(rep), buf + 5); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "load")) { do_load(rep, sizeof(rep), NULL, NULL, 0); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "load ", 5)) { do_load(rep, sizeof(rep), buf + 5, NULL, 0); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "load-from ", 10)) {  /* load-from <verify 0|1> <socket> [<cache>] */
+        char *verify = buf + 10, *sock = strchr(verify, ' '), *dir = NULL;
+        if (sock) { *sock++ = 0; if ((dir = strchr(sock, ' '))) *dir++ = 0; }
+        if (!sock || !*sock || (strcmp(verify, "0") && strcmp(verify, "1")))
+            snprintf(rep, sizeof(rep), "err usage: load-from <verify 0|1> <socket> [<cache>]");
+        else
+            do_load(rep, sizeof(rep), dir, sock, *verify == '1');
+        msg_send(s, rep, -1);
+    }
     else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "remap ", 6)) { do_remap(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "fabmap ", 7)) { do_fabmap(rep, sizeof(rep), buf + 7); msg_send(s, rep, -1); }
@@ -2674,11 +2708,11 @@ static CUresult chunk_put(const struct chunk *c, size_t len)
  * for cache-gc's LRU), else from the store. A miss does not fill the cache:
  * that would put cache writes on the restore's critical path. Saves write
  * through to it, and nvsnap-gpu-suspend cache-prefetch fills it (e.g. in
- * the background after a restore). */
-static int chunk_get(const struct chunk *c, size_t len)
+ * the background after a restore). cache_only: not from the store. */
+static int chunk_get(const struct chunk *c, size_t len, int cache_only)
 {
     char path[512];
-    for (int from_cache = !!cache[0]; from_cache >= 0; from_cache--) {
+    for (int from_cache = !!cache[0]; from_cache >= !!cache_only; from_cache--) {
         chunk_path(from_cache ? cache : store, c, path, sizeof(path));
         int fd = chunk_open(path, O_RDONLY, len);
         if (fd < 0) {
@@ -2694,6 +2728,161 @@ static int chunk_get(const struct chunk *c, size_t len)
         return 0;
     }
     return -1;
+}
+
+/* Fill v's memory (mapped, its device current) with what was saved: from
+ * host memory, or chunk by chunk from the node cache or the store. With
+ * "load-from", a chunk the cache lacks is left to the server instead (if
+ * ext: device memory only, a NIC cannot register host memory this way). */
+static CUresult valloc_fill(const struct valloc *v, int ext)
+{
+    if (!v->chunks) return v->save ? CU(cuMemcpyHtoD_v2, v->va, v->save, v->size) : CUDA_SUCCESS;
+    ext = ext && gf_sock[0];
+    int g = -1;
+    for (size_t o = 0; o < v->size; o += STAGE_SIZE) {
+        size_t len = v->size - o < STAGE_SIZE ? v->size - o : STAGE_SIZE;
+        const struct chunk *c = &v->chunks[o / STAGE_SIZE];
+        CUresult r = CUDA_SUCCESS;
+        if (!c->h[0] && !c->h[1]) r = CU(cuMemsetD8_v2, v->va + o, 0, len);
+        else if (chunk_get(c, len, ext) == 0) r = CU(cuMemcpyHtoD_v2, v->va + o, stage, len);
+        else if (!ext) r = CUDA_ERROR_FILE_NOT_FOUND;
+        else {
+            if (g < 0) {
+                PUSH(gfas, ((struct gf_alloc){ v->va, v->size, v->dev, NULL, 0, 0 }));
+                g = n_gfas - 1;
+            }
+            struct gf_alloc *a = &gfas[g];
+            if (a->n == a->cap) {
+                void *p = realloc(a->ch, (a->cap ? 2 * a->cap : 16) * sizeof(*a->ch));
+                if (!p) return CUDA_ERROR_OUT_OF_MEMORY;
+                a->ch = p;
+                a->cap = a->cap ? 2 * a->cap : 16;
+            }
+            a->ch[a->n++] = (struct gf_chunk){ o, len, *c };
+            st_ext += len;
+        }
+        if (r != CUDA_SUCCESS) return r;
+    }
+    return CUDA_SUCCESS;
+}
+
+/* "load-from": the server's NIC registers the allocations "load" creates
+ * (dma-buf), so they must allow GPUDirect RDMA where the device can. */
+static int gdr_vmm(CUdevice dev)
+{
+    int v = 0;
+    return gf_sock[0] && CU(cuDeviceGetAttribute, &v, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED,
+                            dev) == CUDA_SUCCESS && v;
+}
+
+#define GF_MSG 16384
+
+/* "load-from": hand the chunks no local source had to the server at
+ * gf_sock (bedrock-peer), which writes them into our memory over RDMA,
+ * and wait until it is done (mu held). Messages (SOCK_SEQPACKET, text):
+ *   -> gpu-from 1 pid=<pid> allocs=<n> chunks=<n> bytes=<n>
+ *   -> alloc <i> <size>               with the allocation's dma-buf fd
+ *   -> chunks <i> <hash> <offset> <length> ...   (repeated as needed)
+ *   -> end
+ *   <- done | err <reason>            (other replies: progress, ignored)
+ * <hash> names the chunk in the store (32 hex digits); offsets are within
+ * allocation i. The server must not reply before its writes are complete. */
+static CUresult gpu_from(char *reply, size_t n, double *secs_out)
+{
+    if (!n_gfas) return CUDA_SUCCESS;
+    double t0 = secs();
+    size_t nch = 0;
+    for (int i = 0; i < n_gfas; i++) nch += gfas[i].n;
+    struct sockaddr_un a = { .sun_family = AF_UNIX };
+    memcpy(a.sun_path, gf_sock, strlen(gf_sock) + 1);  /* do_load checked the length */
+    int s = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof(a)) != 0) {
+        snprintf(reply, n, "err load-from %s: %s", gf_sock, strerror(errno));
+        if (s >= 0) close(s);
+        return CUDA_ERROR_NOT_READY;
+    }
+    CUresult r = CUDA_SUCCESS;
+    char *msg = malloc(GF_MSG);
+    if (!msg) { close(s); return CUDA_ERROR_OUT_OF_MEMORY; }
+    snprintf(msg, GF_MSG, "gpu-from 1 pid=%d allocs=%d chunks=%zu bytes=%zu", (int)getpid(), n_gfas, nch, st_ext);
+    if (msg_send(s, msg, -1) < 0) goto lost;
+    for (int i = 0; i < n_gfas; i++) {
+        struct gf_alloc *g = &gfas[i];
+        int fd = -1, dev = push_dev_ctx(g->dev);
+        if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; snprintf(reply, n, "err load-from: no context on device %d", g->dev); goto out; }
+        r = CU(cuMemGetHandleForAddressRange, &fd, g->va, g->size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+        pop_ctx(dev);
+        if (r != CUDA_SUCCESS) {
+            snprintf(reply, n, "err load-from: dma-buf of %#llx+%zu on device %d: %s", (unsigned long long)g->va,
+                     g->size, g->dev, errstr(r));
+            goto out;
+        }
+        snprintf(msg, GF_MSG, "alloc %d %zu", i, g->size);
+        int e = msg_send(s, msg, fd);
+        close(fd);  /* the server has its own reference */
+        if (e < 0) goto lost;
+        int len = snprintf(msg, GF_MSG, "chunks %d", i);
+        for (int k = 0; k < g->n; k++) {
+            if (len > GF_MSG - 80) {
+                if (msg_send(s, msg, -1) < 0) goto lost;
+                len = snprintf(msg, GF_MSG, "chunks %d", i);
+            }
+            len += snprintf(msg + len, GF_MSG - len, " %016llx%016llx %zu %zu", (unsigned long long)g->ch[k].c.h[0],
+                            (unsigned long long)g->ch[k].c.h[1], g->ch[k].off, g->ch[k].len);
+        }
+        if (msg_send(s, msg, -1) < 0) goto lost;
+    }
+    if (msg_send(s, "end", -1) < 0) goto lost;
+    for (;;) {
+        errno = 0;
+        if (msg_recv(s, msg, GF_MSG, NULL) < 0) goto lost;
+        if (!strcmp(msg, "done")) break;
+        if (!strncmp(msg, "err", 3)) {
+            r = CUDA_ERROR_UNKNOWN;
+            snprintf(reply, n, "err load-from: server: %.200s", msg);
+            goto out;
+        }
+    }
+    /* The NIC wrote behind the GPU's back: make its writes visible to
+     * this context's work before anything reads them. */
+    for (int i = 0; i < n_gfas; i++) {
+        int dev = push_dev_ctx(gfas[i].dev);
+        if (dev < 0) continue;
+        CU(cuFlushGPUDirectRDMAWrites, CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX,
+           CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER);
+        pop_ctx(dev);
+    }
+    if (gf_verify) {  /* hash each chunk as written; the store's names are its hashes */
+        if ((r = stage_get()) != CUDA_SUCCESS) { snprintf(reply, n, "err load-from: staging buffer: %s", errstr(r)); goto out; }
+        for (int i = 0; r == CUDA_SUCCESS && i < n_gfas; i++) {
+            struct gf_alloc *g = &gfas[i];
+            int dev = push_dev_ctx(g->dev);
+            if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
+            for (int k = 0; r == CUDA_SUCCESS && k < g->n; k++) {
+                const struct gf_chunk *c = &g->ch[k];
+                if ((r = CU(cuMemcpyDtoH_v2, stage, g->va + c->off, c->len)) != CUDA_SUCCESS) break;
+                struct chunk h = chunk_hash(stage, c->len);
+                if (memcmp(&h, &c->c, sizeof(h))) {
+                    r = CUDA_ERROR_INVALID_VALUE;
+                    snprintf(reply, n, "err load-from: chunk %016llx%016llx at %#llx+%zu differs after the server wrote it",
+                             (unsigned long long)c->c.h[0], (unsigned long long)c->c.h[1],
+                             (unsigned long long)g->va, c->off);
+                }
+            }
+            pop_ctx(dev);
+        }
+        if (r != CUDA_SUCCESS && strncmp(reply, "err", 3))
+            snprintf(reply, n, "err load-from: verify: %s", errstr(r));
+    }
+    goto out;
+lost:
+    r = CUDA_ERROR_NOT_READY;
+    snprintf(reply, n, "err load-from %s: connection lost: %s", gf_sock, errno ? strerror(errno) : "closed");
+out:
+    free(msg);
+    close(s);
+    *secs_out = secs() - t0;
+    return r;
 }
 
 static CUresult valloc_save(struct valloc *v);
@@ -2756,22 +2945,15 @@ static CUresult valloc_load(struct valloc *v)
 {
     if (v->chunks && stage_get() != CUDA_SUCCESS) return CUDA_ERROR_OUT_OF_MEMORY;
     CUmemAllocationProp p = valloc_prop(v->dev);
+    p.allocFlags.gpuDirectRDMACapable = gdr_vmm(v->dev);
     CUmemGenericAllocationHandle h;
     CUresult r = CU(cuMemCreate, &h, v->size, &p, 0);
     if (r != CUDA_SUCCESS) return r;
     CUmemAccessDesc a[MAX_DEV + 1];
     int na = valloc_access(v->dev, a);
     if ((r = REAL(r_map, "cuMemMap")(v->va, v->size, 0, h, 0)) == CUDA_SUCCESS &&
-        (r = REAL(r_set_access, "cuMemSetAccess")(v->va, v->size, a, na)) == CUDA_SUCCESS) {
-        if (!v->chunks) r = CU(cuMemcpyHtoD_v2, v->va, v->save, v->size);
-        for (size_t o = 0; v->chunks && r == CUDA_SUCCESS && o < v->size; o += STAGE_SIZE) {
-            size_t len = v->size - o < STAGE_SIZE ? v->size - o : STAGE_SIZE;
-            const struct chunk *c = &v->chunks[o / STAGE_SIZE];
-            if (!c->h[0] && !c->h[1]) { r = CU(cuMemsetD8_v2, v->va + o, 0, len); continue; }
-            if (chunk_get(c, len) != 0) { r = CUDA_ERROR_FILE_NOT_FOUND; break; }
-            r = CU(cuMemcpyHtoD_v2, v->va + o, stage, len);
-        }
-    }
+        (r = REAL(r_set_access, "cuMemSetAccess")(v->va, v->size, a, na)) == CUDA_SUCCESS)
+        r = valloc_fill(v, 1);
     if (r != CUDA_SUCCESS) {
         REAL(r_unmap, "cuMemUnmap")(v->va, v->size);
         REAL(r_release, "cuMemRelease")(h);
@@ -2897,6 +3079,8 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         }
         CUmemGenericAllocationHandle nh = 0;
         CUmemAllocationProp p = x->prop;
+        int ext = p.location.type == CU_MEM_LOCATION_TYPE_DEVICE;  /* see valloc_fill */
+        if (ext && gdr_vmm(p.location.id)) p.allocFlags.gpuDirectRDMACapable = 1;
         const char *step = "cuMemCreate";
         r = REAL(r_mem_create, "cuMemCreate")(&nh, x->size, &p, 0);
         if (r == CUDA_ERROR_NOT_PERMITTED && (p.requestedHandleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
@@ -2907,16 +3091,7 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
         if (r == CUDA_SUCCESS && (step = "cuMemMap", r = REAL(r_map, "cuMemMap")(x->va, x->size, 0, nh, 0)) == CUDA_SUCCESS) {
             mapped = 1;
             if (x->na) step = "cuMemSetAccess", r = REAL(r_set_access, "cuMemSetAccess")(x->va, x->size, x->acc, x->na);
-            if (r == CUDA_SUCCESS) step = "copy";
-            const struct valloc *v = &x->sv;
-            if (r == CUDA_SUCCESS && !v->chunks && v->save) r = CU(cuMemcpyHtoD_v2, v->va, v->save, v->size);
-            for (size_t o = 0; v->chunks && r == CUDA_SUCCESS && o < v->size; o += STAGE_SIZE) {
-                size_t len = v->size - o < STAGE_SIZE ? v->size - o : STAGE_SIZE;
-                const struct chunk *c = &v->chunks[o / STAGE_SIZE];
-                if (!c->h[0] && !c->h[1]) { r = CU(cuMemsetD8_v2, v->va + o, 0, len); continue; }
-                if (chunk_get(c, len) != 0) { r = CUDA_ERROR_FILE_NOT_FOUND; break; }
-                r = CU(cuMemcpyHtoD_v2, v->va + o, stage, len);
-            }
+            if (r == CUDA_SUCCESS) step = "copy", r = valloc_fill(&x->sv, ext);
         }
         pop_ctx(dev);
         if (r != CUDA_SUCCESS) {

@@ -62,6 +62,13 @@ SPDX-License-Identifier: Apache-2.0
  * never the only copy.
  *   cache-prefetch S C DIR   copy checkpoint C's chunks from store S into DIR
  *   cache-gc DIR MAX-GiB     LRU-evict DIR's chunks to 80% of MAX-GiB
+ * --gpu-from SOCK (resume after stop + CRIU restore): chunks the node cache
+ * lacks are not read from the store: each process hands them to the server
+ * listening on unix socket SOCK (bedrock-peer), which writes them straight
+ * into the re-created GPU memory over RDMA, one dma-buf per allocation (see
+ * gpu_from in libnvsnap_gpushare). Host memory the app shares still comes
+ * from the cache or the store. --gpu-from-verify: hash every chunk the
+ * server wrote, and fail the load on a mismatch.
  *
  * --store S --ckpt-dir C (suspend): processes using libnvsnap_gpushare save the
  * GPU memory it saves at "release" to the chunk store S (chunks shared by
@@ -288,6 +295,8 @@ static int visible_gpus(CUuuid *out, int max)
 static const char *gpu_map_file;
 static const char *store_dir, *ckpt_dir, *cache_dir, *fabric_dir;
 static int hold_gate;  /* --hold-gate */
+static const char *gpu_from;  /* --gpu-from */
+static int gpu_from_verify;   /* --gpu-from-verify */
 static long long clock_at = -1;  /* --clock-at, ns */
 static int resume_held(const int *pids, int n);
 
@@ -737,6 +746,8 @@ static int remap_all(const int *pids, int n)
     char load[512] = "load", remap[600] = "remap";
     send_numa(pids, n);
     if (cache_dir) snprintf(load, sizeof(load), "load %s", cache_dir);
+    if (gpu_from) snprintf(load, sizeof(load), "load-from %d %s%s%s", gpu_from_verify, gpu_from,
+                           cache_dir ? " " : "", cache_dir ? cache_dir : "");
     if (fabric_dir) {  /* a previous cycle's lists */
         char p[512];
         snprintf(p, sizeof(p), "%s/in", fabric_dir);
@@ -1500,6 +1511,9 @@ static void usage(const char *prog)
         "--hold-gate: (resume after CRIU restore) thaw with GPU launches held until open\n"
         "--clock-at NS: (resume after CRIU restore) thaw once the pids' CLOCK_MONOTONIC\n"
         "         reaches NS, the value CRIU dumped\n"
+        "--gpu-from SOCK: (resume after CRIU restore) chunks not in the cache are written\n"
+        "         into GPU memory by the server on unix socket SOCK (bedrock-peer, RDMA)\n"
+        "--gpu-from-verify: (with --gpu-from) hash the chunks the server wrote\n"
         "Cache:   cache-prefetch STORE CKPT-DIR CACHE | cache-gc CACHE MAX-GiB\n"
         "Multi-GPU: pass all ranks in one call, e.g.:\n"
         "  %s full-save 503 504 505 508\n", prog, prog);
@@ -1518,6 +1532,11 @@ int main(int argc, char **argv)
             argi++;
             continue;
         }
+        if (strcmp(argv[argi], "--gpu-from-verify") == 0) {
+            gpu_from_verify = 1;
+            argi++;
+            continue;
+        }
         if (strcmp(argv[argi], "--timeout-ms") == 0)
             timeout_ms = (unsigned)strtoul(argv[argi + 1], NULL, 10);
         else if (strcmp(argv[argi], "--clock-at") == 0)
@@ -1532,6 +1551,8 @@ int main(int argc, char **argv)
             cache_dir = argv[argi + 1];
         else if (strcmp(argv[argi], "--fabric-map") == 0)
             fabric_dir = argv[argi + 1];
+        else if (strcmp(argv[argi], "--gpu-from") == 0)
+            gpu_from = argv[argi + 1];
         else
             break;
         argi += 2;

@@ -44,6 +44,10 @@ SPDX-License-Identifier: Apache-2.0
  *   resume hold  the same, but the gate stays closed until "open": across
  *            nodes, only once every node has bound its multicast memory.
  *   open     (after "resume hold")  reopen the launch gate.
+ *   load-from <verify 0|1> <socket> [<cache>]  "load", but chunks the cache
+ *            lacks are written into the re-created GPU memory by the server
+ *            on <socket> (bedrock-peer, RDMA into a dma-buf of each
+ *            allocation) instead of read from the store; 1: hash them after.
  *   mx pause  (before quiesce)  ModelExpress stops serving its weights to
  *            peers and drops its NIXL/RDMA state, which CRIU cannot dump.
  *   mx resume (after open)  it registers them again and republishes.
