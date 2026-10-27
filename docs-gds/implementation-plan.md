@@ -502,3 +502,37 @@ Phase 4, LLM stack integration:
   reconnects are cheap; DynamoDB Streams or the `by_updated_at` LSI are the scaling paths.
 - Pylon dynamic seeds change `InferenceServerRegistrationConfig`, touching existing tests.
 - Dynamo PoolRelay and Python Global Router integration happen in the Dynamo repo later.
+
+## Status
+
+Workstream 1 (foundation), branch `feat/gds-ws1-foundation`, delivered under
+`src/control-plane-services/global-discovery`:
+
+- Module skeleton: `go.mod` (Go 1.26.5), Makefile (`build`, `test` with an
+  85 percent coverage gate on `internal/`, `vet`, `lint`, `proto`,
+  `proto-check`, `proto-breaking`), README, AGENTS, golangci config.
+- Proto contract `nvidia.gds.v1` (`common`, `cluster`, `mcs`, `pool`,
+  `server`) with REST annotations, vendored `google/api`, `buf.yaml`
+  (STANDARD lint, no exceptions), `buf.gen.yaml`, `hack/proto.sh`, and the
+  generated Go, grpc-gateway and OpenAPI code checked in. A gateway test pins
+  every REST path, the JSON shape and the stream shape.
+- `api/`: well-known labels and annotations, error and condition reasons,
+  limits, `DerivedServiceName` with golden values cross-checked against the
+  mcs-api algorithm.
+- `internal/store`: interfaces, records, typed errors, the memory store and
+  the `storetest` conformance suite.
+- `internal/registry`: lease math, TTL clamping, generations, roles and pool
+  state derivation.
+- `internal/config`, `internal/version` and a `cmd/gds-server` stub that
+  validates its flags and exits.
+- Bazel: module in `go.work.bazel`, Gazelle BUILD files (the root
+  `BUILD.bazel` now excludes `src/control-plane-services` per subtree so the
+  root Gazelle manages this module), `org_golang_google_genproto_googleapis_api`
+  added to `use_repo`, `x_defs` on `gds-server`.
+
+Deviations from the plan: `PutPool` takes `PutPoolOptions{Now, MintLease}` so
+that registration and update share one conditional write; store methods take
+server time explicitly. Not done in ws1: CI wiring (the
+`.github/workflows/bazel.yml` matrix row and the `check-go-codegen` guard),
+`go_oci_image`, golangci-lint run (not installed locally; staticcheck is
+clean).
