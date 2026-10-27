@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "journalfs",
+    srcs = [
+        "atomic.go",
+        "batch.go",
+        "cleaning.go",
+        "config.go",
+        "fence.go",
+        "layout.go",
+        "load.go",
+        "lock.go",
+        "recover.go",
+        "store.go",
+        "sweep.go",
+        "validate.go",
+        "volume.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/journalfs",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/journal"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":journalfs",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+go_test(
+    name = "journalfs_test",
+    srcs = [
+        "batch_test.go",
+        "durability_test.go",
+        "fence_test.go",
+        "helpers_test.go",
+        "lock_test.go",
+        "recover_test.go",
+        "store_test.go",
+    ],
+    embed = [":journalfs"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/journal"],
+)
