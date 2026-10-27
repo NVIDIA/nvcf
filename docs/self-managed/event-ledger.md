@@ -32,6 +32,13 @@ explicitly enabled.
 - A registered compute plane running a compatible NVCA Operator release.
 - Network reachability from each compute plane to Event Ledger.
 
+The control-plane stack provisions these dependencies:
+
+- Cassandra stores Event Ledger data in the `event_ledger` keyspace. The
+  Cassandra migrations create the schema.
+- OpenBao provides the Event Ledger JWT role and service secret paths.
+- The API Keys service evaluates Event Ledger read keys.
+
 The default self-hosted artifact manifest does not include the optional NVCA
 Event Ledger collector image. Obtain the collector image selected by the NVCA
 Operator release and mirror it with the other compute-plane images. The
@@ -259,6 +266,22 @@ SIS events should appear when the control-plane service is enabled. NVCA Pod
 and ICMSRequest events require the collector on the compute plane. See
 [Event Ledger](../overview/event-ledger.md#read-events-for-a-context) for the
 complete query workflow.
+
+## Operations
+
+Prometheus metrics are available at this in-cluster endpoint:
+
+```text
+http://event-ledger.nvcf.svc.cluster.local:8081/metrics
+```
+
+Event Ledger API keys expire after 24 hours by default. Rotate a read key with:
+
+```bash
+nvcf-cli api-key generate --for event-ledger
+```
+
+Use `--expires-in` when automation needs a different lifetime.
 
 ## Troubleshooting
 

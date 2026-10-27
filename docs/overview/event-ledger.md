@@ -9,17 +9,19 @@ deployment state, or replace application logs, metrics, or traces.
 
 ## How it works
 
-Event Ledger combines events from two sources:
+Event Ledger combines events from three producers:
 
 - The Spot Instance Service (SIS) publishes function instance lifecycle events
   from the control plane as CloudEvents.
 - The NVIDIA Cluster Agent (NVCA) OpenTelemetry Collector watches Kubernetes
   Pod and ICMSRequest events on each enabled compute plane and publishes them as
   OpenTelemetry Protocol (OTLP) log records.
+- The gRPC proxy publishes service lifecycle events as CloudEvents when its
+  Event Ledger publisher is configured.
 
-The Event Ledger stores both sources under a namespace. For function events,
-the namespace is the function version ID. Each event also has a context that
-identifies the workload or resource that produced it.
+The Event Ledger stores events from these producers under a namespace. For
+function events, the namespace is the function version ID. Each event also has
+a context that identifies the workload or resource that produced it.
 
 Event delivery is asynchronous. A newly produced event might not be visible
 immediately.
@@ -63,6 +65,10 @@ Context matching is exact. Supply every field shown in the context when you
 read its events. If no context fields are supplied, Event Ledger returns only
 events that were stored without a context. It does not return events from every
 context.
+
+Context values can contain letters, numbers, and dashes. `instance_id` can also
+contain dots between non-empty segments. An invalid context value returns
+`400 Bad Request`.
 
 ### Event names
 
@@ -138,6 +144,8 @@ nvcf-cli api-key generate --for event-ledger
 The CLI saves the key as its dedicated Event Ledger credential. It also reads
 `EVENT_LEDGER_API_KEY` from the environment. Running `nvcf-cli api-key generate`
 without `--for` generates function, task, and Event Ledger keys together.
+The default key lifetime is 24 hours. Use `--expires-in` to choose another
+duration.
 
 ## Inspect deployment state
 
@@ -248,9 +256,9 @@ The CLI uses the Event Ledger v3 read API:
 | `GET` | `/v3/ledger/namespace/{namespace}/events` | Return stored event names for one exact context. |
 
 The stats endpoint accepts `eventFilter`, a comma-separated list of exact event
-names. The events endpoint accepts `instance_id`, `deployment_id`,
-`gpu_specification_id`, `cluster_id`, `resource_id`, `attribute_key`, and
-`attribute_value`.
+names. The optional `view=filtered` selects the filtered stats view when it is
+enabled in the service configuration. An unknown view returns `400`. Requesting
+the filtered view when it is disabled returns `404`.
 
 Use an Event Ledger API key as a bearer credential:
 
@@ -258,6 +266,63 @@ Use an Event Ledger API key as a bearer credential:
 curl -sS "${EVENT_LEDGER_URL}/v3/ledger/namespace/${FUNCTION_VERSION_ID}/stats" \
   -H "Authorization: Bearer ${EVENT_LEDGER_API_KEY}" \
   -H "Accept: application/json"
+```
+
+The response contains the latest event for every context:
+
+```json
+{
+  "namespace": "<function-version-id>",
+  "summary": {
+    "total_contexts": 1,
+    "by_event": {
+      "ICMSRequest.InstanceStatusUpdate.running": 1
+    }
+  },
+  "contexts": [
+    {
+      "context": "cluster_id=cluster-1,resource_id=request-123",
+      "event_name": "ICMSRequest.InstanceStatusUpdate.running",
+      "timestamp": "2026-10-26T20:10:18Z",
+      "first_seen": "2026-10-26T20:08:55Z"
+    }
+  ]
+}
+```
+
+The events endpoint accepts `instance_id`, `deployment_id`,
+`gpu_specification_id`, `cluster_id`, `resource_id`, `attribute_key`, and
+`attribute_value`. The context fields select one exact context. Send
+`attribute_key` and `attribute_value` together.
+
+```bash
+curl -sS "${EVENT_LEDGER_URL}/v3/ledger/namespace/${FUNCTION_VERSION_ID}/events?cluster_id=cluster-1&resource_id=request-123" \
+  -H "Authorization: Bearer ${EVENT_LEDGER_API_KEY}" \
+  -H "Accept: application/json"
+```
+
+The response contains the latest stored occurrence of each event name for that
+context:
+
+```json
+{
+  "namespace": "<function-version-id>",
+  "context": "cluster_id=cluster-1,resource_id=request-123",
+  "events": [
+    {
+      "event_name": "ICMSRequest.InstanceStatusUpdate.running",
+      "source": "nvca",
+      "timestamp": "2026-10-26T20:10:18Z",
+      "details": {
+        "severity": "Info",
+        "body": "Instance is running",
+        "attributes": {}
+      },
+      "created_at": "2026-10-26T20:08:55Z",
+      "updated_at": "2026-10-26T20:10:18Z"
+    }
+  ]
+}
 ```
 
 When sending requests to a gateway address instead of the Event Ledger DNS
@@ -270,16 +335,29 @@ Event producers use these v3 endpoints:
 | `POST` | `/v3/ledger/cloudevents` | `application/cloudevents+json` or `application/cloudevents-batch+json` | Service bearer token or an authorized NVCA projected token. |
 | `POST` | `/v3/ledger/k8s-events` | `application/x-protobuf` OTLP logs, optionally gzip-compressed | Service bearer token or an authorized NVCA projected token. |
 
-The CLI does not wrap the producer endpoints. The NVCA collector and SIS
-configure them as part of the self-managed deployment.
+`POST /v3/ledger/cloudevents` accepts one structured CloudEvent or a batch.
+`namespace` is required. A producer keyed by function version can send
+`functionVersionId` instead.
+
+`POST /v3/ledger/k8s-events` accepts an OTLP `ExportLogsServiceRequest`. Each
+log record requires the string attributes `event_name`, `namespace`, and
+`source`. The request can be gzip-compressed.
+
+Service credentials need the `fnds:createEvent` scope to write. A read key with
+`fnds:getEvents` cannot write, and a write credential cannot read unless it also
+has a read scope. An authorized NVCA projected token can write after Event
+Ledger verifies its cluster identity through SIS.
+
+The CLI does not wrap the producer endpoints. SIS, the NVCA collector, and the
+gRPC proxy configure publishing as part of the self-managed deployment.
 
 The API returns errors as `application/problem+json`. Common status codes are:
 
 | Status | Meaning |
 | --- | --- |
 | `400` | Invalid namespace, context, filter, or event payload. |
-| `401` | Missing or invalid bearer credential. |
-| `403` | The credential lacks the required scope or tenant access. |
+| `401` | The bearer credential is missing, or a JWT fails validation. |
+| `403` | An opaque API key is unknown, expired, lacks the required scope, or lacks tenant access. |
 | `404` | The route or optional filtered stats view was not found. |
 | `413` | A decompressed OTLP request exceeded 10 MiB. |
 | `415` | The producer used an unsupported content type. |

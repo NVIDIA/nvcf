@@ -181,14 +181,18 @@ endpoints require `NVCF_NVCT_API_KEY` with the listed scope.
 | `GET /v1/nvct/tasks/{taskId}/results` | `NVCF_NVCT_API_KEY` | `list_results` |
 | `PUT /v1/nvct/secrets/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `update_secrets` |
 
-Event Ledger reads use v3 endpoints served through the `events.<domain>`
-gateway route. Both endpoints require `EVENT_LEDGER_API_KEY` with the
-`fnds:getEvents` scope.
+Event Ledger uses v3 endpoints served through the `events.<domain>` gateway
+route. Read endpoints require `EVENT_LEDGER_API_KEY` with the `fnds:getEvents`
+scope. Service credentials that publish events require `fnds:createEvent`.
+An authorized NVCA projected token can also publish after its cluster identity
+is verified.
 
 | Method and endpoint | Accepted bearer | Scope |
 | --- | --- | --- |
 | `GET /v3/ledger/namespace/{namespace}/stats` | `EVENT_LEDGER_API_KEY` | `fnds:getEvents` |
 | `GET /v3/ledger/namespace/{namespace}/events` | `EVENT_LEDGER_API_KEY` | `fnds:getEvents` |
+| `POST /v3/ledger/cloudevents` | Service bearer or authorized NVCA projected token | `fnds:createEvent` or verified NVCA identity |
+| `POST /v3/ledger/k8s-events` | Service bearer or authorized NVCA projected token | `fnds:createEvent` or verified NVCA identity |
 
 See [Event Ledger](./event-ledger.md) for context matching and filtering rules.
 

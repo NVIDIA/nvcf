@@ -24,8 +24,8 @@ eventLedger:
 
   # Override the runtime service identity (resource names / selectors /
   # container name). Defaults to "event-ledger" so the Service DNS
-  # (event-ledger.<ns>.svc) matches the contract defined in the SADD
-  # (section 3.1), independent of the chart package name or release name.
+  # (event-ledger.<ns>.svc) matches what the rest of the stack expects,
+  # independent of the chart package name or release name.
   nameOverride: ""
   fullnameOverride: "event-ledger"
 
@@ -141,7 +141,7 @@ eventLedger:
     auth:
       enabled: true
       # Use the "policy" provider in self-managed so external read requests
-      # are validated against api-keys-api (section 3.3 of the SADD).
+      # are validated against api-keys-api.
       provider: "policy"
       # JWKS endpoint for event-ledger's own JWT engine in OpenBao.
       # SIS, NVCA, and NVCF-API sign tokens against this engine; event-ledger
@@ -160,7 +160,7 @@ eventLedger:
         # In-cluster address of the api-keys-api policy evaluator.
         policy-evaluator-addr: "http://api-keys.api-keys.svc.cluster.local:8080"
         subject-field: "subject"
-        # api-keys-api expects "apiKey" (not "starfleetApiKey") per SADD §3.3.
+        # api-keys-api expects "apiKey", not "starfleetApiKey".
         api-key-field: "apiKey"
     database:
       provider: "cassandra"
@@ -175,7 +175,7 @@ eventLedger:
     service:
       api-port: 8080
       internal-port: 8081
-    # V1 and V2 endpoints are disabled in self-hosted per SADD §3.4.
+    # V1 and V2 endpoints are disabled in self-hosted.
     deprecate-endpoints: true
     publisher:
       # CloudEvents (Kratos) is not available in self-managed; disable it.
