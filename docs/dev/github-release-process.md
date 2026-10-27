@@ -269,10 +269,19 @@ next bump run render them again. A chart reaches its registry after its
 GitHub release, so the first render after a chart release can fail this
 way.
 
-The `compute-plane goldens` workflow renders the stack for every pull
-request from a branch of this repository and every `main` push that
-changes it. It fails when the fixtures do not match, or when the chart
-registry secrets are not set.
+The `compute-plane goldens` workflow renders the stack and compares the
+result with the fixtures. It runs for:
+
+- Pull requests that target `main`, `release-**`, or `release/**`.
+- Pushes to `main`.
+- Manual runs through `workflow_dispatch`.
+
+Pull requests and pushes run it only when they change
+`deploy/stacks/nvcf-compute-plane/`,
+`.github/workflows/compute-plane-goldens.yml`, or
+`tools/ci/refresh-compute-plane-goldens`. A pull request from a fork gets
+a notice instead. The check fails when the fixtures do not match, or when
+the chart registry secrets are not set.
 
 ## Release branches
 
