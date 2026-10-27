@@ -11,6 +11,8 @@ in ~/projects/nvidia are left untouched.
 - `network-interaction-comparison.md`: how Stargate and Pylon interact today versus the HLD
   components, at the network level, and what that implies for GDS and MCS, including the
   cross-region request path.
+- `qa-gds-value-for-llm-stack.md`: Q&A on why GDS and MCS help the unmodified LLM stack and
+  whether GDS can be consumed without MCS (discussion note, no design change).
 
 This directory lives in the nvcf monorepo on branch
 `feat/global-discovery-service`, to be ported to `github.com/ai-dynamo/stargate`.
