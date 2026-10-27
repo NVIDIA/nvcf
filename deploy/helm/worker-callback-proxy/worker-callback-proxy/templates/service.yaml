@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "workerCallbackProxy.serviceName" . | quote }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     {{- include "workerCallbackProxy.labels" . | nindent 4 }}
     {{- with $c.service.labels }}
@@ -31,10 +31,10 @@ metadata:
 spec:
   type: {{ $c.service.type | quote }}
   {{- with $c.service.loadBalancerClass }}
-  loadBalancerClass: {{ . }}
+  loadBalancerClass: {{ . | quote }}
   {{- end }}
   {{- with $c.service.externalTrafficPolicy }}
-  externalTrafficPolicy: {{ . }}
+  externalTrafficPolicy: {{ . | quote }}
   {{- end }}
   selector:
     {{- include "workerCallbackProxy.selectorLabels" . | nindent 4 }}

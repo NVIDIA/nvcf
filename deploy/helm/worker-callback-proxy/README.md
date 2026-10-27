@@ -28,8 +28,9 @@ Envoy only completes the upstream TLS handshake with grpc-proxy pods whose
 certificate matches `grpcProxy.tlsServerName` and chains to
 `grpcProxy.caSecret`.
 
-The grpc-proxy chart issues that certificate when `grpcproxy.http3` is
-enabled. The defaults match a grpc-proxy release named `grpc-proxy` in the
+The grpc-proxy chart issues that certificate when `grpcproxy.http3.enabled`
+and `grpcproxy.http3.tls.certificate.enabled` are both set; otherwise
+`grpcproxy.http3.tls.secretName` must name an existing Secret. The defaults match a grpc-proxy release named `grpc-proxy` in the
 same namespace: Secret `grpc-proxy-worker-tls`, key `ca.crt`, and SAN
 `*.grpc-headless.<namespace>.svc.<clusterDomain>`.
 
@@ -145,8 +146,10 @@ trust the CA that signed the frontend certificate.
 | Value | Example |
 | --- | --- |
 | `workerCallbackProxy.workerDomain` | `grpc-worker.example.com` |
-| `workerCallbackProxy.image.registry` | `docker.io` or a mirror |
 | `workerCallbackProxy.tls.frontend.certificate.issuerRef.name` | `nvcf-worker-callback`, unless `existingSecret` is set |
+
+`workerCallbackProxy.image.registry` is optional. Set it only to pull Envoy
+from a mirror; when empty the image is `repository:tag`.
 
 Wildcard DNS for `*.<workerDomain>` must resolve to the Service.
 `values.schema.json` rejects unknown keys, and render fails on inconsistent
@@ -176,9 +179,10 @@ SIGTERM. Envoy exits on SIGTERM. Render fails unless
 
 ## Usage
 
-`make template`, `make lint`, `make validate`, and `make test` use the CI
-values in `tools/ci/helm-validate-values/worker-callback-proxy.yaml` unless
-`values=` is set. `make install` requires `values=`.
+`make template`, `make lint`, and `make validate` use the CI values in
+`tools/ci/helm-validate-values/worker-callback-proxy.yaml` unless `values=` is
+set. `make test` lints with `values=` but its render tests always use the CI
+values, since they assert exact output. `make install` requires `values=`.
 
 ```bash
 make test             # helm lint and render tests
