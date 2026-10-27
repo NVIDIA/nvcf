@@ -180,6 +180,13 @@ func (r *Refresher) Run(ctx context.Context) {
 				log.Warn("clusterset discovery failed", zap.Error(err))
 			}
 		case <-refresh.C():
+			// Until the first discovery succeeds, retry it every refresh
+			// interval rather than every discovery interval.
+			if !r.view.Discovered() {
+				if err := r.Discover(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("clusterset discovery failed", zap.Error(err))
+				}
+			}
 			if err := r.RefreshAll(ctx); err != nil && ctx.Err() == nil {
 				log.Warn("view refresh failed", zap.Error(err))
 			}

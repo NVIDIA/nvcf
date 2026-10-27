@@ -166,14 +166,10 @@ func (v *View) setGauges(cs *clusterSet) {
 			g.ExpiredClusters++
 		}
 	}
-	for _, r := range cs.endpoints {
-		for _, e := range r.Endpoints {
-			if e.Conditions.Ready {
-				g.ReadyEndpoints++
-			} else {
-				g.NotReadyEnds++
-			}
-		}
+	for key := range cs.endpoints {
+		ep, _ := cs.endpointsOf(key)
+		g.ReadyEndpoints += int(ep.ready)
+		g.NotReadyEnds += int(ep.total - ep.ready)
 	}
 	for _, o := range cs.objects[KindServiceImport] {
 		g.Imports++

@@ -164,6 +164,10 @@ func TestReplaceDerivesImportsAndClusters(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_ACTIVE, o.Full.(*gdsv1.Cluster).GetLease().GetState())
 
+	assert.Equal(t, 2.0, testutilValue(f.metrics.Endpoints.WithLabelValues(cs, "ready")))
+	assert.Equal(t, 1.0, testutilValue(f.metrics.Endpoints.WithLabelValues(cs, "not_ready")))
+	assert.Equal(t, 2.0, testutilValue(f.metrics.Clusters.WithLabelValues(cs, "active")))
+
 	rev := f.view.Revision(cs)
 	f.view.Replace(baseSnapshot(), t0)
 	assert.Equal(t, rev, f.view.Revision(cs), "an unchanged snapshot publishes nothing")

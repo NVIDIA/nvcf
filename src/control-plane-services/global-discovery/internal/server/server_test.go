@@ -118,18 +118,6 @@ func start(t *testing.T, cfg *config.Config, opts AppOptions) *running {
 	return r
 }
 
-func (r *running) stop(t *testing.T) error {
-	t.Helper()
-	r.cancel()
-	select {
-	case err := <-r.done:
-		return err
-	case <-time.After(10 * time.Second):
-		t.Fatal("server did not stop")
-	}
-	return nil
-}
-
 func dial(t *testing.T, addr string, creds credentials.TransportCredentials) *grpc.ClientConn {
 	t.Helper()
 	if creds == nil {
@@ -486,7 +474,7 @@ func TestOTelStatsHandler(t *testing.T) {
 			if s.Name() == name {
 				out := map[string]string{}
 				for _, a := range s.Attributes() {
-					out[string(a.Key)] = a.Value.Emit()
+					out[string(a.Key)] = a.Value.String()
 				}
 				return out
 			}

@@ -166,6 +166,30 @@ func TestRefresherRun(t *testing.T) {
 	<-done
 }
 
+func TestRefresherRetriesDiscovery(t *testing.T) {
+	f := newFixture(t)
+	st := &faultyStore{Store: memory.New()}
+	seed(t, st, t0)
+	st.set("list", store.ErrUnavailable)
+	r := NewRefresher(f.view, st, RefresherOptions{RefreshInterval: time.Second, DiscoveryInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+	f.clock.BlockUntil(3)
+	assert.False(t, f.view.Discovered())
+	st.set("list", nil)
+	f.clock.Advance(time.Second)
+	require.Eventually(t, func() bool {
+		ok, _ := f.view.Ready(f.clock.Now(), time.Minute)
+		return ok
+	}, 5*time.Second, 10*time.Millisecond)
+	cancel()
+	<-done
+}
+
 func TestCompaction(t *testing.T) {
 	f := newFixture(t)
 	st := &faultyStore{Store: memory.New()}

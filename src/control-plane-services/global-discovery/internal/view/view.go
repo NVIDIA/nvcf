@@ -269,6 +269,13 @@ func (v *View) SetDiscovered(names []string) {
 	}
 }
 
+// Discovered reports whether SetDiscovered ran at least once.
+func (v *View) Discovered() bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.discovered
+}
+
 // Ready reports whether the view is fresh enough to serve: clustersets were
 // discovered at least once, and every clusterset the store knows was
 // refreshed within maxAge. The string explains a false result.
