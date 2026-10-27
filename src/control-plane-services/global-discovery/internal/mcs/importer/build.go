@@ -140,12 +140,17 @@ func BuildServiceImportStatus(imp *gdsv1.ServiceImport, existing []metav1.Condit
 			participating++
 		}
 	}
-	setCondition(&st.Conditions, metav1.Condition{
+	ready := metav1.Condition{
 		Type: string(mcsv1beta1.ServiceImportConditionReady), Status: metav1.ConditionTrue,
 		Reason:             string(mcsv1beta1.ServiceImportReasonReady),
 		Message:            fmt.Sprintf("Imported from GDS: %d of %d exporting clusters participate", participating, len(imp.GetClusters())),
 		ObservedGeneration: generation,
-	})
+	}
+	if participating == 0 {
+		ready.Status, ready.Reason = metav1.ConditionFalse, string(mcsv1beta1.ServiceImportReasonPending)
+		ready.Message = fmt.Sprintf("None of the %d exporting clusters participates: their leases expired", len(imp.GetClusters()))
+	}
+	setCondition(&st.Conditions, ready)
 	conflict := metav1.Condition{
 		Type: api.ConditionConflict, Status: metav1.ConditionFalse, Reason: api.ConditionReasonNoConflicts,
 		Message: "The exports agree", ObservedGeneration: generation,

@@ -123,6 +123,15 @@ func TestBuildServiceImportStatus(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, st2.Conditions[1].Status)
 	assert.Equal(t, api.ConditionReasonPortConflict, st2.Conditions[1].Reason)
 	assert.NotEqual(t, old, st2.Conditions[1].LastTransitionTime)
+
+	for _, c := range imp.Clusters {
+		c.Participating = false
+	}
+	st3 := BuildServiceImportStatus(imp, nil, 3)
+	assert.Empty(t, st3.Clusters)
+	assert.NotNil(t, st3.Clusters, "an empty list, so that the merge patch clears it")
+	assert.Equal(t, metav1.ConditionFalse, st3.Conditions[0].Status)
+	assert.Equal(t, "Pending", st3.Conditions[0].Reason)
 }
 
 func TestBuildDerivedService(t *testing.T) {

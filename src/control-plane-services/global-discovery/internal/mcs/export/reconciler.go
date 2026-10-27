@@ -402,12 +402,12 @@ func (r *Reconciler) export(ctx context.Context, se *mcsv1beta1.ServiceExport, s
 		}
 	}
 	eps, dropped := BuildEndpoints(own, api.MaxEndpointsPerExport)
-	if dropped > 0 {
-		msg := fmt.Sprintf("Service has %d endpoints; exporting %d, ready ones first", len(eps)+dropped, len(eps))
-		logger.Info("Endpoint set truncated", "dropped", dropped, "limit", api.MaxEndpointsPerExport)
-		r.event(se, corev1.EventTypeWarning, EventEndpointsTruncated, msg)
-	}
 	if hash := EndpointsHash(eps); hash != sent.endpointsHash {
+		if dropped > 0 {
+			msg := fmt.Sprintf("Service has %d endpoints; exporting %d, ready ones first", len(eps)+dropped, len(eps))
+			logger.Info("Endpoint set truncated", "dropped", dropped, "limit", api.MaxEndpointsPerExport)
+			r.event(se, corev1.EventTypeWarning, EventEndpointsTruncated, msg)
+		}
 		if res := r.classifyEndpoints(key, r.replaceEndpoints(ctx, key, eps, st)); res != nil {
 			return *res
 		}

@@ -230,16 +230,13 @@ func (i *Importer) apply(ctx context.Context, imp *gdsv1.ServiceImport) (err err
 		return err
 	}
 
-	// Status: re-read for the current conditions, so transition times hold.
-	var current mcsv1beta1.ServiceImport
-	if err := i.opts.Client.Get(ctx, key, &current); err != nil && !apierrors.IsNotFound(err) {
-		return err
-	}
+	// The current conditions keep their transition times when the status
+	// does not change.
 	if !found {
-		current.Status = mcsv1beta1.ServiceImportStatus{}
+		existing = mcsv1beta1.ServiceImport{}
 	}
-	st := BuildServiceImportStatus(imp, current.Status.Conditions, current.Generation)
-	if equality.Semantic.DeepEqual(st.Clusters, current.Status.Clusters) && equalConditions(st.Conditions, current.Status.Conditions) {
+	st := BuildServiceImportStatus(imp, existing.Status.Conditions, si.GetGeneration())
+	if found && equality.Semantic.DeepEqual(st.Clusters, existing.Status.Clusters) && equalConditions(st.Conditions, existing.Status.Conditions) {
 		return nil
 	}
 	// The status is written whole with a merge patch: the controller owns
@@ -248,8 +245,8 @@ func (i *Importer) apply(ctx context.Context, imp *gdsv1.ServiceImport) (err err
 	if err != nil {
 		return err
 	}
-	current.Namespace, current.Name = key.Namespace, key.Name
-	if err := i.opts.Client.Status().Patch(ctx, &current, ctrlclient.RawPatch(types.MergePatchType, patch)); err != nil {
+	target := &mcsv1beta1.ServiceImport{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}
+	if err := i.opts.Client.Status().Patch(ctx, target, ctrlclient.RawPatch(types.MergePatchType, patch)); err != nil {
 		return fmt.Errorf("patch ServiceImport status: %w", err)
 	}
 	logger.V(1).Info("Import applied", "clusters", len(st.Clusters))
