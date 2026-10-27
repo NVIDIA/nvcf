@@ -1072,6 +1072,23 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.Equal(t, "nca-from-generated", meta.NCAID)
 	})
 
+	t.Run("generated values never write otel collector or event ledger fields", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gpu-f-register-values.yaml")
+		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{
+			Path:           path,
+			ClusterName:    "gpu-f",
+			NCAID:          "nca-from-generated",
+			Region:         "us-west-1",
+			IdentitySource: "psat",
+			Registration:   &selfhosted.RegisterResponse{ClusterID: "cluster-id", ClusterGroupID: "group-id"},
+		}))
+
+		body, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "otelCollector")
+		assert.NotContains(t, string(body), "eventLedgerServiceURL")
+	})
+
 	t.Run("generated values render transport trust through agent config merge", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "gpu-d-register-values.yaml")
 		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{

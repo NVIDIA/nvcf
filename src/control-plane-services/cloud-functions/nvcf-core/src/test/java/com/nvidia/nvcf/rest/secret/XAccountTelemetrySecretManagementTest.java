@@ -458,7 +458,7 @@ class XAccountTelemetrySecretManagementTest {
                 TEST_TELEMETRY_LOGS_ID,
                 TEST_TELEMETRY_ENDPOINT,
                 TelemetryProtocol.HTTP,
-                TelemetryProvider.PROMETHEUS,
+                TelemetryProvider.DATADOG,
                 Set.of(TelemetryType.LOGS),
                 TEST_TELEMETRY_LOG_SECRETS
         );

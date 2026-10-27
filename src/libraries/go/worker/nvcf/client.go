@@ -410,6 +410,7 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, natsAccount string
 	if err != nil {
 		return nil, err
 	}
+	logger := zap.L().With(zap.String("function version id", functionVersionId), zap.String("instance id", instanceId))
 	return nats.Connect(nvcfFqdnNats, nats.PingInterval(10*time.Second),
 		nats.RetryOnFailedConnect(true),
 		nats.Timeout(5*time.Second),
@@ -422,9 +423,13 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, natsAccount string
 			if delay == backoff.Stop {
 				delay = maxNatsReconnectDelay
 			}
+			logger.Warn("waiting to reconnect to nats", zap.Int("reconnect_round", attempt), zap.Duration("delay", delay))
 			return delay
 		}),
 		authOption,
+		nats.ReconnectErrHandler(func(conn *nats.Conn, err error) {
+			logger.Warn("nats reconnect attempt failed", zap.Error(err))
+		}),
 		nats.LameDuckModeHandler(func(conn *nats.Conn) {
 			nvcfMetrics.NatsLameDuckCounter.Inc()
 			expBackoffMutex.Lock()
@@ -477,8 +482,10 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, natsAccount string
 			if err := conn.LastError(); err != nil {
 				nvcfMetrics.NatsErrorCounter.Inc()
 				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("terminal_close").Inc()
+				logger.Error("nats connection permanently closed", zap.Error(err))
+				return
 			}
-			zap.L().Info("nats connection closed.", zap.Error(conn.LastError()))
+			logger.Info("nats connection closed.")
 		}),
 	)
 }

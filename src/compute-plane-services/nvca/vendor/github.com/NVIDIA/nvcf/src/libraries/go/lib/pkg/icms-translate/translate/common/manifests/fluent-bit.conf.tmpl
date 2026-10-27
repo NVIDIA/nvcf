@@ -2,22 +2,25 @@
     Flush         5
     Daemon        off
     Log_Level     info
-    Parsers_File  parsers.conf
 
 [INPUT]
     Name              tail
     Path              {{.LogPath}}
     Exclude_Path      {{.ExcludePath}}
     Path_Key          filename
-    Parser            docker
+    # Built-in multiline parsers: docker for Docker JSON logs, cri for containerd and CRI-O.
+    # Both join records that the runtime split into partial lines.
+    multiline.parser  docker, cri
     Tag               logs.*
     Refresh_Interval  5
     Mem_Buf_Limit     5MB
     Skip_Long_Lines   On
     Skip_Empty_Lines  On
+    # Read new files from the start so lines written before the sidecar starts are kept.
+    # Offsets in DB take precedence, so a sidecar restart resumes without duplicates.
+    Read_from_Head    On
     # Disable inotify to prevent "too many open files" error in clusters with many containers
     # Use polling mode instead (less efficient but more reliable)
-    Read_from_Head    Off
     Inotify_Watcher   false
     DB                /fluent-bit/db/flb_kube.db
     DB.locking        true

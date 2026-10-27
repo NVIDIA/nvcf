@@ -297,7 +297,7 @@ rollback.
 
 ## Disabling Admin Issuer Proxy
 
-Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential and cluster-management scopes.
+Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential, cluster-group listing and cluster-management scopes.
 
 **It does not authenticate callers** — the stack relies on the gateway in front of it for that.
 
@@ -431,6 +431,83 @@ If curl exits with a certificate error (exit 60), the edge is presenting a certi
 Only do this when diagnosing that specific failure: `-k` disables certificate verification and says nothing about whether the edge's TLS is sound.
 
 </Note>
+
+## Worker NATS Authentication
+
+Every worker connects to NATS to receive its function's requests. `nats.workerAuth` sets how it authenticates:
+
+| Mode | How a worker authenticates | What it can reach |
+| --- | --- | --- |
+| `nkey` (default) | The NVCF API gives every worker the control plane's shared NATS NKey, as `NKEY_SEED` | Everything in the `APP` account, with no expiry |
+| `token` | Each worker uses its own worker token. The NATS auth callout sends it to the NVCF API, which checks it | Its own function version's subjects, in `APP` |
+
+Use `token` when workers run outside the control-plane cluster, as in a multi-cluster install. In `nkey` mode, the shared key leaves the cluster on every worker launch.
+
+<Warning>
+Token mode needs an NVCF API that tells workers their account (`NVCF_NATS_ACCOUNT`), and a worker-utils image that reads it. An older worker-utils asks for the account `Worker`, which is refused, so its workers can't connect to NATS.
+
+</Warning>
+
+### Configuration
+
+```yaml
+# environments/<environment-name>.yaml
+nats:
+  workerAuth: token
+```
+
+This value changes three releases:
+
+| Release | Effect in `token` mode |
+| --- | --- |
+| `nats` | The auth callout configuration gives the `APP` account a `webhook` plugin that sends worker tokens to the NVCF API's webhook URL. NKey logins and NVCA's login are unchanged |
+| `api` | The API's secrets leave out `worker-nkey-seed`, so the API stops sending `NKEY_SEED` to workers. The API keeps its own NKey for its own connection |
+| `nats-auth-callout-service` | Restarts whenever the mode or the webhook URL changes, because it reads its plugin configuration only at start-up |
+
+The auth callout sends worker tokens to the NVCF API's in-cluster Service, `http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth`. If the API runs elsewhere, set the URL:
+
+```yaml
+# environments/<environment-name>.yaml
+nats:
+  workerAuth: token
+  authCallout:
+    workerTokenAuth:
+      webhookUrl: http://<api-service>.<api-namespace>.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
+```
+
+Any value other than `nkey` or `token` fails the deployment with `nats.workerAuth must be nkey or token`. In `token` mode, an empty webhook URL fails it too.
+
+### Switching an existing install
+
+1. Set `nats.workerAuth: token` and sync the stack.
+2. New workers authenticate with their worker tokens. Workers that were already running keep the shared NKey and stay connected until they're replaced, for example by redeploying their functions.
+3. Once no worker started before the switch is running, rotate the shared NATS NKey, because those workers held it.
+
+Switching back to `nkey` restores the shared key for new workers and restarts the auth callout the same way.
+
+### Verifying
+
+The auth callout logs each successful login, with the account and the user it assigned. Worker logins in token mode show the account `APP` and a user named after the function version:
+
+```bash
+kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-service \
+  --tail=-1 --prefix | grep 'Authentication successful' | grep 'worker-'
+```
+
+If new workers don't appear there, look for refused logins:
+
+```bash
+kubectl logs -n nats-system -l app.kubernetes.io/instance=nats-auth-callout-service \
+  --tail=-1 --prefix | grep -E 'Authentication (failed|denied)'
+```
+
+| Log shows | Cause |
+| --- | --- |
+| `plugin webhook not found for account Worker` | The worker asked for the account `Worker`, not `APP`. Its worker-utils doesn't read `NVCF_NATS_ACCOUNT`, or the NVCF API doesn't send `APP` |
+| `Authentication denied`, with `status_code` 401 or 403 | The NVCF API refused the worker's token or account. Check the API's logs |
+| `webhook request failed` | The auth callout can't reach the NVCF API at the webhook URL |
+
+If the auth callout logged nothing for a worker, its login didn't reach the auth callout. Check the worker's own logs for its NATS connection error.
 
 ## Observability
 

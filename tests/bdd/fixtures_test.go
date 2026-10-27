@@ -186,7 +186,6 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 
 func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testing.T) {
 	want := []string{
-		"-InfraResourceOverhead",
 		"-EnforceContainerFunctionResourceLimits",
 		"-EnforceContainerTaskResourceLimits",
 	}
@@ -222,6 +221,28 @@ func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testin
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Helm resource enforcement keeps NVCA's per-instance infra overhead on, so
+// the local fixtures shrink the utils reservation to keep NCP.GPU.H100_1x
+// registrable on hosts with about 8 CPUs.
+func TestComputePlaneLocalBDDFixturesReserveSmallUtilsContainer(t *testing.T) {
+	want := map[string]string{"cpu": "1", "memory": "2Gi"}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixture := loadYAMLMap(t, fixturePath)
+			for name, quantity := range want {
+				got, exists := nestedYAMLValue(fixture, "global", "nvcaOperator", "utils", "resources", name)
+				if !exists || got != quantity {
+					t.Errorf("global.nvcaOperator.utils.resources.%s = %#v (exists %t), want string %q", name, got, exists, quantity)
+				}
 			}
 		})
 	}
@@ -605,7 +626,7 @@ func TestSelfManagedLocalBDDFixtureUsesStackOwnedLLMAPIGatewayDefaults(t *testin
 	}
 }
 
-func TestNVCTTaskSmokeSupportsContainerAndHelmSamples(t *testing.T) {
+func TestNVCTTaskSamplesExistAndSmokeScriptIsRetired(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/task-samples/task-simple-sample/Dockerfile",
 		"../../examples/task-samples/task-simple-sample/main.py",
@@ -615,47 +636,49 @@ func TestNVCTTaskSmokeSupportsContainerAndHelmSamples(t *testing.T) {
 		"../../examples/task-samples/task-helmchart-sample/task-helmchart-test/values.yaml",
 	} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("task-simple-sample fixture missing %s: %v", path, err)
+			t.Fatalf("task sample fixture missing %s: %v", path, err)
 		}
+	}
+	if _, err := os.Stat("scripts/run-nvct-task-smoke.sh"); !os.IsNotExist(err) {
+		t.Fatalf("task smoke script must stay removed, stat error = %v", err)
 	}
 
-	scriptBytes, err := os.ReadFile("scripts/run-nvct-task-smoke.sh")
-	if err != nil {
-		t.Fatalf("read NVCT task smoke script: %v", err)
-	}
-	script := string(scriptBytes)
-	for _, want := range []string{
-		"task-simple-sample",
-		"NVCT_BDD_TASK_IMAGE_TAG:-local",
-		"NVCT_BDD_TASK_MODE",
-		"NVCT_BDD_TASK_HELM_CHART must be set in helm mode",
-		"helmChart",
-		"containerEnvironment",
-		"NUM_OF_RESULTS",
-		"DELAY_BETWEEN_RESULTS_IN_MINUTES",
-		".token // empty",
-		"audience_service_ids",
-		"account-tasks",
-		"Key-Issuer-Service",
-		"NVCT_BDD_STATE_PATH",
-		"NVCT_BDD_TASKS_HOST",
-		"NVCT_BDD_TASK_INSTANCE_TYPE must be set",
-	} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("NVCT task smoke script does not reference %q", want)
+	for _, root := range []string{"features", "scripts", "fixtures", "README.md", "PLAN.md", "AGENTS.md"} {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() {
+				return walkErr
+			}
+			body, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			for _, obsolete := range []string{"run-nvct-task-smoke", "NVCT_BDD_"} {
+				if strings.Contains(string(body), obsolete) {
+					t.Errorf("%s still references %s", path, obsolete)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
 		}
 	}
-	if strings.Contains(script, ".apiKey // empty") {
-		t.Fatal("NVCT task smoke script reads the function API key from nvcf-cli state")
+}
+
+func TestLocalNVCFCLIFixtureRoutesTaskCommandsThroughTheGateway(t *testing.T) {
+	body, err := os.ReadFile("fixtures/nvcf-cli-local.yaml")
+	if err != nil {
+		t.Fatalf("read local CLI fixture: %v", err)
 	}
-	if strings.Contains(script, "task_simple_sample") {
-		t.Fatal("NVCT task smoke script uses the unpublished underscore image name")
+	var config map[string]string
+	if err := yaml.Unmarshal(body, &config); err != nil {
+		t.Fatalf("parse local CLI fixture: %v", err)
 	}
-	if strings.Contains(script, "docker.io/library/busybox") {
-		t.Fatal("NVCT task smoke script still uses the synthetic busybox sample")
+	if config["base_nvct_url"] != "http://tasks.localhost:8080" {
+		t.Fatalf("base_nvct_url = %q, want the local gateway tasks endpoint", config["base_nvct_url"])
 	}
-	if strings.Contains(script, "NVCT_BDD_TASK_INSTANCE_TYPE:-") {
-		t.Fatal("NVCT task smoke script has a topology-dependent instance type default")
+	if config["nvct_host"] != "tasks.localhost" {
+		t.Fatalf("nvct_host = %q, want tasks.localhost", config["nvct_host"])
 	}
 }
 

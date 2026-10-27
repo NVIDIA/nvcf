@@ -61,7 +61,7 @@ func (p *EchoProvider) Complete(
 			},
 		},
 		Usage:       usage,
-		ServiceTier: request.ChatRequest.ServiceTier,
+		ServiceTier: ptr.Deref(request.ChatRequest.ServiceTier),
 	}, nil
 }
 
@@ -109,7 +109,7 @@ func (p *EchoProvider) Stream(
 							},
 						},
 					},
-					ServiceTier: request.ChatRequest.ServiceTier,
+					ServiceTier: ptr.Deref(request.ChatRequest.ServiceTier),
 				},
 			}
 		}
@@ -129,7 +129,7 @@ func (p *EchoProvider) Stream(
 					},
 				},
 				Usage:       ptr.To(newUsage(request.InputTokens, len(text)/4)),
-				ServiceTier: request.ChatRequest.ServiceTier,
+				ServiceTier: ptr.Deref(request.ChatRequest.ServiceTier),
 			},
 		}
 	}()

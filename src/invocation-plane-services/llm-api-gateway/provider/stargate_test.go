@@ -42,7 +42,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
@@ -279,7 +278,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -295,7 +294,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "upstream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -535,7 +534,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 					CreatedAt:         123,
 					Model:             "choice-model",
 					SystemFingerprint: ptr.To(fingerprint),
-					ServiceTier:       servicetier.Auto,
+					ServiceTier:       "auto",
 					Choices: []models.ChatCompletionChunkChoice{
 						{
 							Index: 1,
@@ -586,7 +585,7 @@ func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testin
 	require.Equal(t, int64(123), response.CreatedAt)
 	require.Equal(t, "choice-model", response.Model)
 	require.Equal(t, fingerprint, ptr.Deref(response.SystemFingerprint))
-	require.Equal(t, servicetier.Auto, response.ServiceTier)
+	require.Equal(t, "auto", response.ServiceTier)
 	require.Len(t, response.Choices, 2)
 	require.Equal(t, uint32(0), response.Choices[0].Index)
 	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
@@ -880,7 +879,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -896,7 +895,7 @@ func TestStargateProviderStreamParsesSSE(t *testing.T) {
 				Object:      models.ObjectChatCompletionChunk,
 				CreatedAt:   123,
 				Model:       "stream-model",
-				ServiceTier: servicetier.Auto,
+				ServiceTier: "auto",
 				Choices: []models.ChatCompletionChunkChoice{
 					{
 						Index: 0,
@@ -1086,72 +1085,72 @@ func TestStargateProviderNewOutboundRequestOmitsFieldsTheClientDidNotSend(t *tes
 			name:       "unary chat",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "max_tokens", "stream"},
 		},
 		{
 			name:       "unary chat forced to stream upstream",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`,
 			stream:     true,
-			wantFields: []string{"messages", "model", "max_tokens", "service_tier", "stream", "stream_options"},
+			wantFields: []string{"messages", "model", "max_tokens", "stream", "stream_options"},
 		},
 		{
 			name:       "streaming chat",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`,
 			stream:     true,
-			wantFields: []string{"messages", "model", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stream"},
 		},
 		{
 			name:       "explicit reasoning fields",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"include_reasoning":false,"reasoning_format":"parsed","prompt_cache_key":"k"}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "include_reasoning", "reasoning_format", "prompt_cache_key", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "include_reasoning", "reasoning_format", "prompt_cache_key", "stream"},
 		},
 		{
 			name:       "explicit null fields",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":null,"stop":null}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stream"},
 		},
 		{
 			name:       "explicit empty stop list",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":[]}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stop", "stream"},
 			wantValues: map[string]string{"stop": `[]`},
 		},
 		{
 			name:       "stop string",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":"END"}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "stop", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "stop", "stream"},
 			wantValues: map[string]string{"stop": `["END"]`},
 		},
 		{
 			name:       "explicit zero and false values",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0,"seed":0,"parallel_tool_calls":false,"logit_bias":{}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "temperature", "seed", "parallel_tool_calls", "logit_bias", "stream"},
 			wantValues: map[string]string{"temperature": `0`, "seed": `0`, "parallel_tool_calls": `false`, "logit_bias": `{}`},
 		},
 		{
 			name:       "json schema without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s"}}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "response_format", "stream"},
 			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s"}}`},
 		},
 		{
 			name:       "json schema with explicit strict false and empty schema",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "response_format", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "response_format", "stream"},
 			wantValues: map[string]string{"response_format": `{"type":"json_schema","json_schema":{"name":"s","schema":{},"strict":false}}`},
 		},
 		{
 			name:       "tool without optional members",
 			body:       `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f"}}]}`,
 			stream:     false,
-			wantFields: []string{"messages", "model", "tools", "service_tier", "stream"},
+			wantFields: []string{"messages", "model", "tools", "stream"},
 		},
 	}
 	for _, tt := range tests {

@@ -26,27 +26,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 type Config struct {
-	Telemetry          TelemetryConfig
-	Server             ServerConfig
-	Stargate           StargateConfig
-	NVCF               NVCFConfig
-	Olric              OlricConfig
-	RateLimiter        RateLimiterConfig
-	RateLimitSync      RateLimitSynchronizationConfig
-	DefaultServiceTier servicetier.Tier
-	DefaultTPM         int64
-	DefaultRPM         int64
-	ModelCapabilities  map[string]ModelCapabilities
+	Telemetry         TelemetryConfig
+	Server            ServerConfig
+	Stargate          StargateConfig
+	NVCF              NVCFConfig
+	Olric             OlricConfig
+	RateLimiter       RateLimiterConfig
+	RateLimitSync     RateLimitSynchronizationConfig
+	DefaultTPM        int64
+	DefaultRPM        int64
+	ModelCapabilities map[string]ModelCapabilities
 	// ModelURIAllowlistEnabled refuses requests to endpoints a model does
 	// not declare in its uris allowlist. When false, undeclared endpoints
 	// are only counted and logged so enforcement can roll out per
 	// environment.
 	ModelURIAllowlistEnabled bool
+	// ExposeRouterErrorCodes puts the request router's rejection reason, such
+	// as no_eligible_candidates, in error.code of OpenAI-format error
+	// responses. When false, the reason is only logged.
+	ExposeRouterErrorCodes bool
 }
 
 type ServerConfig struct {
@@ -254,7 +255,6 @@ func Default() *Config {
 				ConnectTimeout: 5 * time.Second,
 			},
 		},
-		DefaultServiceTier: servicetier.Auto,
 	}
 }
 
@@ -279,6 +279,9 @@ func LoadFromEnv() (*Config, error) {
 
 	if v, ok := errs.boolean("MODEL_URI_ALLOWLIST_ENABLED"); ok {
 		cfg.ModelURIAllowlistEnabled = v
+	}
+	if v, ok := errs.boolean("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES"); ok {
+		cfg.ExposeRouterErrorCodes = v
 	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.
@@ -532,15 +535,6 @@ func applyRateLimitEnv(cfg *Config, errs *envErrs) {
 }
 
 func applyDefaultModelEnv(cfg *Config, errs *envErrs) {
-	if tier := os.Getenv("NVCF_DEFAULT_SERVICE_TIER"); tier != "" {
-		var parsed servicetier.Tier
-		if err := parsed.UnmarshalText([]byte(tier)); err != nil {
-			errs.add("NVCF_DEFAULT_SERVICE_TIER", tier, err)
-		} else {
-			cfg.DefaultServiceTier = parsed
-		}
-	}
-
 	if tpm, ok := errs.integer64("NVCF_DEFAULT_TPM"); ok {
 		cfg.DefaultTPM = tpm
 	}

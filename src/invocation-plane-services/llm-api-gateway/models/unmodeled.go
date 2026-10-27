@@ -20,7 +20,9 @@ package models
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,8 +82,72 @@ func MergeJSONMembers(encoded []byte, extra map[string]json.RawMessage) ([]byte,
 	return json.Marshal(members)
 }
 
+// MemberDecoder marks a struct whose UnmarshalJSON decodes its declared
+// members by name like encoding/json, so AmbiguousMemberPath still inspects them.
+type MemberDecoder interface {
+	DecodesMembers()
+}
+
+// DecodeMembers decodes the JSON object in data into the struct that target
+// points to, one declared member at a time. A member that fails to decode
+// keeps its zero value and is returned in failed, keyed by its spelling in
+// data. If the member's JSON name is listed in checked, DecodeMembers returns
+// its error instead. Data that is not a JSON object or null is an error.
+func DecodeMembers(data []byte, target any, checked ...string) (failed map[string]json.RawMessage, err error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return nil, err
+	}
+
+	value := reflect.ValueOf(target).Elem()
+	for i := range value.NumField() {
+		name := jsonFieldName(value.Type().Field(i))
+		if name == "" {
+			continue
+		}
+		key, ok := memberKey(members, name)
+		if !ok {
+			continue
+		}
+		field := value.Field(i)
+		if err := json.Unmarshal(members[key], field.Addr().Interface()); err != nil {
+			field.SetZero()
+			if slices.Contains(checked, name) {
+				var typeErr *json.UnmarshalTypeError
+				if errors.As(err, &typeErr) {
+					typeErr.Struct = value.Type().Name()
+					typeErr.Field = strings.TrimSuffix(name+"."+typeErr.Field, ".")
+					// The offset counts from the member, not the body, so echo would print a wrong position.
+					typeErr.Offset = 0
+				}
+				// Not wrapped: echo builds its 400 message from *json.UnmarshalTypeError by type assertion.
+				return nil, err
+			}
+			if failed == nil {
+				failed = make(map[string]json.RawMessage)
+			}
+			failed[key] = members[key]
+		}
+	}
+	return failed, nil
+}
+
+// memberKey matches like encoding/json: an exact name first, then any letter case.
+func memberKey(members map[string]json.RawMessage, name string) (string, bool) {
+	if _, ok := members[name]; ok {
+		return name, true
+	}
+	for key := range members {
+		if strings.EqualFold(key, name) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
 var (
 	jsonUnmarshalerType = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+	memberDecoderType   = reflect.TypeOf((*MemberDecoder)(nil)).Elem()
 	// Types with custom decoding, mapped to the struct they decode objects into.
 	customObjectTypes = map[reflect.Type]reflect.Type{
 		reflect.TypeOf(ChatMessageContent{}):                reflect.TypeOf([]outboundContentPart{}),
@@ -107,7 +173,7 @@ func ambiguousMemberPath(data []byte, t reflect.Type, path string) string {
 	}
 	if mapped, ok := customObjectTypes[t]; ok {
 		t = mapped
-	} else if reflect.PointerTo(t).Implements(jsonUnmarshalerType) {
+	} else if pt := reflect.PointerTo(t); pt.Implements(jsonUnmarshalerType) && !pt.Implements(memberDecoderType) {
 		return ""
 	}
 

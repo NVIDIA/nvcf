@@ -1,6 +1,6 @@
 module github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout
 
-go 1.25.0
+go 1.26.10
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.4.0

@@ -471,6 +471,46 @@ yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors
   "$work_dir/worker-labels-disabled.yaml" >/dev/null ||
   fail 'empty worker identity labels must omit podTargetLabels'
 
+# BYOO platform metrics federation selects worker and DCGM series by job name.
+# A PodMonitor defaults the job to namespace/name, so the chart sets it with an
+# endpoint relabeling. Keep the names aligned with the collector templates.
+byoo_templates_dir="$repo_dir/src/compute-plane-services/byoo-otel-collector/internal/otelconfig/source_templates"
+find "$work_dir/matrix-compute" -type f -name '*.yaml' -exec cat {} + \
+  >"$work_dir/stack-compute-monitors.yaml"
+[[ -s "$work_dir/stack-compute-monitors.yaml" ]] ||
+  fail 'stack compute monitor manifests were not rendered'
+monitor_job_expression='select(.kind == "PodMonitor" and .metadata.name == strenv(NVCF_MONITOR_NAME)) |
+  .spec.podMetricsEndpoints[0].relabelings[] | select(.targetLabel == "job") |
+  .action + "|" + ((.sourceLabels // []) | join(",")) + "|" + .replacement'
+for row in 'worker|nvcf-worker' 'dcgm|nvidia-dcgm-exporter'; do
+  IFS='|' read -r monitor expected_job <<<"$row"
+  for manifest in "$work_dir/chart-compute/manifests.yaml" \
+    "$work_dir/stack-compute-monitors.yaml"; do
+    assert_equal \
+      "$(NVCF_MONITOR_NAME="nvcf-default-monitors-$monitor" yq -r "$monitor_job_expression" "$manifest")" \
+      "replace||$expected_job" "$monitor job relabeling in $(basename "$manifest")"
+  done
+  for profile in compute all; do
+    assert_yaml_value "$work_dir/$profile-monitor-values.yaml" \
+      ".computePlane.$monitor.jobName" "$expected_job" \
+      "$profile $monitor job name in Helmfile values"
+  done
+  for template in "$byoo_templates_dir"/src-config-k8s-*.yaml.tmpl; do
+    grep -Fq "{job=~\"$expected_job\"," "$template" ||
+      fail "$(basename "$template") no longer selects job $expected_job"
+  done
+done
+
+# An empty job name keeps the PodMonitor default job.
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true \
+  --set-string computePlane.worker.jobName= \
+  >"$work_dir/worker-job-default.yaml"
+yq -e 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker") |
+  .spec.podMetricsEndpoints[0] | has("relabelings") == false' \
+  "$work_dir/worker-job-default.yaml" >/dev/null ||
+  fail 'an empty worker job name must omit the job relabeling'
+
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break
 # discovery.

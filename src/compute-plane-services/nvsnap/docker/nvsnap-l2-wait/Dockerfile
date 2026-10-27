@@ -18,7 +18,7 @@
 
 # Stage 1: build a static, stripped binary. CGO disabled so the
 # resulting binary has no glibc dependency — scratch-runnable.
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26.10-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/root/go/pkg/mod \

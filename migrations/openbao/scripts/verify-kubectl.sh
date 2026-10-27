@@ -5,10 +5,13 @@
 set -eu
 
 kubectl=${KUBECTL_BINARY:-/out/kubectl}
-kubectl_go_version=${KUBECTL_GO_VERSION:-go1.26.6}
+kubectl_go_version=${KUBECTL_GO_VERSION:-go1.26.9}
 target_arch=${TARGETARCH:?TARGETARCH must be set}
 metadata=$(mktemp)
 trap 'rm -f "$metadata"' EXIT INT TERM
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+"$script_dir/verify-go-security.sh" "$kubectl"
 
 go version -m "$kubectl" >"$metadata"
 

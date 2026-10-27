@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "gateway",
     srcs = [
+        "anthropic_models.go",
         "gateway.go",
         "h2.go",
         "health.go",
@@ -65,8 +66,11 @@ go_test(
         "h2_test.go",
         "info_test.go",
         "llm_gateway_director_test.go",
+        "model_info_test.go",
+        "models_protocol_test.go",
         "openai_director_test.go",
         "processing_test.go",
+        "request_id_test.go",
         "shadow_metrics_test.go",
         "shadow_sampling_test.go",
         "shadow_test.go",
@@ -74,6 +78,7 @@ go_test(
         "vanity_director_test.go",
         "version_test.go",
     ],
+    data = ["//src/invocation-plane-services/vanity-gateway:model_info_testdata"],
     embed = [":gateway"],
     deps = [
         "//src/invocation-plane-services/vanity-gateway/gateway_config",

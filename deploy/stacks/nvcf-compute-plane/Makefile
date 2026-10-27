@@ -184,6 +184,10 @@ test-nvca-entrypoints: render-local
 test-nvca-default-ownership:
 	@tests/nvca-default-ownership.sh
 
+.PHONY: test-collector-images
+test-collector-images:
+	@bash tests/collector-images.sh
+
 test-compare-golden:
 	@tests/test-compare-golden.sh
 
@@ -193,7 +197,7 @@ test-nats-reloader-alignment:
 test-nats-server-source:
 	@tests/nats-server-source.sh
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints
+test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-collector-images test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local

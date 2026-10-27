@@ -24,6 +24,7 @@ import (
 	"time"
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	kartav1alpha1 "github.com/run-ai/karta/pkg/api/runai/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,6 +37,7 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -278,8 +280,19 @@ func BuildController(ctx context.Context,
 		Watches(&appsv1.StatefulSet{}, miniserviceLabelEventHandler).
 		Watches(&appsv1.ReplicaSet{}, miniserviceLabelEventHandler)
 
-	// Watch extra validation policy types so events are registered.
-	for _, gvk := range extraGVKs {
+	// Watch extra validation policy types so events are registered. A watch on a kind the
+	// API server does not serve never syncs, which makes the manager exit and the agent crash
+	// loop, so skip types whose CRD is not installed. An allowed type is only a permission, and
+	// a cluster may run an operator release that no longer ships it.
+	watchGVKs, absentGVKs := partitionInstalledGVKs(mgr.GetRESTMapper(), extraGVKs)
+	for _, gvk := range absentGVKs {
+		core.GetLogger(ctx).
+			WithField("group", gvk.Group).
+			WithField("version", gvk.Version).
+			WithField("kind", gvk.Kind).
+			Warn("Skipping watch on allowed extra Kubernetes type: its API is not installed")
+	}
+	for _, gvk := range watchGVKs {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
 		b.Watches(u, miniserviceLabelEventHandler)
@@ -290,6 +303,21 @@ func BuildController(ctx context.Context,
 	}
 
 	return nil
+}
+
+// partitionInstalledGVKs splits gvks into those the API server serves and those it does not.
+// Only a definite "no such kind" answer marks a type absent. Any other lookup failure, such as a
+// transient discovery error, keeps the type installed so a watch is never dropped on a
+// temporary failure.
+func partitionInstalledGVKs(mapper meta.RESTMapper, gvks []schema.GroupVersionKind) (installed, absent []schema.GroupVersionKind) {
+	for _, gvk := range gvks {
+		if _, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version); meta.IsNoMatchError(err) {
+			absent = append(absent, gvk)
+			continue
+		}
+		installed = append(installed, gvk)
+	}
+	return installed, absent
 }
 
 func getMiniServiceNameFromLabel(obj client.Object) string {

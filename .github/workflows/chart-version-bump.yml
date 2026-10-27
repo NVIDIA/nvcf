@@ -4,15 +4,26 @@
 # When a service release is published, open a pull request moving the charts
 # that deploy it to that version.
 #
-# This is the first hop of the service to chart to stack cascade. The second is
-# stack-pin-bump.yml: merging this pull request does not by itself move the
-# stack, because a chart version only reaches the stack once the chart is
-# released. Cutting that chart release stays a human decision, and publishing
-# it is what triggers the stack bump.
+# Registered charts release automatically from main. For the release cascade
+# and maintenance-train stack handoff, see:
+# docs/dev/github-release-process.md#automatic-pin-bumps
 #
 # Which charts deploy the released service is declared, not derived; see
 # tools/ci/chart-service-edge for why deriving it is wrong. A service whose
 # charts have not declared the edge yet bumps nothing and says so.
+#
+# A stack can also declare an image tag it repeats in its own values, through
+# values_files in tools/ci/github-release-subprojects.json. The compute-plane
+# stack pins its NVCA and collector image tags that way. Those pins move here,
+# with the charts, so the paths this job checks and stages cover deploy/stacks
+# as well as deploy/helm. tools/chart-version-bumper tests that these paths
+# cover every declared target.
+#
+# A pin on the default branch only moves up. The bumper skips a release whose
+# version is not above the pinned one, and, given --base, a release tagged on a
+# commit the default branch does not contain. A backport cut on a release
+# branch publishes a release too, and its version can sort below what the
+# default branch already pins.
 
 name: chart version bump
 
@@ -55,6 +66,11 @@ jobs:
           # Full history: the pull request title is derived from every bump
           # commit on the shared branch, which needs the merge base with main.
           fetch-depth: 0
+          # No credential left in the git config. The steps below run
+          # repository code (go test, the bumper, the branch helper), and this
+          # repository is public, so their fetches need none. Only the push and
+          # pull request steps hold a token.
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -119,13 +135,20 @@ jobs:
           # also makes the run idempotent: the bumper sees the current value and
           # reports "already <version>".
           #
-          # The shared branch is rebased onto the default branch first, as the
+          # The shared branch is moved onto the default branch first, as the
           # stack workflow does. Its tree can predate the tools this run needs
           # (the bumper's "bump:" line, release-bump-type), and a stale branch
           # would either fail or fall back to a patch commit for a minor bump.
+          #
+          # The default branch also moves the same chart versions, through a
+          # manual bump or a merged earlier bump. A plain rebase then stopped
+          # on that conflict and every later release failed here, so the
+          # helper regenerates a bump commit that no longer applies by running
+          # the bumper again for the release it recorded. See the helper for
+          # what it keeps, regenerates, drops, and refuses.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}"
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}"
 
       - name: Apply the bump
         id: bump
@@ -135,6 +158,7 @@ jobs:
           # whoever pushes it, and ${{ }} interpolation into a run: block is the
           # standard Actions injection shape.
           TAG: ${{ steps.tag.outputs.tag }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set +e
           set -uo pipefail
@@ -142,7 +166,10 @@ jobs:
           # exits 3 when a chart's appVersion and image tag disagree even though
           # it still applied every chart it could move safely. Aborting here
           # would throw those away and leave the refusal as the only outcome.
-          tools/ci/chart-version-bumper \
+          # --base skips a tag the default branch does not contain, such as a
+          # backport cut on a release branch. The checkout above fetched every
+          # tag and branch, and the branch helper refreshed origin/<default>.
+          tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}" \
             --tag "${TAG}" --write >/tmp/bump.out 2>/tmp/refusals
           status=$?
           cat /tmp/bump.out
@@ -165,39 +192,30 @@ jobs:
           # Scoped to the same paths the commit below stages. Repo-wide, any
           # unrelated modification in the workspace would set changed=true and
           # the commit would then abort with nothing staged.
-          if git diff --quiet -- deploy/helm; then
+          if git diff --quiet -- deploy/helm deploy/stacks; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
-            echo "no chart moved"
+            echo "no chart or stack pin moved"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
-            git --no-pager diff --stat -- deploy/helm
+            git --no-pager diff --stat -- deploy/helm deploy/stacks
           fi
           # The largest semver step any chart took, reported by the bumper as
           # "bump: <level>". Empty when nothing moved.
           echo "level=$(sed -n 's/^bump: //p' /tmp/bump.out | tail -n 1)" >> "${GITHUB_OUTPUT}"
 
-      - name: Open or refresh the pull request
+      - name: Commit the bump
+        id: commit
         if: steps.bump.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
           LEVEL: ${{ steps.bump.outputs.level }}
-          REFUSED: ${{ steps.bump.outputs.refused }}
-          SERVER_URL: ${{ github.server_url }}
-          REPO: ${{ github.repository }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          branch="chore/chart-version-bumps"
-
-          git add deploy/helm
-          # The commit type carries the semver step of the service release
-          # into the chart release. tools/ci/github-release feeds RELEASE_RULES
-          # to semantic-release: fix cuts a patch, feat a minor, "!" a major,
-          # and chore cuts nothing (which would stop the cascade here, since a
-          # published chart release is what triggers stack-pin-bump.yml). A
-          # service that moved a minor therefore moves its chart a minor, and
-          # one step later the stack, instead of every bump reading as a patch.
+          git add deploy/helm deploy/stacks
+          # Carry the service bump level into chart commit labels. Chart source
+          # release rules are documented in:
+          # docs/dev/github-release-process.md#service-auto-tags
           type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
           case "${type}" in
             *!) subject="${type%!}(charts)!: bump for ${TAG}" ;;
@@ -216,15 +234,53 @@ jobs:
               -m "${subject}" \
               -m "Opened by the chart version bump workflow on release of ${TAG}."
           fi
-          git push --force-with-lease origin "${branch}"
 
           # The pull request squashes to one commit, so its title has to carry
           # the largest step among every bump accumulated on the branch.
           pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
-          case "${pr_type}" in
-            *!) title="${pr_type%!}(charts)!: bump chart versions for released services"
+          echo "pr_type=${pr_type}" >> "${GITHUB_OUTPUT}"
+
+      - name: Push the bump branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: chore/chart-version-bumps
+          # The repository secret, not github.token: GitHub starts no workflow
+          # for a push made with github.token, so the pull request's checks
+          # never ran on the bot's commits until a person pushed. github.token
+          # remains the fallback where the secret is absent, such as on a fork.
+          PUSH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+        # A step of its own that runs no repository code, so the steps that do
+        # never hold the token. The credential helper reads the token from
+        # this step's environment when git asks for it. It is not written to
+        # the git config, a remote URL, the command line, or the log. Hooks are
+        # off, so nothing an earlier step left in .git runs here.
+        run: |
+          set -euo pipefail
+          # Single quotes on purpose: the helper expands PUSH_TOKEN when git
+          # runs it, so the token never appears on this command line.
+          # shellcheck disable=SC2016
+          git -c core.hooksPath=/dev/null \
+            -c credential.helper= \
+            -c 'credential.helper=!f() { [ "$1" = get ] || return 0; printf "username=x-access-token\npassword=%s\n" "${PUSH_TOKEN}"; }; f' \
+            push --force-with-lease origin "${BRANCH}"
+
+      - name: Open or refresh the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PR_TYPE: ${{ steps.commit.outputs.pr_type }}
+          REFUSED: ${{ steps.bump.outputs.refused }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch="chore/chart-version-bumps"
+
+          case "${PR_TYPE}" in
+            *!) title="${PR_TYPE%!}(charts)!: bump chart versions for released services"
                 breaking="BREAKING CHANGE: a pinned service moved to a new major version." ;;
-            *)  title="${pr_type}(charts): bump chart versions for released services"
+            *)  title="${PR_TYPE}(charts): bump chart versions for released services"
                 breaking="" ;;
           esac
 
@@ -246,7 +302,11 @@ jobs:
             "" \
             "The released tag identifies the version and source tree, so this is a direct update rather than a lookup of the newest published image." \
             "" \
-            "Merging this does not move the self-managed stack. A chart version reaches the stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`." \
+            "Review the [release flow](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#automatic-pin-bumps) and verify that the selected images are available from the intended registry routes before merge." \
+            "" \
+            "This PR targets main. Follow the [maintenance handoff](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#patch-an-existing-component-minor) for supported release trains." \
+            "" \
+            "Image tags declared in a stack's own values are updated here. A change under \`deploy/stacks/nvcf-compute-plane\` also needs its golden render fixtures refreshed with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` before merge." \
             "" \
             "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
             "${notes}" \

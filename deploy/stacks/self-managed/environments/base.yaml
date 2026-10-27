@@ -230,6 +230,22 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # How workers authenticate to NATS.
+  #   nkey: the NVCF API gives every worker the control plane's shared NATS
+  #     NKey as NKEY_SEED. The default.
+  #   token: each worker authenticates with its own worker token, into APP. The
+  #     NATS auth callout passes it to the NVCF API, which returns that function
+  #     version's permissions, and the API stops sending NKEY_SEED. Needs an NVCF
+  #     API and worker-utils that support NVCF_NATS_ACCOUNT. Use it when workers
+  #     run outside the control-plane cluster.
+  # Switching an existing install: see "Worker NATS Authentication" in
+  # docs/self-managed/control-plane-operations.md.
+  workerAuth: nkey
+  authCallout:
+    workerTokenAuth:
+      # token mode: the NVCF API endpoint the NATS auth callout sends worker
+      # tokens to. Changing it restarts the auth callout.
+      webhookUrl: http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
@@ -260,6 +276,21 @@ nats:
     #   tls:
     #     enabled: true
     #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
+  # CPU and memory for each NATS server container. The chart sets none, so the
+  # servers run as BestEffort and nats-server sizes its Go runtime to every
+  # core on the node. Set a CPU limit so the runtime sizes itself to it, and
+  # set requests so NATS keeps its CPU share when the node is full. Size both
+  # from your own load test. No memory limit is shown because the
+  # request-queue streams are memory-backed and a memory limit can end the
+  # server under a backlog.
+  # container:
+  #   merge:
+  #     resources:
+  #       requests:
+  #         cpu: <cores>
+  #         memory: <memory>
+  #       limits:
+  #         cpu: <cores>
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
@@ -491,17 +522,9 @@ addons:
       # manage a custom ClusterIssuer. Leave it false for an external issuer.
       # clusterIssuer:
       #   enabled: true
-      # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
-      # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.5 if
-      # neither location is set.
-      # image:
-      #   registry: ""
-      #   repository: ""
-      #   tag: ""
 
   # Event Ledger addon: records deployment stage events from NVCA and SIS.
   # When enabled, deploys the event-ledger service backed by Cassandra.

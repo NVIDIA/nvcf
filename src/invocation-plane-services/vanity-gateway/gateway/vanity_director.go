@@ -123,6 +123,7 @@ func markUpstreamResponse(request *http.Request, resp *http.Response) {
 func requestProxy(base *httputil.ReverseProxy, request *http.Request, proxyErr *error) *httputil.ReverseProxy {
 	rp := *base
 	rp.ModifyResponse = func(resp *http.Response) error {
+		middleware.DropUpstreamRequestIDHeaders(request.Context(), resp.Header)
 		markUpstreamResponse(request, resp)
 		return modifyTooManyRequestsResponse(resp)
 	}

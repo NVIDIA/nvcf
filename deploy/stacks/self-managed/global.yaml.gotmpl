@@ -246,6 +246,14 @@ topologySpreadConstraints:
 {{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
 {{- end }}
 {{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
+{{- $natsWorkerAuth := dig "nats" "workerAuth" "nkey" .Values | toString }}
+{{- if not (has $natsWorkerAuth (list "nkey" "token")) }}
+{{- fail (printf "nats.workerAuth must be nkey or token, got %q" $natsWorkerAuth) }}
+{{- end }}
+{{- $natsWorkerWebhookUrl := dig "nats" "authCallout" "workerTokenAuth" "webhookUrl" "" .Values | default "" | toString }}
+{{- if and (eq $natsWorkerAuth "token") (not $natsWorkerWebhookUrl) }}
+{{- fail "nats.authCallout.workerTokenAuth.webhookUrl is required when nats.workerAuth is token" }}
+{{- end }}
 {{- range $key := list "affinity" "topologySpreadConstraints" }}
 {{- $byClass := dig "global" $key dict $.Values }}
 {{- if not (kindIs "map" $byClass) }}
@@ -327,9 +335,8 @@ cassandra:
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
-# `cert-manager` key. The controller components use the nvcr.io mirror. The
-# ACME solver keeps the chart's quay.io/jetstack default unless an operator
-# supplies certManager.acmesolver.image for a private mirror.
+# `cert-manager` key. Explicit component repositories bypass global.image;
+# unset values retain the existing mirror and upstream solver defaults.
 cert-manager:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -337,13 +344,28 @@ cert-manager:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
   {{- end }}
   image:
-    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-controller
+    repository: {{ dig "certManager" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-controller" .Values.global.image.registry .Values.global.image.repository) | quote }}
+    {{- range $key := list "tag" "digest" "pullPolicy" }}
+    {{- with dig "certManager" "image" $key "" $.Values }}
+    {{ $key }}: {{ . | quote }}
+    {{- end }}
+    {{- end }}
   webhook:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-webhook
+      repository: {{ dig "certManager" "webhook" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-webhook" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "webhook" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
   cainjector:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+      repository: {{ dig "certManager" "cainjector" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-cainjector" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "cainjector" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
   {{- $acmeSolverRepository := dig "certManager" "acmesolver" "image" "repository" "" .Values }}
   {{- $acmeSolverTag := dig "certManager" "acmesolver" "image" "tag" "" .Values }}
   {{- $acmeSolverDigest := dig "certManager" "acmesolver" "image" "digest" "" .Values }}
@@ -366,7 +388,12 @@ cert-manager:
   {{- end }}
   startupapicheck:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
+      repository: {{ dig "certManager" "startupapicheck" "image" "repository" "" .Values | default (printf "%s/%s/cert-manager-startupapicheck" .Values.global.image.registry .Values.global.image.repository) | quote }}
+      {{- range $key := list "tag" "digest" "pullPolicy" }}
+      {{- with dig "certManager" "startupapicheck" "image" $key "" $.Values }}
+      {{ $key }}: {{ . | quote }}
+      {{- end }}
+      {{- end }}
 
 openbao:
   {{- if .Values.global.imagePullSecrets }}
@@ -399,8 +426,11 @@ openbao:
 
   injector:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+      registry: {{ dig "openbao" "injector" "image" "registry" "" .Values | default .Values.global.image.registry | quote }}
+      repository: {{ dig "openbao" "injector" "image" "repository" "" .Values | default (printf "%s/oss-vault-k8s" .Values.global.image.repository) | quote }}
+      {{- with dig "openbao" "injector" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     agentImage:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
@@ -486,15 +516,23 @@ nats:
         {{- end }}
   {{- end }}
   container:
-    {{- with dig "nats" "container" "merge" "securityContext" dict .Values }}
+    {{- $natsSecurityContext := dig "nats" "container" "merge" "securityContext" dict .Values }}
+    {{- $natsResources := dig "nats" "container" "merge" "resources" dict .Values }}
+    {{- if or $natsSecurityContext $natsResources }}
     merge:
+      {{- with $natsSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $natsResources }}
+      resources:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     {{- end }}
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server
-      tag: 2.14.6-alpine3.22
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
+      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
@@ -520,15 +558,28 @@ nats:
     {{- end }}
   {{- end }}
   natsBox:
+    {{- with dig "nats" "natsBox" "podTemplate" "merge" "spec" "securityContext" dict .Values }}
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+    {{- end }}
     container:
       image:
-        registry: {{ .Values.global.image.registry }}
-        repository: {{ .Values.global.image.repository }}/nats-box
-        tag: 0.19.7-nonroot
+        registry: {{ dig "nats" "natsBox" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+        repository: {{ dig "nats" "natsBox" "container" "image" "repository" "" .Values | default (printf "%s/nats-box" .Values.global.image.repository) }}
+        tag: {{ dig "nats" "natsBox" "container" "image" "tag" "" .Values | default "0.19.7-nonroot" | quote }}
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if eq $natsWorkerAuth "token" }}
+  authCallout:
+    workerTokenAuth:
+      enabled: true
+      webhookUrl: {{ $natsWorkerWebhookUrl | quote }}
+  {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- /* nats-box shares the release's instance label; select server Pods only. */}}
@@ -640,6 +691,10 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "resources" dict .Values }}
+  resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}
@@ -897,6 +952,10 @@ api:
     configData:
       {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
+  {{- if eq $natsWorkerAuth "token" }}
+  workerNkeySeed:
+    enabled: false
+  {{- end }}
   {{- $accountBootstrapRegistry := dig "api" "accountBootstrap" "image" "registry" "" .Values }}
   {{- $accountBootstrapRepository := dig "api" "accountBootstrap" "image" "repository" "" .Values }}
   {{- $accountBootstrapTag := dig "api" "accountBootstrap" "image" "tag" "" .Values }}
@@ -996,6 +1055,7 @@ invocation:
   {{- end }}
   {{- $invocationEnv := dict }}
   {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "info,otel::tracing=debug" }}
   {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
   {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
   {{- else }}
@@ -1907,28 +1967,32 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
-  {{- /* This hook rewrites the same OpenBao role as the stack migration, so
-       it must keep the worker callback proxy domains too. */ -}}
   {{- if eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" }}
   {{- $allowedDomains = include "nvcf.servicePki.allowedDomains" .Values }}
   {{- end }}
-  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
-       PKI tag, then the OpenBao migrations tag, and finally the compatible
-       stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
+  {{- /* The chart only runs this check with its hook enabled, so run it here
+       against the domains the stack migration writes. Same coverage rule as
+       llm-request-router.validatePkiAllowedDomains: the role allows
+       subdomains and wildcards but refuses bare domains. */ -}}
+  {{- range $dnsName := $dnsNames }}
+  {{- $name := $dnsName | toString | lower | trim }}
+  {{- $base := trimPrefix "*." $name }}
+  {{- $covered := false }}
+  {{- range $allowed := splitList "," ($allowedDomains | toString) }}
+  {{- $allowed = trim $allowed | lower }}
+  {{- if and $allowed (or (hasSuffix (printf ".%s" $allowed) $base) (and (hasPrefix "*." $name) (eq $base $allowed))) }}
+  {{- $covered = true }}
+  {{- end }}
+  {{- end }}
+  {{- if not $covered }}
+  {{- fail (printf "addons.llm.pki.dnsNames entry %q is not covered by addons.llm.pki.allowedDomains %q. The OpenBao signing role allows subdomains but not bare domains, so cert-manager issuance would be rejected." $dnsName $allowedDomains) }}
+  {{- end }}
+  {{- end }}
+  {{- /* The openbao-server migration owns the nvcf-service-server role and the
+       cert-manager policy. The chart's hook runs the same addon from its own
+       values, so the two writers would overwrite each other's role. */}}
   pki:
-    enabled: true
-    namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
-    allowedDomains: {{ $allowedDomains | quote }}
-    image:
-      registry: {{ dig "addons" "llm" "pki" "image" "registry" .Values.global.image.registry .Values | quote }}
-      repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
-      tag: {{ $pkiImageTag | quote }}
-      pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
-    {{- if .Values.global.imagePullSecrets }}
-    imagePullSecrets:
-      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
-    {{- end }}
+    enabled: false
   {{- end }}
   {{- end }}
   {{- end }}
@@ -2136,7 +2200,7 @@ nvcfUi:
       - name: nats-auth-callout-service
         namespace: nats-system
         endpoints:
-          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/readyz
       {{- if dig "nats" "enabled" true .Values }}
       - name: nats
         namespace: nats-system

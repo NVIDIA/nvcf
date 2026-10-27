@@ -854,6 +854,48 @@ func TestExtractCloudEvent_ResourceID(t *testing.T) {
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }
 
+// TestExtractCloudEvent_FunctionVersionIDNamespace verifies functionVersionId
+// is accepted in place of namespace and stored as the namespace.
+func TestExtractCloudEvent_FunctionVersionIDNamespace(t *testing.T) {
+	const versionID = "0f230d58-275f-444e-b30e-9c363a076702"
+	tests := []struct {
+		name       string
+		extensions map[string]string
+		want       string
+		wantErr    string
+	}{
+		{name: "namespace only", extensions: map[string]string{"namespace": versionID}, want: versionID},
+		{name: "functionVersionId only", extensions: map[string]string{"functionversionid": versionID}, want: versionID},
+		{name: "both matching", extensions: map[string]string{"namespace": versionID, "functionversionid": versionID}, want: versionID},
+		{name: "both differing", extensions: map[string]string{"namespace": "other", "functionversionid": versionID}, wantErr: "must match"},
+		{name: "neither", extensions: map[string]string{}, wantErr: ErrMissingNamespace.Error()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ce := cloudevents.NewEvent()
+			ce.SetID("test-id")
+			ce.SetType("test.event")
+			ce.SetSource("/test")
+			for name, value := range tc.extensions {
+				ce.SetExtension(name, value)
+			}
+
+			event, err := extractCloudEvent(context.Background(), &ce)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, event.Namespace)
+
+			var details map[string]any
+			require.NoError(t, json.Unmarshal(event.DetailsJSON, &details))
+			attrs, _ := details["attributes"].(map[string]any)
+			assert.NotContains(t, attrs, "functionversionid")
+		})
+	}
+}
+
 // TestExtractCloudEvent_NVCAClusterBinding mirrors
 // TestExtractK8sEvent_NVCAClusterBinding: bindNVCAClusterID is wired into
 // both extractK8sEvent and extractCloudEvent, so both need the same

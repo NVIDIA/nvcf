@@ -14,7 +14,10 @@ test:
 	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
+	@tests/nats-image-overrides.sh
+	@tests/cert-manager-image-overrides.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/openbao-injector-image-overrides.sh
 	@tests/service-pki-wiring.sh
 	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
@@ -37,8 +40,10 @@ test:
 	@tests/admin-issuer-proxy-wiring.sh
 	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
+	@tests/nats-container-resources.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
+	@tests/nats-worker-auth-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
 	@tests/nonroot-ui-migrations.sh
