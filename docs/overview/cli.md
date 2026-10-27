@@ -647,7 +647,8 @@ accepts the admin token from `init` or an API key generated with the
 
 These commands read function deployment events from the Event Ledger. They need
 the Event Ledger addon on the control plane and an `EVENT_LEDGER_API_KEY`
-(see [Generate API Keys](#generate-api-keys)).
+(see [Generate API Keys](#generate-api-keys)). For how events are organized and
+the REST API, see [Event Ledger](./event-ledger.md).
 
 | Command | Description |
 | --- | --- |

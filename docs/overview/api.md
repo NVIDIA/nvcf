@@ -22,6 +22,7 @@ The NVCF API is divided into the following sets of APIs:
 | Function Management   | The creation, modification and deletion of functions                                  |
 | Function Deployment   | Endpoints for creating and managing function deployments.                             |
 | Task Management       | GPU-backed batch jobs via NVIDIA Cloud Tasks (NVCT).                                  |
+| Event Ledger          | Deployment events and their latest state. See [Event Ledger](./event-ledger.md).      |
 
 **API Versioning**
 
@@ -169,6 +170,18 @@ endpoints require `NVCF_NVCT_API_KEY` with the listed scope.
 | `GET /v1/nvct/tasks/{taskId}/events` | `NVCF_NVCT_API_KEY` | `list_events` |
 | `GET /v1/nvct/tasks/{taskId}/results` | `NVCF_NVCT_API_KEY` | `list_results` |
 | `PUT /v1/nvct/secrets/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `update_secrets` |
+
+Event Ledger endpoints are served at `events.<domain>` on your gateway and
+accept an Event Ledger key. Create one with
+`nvcf-cli api-key generate --for event-ledger`. See [Event Ledger](./event-ledger.md)
+for the request and response formats.
+
+| Method and endpoint | Accepted bearer | Scope |
+| --- | --- | --- |
+| `GET /v3/ledger/namespace/{namespace}/events` | Event Ledger API key | `fnds:getEvents` |
+| `GET /v3/ledger/namespace/{namespace}/stats` | Event Ledger API key | `fnds:getEvents` |
+| `POST /v3/ledger/cloudevents` | Service credential | `fnds:createEvent` |
+| `POST /v3/ledger/k8s-events` | Service credential | `fnds:createEvent` |
 
 ### Direct API key creation
 

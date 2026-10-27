@@ -251,7 +251,7 @@ that should send its events to the Event Ledger. Also set
 `global.nvcaOperator.selfManaged.eventLedgerServiceURL` there when the compute
 plane is in a different cluster than the control plane; leave it empty when
 they share a cluster, since the collector then defaults to the in-cluster
-Event Ledger Service.
+Event Ledger Service. See [Event Ledger Enablement](../../self-managed/event-ledger.md).
 
 <Warning>
 The `KAIScheduler` feature flag is optional. Enable it only if the

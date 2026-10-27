@@ -221,6 +221,9 @@ nvcf-cli task get
 nvcf-cli task events
 ```
 
+`task events` reads task lifecycle events from the task API. To read function
+deployment events, see [Event Ledger](./event-ledger.md).
+
 A `task get` response includes `percentComplete` and `healthInfo` (the GPU type,
 instance type, and any error message from the platform) in addition to the
 lifecycle status.
