@@ -2,11 +2,9 @@
 
 ## Build with Bazel
 
-CI runs `bazel test //...` and publishes the multi-arch image via
-`bazel run //nvidia-internal:image_push_nvcf_dev` (the legacy
-`nvcr.io/0544956542906249/nvcf-dev` path). The legacy
-`cds/cicd-pipelines/pipelines/nvcf/nvcf-rust-ci-pipeline.yml` template
-is retired.
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on
 PATH delegating to the version pinned in `.bazelversion`).
@@ -28,12 +26,6 @@ bazel build //crates/server:image_index
 
 # Load the host-arch image into the local docker daemon for smoke tests.
 bazel run //crates/server:image_load
-
-# Push to nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service.
-# Needs DOCKER_CONFIG pointed at credentials for that path (CI uses
-# the NGC_REGISTRY_TOKEN from vault path
-# kv/gitlab/ngc-registry-auth/nvcf-invocation-service).
-bazel run //nvidia-internal:image_push_nvcf_dev
 
 # Repin crate_universe after Cargo.lock changes.
 CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
@@ -177,7 +169,7 @@ end group
 is -> is: encode http request headers and up to 32k of body into protobuf
 note right
     the entire request including headers can optionally be omitted from
-    the protobuf. if omitted, the worker will fetch all request data 
+    the protobuf. if omitted, the worker will fetch all request data
     instead of just the request body with GET attach.
 end note
 group if more request data is available
@@ -231,14 +223,14 @@ group if http response is 202
         Preparation accepts headerless records until the enforcement release.
     end note
     loop
-        worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id} 
+        worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id}
         note right
             the current pexec polling api allows us to differentiate
             a polling request from a new request which lets us know when
             to write into the regular request subject vs this polling subject.
-            
+
             for future full passthrough apis, we could differentiate using a
-            request id or cookie in the http header.  
+            request id or cookie in the http header.
         end note
     end loop
 end group

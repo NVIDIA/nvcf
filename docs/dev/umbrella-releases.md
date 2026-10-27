@@ -66,8 +66,16 @@ candidate CI. It validates and assembles the pins and uploads a QA artifact
 named `umbrella-candidate-<sha>-<run-id>-<run-attempt>`. Pull requests use their
 head commit SHA. It creates no stable tag or release.
 Download that exact artifact for QA and retain its candidate SHA, manifest hash,
-archive hash, and CI run with the results. A pin change produces a new artifact
+archive hash, and CI run with the results. The CI artifact expires after
+30 days; retain required evidence in durable release storage. A pin change produces a new artifact
 and requires qualification of the changed combination.
+
+Keep implementation fixes in their owning component and stack maintenance
+branches. An older candidate branch may need the reviewed candidate tooling
+once; thereafter it carries the selection manifest and qualification metadata.
+Do not merge the whole umbrella branch back into a stack maintenance branch.
+Customer catalog publication of stack resources is not a prerequisite for
+assembly: CI consumes the public stable source releases and inventories.
 
 The archive preserves the sibling paths under `deploy/stacks/`. Each stack's
 `VERSION` is its own version; root `VERSION` is the umbrella version. The archive
@@ -112,7 +120,16 @@ configuration, and test results. Test fresh installation, supported upgrade
 paths, repeat apply, rollback limits, single/split cluster topologies, and
 supported observability profiles. Validate real workloads, original function
 and deployment identities, migrations, registration, and invocation continuity.
-Fixture chart tests validate the packaging machinery only.
+Fixture chart tests validate the packaging machinery only. The
+`Umbrella bundle E2E` workflow assembles and renders fixtures; it does not run
+live single- or multi-cluster BDDs or approve the product.
+
+Before QA sign-off, download every selected external chart through its customer
+registry or retained public upstream route. Account for bundled charts and
+subchart dependencies in the archive. Verify effective images after stack
+values and overrides; chart `appVersion` alone is insufficient. Repeat these
+checks when selected pins change. Record any engineering-registry testing
+separately from completed customer-distribution checks.
 
 Run qualification through the existing packaged Helmfile/Make entrypoints.
 Any CLI-assisted step must use the existing component-source interface with
@@ -137,6 +154,8 @@ Run `Publish Umbrella Release` from `main` with `version=X.Y.Z` and
 `target=FULL_REVIEWED_PRODUCT_COMMIT`. Use `mode=validate`, then `draft`.
 Keep that full target SHA for retries and promotion, even if `main` advances.
 The target must already belong to `main` and contain the final manifest and notes.
+The workflow validates source identities and assets; it does not execute QA
+or independently enforce a release-owner hold on external catalog publication.
 The publisher uploads missing assets, verifies existing bytes, and leaves an
 interrupted upload as a draft. Retry identical inputs. A checksum conflict
 requires investigation; do not replace a published asset.
