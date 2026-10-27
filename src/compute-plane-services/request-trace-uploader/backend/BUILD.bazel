@@ -4,6 +4,7 @@ go_library(
     name = "backend",
     srcs = [
         "client.go",
+        "errors.go",
         "registry.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend",
@@ -22,7 +23,14 @@ alias(
 
 go_test(
     name = "backend_test",
-    srcs = ["registry_test.go"],
+    srcs = [
+        "client_test.go",
+        "errors_test.go",
+        "registry_test.go",
+    ],
     embed = [":backend"],
-    deps = ["//src/compute-plane-services/request-trace-uploader/config"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/segment",
+    ],
 )
