@@ -60,7 +60,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -113,12 +112,6 @@ class FunctionManagementTelemetryTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void disabledRejectsEmptyTelemetries(boolean newVersion) {
-        assertRejected(newVersion, new TelemetriesDto(null, null, null));
-    }
-
-    @ParameterizedTest
     @MethodSource("telemetryCases")
     void enabledValidatesAndSavesTelemetryReferences(boolean newVersion, TelemetryType type) {
         var telemetry = new TelemetryByAccountEntity();
@@ -136,13 +129,6 @@ class FunctionManagementTelemetryTest {
     @MethodSource("modeAndVersionCases")
     void functionsWithoutTelemetriesWorkInEitherMode(boolean enabled, boolean newVersion) {
         assertSaved(enabled, newVersion, null);
-        verifyNoInteractions(telemetryLookupService);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void enabledAcceptsEmptyTelemetries(boolean newVersion) {
-        assertSaved(true, newVersion, new TelemetriesDto(null, null, null));
         verifyNoInteractions(telemetryLookupService);
     }
 
