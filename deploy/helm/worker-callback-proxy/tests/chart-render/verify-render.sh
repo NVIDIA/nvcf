@@ -149,7 +149,13 @@ expect_eq "CA SDS watches its mount" \
   "$(pod "${m}" '.containers[0].volumeMounts[] | select(.name == "grpc-proxy-ca") | .mountPath')"
 expect_eq "invocation route" \
   "$(envoy "${m}" '.. | select(has("safe_regex")) | .safe_regex.regex' | sort -u)" \
-  '^\d+-\d+-\d+-\d+\.invocation\.nvcf\.svc\.cluster\.local:8080$'
+  '^\d+-\d+-\d+-\d+\.invocation\.nvcf\.svc\.cluster\.local:8443$'
+# Both invocation TLS layers: the worker's TLS to Envoy ends on the frontend
+# certificate, and the tunnel only reaches the pod's TLS port.
+invocation_tls() {
+  envoy "$1" '.static_resources.listeners[] | select(.name == "invocation_worker_tcp") | .filter_chains[0].transport_socket.typed_config.common_tls_context.tls_certificate_sds_secret_configs[0].name // "none"'
+}
+expect_eq "invocation listener TLS" "$(invocation_tls "${m}")" "frontend_tls"
 expect_eq "drain time" "$(pod "${m}" '.containers[0].args | .[(to_entries[] | select(.value == "--drain-time-s") | .key) + 1]')" "30"
 expect_eq "access log format" "$(envoy "${m}" '[.. | select(has("json_format")) | .json_format.x_request_id] | unique | .[]')" \
   "%REQ(X-REQUEST-ID)%"
@@ -191,8 +197,19 @@ expect_eq "Secret names and key are strings" \
 m="${tmp_dir}/invocation-only.yaml"
 render --set workerCallbackProxy.grpcProxy.enabled=false > "${m}"
 check_wiring "${m}"
-expect_eq "no Certificate without grpcProxy" "$(q "${m}" 'select(.kind == "Certificate") | .kind')" ""
-expect_eq "no TLS volumes without grpcProxy" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config"
+expect_eq "invocation-only keeps the frontend Certificate" "$(q "${m}" 'select(.kind == "Certificate") | .kind')" "Certificate"
+expect_eq "invocation-only mounts only the frontend Secret" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config,frontend-tls"
+expect_eq "invocation-only listener TLS" "$(invocation_tls "${m}")" "frontend_tls"
+m="${tmp_dir}/invocation-plaintext.yaml"
+render --set workerCallbackProxy.grpcProxy.enabled=false --set workerCallbackProxy.invocation.tls.enabled=false \
+  --set workerCallbackProxy.invocation.port=8080 > "${m}"
+check_wiring "${m}"
+expect_eq "no Certificate without a TLS listener" "$(q "${m}" 'select(.kind == "Certificate") | .kind')" ""
+expect_eq "no TLS volumes without a TLS listener" "$(pod "${m}" '[.volumes[].name] | join(",")')" "config"
+expect_eq "plaintext invocation listener" "$(invocation_tls "${m}")" "none"
+expect_eq "plaintext invocation route" \
+  "$(envoy "${m}" '.. | select(has("safe_regex")) | .safe_regex.regex' | sort -u)" \
+  '^\d+-\d+-\d+-\d+\.invocation\.nvcf\.svc\.cluster\.local:8080$'
 m="${tmp_dir}/grpc-only.yaml"
 render --set workerCallbackProxy.invocation.enabled=false > "${m}"
 check_wiring "${m}"

@@ -212,7 +212,21 @@ static_resources:
         socket_address: { protocol: TCP, address: 0.0.0.0, port_value: {{ int $c.ports.invocationTcp }} }
       per_connection_buffer_limit_bytes: {{ int $limits.perConnectionBufferLimitBytes }}
       filter_chains:
-        - filters:
+        - {{- if $c.invocation.tls.enabled }}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_params: { tls_minimum_protocol_version: TLSv1_2 }
+                alpn_protocols: ["http/1.1"]
+                tls_certificate_sds_secret_configs:
+                  - name: frontend_tls
+                    sds_config:
+                      path_config_source:
+                        path: /etc/envoy/config/sds_frontend.yaml
+          {{- end }}
+          filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager

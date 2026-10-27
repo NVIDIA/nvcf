@@ -57,7 +57,16 @@ workerCallbackProxy:
     serviceName: invocation
     # Defaults to the release namespace.
     namespace: ""
-    port: 8080
+    # The only invocation-service port workers may tunnel to. 8443 is its
+    # worker TLS listener (invocation.workerTls in its chart), so the tunnel
+    # carries TLS from the worker to the pod. 8080 is plaintext.
+    port: 8443
+    tls:
+      # Serve TLS on ports.invocationTcp with the *.<workerDomain> frontend
+      # certificate, so the CONNECT request is encrypted too. Workers then use
+      # https://<name>.<workerDomain>:<port> as the proxy address and must
+      # trust the issuing CA.
+      enabled: true
 
   tls:
     frontend:

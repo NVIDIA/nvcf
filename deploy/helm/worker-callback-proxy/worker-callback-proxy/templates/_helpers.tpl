@@ -85,6 +85,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (printf "*.grpc-headless.%s.svc.%s" .Release.Namespace $c.clusterDomain) $c.grpcProxy.tlsServerName -}}
 {{- end -}}
 
+{{/*
+"true" when a listener serves the *.<workerDomain> frontend certificate.
+*/}}
+{{- define "workerCallbackProxy.frontendTls" -}}
+{{- $c := .Values.workerCallbackProxy -}}
+{{- if or $c.grpcProxy.enabled (and $c.invocation.enabled $c.invocation.tls.enabled) -}}true{{- end -}}
+{{- end -}}
+
 {{- define "workerCallbackProxy.invocationAuthorityRegex" -}}
 {{- $c := .Values.workerCallbackProxy -}}
 {{- $ns := default .Release.Namespace $c.invocation.namespace -}}
@@ -124,7 +132,7 @@ Fails the render on value combinations the schema cannot express.
 {{- fail "workerCallbackProxy.metrics.serviceMonitor.enabled requires metrics.service.enabled" -}}
 {{- end -}}
 {{- $cert := $c.tls.frontend.certificate -}}
-{{- if and $c.grpcProxy.enabled $cert.create (not $c.tls.frontend.existingSecret) -}}
+{{- if and (include "workerCallbackProxy.frontendTls" .) $cert.create (not $c.tls.frontend.existingSecret) -}}
 {{- $_ := required "workerCallbackProxy.tls.frontend.certificate.issuerRef.name is required when certificate.create is true" $cert.issuerRef.name -}}
 {{- end -}}
 {{- end -}}

@@ -22,7 +22,8 @@ so the targets use `tools/ci/helm-validate-values/worker-callback-proxy.yaml`.
 selectors against the pod, Envoy listeners against container ports, and SDS
 paths against mounts. Extend it when adding a port, listener, or mount.
 `validate-envoy.sh` runs the rendered config in the `appVersion` Envoy image
-and rotates the grpc-proxy CA to prove it reloads without a restart.
+and rotates the grpc-proxy CA to prove it reloads without a restart. It also
+runs a worker curl through the TLS invocation listener to a TLS upstream.
 
 ## Style
 
@@ -46,6 +47,7 @@ public snapshot rules.
 - Keep the admin API on `127.0.0.1`. It can stop Envoy and dump its config;
   only `/ready` and `/stats/prometheus` are exposed, on their own listeners.
 - The invocation route must keep the authority regex. Without it the listener
-  is an open forward proxy.
+  is an open forward proxy. Keep `invocation.tls.enabled` and the 8443
+  `invocation.port` as defaults; plaintext is for test setups only.
 - Never commit certificates or private keys. `bin/` is ignored for local
   renders.
