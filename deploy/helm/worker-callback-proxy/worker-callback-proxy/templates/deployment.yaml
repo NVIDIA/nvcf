@@ -153,29 +153,11 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $c.affinity }}
+      {{- with $c.affinity }}
       affinity:
-        {{- toYaml $c.affinity | nindent 8 }}
-      {{- else if $c.defaultPodAntiAffinity }}
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels:
-                    {{- include "workerCallbackProxy.selectorLabels" . | nindent 20 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $c.topologySpreadConstraints }}
+      {{- with $c.topologySpreadConstraints }}
       topologySpreadConstraints:
-        {{- toYaml $c.topologySpreadConstraints | nindent 8 }}
-      {{- else if $c.defaultZoneSpread }}
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels:
-              {{- include "workerCallbackProxy.selectorLabels" . | nindent 14 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
