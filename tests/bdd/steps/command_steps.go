@@ -78,14 +78,22 @@ func (sc *ScenarioContext) iPollCommandUntilOutputContains(
 		return fmt.Errorf("command poll text must be non-empty")
 	}
 	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+	pollCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	timedOut := func() error {
+		return fmt.Errorf("command poll timed out after %d seconds waiting for %q (see %s for command logs)",
+			seconds, dsl.RedactSecrets(want), sc.Suite.Config.CommandLogDir)
+	}
 	for {
-		err := sc.runAndRecord(ctx, doc.Content)
+		err := sc.runAndRecord(pollCtx, doc.Content)
 		if err == nil && sc.LastResult.ExitCode == 0 && strings.Contains(combinedOutput(sc.LastResult), want) {
 			return nil
 		}
+		if ctx.Err() == nil && pollCtx.Err() != nil {
+			return timedOut()
+		}
 		if time.Now().Add(commandPollInterval).After(deadline) {
-			return fmt.Errorf("command poll timed out after %d seconds waiting for %q (see %s for command logs)",
-				seconds, dsl.RedactSecrets(want), sc.Suite.Config.CommandLogDir)
+			return timedOut()
 		}
 		select {
 		case <-ctx.Done():

@@ -709,6 +709,25 @@ func TestIPollCommandUntilOutputContainsRetriesAndPreservesMatch(t *testing.T) {
 	}
 }
 
+func TestIPollCommandUntilOutputContainsBoundsHangingCommand(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.runHook = func(ctx context.Context, _ int) (harness.Result, error) {
+		<-ctx.Done()
+		return harness.Result{ExitCode: -1}, ctx.Err()
+	}
+	doc := &godog.DocString{Content: "nvcf-cli stats get --json"}
+	done := make(chan error, 1)
+	go func() { done <- sc.iPollCommandUntilOutputContains(context.Background(), 1, `"ready"`, doc) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "command poll timed out after 1 seconds") {
+			t.Fatalf("err = %v, want poll timeout", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("hanging command was not bounded by the polling deadline")
+	}
+}
+
 func TestISuccessfullyRunCommandRejectsNonZeroExit(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 2, Stderr: "failed"}
