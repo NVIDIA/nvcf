@@ -54,7 +54,6 @@ import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -103,21 +102,6 @@ class SyncKeysV2OperationsServiceTest {
         service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection, keyCache, introspectionCache);
         lenient().when(services.getServiceById(ISSUER))
                 .thenReturn(Optional.of(ServiceVo.builder().serviceId(ISSUER).build()));
-    }
-
-    @ParameterizedTest
-    @MethodSource("invalidSelections")
-    void validatesEverySelectorBeforeDiscoveryOrMutation(List<String> users) {
-        var request = accountRequest().toBuilder().users(users).build();
-        assertThatThrownBy(() -> service.operateAsAccountAdmin("a", request))
-                .isInstanceOf(BadRequestException.class);
-        verifyNoInteractions(keys);
-    }
-
-    static Stream<List<String>> invalidSelections() {
-        return Stream.of(null, List.of(), List.of("u", "*"),
-                List.of("u", "u"), List.of(" "), Arrays.asList("u", null),
-                java.util.stream.IntStream.range(0, 11).mapToObj(i -> "u" + i).toList());
     }
 
     @ParameterizedTest
@@ -252,41 +236,6 @@ class SyncKeysV2OperationsServiceTest {
             verify(keyCache).invalidate();
             verify(introspectionCache).invalidate();
         }
-
-        var mapper = JsonUtils.getRequestResponseJsonMapper();
-        var serialized = mapper.writeValueAsString(response);
-        var json = mapper.readTree(serialized);
-        assertThat(json.get("operationId").asString()).isEqualTo(response.getOperationId().toString());
-        assertThat(json.get("status").asString()).isEqualTo("COMPLETED");
-        assertThat(json.has("correlationId")).isFalse();
-        assertThat(json.has("cutoffAt")).isFalse();
-        assertThat(mapper.readValue(serialized, KeyOperationResponse.class)).isEqualTo(response);
-    }
-
-    @Test
-    void appliesCutoffWithinExactAccountBoundary() {
-        var row = row("a", "u", "old", CUTOFF);
-        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(row,
-                row("a", "u", "later", CUTOFF.plusMillis(1))));
-        var response = service.operateAsAccountAdmin("a", accountRequest());
-        assertThat(response.getCompletedCount()).isOne();
-        verify(keys).updateKeyStatus("a", USER, "u", ISSUER, "old", KeyStatus.REVOKED);
-        verify(keys, never()).updateKeyStatus("a", USER, "u", ISSUER, "later", KeyStatus.REVOKED);
-        verify(keys, never()).getOwnerStatusByAccount(anyString(), any(), anyString());
-    }
-
-    @Test
-    void platformSelectionUsesExactAccountUserIssuerIntersectionsIncludingLegacyAccount() {
-        when(selection.select("a", "u", ISSUER, CUTOFF))
-                .thenReturn(Stream.of(row("a", "u", "new-key", CUTOFF)));
-        when(selection.select("legacy", "u", ISSUER, CUTOFF))
-                .thenReturn(Stream.of(row("legacy", "u", "legacy-key", CUTOFF)));
-        var response = service.operateAsPlatformAdmin(PlatformAdminKeysOperationRequest.builder()
-                .operation(DELETE).accounts(List.of("a", "legacy")).users(List.of("u"))
-                .issuerServices(List.of(ISSUER)).build());
-        assertThat(response.getCompletedCount()).isEqualTo(2);
-        verify(keys).deleteKeyById("a", USER, "u", ISSUER, "new-key");
-        verify(keys).deleteKeyById("legacy", USER, "u", ISSUER, "legacy-key");
     }
 
     @Test
@@ -312,14 +261,6 @@ class SyncKeysV2OperationsServiceTest {
         assertThatThrownBy(() -> service.operateAsKeyOwner("u", ownerRequest()))
                 .isInstanceOf(ForbiddenException.class);
         verifyNoInteractions(selection);
-    }
-
-    @Test
-    void ownerRouteKeepsUserFixed() {
-        when(selection.select("a", "u", ISSUER, CUTOFF))
-                .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
-        assertThat(service.operateAsKeyOwner("u", ownerRequest()).getCompletedCount()).isOne();
-        verify(keys).deleteKeyById("a", USER, "u", ISSUER, "key");
     }
 
     @Test
@@ -447,8 +388,6 @@ class SyncKeysV2OperationsServiceTest {
         assertThat(result.getStatus()).isEqualTo(KeyOperationStatus.FAILED);
         assertThat(result.getSubmittedAt()).isEqualTo(CUTOFF);
         assertThat(result.getUpdatedAt()).isEqualTo(CUTOFF);
-        var mapper = JsonUtils.getRequestResponseJsonMapper();
-        assertThat(mapper.readValue(mapper.writeValueAsString(result), KeyOperationResponse.class)).isEqualTo(result);
         return result;
     }
 

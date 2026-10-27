@@ -77,8 +77,7 @@ class KeysV2BulkSelectionServiceTest {
                 .thenReturn(Stream.of(current, migrated));
         when(keysDao.streamForBulk(USER, null, null, PAGE_SIZE)).thenReturn(Stream.of(
                 legacy("legacy-only"), legacy("migrated"),
-                legacy("newer").toBuilder().createdAt(CUTOFF.plusMillis(1)).build(),
-                legacy("unmapped").toBuilder().issuerServiceId("unmapped").build()));
+                legacy("newer").toBuilder().createdAt(CUTOFF.plusMillis(1)).build()));
         when(keysV2Dao.get("legacy", USER, "user", "issuer", "migrated"))
                 .thenReturn(Optional.of(migrated));
         when(keysV2Dao.get("legacy", USER, "user", "issuer", "legacy-only"))
@@ -86,20 +85,6 @@ class KeysV2BulkSelectionServiceTest {
         try (var selected = service.select(null, null, null, CUTOFF)) {
             assertThat(selected).extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                     .containsExactly("legacy-only", "current", "migrated");
-        }
-    }
-
-    @Test
-    void existingV2RowAfterCutoffPreventsLegacyCopyFromSelectingIt() {
-        when(keysV2Dao.streamForBulk("legacy", USER, "user", "issuer", CUTOFF, PAGE_SIZE))
-                .thenReturn(Stream.empty());
-        when(keysDao.streamForBulk(USER, "user", "legacy-issuer", PAGE_SIZE))
-                .thenReturn(Stream.of(legacy("same-key")));
-        when(keysV2Dao.get("legacy", USER, "user", "issuer", "same-key"))
-                .thenReturn(Optional.of(row("legacy", "same-key").toBuilder()
-                        .createdAt(CUTOFF.plusMillis(1)).build()));
-        try (var selected = service.select("legacy", "user", "issuer", CUTOFF)) {
-            assertThat(selected).isEmpty();
         }
     }
 

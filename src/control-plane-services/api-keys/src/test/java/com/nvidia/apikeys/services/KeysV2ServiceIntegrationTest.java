@@ -606,10 +606,9 @@ class KeysV2ServiceIntegrationTest {
     }
 
     private static void deleteLock(String table) {
-        // Use the same conditional-write timestamps as lock acquisition.
         IntegrationTestConfiguration.CQL_SESSION.execute(
                 "DELETE FROM " + KEY_SPACE + ".row_update_lock"
-                        + " WHERE table_name = ? AND record_key = ? IF EXISTS",
+                        + " WHERE table_name = ? AND record_key = ?",
                 table, KeysService.UPDATE_LOCK_KEY_PREFIX + API_KEY_HASH_1);
     }
 }

@@ -41,11 +41,11 @@ A failure between v2 and legacy writes can partially update one migrated key.
 The operation reports failure until both representations are updated. Retrying
 repeats the per-key mutation to repair partial writes.
 
-A legacy key with a missing creation time fails selection because its cutoff
-eligibility cannot be established. Repair the malformed record before retrying.
+Selection fails when a legacy key lacks the creation time or issuer mapping
+needed to process it. Correct the record or deployment mapping before retrying.
 
-Bulk mutations clear this instance's key and introspection caches before the
-response, including after partial failure. Other replicas expire cached key
+Bulk mutations clear cached key rows and introspection responses on this instance
+before the response, including after partial failure. Other replicas expire cached key
 rows after 60 seconds and cached introspection responses after 60 seconds.
 These layers can retain a successful decision for up to 120 seconds after a
 mutation, plus in-flight request time. Existing caller-side HTTP caching can

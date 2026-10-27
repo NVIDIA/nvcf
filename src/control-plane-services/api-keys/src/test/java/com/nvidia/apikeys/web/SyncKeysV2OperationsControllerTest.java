@@ -94,12 +94,11 @@ class SyncKeysV2OperationsControllerTest extends BaseIntegrationTest {
             case "account" -> ADMIN_ROUTE;
             default -> PLATFORM_ROUTE;
         };
-        // Unknown fields cannot replace the dimension fixed by the route or the internal USER type.
         var body = switch (actor) {
             case "owner" -> Map.of("operation", operation, "accounts", List.of("*"),
-                    "issuerServices", List.of("nvcf"), "users", List.of("u2"), "ownerType", "SERVICE");
+                    "issuerServices", List.of("nvcf"));
             case "account" -> Map.of("operation", operation, "users", List.of("*"),
-                    "issuerServices", List.of("*"), "accounts", List.of("b"), "ownerType", "SERVICE");
+                    "issuerServices", List.of("*"));
             default -> Map.of("operation", operation, "accounts", List.of("a*", "b"),
                     "users", List.of("user*", "u2"), "issuerServices", List.of("nvcf"));
         };

@@ -69,11 +69,14 @@ public class KeysV2BulkSelectionService {
             return Stream.empty();
         }
         return keysDao.streamForBulk(USER, user, legacyIssuer, pageSize)
-                .filter(key -> legacyAccount.findLegacyIssuerServiceId(
-                                legacyAccount.toServiceId(key.getIssuerServiceId()))
-                        .filter(key.getIssuerServiceId()::equals).isPresent())
-                .map(legacyAccount::fromLegacy)
                 .filter(key -> key.getCreatedAt() == null || !key.getCreatedAt().isAfter(cutoff))
+                .map(key -> {
+                    if (legacyAccount.findLegacyIssuerServiceId(legacyAccount.toServiceId(key.getIssuerServiceId()))
+                            .filter(key.getIssuerServiceId()::equals).isEmpty()) {
+                        throw new IllegalStateException("Legacy key issuer has no configured mapping");
+                    }
+                    return legacyAccount.fromLegacy(key);
+                })
                 // A migrated v2 row wins even when its creation time is after the cutoff.
                 .filter(key -> keysV2Dao.get(key.getNcaId(), USER, key.getOwnerId(),
                         key.getIssuerServiceId(), key.getKeyId()).isEmpty());

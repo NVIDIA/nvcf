@@ -178,7 +178,6 @@ public class KeysDao {
         return cassandraTemplate.stream(query.queryOptions(QueryOptions.builder().pageSize(pageSize).build()),
                         KeyByOwnerAndServiceModel.class)
                 .filter(row -> row.getKeyId() != null && row.getOwnerType() == ownerType)
-                .filter(row -> ownerId == null || ownerId.equals(row.getOwnerId()))
                 .filter(row -> serviceId == null || serviceId.equals(row.getIssuerServiceId()))
                 .map(this::modelToValidatedVo);
     }

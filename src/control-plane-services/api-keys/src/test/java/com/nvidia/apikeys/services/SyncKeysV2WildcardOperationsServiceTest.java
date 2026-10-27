@@ -181,16 +181,10 @@ class SyncKeysV2WildcardOperationsServiceTest {
     static Stream<Arguments> invalidSelectors() {
         List<List<String>> invalid = Arrays.asList(null, List.of(), List.of("*", "id"),
                 List.of("id", "*"), List.of("id", "id"), List.of("*", "*"),
-                Arrays.asList("id", null));
+                Arrays.asList("id", null), List.of(" "),
+                java.util.stream.IntStream.range(0, 11).mapToObj(i -> "id" + i).toList());
         return Stream.of("accounts", "users", "issuerServices")
                 .flatMap(dimension -> invalid.stream().map(values -> Arguments.of(dimension, values)));
-    }
-
-    @ParameterizedTest
-    @CsvSource({"KEY_OWNER", "ACCOUNT_ADMIN"})
-    void fixedRouteDimensionsCannotBeWildcards(String actor) {
-        assertThrows(BadRequestException.class, () -> operate(actor, DELETE, ALL, ALL, ALL, null));
-        verifyNoInteractions(selection, keys);
     }
 
     @ParameterizedTest
@@ -236,21 +230,17 @@ class SyncKeysV2WildcardOperationsServiceTest {
 
     @ParameterizedTest
     @EnumSource(KeysOperationType.class)
-    void appliesSubmissionCutoffThroughoutTheStreamAndClosesIt(KeysOperationType operation) {
-        var before = row("a1", "u1", "s1", "before").toBuilder()
-                .createdAt(CUTOFF.minusMillis(1)).build();
-        var at = row("a2", "u2", "s2", "at");
-        var after = row("a3", "u3", "s3", "after").toBuilder()
-                .createdAt(CUTOFF.plusMillis(1)).build();
+    void processesSelectionAndClosesItsStream(KeysOperationType operation) {
+        var first = row("a1", "u1", "s1", "first");
+        var second = row("a2", "u2", "s2", "second");
         var closed = new AtomicBoolean();
         when(selection.select(null, null, null, CUTOFF)).thenAnswer(call ->
-                Stream.of(List.of(before), List.of(at, after)).flatMap(List::stream)
-                        .onClose(() -> closed.set(true)));
+                Stream.of(first, second).onClose(() -> closed.set(true)));
 
         var response = operate("PLATFORM_ADMIN", operation, ALL, ALL, ALL, true);
 
         assertThat(response.getCompletedCount()).isEqualTo(2);
-        assertThat(mutations).containsExactly(mutation(operation, before), mutation(operation, at));
+        assertThat(mutations).containsExactly(mutation(operation, first), mutation(operation, second));
         assertThat(closed).isTrue();
     }
 

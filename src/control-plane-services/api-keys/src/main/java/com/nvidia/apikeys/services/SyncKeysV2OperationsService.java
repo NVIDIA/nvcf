@@ -150,9 +150,6 @@ public class SyncKeysV2OperationsService {
                                 if (key.getCreatedAt() == null) {
                                     throw new IllegalStateException("Selected key has no creation time");
                                 }
-                                if (key.getCreatedAt().isAfter(cutoff)) {
-                                    continue;
-                                }
                                 result.setMatchedCount(result.getMatchedCount() + 1);
                                 try {
                                     if (actor == Actor.KEY_OWNER) {
@@ -222,9 +219,7 @@ public class SyncKeysV2OperationsService {
                             if (key.getCreatedAt() == null) {
                                 throw new IllegalStateException("Selected key has no creation time");
                             }
-                            if (!key.getCreatedAt().isAfter(cutoff)) {
-                                assertOwnerActive(key.getNcaId(), user, key.getIssuerServiceId());
-                            }
+                            assertOwnerActive(key.getNcaId(), user, key.getIssuerServiceId());
                         });
                     }
                 }
@@ -236,9 +231,6 @@ public class SyncKeysV2OperationsService {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             var request = attributes.getRequest();
             var actorId = request.getHeader("NVCF-ACTOR-ID");
-            if (actorId == null) {
-                actorId = request.getHeader(ActorResolver.HEADER_KEY_OWNER_ID);
-            }
             if (actorId != null) {
                 return actorId;
             }

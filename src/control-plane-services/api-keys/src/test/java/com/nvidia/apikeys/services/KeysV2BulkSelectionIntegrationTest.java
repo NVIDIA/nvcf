@@ -58,13 +58,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 @ExtendWith(TestCleanerExtension.class)
-@AutoConfigureTestRestTemplate
 @SpringBootTest(classes = App.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "spring.profiles.active=integrationtest")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
@@ -195,6 +193,39 @@ class KeysV2BulkSelectionIntegrationTest {
                 .extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.ACTIVE);
         assertThat(keysDao.getKeyByHash("legacy-later-hash")).get()
                 .extracting(key -> key.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(KeysOperationType.class)
+    void unmappedLegacyIssuerFailsWithinCutoffInsteadOfBeingSkipped(KeysOperationType operation) {
+        var legacy = KEY_VO_1.toBuilder().issuerServiceId("unmapped")
+                .createdAt(TEST_TIME.plusMillis(1)).build();
+        keysDao.save(legacy, KEY_OWNER_VO_1);
+        var bulk = new SyncKeysV2OperationsService(keys, services, legacyAccount,
+                new MillisecondPrecisionClock(Clock.fixed(TEST_TIME, ZoneOffset.UTC)), 10, selector(),
+                keyCache, introspectionCache);
+        var request = PlatformAdminKeysOperationRequest.builder().operation(operation)
+                .accounts(List.of("*")).users(List.of("*")).issuerServices(List.of("*"))
+                .confirmPlatformWide(true).build();
+
+        assertThat(bulk.operateAsPlatformAdmin(request).getMatchedCount()).isZero();
+        assertThat(keysDao.getKeyByHash(legacy.getKeyHash())).contains(legacy);
+
+        var eligible = legacy.toBuilder().createdAt(TEST_TIME).build();
+        keysDao.save(eligible, KEY_OWNER_VO_1);
+
+        var failure = assertThrows(BulkOperationException.class, () -> bulk.operateAsPlatformAdmin(request));
+
+        assertThat(failure.getCause()).isInstanceOf(IllegalStateException.class)
+                .hasMessage("Legacy key issuer has no configured mapping");
+        assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", false);
+        var result = (KeyOperationResponse) failure.getBody().getProperties().get("bulkOperation");
+        assertThat(result.getStatus()).isEqualTo(KeyOperationStatus.FAILED);
+        assertThat(result.getCompletedCount()).isZero();
+        assertThat(keysDao.getKeyByHash(eligible.getKeyHash())).contains(eligible);
+        assertThat(keysDao.getKeyByOwnerAndServiceAndId(USER, eligible.getOwnerId(),
+                "unmapped", eligible.getKeyId())).get()
+                .extracting(row -> row.getKeyStatus()).isEqualTo(KeyStatus.ACTIVE);
     }
 
     @Test
