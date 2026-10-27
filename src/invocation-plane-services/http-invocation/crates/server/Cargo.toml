@@ -119,6 +119,7 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 async-stream = "0.3"
+rcgen = "=0.13.2"
 rstest = "0.25"
 scopeguard = "1"
 tempfile = "3"
