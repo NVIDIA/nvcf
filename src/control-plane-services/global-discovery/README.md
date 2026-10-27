@@ -39,6 +39,8 @@ clients build on:
 - Lease math, writer generations and pool state derivation.
 - The `gds-server` configuration. `gds-server` validates its flags and exits;
   it does not serve yet.
+- The Go client `pkg/client` (failover, typed calls, watch loop, pool and
+  router caches, metrics) and the in-memory test server `pkg/fakegds`.
 
 ## Layout
 
@@ -58,6 +60,10 @@ clients build on:
 - `internal/config/`: `gds-server` flags with `GDS_` environment fallbacks.
 - `internal/version/`: build metadata set by Bazel `x_defs`.
 - `cmd/gds-server/`: server entrypoint (configuration only for now).
+- `pkg/client/`: the Go client library; usage, failover and cache semantics
+  are in `pkg/client/README.md`.
+- `pkg/fakegds/`: in-memory implementation of the five GDS services for tests
+  of clients, the controller and integrations.
 - `docs/api.md`: REST paths, JSON and stream shapes, errors and limits.
 - `hack/proto.sh`: proto lint and code generation.
 

@@ -592,3 +592,58 @@ Not done in ws6: Cargo commands (`cargo test`, `cargo clippy`, `cargo fmt`)
 were not run because the machine has no cargo; the Bazel equivalents above
 were. The Stargate, Pylon and Pylon Operator integration is a later
 workstream.
+
+Workstream 4 (Go client), branch `feat/gds-ws4-goclient`, delivered under
+`src/control-plane-services/global-discovery/pkg`:
+
+- `pkg/fakegds`: in-memory implementation of the five services for tests,
+  served over bufconn or `127.0.0.1:0` (and `ServeAddr` to restart on the
+  same address). Cluster and pool leases with epochs, writer generations
+  with the STALE_GENERATION details, RegisterPool, UpdatePool with a field
+  mask, HeartbeatPool and DeregisterPool, pools derived from labelled exports
+  and merged with the API overlay (state from `internal/registry`), routers
+  from role labels, simplified merged imports (oldest active export wins,
+  ports unioned, no conflicts), watches with snapshots, deltas, bookmarks,
+  revisions, per-watcher filters, resume from a history and re-snapshot on
+  lag, `FailNext`, `CallCount`, `CloseWatches`, `SetServerInfo` and seeding
+  helpers.
+- `pkg/client`: `Config` with the plan defaults, `New`, `Close`, `Conn`,
+  `OnReconnect`, `CurrentURL`, `URLs` and typed sub-clients (`Clusters`,
+  `ServiceExports`, `ServiceImports`, `Pools`, `Routers`, `ServerInfo`).
+  Failover through a per-client resolver scheme: every URL host re-resolved
+  in order with the injected `Resolver`, `ServerName` per URL, `pick_first`
+  without shuffling, a retry policy on UNAVAILABLE for the unary methods,
+  `GetServerInfo.endpoints` appended as fallbacks, and a timer that probes
+  the primary and moves the connection and the watch loops back.
+  `WatchLoop[T]`, `PoolCache` and `RouterCache` (initial list, watch resumed
+  from the list revision, anti-entropy list every TTL, `Stale` after 2 x TTL,
+  `Snapshot`, `Updates`, `WaitSynced`, `Refresh`), `PoolState.ByModel`,
+  `ByCluster`, `Active`, `RouterState.SeedURL` and `SeedURLs`,
+  `NextGeneration` and `Generation`, error helpers (`Reason`,
+  `StaleGeneration`, `IsLeaseEpochMismatch`), and the `nvcf_gds_client_*`
+  metrics through interceptors and a stats handler.
+- Tests against `pkg/fakegds` with the race detector: failover to a second
+  listener and return to the primary, DNS re-resolution through a fake
+  resolver, retry policy, advertised fallbacks, TLS server name per URL,
+  metrics and deadlines, watch snapshot, resume, resync and idle handling,
+  cache deltas, TTL re-list, stale flag and seed URLs.
+- Docs: `pkg/client/README.md`; module README and AGENTS updated.
+- Dependency: `github.com/prometheus/client_golang` v1.23.2 (already in the
+  repository's Bazel graph); `google.golang.org/genproto/googleapis/rpc`
+  became a direct requirement for the error details.
+
+Deviations from the plan: the fake server lives in `pkg/fakegds` instead of
+`internal/mcs/testing/fakegds` so other modules' tests can import it. The
+client adds `Dialer`, `DialOptions` and `Logger` to `Config`, and
+`ServerInfo()`, `CurrentURL()` and `URLs()` to the client. All URLs of one
+client share a scheme. Addresses are passed to `pick_first` with a URL
+prefix so the URL order is kept (no IPv4 and IPv6 interleaving) and each
+connection is attributed to its URL. Returning to the primary also restarts
+the `WatchLoop` streams, which otherwise stay on the old connection. The
+caches reopen a watch that is silent for 30 s (`IdleTimeout`), since no
+client keepalive is configured. `SeedURLs` returns one URL per router
+cluster (the first router by namespace and name) and lists a URL shared by
+several clusters once. Not done in ws4: an OpenTelemetry stats handler is
+not wired by default (pass it in `DialOptions`), and staticcheck and
+golangci-lint were not run (not installed locally); `go vet` and `gofmt` are
+clean.
