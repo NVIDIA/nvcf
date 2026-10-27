@@ -109,7 +109,19 @@ filegroup(
 # gazelle:exclude src/compute-plane-services/worker-llm-credentials
 # gazelle:exclude src/compute-plane-services/worker-task
 # gazelle:exclude src/compute-plane-services/worker-utils
-# gazelle:exclude src/control-plane-services
+# src/control-plane-services is excluded per-subtree as well: global-discovery
+# is managed by the root Gazelle.
+# gazelle:exclude src/control-plane-services/admin-token-issuer-proxy
+# gazelle:exclude src/control-plane-services/api-keys
+# gazelle:exclude src/control-plane-services/cloud-functions
+# gazelle:exclude src/control-plane-services/cloud-tasks
+# gazelle:exclude src/control-plane-services/encrypted-secret-store
+# gazelle:exclude src/control-plane-services/event-ledger
+# gazelle:exclude src/control-plane-services/function-autoscaler
+# gazelle:exclude src/control-plane-services/helm-reval
+# gazelle:exclude src/control-plane-services/instance-cluster-management
+# gazelle:exclude src/control-plane-services/nats-auth-callout
+# gazelle:exclude src/control-plane-services/notary
 # gazelle:exclude src/invocation-plane-services
 # gazelle:exclude src/libraries/python
 # gazelle:exclude src/libraries/ts
