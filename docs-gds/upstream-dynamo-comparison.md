@@ -85,6 +85,46 @@ per-source snapshots and defines no transport.
 PR #99 contains nothing about discovery, registration, pools or MCS; it is about the KvRouter
 ownership boundary. It is not discussed further.
 
+### 1.4 Changes since the first pass (checked 2026-10-27, evening)
+
+The stack moved during the day. What changed and what it means for this comparison:
+
+- DEP #103 gained a rewritten per-mode components table (commits 8143c2e and aeba94e). It now
+  says pool discovery "moved into a Global Discovery Service" serving every mode over HTTP, that
+  in Full Kubernetes mode the PoolRelay both gets a ServiceExport from the operator and calls
+  `POST /pools` on a timer, and that "frontend addresses come from MCS". So the DEP has converged
+  on the same split as our design: MCS for reachability and liveness, a registry for what MCS
+  cannot know. The DEP also states that the state connection between clusters is still TBD:
+  "a new push RPC from the Relay, or a reverse tunnel that runs subscriptions over a connection
+  Relay opens". Registration direction is therefore open upstream too, which matches the
+  neutral stance in design section 4.3 and in `network-interaction-comparison.md`.
+- #17330 (shared types): the 24 h lease cap moved out of the shared `Lease` type (8e30f3c);
+  the service binary in #17371 now enforces it with `--lease-duration-secs` capped at 86400
+  (d0dc8fb). `relay_identity` became `relay_identities: Vec<String>` so a dual-stack relay pod
+  lists both addresses (8b6c23e). Mergeable state is `dirty` against main at head c7ee161.
+- nnshah1 posted a naming review on #17330 (2026-10-27 17:56) and would hold the PR on the
+  first item: `PoolKey.site_id` should be the relay's `cluster_id` from #17215, and
+  `PoolLocation.cluster` should go or be documented as the physical cluster. Also:
+  `ReplicaEndpoint` to `RouterReplica`, `WatchEvent::Added` to `Upserted`, `Capacity.count` to
+  `workers`, and a note that `capabilities = ["aggregated"]` is a serving mode. If accepted,
+  the terminology map in section 5 simplifies: `cluster_id` maps one to one onto our
+  `Location.cluster` and the source-cluster label, and their `Upserted` matches our `UPSERT`.
+- #17332: `--pool-service-suffix` and `--frontend-service-suffix` now accept values starting
+  with a hyphen (c506f67). The suffix convention (`-pool-relay`, `-frontend`) is therefore
+  configurable on their side, which weakens the case for hard-coding it in our controller
+  (recommendation 3 in section 7); read the suffixes from flags if we infer roles at all.
+- #17331 review threads (dynamo-review-agent, answered by atchernych): the Kubernetes cache
+  waits for the first complete list before `list_and_watch` yields, and the service answers
+  503 on `/healthz` and `GET /pools` until then. Staleness after a dead watch is computed
+  lazily on snapshot, so existing watchers do not learn their snapshot went `Estimated`.
+  Our view handles the same case differently: `view_age_seconds` drives readiness and a
+  failed refresh does not change what watchers already hold either. Worth noting in
+  `docs/consistency.md` as a shared limitation.
+- #17208 (client) merged main twice today and is `blocked` on checks, not reviews. #17412
+  (operator ServiceExports) has one commit, no review comments, and is `blocked`.
+
+Nothing in the day's changes alters sections 3 to 8. The open questions stand.
+
 ## 2. The upstream design in short
 
 The DEP (#103) frames pool membership behind a `PoolDiscovery` abstraction with modes gRPC
