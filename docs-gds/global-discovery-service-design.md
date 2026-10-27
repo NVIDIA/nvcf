@@ -455,7 +455,7 @@ and field manager `gds-mcs-controller`:
   annotations, annotation `multicluster.kubernetes.io/derived-service`, status clusters and
   conditions from GDS;
 - a derived Service `derived-<hash>` with no selector, ClusterIP for CLUSTER_SET_IP and
-  `clusterIP: None` for HEADLESS, owned by the ServiceImport; `status.ips` of the import is the
+  `clusterIP: None` for HEADLESS, owned by the ServiceImport; `spec.ips` of the import is the
   derived Service's ClusterIPs;
 - EndpointSlices `<derived>-<cluster>-<i>` (100 endpoints per slice), one set per source cluster
   including the local one, labelled `kubernetes.io/service-name=<derived>`,

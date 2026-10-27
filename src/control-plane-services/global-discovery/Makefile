@@ -24,6 +24,14 @@ GOLANGCI_LINT ?= golangci-lint
 # Minimum statement coverage of internal/, in percent.
 COVERAGE_MIN ?= 85
 
+# controller-tools v0.19 and setup-envtest release-0.22 match
+# controller-runtime v0.22 and Kubernetes 1.34 in go.mod.
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
+export CONTROLLER_TOOLS_VERSION
+SETUP_ENVTEST_VERSION ?= release-0.22
+ENVTEST_K8S_VERSION ?= 1.34.x
+ENVTEST_BIN_DIR ?= $(CURDIR)/_output/envtest
+
 # buf and the protoc plugins are installed with `go install` (versions in
 # hack/proto.sh) into $(HOME)/go/bin, which is not always on PATH.
 # make proto-tools installs the pinned versions into _output/tools, which
@@ -39,9 +47,12 @@ build:
 	$(GO) build ./...
 	$(GO) build -o _output/bin/gds-server ./cmd/gds-server
 	$(GO) build -o _output/bin/gds-admin ./cmd/gds-admin
+	$(GO) build -o _output/bin/gds-mcs-controller ./cmd/gds-mcs-controller
 
 # Unit tests with the race detector. The reported total is the statement
-# coverage of internal/; the target fails below COVERAGE_MIN percent.
+# coverage of internal/; the target fails below COVERAGE_MIN percent. The
+# envtest suite in internal/mcs/integration skips unless KUBEBUILDER_ASSETS
+# is set; use test-envtest to run it.
 .PHONY: test
 test:
 	@mkdir -p _output/cover
@@ -69,6 +80,27 @@ test-integration:
 	echo "DOCKER_HOST=$${docker_host} $(GO) test -race -count=1 -tags=integration $(INTEGRATION_PKGS)"; \
 	DOCKER_HOST="$${docker_host}" TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE="$${socket_override}" \
 		$(GO) test -race -count=1 -tags=integration $(INTEGRATION_PKGS)
+
+# Downloads kube-apiserver and etcd for envtest into ENVTEST_BIN_DIR and
+# prints their directory.
+.PHONY: envtest-assets
+envtest-assets:
+	@$(GO) run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION) \
+		use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_BIN_DIR) -p path
+
+# The gds-mcs-controller envtest suite against a real API server.
+.PHONY: test-envtest
+test-envtest:
+	KUBEBUILDER_ASSETS="$$($(MAKE) -s envtest-assets)" $(GO) test -race -count=1 ./internal/mcs/integration/... -v
+
+# Regenerates config/rbac/role.yaml from the +kubebuilder:rbac markers.
+.PHONY: codegen-update
+codegen-update:
+	hack/codegen.sh
+
+.PHONY: codegen-check
+codegen-check:
+	hack/codegen.sh --check
 
 .PHONY: lint
 lint:

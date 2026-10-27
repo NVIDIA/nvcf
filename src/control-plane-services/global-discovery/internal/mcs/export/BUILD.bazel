@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "export",
+    srcs = [
+        "autoexport.go",
+        "reconciler.go",
+        "resync.go",
+        "spec.go",
+        "status.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/mcs/export",
+    visibility = ["//src/control-plane-services/global-discovery:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
+        "//src/control-plane-services/global-discovery/internal/mcs/convert",
+        "//src/control-plane-services/global-discovery/internal/mcs/identity",
+        "//src/control-plane-services/global-discovery/internal/mcs/metrics",
+        "//src/control-plane-services/global-discovery/internal/mcs/tracing",
+        "//src/control-plane-services/global-discovery/pkg/client",
+        "@com_github_go_logr_logr//:logr",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/api/meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//tools/record",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@io_k8s_sigs_controller_runtime//pkg/builder",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/controller",
+        "@io_k8s_sigs_controller_runtime//pkg/controller/controllerutil",
+        "@io_k8s_sigs_controller_runtime//pkg/event",
+        "@io_k8s_sigs_controller_runtime//pkg/handler",
+        "@io_k8s_sigs_controller_runtime//pkg/log",
+        "@io_k8s_sigs_controller_runtime//pkg/predicate",
+        "@io_k8s_sigs_controller_runtime//pkg/reconcile",
+        "@io_k8s_sigs_controller_runtime//pkg/source",
+        "@io_k8s_sigs_mcs_api//pkg/apis/v1beta1",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":export",
+    visibility = ["//src/control-plane-services/global-discovery:__subpackages__"],
+)
+
+go_test(
+    name = "export_test",
+    srcs = [
+        "autoexport_test.go",
+        "reconciler_test.go",
+        "spec_test.go",
+    ],
+    embed = [":export"],
+    deps = [
+        "//src/control-plane-services/global-discovery/api",
+        "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
+        "//src/control-plane-services/global-discovery/internal/mcs/mcstest",
+        "//src/control-plane-services/global-discovery/internal/mcs/metrics",
+        "//src/control-plane-services/global-discovery/pkg/client",
+        "//src/control-plane-services/global-discovery/pkg/fakegds",
+        "@com_github_go_logr_logr//testr",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_api//discovery/v1:discovery",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/api/meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//tools/record",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/controller/controllerutil",
+        "@io_k8s_sigs_mcs_api//pkg/apis/v1beta1",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/fieldmaskpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

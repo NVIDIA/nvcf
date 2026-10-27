@@ -904,3 +904,83 @@ Docker host. `run.sh` now detects this and says so. The 39 REST and admin
 checks passed against the same image in plain Docker; the chart install and
 port-forward steps have not run on a cluster yet. kubeconform was not on
 PATH for `make validate` (it skips); version 0.6.7 validated the renders.
+
+Workstream 5 (MCS controller), branch `feat/gds-ws5-controller` (fast-forwarded to
+`feat/global-discovery-service` after the server merge before work started), delivered under
+`src/control-plane-services/global-discovery`:
+
+- `internal/mcs/config`: every flag of the plan plus `--otel-enabled`; `--gds-url` repeatable
+  or comma-separated with `GDS_URLS`, `--operator-namespace` from `POD_NAMESPACE`,
+  `--leader-elect` default true; `Validate`; the scheme (client-go types,
+  `multicluster.x-k8s.io/v1beta1`; ClusterProperty unstructured) and manager options with
+  namespace-restricted caches and stripped managed fields.
+- `internal/mcs/identity`: `Resolve` (auto, flags or clusterproperty; region and zones from
+  node labels; provider from `spec.providerID`) and `WriteClusterProperties`, which refuses
+  to overwrite another identity.
+- `internal/mcs/lease`: leader-only runnable; register, heartbeat every TTL/3 with 10 percent
+  jitter, re-register on ABORTED/LEASE_EPOCH_MISMATCH or NOT_FOUND and trigger a resync,
+  `Registered`, `WaitRegistered`, `Kick`, deregister on shutdown only with the flag.
+- `internal/mcs/export`: the ServiceExport reconciler (finalizer, Valid/NoService and
+  InvalidServiceType with a one-time withdrawal, spec and endpoint hashes, generations from
+  `client.Generation` with one STALE_GENERATION retry above the stored value, endpoints as in
+  the AWS `extractEndpoints` with `targetRef.*` attributes and ready-first truncation at 1000,
+  Ready and Conflict from the importer's channel), `Resync`/`Resyncer` (GDS records without a
+  local ServiceExport deleted, everything resent at startup, reconnect and re-registration),
+  `AutoExporter` (label half) and `PoolExporter` (pool half over a `PoolCache` of the own
+  cluster).
+- `internal/mcs/importer`: `WatchServiceImports` with endpoints through `WatchLoop`, a local
+  map, GC after `SNAPSHOT_END`, and an import controller: ServiceImport by server-side apply
+  (field manager `gds-mcs-controller`), derived Service, `<derived>-<cluster>-<i>` slices for
+  every source cluster, pending namespaces with a Namespace watch, `--create-namespaces`,
+  `--adopt-unmanaged-imports`, repair of deleted managed objects, no API calls for an
+  unchanged import, own-cluster status to the export side.
+- `internal/mcs/{convert,metrics,tracing,app,mcstest}`, `cmd/gds-mcs-controller`
+  (controller-runtime zap, `/healthz`, `/readyz` = connected once and, on the leader,
+  registered), `config/crd` (embedded mcs-api CRDs and a ClusterProperty CRD in
+  `config/crd/bases`), `config/rbac/role.yaml` from `+kubebuilder:rbac` markers through
+  `hack/codegen.sh` (`make codegen-update`, `make codegen-check`).
+- Tests: unit tests with the controller-runtime fake client and `pkg/fakegds` (mapping
+  tables, headless, port filtering, endpoint hash stability, generation retry, pending and
+  terminating namespaces, derived names, slice packing, auto-export create and delete, pool
+  half including DRAINING, stale and GONE). The envtest suite `internal/mcs/integration`
+  (`make envtest-assets`, `make test-envtest`; Bazel target tagged `external` and
+  `requires-kubebuilder` with `env_inherit`) covers export Put and Replace, scaling with a
+  higher generation, own-cluster conditions, deletion through the finalizer, an import with
+  derived Service, `spec.ips` and slices, repair of a deleted slice, DELETE cascading, GC
+  after a snapshot from a new replica, a pending namespace created later, label-driven export,
+  and the controller against an in-process gds-server (memory store) with a second cluster
+  exporting the same Service. `make test` stays at 95 percent coverage of `internal/`.
+- Bazel: Gazelle BUILD files, `x_defs` on the binary, `controller_image` (`go_oci_image`,
+  `/usr/bin/gds-mcs-controller`) with an entrypoint mode test, `io_k8s_sigs_mcs_api` in
+  `use_repo`, and a `gazelle_override` (`build_file_generation = "clean"`) for
+  `sigs.k8s.io/mcs-api`, whose stale Kubernetes staging BUILD files do not build here.
+- Dependencies: `sigs.k8s.io/controller-runtime` v0.22.5, `k8s.io/{api,apimachinery,client-go}`
+  v0.34.3 (pylon-operator's versions), `sigs.k8s.io/mcs-api` v0.5.2 (requires k8s.io v0.32.5,
+  so nothing moved up).
+- Docs: `docs/mcs-controller.md`, module README and AGENTS.
+
+Deviations from the plan:
+
+- No separate `poolexport` package or runnable flag: the pool half lives in
+  `export/autoexport.go`. It exports only pools registered through the API (pools with a
+  lease); label-only pools already have their exports. It keeps exports in every state but
+  GONE, UNHEALTHY included, since removing them would keep such a pool unhealthy for good.
+- `spec.ips` carries the derived ClusterIPs: `multicluster.x-k8s.io/v1beta1` has no
+  `status.ips`, and mcs-api's own controller sets `spec.ips`. The CoreDNS multicluster plugin
+  answers from it.
+- The ServiceImport status is written with a merge patch of the whole status, the spec and
+  metadata with server-side apply. The ServiceImport also gets a `Conflict` condition
+  mirroring the import-level conflict.
+- Imported slices drop `nodeName` for remote endpoints (it names another cluster's node) and
+  carry no `targetRef`. Deleted imports delete their objects explicitly; owner references
+  exist but the controller does not rely on the garbage collector.
+- The controller's test helpers are `internal/mcs/mcstest`; the fake server is ws4's
+  `pkg/fakegds`. The DNS document is `docs/mcs-controller.md` (CoreDNS section) instead of
+  `docs/dev/global-discovery-clusterset-dns.md`.
+- The generated ClusterRole is the superset; the chart drops namespace creation and
+  ClusterProperty writes when their flags are off and adds the leader election Role.
+
+Not done in ws5: golangci-lint and staticcheck (not installed; `go vet` and `gofmt` are
+clean), regenerating the root `dependencies.md` (the collector needs the Java toolchain), the
+controller chart and the multi-cluster k3d e2e (ws7), CI wiring for `make test-envtest` and
+`codegen-check`.

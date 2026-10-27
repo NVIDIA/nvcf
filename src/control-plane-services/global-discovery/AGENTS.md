@@ -37,6 +37,8 @@ make lint
 make proto-tools   # pinned buf and protoc plugins into _output/tools
 make proto         # after editing api/proto
 make proto-check   # before committing
+make envtest-assets && make test-envtest   # gds-mcs-controller against kube-apiserver and etcd
+make codegen-update  # after changing +kubebuilder:rbac markers under internal/mcs
 GOWORK=off go run ./cmd/gds-server --log-level=debug   # memory store on :9090, :8080, :9091
 ```
 
@@ -130,14 +132,49 @@ new BUILD files; copy it from an existing one.
 - REST behaviour changes may need the checks of
   `tests/e2e/global-discovery-k3d/run.sh` updated.
 
+## MCS controller
+
+`cmd/gds-mcs-controller` and `internal/mcs/*`; behaviour, flags, RBAC and
+metrics are in `docs/mcs-controller.md`. Keep that page in step with the
+code.
+
+- Run `make test-envtest` after changing the export or import logic. The
+  controller-runtime fake client differs from an API server in ways that
+  matter here: it fills apply configurations with the answer of `Apply`
+  (the real client does not), it does not separate status from main
+  resource field ownership under server-side apply, and it allocates no
+  ClusterIPs or UIDs. Unit tests alone have hidden bugs of that kind.
+- The envtest suite (`internal/mcs/integration`) skips without
+  `KUBEBUILDER_ASSETS`. Its Bazel target is tagged `external` and
+  `requires-kubebuilder` and inherits the variable; those attributes are
+  kept by hand (`# keep`).
+- `config/rbac/role.yaml` is generated: change the `+kubebuilder:rbac`
+  markers, run `make codegen-update` and commit the result
+  (`make codegen-check` verifies). Leader election RBAC belongs to the chart.
+- CRDs are not generated here: ServiceExport and ServiceImport come from
+  `sigs.k8s.io/mcs-api` (`config/crd` embeds them), the ClusterProperty CRD
+  is kept by hand in `config/crd/bases`.
+- Label, annotation, finalizer, field manager and condition values come
+  from `api/labels.go` and `api/errors.go`; they are a contract with the
+  charts and the Rust crate.
+- Everything that writes to GDS or applies imports is leader-only. One
+  controller owns all export records of its cluster id: it deletes records
+  without a local ServiceExport on every resync.
+- Use `internal/mcs/mcstest` (fakegds with a client, a fake Kubernetes
+  client with the controller scheme, object builders, metric reads) in
+  tests.
+
 ## Conventions
 
-- Metrics: `nvcf_gds_*` (server, `internal/metrics`), `nvcf_gds_mcs_controller_*`,
-  `nvcf_gds_client_*`, with pre-initialised counters. Add new label values
-  to the initialisation in `internal/metrics`.
+- Metrics: `nvcf_gds_*` (server, `internal/metrics`), `nvcf_gds_mcs_controller_*`
+  (`internal/mcs/metrics`), `nvcf_gds_client_*`, with pre-initialised
+  counters. Add new label values to the initialisation of the package.
 - Logs: zap JSON. Do not log and return the same error; the gRPC logging
-  interceptor logs every failed call.
+  interceptor logs every failed call. The controller logs through
+  controller-runtime's logr (zap); controller-runtime logs reconcile
+  errors.
 - Timestamps given to the store are server time; leases are evaluated at
   read time with `registry.LeaseExpired`.
-- Flags use the standard `flag` package; every flag has a `GDS_` environment
-  fallback (`internal/config`).
+- Flags use the standard `flag` package; every gds-server flag has a `GDS_`
+  environment fallback (`internal/config`). The controller's flags
+  (`internal/mcs/config`) read only `GDS_URLS` and `POD_NAMESPACE`.
