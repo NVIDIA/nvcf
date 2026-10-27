@@ -55,11 +55,14 @@ const ControllerName = "serviceimport"
 // Options configure an Importer.
 type Options struct {
 	// Client is the manager's client.
-	Client   ctrlclient.Client
-	GDS      *client.Client
-	Identity identity.Identity
-	Metrics  *metrics.Metrics
-	Logger   logr.Logger
+	Client ctrlclient.Client
+	// APIReader reads from the API server, bypassing the cache, for the
+	// ClusterIPs of a derived Service just created; nil uses Client.
+	APIReader ctrlclient.Reader
+	GDS       *client.Client
+	Identity  identity.Identity
+	Metrics   *metrics.Metrics
+	Logger    logr.Logger
 	// EndpointsPerSlice bounds imported EndpointSlices; default 100.
 	EndpointsPerSlice int
 	// CreateNamespaces creates a missing namespace instead of holding the
@@ -108,6 +111,9 @@ func New(opts Options) *Importer {
 	}
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = client.DefaultWatchIdleTimeout
+	}
+	if opts.APIReader == nil {
+		opts.APIReader = opts.Client
 	}
 	return &Importer{
 		opts:        opts,

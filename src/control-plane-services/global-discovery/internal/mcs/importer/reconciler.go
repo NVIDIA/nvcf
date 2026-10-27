@@ -30,7 +30,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -207,7 +206,17 @@ func (i *Importer) apply(ctx context.Context, imp *gdsv1.ServiceImport) (err err
 	if err := i.opts.Client.Apply(ctx, derived, ctrlclient.FieldOwner(api.FieldManager), ctrlclient.ForceOwnership); err != nil {
 		return fmt.Errorf("apply derived Service %s: %w", derivedKey.Name, err)
 	}
-	if got := derivedIPs(derived, headless); !slices.Equal(got, ips) {
+	got := ips
+	if !svcFound && !headless {
+		// Created now: the API server allocated the ClusterIPs, which the
+		// cache may not hold yet.
+		var fresh corev1.Service
+		if err := i.opts.APIReader.Get(ctx, derivedKey, &fresh); err != nil {
+			return fmt.Errorf("read derived Service %s: %w", derivedKey.Name, err)
+		}
+		got = clusterIPs(&fresh)
+	}
+	if !slices.Equal(got, ips) {
 		si, err = BuildServiceImport(imp, id.ClusterSet, got)
 		if err != nil {
 			return err
@@ -338,20 +347,6 @@ func clusterIPs(svc *corev1.Service) []string {
 		ips = ips[:2]
 	}
 	return ips
-}
-
-// derivedIPs returns the ClusterIPs of a derived Service apply request after
-// the apply filled it with the server's answer.
-func derivedIPs(ac *corev1ac.ServiceApplyConfiguration, headless bool) []string {
-	if headless || ac.Spec == nil {
-		return nil
-	}
-	svc := corev1.Service{}
-	svc.Spec.ClusterIPs = ac.Spec.ClusterIPs
-	if ac.Spec.ClusterIP != nil {
-		svc.Spec.ClusterIP = *ac.Spec.ClusterIP
-	}
-	return clusterIPs(&svc)
 }
 
 // equalConditions compares condition lists ignoring order and heartbeat
