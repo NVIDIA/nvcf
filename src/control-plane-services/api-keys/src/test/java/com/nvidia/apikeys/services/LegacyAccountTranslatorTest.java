@@ -70,6 +70,12 @@ class LegacyAccountTranslatorTest {
     }
 
     @Test
+    void findServiceIdIsEmptyForUnmappedLegacyServiceId() {
+        assertThat(translator.findServiceId(SERVICE_ID_1)).contains(SERVICE_NAME);
+        assertThat(translator.findServiceId("other-service")).isEmpty();
+    }
+
+    @Test
     void toLegacyTranslatesServiceIdsAndDropsNcaId() {
         assertThat(translator.toLegacy(LEGACY_KEY_V2)).isEqualTo(KEY_VO_1);
     }

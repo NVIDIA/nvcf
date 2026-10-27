@@ -37,9 +37,11 @@ import static com.nvidia.apikeys.services.LegacyAccountTranslatorTest.SERVICE_NA
 import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,11 +49,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.config.NakProperties;
+import com.nvidia.apikeys.config.exceptions.ServiceUnavailableException;
 import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
 import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
 import com.nvidia.apikeys.persistance.dao.RowUpdateLockDao;
-import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.models.KeyV2Model;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
@@ -66,6 +68,7 @@ import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.TooManyRequestsException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -84,6 +87,8 @@ class KeysV2ServiceTest {
     private static final int MIN_AUTHZ_UPDATE_INTERVAL_SECONDS = 10;
     private static final KeysByOwnerAndAccountAndServiceVo KEY_V2_ROW_1 =
             KeysByOwnerAndAccountAndServiceVo.from(KEY_V2_VO_1);
+    private static final ServiceUnavailableException MAINTENANCE =
+            new ServiceUnavailableException("Key maintenance in progress", Duration.ofMinutes(2));
 
     @Mock
     private KeysDao keysDao;
@@ -99,6 +104,8 @@ class KeysV2ServiceTest {
     private MillisecondPrecisionClock clock;
     @Mock
     private ActionRecorder actionRecorder;
+    @Mock
+    private LegacyKeyMaintenance maintenance;
 
     private KeysV2Service service;
 
@@ -107,7 +114,8 @@ class KeysV2ServiceTest {
         var legacyAccount = new LegacyAccountTranslator(
                 NakProperties.builder().ncaId(LEGACY_NCA_ID).serviceIdMap(SERVICE_ID_MAP).build());
         service = new KeysV2Service(keysDao, keysV2Dao, keyOwnerService, ownerStatusDao,
-                                    rowUpdateLockDao, legacyAccount, clock, actionRecorder);
+                                    rowUpdateLockDao, legacyAccount, clock, actionRecorder,
+                                    maintenance);
         lenient().when(keysV2Dao.getKeyByHash(anyString())).thenReturn(Optional.empty());
         lenient().when(keysDao.getKeyByHash(anyString())).thenReturn(Optional.empty());
         lenient().when(clock.instant()).thenReturn(TEST_TIME);
@@ -472,10 +480,10 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateKeyAuthorizationsLocksLegacyKeysForLegacyAccount() {
+    void updateKeyAuthorizationsLocksKeysV2NameForLegacyKey() {
         stubLegacyKey();
         when(clock.instant()).thenReturn(TEST_TIME);
-        when(rowUpdateLockDao.lock(KeyModel.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
+        when(rowUpdateLockDao.lock(KeyV2Model.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
                                    TEST_TIME, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS))
                 .thenReturn(true);
         when(keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(USER, USER_KEY_OWNER_ID_1))
@@ -561,6 +569,40 @@ class KeysV2ServiceTest {
         verify(keysV2Dao).delete(migrated);
         verify(keysDao).deleteKey(KEY_BY_OWNER_AND_SERVICE_VO_1);
         verifyKeyAction(LEGACY_KEY_V2, Action.DELETE);
+    }
+
+    @Test
+    void updateKeyStatusDuringMaintenanceIsUnavailable() {
+        doThrow(MAINTENANCE).when(maintenance).assertWritable(LEGACY_NCA_ID);
+
+        assertThatThrownBy(() -> service.updateKeyStatus(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1, KeyStatus.SUSPENDED))
+                .isSameAs(MAINTENANCE);
+
+        verifyNoInteractions(keysDao, keysV2Dao, actionRecorder);
+    }
+
+    @Test
+    void updateKeyAuthorizationsDuringMaintenanceIsUnavailable() {
+        doThrow(MAINTENANCE).when(maintenance).assertWritable(LEGACY_NCA_ID);
+
+        assertThatThrownBy(() -> service.updateKeyAuthorizations(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1, KEY_AUTHZ_2,
+                MIN_AUTHZ_UPDATE_INTERVAL_SECONDS))
+                .isSameAs(MAINTENANCE);
+
+        verifyNoInteractions(keysDao, keysV2Dao, rowUpdateLockDao, actionRecorder);
+    }
+
+    @Test
+    void deleteKeyByIdDuringMaintenanceIsUnavailable() {
+        doThrow(MAINTENANCE).when(maintenance).assertWritable(LEGACY_NCA_ID);
+
+        assertThatThrownBy(() -> service.deleteKeyById(
+                LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+                .isSameAs(MAINTENANCE);
+
+        verifyNoInteractions(keysDao, keysV2Dao, actionRecorder);
     }
 
     @Test

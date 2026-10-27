@@ -32,7 +32,6 @@ import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
 import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
 import com.nvidia.apikeys.persistance.dao.RowUpdateLockDao;
-import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.persistance.models.KeyV2Model;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
@@ -63,7 +62,8 @@ import org.springframework.stereotype.Service;
  * first and fall back to {@link KeysDao}, with service IDs translated by
  * {@link LegacyAccountTranslator}. Updates and deletes go to the table that holds the key. Its
  * owner status stays with the legacy keys through {@link KeyOwnerService}. Every other account
- * uses {@link OwnerStatusByAccountDao} for owner status.
+ * uses {@link OwnerStatusByAccountDao} for owner status. While the legacy key migration holds
+ * its maintenance lease, key updates and deletes for the legacy account return 503.
  *
  * <p>Callers pass validated values. Keys are always returned in v2 form.
  */
@@ -90,6 +90,7 @@ public class KeysV2Service {
     private final LegacyAccountTranslator legacyAccount;
     private final MillisecondPrecisionClock clock;
     private final ActionRecorder actionRecorder;
+    private final LegacyKeyMaintenance maintenance;
 
     /**
      * Every new key goes to keys_v2, including keys for the legacy account. The hash is unique
@@ -158,6 +159,8 @@ public class KeysV2Service {
     public KeyV2Vo updateKeyStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId, KeyStatus status) {
+        // Returns 503 for the legacy account while the migration lease is held.
+        maintenance.assertWritable(ncaId);
         var stored = load(ncaId, ownerType, ownerId, issuerServiceId, keyId);
         var key = stored.key();
         if (key.getKeyStatus() == status) {
@@ -177,17 +180,25 @@ public class KeysV2Service {
         return updated;
     }
 
+    /**
+     * The throttle lock always uses the keys_v2 name, so migrating a legacy key does not reset
+     * its authorization update interval.
+     */
     public KeyV2Vo updateKeyAuthorizations(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId, String authorizations, int minAuthzUpdateIntervalSeconds) {
+        // Returns 503 for the legacy account while the migration lease is held. Must run before
+        // the throttle lock below, or a rejected request would still start the update interval
+        // and block the caller's retry.
+        maintenance.assertWritable(ncaId);
         var stored = load(ncaId, ownerType, ownerId, issuerServiceId, keyId);
         var key = stored.key();
         if (key.getKeyStatus() != KeyStatus.ACTIVE) {
             throw new BadRequestException(MESG_KEY_NOT_ACTIVE);
         }
 
-        var tableName = stored.legacy() ? KeyModel.TABLE_NAME : KeyV2Model.TABLE_NAME;
-        lockForAuthorizationUpdates(tableName, key.getKeyHash(), minAuthzUpdateIntervalSeconds);
+        lockForAuthorizationUpdates(
+                KeyV2Model.TABLE_NAME, key.getKeyHash(), minAuthzUpdateIntervalSeconds);
 
         var updated = key.toBuilder().authorizations(authorizations).build();
         save(stored, updated);
@@ -202,6 +213,8 @@ public class KeysV2Service {
     public void deleteKeyById(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId) {
+        // Returns 503 for the legacy account while the migration lease is held.
+        maintenance.assertWritable(ncaId);
         var v2Key = keysV2Dao.get(ncaId, ownerType, ownerId, issuerServiceId, keyId);
         var legacyKey = findLegacyKeyRow(ncaId, ownerType, ownerId, issuerServiceId, keyId);
         if (v2Key.isEmpty() && legacyKey.isEmpty()) {

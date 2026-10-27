@@ -34,3 +34,10 @@ apikeys:
   service-id-map:
     nvcf: nvidia-cloud-functions-ncp-service-id-aketm
     nvct: nvidia-cloud-tasks-ncp-service-id-nvcttasks
+  migration:
+    legacy-keys:
+      enabled: false
+      page-size: 2
+      batch-delay: PT0S
+      page-fetch-backoff: PT0S
+      maintenance-grace-period: PT0S

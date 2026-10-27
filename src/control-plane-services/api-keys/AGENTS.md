@@ -64,6 +64,16 @@ legacy routing in these two classes instead of the DAOs or controllers.
 maps every model column to a same-named value-object field, so a new column on
 an encrypted model also needs that field on its `@ValueObject`.
 
+`com.nvidia.apikeys.migration` copies legacy keys into `keys_v2` and
+`keys_by_owner_and_account_and_service` when
+`apikeys.migration.legacy-keys.enabled` is true. A run holds a lease row in
+`row_update_lock` through `LegacyKeyMaintenance`. While the lease exists,
+`KeysV2Service` returns 503 for legacy-account key updates and deletes on every
+replica, whether or not the task is enabled there. Ship the 503 check with the
+task disabled first, and enable it only after every replica runs that build.
+The authorization throttle always uses the `keys_v2` lock name, so a migrated
+key keeps its interval.
+
 Integration tests bind each `.cql` file in `local_env/docker-compose.test.yml`
 because Bazel runfiles are symlinks. Local Compose mounts the whole schema
 directory.
