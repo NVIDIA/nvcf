@@ -106,6 +106,7 @@ pub(crate) async fn feed_seeds(
     stop: CancellationToken,
 ) {
     let mut stale = false;
+    let mut warned_no_routers = false;
     loop {
         let (gds_seeds, router_count, synced, now_stale) = {
             let state = routers.borrow_and_update();
@@ -126,24 +127,23 @@ pub(crate) async fn feed_seeds(
         }
         let mut seeds = static_seeds.clone();
         seeds.extend(gds_seeds);
+        if warn_no_routers(&mut warned_no_routers, synced, &seeds) {
+            warn!(
+                router_count,
+                "GDS lists no router with a live lease and ready replicas; no Stargate to register with"
+            );
+        }
         seeds_tx.send_if_modified(|current| {
             if *current == seeds {
                 return false;
             }
-            if seeds.is_empty() && synced {
-                warn!(
-                    router_count,
-                    "GDS lists no router with a live lease and ready replicas; no Stargate to register with"
-                );
-            } else {
-                info!(
-                    seed_count = seeds.len(),
-                    router_count,
-                    added = seeds.difference(current).count(),
-                    removed = current.difference(&seeds).count(),
-                    "GDS Stargate seeds changed"
-                );
-            }
+            info!(
+                seed_count = seeds.len(),
+                router_count,
+                added = seeds.difference(current).count(),
+                removed = current.difference(&seeds).count(),
+                "GDS Stargate seeds changed"
+            );
             *current = std::mem::take(&mut seeds);
             true
         });
@@ -156,6 +156,15 @@ pub(crate) async fn feed_seeds(
             }
         }
     }
+}
+
+/// Whether to warn that the synced router view gives no seed: once each time
+/// the seed set becomes empty, including at startup.
+fn warn_no_routers(warned: &mut bool, synced: bool, seeds: &BTreeSet<String>) -> bool {
+    let empty = synced && seeds.is_empty();
+    let warn = empty && !*warned;
+    *warned = empty;
+    warn
 }
 
 #[cfg(test)]
@@ -213,6 +222,28 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("seeds never became {expected:?}"));
+    }
+
+    #[test]
+    fn no_router_warning_fires_once_per_empty_period() {
+        let mut warned = false;
+        let none = BTreeSet::new();
+        let some = set(&["http://10.1.0.1:50071"]);
+
+        assert!(
+            !warn_no_routers(&mut warned, false, &none),
+            "not before the first list"
+        );
+        assert!(warn_no_routers(&mut warned, true, &none));
+        assert!(
+            !warn_no_routers(&mut warned, true, &none),
+            "once while it stays empty"
+        );
+        assert!(!warn_no_routers(&mut warned, true, &some));
+        assert!(
+            warn_no_routers(&mut warned, true, &none),
+            "again after seeds came and went"
+        );
     }
 
     #[tokio::test]
