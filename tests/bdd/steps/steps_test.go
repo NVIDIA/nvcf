@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cucumber/godog"
 	messages "github.com/cucumber/messages/go/v21"
@@ -686,6 +687,28 @@ func TestISuccessfullyRunCommandDocPreservesOutput(t *testing.T) {
 	}
 }
 
+func TestIPollCommandUntilOutputContainsRetriesAndPreservesMatch(t *testing.T) {
+	previousInterval := commandPollInterval
+	commandPollInterval = time.Nanosecond
+	t.Cleanup(func() { commandPollInterval = previousInterval })
+
+	sc, fake := newScenarioContext(t)
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: `{"status":"pending"}`},
+		{ExitCode: 0, Stdout: `{"status":"ready"}`},
+	}
+	doc := &godog.DocString{Content: "nvcf-cli stats get --json"}
+	if err := sc.iPollCommandUntilOutputContains(context.Background(), 1, `"ready"`, doc); err != nil {
+		t.Fatalf("poll command: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+	if sc.LastResult.Stdout != `{"status":"ready"}` {
+		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+}
+
 func TestISuccessfullyRunCommandRejectsNonZeroExit(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 2, Stderr: "failed"}
@@ -910,6 +933,23 @@ func TestIExportCommandOutputToEnvRejectsEmptyName(t *testing.T) {
 	err := sc.iExportCommandOutputToEnv(context.Background(), "")
 	if err == nil {
 		t.Fatal("expected error for empty name, got nil")
+	}
+}
+
+func TestIExportCommandJSONFieldSetsEnv(t *testing.T) {
+	const name = "BDD_TEST_EXPORT_JSON"
+	t.Setenv(name, "original")
+
+	sc, _ := newScenarioContext(t)
+	sc.LastResult = harness.Result{ExitCode: 0, Stdout: `{"contexts":[{"context":"cluster_id=c1"}]}`}
+	if err := sc.iExportCommandJSONField(context.Background(), "contexts.0.context", name); err != nil {
+		t.Fatalf("export JSON field: %v", err)
+	}
+	if got := os.Getenv(name); got != "cluster_id=c1" {
+		t.Fatalf("got %q, want cluster_id=c1", got)
+	}
+	if err := sc.Suite.EnvLedger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
 	}
 }
 

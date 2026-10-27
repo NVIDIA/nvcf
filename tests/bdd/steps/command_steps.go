@@ -22,12 +22,16 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
 	"nvcf-bdd/harness"
 )
+
+// commandPollInterval is the pause between command polls; tests shorten it.
+var commandPollInterval = 5 * time.Second
 
 // registerCommandSteps hooks the run/has-succeeded/export handlers.
 // The run forms (single-line and docstring) route through runCommand
@@ -37,9 +41,11 @@ func registerCommandSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I run command:$`, sc.iRunCommandDoc)
 	ctx.Step(`^I successfully run command "([^"]*)"$`, sc.iSuccessfullyRunCommandLine)
 	ctx.Step(`^I successfully run command:$`, sc.iSuccessfullyRunCommandDoc)
+	ctx.Step(`^I poll command for up to (\d+) seconds until output contains "([^"]*)":$`, sc.iPollCommandUntilOutputContains)
 	ctx.Step(`^I run command with a terminal:$`, sc.iRunCommandWithTTYDoc)
 	ctx.Step(`^command has succeeded:$`, sc.commandHasSucceededDoc)
 	ctx.Step(`^I export command output to environment variable "([^"]*)"$`, sc.iExportCommandOutputToEnv)
+	ctx.Step(`^I export command output JSON field "([^"]*)" to environment variable "([^"]*)"$`, sc.iExportCommandJSONField)
 }
 
 func (sc *ScenarioContext) iRunCommandLine(ctx context.Context, commandText string) error {
@@ -56,6 +62,37 @@ func (sc *ScenarioContext) iSuccessfullyRunCommandLine(ctx context.Context, comm
 
 func (sc *ScenarioContext) iSuccessfullyRunCommandDoc(ctx context.Context, doc *godog.DocString) error {
 	return sc.runSuccessfully(ctx, doc.Content)
+}
+
+func (sc *ScenarioContext) iPollCommandUntilOutputContains(
+	ctx context.Context,
+	seconds int,
+	want string,
+	doc *godog.DocString,
+) error {
+	if seconds <= 0 {
+		return fmt.Errorf("command poll timeout must be positive")
+	}
+	want = dsl.Interpolate(want)
+	if strings.TrimSpace(want) == "" {
+		return fmt.Errorf("command poll text must be non-empty")
+	}
+	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+	for {
+		err := sc.runAndRecord(ctx, doc.Content)
+		if err == nil && sc.LastResult.ExitCode == 0 && strings.Contains(combinedOutput(sc.LastResult), want) {
+			return nil
+		}
+		if time.Now().Add(commandPollInterval).After(deadline) {
+			return fmt.Errorf("command poll timed out after %d seconds waiting for %q (see %s for command logs)",
+				seconds, dsl.RedactSecrets(want), sc.Suite.Config.CommandLogDir)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(commandPollInterval):
+		}
+	}
 }
 
 // iRunCommandWithTTYDoc runs the docstring command with stdin attached to
@@ -170,6 +207,29 @@ func (sc *ScenarioContext) iExportCommandOutputToEnv(_ context.Context, name str
 	value := strings.TrimSpace(sc.LastResult.Stdout)
 	if value == "" {
 		return fmt.Errorf("export to %s: prior command produced empty stdout", name)
+	}
+	if err := sc.Suite.EnvLedger.Snapshot(name); err != nil {
+		return fmt.Errorf("export to %s: snapshot: %w", name, err)
+	}
+	if err := os.Setenv(name, value); err != nil {
+		return fmt.Errorf("export to %s: setenv: %w", name, err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) iExportCommandJSONField(_ context.Context, path, name string) error {
+	if name == "" {
+		return fmt.Errorf("export: env var name must be non-empty")
+	}
+	if sc.LastResult.ExitCode != 0 {
+		return fmt.Errorf("export to %s: prior command exited %d (want 0)", name, sc.LastResult.ExitCode)
+	}
+	value, err := dsl.JSONField(sc.LastResult.Stdout, path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("export to %s: json field %q is empty", name, path)
 	}
 	if err := sc.Suite.EnvLedger.Snapshot(name); err != nil {
 		return fmt.Errorf("export to %s: snapshot: %w", name, err)
