@@ -2234,7 +2234,7 @@
           }
         }
       },
-      "description": "Router is derived from one export labelled gds.nvidia.com/role=router, one\nper (cluster, namespace, name). A pylon dials the derived Service of the\nimport in its own cluster:\n\u003cdial_scheme\u003e://derived-\u003chash\u003e.\u003cnamespace\u003e.svc.cluster.local:\u003cgrpc_port\u003e."
+      "description": "Router is derived from one export labelled gds.nvidia.com/role=router, one\nper (cluster, namespace, name). Pylons use its ready replicas as seeds,\n\u003cdial_scheme\u003e://\u003creplica address\u003e:\u003cgrpc_port\u003e, so that a seed reaches the\nrouters of this cluster even when other clusters export the same namespace\nand name into one shared import."
     },
     "v1RouterReplica": {
       "type": "object",

@@ -724,9 +724,10 @@ func (x *RouterReplica) GetZone() string {
 }
 
 // Router is derived from one export labelled gds.nvidia.com/role=router, one
-// per (cluster, namespace, name). A pylon dials the derived Service of the
-// import in its own cluster:
-// <dial_scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>.
+// per (cluster, namespace, name). Pylons use its ready replicas as seeds,
+// <dial_scheme>://<replica address>:<grpc_port>, so that a seed reaches the
+// routers of this cluster even when other clusters export the same namespace
+// and name into one shared import.
 type Router struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Cluster           string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`

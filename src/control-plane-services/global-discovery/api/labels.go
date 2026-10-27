@@ -63,8 +63,9 @@ const (
 	AnnotationHardwareClass = Prefix + "hardware-class"
 	// AnnotationDC is the data center of the pool.
 	AnnotationDC = Prefix + "dc"
-	// AnnotationDialScheme is the scheme clients use for the derived VIP:
-	// DialSchemeHTTP or DialSchemeHTTPS.
+	// AnnotationDialScheme is the scheme clients dial the exported Service
+	// with, through router seeds or the derived VIP: DialSchemeHTTP or
+	// DialSchemeHTTPS.
 	AnnotationDialScheme = Prefix + "dial-scheme"
 	// AnnotationGRPCPortName names the Service port that carries gRPC.
 	AnnotationGRPCPortName = Prefix + "grpc-port-name"
