@@ -34,6 +34,7 @@ make test          # -race, coverage of internal/ must stay at or above 85 perce
 make test-integration  # DynamoDB store and gds-admin against dynamodb-local; needs Docker
 make vet
 make lint
+make proto-tools   # pinned buf and protoc plugins into _output/tools
 make proto         # after editing api/proto
 make proto-check   # before committing
 GOWORK=off go run ./cmd/gds-server --log-level=debug   # memory store on :9090, :8080, :9091
@@ -115,6 +116,19 @@ new BUILD files; copy it from an existing one.
   bufconn with the race detector: `go test -race ./pkg/...`. The coverage
   gate of `make test` covers `internal/` only; keep `pkg/` tests thorough
   anyway.
+
+## Packaging
+
+- Images: `:image` (gds-server) and `:admin_image` (gds-admin) in
+  `BUILD.bazel`, with the entrypoint mode tests. Server flags reach the
+  chart through `deploy/helm/global-discovery`: a new flag gets a value
+  there, an assertion in its `scripts/check-render.sh` and a row in its
+  README. Run `make -C deploy/helm/global-discovery lint template test`.
+- CI runs `tools/ci/check-go-codegen src/control-plane-services/global-discovery
+  --command 'make proto-tools proto'`; keep the `go install` lines of
+  `hack/proto.sh` in their format, `make proto-tools` reads them.
+- REST behaviour changes may need the checks of
+  `tests/e2e/global-discovery-k3d/run.sh` updated.
 
 ## Conventions
 

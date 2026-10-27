@@ -162,13 +162,17 @@ replicas. Grant it to operators or a deployment pipeline, not to pods.
 ## IRSA
 
 gds-server runs in an EKS cluster in each GDS region. With IAM roles for
-service accounts, the chart annotates the ServiceAccount with the role ARN:
+service accounts, the chart (`deploy/helm/global-discovery`) annotates the
+ServiceAccount with the role ARN of `serviceAccount.irsaRoleArn`:
 
 ```yaml
 serviceAccount:
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/gds-server
+  irsaRoleArn: arn:aws:iam::<account>:role/gds-server
 ```
+
+It renders `eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/gds-server`
+on the ServiceAccount; the annotation can also be set directly in
+`serviceAccount.annotations`.
 
 The EKS pod identity webhook injects `AWS_ROLE_ARN`,
 `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_REGION` and `AWS_DEFAULT_REGION`; the
@@ -215,7 +219,9 @@ Pin both the audience and the exact ServiceAccount:
 ```
 
 - `<namespace>` and `<serviceaccount>` are the release namespace and the
-  ServiceAccount name the chart renders.
+  ServiceAccount name the chart renders: the release full name, for example
+  `global-discovery` for a release named `global-discovery`, unless
+  `serviceAccount.name` is set.
 - Use regional STS endpoints (the default of current SDKs), so token
   exchange does not depend on another region.
 - EKS Pod Identity works as well: the trust principal is
