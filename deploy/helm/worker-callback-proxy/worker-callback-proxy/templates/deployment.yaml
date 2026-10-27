@@ -17,7 +17,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "workerCallbackProxy.fullname" . | quote }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     {{- include "workerCallbackProxy.labels" . | nindent 4 }}
 spec:

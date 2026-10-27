@@ -192,6 +192,12 @@ render --set-string workerCallbackProxy.tls.frontend.existingSecret=123 \
   --set-string workerCallbackProxy.grpcProxy.caSecret.key=789 > "${m}"
 expect_eq "Secret names and key are strings" \
   "$(pod "${m}" '[.volumes[] | select(.secret) | (.secret.secretName, .secret.items[0].key) | tag] | unique | join(",")')" "!!str"
+m="${tmp_dir}/numeric-release.yaml"
+helm template 1234 "${CHART}" --namespace 5678 -f "${VALUES}" \
+  --set workerCallbackProxy.service.type=LoadBalancer \
+  --set-string workerCallbackProxy.service.loadBalancerClass=90 > "${m}"
+expect_eq "labels, namespaces and Service fields are strings" \
+  "$(q "${m}" '[(.metadata.labels[], .metadata.namespace, .spec.selector.matchLabels[]?, .spec.loadBalancerClass?) | select(. != null) | tag] | unique | join(",")' | sort -u | paste -sd, -)" "!!str"
 
 # --- Single tunnels.
 m="${tmp_dir}/invocation-only.yaml"

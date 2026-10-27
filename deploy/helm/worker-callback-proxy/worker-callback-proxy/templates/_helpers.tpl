@@ -36,12 +36,12 @@ limitations under the License.
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" | quote }}
 {{ include "workerCallbackProxy.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
 {{- end -}}
 
 {{- define "workerCallbackProxy.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "workerCallbackProxy.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/name: {{ include "workerCallbackProxy.name" . | quote }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- end -}}
 
 {{- define "workerCallbackProxy.image" -}}

@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "workerCallbackProxy.fullname" . }}-metrics
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     {{- include "workerCallbackProxy.labels" . | nindent 4 }}
     app.kubernetes.io/component: metrics
@@ -38,7 +38,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "workerCallbackProxy.fullname" . | quote }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     {{- include "workerCallbackProxy.labels" . | nindent 4 }}
     {{- with $c.metrics.serviceMonitor.labels }}
@@ -51,7 +51,7 @@ spec:
       app.kubernetes.io/component: metrics
   namespaceSelector:
     matchNames:
-      - {{ .Release.Namespace }}
+      - {{ .Release.Namespace | quote }}
   endpoints:
     - port: metrics
       path: /stats/prometheus

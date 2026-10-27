@@ -18,7 +18,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: {{ include "workerCallbackProxy.fullname" . | quote }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     {{- include "workerCallbackProxy.labels" . | nindent 4 }}
 spec:
