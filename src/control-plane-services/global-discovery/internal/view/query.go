@@ -427,3 +427,22 @@ func (v *View) Summaries() []Summary {
 	}
 	return out
 }
+
+// ExportStatusOf returns one stored export with its endpoint set counts.
+func (v *View) ExportStatusOf(key store.ExportKey) (ExportStatus, bool) {
+	cs := v.get(key.ClusterSet)
+	if cs == nil {
+		return ExportStatus{}, false
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	r, ok := cs.exports[key]
+	if !ok {
+		return ExportStatus{}, false
+	}
+	st := ExportStatus{Record: r.Clone()}
+	if ep, ok := cs.endpointsOf(key); ok {
+		st.EndpointsGeneration, st.EndpointCount, st.ReadyEndpointCount = ep.gen, ep.total, ep.ready
+	}
+	return st, true
+}

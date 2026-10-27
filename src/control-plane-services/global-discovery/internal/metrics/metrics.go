@@ -85,6 +85,10 @@ var StoreOperations = []string{
 	"list_cluster_sets", "load_cluster_set", "ping",
 }
 
+// Store results of store_request_duration_seconds: ok, conditional (the
+// write's condition refused it, or the record was not found) and error.
+var StoreResults = []string{"ok", "conditional", "error"}
+
 // Conditional failure reasons of store_conditional_failures_total, keyed by
 // the operations that can produce them.
 var ConditionalFailures = map[string][]string{
@@ -186,7 +190,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}),
 		StoreRequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: Namespace, Name: "store_request_duration_seconds",
-			Help:    "Store request duration by operation and result (ok, error).",
+			Help:    "Store request duration by operation and result (ok, conditional, error).",
 			Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"operation", "result"}),
 		StoreConditionalFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -231,7 +235,7 @@ func (m *Metrics) init() {
 		m.WatchRejected.WithLabelValues(r)
 	}
 	for _, op := range StoreOperations {
-		for _, res := range []string{"ok", "error"} {
+		for _, res := range StoreResults {
 			m.StoreRequestDuration.WithLabelValues(op, res)
 		}
 	}
