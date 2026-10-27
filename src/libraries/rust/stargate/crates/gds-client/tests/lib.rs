@@ -14,3 +14,11 @@
 // limitations under the License.
 
 //! Integration tests for gds-client against an in-process fake GDS.
+
+mod cache;
+mod client;
+mod derived;
+mod failover;
+mod register;
+mod routers;
+mod support;
