@@ -328,9 +328,9 @@ func TestSetConfigDefaultResourcesConfigOnly(t *testing.T) {
 		quantities(cfg.Agent.AdditionalResourceOverhead))
 	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
 		quantities(cfg.Agent.SharedStorage.Server.ContainerResources.Limits))
-	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "500m", corev1.ResourceMemory: "2Gi"},
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesBYOO().Limits)),
 		quantities(cfg.Agent.BYOOResources.Limits))
-	assert.Equal(t, map[corev1.ResourceName]string{corev1.ResourceCPU: "200m", corev1.ResourceMemory: "256Mi"},
+	assert.Equal(t, quantities(nvcaconfig.ResourceList(common.GetDefaultContainerResourcesFluentbit().Limits)),
 		quantities(cfg.Agent.BYOOFluentBitResources.Limits))
 }
 
