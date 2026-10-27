@@ -536,3 +536,30 @@ server time explicitly. Not done in ws1: CI wiring (the
 `.github/workflows/bazel.yml` matrix row and the `check-go-codegen` guard),
 `go_oci_image`, golangci-lint run (not installed locally; staticcheck is
 clean).
+
+Workstream 2 (server core), branch `feat/gds-ws2-server`, delivered under
+`src/control-plane-services/global-discovery`:
+
+- `internal/registry/merge`: the Cilium ServiceImport merge (priority order
+  with expired clusters skipped, port union, IP family intersection,
+  conflict checks) with Cilium's named cases and the GDS cases.
+- `internal/view`: per-clusterset view (clusters, merged imports, pools from
+  labelled exports plus the API overlay, routers, model and label indexes),
+  refresher with write-through and lease evaluation, watch hub (revisions,
+  ring buffer, resume, bookmarks, lagged resync, watcher limit), compaction.
+- `internal/api`, `internal/auth`, `internal/server`, `internal/metrics`,
+  `internal/store/instrumented`, `internal/storefactory`; `gds-server`
+  serves gRPC, REST and admin with the memory store; `gds-admin` has
+  `describe` and `delete-cluster`. `docs/consistency.md` added.
+
+Deviations from the plan: a write with generation 0 gets a server-assigned
+generation; errors also use the reasons `INVALID_ARGUMENT`, `NOT_FOUND` and
+`INTERNAL`; the default pool id is a name-based UUID of
+`clusterset/cluster/name`; the merge compares port sets without order and
+ignores exports that list no IP family; an import whose clusters all
+expired keeps its shape; gRPC metrics are `nvcf_gds_grpc_server_*`;
+compaction re-reads a cluster before deleting it because the store has no
+conditional delete; the per-watcher queue flag stays `--watch-queue-size`.
+Not done in ws2: the DynamoDB opener in `internal/storefactory` (ws3),
+removal of empty clustersets from `ListClusterSets` (the store has no call
+for it), `go_oci_image` and CI wiring.
