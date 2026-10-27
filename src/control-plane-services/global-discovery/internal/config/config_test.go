@@ -46,6 +46,7 @@ func TestDefaultsAreValid(t *testing.T) {
 	assert.Equal(t, StoreMemory, c.Store)
 	assert.Equal(t, 2*time.Second, c.RefreshInterval)
 	assert.Equal(t, time.Second, c.LeaseEvalInterval)
+	assert.Equal(t, 30*time.Second, c.ClusterSetDiscoveryInterval)
 	assert.Equal(t, 2*time.Second, c.LeaseSkew)
 	assert.Equal(t, 24*time.Hour, c.Retention)
 	assert.Equal(t, 5*time.Second, c.BookmarkInterval)
@@ -69,6 +70,7 @@ func TestFlags(t *testing.T) {
 		"--dynamodb-endpoint=http://localhost:8000",
 		"--refresh-interval=500ms",
 		"--lease-eval-interval=250ms",
+		"--clusterset-discovery-interval=10s",
 		"--lease-skew=0s",
 		"--retention=1h",
 		"--compaction-interval=1m",
@@ -88,23 +90,24 @@ func TestFlags(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, &Config{
-		GRPCListenAddress:  "127.0.0.1:19090",
-		HTTPListenAddress:  "127.0.0.1:18080",
-		AdminListenAddress: "127.0.0.1:19091",
-		Region:             "eu-west-1",
-		Store:              StoreDynamoDB,
-		DynamoDBTable:      "gds-test",
-		DynamoDBEndpoint:   "http://localhost:8000",
-		RefreshInterval:    500 * time.Millisecond,
-		LeaseEvalInterval:  250 * time.Millisecond,
-		LeaseSkew:          0,
-		Retention:          time.Hour,
-		CompactionInterval: time.Minute,
-		BookmarkInterval:   10 * time.Second,
-		WatchHistory:       100,
-		WatchQueueSize:     16,
-		MaxWatchers:        10,
-		MaxMessageBytes:    8 << 20,
+		GRPCListenAddress:           "127.0.0.1:19090",
+		HTTPListenAddress:           "127.0.0.1:18080",
+		AdminListenAddress:          "127.0.0.1:19091",
+		Region:                      "eu-west-1",
+		Store:                       StoreDynamoDB,
+		DynamoDBTable:               "gds-test",
+		DynamoDBEndpoint:            "http://localhost:8000",
+		RefreshInterval:             500 * time.Millisecond,
+		LeaseEvalInterval:           250 * time.Millisecond,
+		ClusterSetDiscoveryInterval: 10 * time.Second,
+		LeaseSkew:                   0,
+		Retention:                   time.Hour,
+		CompactionInterval:          time.Minute,
+		BookmarkInterval:            10 * time.Second,
+		WatchHistory:                100,
+		WatchQueueSize:              16,
+		MaxWatchers:                 10,
+		MaxMessageBytes:             8 << 20,
 		AdvertiseEndpoints: AdvertiseEndpoints{
 			{Region: "us-east-1", GRPCURL: "https://gds.us-east-1.example:443", HTTPURL: "https://gds.us-east-1.example", Primary: true},
 			{Region: "us-west-2", GRPCURL: "https://gds.us-west-2.example:443"},
@@ -164,7 +167,7 @@ func TestEveryFlagHasAnEnvVar(t *testing.T) {
 		assert.Regexp(t, `^GDS_[A-Z0-9_]+$`, EnvName(f.Name))
 		assert.NotEmpty(t, f.Usage, f.Name)
 	})
-	assert.Equal(t, 24, n)
+	assert.Equal(t, 25, n)
 }
 
 func TestParseErrors(t *testing.T) {
@@ -228,6 +231,7 @@ func TestValidate(t *testing.T) {
 		{"dynamodb endpoint unparsable", func(c *Config) { c.DynamoDBEndpoint = "http://[::1" }, "--dynamodb-endpoint"},
 		{"refresh too fast", func(c *Config) { c.RefreshInterval = time.Millisecond }, "--refresh-interval"},
 		{"lease eval zero", func(c *Config) { c.LeaseEvalInterval = 0 }, "--lease-eval-interval"},
+		{"discovery too fast", func(c *Config) { c.ClusterSetDiscoveryInterval = time.Millisecond }, "--clusterset-discovery-interval"},
 		{"retention too short", func(c *Config) { c.Retention = time.Minute }, "--retention"},
 		{"compaction zero", func(c *Config) { c.CompactionInterval = 0 }, "--compaction-interval"},
 		{"bookmark zero", func(c *Config) { c.BookmarkInterval = 0 }, "--bookmark-interval"},

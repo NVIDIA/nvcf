@@ -35,6 +35,7 @@ all: build
 build:
 	$(GO) build ./...
 	$(GO) build -o _output/bin/gds-server ./cmd/gds-server
+	$(GO) build -o _output/bin/gds-admin ./cmd/gds-admin
 
 # Unit tests with the race detector. The reported total is the statement
 # coverage of internal/; the target fails below COVERAGE_MIN percent.

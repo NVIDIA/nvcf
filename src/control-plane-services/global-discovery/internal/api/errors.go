@@ -123,3 +123,15 @@ func watchError(err error) error {
 	}
 	return gdsError(codes.Internal, gds.ReasonInternal, "watch: "+err.Error(), nil)
 }
+
+// ShuttingDownError is the UNAVAILABLE SHUTTING_DOWN error of a call that
+// reaches a draining replica.
+func ShuttingDownError() error {
+	return gdsError(codes.Unavailable, gds.ReasonShuttingDown, "the replica is shutting down; retry on another replica", nil)
+}
+
+// InternalError is the INTERNAL error of a call that failed unexpectedly,
+// for example a recovered panic.
+func InternalError(msg string) error {
+	return gdsError(codes.Internal, gds.ReasonInternal, msg, nil)
+}

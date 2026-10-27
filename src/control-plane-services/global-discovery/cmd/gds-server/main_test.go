@@ -19,24 +19,110 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func noEnv(string) (string, bool) { return "", false }
 
-func TestRun(t *testing.T) {
-	var out bytes.Buffer
-	assert.Equal(t, 0, run([]string{"--region=us-east-1"}, noEnv, &out))
-	assert.Contains(t, out.String(), `"region":"us-east-1"`)
-	assert.Contains(t, out.String(), `"store":"memory"`)
+// syncBuffer is a bytes.Buffer safe for the server's concurrent logging.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
 
-	out.Reset()
-	assert.Equal(t, 2, run([]string{"--store=etcd"}, noEnv, &out))
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+	return l.Addr().String()
+}
+
+func TestRunConfigErrors(t *testing.T) {
+	var out syncBuffer
+	assert.Equal(t, 2, run(context.Background(), []string{"--store=etcd"}, noEnv, &out))
 	assert.Contains(t, out.String(), "gds-server: --store")
-
-	out.Reset()
-	assert.Equal(t, 0, run([]string{"--help"}, noEnv, &out))
+	assert.Equal(t, 0, run(context.Background(), []string{"--help"}, noEnv, &out))
 	assert.Contains(t, out.String(), "Usage of gds-server")
+}
+
+func TestRunDynamoDBNotBuilt(t *testing.T) {
+	var out syncBuffer
+	assert.Equal(t, 1, run(context.Background(), []string{"--store=dynamodb"}, noEnv, &out))
+	assert.Contains(t, out.String(), "not built into this binary yet")
+}
+
+func TestRunServesUntilCanceled(t *testing.T) {
+	grpcAddr, httpAddr, adminAddr := freePort(t), freePort(t), freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	var out syncBuffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{
+			"--grpc-listen-address=" + grpcAddr, "--http-listen-address=" + httpAddr, "--admin-listen-address=" + adminAddr,
+			"--shutdown-drain=0s", "--refresh-interval=200ms", "--log-level=debug",
+		}, noEnv, &out)
+	}()
+	require.Eventually(t, func() bool {
+		resp, err := http.Get(fmt.Sprintf("http://%s/readyz", adminAddr))
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 10*time.Second, 20*time.Millisecond)
+	resp, err := http.Get(fmt.Sprintf("http://%s/v1/clustersets", httpAddr))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	cancel()
+	select {
+	case code := <-done:
+		assert.Equal(t, 0, code)
+	case <-time.After(10 * time.Second):
+		t.Fatal("gds-server did not stop")
+	}
+	logs := out.String()
+	assert.Contains(t, logs, `"msg":"starting gds-server"`)
+	assert.Contains(t, logs, `"msg":"gds-server stopped"`)
+	assert.True(t, strings.Contains(logs, `"service":"nvcf-global-discovery"`))
+}
+
+func TestRunListenError(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer busy.Close()
+	var out syncBuffer
+	code := run(context.Background(), []string{
+		"--grpc-listen-address=" + busy.Addr().String(), "--http-listen-address=" + freePort(t), "--admin-listen-address=" + freePort(t),
+	}, noEnv, &out)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, out.String(), "start failed")
+}
+
+func TestNewLogger(t *testing.T) {
+	_, err := newLogger("loud", &bytes.Buffer{})
+	assert.Error(t, err)
 }
