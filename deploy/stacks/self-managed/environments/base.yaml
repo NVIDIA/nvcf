@@ -79,9 +79,15 @@ global:
     # own address. Every replica advertises a set value, so invocation-service
     # stays at one replica under HA when it is set.
     invocationServiceURL: ""
+    # Proxy that workers dial for invocation callbacks
+    # (WORKER_STREAM_PROPERTIES__PROXY_ADDRESS). Used only when
+    # workerCallbackProxy.enabled is true; empty uses the worker callback proxy
+    # Service. Set it when workers reach Envoy through another address.
+    invocationProxyURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy. Empty
     # advertises each pod's IP. Every replica advertises a set value, so
-    # grpc-proxy stays at one replica under HA when it is set.
+    # grpc-proxy stays at one replica under HA when it is set, unless
+    # grpcproxy.http3 is enabled, which puts each pod's IP in front of it.
     grpcProxyWorkerConnectURL: ""
     # Pylon discovery endpoint. Empty uses
     # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
@@ -787,6 +793,57 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Worker callback proxy (Envoy), for workers in another cluster that cannot
+# reach control-plane pod IPs. Envoy routes each callback to the grpc-proxy or
+# invocation-service pod that holds the request. Single-cluster installs do
+# not need it: workers call the pod directly, and highAvailability scales both
+# services either way.
+#
+# With it enabled, grpc-proxy serves HTTP/3 callbacks and advertises
+# https://<dashed-pod-ip>.<workerDomain>, and invocation-service sends worker
+# streams through the proxy. The OpenBao service PKI issues the Envoy and
+# grpc-proxy certificates through addons.llm.pki's issuer
+# (ClusterIssuer/nvcf-openbao-pki by default), without the LLM add-on.
+# Requires openbao.enabled and cert-manager. Not supported with split-plane
+# worker URLs (global.workerEndpoints.invocationServiceURL,
+# global.workerEndpoints.grpcProxyWorkerConnectURL, or
+# grpcproxy.workerConnectBaseURL).
+#
+# Before enabling:
+#   - Resolve *.<workerDomain> to the worker-callback-proxy Service from the
+#     compute plane, for example with a wildcard DNS record or, on k3s and
+#     AKS, a CoreDNS rewrite in kube-system/coredns-custom:
+#       rewrite stop {
+#         name regex (.+)\.<workerDomain with dots escaped>\.$ worker-callback-proxy.nvcf.svc.cluster.local.
+#         answer auto
+#       }
+#   - Give workers the issuing CA through
+#     global.nvcaOperator.agent.workerCallbackCaPem in the compute-plane stack.
+# See docs/self-managed/worker-callback-proxy.md.
+workerCallbackProxy:
+  enabled: false
+  # REQUIRED when enabled. Workers call back on <dashed-pod-ip>.<workerDomain>,
+  # for example grpc-worker.example.com. The stack adds it to the OpenBao
+  # signing role's allowed domains when addons.llm.pki.allowedDomains does not
+  # already cover it.
+  workerDomain: ""
+  # Set only for source-tree validation. Empty uses the released OCI chart.
+  chartPath: ""
+  # replicaCount defaults to the chart value (2).
+  # replicaCount: 2
+  # Workers in another cluster reach Envoy through this Service, so expose it,
+  # for example as a LoadBalancer, and point *.<workerDomain> and
+  # global.workerEndpoints.invocationProxyURL at its address. Passed to the
+  # chart as is.
+  # service:
+  #   type: LoadBalancer
+  # The chart defaults to the upstream image, docker.io/envoyproxy/envoy.
+  # Set registry and repository together to use a mirror:
+  # image:
+  #   registry: <your-registry>
+  #   repository: <your-repository>/envoy
+  #   tag: v1.40.1
 
 # Control-plane high availability.
 # global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone

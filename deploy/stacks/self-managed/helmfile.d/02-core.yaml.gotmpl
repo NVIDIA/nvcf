@@ -136,6 +136,22 @@ releases:
     needs:
       - nvcf/api
 
+  - name: worker-callback-proxy
+    {{- $workerCallbackProxyChartPath := dig "workerCallbackProxy" "chartPath" "" .Values }}
+    chart: {{ $workerCallbackProxyChartPath | default "nvcf/helm-nvcf-worker-callback-proxy" | quote }}
+    {{- if not $workerCallbackProxyChartPath }}
+    version: 0.1.0
+    {{- end }}
+    namespace: nvcf
+    condition: workerCallbackProxy.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+    needs:
+      # Envoy mounts the CA from the grpc-proxy HTTP/3 certificate Secret.
+      - nvcf/grpc-proxy
+
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
     version: 1.3.0
