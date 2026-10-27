@@ -503,3 +503,35 @@ func TestStartWatchesGDS(t *testing.T) {
 		return !ok
 	}, 5*time.Second, 10*time.Millisecond)
 }
+
+func TestUnchangedImportsAreNotReapplied(t *testing.T) {
+	var applies atomic.Int32
+	funcs := interceptor.Funcs{
+		Apply: func(ctx context.Context, c ctrlclient.WithWatch, obj runtime.ApplyConfiguration, opts ...ctrlclient.ApplyOption) error {
+			applies.Add(1)
+			return c.Apply(ctx, obj, opts...)
+		},
+	}
+	e := newEnvWith(t, Options{}, funcs, namespace(testNS))
+	e.sync(t, testImport())
+	n := applies.Load()
+	require.Positive(t, n)
+
+	// A snapshot after a reconnect delivers the same import: no writes.
+	e.sync(t, testImport())
+	assert.Equal(t, n, applies.Load())
+
+	// A deleted managed object makes the importer forget and re-apply.
+	e.imp.forgetApplied(types.NamespacedName{Namespace: testNS, Name: "frontend"})
+	e.imp.Upsert(testImport())
+	e.reconcileAll(t)
+	assert.Greater(t, applies.Load(), n)
+
+	// A changed import is applied.
+	n = applies.Load()
+	imp := testImport()
+	imp.Endpoints = imp.Endpoints[:1]
+	e.imp.Upsert(imp)
+	e.reconcileAll(t)
+	assert.Greater(t, applies.Load(), n)
+}

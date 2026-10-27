@@ -70,12 +70,21 @@ func (i *Importer) SetupWithManager(mgr ctrl.Manager) error {
 		DeleteFunc:  func(e event.DeleteEvent) bool { return isManaged(e.Object.GetLabels()) },
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
+	// A deleted managed object must be re-applied even though its import
+	// did not change: forget what was applied.
 	byServiceName := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o ctrlclient.Object) []reconcile.Request {
 		name := o.GetLabels()[api.LabelMCSServiceName]
 		if name == "" {
 			return nil
 		}
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: name}}}
+		key := types.NamespacedName{Namespace: o.GetNamespace(), Name: name}
+		i.forgetApplied(key)
+		return []reconcile.Request{{NamespacedName: key}}
+	})
+	byName := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o ctrlclient.Object) []reconcile.Request {
+		key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
+		i.forgetApplied(key)
+		return []reconcile.Request{{NamespacedName: key}}
 	})
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
@@ -83,11 +92,12 @@ func (i *Importer) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o ctrlclient.Object) []reconcile.Request {
 			var reqs []reconcile.Request
 			for _, key := range i.keysIn(o.GetName()) {
+				i.forgetApplied(key)
 				reqs = append(reqs, reconcile.Request{NamespacedName: key})
 			}
 			return reqs
 		}), builder.WithPredicates(created)).
-		Watches(&mcsv1beta1.ServiceImport{}, &handler.EnqueueRequestForObject{}, builder.WithPredicates(deletedManaged)).
+		Watches(&mcsv1beta1.ServiceImport{}, byName, builder.WithPredicates(deletedManaged)).
 		Watches(&corev1.Service{}, byServiceName, builder.WithPredicates(deletedManaged)).
 		Watches(&discoveryv1.EndpointSlice{}, byServiceName, builder.WithPredicates(deletedManaged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: i.opts.MaxConcurrentReconciles}).
@@ -151,8 +161,19 @@ func (i *Importer) ensureNamespace(ctx context.Context, name string) (bool, erro
 func (i *Importer) apply(ctx context.Context, imp *gdsv1.ServiceImport) (err error) {
 	id := i.opts.Identity
 	key := keyOf(imp)
+	hash := importHash(imp)
+	if i.appliedHash(key) == hash {
+		// Applied before and unchanged, for example a snapshot after a
+		// reconnect: nothing to write.
+		return nil
+	}
 	ctx, span := tracing.Start(ctx, "apply_service_import", id.ClusterSet, id.Cluster, key.Namespace, key.Name)
 	defer func() { tracing.End(span, err) }()
+	defer func() {
+		if err == nil {
+			i.setApplied(key, hash)
+		}
+	}()
 	logger := log.FromContext(ctx)
 
 	var existing mcsv1beta1.ServiceImport
@@ -165,6 +186,7 @@ func (i *Importer) apply(ctx context.Context, imp *gdsv1.ServiceImport) (err err
 	}
 	if found && !isManaged(existing.Labels) && !i.opts.AdoptUnmanaged {
 		logger.V(1).Info("Skipping an import whose ServiceImport another controller manages")
+		hash = ""
 		return nil
 	}
 
@@ -288,6 +310,7 @@ func (i *Importer) applySlices(ctx context.Context, imp *gdsv1.ServiceImport, ow
 // EndpointSlices of an import GDS no longer has. Owner references would
 // cascade, but the controller does not rely on the garbage collector.
 func (i *Importer) remove(ctx context.Context, key types.NamespacedName) error {
+	i.forgetApplied(key)
 	logger := log.FromContext(ctx)
 	var si mcsv1beta1.ServiceImport
 	err := i.opts.Client.Get(ctx, key, &si)

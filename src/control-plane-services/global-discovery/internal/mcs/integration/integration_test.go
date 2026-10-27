@@ -52,9 +52,13 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api"
 	gdsv1 "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/config/crd"
+	gdsconfig "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/mcs/app"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/mcs/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/mcs/mcstest"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/server"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/store/memory"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/pkg/client"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/pkg/fakegds"
 )
 
@@ -126,12 +130,18 @@ type controller struct {
 	gds *mcstest.GDS
 }
 
-// startController runs a controller watching namespaces against a new
+// startController runs a controller watching namespaces against a
 // fakegds, and stops it at the end of the test.
 func startController(t *testing.T, gds *mcstest.GDS, namespaces ...string) *controller {
 	t.Helper()
+	return &controller{app: startApp(t, gds.Running.URL(), namespaces...), gds: gds}
+}
+
+// startApp runs a controller watching namespaces against the GDS at url.
+func startApp(t *testing.T, url string, namespaces ...string) *app.App {
+	t.Helper()
 	cfg := config.Config{
-		GDSURLs:                 []string{gds.Running.URL()},
+		GDSURLs:                 []string{url},
 		GDSAllowInsecureHTTP:    true,
 		ClusterSetID:            mcstest.ClusterSet,
 		ClusterID:               mcstest.Cluster,
@@ -168,7 +178,7 @@ func startController(t *testing.T, gds *mcstest.GDS, namespaces ...string) *cont
 		}
 	})
 	require.NoError(t, a.Lease.WaitRegistered(mcstest.Ctx(t)))
-	return &controller{app: a, gds: gds}
+	return a
 }
 
 func createNamespace(t *testing.T) string {
@@ -335,6 +345,13 @@ func TestImportFromAnotherCluster(t *testing.T) {
 	require.Len(t, s.Ports, 1)
 	assert.Equal(t, int32(8080), *s.Ports[0].Port)
 
+	// A managed object deleted by hand comes back.
+	require.NoError(t, k8sClient.Delete(context.Background(), &s))
+	eventually(t, func() bool {
+		slices := importedSlices(t, ns, "frontend")
+		return len(slices) == 1 && slices[0].UID != s.UID
+	}, "deleted slice re-created")
+
 	// Deleting the export in GDS cascades.
 	gds.Server.DeleteExport(mcstest.ClusterSet, remote, ns, "frontend")
 	eventually(t, func() bool {
@@ -411,4 +428,94 @@ func TestLabelDrivenExport(t *testing.T) {
 	eventually(t, func() bool {
 		return !get(t, ns, "web", &mcsv1beta1.ServiceExport{}) && gdsExport(t, c, ns, "web") == nil
 	}, "ServiceExport and export removed with the label")
+}
+
+// startServer runs a gds-server with the memory store on loopback ports and
+// returns a client of it.
+func startServer(t *testing.T) (string, *client.Client) {
+	t.Helper()
+	cfg := gdsconfig.Default()
+	cfg.GRPCListenAddress, cfg.HTTPListenAddress, cfg.AdminListenAddress = "127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0"
+	cfg.ShutdownDrain, cfg.ShutdownTimeout = 0, 2*time.Second
+	srv, err := server.NewApp(cfg, server.AppOptions{Store: memory.New()})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Server.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	url := "http://" + srv.Server.GRPCAddr()
+	return url, mcstest.NewClient(t, url)
+}
+
+// TestAgainstGDSServer runs the controller against the real gds-server
+// instead of fakegds: its validation, merge rules and conditions.
+func TestAgainstGDSServer(t *testing.T) {
+	requireEnv(t)
+	ctx := mcstest.Ctx(t)
+	ns := createNamespace(t)
+	url, gds := startServer(t)
+	startApp(t, url, ns)
+
+	require.NoError(t, k8sClient.Create(ctx, webService(ns)))
+	require.NoError(t, k8sClient.Create(ctx, mcstest.EndpointSlice(ns, "web-1", "web", "10.5.0.1", "10.5.0.2")))
+	require.NoError(t, k8sClient.Create(ctx, &mcsv1beta1.ServiceExport{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "web"}}))
+
+	ownExport := func() *gdsv1.ServiceExport {
+		resp, err := gds.ServiceExports().List(ctx, &gdsv1.ListServiceExportsRequest{Clusterset: mcstest.ClusterSet, Cluster: mcstest.Cluster})
+		require.NoError(t, err)
+		for _, x := range resp.GetExports() {
+			if x.GetNamespace() == ns && x.GetName() == "web" {
+				return x
+			}
+		}
+		return nil
+	}
+	eventually(t, func() bool {
+		x := ownExport()
+		return x != nil && x.GetEndpointCount() == 2
+	}, "export and endpoints in gds-server")
+
+	var se mcsv1beta1.ServiceExport
+	eventually(t, func() bool {
+		get(t, ns, "web", &se)
+		return meta.IsStatusConditionTrue(se.Status.Conditions, api.ConditionReady) &&
+			meta.IsStatusConditionFalse(se.Status.Conditions, api.ConditionConflict)
+	}, "Ready and Conflict from gds-server")
+	assert.Equal(t, api.ConditionReasonReady, meta.FindStatusCondition(se.Status.Conditions, api.ConditionReady).Reason)
+
+	// Cluster b exports the same Service: the import gets both clusters.
+	_, err := gds.Clusters().Register(ctx, &gdsv1.RegisterClusterRequest{Clusterset: mcstest.ClusterSet, Cluster: remote, Region: "us-west-2"})
+	require.NoError(t, err)
+	spec := remoteSpec()
+	spec.Labels = nil
+	spec.Ports[0].Port = 80
+	_, err = gds.ServiceExports().Put(ctx, &gdsv1.PutServiceExportRequest{Clusterset: mcstest.ClusterSet, Cluster: remote,
+		Namespace: ns, Name: "web", Spec: spec, Generation: client.NextGeneration(0)})
+	require.NoError(t, err)
+	_, err = gds.ServiceExports().ReplaceEndpoints(ctx, &gdsv1.ReplaceEndpointsRequest{Clusterset: mcstest.ClusterSet, Cluster: remote,
+		Namespace: ns, Name: "web", Endpoints: remoteEndpoints("10.6.0.1"), Generation: client.NextGeneration(0)})
+	require.NoError(t, err)
+
+	clustersOf := func() []string {
+		var out []string
+		for _, s := range importedSlices(t, ns, "web") {
+			out = append(out, s.Labels[api.LabelMCSSourceCluster])
+		}
+		sort.Strings(out)
+		return out
+	}
+	eventually(t, func() bool { return assert.ObjectsAreEqual([]string{mcstest.Cluster, remote}, clustersOf()) }, "slices of both clusters")
+	var si mcsv1beta1.ServiceImport
+	eventually(t, func() bool {
+		return get(t, ns, "web", &si) && len(si.Status.Clusters) == 2 && len(si.Spec.IPs) == 1
+	}, "ServiceImport of both clusters with a VIP")
+
+	// Withdrawing the local export leaves cluster b's part.
+	require.NoError(t, k8sClient.Delete(ctx, &se))
+	eventually(t, func() bool {
+		return ownExport() == nil && assert.ObjectsAreEqual([]string{remote}, clustersOf())
+	}, "local export withdrawn, remote slices kept")
 }

@@ -29,11 +29,14 @@ package importer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,6 +99,9 @@ type Importer struct {
 	pending     map[types.NamespacedName]bool
 	ownReported map[types.NamespacedName]bool
 	ownSeen     map[types.NamespacedName]bool
+	// applied is the hash of the import last applied per key, so that an
+	// unchanged import costs no API calls.
+	applied map[types.NamespacedName]string
 }
 
 // New returns an Importer. Add it to the manager and call SetupWithManager.
@@ -122,7 +128,38 @@ func New(opts Options) *Importer {
 		imports:     map[types.NamespacedName]*gdsv1.ServiceImport{},
 		pending:     map[types.NamespacedName]bool{},
 		ownReported: map[types.NamespacedName]bool{},
+		applied:     map[types.NamespacedName]string{},
 	}
+}
+
+func (i *Importer) appliedHash(key types.NamespacedName) string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.applied[key]
+}
+
+// setApplied records the hash of an applied import; an empty hash forgets
+// it.
+func (i *Importer) setApplied(key types.NamespacedName, hash string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if hash == "" {
+		delete(i.applied, key)
+		return
+	}
+	i.applied[key] = hash
+}
+
+func (i *Importer) forgetApplied(key types.NamespacedName) { i.setApplied(key, "") }
+
+// importHash is a stable hash of an import as GDS sent it.
+func importHash(imp *gdsv1.ServiceImport) string {
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(imp)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // NeedLeaderElection makes the importer leader-only.

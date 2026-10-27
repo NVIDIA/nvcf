@@ -56,6 +56,7 @@ go_library(
         "@io_k8s_sigs_controller_runtime//pkg/reconcile",
         "@io_k8s_sigs_controller_runtime//pkg/source",
         "@io_k8s_sigs_mcs_api//pkg/apis/v1beta1",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 

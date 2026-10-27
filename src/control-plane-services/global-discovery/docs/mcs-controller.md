@@ -208,6 +208,10 @@ Details:
   disconnected. Before `SNAPSHOT_END` nothing is deleted for a missing
   import, so a reconnect never flaps imports.
 - Deleting a managed object by hand re-creates it.
+- The controller remembers the import it applied last per name; an
+  unchanged import (for example in the snapshot after a reconnect) costs no
+  API call. A deleted managed object or a re-created namespace makes it
+  apply again.
 - This cluster's status of every import (`clusters[]` entry of the cluster
   id) goes to the ServiceExport reconciler, which copies `Ready` and
   `Conflict` onto the ServiceExport.
@@ -434,4 +438,6 @@ import creating the ServiceImport, the derived Service with `spec.ips`, and
 slices with their labels and owner references; a `DELETE` cascading; a
 snapshot after reconnecting to a new replica collecting an orphan import; a
 namespace created later receiving its pending import; label-driven export
-and its removal.
+and its removal; a deleted imported slice re-created; and the controller
+against an in-process gds-server (memory store) with a second cluster
+exporting the same Service.
