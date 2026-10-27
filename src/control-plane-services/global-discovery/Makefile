@@ -35,6 +35,7 @@ all: build
 build:
 	$(GO) build ./...
 	$(GO) build -o _output/bin/gds-server ./cmd/gds-server
+	$(GO) build -o _output/bin/gds-admin ./cmd/gds-admin
 
 # Unit tests with the race detector. The reported total is the statement
 # coverage of internal/; the target fails below COVERAGE_MIN percent.
@@ -50,12 +51,12 @@ test:
 	fi
 
 # Integration tests (build tag "integration"): the DynamoDB store
-# conformance and multi-replica tests against amazon/dynamodb-local, started
-# through testcontainers-go. They skip when no Docker daemon is reachable. DOCKER_HOST defaults to the endpoint of the
+# conformance and multi-replica tests and gds-admin create-table against
+# amazon/dynamodb-local, started through testcontainers-go. They skip when no Docker daemon is reachable. DOCKER_HOST defaults to the endpoint of the
 # current docker context, and colima gets the Ryuk socket override it needs.
 # GDS_TEST_DYNAMODB_ENDPOINT=http://host:port uses a running endpoint instead
 # of a container.
-INTEGRATION_PKGS ?= ./internal/store/dynamodb/...
+INTEGRATION_PKGS ?= ./internal/store/dynamodb/... ./cmd/gds-admin/...
 
 .PHONY: test-integration
 test-integration:

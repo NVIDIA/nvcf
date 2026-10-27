@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "createtable",
+    srcs = ["createtable.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/cmd/gds-admin/createtable",
+    visibility = ["//visibility:public"],
+    deps = ["//src/control-plane-services/global-discovery/internal/store/dynamodb"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":createtable",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "createtable_test",
+    srcs = ["createtable_test.go"],
+    embed = [":createtable"],
+    deps = [
+        "//src/control-plane-services/global-discovery/internal/store/dynamodb",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_dynamodb//:dynamodb",
+        "@com_github_aws_aws_sdk_go_v2_service_dynamodb//types",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# gds-admin create-table against amazon/dynamodb-local in Docker; see
+# //src/control-plane-services/global-discovery/internal/store/dynamodb:dynamodb_integration_test.
+# keep
+go_test(
+    name = "createtable_integration_test",
+    srcs = ["integration_test.go"],
+    embed = [":createtable"],
+    env_inherit = [
+        "PATH",
+        "DOCKER_HOST",
+        "DOCKER_TLS_CERTDIR",
+        "DOCKER_CERT_PATH",
+        "DOCKER_TLS_VERIFY",
+        "TESTCONTAINERS_HOST_OVERRIDE",
+        "TESTCONTAINERS_RYUK_DISABLED",
+        "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE",
+        "GDS_TEST_DYNAMODB_ENDPOINT",
+    ],
+    gotags = ["integration"],
+    local = True,
+    tags = [
+        "external",
+        "requires-docker",
+    ],
+    deps = [
+        "//src/control-plane-services/global-discovery/internal/store/dynamodb",
+        "//src/control-plane-services/global-discovery/internal/store/dynamodb/dynamodblocal",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_dynamodb//:dynamodb",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
