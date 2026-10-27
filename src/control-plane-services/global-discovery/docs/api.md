@@ -194,6 +194,10 @@ A pool is identified by `(cluster, name)` and addressed by `pool_id`.
   `gds.nvidia.com/http-port-name`, default `http`) and
   `FRONTEND_ROLE_KV_RELAY` for `kv-relay` (`gds.nvidia.com/grpc-port-name`,
   default `grpc`), plus the API's URL entries.
+- Every `services[]` entry is a Service in the pool's cluster with a
+  `role`, `FRONTEND_ROLE_OPENAI` or `FRONTEND_ROLE_KV_RELAY` (required, as
+  for `frontends[]`); the MCS controller of that cluster exports it while
+  the pool is registered through the API.
 - `endpoints[]` has one entry per Service in `services[]` of the pool's
   cluster, with zero counts and no endpoints while the cluster lease is not
   active. `ready_endpoint_count` counts the ready endpoints of the OPENAI
