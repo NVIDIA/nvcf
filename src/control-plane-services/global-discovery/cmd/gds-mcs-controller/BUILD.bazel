@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "gds-mcs-controller_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/cmd/gds-mcs-controller",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/control-plane-services/global-discovery/internal/mcs/app",
+        "//src/control-plane-services/global-discovery/internal/mcs/config",
+        "//src/control-plane-services/global-discovery/internal/mcs/tracing",
+        "//src/control-plane-services/global-discovery/internal/version",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@io_k8s_sigs_controller_runtime//pkg/log/zap",
+        "@io_k8s_sigs_controller_runtime//pkg/metrics",
+    ],
+)
+
+go_binary(
+    name = "gds-mcs-controller",
+    embed = [":gds-mcs-controller_lib"],
+    visibility = ["//visibility:public"],
+    # x_defs lives on go_binary, not go_library, so tests never see the
+    # empty {STABLE_*} values an unstamped build substitutes.
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/version.Service": "nvcf-gds-mcs-controller",
+        "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+        "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
+)
+
+go_test(
+    name = "gds-mcs-controller_test",
+    srcs = ["main_test.go"],
+    embed = [":gds-mcs-controller_lib"],
+    deps = [
+        "//src/control-plane-services/global-discovery/internal/mcs/config",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
