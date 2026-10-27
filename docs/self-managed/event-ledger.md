@@ -117,11 +117,11 @@ Confirm that SIS event publishing is enabled:
 
 ```bash
 kubectl -n sis get configmaps -o yaml | \
-  grep -E 'ICMS_FNDS_MESSAGES_(V3_)?ENABLED'
+  grep ICMS_FNDS_MESSAGES_V3_ENABLED
 ```
 
-`ICMS_FNDS_MESSAGES_V3_ENABLED` must be `"true"`. If it is missing or `"false"`,
-SIS does not publish to the v3 API even when the legacy flag is set.
+The value must be `"true"`. If the line is missing or the value is `"false"`,
+SIS does not publish to the v3 API.
 
 ## Enable the compute-plane collector
 
