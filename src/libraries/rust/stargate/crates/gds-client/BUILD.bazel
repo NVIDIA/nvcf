@@ -133,9 +133,14 @@ rust_test(
     deps = all_crate_deps(normal_dev = True),
 )
 
+# rust_test does not inherit crate_features from the crate under test.
 rust_test(
     name = "gds-client-stargate_test",
     crate = ":gds-client-stargate",
+    crate_features = [
+        "metrics",
+        "stargate",
+    ],
     deps = all_crate_deps(normal_dev = True),
 )
 
