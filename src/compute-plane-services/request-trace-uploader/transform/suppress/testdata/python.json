@@ -1,0 +1,158 @@
+[
+ {
+  "in": "{\"timestamp\":101,\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r1\",\"endpoint\":\"chat\",\"model\":\"m\",\"request\":{\"messages\":[{\"role\":\"user\",\"content\":\"secret\"}]},\"response\":{\"choices\":[]},\"http_request_headers\":{\"nvcf-ncaid\":\"nca-acme-nca\"},\"payload_complete\":true}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"timestamp\":101,\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r1\",\"endpoint\":\"chat\",\"model\":\"m\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r2\",\"endpoint\":\"chat\",\"model\":\"m\",\"request\":{\"messages\":[{\"role\":\"user\",\"content\":\"secret\"}]},\"response\":{\"choices\":[]},\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"},\"payload_complete\":true}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r2\",\"endpoint\":\"chat\",\"model\":\"m\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"other\":1,\"timestamp\":7,\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r3\",\"request\":{\"messages\":[{\"role\":\"user\",\"content\":\"secret\"}]},\"response\":{\"choices\":[]},\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}},\"tail\":2}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"timestamp\":7,\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r3\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+ },
+ {
+  "in": "{\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"model\":\"m\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"event\":{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"model\":\"m\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+ },
+ {
+  "in": "{\"timestamp\":null,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"request_id\":\"r5\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"timestamp\":null,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"request_id\":\"r5\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"request_id\":\"r6\",\"requested_streaming\":true,\"model\":\"m\",\"schema_version\":3,\"headers\":{\"nvcf-ncaid\":\"acme\"},\"payload\":\"not a dict\"}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"schema_version\":3,\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"request_id\":\"r6\",\"requested_streaming\":true,\"model\":\"m\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"headers\":{\"nvcf-ncaid\":\"acme\"}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r7\",\"model\":\"caf\u00e9 \u2603 \ud83d\ude00\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r7\",\"model\":\"caf\\u00e9 \\u2603 \\ud83d\\ude00\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r8\",\"http_request_headers\":{\"NVCF-NCAID\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r8\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r9\",\"http_request_headers\":{\"nvcf-ncaid\":[\"\",\"acme\"]}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r9\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r10\",\"http_request_headers\":{\"nvcf-nca-id\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r10\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"headers\":{\"nvcf-ncaid\":\"  \"},\"payload\":{\"request_id\":\"r11\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r11\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r12\",\"http_request_headers\":{\"nvcf-ncaid\":\"someone-else\"}}}",
+  "ids": "acme",
+  "nca_id": "someone-else",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_end\",\"request\":{\"request_id\":\"r13\"},\"headers\":{\"nvcf-ncaid\":\"acme\"}}",
+  "ids": "acme",
+  "nca_id": "",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r14\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": " nca-acme-nca , other,, ",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r14\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r15\",\"http_request_headers\":{\"nvcf-ncaid\":\"nca-acme\"}}}",
+  "ids": "acme",
+  "nca_id": "nca-acme",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r16\",\"http_request_headers\":{\"nvcf-ncaid\":\" acme\\t\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r16\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r17\",\"http_request_headers\":{\"nvcf-ncaid\":123}}}",
+  "ids": "123",
+  "nca_id": "123",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r17\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"123\",\"http_request_headers\":{\"nvcf-ncaid\":\"123\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"s\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1.5e3,\"payload\":{\"request_id\":\"r18\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"s\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1500.0,\"payload\":{\"request_id\":\"r18\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"event\":\"request_payload\",\"nvcf-ncaid\":\"acme\"}",
+  "ids": "acme",
+  "nca_id": "",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"dup\",\"request_id\":\"r20\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r20\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r21\",\"http_request_headers\":{\"Nvcf-NcaId\":\"\",\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r22\",\"http_request_headers\":{\"nvcf-ncaid\":true}}}",
+  "ids": "True",
+  "nca_id": "True",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r22\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"True\",\"http_request_headers\":{\"nvcf-ncaid\":\"True\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r23\",\"http_request_headers\":{\"nvcf-ncaid\":0,\"nvcf-nca-id\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r23\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r24\",\"http_request_headers\":{\"\u212avcf-ncaid\":\"x\",\"nvcf-ncaid\":\"acme\"}}}",
+  "ids": "acme",
+  "nca_id": "acme",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r24\",\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}"
+ },
+ {
+  "in": "[{\"event_type\":\"request_payload\"}]",
+  "ids": "acme",
+  "nca_id": "",
+  "out": null
+ },
+ {
+  "in": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r26\",\"endpoint\":null,\"http_request_headers\":{\"nvcf-ncaid\":1.5}}}",
+  "ids": "1.5",
+  "nca_id": "1.5",
+  "out": "{\"schema\":\"dynamo.request.trace.v1\",\"event_type\":\"request_payload\",\"event_time_unix_ms\":1777312801000,\"event_source\":\"frontend\",\"payload\":{\"request_id\":\"r26\",\"endpoint\":null,\"payload_complete\":false,\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"1.5\",\"http_request_headers\":{\"nvcf-ncaid\":\"1.5\"}}}"
+ }
+]
