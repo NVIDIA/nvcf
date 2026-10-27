@@ -26,6 +26,7 @@ const DEFAULT_PYLON_RETRYABLE_UPSTREAM_STATUS_CODES: &str = "429,503";
 const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRYABLE;
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
 
+mod gds;
 mod startup;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
@@ -56,9 +57,18 @@ struct Args {
     /// Timeout for one model-discovery request in milliseconds
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     model_discovery_request_timeout_ms: u64,
-    /// Stargate gRPC address for registration. Must be https:// when a custom gRPC CA is configured
-    #[arg(long, default_value = "127.0.0.1:50071", value_name = "ADDR")]
-    stargate_address: String,
+    /// Stargate gRPC address for registration. Defaults to 127.0.0.1:50071 without --gds-url; optional with --gds-url, where it is watched in addition to the GDS router seeds. Must be https:// when a custom gRPC CA is configured
+    #[arg(long, value_name = "ADDR")]
+    stargate_address: Option<String>,
+    /// Global Discovery Service (GDS) gRPC URL, in failover order; repeatable. Pylon watches the router replica seeds GDS lists for the clusterset and follows their changes
+    #[arg(long, env = "GDS_URLS", value_delimiter = ',', value_name = "URL")]
+    gds_url: Vec<String>,
+    /// GDS clusterset id. Required with --gds-url
+    #[arg(long, env = "GDS_CLUSTERSET_ID", value_name = "ID")]
+    gds_clusterset: Option<String>,
+    /// PEM CA bundle trusted for https:// GDS URLs in addition to the system roots
+    #[arg(long, env = "GDS_TLS_CA_CERT_PATH", value_name = "PATH")]
+    gds_tls_ca_cert_path: Option<String>,
     /// Inference server id for registration
     #[arg(long, default_value = "pylon", value_name = "ID")]
     inference_server_id: String,

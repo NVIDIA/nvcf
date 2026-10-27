@@ -13,11 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use stargate_auth::AuthTokenProvider;
 use stargate_protocol::TunnelTransportProtocol;
+use tokio::sync::watch;
 
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 
@@ -31,9 +33,23 @@ pub enum ClientError {
     Tunnel(#[from] TunnelError),
 }
 
+/// A seed set that never changes, such as a fixed `--stargate-address`.
+pub fn static_seeds<I, S>(seeds: I) -> watch::Receiver<BTreeSet<String>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let (_sender, seeds) = watch::channel(seeds.into_iter().map(Into::into).collect());
+    seeds
+}
+
 #[derive(Debug, Clone)]
 pub struct InferenceServerRegistrationConfig {
-    pub seeds: Vec<String>,
+    /// The `WatchStargates` URLs to start discovery from. The registration
+    /// loop follows changes while the sender is alive, so a dynamic source
+    /// such as GDS may start empty; with a closed sender (see
+    /// [`static_seeds`]) the set must not be empty.
+    pub seeds: watch::Receiver<BTreeSet<String>>,
     pub inference_server_id: String,
     pub cluster_id: String,
     pub inference_server_url: String,
@@ -52,7 +68,7 @@ pub struct InferenceServerRegistrationConfig {
 
 #[derive(Debug)]
 pub(super) struct RegistrationSessionConfig {
-    pub(super) watch_seeds: Vec<String>,
+    pub(super) watch_seeds: watch::Receiver<BTreeSet<String>>,
     pub(super) inference_server_id: String,
     pub(super) cluster_id: String,
     pub(super) inference_server_url: String,
@@ -71,7 +87,12 @@ impl TryFrom<InferenceServerRegistrationConfig> for RegistrationSessionConfig {
     type Error = ClientError;
 
     fn try_from(mut config: InferenceServerRegistrationConfig) -> Result<Self, Self::Error> {
-        if config.seeds.is_empty() {
+        let no_seeds = config
+            .seeds
+            .borrow()
+            .iter()
+            .all(|seed| seed.trim().is_empty());
+        if no_seeds && config.seeds.has_changed().is_err() {
             return Err(ClientError::Config("stargate seeds are empty".to_string()));
         }
         if !config.reverse_tunnel && !is_direct_inference_server_url(&config.inference_server_url) {

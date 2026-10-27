@@ -37,10 +37,15 @@ use reqwest::header::HeaderName;
 use stargate_proto::pb::InferenceServerStatus;
 use stargate_protocol::BackendConnectivity;
 use stargate_runtime::wait_for_termination_signal;
+use tokio::sync::watch;
 use tokio::task::JoinError;
 use tracing::{error, info, warn};
 
+use super::gds::{GdsSeedConfig, RouterSeeds};
 use super::{Args, OutputTokenCalibrationMode};
+
+/// The registration address without `--stargate-address` and `--gds-url`.
+pub(crate) const DEFAULT_STARGATE_ADDRESS: &str = "127.0.0.1:50071";
 
 type TaskExit = std::result::Result<(), JoinError>;
 
@@ -64,7 +69,6 @@ pub(super) async fn run(args: Args) -> Result<()> {
     };
 
     log_startup_complete(
-        &args.stargate_address,
         &args.inference_server_id,
         &plan,
         &runtime.registration_inference_server_url,
@@ -98,15 +102,22 @@ where
 }
 
 fn log_startup_complete(
-    stargate_address: &str,
     inference_server_id: &str,
     plan: &PylonStartupPlan,
     registration_inference_server_url: &str,
     model_ids: &[String],
 ) {
+    let stargate_address = plan.router_seeds.static_address.as_deref().unwrap_or("");
+    let gds_urls = plan
+        .router_seeds
+        .gds
+        .as_ref()
+        .map(|gds| gds.client.urls.clone())
+        .unwrap_or_default();
     if plan.backend_tunnel.is_reverse() {
         info!(
             stargate = stargate_address,
+            ?gds_urls,
             inference_server_id,
             cluster_id = %plan.cluster_id,
             upstream = %plan.upstream,
@@ -118,6 +129,7 @@ fn log_startup_complete(
     } else {
         info!(
             stargate = stargate_address,
+            ?gds_urls,
             inference_server_id,
             cluster_id = %plan.cluster_id,
             inference_server_url = registration_inference_server_url,
@@ -151,6 +163,89 @@ pub(crate) struct PylonStartupPlan {
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
     tls_reload_interval: Duration,
+    router_seeds: RouterSeedPlan,
+}
+
+/// Where the registration seeds come from: `--stargate-address`, GDS, or
+/// both.
+pub(crate) struct RouterSeedPlan {
+    static_address: Option<String>,
+    gds: Option<GdsSeedConfig>,
+}
+
+impl RouterSeedPlan {
+    fn from_args(args: &Args) -> Result<Self> {
+        let gds = gds_seed_config_from_args(args)?;
+        let static_address = match args.stargate_address.as_deref().map(str::trim) {
+            Some("") => {
+                ensure!(
+                    gds.is_some(),
+                    "--stargate-address is empty; set it or --gds-url"
+                );
+                None
+            }
+            Some(address) => Some(address.to_string()),
+            None if gds.is_none() => Some(DEFAULT_STARGATE_ADDRESS.to_string()),
+            None => None,
+        };
+        Ok(Self {
+            static_address,
+            gds,
+        })
+    }
+
+    pub(crate) fn start(&self) -> Result<RouterSeeds> {
+        RouterSeeds::start(self.static_address.as_deref(), self.gds.as_ref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn static_address(&self) -> Option<&str> {
+        self.static_address.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gds(&self) -> Option<&GdsSeedConfig> {
+        self.gds.as_ref()
+    }
+}
+
+/// The GDS seed source, `None` without `--gds-url`. Plaintext GDS URLs are
+/// accepted, as plaintext Stargate addresses are.
+fn gds_seed_config_from_args(args: &Args) -> Result<Option<GdsSeedConfig>> {
+    let configured = args.gds_url.iter().any(|url| !url.trim().is_empty());
+    let clusterset = args
+        .gds_clusterset
+        .as_deref()
+        .map(str::trim)
+        .filter(|clusterset| !clusterset.is_empty());
+    if !configured {
+        ensure!(
+            clusterset.is_none() && args.gds_tls_ca_cert_path.is_none(),
+            "--gds-clusterset and --gds-tls-ca-cert-path require --gds-url"
+        );
+        return Ok(None);
+    }
+    let clusterset = clusterset.context("--gds-url requires --gds-clusterset")?;
+    gds_client::EndpointSet::parse(&args.gds_url, true).context("invalid --gds-url")?;
+    let tls = args
+        .gds_tls_ca_cert_path
+        .as_ref()
+        .map(gds_client::TlsOptions::from_ca_file)
+        .transpose()
+        .context("invalid --gds-tls-ca-cert-path")?
+        .unwrap_or_default();
+    Ok(Some(GdsSeedConfig {
+        client: gds_client::GdsClientConfig {
+            urls: args.gds_url.clone(),
+            tls,
+            policy: gds_client::ConnectPolicy {
+                allow_insecure_http: true,
+                user_agent: Some(format!("pylon/{}", env!("CARGO_PKG_VERSION"))),
+                ..gds_client::ConnectPolicy::default()
+            },
+        },
+        clusterset: clusterset.to_string(),
+    }))
 }
 
 enum BackendTunnelStartup {
@@ -182,7 +277,8 @@ impl BackendTunnelStartup {
 
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
-        validate_grpc_tls_ca_requires_https(args)?;
+        let router_seeds = RouterSeedPlan::from_args(args)?;
+        validate_grpc_tls_ca_requires_https(args, router_seeds.static_address.as_deref())?;
         let model_initialization = model_initialization_from_args(args)?;
         let model_source = model_source_from_args(args)?;
         Ok(Self {
@@ -211,7 +307,13 @@ impl PylonStartupPlan {
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
             tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+            router_seeds,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn router_seeds(&self) -> &RouterSeedPlan {
+        &self.router_seeds
     }
 
     pub(crate) fn direct_tunnel_listen_addr(&self) -> Option<SocketAddr> {
@@ -229,17 +331,19 @@ impl PylonStartupPlan {
 
 /// A custom gRPC CA only applies to HTTPS, so a plaintext --stargate-address
 /// with one configured can never connect. Reject it before contacting anything
-/// instead of retrying the registration stream forever.
-fn validate_grpc_tls_ca_requires_https(args: &Args) -> Result<()> {
-    let Some(path) = args.grpc_tls_ca_cert_path.as_deref() else {
+/// instead of retrying the registration stream forever. GDS seeds carry the
+/// scheme their router exports, so only the static address is checked.
+fn validate_grpc_tls_ca_requires_https(args: &Args, stargate_address: Option<&str>) -> Result<()> {
+    let (Some(path), Some(stargate_address)) =
+        (args.grpc_tls_ca_cert_path.as_deref(), stargate_address)
+    else {
         return Ok(());
     };
     ensure!(
-        args.stargate_address.trim().starts_with("https://"),
+        stargate_address.trim().starts_with("https://"),
         "--grpc-tls-ca-cert-path (STARGATE_GRPC_TLS_CA_CERT_PATH) is set to {path} but \
-         --stargate-address {:?} is not an https:// URL; a custom gRPC CA only applies to \
-         HTTPS, so use an https:// Stargate address or unset the CA",
-        args.stargate_address
+         --stargate-address {stargate_address:?} is not an https:// URL; a custom gRPC CA only \
+         applies to HTTPS, so use an https:// Stargate address or unset the CA"
     );
     Ok(())
 }
@@ -288,6 +392,8 @@ fn model_source_from_args(args: &Args) -> Result<ModelSource> {
 }
 
 struct RunningPylon {
+    /// Keeps the GDS seed feed running; registration reads its receiver.
+    _router_seeds: RouterSeeds,
     registration_client: InferenceServerRegistrationClient,
     engine_stats_stream: Option<RunningEngineStatsStream>,
     stats_collector: StatsCollectorHandle,
@@ -397,7 +503,8 @@ fn engine_stats_exit_is_expected(mode: Option<EngineStatsStreamMode>, result: &T
 }
 
 async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<RunningPylon> {
-    let grpc_tls_ca_cert_pem = load_grpc_tls_ca_cert(args)?;
+    let grpc_tls_ca_cert_pem =
+        load_grpc_tls_ca_cert(args, plan.router_seeds.static_address.as_deref())?;
     let metrics = PylonMetrics::new()?;
     metrics.observe_target_info(
         env!("CARGO_PKG_VERSION"),
@@ -507,9 +614,11 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
     .context("pylon initial model initialization failed")?;
     let initial_model_ids = runtime_state.advertised_model_ids();
     let registration_inference_server_url = registration_url(plan, tunnel.as_ref());
+    let router_seeds = plan.router_seeds.start()?;
     let registration_config = registration_config_from_plan(
         args,
         plan,
+        router_seeds.receiver(),
         forwarding,
         registration_inference_server_url.clone(),
         tls_cert_pem,
@@ -519,6 +628,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
     registration_client.start(registration_config)?;
 
     Ok(RunningPylon {
+        _router_seeds: router_seeds,
         registration_client,
         engine_stats_stream,
         stats_collector,
@@ -602,13 +712,14 @@ fn direct_tunnel_config(
 fn registration_config_from_plan(
     args: &Args,
     plan: &PylonStartupPlan,
+    seeds: watch::Receiver<BTreeSet<String>>,
     forwarding: TunnelForwardingConfig,
     inference_server_url: String,
     tls_cert_pem: Option<Vec<u8>>,
     grpc_tls_ca_cert_pem: Option<Vec<u8>>,
 ) -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
-        seeds: vec![args.stargate_address.clone()],
+        seeds,
         inference_server_id: args.inference_server_id.clone(),
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
@@ -624,13 +735,14 @@ fn registration_config_from_plan(
     }
 }
 
-fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
+fn load_grpc_tls_ca_cert(args: &Args, stargate_address: Option<&str>) -> Result<Option<Vec<u8>>> {
     // Reverse QUIC always uses tls_cert_path as its trust anchor. Reuse that
-    // bundle for gRPC only when the registration seed explicitly uses HTTPS;
-    // treating it as a gRPC CA for an HTTP seed prevents Pylon from connecting.
+    // bundle for gRPC only when the static registration seed explicitly uses
+    // HTTPS; treating it as a gRPC CA for an HTTP seed prevents Pylon from
+    // connecting.
     let reuse_reverse_quic_trust =
         matches!(args.backend_connectivity, BackendConnectivity::Reverse)
-            && args.stargate_address.trim().starts_with("https://");
+            && stargate_address.is_some_and(|address| address.trim().starts_with("https://"));
     args.grpc_tls_ca_cert_path
         .as_ref()
         .or_else(|| {
@@ -1217,6 +1329,8 @@ mod tests {
         .await
         .expect("test model lifecycle should start");
         RunningPylon {
+            _router_seeds: RouterSeeds::start(Some("http://127.0.0.1:1"), None)
+                .expect("static seeds should start"),
             registration_client: InferenceServerRegistrationClient::default(),
             engine_stats_stream: None,
             stats_collector,
@@ -1552,16 +1666,25 @@ mod tests {
         ]);
         let forwarding = test_forwarding(&plan);
 
+        let seeds = plan.router_seeds().start().expect("seeds should start");
         let config = registration_config_from_plan(
             &args,
             &plan,
+            seeds.receiver(),
             forwarding,
             "quic://127.0.0.1:4567".to_string(),
             None,
             None,
         );
 
-        assert_eq!(config.seeds, ["http://stargate:50071"]);
+        assert_eq!(
+            *config.seeds.borrow(),
+            BTreeSet::from(["http://stargate:50071".to_string()])
+        );
+        assert!(
+            config.seeds.has_changed().is_err(),
+            "a static address is a closed seed source"
+        );
         assert_eq!(config.inference_server_id, "pylon-a");
         assert_eq!(config.inference_server_url, "quic://127.0.0.1:4567");
         assert_eq!(config.min_update_interval, Duration::from_millis(250));
@@ -1605,16 +1728,21 @@ mod tests {
         let forwarding = test_forwarding(&plan);
         let metrics = forwarding.metrics.clone().unwrap();
 
+        let seeds = plan.router_seeds().start().expect("seeds should start");
         let config = registration_config_from_plan(
             &args,
             &plan,
+            seeds.receiver(),
             forwarding,
             "http://127.0.0.1:8090".to_string(),
             Some(b"trusted reverse cert".to_vec()),
             Some(b"trusted grpc CA".to_vec()),
         );
 
-        assert_eq!(config.seeds, ["http://stargate:50071"]);
+        assert_eq!(
+            *config.seeds.borrow(),
+            BTreeSet::from(["http://stargate:50071".to_string()])
+        );
         assert_eq!(config.inference_server_id, "pylon-a");
         assert_eq!(config.cluster_id, "shared-cluster");
         assert_eq!(config.inference_server_url, "http://127.0.0.1:8090");
@@ -1654,7 +1782,7 @@ mod tests {
             .into_bytes();
         std::fs::write(&path, &pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--stargate-address",
             "https://stargate.example.test:50071",
             "--grpc-tls-ca-cert-path",
@@ -1662,7 +1790,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            load_grpc_tls_ca_cert(&args)
+            load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
                 .expect("configured gRPC CA should load")
                 .as_deref(),
             Some(pem.as_slice())
@@ -1683,7 +1811,7 @@ mod tests {
             .into_bytes();
         std::fs::write(&path, &pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--backend-connectivity",
             "reverse",
             "--stargate-address",
@@ -1693,7 +1821,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            load_grpc_tls_ca_cert(&args)
+            load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
                 .expect("reverse-mode shared CA should load")
                 .as_deref(),
             Some(pem.as_slice())
@@ -1706,7 +1834,7 @@ mod tests {
         let path = root.path().join("quic-ca.pem");
         std::fs::write(&path, b"not a gRPC CA bundle").expect("QUIC trust should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--backend-connectivity",
             "reverse",
             "--stargate-address",
@@ -1716,7 +1844,7 @@ mod tests {
         ]);
 
         assert!(
-            load_grpc_tls_ca_cert(&args)
+            load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
                 .expect("plaintext gRPC should not load the QUIC trust bundle")
                 .is_none()
         );
@@ -1746,7 +1874,7 @@ mod tests {
         std::fs::write(&override_path, &override_pem).expect("gRPC CA should write");
         let shared_path = shared_path.to_string_lossy().into_owned();
         let override_path = override_path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--backend-connectivity",
             "reverse",
             "--stargate-address",
@@ -1758,7 +1886,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            load_grpc_tls_ca_cert(&args)
+            load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
                 .expect("gRPC CA override should load")
                 .as_deref(),
             Some(override_pem.as_slice())
@@ -1771,10 +1899,10 @@ mod tests {
         let cert_path = root.path().join("server.pem");
         std::fs::write(&cert_path, b"not a CA bundle").expect("server identity should write");
         let cert_path = cert_path.to_string_lossy().into_owned();
-        let (args, _) = startup(&["--tls-cert-path", &cert_path]);
+        let (args, plan) = startup(&["--tls-cert-path", &cert_path]);
 
         assert!(
-            load_grpc_tls_ca_cert(&args)
+            load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
                 .expect("direct-mode server identity should be ignored for gRPC trust")
                 .is_none()
         );
@@ -1793,14 +1921,15 @@ mod tests {
             let path = root.path().join(format!("{name}-grpc-ca.pem"));
             std::fs::write(&path, pem).expect("test CA should write");
             let path = path.to_string_lossy().into_owned();
-            let (args, _) = startup(&[
+            let (args, plan) = startup(&[
                 "--stargate-address",
                 "https://stargate.example.test:50071",
                 "--grpc-tls-ca-cert-path",
                 &path,
             ]);
 
-            let error = load_grpc_tls_ca_cert(&args).expect_err("invalid gRPC CA should fail");
+            let error = load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
+                .expect_err("invalid gRPC CA should fail");
             let message = format!("{error:#}");
 
             assert!(message.contains("contains no valid certificates"));
@@ -1825,14 +1954,14 @@ mod tests {
         );
         std::fs::write(&path, pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--stargate-address",
             "https://stargate.example.test:50071",
             "--grpc-tls-ca-cert-path",
             &path,
         ]);
 
-        let error = load_grpc_tls_ca_cert(&args)
+        let error = load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
             .expect_err("a bundle with an ignored certificate should fail");
         assert!(
             error.to_string().contains("invalid certificate"),
@@ -1845,14 +1974,15 @@ mod tests {
         let root = tempfile::tempdir().expect("test directory should create");
         let path = root.path().join("missing-grpc-ca.pem");
         let path = path.to_string_lossy().into_owned();
-        let (args, _) = startup(&[
+        let (args, plan) = startup(&[
             "--stargate-address",
             "https://stargate.example.test:50071",
             "--grpc-tls-ca-cert-path",
             &path,
         ]);
 
-        let error = load_grpc_tls_ca_cert(&args).expect_err("missing gRPC CA should fail");
+        let error = load_grpc_tls_ca_cert(&args, plan.router_seeds().static_address())
+            .expect_err("missing gRPC CA should fail");
         let message = format!("{error:#}");
 
         assert!(message.contains("load gRPC TLS CA certificate"));
@@ -2398,5 +2528,171 @@ mod tests {
             plan.auth_token_provider.as_deref(),
             Some(AuthTokenProvider::File(path)) if path == std::path::Path::new("/tmp/pylon-token")
         ));
+    }
+
+    const GDS: [&str; 4] = [
+        "--gds-url",
+        "https://gds.example.test",
+        "--gds-clusterset",
+        "prod",
+    ];
+
+    #[test]
+    fn stargate_address_defaults_only_without_gds() {
+        let (args, plan) = startup(&[]);
+        assert_eq!(args.stargate_address, None);
+        assert_eq!(
+            plan.router_seeds().static_address(),
+            Some(DEFAULT_STARGATE_ADDRESS)
+        );
+        assert!(plan.router_seeds().gds().is_none());
+
+        let (_, plan) = startup(&GDS);
+        assert_eq!(plan.router_seeds().static_address(), None);
+        let gds = plan.router_seeds().gds().expect("GDS should be configured");
+        assert_eq!(gds.client.urls, ["https://gds.example.test"]);
+        assert_eq!(gds.clusterset, "prod");
+        assert!(gds.client.policy.allow_insecure_http);
+        assert!(gds.client.tls.ca_certificate_pem.is_none());
+
+        let mut both = GDS.to_vec();
+        both.extend(["--stargate-address", " http://stargate:50071 "]);
+        let (_, plan) = startup(&both);
+        assert_eq!(
+            plan.router_seeds().static_address(),
+            Some("http://stargate:50071")
+        );
+        assert!(plan.router_seeds().gds().is_some());
+
+        let mut empty_address = GDS.to_vec();
+        empty_address.extend(["--stargate-address", ""]);
+        let (_, plan) = startup(&empty_address);
+        assert_eq!(plan.router_seeds().static_address(), None);
+    }
+
+    #[test]
+    fn gds_flags_parse_repeated_and_comma_separated_urls() {
+        let (args, plan) = startup(&[
+            "--gds-url",
+            "https://gds-a.example.test,https://gds-b.example.test",
+            "--gds-url",
+            "http://gds-c.example.test:8080",
+            "--gds-clusterset",
+            "prod",
+        ]);
+        assert_eq!(
+            args.gds_url,
+            [
+                "https://gds-a.example.test",
+                "https://gds-b.example.test",
+                "http://gds-c.example.test:8080"
+            ]
+        );
+        assert_eq!(plan.router_seeds().gds().unwrap().client.urls.len(), 3);
+    }
+
+    #[test]
+    fn gds_flags_are_validated_together() {
+        for (flags, expected) in [
+            (
+                vec!["--stargate-address", ""],
+                "--stargate-address is empty; set it or --gds-url",
+            ),
+            (
+                vec!["--gds-url", "https://gds.example.test"],
+                "--gds-url requires --gds-clusterset",
+            ),
+            (
+                vec!["--gds-clusterset", "prod"],
+                "--gds-clusterset and --gds-tls-ca-cert-path require --gds-url",
+            ),
+            (
+                vec!["--gds-tls-ca-cert-path", "/etc/pylon/gds-ca.crt"],
+                "require --gds-url",
+            ),
+            (
+                vec![
+                    "--gds-url",
+                    "ftp://gds.example.test",
+                    "--gds-clusterset",
+                    "prod",
+                ],
+                "invalid --gds-url",
+            ),
+            (
+                [
+                    GDS.as_slice(),
+                    &["--gds-tls-ca-cert-path", "/nonexistent/gds-ca.crt"],
+                ]
+                .concat(),
+                "/nonexistent/gds-ca.crt",
+            ),
+        ] {
+            let message = startup_plan_error(&flags);
+            assert!(message.contains(expected), "{flags:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn gds_ca_bundle_is_loaded_for_the_gds_client() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("gds-ca.pem");
+        std::fs::write(&path, b"-----BEGIN CERTIFICATE-----\n").expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (_, plan) = startup(&[GDS.as_slice(), &["--gds-tls-ca-cert-path", &path]].concat());
+
+        assert!(
+            plan.router_seeds()
+                .gds()
+                .unwrap()
+                .client
+                .tls
+                .ca_certificate_pem
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn custom_grpc_ca_is_not_checked_against_gds_seeds() {
+        let (_, plan) =
+            startup(&[GDS.as_slice(), &["--grpc-tls-ca-cert-path", "/etc/ca.pem"]].concat());
+        assert_eq!(plan.router_seeds().static_address(), None);
+
+        let message = startup_plan_error(
+            &[
+                GDS.as_slice(),
+                &[
+                    "--grpc-tls-ca-cert-path",
+                    "/etc/ca.pem",
+                    "--stargate-address",
+                    "http://stargate:50071",
+                ],
+            ]
+            .concat(),
+        );
+        assert!(message.contains("--grpc-tls-ca-cert-path"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn gds_seed_receiver_follows_the_router_cache() {
+        let (_, plan) = startup(&[
+            "--gds-url",
+            "http://127.0.0.1:1",
+            "--gds-clusterset",
+            "prod",
+            "--stargate-address",
+            "http://stargate:50071",
+        ]);
+        let seeds = plan.router_seeds().start().expect("GDS seeds should start");
+        let receiver = seeds.receiver();
+
+        assert_eq!(
+            *receiver.borrow(),
+            BTreeSet::from(["http://stargate:50071".to_string()])
+        );
+        assert!(
+            receiver.has_changed().is_ok(),
+            "GDS seeds stay open for changes"
+        );
     }
 }

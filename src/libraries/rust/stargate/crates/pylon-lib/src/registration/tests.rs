@@ -374,7 +374,7 @@ fn watch_snapshot(routers: &[&str], watch_urls: &[&str]) -> WatchEndpointSnapsho
 
 fn test_registration_config() -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
-        seeds: vec!["router-a".to_string()],
+        seeds: static_seeds(["router-a"]),
         inference_server_id: "inst-a".to_string(),
         cluster_id: "cluster-a".to_string(),
         inference_server_url: "quic://127.0.0.1:8443".to_string(),
@@ -544,14 +544,22 @@ fn registration_session_config_normalizes_reverse_url_and_cluster_id() {
 
     let session = RegistrationSessionConfig::try_from(config).expect("session should build");
 
-    assert_eq!(session.watch_seeds, ["router-a"]);
+    assert_eq!(
+        *session.watch_seeds.borrow(),
+        BTreeSet::from(["router-a".to_string()])
+    );
     assert_eq!(session.cluster_id, "inst-a");
     assert_eq!(session.inference_server_url, "http://127.0.0.1:8090");
 }
 
 #[test]
 fn registration_session_config_rejects_invalid_public_config() {
-    assert_invalid_registration_config("stargate seeds are empty", |config| config.seeds.clear());
+    assert_invalid_registration_config("stargate seeds are empty", |config| {
+        config.seeds = static_seeds(Vec::<String>::new());
+    });
+    assert_invalid_registration_config("stargate seeds are empty", |config| {
+        config.seeds = static_seeds([" "]);
+    });
     assert_invalid_registration_config(
         "direct registration inference_server_url must be quic://",
         |config| config.inference_server_url = "http://127.0.0.1:8090".to_string(),
@@ -883,7 +891,7 @@ async fn custom_grpc_ca_completes_watch_and_registration_with_separate_authority
     let ca = TestCertificateAuthority::new("registration-test-ca");
     let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
     let mut config = test_registration_config();
-    config.seeds = vec![server.dial_url.clone()];
+    config.seeds = static_seeds([server.dial_url.clone()]);
     config.grpc_tls_ca_cert_pem = Some(ca.pem());
     config.min_update_interval = Duration::from_millis(10);
     let mut client = InferenceServerRegistrationClient::default();
@@ -919,7 +927,7 @@ async fn stats_changes_publish_before_the_heartbeat_and_coalesce() {
     let ca = TestCertificateAuthority::new("registration-change-ca");
     let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
     let mut config = test_registration_config();
-    config.seeds = vec![server.dial_url.clone()];
+    config.seeds = static_seeds([server.dial_url.clone()]);
     config.grpc_tls_ca_cert_pem = Some(ca.pem());
     config.min_update_interval = Duration::from_secs(60);
     config.stats_update_coalesce = Duration::from_millis(50);
@@ -1148,7 +1156,7 @@ async fn watch_tls_failure_event(
     let dispatch = tracing::Dispatch::new(subscriber.clone());
     let _default_guard = tracing::dispatcher::set_default(&dispatch);
     let watch_task = tokio::spawn(run_watch_stargate_discovery(
-        vec![server.dial_url.clone()],
+        static_seeds([server.dial_url.clone()]),
         Some(ca_cert_pem),
         topology_tx,
         stop.clone(),
@@ -1267,7 +1275,7 @@ async fn watch_discovery_accepts_a_trusted_ca_and_matching_san_without_failure_l
     let dispatch = tracing::Dispatch::new(subscriber.clone());
     let _default_guard = tracing::dispatcher::set_default(&dispatch);
     let watch_task = tokio::spawn(run_watch_stargate_discovery(
-        vec![server.dial_url.clone()],
+        static_seeds([server.dial_url.clone()]),
         Some(ca.pem()),
         topology_tx,
         stop.clone(),
@@ -1298,6 +1306,148 @@ async fn watch_discovery_accepts_a_trusted_ca_and_matching_san_without_failure_l
         .await
         .expect("trusted WatchStargates task should stop promptly")
         .expect("trusted WatchStargates task should not panic");
+    server.shutdown().await;
+}
+
+#[test]
+fn registration_session_config_accepts_empty_seeds_while_the_source_is_open() {
+    let (seeds_tx, seeds_rx) = watch::channel(BTreeSet::new());
+    let mut config = test_registration_config();
+    config.seeds = seeds_rx;
+
+    let session =
+        RegistrationSessionConfig::try_from(config).expect("a dynamic seed source may start empty");
+
+    assert!(session.watch_seeds.borrow().is_empty());
+    drop(seeds_tx);
+}
+
+/// The dial endpoints of the published registration routers.
+fn published_router_dials(topology: &RegistrationRouterTopology) -> Option<BTreeSet<String>> {
+    topology.published_routers().map(|routers| {
+        routers
+            .iter()
+            .map(StargateGrpcEndpoint::dial_endpoint)
+            .collect()
+    })
+}
+
+async fn wait_for_router_dials(
+    topology_rx: &mut watch::Receiver<RegistrationRouterTopology>,
+    expected: &[&str],
+) {
+    let expected: BTreeSet<String> = expected.iter().map(ToString::to_string).collect();
+    tokio::time::timeout(TEST_WAIT, async {
+        loop {
+            if published_router_dials(&topology_rx.borrow_and_update()).as_ref() == Some(&expected)
+            {
+                return;
+            }
+            topology_rx
+                .changed()
+                .await
+                .expect("topology channel should remain open");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "published routers never became {expected:?}, last {:?}",
+            published_router_dials(&topology_rx.borrow())
+        )
+    });
+}
+
+async fn next_watch_request(server: &mut TestTlsControlPlane) {
+    tokio::time::timeout(TEST_WAIT, server.watch_authorities.recv())
+        .await
+        .expect("WatchStargates request should not time out")
+        .expect("WatchStargates request channel should remain open");
+}
+
+#[tokio::test]
+async fn seed_changes_start_and_stop_watch_tasks() {
+    let ca = TestCertificateAuthority::new("seed-change-ca");
+    let mut server_a = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let mut server_b = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let (seeds_tx, seeds_rx) = watch::channel(BTreeSet::from([server_a.dial_url.clone()]));
+    let (topology_tx, mut topology_rx) = watch::channel(RegistrationRouterTopology::default());
+    let stop = CancellationToken::new();
+    let watch_task = tokio::spawn(run_watch_stargate_discovery(
+        seeds_rx,
+        Some(ca.pem()),
+        topology_tx,
+        stop.clone(),
+    ));
+
+    next_watch_request(&mut server_a).await;
+    wait_for_router_dials(&mut topology_rx, &[&server_a.dial_url]).await;
+
+    // A new seed starts a watch, and its routers join the topology.
+    seeds_tx
+        .send(BTreeSet::from([
+            server_a.dial_url.clone(),
+            format!(" {} ", server_b.dial_url),
+        ]))
+        .expect("discovery should hold the seed receiver");
+    next_watch_request(&mut server_b).await;
+    wait_for_router_dials(&mut topology_rx, &[&server_a.dial_url, &server_b.dial_url]).await;
+
+    // A removed seed stops its watch, and its routers leave the topology.
+    seeds_tx
+        .send(BTreeSet::from([server_b.dial_url.clone()]))
+        .expect("discovery should hold the seed receiver");
+    wait_for_router_dials(&mut topology_rx, &[&server_b.dial_url]).await;
+    assert!(
+        server_b.watch_authorities.try_recv().is_err(),
+        "an unchanged seed keeps its watch stream"
+    );
+
+    // A closed seed source keeps the last seeds.
+    drop(seeds_tx);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        published_router_dials(&topology_rx.borrow()),
+        Some(BTreeSet::from([server_b.dial_url.clone()]))
+    );
+    assert!(!watch_task.is_finished(), "discovery should keep running");
+
+    stop.cancel();
+    tokio::time::timeout(TEST_WAIT, watch_task)
+        .await
+        .expect("discovery should stop promptly")
+        .expect("discovery should not panic");
+    server_a.shutdown().await;
+    server_b.shutdown().await;
+}
+
+#[tokio::test]
+async fn empty_initial_seeds_wait_for_the_first_seed() {
+    let ca = TestCertificateAuthority::new("late-seed-ca");
+    let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let (seeds_tx, seeds_rx) = watch::channel(BTreeSet::new());
+    let mut config = test_registration_config();
+    config.seeds = seeds_rx;
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.min_update_interval = Duration::from_millis(10);
+    let mut client = InferenceServerRegistrationClient::default();
+
+    client
+        .start(config)
+        .expect("registration should start without seeds");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), server.watch_authorities.recv())
+            .await
+            .is_err(),
+        "nothing is watched before the first seed"
+    );
+    seeds_tx
+        .send(BTreeSet::from([server.dial_url.clone()]))
+        .expect("registration should hold the seed receiver");
+    let registration = server.first_registration().await;
+    assert_eq!(registration.inference_server_id, "inst-a");
+
+    client.shutdown().await;
     server.shutdown().await;
 }
 

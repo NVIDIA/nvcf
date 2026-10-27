@@ -17,9 +17,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use pylon_lib::{
-    ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES, InferenceServerRegistrationClient,
-    InferenceServerRegistrationConfig, QuicHttpTunnelConfig, RequestCounterUpdate,
-    RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource, TunnelTransportProtocol,
+    ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES,
+    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, QuicHttpTunnelConfig,
+    RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource,
+    TunnelTransportProtocol, static_seeds,
 };
 
 #[test]
@@ -31,7 +32,7 @@ fn crate_root_exports_registration_public_api() {
     assert_eq!(stats.queue_size, 0);
 
     let config = InferenceServerRegistrationConfig {
-        seeds: vec!["router-a".to_string()],
+        seeds: static_seeds(["router-a"]),
         inference_server_id: "pylon-a".to_string(),
         cluster_id: "cluster-a".to_string(),
         inference_server_url: "quic://127.0.0.1:8443".to_string(),

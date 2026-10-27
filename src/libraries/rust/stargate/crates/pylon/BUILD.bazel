@@ -11,6 +11,7 @@ load("//rules/oci:defs.bzl", "rust_oci_image")
 # against members of this Cargo workspace) have to be added explicitly as
 # Bazel labels.
 _WORKSPACE_DEPS_WITHOUT_PYLON_LIB = [
+    "//src/libraries/rust/stargate/crates/gds-client:gds-client",
     "//src/libraries/rust/stargate/crates/proto:stargate-proto",
     "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
     "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
