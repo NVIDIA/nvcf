@@ -21,6 +21,7 @@ import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 
 import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
+import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import java.time.Instant;
 import java.util.stream.Stream;
@@ -70,15 +71,17 @@ public class KeysV2BulkSelectionService {
         }
         return keysDao.streamForBulk(USER, user, legacyIssuer, pageSize)
                 .filter(key -> key.getCreatedAt() == null || !key.getCreatedAt().isAfter(cutoff))
-                .map(key -> {
-                    if (legacyAccount.findLegacyIssuerServiceId(legacyAccount.toServiceId(key.getIssuerServiceId()))
-                            .filter(key.getIssuerServiceId()::equals).isEmpty()) {
-                        throw new IllegalStateException("Legacy key issuer has no configured mapping");
-                    }
-                    return legacyAccount.fromLegacy(key);
-                })
+                .map(this::validateAndTranslateLegacyKey)
                 // A migrated v2 row wins even when its creation time is after the cutoff.
                 .filter(key -> keysV2Dao.get(key.getNcaId(), USER, key.getOwnerId(),
                         key.getIssuerServiceId(), key.getKeyId()).isEmpty());
+    }
+
+    private KeysByOwnerAndAccountAndServiceVo validateAndTranslateLegacyKey(KeyByOwnerAndServiceVo key) {
+        if (legacyAccount.findLegacyIssuerServiceId(legacyAccount.toServiceId(key.getIssuerServiceId()))
+                .filter(key.getIssuerServiceId()::equals).isEmpty()) {
+            throw new IllegalStateException("Legacy key issuer has no configured mapping");
+        }
+        return legacyAccount.fromLegacy(key);
     }
 }
