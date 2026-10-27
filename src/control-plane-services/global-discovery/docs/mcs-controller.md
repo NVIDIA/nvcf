@@ -243,7 +243,7 @@ the controller never deletes namespaces.
 | ServiceExport | `Valid` | True/`Valid`; False/`NoService`; False/`InvalidServiceType` |
 | ServiceExport | `Ready` | Copied from GDS (True/`Ready`; False/`ClusterLeaseExpired`); Unknown/`Pending` before GDS reports or while the cluster is not registered; False/`Failed` when GDS rejects the export or it is invalid |
 | ServiceExport | `Conflict` | Copied from GDS: False/`NoConflicts`, True with the mcs-api reasons (`PortConflict`, `TypeConflict`, ...; several joined by commas) or `IPFamilyConflict`; Unknown/`ClusterLeaseExpired` |
-| ServiceImport | `Ready` | True/`Ready` with the count of participating clusters |
+| ServiceImport | `Ready` | True/`Ready` with the count of participating clusters; False/`Pending` when no exporting cluster participates (all leases expired) |
 | ServiceImport | `Conflict` | The import-level conflict: False/`NoConflicts` or True with its reason |
 
 ## Reachability prerequisite
