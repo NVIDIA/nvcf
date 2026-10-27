@@ -77,7 +77,8 @@ new BUILD files; copy it from an existing one.
   test cases; keep them in step with `sigs.k8s.io/mcs-api` reasons.
 - Time comes from `internal/clock`; tests use `clock.NewFake` and
   `BlockUntil` before advancing.
-- A new store backend registers its opener in `internal/storefactory`.
+- A new store backend registers its opener in `internal/storefactory` and
+  its admin commands with `registerCommand` in a new file of `cmd/gds-admin`.
 
 ## Store
 

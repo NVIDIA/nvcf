@@ -746,3 +746,17 @@ func TestDialScheme(t *testing.T) {
 	assert.Equal(t, "https", DialScheme(map[string]string{api.AnnotationDialScheme: " https "}))
 	assert.Equal(t, "http", DialScheme(map[string]string{api.AnnotationDialScheme: "quic"}))
 }
+
+func TestApplyLocal(t *testing.T) {
+	f := newFixture(t)
+	require.NoError(t, f.view.ApplyLocal(
+		clusterRec("a", "us-east-1", t0),
+		exportRec("a", "ns", "web", 1, t0, nil, nil, httpPort),
+		endpointSet("a", "ns", "web", 1, true),
+		apiPool("p1", "a", "mistral", store.Lease{}),
+	))
+	si := importOf(t, f.view, "ns", "web")
+	assert.Len(t, si.GetEndpoints(), 1)
+	poolOf(t, f.view, "p1")
+	assert.ErrorContains(t, f.view.ApplyLocal("nope"), "cannot apply string")
+}

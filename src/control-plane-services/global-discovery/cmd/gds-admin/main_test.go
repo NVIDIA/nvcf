@@ -173,8 +173,9 @@ func TestErrors(t *testing.T) {
 		code, _, _ := runWith(t, memory.New(), t0, args...)
 		assert.Equal(t, 2, code, args)
 	}
-	code, _, _ := runWith(t, memory.New(), t0, "--help")
+	code, _, errOut := runWith(t, memory.New(), t0, "--help")
 	assert.Equal(t, 0, code)
+	assert.Contains(t, errOut, "delete-cluster  delete a cluster")
 
 	var stdout, stderr bytes.Buffer
 	failOpen := func(context.Context, *config.Config) (store.Store, error) { return nil, errors.New("no backend") }

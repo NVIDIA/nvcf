@@ -18,6 +18,7 @@ limitations under the License.
 package view
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/store"
@@ -27,6 +28,28 @@ import (
 // handler calls one after each successful store write with the record the
 // store returned, so the handling replica serves the write at once. Each
 // call derives the affected objects and publishes the changes to watchers.
+
+// ApplyLocal applies records that a handler stored through this replica, in
+// order: store.ClusterRecord, store.ExportRecord, store.EndpointSetRecord or
+// store.PoolRecord. It returns an error for any other type. Deletions use
+// the typed Apply*Delete methods.
+func (v *View) ApplyLocal(records ...any) error {
+	for _, r := range records {
+		switch rec := r.(type) {
+		case store.ClusterRecord:
+			v.ApplyCluster(rec)
+		case store.ExportRecord:
+			v.ApplyExport(rec)
+		case store.EndpointSetRecord:
+			v.ApplyEndpointSet(rec)
+		case store.PoolRecord:
+			v.ApplyPool(rec)
+		default:
+			return fmt.Errorf("view: cannot apply %T", r)
+		}
+	}
+	return nil
+}
 
 // apply runs fn on the clusterset under its lock and recomputes it.
 func (v *View) apply(clusterSet string, fn func(cs *clusterSet)) {

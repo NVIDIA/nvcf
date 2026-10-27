@@ -23,8 +23,9 @@ limitations under the License.
 //
 // Store flags select the backend as gds-server does (--store,
 // --dynamodb-table, --dynamodb-endpoint, --region), with the same GDS_
-// environment fallbacks. create-table belongs to the DynamoDB store and is
-// added with it.
+// environment fallbacks. Commands live in a table; a backend-specific
+// command such as the DynamoDB store's create-table registers itself from
+// its own file with registerCommand.
 package main
 
 import (
@@ -34,7 +35,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -46,29 +49,81 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/storefactory"
 )
 
-const usage = `Usage: gds-admin [store flags] <command> [command flags]
-
-Commands:
-  describe        list clustersets, or the records of one clusterset
-  delete-cluster  delete a cluster and everything it owns
-
-Store flags:
-`
-
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr, storefactory.Open, time.Now))
 }
 
 type opener func(context.Context, *config.Config) (store.Store, error)
 
+// cmdEnv is what a command runs with.
+type cmdEnv struct {
+	cfg    *config.Config
+	stdout io.Writer
+	now    time.Time
+	open   opener
+	st     store.Store
+}
+
+// store opens the configured store once.
+func (e *cmdEnv) store(ctx context.Context) (store.Store, error) {
+	if e.st == nil {
+		st, err := e.open(ctx, e.cfg)
+		if err != nil {
+			return nil, err
+		}
+		e.st = st
+	}
+	return e.st, nil
+}
+
+// command is one gds-admin subcommand.
+type command struct {
+	summary string
+	run     func(ctx context.Context, e *cmdEnv, args []string) error
+}
+
+var commands = map[string]command{}
+
+// registerCommand adds a subcommand.
+func registerCommand(name string, c command) { commands[name] = c }
+
+func init() {
+	registerCommand("describe", command{
+		summary: "list clustersets, or the records of one clusterset",
+		run: func(ctx context.Context, e *cmdEnv, args []string) error {
+			st, err := e.store(ctx)
+			if err != nil {
+				return err
+			}
+			return describe(ctx, st, args, e.stdout, e.now, e.cfg.LeaseSkew)
+		},
+	})
+	registerCommand("delete-cluster", command{
+		summary: "delete a cluster and everything it owns",
+		run: func(ctx context.Context, e *cmdEnv, args []string) error {
+			st, err := e.store(ctx)
+			if err != nil {
+				return err
+			}
+			return deleteCluster(ctx, st, args, e.stdout)
+		},
+	})
+}
+
+func usage(w io.Writer, fs *flag.FlagSet) {
+	fmt.Fprint(w, "Usage: gds-admin [store flags] <command> [command flags]\n\nCommands:\n")
+	for _, name := range slices.Sorted(maps.Keys(commands)) {
+		fmt.Fprintf(w, "  %-15s %s\n", name, commands[name].summary)
+	}
+	fmt.Fprint(w, "\nStore flags:\n")
+	fs.PrintDefaults()
+}
+
 func run(ctx context.Context, args []string, lookupEnv func(string) (string, bool), stdout, stderr io.Writer, open opener, now func() time.Time) int {
 	cfg := config.Default()
 	fs := flag.NewFlagSet("gds-admin", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprint(stderr, usage)
-		fs.PrintDefaults()
-	}
+	fs.Usage = func() { usage(stderr, fs) }
 	fs.StringVar(&cfg.Store, "store", cfg.Store, "store backend: memory or dynamodb")
 	fs.StringVar(&cfg.DynamoDBTable, "dynamodb-table", cfg.DynamoDBTable, "DynamoDB table name")
 	fs.StringVar(&cfg.DynamoDBEndpoint, "dynamodb-endpoint", cfg.DynamoDBEndpoint, "DynamoDB endpoint override, for dynamodb-local")
@@ -91,35 +146,27 @@ func run(ctx context.Context, args []string, lookupEnv func(string) (string, boo
 		fs.Usage()
 		return 2
 	}
-
-	var cmd func(context.Context, store.Store, []string) error
-	switch fs.Arg(0) {
-	case "describe":
-		cmd = func(ctx context.Context, st store.Store, args []string) error {
-			return describe(ctx, st, args, stdout, now(), cfg.LeaseSkew)
+	name := fs.Arg(0)
+	cmd, ok := commands[name]
+	if !ok {
+		if name == "create-table" {
+			fmt.Fprintln(stderr, "gds-admin: create-table is part of the DynamoDB store, which is not built into this binary yet")
+			return 2
 		}
-	case "delete-cluster":
-		cmd = func(ctx context.Context, st store.Store, args []string) error {
-			return deleteCluster(ctx, st, args, stdout)
-		}
-	case "create-table":
-		fmt.Fprintln(stderr, "gds-admin: create-table is part of the DynamoDB store, which is not built into this binary yet")
-		return 2
-	default:
-		fmt.Fprintf(stderr, "gds-admin: unknown command %q\n", fs.Arg(0))
+		fmt.Fprintf(stderr, "gds-admin: unknown command %q\n", name)
 		fs.Usage()
 		return 2
 	}
 
-	st, err := open(ctx, cfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "gds-admin: %v\n", err)
-		return 1
-	}
-	defer func() { _ = st.Close() }()
-	if err := cmd(ctx, st, fs.Args()[1:]); err != nil {
+	e := &cmdEnv{cfg: cfg, stdout: stdout, now: now(), open: open}
+	defer func() {
+		if e.st != nil {
+			_ = e.st.Close()
+		}
+	}()
+	if err := cmd.run(ctx, e, fs.Args()[1:]); err != nil {
+		fmt.Fprintf(stderr, "gds-admin %s: %v\n", name, err)
 		var usageErr usageError
-		fmt.Fprintf(stderr, "gds-admin %s: %v\n", fs.Arg(0), err)
 		if errors.As(err, &usageErr) {
 			return 2
 		}
