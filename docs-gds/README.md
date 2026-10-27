@@ -16,6 +16,9 @@ in ~/projects/nvidia are left untouched.
 - `upstream-dynamo-comparison.md`: the open upstream Dynamo discovery work (DEP 103, the
   global-discovery PRs, the global-router-v2 branch) compared with the GDS design and
   implementation, with recommendations and open questions (discussion note, no design change).
+- `karmada-mcs-comparison.md`: how Karmada MCS works and how the upstream Dynamo CDK, operator
+  and discovery service use it, compared with GDS as the MCS implementation, including the
+  GDS interactions in both directions (discussion note, no design change).
 - `upstream-review-state.md`: PR head SHAs, clone refs and refresh commands from the last
   upstream check, so the review can resume from a known point.
 
