@@ -258,9 +258,14 @@ branch.
   pins that chart, such as `helm-nvca-operator` in the compute-plane
   stack.
 
-A compute-plane bump also needs its golden render fixtures refreshed
-with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
-merge.
+When a bump changes anything under `deploy/stacks/nvcf-compute-plane`,
+the workflow renders that stack's golden fixtures again with
+`tools/ci/refresh-compute-plane-goldens` and commits them on top of the
+bumps. Each run drops the previous fixture commit and renders them again
+for what the branch then pins. If the render fails, the pull request says
+so and the run fails. Render them by hand with
+`make -C deploy/stacks/nvcf-compute-plane generate-golden`, or let the
+next bump run render them again.
 
 ## Release branches
 

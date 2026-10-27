@@ -300,6 +300,9 @@ jobs:
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
 
+      - name: Test compute-plane golden refresh on bump branches
+        run: bash tools/ci/test-refresh-compute-plane-goldens
+
       - name: Test bump workflow push credentials
         run: bash tools/ci/test-bump-workflow-push
 
