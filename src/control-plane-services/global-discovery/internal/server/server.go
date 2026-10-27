@@ -20,8 +20,9 @@ limitations under the License.
 //   - gRPC (h2c, or TLS when configured), the NLB target, with keepalive,
 //     message size limits, the gRPC health service per service name and the
 //     interceptor chain: Prometheus (go-grpc-middleware provider), zap
-//     logging, the shutdown guard, authentication and panic recovery, plus
-//     the otelgrpc stats handler when OpenTelemetry is enabled;
+//     logging, request fields on logs and spans, the shutdown guard,
+//     authentication and panic recovery, plus the otelgrpc stats handler
+//     when OpenTelemetry is enabled;
 //   - the REST gateway (grpc-gateway), which dials the gRPC server over a
 //     private loopback listener so that server streams work;
 //   - admin: /metrics, /healthz, /readyz and /debug/pprof.
@@ -255,6 +256,7 @@ func (s *Server) build() error {
 		grpc.ChainStreamInterceptor(
 			srvMetrics.StreamServerInterceptor(),
 			logging.StreamServerInterceptor(logger, logOpts...),
+			requestFieldsStream,
 			s.shutdownGuardStream,
 			auth.StreamServerInterceptor(s.opts.Authenticator, auth.DefaultExempt...),
 			recovery.StreamServerInterceptor(recoveryOpt),

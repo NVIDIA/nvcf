@@ -22,6 +22,8 @@ import (
 	"fmt"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
@@ -106,11 +108,59 @@ func fieldsFromRequest(ctx context.Context, req any) logging.Fields {
 	return f
 }
 
-// requestFieldsUnary injects the request fields for the logging
-// interceptor, which must run inside it.
-func requestFieldsUnary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	if f := fieldsFromRequest(ctx, req); len(f) > 0 {
-		logging.AddFields(ctx, f)
+// spanAttributes maps request log fields to span attribute keys.
+var spanAttributes = map[string]string{
+	"clusterset": "gds.clusterset",
+	"cluster":    "nvcf.cluster.id",
+	"namespace":  "k8s.namespace.name",
+	"name":       "k8s.service.name",
+	"pool_id":    "gds.pool.id",
+	"request_id": "gds.request.id",
+}
+
+// annotate adds the request fields of req to the call's log fields and to
+// its server span.
+func annotate(ctx context.Context, req any) {
+	f := fieldsFromRequest(ctx, req)
+	if len(f) == 0 {
+		return
 	}
+	logging.AddFields(ctx, f)
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	for i := 0; i+1 < len(f); i += 2 {
+		if key, ok := spanAttributes[f[i].(string)]; ok {
+			span.SetAttributes(attribute.String(key, fmt.Sprint(f[i+1])))
+		}
+	}
+}
+
+// requestFieldsUnary annotates unary calls. It must run inside the logging
+// interceptor.
+func requestFieldsUnary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	annotate(ctx, req)
 	return handler(ctx, req)
+}
+
+// annotatedStream annotates a server stream with its first request.
+type annotatedStream struct {
+	grpc.ServerStream
+	done bool
+}
+
+func (s *annotatedStream) RecvMsg(m any) error {
+	err := s.ServerStream.RecvMsg(m)
+	if err == nil && !s.done {
+		s.done = true
+		annotate(s.Context(), m)
+	}
+	return err
+}
+
+// requestFieldsStream annotates streams. It must run inside the logging
+// interceptor.
+func requestFieldsStream(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return handler(srv, &annotatedStream{ServerStream: ss})
 }

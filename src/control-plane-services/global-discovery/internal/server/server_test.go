@@ -44,6 +44,9 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -447,6 +450,11 @@ func TestLoggingHelpers(t *testing.T) {
 }
 
 func TestSetupTracing(t *testing.T) {
+	prev, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	shutdown, err := SetupTracing(t.Context(), "gds-test", "v0")
 	require.NoError(t, err)
@@ -456,10 +464,38 @@ func TestSetupTracing(t *testing.T) {
 }
 
 func TestOTelStatsHandler(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
 	cfg := testConfig()
 	cfg.OTelEnabled = true
 	r := start(t, cfg, AppOptions{})
 	conn := dial(t, r.app.Server.GRPCAddr(), nil)
-	_, err := gdsv1.NewServerInfoServiceClient(conn).GetServerInfo(t.Context(), &gdsv1.GetServerInfoRequest{})
+	_, err := gdsv1.NewClusterServiceClient(conn).RegisterCluster(t.Context(), &gdsv1.RegisterClusterRequest{Clusterset: "prod", Cluster: "a"})
 	require.NoError(t, err)
+	watch, err := gdsv1.NewPoolServiceClient(conn).WatchPools(t.Context(), &gdsv1.WatchPoolsRequest{Clusterset: "prod"})
+	require.NoError(t, err)
+	_, err = watch.Recv()
+	require.NoError(t, err)
+
+	attrs := func(name string) map[string]string {
+		for _, s := range rec.Ended() {
+			if s.Name() == name {
+				out := map[string]string{}
+				for _, a := range s.Attributes() {
+					out[string(a.Key)] = a.Value.Emit()
+				}
+				return out
+			}
+		}
+		return nil
+	}
+	require.Eventually(t, func() bool { return attrs("nvidia.gds.v1.ClusterService/RegisterCluster") != nil }, 5*time.Second, 10*time.Millisecond)
+	a := attrs("nvidia.gds.v1.ClusterService/RegisterCluster")
+	assert.Equal(t, "prod", a["gds.clusterset"])
+	assert.Equal(t, "a", a["nvcf.cluster.id"])
+	assert.NotNil(t, attrs("gds.store.put_cluster"), "store child span")
 }
