@@ -16,6 +16,8 @@ in ~/projects/nvidia are left untouched.
 - `upstream-dynamo-comparison.md`: the open upstream Dynamo discovery work (DEP 103, the
   global-discovery PRs, the global-router-v2 branch) compared with the GDS design and
   implementation, with recommendations and open questions (discussion note, no design change).
+- `upstream-review-state.md`: PR head SHAs, clone refs and refresh commands from the last
+  upstream check, so the review can resume from a known point.
 
 This directory lives in the nvcf monorepo on branch
 `feat/global-discovery-service`, to be ported to `github.com/ai-dynamo/stargate`.
