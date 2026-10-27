@@ -406,6 +406,358 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # Free the GPU node for the LLM scenario.
       And I successfully undeploy the function selected by NVCF CLI
 
+    # Sticky shadow sampling through the Vanity Gateway's OpenAI-compatible
+    # routes. The primary and shadow are separate LLM functions built from
+    # SAMPLE_LLM_ECHO_IMAGE, which must honor the LOAD_TESTER_DEFAULT_*
+    # container settings; the shadow answers after 4 s with its own text. A
+    # client never sees whether a request was shadowed, so the checks read
+    # the gateway's decision counter (which method decided and the outcome)
+    # and its shadow replay server metric. Sampling is 50 percent; buckets
+    # are a fixed hash of the key or canonical first message, so the session
+    # keys and first messages below are chosen on either side of 50:
+    # bdd-shadow-session-a (22) and "bdd shadow conversation a" (24) are
+    # admitted, bdd-shadow-session-03 (99) and "bdd shadow conversation c"
+    # (85) are rejected. A non-sticky decision would split their turns.
+    # Depends on the earlier install and registration scenarios.
+    @vanity-shadow-sampling
+    Scenario: Vanity Gateway keeps each conversation's shadow decision and never delays the primary
+      Given environment variable "SAMPLE_LLM_ECHO_IMAGE" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully create function "bdd-vanity-shadow-primary" from image "${SAMPLE_LLM_ECHO_IMAGE}" with CLI options:
+        | option           | value |
+        | --function-type  | LLM |
+        | --inference-url  | /v1/chat/completions |
+        | --inference-port | 8000 |
+        | --health-uri     | /health |
+        | --health-port    | 8000 |
+        | --health-timeout | PT30S |
+        | --llm-model      | name=bdd-primary,uris=/v1/chat/completions\|/v1/responses,routingMethod=round_robin |
+        | --llm-model      | name=bdd-primary-failing-shadow,uris=/v1/chat/completions,routingMethod=round_robin |
+        | --container-env  | LOAD_TESTER_DEFAULT_CHUNK=bdd-primary-reply |
+      And I export the function selected by NVCF CLI to environment variables "BDD_SHADOW_PRIMARY_FUNCTION_ID" and "BDD_SHADOW_PRIMARY_VERSION_ID"
+      And function "${BDD_SHADOW_PRIMARY_FUNCTION_ID}" version "${BDD_SHADOW_PRIMARY_VERSION_ID}" is deleted at scenario teardown
+      And function "${BDD_SHADOW_PRIMARY_FUNCTION_ID}" version "${BDD_SHADOW_PRIMARY_VERSION_ID}" is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+
+      When I successfully create function "bdd-vanity-shadow-target" from image "${SAMPLE_LLM_ECHO_IMAGE}" with CLI options:
+        | option           | value |
+        | --function-type  | LLM |
+        | --inference-url  | /v1/chat/completions |
+        | --inference-port | 8000 |
+        | --health-uri     | /health |
+        | --health-port    | 8000 |
+        | --health-timeout | PT30S |
+        | --llm-model      | name=bdd-shadow,uris=/v1/chat/completions\|/v1/responses,routingMethod=round_robin |
+        | --container-env  | LOAD_TESTER_DEFAULT_TTFT_MS=4000 |
+        | --container-env  | LOAD_TESTER_DEFAULT_CHUNK=bdd-shadow-reply |
+      And I export the function selected by NVCF CLI to environment variables "BDD_SHADOW_TARGET_FUNCTION_ID" and "BDD_SHADOW_TARGET_VERSION_ID"
+      And function "${BDD_SHADOW_TARGET_FUNCTION_ID}" version "${BDD_SHADOW_TARGET_VERSION_ID}" is deleted at scenario teardown
+      And function "${BDD_SHADOW_TARGET_FUNCTION_ID}" version "${BDD_SHADOW_TARGET_VERSION_ID}" is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-vanity-shadow                                                   |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
+
+      # Call the shadow function once directly so the LLM gateway has a route
+      # to it before the first shadow copy arrives. The 4 s delay lets Pylon
+      # finish startup calibration (its first batch sends five requests one at
+      # a time within 30 s) and stays under its 5 s canary timeout, so the idle
+      # shadow is not marked unavailable.
+      When I successfully invoke model "bdd-shadow" at "/v1/chat/completions" with timeout "120" seconds:
+        """
+        {"messages":[{"role":"user","content":"bdd-shadow-warmup"}]}
+        """
+      Then the command output should contain "bdd-shadow-reply"
+
+      # bdd-missing is not declared on the function, so the LLM gateway
+      # answers its shadow copies with 404: a failing shadow target. The
+      # gateway matches the Host header exactly, so the host carries the
+      # local stack's port.
+      When I set yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" key "addons.vanityGateway.mappingConfig.v2config.openai" to:
+        """
+        host: vanity-openai.localhost:8080
+        chatCompletions:
+          bdd_primary:
+            modelName: bdd-primary
+            functionID: ${BDD_SHADOW_PRIMARY_FUNCTION_ID}
+            functionType: LLM
+            promptCacheKeyHeaders:
+              - x-multi-turn-session-id
+            shadows:
+              - modelName: bdd-shadow
+                percentage: 50
+                samplingMethod:
+                  - promptCacheKey
+                  - firstMessageHash
+          bdd_primary_failing_shadow:
+            modelName: bdd-primary-failing-shadow
+            functionID: ${BDD_SHADOW_PRIMARY_FUNCTION_ID}
+            functionType: LLM
+            shadows:
+              - modelName: bdd-missing
+                percentage: 100
+          bdd_shadow:
+            modelName: bdd-shadow
+            functionID: ${BDD_SHADOW_TARGET_FUNCTION_ID}
+            functionType: LLM
+          bdd_missing:
+            modelName: bdd-missing
+            functionID: ${BDD_SHADOW_PRIMARY_FUNCTION_ID}
+            functionType: LLM
+        responses:
+          bdd_primary:
+            modelName: bdd-primary
+            functionID: ${BDD_SHADOW_PRIMARY_FUNCTION_ID}
+            functionType: LLM
+            shadows:
+              - modelName: bdd-shadow
+                percentage: 50
+                samplingMethod:
+                  - firstMessageHash
+          bdd_shadow:
+            modelName: bdd-shadow
+            functionID: ${BDD_SHADOW_TARGET_FUNCTION_ID}
+            functionType: LLM
+        """
+      And I set yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" key "ingress.gatewayApi.routes.vanityGateway.hostnames" to:
+        """
+        - vanity.localhost
+        - vanity-openai.localhost
+        """
+      When I successfully run command "k3d kubeconfig merge ncp-local --output ${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml --overwrite --kubeconfig-switch-context=false"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=ingress KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=vanity-gateway KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "kubectl --context k3d-ncp-local rollout restart deployment/vanity-gateway --namespace nvcf"
+      Then deployment "vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should complete rollout within "5m"
+      # Decision and replay counters are per pod, and replaced pods keep
+      # serving while they drain (up to the 330 s grace period), so wait
+      # until only the new pod remains before reading any baseline.
+      And I successfully run command:
+        """
+        /bin/bash -c 'for i in $(seq 1 84); do [ "$(kubectl --context k3d-ncp-local get pods -n nvcf -l app.kubernetes.io/instance=vanity-gateway --no-headers | wc -l | tr -d " ")" = 1 ] && exit 0; sleep 5; done; echo "old vanity-gateway pods still running after 420s" >&2; exit 1'
+        """
+      And Kubernetes resource "httproute/vanity-gateway" in namespace "envoy-gateway-system" using context "k3d-ncp-local" should contain:
+        """
+        spec:
+          hostnames:
+            - vanity.localhost
+            - vanity-openai.localhost
+        """
+      And these Gateway API routes should be accepted and resolved using context "k3d-ncp-local" within "2m":
+        | kind      | name           | namespace            | parent    |
+        | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
+
+      # The gateway restarted above and only the new pod remains, so its
+      # counters start at zero and the totals below are cumulative. Admitted
+      # shadows take 4 s, so a primary that waited for them would exceed each
+      # request's 3 s deadline.
+
+      # A prompt_cache_key in the body keeps one decision on every turn.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","prompt_cache_key":"bdd-shadow-session-a","messages":[{"role":"user","content":"bdd body key admitted"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","prompt_cache_key":"bdd-shadow-session-a","messages":[{"role":"user","content":"bdd body key admitted"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","prompt_cache_key":"bdd-shadow-session-a","messages":[{"role":"user","content":"bdd body key admitted"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 3"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      # Read each conversation on its own: decisions that flip in both
+      # conversations would still give the same combined totals.
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                   | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=admitted | exactly    | 3     |
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","prompt_cache_key":"bdd-shadow-session-03","messages":[{"role":"user","content":"bdd body key rejected"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","prompt_cache_key":"bdd-shadow-session-03","messages":[{"role":"user","content":"bdd body key rejected"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                   | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=admitted | exactly    | 3     |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=rejected | exactly    | 2     |
+
+      # With no body key, the configured session header is the key.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "x-multi-turn-session-id" is "bdd-shadow-session-a"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd header key admitted"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "x-multi-turn-session-id" is "bdd-shadow-session-a"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd header key admitted"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                   | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=admitted | exactly    | 5     |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=promptCacheKey,outcome=rejected | exactly    | 2     |
+
+      # With no key, the first message decides; resending the history keeps it.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd shadow conversation a"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd shadow conversation a"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      # Read conversation a on its own, as for the body key above.
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                     | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=firstMessageHash,outcome=admitted | exactly    | 2     |
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd shadow conversation c"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","messages":[{"role":"user","content":"bdd shadow conversation c"},{"role":"assistant","content":"bdd-primary-reply"},{"role":"user","content":"turn 2"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                                                     | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=firstMessageHash,outcome=admitted | exactly    | 2     |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=chatCompletions,method=firstMessageHash,outcome=rejected | exactly    | 2     |
+
+      # Exactly the 7 admitted requests reach the slow shadow, which answers 200.
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "90s":
+        | metric                                     | labels                                         | comparison | total |
+        | http_server_request_duration_seconds_count | nvcf_shadow=true,http_response_status_code=200 | exactly    | 7     |
+
+      # A Responses request that continues earlier turns cannot use the first
+      # message, so sampling falls back to random.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/responses" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","input":"bdd follow-up one","previous_response_id":"resp_bdd_shadow"}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/responses" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary","input":"bdd follow-up two","previous_response_id":"resp_bdd_shadow"}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                              | labels                                              | comparison | total |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=responses,method=random           | exactly    | 2     |
+        | nvcf_ai_api_gateway_shadow_sampling_decisions_total | sampling_endpoint=responses,method=firstMessageHash | exactly    | 0     |
+
+      # A failing shadow target does not change the primary response.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/chat/completions" with timeout 3 seconds and body:
+        """
+        {"model":"bdd-primary-failing-shadow","messages":[{"role":"user","content":"bdd failing shadow"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-primary-reply"
+      And the HTTP response body should not contain "bdd-shadow-reply"
+      Then Prometheus metrics on port "10083" of pods selected by "app.kubernetes.io/name=helm-nvcf-vanity-gateway,app.kubernetes.io/instance=vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should total within "30s":
+        | metric                                     | labels                                         | comparison | total |
+        | http_server_request_duration_seconds_count | nvcf_shadow=true,http_response_status_code=404 | exactly    | 1     |
+
     # Proves the serve path the @llm-gateway scenario only installs:
     # LLM-type functions route through llm-api-gateway and
     # llm-request-router. The CLI maps invocation.localhost to the
