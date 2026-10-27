@@ -21,6 +21,7 @@ members = [
   "crates/stargate-runtime",
   "crates/stargate-auth",
   "crates/pylon-lib",
+  "crates/gds-client",
   "crates/stargate-tls",
   "crates/stargate-forwarding",
   "crates/stargate",
@@ -48,6 +49,7 @@ async-stream = "=0.3.6"
 bytes = "=1.12.1"
 axum = { version = "=0.8.9", features = ["macros"] }
 clap = { version = "=4.6.1", features = ["derive", "env"] }
+data-encoding = "=2.10.0"
 futures = "=0.3.32"
 flume = "=0.12.0"
 h3 = "=0.0.8"
@@ -58,12 +60,14 @@ memchr = "=2.8.3"
 moka = { version = "=0.12.15", default-features = false, features = ["sync"] }
 parking_lot = "=0.12.5"
 prost = "=0.14.4"
+prost-types = "=0.14.3"
 rand = "=0.9.3"
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
 scc = "=3.7.1"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 serde_yaml_ng = "=0.10.0"
+sha2 = "=0.10.9"
 sfv = { version = "=0.15.0", default-features = false, features = ["parsed-types"] }
 sonic-rs = "=0.5.8"
 sse-core = { version = "=0.2.3", default-features = false, features = ["std"] }
@@ -116,6 +120,7 @@ stargate-proto = { path = "crates/proto" }
 stargate-protocol = { path = "crates/protocol" }
 mock-engine = { path = "crates/mock-engine" }
 pylon-lib = { path = "crates/pylon-lib" }
+gds-client = { path = "crates/gds-client" }
 
 [profile.integration]
 inherits = "release"

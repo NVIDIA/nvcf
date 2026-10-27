@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@aspect_bazel_lib//lib:diff_test.bzl", "diff_test")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+
+# Vendored copies of the GDS proto contract. Each one must be byte-identical to
+# the canonical file in the global-discovery module; run
+# src/control-plane-services/global-discovery/hack/sync-gds-proto.sh after a
+# contract change.
+_VENDORED_PROTOS = [
+    "google/api/annotations.proto",
+    "google/api/http.proto",
+    "nvidia/gds/v1/cluster.proto",
+    "nvidia/gds/v1/common.proto",
+    "nvidia/gds/v1/mcs.proto",
+    "nvidia/gds/v1/pool.proto",
+    "nvidia/gds/v1/server.proto",
+]
+
+_CANONICAL_PROTOS = "//src/control-plane-services/global-discovery/api/proto:proto_srcs"
+
+# The canonical module exports its protos as one filegroup. Pick each file out
+# of it so every vendored file gets its own diff_test.
+[
+    genrule(
+        name = "canonical_" + p.replace("/", "_").replace(".proto", ""),
+        srcs = [_CANONICAL_PROTOS],
+        outs = ["canonical/" + p],
+        cmd = """
+            for f in $(SRCS); do
+                case "$$f" in
+                    */api/proto/{path}) cp "$$f" "$@"; exit 0 ;;
+                esac
+            done
+            echo "{path} not found in {group}" >&2
+            exit 1
+        """.format(
+            group = _CANONICAL_PROTOS,
+            path = p,
+        ),
+    )
+    for p in _VENDORED_PROTOS
+]
+
+[
+    diff_test(
+        name = "vendored_proto_" + p.replace("/", "_").replace(".proto", "") + "_test",
+        failure_message = "proto/{path} differs from the global-discovery contract; run src/control-plane-services/global-discovery/hack/sync-gds-proto.sh".format(path = p),
+        file1 = "proto/" + p,
+        file2 = ":canonical_" + p.replace("/", "_").replace(".proto", ""),
+    )
+    for p in _VENDORED_PROTOS
+]
+
+# Use the repository protoc for code generation, as crates/proto does.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env = {
+        "PROTOC": "$(execpath @com_google_protobuf//:protoc)",
+        # cargo_build_script runs from _main/<package>/, so the well-known
+        # type include dir resolves through one hop per package path segment
+        # plus one for _main.
+        "PROTOC_WKT_DIR": "../../../../../../../protobuf+/src",
+    },
+    crate_root = "build.rs",
+    data = glob(["proto/**/*.proto"]) + [
+        # google/api/annotations.proto imports descriptor.proto, which is not
+        # one of the well-known types.
+        "@com_google_protobuf//:descriptor_proto_srcs",
+        "@com_google_protobuf//:well_known_type_protos",
+    ],
+    edition = "2024",
+    tools = [
+        "@com_google_protobuf//:protoc",
+    ],
+    deps = all_crate_deps(build = True),
+)
+
+_SRCS = glob(["src/**/*.rs"])
+
+rust_library(
+    name = "gds-client",
+    srcs = _SRCS,
+    aliases = aliases(),
+    crate_name = "gds_client",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)
+
+# The same crate with the optional features the stargate workspace uses:
+# Prometheus metrics and the stargate-proto conversions. Cargo turns these on
+# per dependent; Bazel needs a separate target.
+rust_library(
+    name = "gds-client-stargate",
+    srcs = _SRCS,
+    aliases = aliases(),
+    crate_features = [
+        "metrics",
+        "stargate",
+    ],
+    crate_name = "gds_client",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+        "@stargate_crates//:prometheus",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "gds-client_test",
+    crate = ":gds-client",
+    deps = all_crate_deps(normal_dev = True),
+)
+
+# rust_test does not inherit crate_features from the crate under test.
+rust_test(
+    name = "gds-client-stargate_test",
+    crate = ":gds-client-stargate",
+    crate_features = [
+        "metrics",
+        "stargate",
+    ],
+    deps = all_crate_deps(normal_dev = True),
+)
+
+rust_test(
+    name = "gds-client_integration_test",
+    srcs = glob(["tests/**/*.rs"]),
+    aliases = aliases(normal_dev = True),
+    crate_root = "tests/lib.rs",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = [":gds-client"] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)

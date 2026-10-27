@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "gds-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Global Discovery Service client: failover, typed calls, pool and router caches, pool registration"
+# The integration tests are modules of one crate rooted at tests/lib.rs.
+autotests = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Prometheus metrics named nvcf_gds_client_*.
+metrics = ["dep:prometheus"]
+# Conversions to stargate-proto types for diagnostics.
+stargate = ["dep:stargate-proto"]
+
+[dependencies]
+data-encoding = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+prometheus = { workspace = true, optional = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+stargate-proto = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true, features = ["tls-aws-lc", "tls-native-roots", "tls-webpki-roots"] }
+tonic-prost = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+hyper-util = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tower = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"

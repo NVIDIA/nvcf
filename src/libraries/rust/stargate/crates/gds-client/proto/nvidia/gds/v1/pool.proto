@@ -1,0 +1,393 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.gds.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "nvidia/gds/v1/common.proto";
+import "nvidia/gds/v1/mcs.proto";
+
+option go_package = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1;gdsv1";
+
+// PoolService is the pool and router registry.
+//
+// A Pool exists when a labelled export names it (Service labels
+// gds.nvidia.com/role=pool-frontend or kv-relay and gds.nvidia.com/pool=<name>),
+// when RegisterPool registered it, or both; the two are merged by
+// (cluster, pool name). Static metadata comes from the export's labels and
+// annotations, dynamic state (worker counts, DRAINING) from this API.
+//
+// Routers are derived from exports labelled gds.nvidia.com/role=router; they
+// are never registered.
+service PoolService {
+  // RegisterPool registers a pool or re-registers it. It is idempotent on
+  // (cluster, name): the existing pool_id is returned and a new lease epoch
+  // is minted. The server assigns pool_id unless the request names one; a
+  // pool_id that differs from the pool already holding the name fails with
+  // ALREADY_EXISTS and reason POOL_NAME_TAKEN.
+  rpc RegisterPool(RegisterPoolRequest) returns (RegisterPoolResponse) {
+    option (google.api.http) = {
+      post: "/v1/clustersets/{clusterset}/pools"
+      body: "*"
+    };
+  }
+
+  // UpdatePool changes the writer-owned fields named in update_mask.
+  // generation must exceed the stored one (STALE_GENERATION).
+  rpc UpdatePool(UpdatePoolRequest) returns (UpdatePoolResponse) {
+    option (google.api.http) = {
+      patch: "/v1/clustersets/{clusterset}/pools/{pool_id}"
+      body: "*"
+    };
+  }
+
+  // HeartbeatPool renews the pool lease and optionally reports worker counts
+  // and the desired state. The epoch must be the current one
+  // (LEASE_EPOCH_MISMATCH). API pools heartbeat every 20 s by default.
+  rpc HeartbeatPool(HeartbeatPoolRequest) returns (HeartbeatPoolResponse) {
+    option (google.api.http) = {
+      post: "/v1/clustersets/{clusterset}/pools/{pool_id}:heartbeat"
+      body: "*"
+    };
+  }
+
+  // DeregisterPool removes the API registration. Watchers receive a DELETE
+  // event with state GONE. Deregistering an unknown pool succeeds.
+  rpc DeregisterPool(DeregisterPoolRequest) returns (DeregisterPoolResponse) {
+    option (google.api.http) = {delete: "/v1/clustersets/{clusterset}/pools/{pool_id}"};
+  }
+
+  // GetPool returns one pool.
+  rpc GetPool(GetPoolRequest) returns (GetPoolResponse) {
+    option (google.api.http) = {get: "/v1/clustersets/{clusterset}/pools/{pool_id}"};
+  }
+
+  // ListPools returns the pools of a clusterset that match every filter set.
+  rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse) {
+    option (google.api.http) = {get: "/v1/clustersets/{clusterset}/pools"};
+  }
+
+  // WatchPools streams the matching pools: a snapshot, then deltas and
+  // bookmarks. See EventType.
+  rpc WatchPools(WatchPoolsRequest) returns (stream WatchPoolsResponse) {
+    option (google.api.http) = {get: "/v1/clustersets/{clusterset}/pools:watch"};
+  }
+
+  // ListRouters returns the routers derived from exports labelled
+  // gds.nvidia.com/role=router.
+  rpc ListRouters(ListRoutersRequest) returns (ListRoutersResponse) {
+    option (google.api.http) = {get: "/v1/clustersets/{clusterset}/routers"};
+  }
+
+  // WatchRouters streams the matching routers: a snapshot, then deltas and
+  // bookmarks. See EventType.
+  rpc WatchRouters(WatchRoutersRequest) returns (stream WatchRoutersResponse) {
+    option (google.api.http) = {get: "/v1/clustersets/{clusterset}/routers:watch"};
+  }
+}
+
+// PoolState is the desired or derived state of a pool.
+//
+// Derivation: REGISTERED until the first heartbeat (API-only pools) or the
+// first ready endpoint (pools joined to exports); then desired_state (ACTIVE
+// or DRAINING) while the pool is live, UNHEALTHY otherwise. A pool joined to
+// exports is live while its cluster lease is active and at least one of its
+// endpoints is ready; an API-only pool (no services and no labelled export) is
+// live while its own lease is active. GONE after DeregisterPool or when both
+// the labelled export and the API registration are gone; a GONE pool is kept
+// as a tombstone for one bookmark interval.
+enum PoolState {
+  POOL_STATE_UNSPECIFIED = 0;
+  POOL_STATE_REGISTERED = 1;
+  POOL_STATE_ACTIVE = 2;
+  POOL_STATE_DRAINING = 3;
+  POOL_STATE_UNHEALTHY = 4;
+  POOL_STATE_GONE = 5;
+}
+
+// FrontendRole is what a pool endpoint or Service serves.
+enum FrontendRole {
+  FRONTEND_ROLE_UNSPECIFIED = 0;
+  // OpenAI-compatible HTTP frontend; the dispatch address for routers.
+  // Label role pool-frontend.
+  FRONTEND_ROLE_OPENAI = 1;
+  // KV event relay (Dynamo PoolRelay). Label role kv-relay.
+  FRONTEND_ROLE_KV_RELAY = 2;
+}
+
+// Location places a pool.
+message Location {
+  string region = 1;
+  // Data center, from the gds.nvidia.com/dc annotation or the API.
+  string dc = 2;
+  // Cluster id of the pool; required.
+  string cluster = 3;
+  repeated string zones = 4;
+}
+
+// ModelServed is a model a pool serves.
+message ModelServed {
+  string model_id = 1;
+  repeated string aliases = 2;
+  map<string, string> attributes = 3;
+}
+
+// ServiceRef names an exported Service in the pool's cluster.
+message ServiceRef {
+  string namespace = 1;
+  string name = 2;
+  FrontendRole role = 3;
+}
+
+// FrontendEndpoint is a dialable entry point of a pool. Exactly one of url
+// and service is set. A client resolves service to the derived Service of the
+// import in its own cluster:
+// derived-<hash>.<namespace>.svc.cluster.local, with the port named
+// port_name.
+message FrontendEndpoint {
+  FrontendRole role = 1;
+  // Static URL, for pools fronted by a load balancer.
+  string url = 2;
+  // Exported Service in the pool's cluster.
+  ServiceRef service = 3;
+  // Service port to dial; defaults to the gds.nvidia.com/http-port-name
+  // annotation, then http.
+  string port_name = 4;
+}
+
+// Pool is the unit of routing, nominally one Dynamo graph deployment.
+message Pool {
+  string clusterset = 1;
+  // Server-assigned UUID unless given at registration; stable for the pool's
+  // life.
+  string pool_id = 2;
+  // DNS label unique within (clusterset, cluster).
+  string name = 3;
+  Location location = 4;
+  // Free-form hardware class, for example b200-ib.
+  string hardware_class = 5;
+  // At most 256 entries.
+  repeated ModelServed models = 6;
+  int32 worker_count = 7;
+  int32 ready_worker_count = 8;
+  // Dispatch entries. Always contains the OPENAI entry: the exported
+  // frontend Service for label-derived pools, the caller's url for API pools.
+  repeated FrontendEndpoint frontends = 9;
+  // Exported Services in the pool's cluster used for the endpoint join.
+  repeated ServiceRef services = 10;
+  map<string, string> labels = 11;
+  // ACTIVE or DRAINING; set through the API overlay.
+  PoolState desired_state = 12;
+  // Derived state, see PoolState.
+  PoolState state = 13;
+  // Lease of an API registration; unset for label-only pools.
+  Lease lease = 14;
+  // Writer generation of the API registration.
+  uint64 generation = 15;
+  // Identity of the registering writer.
+  string owner_id = 16;
+  google.protobuf.Timestamp registered_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+  // Endpoints joined from the imports of the pool's Services in
+  // location.cluster, one entry per Service. Counts are always set; the
+  // endpoint lists only when include_endpoints is requested.
+  repeated ClusterEndpoints endpoints = 19;
+  // Ready endpoints across the pool's OPENAI frontend Services. Routers skip
+  // pools with none.
+  int32 ready_endpoint_count = 20;
+}
+
+// RouterReplica is one endpoint of a router Service.
+message RouterReplica {
+  string address = 1;
+  AddressType address_type = 2;
+  bool ready = 3;
+  string hostname = 4;
+  string zone = 5;
+}
+
+// Router is derived from one export labelled gds.nvidia.com/role=router, one
+// per (cluster, namespace, name). A pylon dials the derived Service of the
+// import in its own cluster:
+// <dial_scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>.
+message Router {
+  string cluster = 1;
+  string region = 2;
+  string namespace = 3;
+  string name = 4;
+  ServiceType type = 5;
+  LeaseState cluster_lease_state = 6;
+  // Port named by gds.nvidia.com/grpc-port-name (default grpc); 0 if absent.
+  int32 grpc_port = 7;
+  // Port named by gds.nvidia.com/http-port-name (default http); 0 if absent.
+  int32 http_port = 8;
+  // http or https, from gds.nvidia.com/dial-scheme.
+  string dial_scheme = 9;
+  repeated RouterReplica replicas = 10;
+  map<string, string> labels = 11;
+  map<string, string> annotations = 12;
+}
+
+message RegisterPoolRequest {
+  string clusterset = 1;
+  // Writer-owned fields: pool_id (optional), name, location, hardware_class,
+  // models, worker_count, ready_worker_count, frontends, services, labels,
+  // desired_state and owner_id. Server-owned fields are ignored.
+  Pool pool = 2;
+  // Pool lease duration; clamped to [10 s, 5 m]; 60 s when unset.
+  google.protobuf.Duration lease_ttl = 3;
+  // Writer generation, max(previous + 1, unix milliseconds).
+  uint64 generation = 4;
+}
+
+message RegisterPoolResponse {
+  // The stored pool with its pool_id and newly minted lease.
+  Pool pool = 1;
+  google.protobuf.Timestamp server_time = 2;
+}
+
+message UpdatePoolRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+  // New values of the fields named in update_mask.
+  Pool pool = 3;
+  // Writer-owned Pool field paths, for example worker_count or
+  // desired_state. An empty mask replaces every writer-owned field.
+  google.protobuf.FieldMask update_mask = 4;
+  // Writer generation, max(previous + 1, unix milliseconds).
+  uint64 generation = 5;
+}
+
+message UpdatePoolResponse {
+  Pool pool = 1;
+}
+
+message HeartbeatPoolRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+  // The lease epoch returned by RegisterPool.
+  uint64 epoch = 3;
+  // Optional worker counts; unchanged when unset.
+  optional int32 worker_count = 4;
+  optional int32 ready_worker_count = 5;
+  // ACTIVE or DRAINING; unchanged when UNSPECIFIED.
+  PoolState desired_state = 6;
+}
+
+message HeartbeatPoolResponse {
+  Lease lease = 1;
+  // Derived state after the heartbeat.
+  PoolState state = 2;
+  google.protobuf.Timestamp server_time = 3;
+}
+
+message DeregisterPoolRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+}
+
+message DeregisterPoolResponse {}
+
+message GetPoolRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+  bool include_endpoints = 3;
+}
+
+message GetPoolResponse {
+  Pool pool = 1;
+}
+
+// ListPoolsRequest filters are combined with AND; an empty filter matches
+// everything.
+message ListPoolsRequest {
+  string clusterset = 1;
+  string region = 2;
+  string dc = 3;
+  string cluster = 4;
+  string hardware_class = 5;
+  // Matches a model_id or an alias.
+  string model = 6;
+  // Matches any of the listed derived states; all states except GONE when
+  // empty.
+  repeated PoolState states = 7;
+  // Matches pool labels.
+  LabelSelector selector = 8;
+  bool include_endpoints = 9;
+}
+
+message ListPoolsResponse {
+  repeated Pool pools = 1;
+  // Revision of the view the list was taken from; usable as resume_revision.
+  string revision = 2;
+}
+
+// WatchPoolsRequest takes the filters of ListPoolsRequest.
+message WatchPoolsRequest {
+  string clusterset = 1;
+  string region = 2;
+  string dc = 3;
+  string cluster = 4;
+  string hardware_class = 5;
+  string model = 6;
+  repeated PoolState states = 7;
+  LabelSelector selector = 8;
+  bool include_endpoints = 9;
+  // Revision from a previous SNAPSHOT_END, BOOKMARK or delta.
+  string resume_revision = 10;
+}
+
+// WatchPoolsResponse is one watch event.
+message WatchPoolsResponse {
+  EventType type = 1;
+  // Set for UPSERT and DELETE. A DELETE carries state GONE.
+  Pool pool = 2;
+  // Set for SNAPSHOT_END, BOOKMARK and every delta.
+  string revision = 3;
+}
+
+message ListRoutersRequest {
+  string clusterset = 1;
+  string region = 2;
+  string cluster = 3;
+}
+
+message ListRoutersResponse {
+  repeated Router routers = 1;
+  // Revision of the view the list was taken from; usable as resume_revision.
+  string revision = 2;
+}
+
+message WatchRoutersRequest {
+  string clusterset = 1;
+  string region = 2;
+  string cluster = 3;
+  // Revision from a previous SNAPSHOT_END, BOOKMARK or delta.
+  string resume_revision = 4;
+}
+
+// WatchRoutersResponse is one watch event.
+message WatchRoutersResponse {
+  EventType type = 1;
+  // Set for UPSERT and DELETE.
+  Router router = 2;
+  // Set for SNAPSHOT_END, BOOKMARK and every delta.
+  string revision = 3;
+}

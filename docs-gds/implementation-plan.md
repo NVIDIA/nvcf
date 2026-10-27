@@ -536,3 +536,59 @@ server time explicitly. Not done in ws1: CI wiring (the
 `.github/workflows/bazel.yml` matrix row and the `check-go-codegen` guard),
 `go_oci_image`, golangci-lint run (not installed locally; staticcheck is
 clean).
+
+Workstream 6 (Rust client), branch `feat/gds-ws6-rust`, delivered
+`src/libraries/rust/stargate/crates/gds-client`:
+
+- Wiring: workspace member and `[workspace.dependencies]` entry, the
+  `stargate_crates` manifest list in MODULE.bazel, lockfiles repinned through
+  Bazel (`CARGO_BAZEL_REPIN=true CARGO_BAZEL_REPIN_ALLOWLIST=stargate_crates
+  bazel mod deps`). Cargo.lock gains only the gds-client package; the new
+  workspace pins (prost-types 0.14.3, sha2 0.10.9, data-encoding 2.10.0)
+  were already resolved.
+- Vendored protos under `proto/`, compiled by `build.rs` with
+  tonic-prost-build (server traits with default stubs, so fakes implement
+  only what they need). One `diff_test` per file against
+  `api/proto:proto_srcs`, with a genrule picking each file out of the
+  filegroup, and `hack/sync-gds-proto.sh` (`--check` mode) in the module.
+- Modules: `error`, `endpoints`, `channel`, `client`, `cache`, `routers`,
+  `register`, `derived`, `labels`, `metrics` (feature) and `stargate`
+  (feature), per the design 9.2 API. Watches follow 5.6 with opaque resume
+  revisions; snapshots replace the cache at SNAPSHOT_END.
+- Bazel: `cargo_build_script` with the repository protoc plus the
+  well-known and descriptor protos, `gds-client`, `gds-client-stargate`
+  (`metrics`, `stargate`), unit tests for both, and an integration test
+  rooted at `tests/lib.rs`. `bazel test
+  //src/libraries/rust/stargate/crates/gds-client/...` passes (33
+  integration tests, 20 and 23 unit tests, 7 diff tests) and `bazel build
+  //src/libraries/rust/stargate/...` succeeds. rustfmt and clippy
+  (`-D clippy::all`) are clean through rules_rust.
+- Tests use `tests/support/fake_gds.rs`, served on localhost ports for
+  failover and over in-memory duplex streams on a paused clock for
+  registration and cache timing.
+
+Deviations from the plan:
+
+- The sync script is `src/control-plane-services/global-discovery/hack/sync-gds-proto.sh`,
+  not `tools/sync-gds-proto.sh`.
+- Extra dependencies: prost-types (well-known types in generated code),
+  sha2 and data-encoding (derived names).
+- `GdsClient::new` is synchronous and connects on the first call.
+  `ChannelManager::mark_failed` takes the failed `Connection` so a late
+  report cannot drop a newer connection. `Error` gains `ConnectTimeout`;
+  `RegistrationLost` is returned by updates after the heartbeat stopped.
+- `PoolRegistration::update` takes a `PoolUpdate` (set fields become the
+  field mask), `report_workers` feeds the next heartbeat, and
+  `shutdown(drain: Duration)` keeps heartbeating while draining. A
+  STALE_GENERATION answer is retried once above the stored generation.
+- `seed_url` uses `https` when a router has no dial scheme; seeds skip
+  routers whose cluster lease expired. Routers with the same namespace and
+  name in several clusters share one derived Service and one seed URL.
+- No Go client metric list existed, so this crate defines the
+  `nvcf_gds_client_*` names and labels (crate README) for `pkg/client` to
+  mirror.
+
+Not done in ws6: Cargo commands (`cargo test`, `cargo clippy`, `cargo fmt`)
+were not run because the machine has no cargo; the Bazel equivalents above
+were. The Stargate, Pylon and Pylon Operator integration is a later
+workstream.

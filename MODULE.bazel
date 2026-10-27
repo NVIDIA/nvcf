@@ -332,6 +332,7 @@ crate.from_cargo(
     manifests = ["//src/libraries/rust/stargate:Cargo.toml"] + [
         "//src/libraries/rust/stargate/crates/%s:Cargo.toml" % c
         for c in [
+            "gds-client",
             "mock-dynamo",
             "mock-engine",
             "proto",

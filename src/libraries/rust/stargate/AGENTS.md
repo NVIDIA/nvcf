@@ -1,7 +1,7 @@
 # Stargate agent guide
 
-This guidance covers the Rust workspace, including `stargate-k8s-router` and
-the shared `stargate-forwarding` crate.
+This guidance covers the Rust workspace, including `stargate-k8s-router`, the
+shared `stargate-forwarding` crate and the `gds-client` crate.
 
 ## Assumed deployment invariants
 
@@ -30,6 +30,36 @@ cargo fmt --all -- --check
 
 For other Rust changes, select the affected workspace packages with `-p`.
 For documentation changes, check whitespace and link targets.
+
+## gds-client
+
+`crates/gds-client` is the Global Discovery Service (GDS) client: endpoint
+failover, typed calls, pool and router caches, pylon and Stargate seed URLs,
+and pool registration. See `crates/gds-client/README.md`.
+
+- Keep it dependency-light so Dynamo can adopt it: no reqwest,
+  hickory-resolver, moka or serde, and no dependency on other workspace
+  crates except the optional `stargate-proto` (feature `stargate`).
+- `crates/gds-client/proto/` is a vendored copy of
+  `src/control-plane-services/global-discovery/api/proto`. Never edit it.
+  Run `src/control-plane-services/global-discovery/hack/sync-gds-proto.sh`
+  from the repository root after a contract change; the Bazel
+  `vendored_proto_*_test` targets fail until the copies match.
+- Metric names (`nvcf_gds_client_*`) and label values are shared with the
+  Go client in the global-discovery module. Change both together.
+
+From the repository root:
+
+```sh
+bazel test //src/libraries/rust/stargate/crates/gds-client/... --test_output=errors
+```
+
+From this directory:
+
+```sh
+cargo test --locked -p gds-client --all-features
+cargo clippy --locked -p gds-client --all-features --all-targets -- -D warnings
+```
 
 ## Code style
 

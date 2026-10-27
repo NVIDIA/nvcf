@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.gds.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1;gdsv1";
+
+// ServerInfoService describes the serving replica.
+service ServerInfoService {
+  // GetServerInfo returns the replica's region, version and view epoch, and
+  // the GDS endpoints of every region from --advertise-endpoints. Clients try
+  // those endpoints after their configured URLs.
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse) {
+    option (google.api.http) = {get: "/v1/serverinfo"};
+  }
+}
+
+// ServerEndpoint is the address of the GDS service in one region.
+message ServerEndpoint {
+  string region = 1;
+  // gRPC URL, for example https://gds.us-east-1.example.internal:443.
+  string grpc_url = 2;
+  // REST URL, for example https://gds.us-east-1.example.internal.
+  string http_url = 3;
+  // True for the global entry clients should prefer.
+  bool primary = 4;
+}
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  string region = 1;
+  string version = 2;
+  // Epoch of this replica's view. Revisions from another view epoch are not
+  // resumable on this replica.
+  string view_epoch = 3;
+  repeated ServerEndpoint endpoints = 4;
+  google.protobuf.Timestamp server_time = 5;
+}

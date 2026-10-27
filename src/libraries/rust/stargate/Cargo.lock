@@ -968,6 +968,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "gds-client"
+version = "0.15.2"
+dependencies = [
+ "data-encoding",
+ "futures",
+ "http",
+ "hyper-util",
+ "prometheus",
+ "prost",
+ "prost-types",
+ "rand 0.9.3",
+ "sha2",
+ "stargate-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

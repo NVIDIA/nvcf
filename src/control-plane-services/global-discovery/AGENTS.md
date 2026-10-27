@@ -50,6 +50,9 @@ local gazelle target on purpose.
 
 - Edit `api/proto/nvidia/gds/v1/*.proto`, then run `make proto` and commit the
   regenerated `api/gen`. Never edit `api/gen` by hand.
+- Then run `hack/sync-gds-proto.sh` and commit the vendored copy in
+  `src/libraries/rust/stargate/crates/gds-client/proto`. Bazel diff tests in
+  that crate fail while the copies differ.
 - Changes are additive only: new fields, messages, enum values and RPCs.
   Never renumber, rename or remove. A breaking change needs a `v2` package.
 - `buf lint` (STANDARD) must pass. Every RPC has its own request and response
