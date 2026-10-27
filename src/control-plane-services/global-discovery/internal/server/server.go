@@ -61,6 +61,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	gdsv1 "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/api"
@@ -298,7 +299,18 @@ func (s *Server) gatewayHandler() (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial gateway loopback: %w", err)
 	}
-	mux := runtime.NewServeMux()
+	// Proto3 canonical JSON: lowerCamelCase names, enum names, unpopulated
+	// fields omitted; unknown input fields are ignored so that newer
+	// clients work against older servers.
+	mux := runtime.NewServeMux(
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
+			Marshaler: &runtime.JSONPb{
+				MarshalOptions:   protojson.MarshalOptions{EmitUnpopulated: false},
+				UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
+			},
+		}),
+		runtime.WithIncomingHeaderMatcher(gatewayHeader),
+	)
 	ctx := context.Background()
 	for _, register := range []func(context.Context, *runtime.ServeMux, *grpc.ClientConn) error{
 		gdsv1.RegisterClusterServiceHandler,
@@ -312,6 +324,17 @@ func (s *Server) gatewayHandler() (http.Handler, error) {
 		}
 	}
 	return mux, nil
+}
+
+// gatewayHeader forwards the W3C trace context and x-request-id of REST
+// requests to the gRPC call, so that the server span joins the caller's
+// trace and the access log carries the request id.
+func gatewayHeader(key string) (string, bool) {
+	switch k := strings.ToLower(key); k {
+	case "traceparent", "tracestate", "baggage", "x-request-id":
+		return k, true
+	}
+	return runtime.DefaultHeaderMatcher(key)
 }
 
 func (s *Server) adminHandler() http.Handler {

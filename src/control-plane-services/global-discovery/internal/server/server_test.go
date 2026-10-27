@@ -45,6 +45,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
@@ -174,9 +175,15 @@ func TestServeGRPCRESTAndAdmin(t *testing.T) {
 	assert.Equal(t, gds.ReasonLeaseEpochMismatch, info["reason"])
 	assert.Equal(t, gds.ErrorDomain, info["domain"])
 
-	code, body = doJSON(t, http.DefaultClient, http.MethodPost, base+"/v1/clustersets/prod/pools",
-		`{"pool":{"name":"mistral","location":{"cluster":"a"},"models":[{"modelId":"mistral"}],"frontends":[{"role":"FRONTEND_ROLE_OPENAI","url":"https://lb.example"}]}}`)
-	require.Equal(t, http.StatusOK, code, body)
+	req, err := http.NewRequest(http.MethodPost, base+"/v1/clustersets/prod/pools",
+		strings.NewReader(`{"pool":{"name":"mistral","location":{"cluster":"a"},"models":[{"modelId":"mistral"}],"frontends":[{"role":"FRONTEND_ROLE_OPENAI","url":"https://lb.example"}]}}`))
+	require.NoError(t, err)
+	req.Header.Set("X-Request-Id", "rest-1")
+	resp0, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	code = resp0.StatusCode
+	_ = resp0.Body.Close()
+	require.Equal(t, http.StatusOK, code)
 	code, body = doJSON(t, http.DefaultClient, http.MethodGet, base+"/v1/clustersets/prod/pools?model=mistral&states=POOL_STATE_REGISTERED", "")
 	require.Equal(t, http.StatusOK, code)
 	assert.Len(t, body["pools"], 1)
@@ -217,6 +224,14 @@ func TestServeGRPCRESTAndAdmin(t *testing.T) {
 		}
 		return false
 	}, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		for _, e := range r.logs.FilterMessage("finished call").All() {
+			if f := e.ContextMap(); f["grpc.method"] == "RegisterPool" && f["request_id"] == "rest-1" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the REST gateway forwards x-request-id")
 }
 
 // The REST gateway streams watches as newline-delimited JSON.
@@ -243,7 +258,8 @@ func TestRESTWatchStream(t *testing.T) {
 		require.NoError(t, json.Unmarshal(lines.Bytes(), &ev), lines.Text())
 		return ev["result"].(map[string]any)
 	}
-	assert.Equal(t, "EVENT_TYPE_SNAPSHOT_START", next()["type"])
+	start := next()
+	assert.Equal(t, map[string]any{"type": "EVENT_TYPE_SNAPSHOT_START"}, start, "unpopulated fields are omitted")
 	up := next()
 	assert.Equal(t, "EVENT_TYPE_UPSERT", up["type"])
 	assert.Equal(t, "blue", up["pool"].(map[string]any)["name"])
@@ -454,9 +470,13 @@ func TestSetupTracing(t *testing.T) {
 func TestOTelStatsHandler(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
-	prev := otel.GetTracerProvider()
+	prev, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp)
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		otel.SetTextMapPropagator(prevProp)
+	})
 
 	cfg := testConfig()
 	cfg.OTelEnabled = true
@@ -481,6 +501,25 @@ func TestOTelStatsHandler(t *testing.T) {
 		}
 		return nil
 	}
+	// A REST call joins the caller's trace.
+	gw := httptest.NewServer(r.app.Server.gateway.Handler)
+	t.Cleanup(gw.Close)
+	req, err := http.NewRequest(http.MethodGet, gw.URL+"/v1/serverinfo", nil)
+	require.NoError(t, err)
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req.Header.Set("traceparent", "00-"+traceID+"-00f067aa0ba902b7-01")
+	resp, err := gw.Client().Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Eventually(t, func() bool {
+		for _, s := range rec.Ended() {
+			if s.Name() == "nvidia.gds.v1.ServerInfoService/GetServerInfo" {
+				return s.SpanContext().TraceID().String() == traceID
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+
 	require.Eventually(t, func() bool { return attrs("nvidia.gds.v1.ClusterService/RegisterCluster") != nil }, 5*time.Second, 10*time.Millisecond)
 	a := attrs("nvidia.gds.v1.ClusterService/RegisterCluster")
 	assert.Equal(t, "prod", a["gds.clusterset"])
