@@ -50,7 +50,8 @@ public class KeysV2BulkSelectionService {
             String account, String user, String issuer, Instant cutoff) {
         var current = keysV2Dao.streamForBulk(account, USER, user, issuer, cutoff, pageSize);
         try {
-            return Stream.concat(current, selectLegacy(account, user, issuer, cutoff));
+            // Exclude migrated legacy copies before mutations can delete their v2 rows.
+            return Stream.concat(selectLegacy(account, user, issuer, cutoff), current);
         } catch (RuntimeException | Error failure) {
             current.close();
             throw failure;

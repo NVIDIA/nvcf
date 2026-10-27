@@ -32,6 +32,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nvidia.apikeys.caching.CachingKeysLoader;
+import com.nvidia.apikeys.caching.IntrospectionLocalCache;
 import com.nvidia.apikeys.config.NakProperties;
 import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
@@ -50,6 +52,7 @@ import com.nvidia.apikeys.vo.ServiceVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -65,12 +68,19 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 class SyncKeysV2OperationsServiceTest {
+
+    @Mock
+    private CachingKeysLoader keyCache;
+    @Mock
+    private IntrospectionLocalCache introspectionCache;
 
     private static final Instant CUTOFF = Instant.parse("2026-10-21T12:00:00Z");
     private static final String ISSUER = "cloud-functions";
@@ -90,7 +100,7 @@ class SyncKeysV2OperationsServiceTest {
         var legacy = new LegacyAccountTranslator(NakProperties.builder()
                 .ncaId("legacy").serviceIdMap(Map.of(ISSUER, "legacy-issuer")).build());
         lenient().when(clock.instant()).thenReturn(CUTOFF);
-        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection);
+        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection, keyCache, introspectionCache);
         lenient().when(services.getServiceById(ISSUER))
                 .thenReturn(Optional.of(ServiceVo.builder().serviceId(ISSUER).build()));
     }
@@ -236,6 +246,12 @@ class SyncKeysV2OperationsServiceTest {
         assertThat(response.getFailedCount()).isZero();
         assertThat(response.getSubmittedAt()).isEqualTo(CUTOFF);
         assertThat(response.getUpdatedAt()).isEqualTo(finishedAt);
+        if (keyCount == 0) {
+            verifyNoInteractions(keyCache, introspectionCache);
+        } else {
+            verify(keyCache).invalidate();
+            verify(introspectionCache).invalidate();
+        }
 
         var mapper = JsonUtils.getRequestResponseJsonMapper();
         var serialized = mapper.writeValueAsString(response);
@@ -248,9 +264,9 @@ class SyncKeysV2OperationsServiceTest {
     }
 
     @Test
-    void appliesCutoffAndDeduplicatesWithinExactAccountBoundary() {
+    void appliesCutoffWithinExactAccountBoundary() {
         var row = row("a", "u", "old", CUTOFF);
-        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(row, row,
+        when(selection.select("a", "u", ISSUER, CUTOFF)).thenReturn(Stream.of(row,
                 row("a", "u", "later", CUTOFF.plusMillis(1))));
         var response = service.operateAsAccountAdmin("a", accountRequest());
         assertThat(response.getCompletedCount()).isOne();
@@ -332,8 +348,13 @@ class SyncKeysV2OperationsServiceTest {
                 () -> service.operateAsAccountAdmin("a", accountRequest()));
         assertThat(failure.getStatusCode().value()).isEqualTo(409);
         assertThat(failure.getCause()).isSameAs(cause);
-        assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true)
-                .containsKey("correlationId");
+        assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true);
+        var result = failedResult(failure);
+        assertThat(result.getMatchedCount()).isEqualTo(2);
+        assertThat(result.getCompletedCount()).isOne();
+        assertThat(result.getFailedCount()).isOne();
+        verify(keyCache).invalidate();
+        verify(introspectionCache).invalidate();
         verify(keys).updateKeyStatus("a", USER, "u", ISSUER, "first", KeyStatus.REVOKED);
         verify(keys, never()).updateKeyStatus("a", USER, "u", ISSUER, "last", KeyStatus.REVOKED);
     }
@@ -348,6 +369,10 @@ class SyncKeysV2OperationsServiceTest {
                 () -> service.operateAsAccountAdmin("a",
                         accountRequest().toBuilder().operation(DELETE).build()));
         assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true);
+        var result = failedResult(failure);
+        assertThat(result.getMatchedCount()).isOne();
+        assertThat(result.getCompletedCount()).isZero();
+        assertThat(result.getFailedCount()).isOne();
     }
 
     @Test
@@ -360,7 +385,71 @@ class SyncKeysV2OperationsServiceTest {
                 () -> service.operateAsAccountAdmin("a",
                         accountRequest().toBuilder().users(List.of("u", "v")).build()));
         assertThat(failure.getBody().getProperties()).containsEntry("partialApplication", true);
+        var result = failedResult(failure);
+        assertThat(result.getMatchedCount()).isOne();
+        assertThat(result.getCompletedCount()).isOne();
+        assertThat(result.getFailedCount()).isZero();
         verify(keys).updateKeyStatus("a", USER, "u", ISSUER, "key", KeyStatus.REVOKED);
+    }
+
+    @Test
+    void selectedKeyDeletedConcurrentlyIsAlreadyComplete() {
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "deleted", CUTOFF)));
+        doThrow(new NotFoundException("Key not found")).when(keys)
+                .deleteKeyById("a", USER, "u", ISSUER, "deleted");
+
+        var result = service.operateAsAccountAdmin("a", accountRequest().toBuilder().operation(DELETE).build());
+
+        assertThat(result.getStatus()).isEqualTo(KeyOperationStatus.COMPLETED);
+        assertThat(result.getMatchedCount()).isOne();
+        assertThat(result.getCompletedCount()).isOne();
+        assertThat(result.getFailedCount()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emitsCompleteAuditOutcomeWithEscapedIdentity(boolean fail, CapturedOutput output) {
+        var request = new MockHttpServletRequest();
+        request.addHeader("NVCF-ACTOR-ID", "actor\nid");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        when(selection.select("a", "u", ISSUER, CUTOFF))
+                .thenReturn(Stream.of(row("a", "u", "key", CUTOFF)));
+        if (fail) {
+            when(keys.updateKeyStatus("a", USER, "u", ISSUER, "key", KeyStatus.REVOKED))
+                    .thenThrow(new IllegalStateException("write failed"));
+        }
+        try {
+            var result = fail
+                    ? failedResult(assertThrows(BulkOperationException.class,
+                            () -> service.operateAsAccountAdmin("a", accountRequest())))
+                    : service.operateAsAccountAdmin("a", accountRequest());
+            var prefix = "Synchronous bulk operation finished: ";
+            var events = output.getOut().lines().filter(line -> line.contains(prefix)).toList();
+            assertThat(events).hasSize(1);
+            var event = events.getFirst();
+            var mapper = JsonUtils.getRequestResponseJsonMapper();
+            var json = mapper.readTree(event.substring(event.indexOf(prefix) + prefix.length()));
+            assertThat(json.get("actor").asString()).isEqualTo("ACCOUNT_ADMIN");
+            assertThat(json.get("actorId").asString()).isEqualTo("actor\nid");
+            assertThat(json.get("accounts")).isEqualTo(mapper.valueToTree(List.of("a")));
+            assertThat(json.get("users")).isEqualTo(mapper.valueToTree(List.of("u")));
+            assertThat(json.get("issuerServices")).isEqualTo(mapper.valueToTree(List.of(ISSUER)));
+            assertThat(mapper.treeToValue(json.get("bulkOperation"), KeyOperationResponse.class)).isEqualTo(result);
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    private static KeyOperationResponse failedResult(BulkOperationException failure) {
+        var result = (KeyOperationResponse) failure.getBody().getProperties().get("bulkOperation");
+        assertThat(result.getOperationId()).isNotNull();
+        assertThat(result.getStatus()).isEqualTo(KeyOperationStatus.FAILED);
+        assertThat(result.getSubmittedAt()).isEqualTo(CUTOFF);
+        assertThat(result.getUpdatedAt()).isEqualTo(CUTOFF);
+        var mapper = JsonUtils.getRequestResponseJsonMapper();
+        assertThat(mapper.readValue(mapper.writeValueAsString(result), KeyOperationResponse.class)).isEqualTo(result);
+        return result;
     }
 
     private static AccountAdminKeysOperationRequest accountRequest() {

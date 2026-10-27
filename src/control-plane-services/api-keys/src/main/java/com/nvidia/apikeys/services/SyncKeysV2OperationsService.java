@@ -19,11 +19,14 @@ package com.nvidia.apikeys.services;
 
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 
+import com.nvidia.apikeys.caching.CachingKeysLoader;
+import com.nvidia.apikeys.caching.IntrospectionLocalCache;
 import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeyOperationResponse;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeysOperationType;
 import com.nvidia.apikeys.dto.keysV2.PlatformAdminKeysOperationRequest;
+import com.nvidia.apikeys.utils.JsonUtils;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
@@ -31,16 +34,16 @@ import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.BootResponseException;
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -52,8 +55,6 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  */
 @Slf4j
 @Service
-@ConditionalOnProperty(prefix = "local.sync-bulk-prototype", name = "enabled",
-        havingValue = "true")
 public class SyncKeysV2OperationsService {
 
     private final KeysV2Service keys;
@@ -62,12 +63,15 @@ public class SyncKeysV2OperationsService {
     private final MillisecondPrecisionClock clock;
     private final int maxSelectorValues;
     private final KeysV2BulkSelectionService selection;
+    private final CachingKeysLoader keyCache;
+    private final IntrospectionLocalCache introspectionCache;
 
     public SyncKeysV2OperationsService(
             KeysV2Service keys, ServicesService services, LegacyAccountTranslator legacyAccount,
             MillisecondPrecisionClock clock,
-            @Value("${local.sync-bulk-prototype.max-selector-values:10}") int maxSelectorValues,
-            KeysV2BulkSelectionService selection) {
+            @Value("${apikeys.bulk-max-selector-values}") int maxSelectorValues,
+            KeysV2BulkSelectionService selection, CachingKeysLoader keyCache,
+            IntrospectionLocalCache introspectionCache) {
         if (maxSelectorValues < 1) {
             throw new IllegalArgumentException("max-selector-values must be positive");
         }
@@ -77,6 +81,8 @@ public class SyncKeysV2OperationsService {
         this.clock = clock;
         this.maxSelectorValues = maxSelectorValues;
         this.selection = selection;
+        this.keyCache = keyCache;
+        this.introspectionCache = introspectionCache;
     }
 
     public KeyOperationResponse operateAsKeyOwner(
@@ -122,20 +128,16 @@ public class SyncKeysV2OperationsService {
             assertSelectedOwnerScopesActive(accounts, users.getFirst(), issuers, cutoff);
         }
         var operationId = UUID.randomUUID();
-        log.atInfo().addKeyValue("requestId", operationId).addKeyValue("actor", actor.name())
-                .addKeyValue("actorId", actorId).addKeyValue("operation", operation.name())
-                .addKeyValue("accounts", accounts).addKeyValue("users", users)
-                .addKeyValue("issuerServices", issuers)
-                .log("Synchronous bulk operation started");
-        return process(actor, operation, accounts, users, issuers, cutoff, operationId);
+        return process(actor, actorId, operation, accounts, users, issuers, cutoff, operationId);
     }
 
     private KeyOperationResponse process(
-            Actor actor, KeysOperationType operation, List<String> accounts,
+            Actor actor, String actorId, KeysOperationType operation, List<String> accounts,
             List<String> users, List<String> issuers, Instant cutoff, UUID operationId) {
-        long completed = 0;
+        var result = KeyOperationResponse.builder()
+                .operationId(operationId).operation(operation).status(KeyOperationStatus.COMPLETED)
+                .matchedCount(0L).completedCount(0L).failedCount(0L).submittedAt(cutoff).build();
         boolean mutationAttempted = false;
-        Set<KeyIdentity> seen = new HashSet<>();
         try {
             for (var account : accounts) {
                 for (var user : users) {
@@ -148,39 +150,54 @@ public class SyncKeysV2OperationsService {
                                 if (key.getCreatedAt() == null) {
                                     throw new IllegalStateException("Selected key has no creation time");
                                 }
-                                if (key.getCreatedAt().isAfter(cutoff)
-                                        || !seen.add(new KeyIdentity(key.getNcaId(), key.getOwnerId(),
-                                                key.getIssuerServiceId(), key.getKeyId()))) {
+                                if (key.getCreatedAt().isAfter(cutoff)) {
                                     continue;
                                 }
-                                if (actor == Actor.KEY_OWNER) {
-                                    assertOwnerActive(key.getNcaId(), key.getOwnerId(), key.getIssuerServiceId());
+                                result.setMatchedCount(result.getMatchedCount() + 1);
+                                try {
+                                    if (actor == Actor.KEY_OWNER) {
+                                        assertOwnerActive(key.getNcaId(), key.getOwnerId(), key.getIssuerServiceId());
+                                    }
+                                    mutationAttempted = true;
+                                    switch (operation) {
+                                        case REVOKED -> keys.updateKeyStatus(
+                                                key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
+                                                key.getKeyId(), KeyStatus.REVOKED);
+                                        case DELETE -> deleteSelectedKey(key);
+                                    }
+                                    result.setCompletedCount(result.getCompletedCount() + 1);
+                                } catch (RuntimeException failure) {
+                                    result.setFailedCount(result.getFailedCount() + 1);
+                                    throw failure;
                                 }
-                                mutationAttempted = true;
-                                switch (operation) {
-                                    case REVOKED -> keys.updateKeyStatus(
-                                            key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
-                                            key.getKeyId(), KeyStatus.REVOKED);
-                                    case DELETE -> keys.deleteKeyById(
-                                            key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
-                                            key.getKeyId());
-                                }
-                                completed++;
                             }
                         }
                     }
                 }
             }
         } catch (RuntimeException failure) {
-            throw new BulkOperationException(operationId.toString(), mutationAttempted, failure);
+            result.setStatus(KeyOperationStatus.FAILED);
+            throw new BulkOperationException(result, mutationAttempted, failure);
+        } finally {
+            if (mutationAttempted) {
+                keyCache.invalidate();
+                introspectionCache.invalidate();
+            }
+            result.setUpdatedAt(clock.instant());
+            log.info("Synchronous bulk operation finished: {}", JsonUtils.getRequestResponseJsonMapper()
+                    .writeValueAsString(Map.of("actor", actor.name(), "actorId", actorId,
+                            "accounts", accounts, "users", users, "issuerServices", issuers,
+                            "bulkOperation", result)));
         }
-        log.atInfo().addKeyValue("requestId", operationId)
-                .addKeyValue("actor", actor.name()).addKeyValue("operation", operation.name())
-                .addKeyValue("completedCount", completed).log("Synchronous bulk operation completed");
-        return KeyOperationResponse.builder()
-                .operationId(operationId).operation(operation).status(KeyOperationStatus.COMPLETED)
-                .matchedCount(completed).completedCount(completed).failedCount(0L)
-                .submittedAt(cutoff).updatedAt(clock.instant()).build();
+        return result;
+    }
+
+    private void deleteSelectedKey(KeysByOwnerAndAccountAndServiceVo key) {
+        try {
+            keys.deleteKeyById(key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId());
+        } catch (NotFoundException ignored) {
+            // A key deleted after selection already satisfies this operation.
+        }
     }
 
     private Stream<KeysByOwnerAndAccountAndServiceVo> select(
@@ -310,18 +327,15 @@ public class SyncKeysV2OperationsService {
         KEY_OWNER, ACCOUNT_ADMIN, PLATFORM_ADMIN
     }
 
-    private record KeyIdentity(String account, String user, String issuer, String keyId) {
-    }
-
     public static final class BulkOperationException extends BootResponseException {
 
-        public BulkOperationException(String correlationId, boolean mutationAttempted, RuntimeException cause) {
+        public BulkOperationException(KeyOperationResponse result, boolean mutationAttempted, RuntimeException cause) {
             super(statusFor(cause), mutationAttempted
                     ? "Bulk operation stopped. Some keys may have changed; reconcile state before retrying."
                     : "Bulk operation stopped before any key mutation was attempted.",
                     cause, BulkOperationException.class);
             getBody().setProperty("partialApplication", mutationAttempted);
-            getBody().setProperty("correlationId", correlationId);
+            getBody().setProperty("bulkOperation", result);
         }
 
         private static HttpStatus statusFor(RuntimeException cause) {

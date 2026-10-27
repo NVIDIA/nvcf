@@ -59,6 +59,7 @@ public class NakProperties {
     private String dataDomainKey;
     @NotNull
     private Duration keepAfterExpiredDuration;
+    private int bulkMaxSelectorValues;
 
     @NotNull
     @Valid

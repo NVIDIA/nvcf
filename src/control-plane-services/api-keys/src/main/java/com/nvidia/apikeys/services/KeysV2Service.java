@@ -49,6 +49,7 @@ import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.TooManyRequestsException;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -153,22 +154,33 @@ public class KeysV2Service {
     }
 
     /**
-     * Sets ACTIVE, SUSPENDED, or REVOKED. EXPIRED and REVOKED keys keep their status.
+     * Sets ACTIVE, SUSPENDED, or REVOKED. Revocation also denies retained expired keys and
+     * existing legacy copies, and rewrites both stored rows on retry.
      */
     public KeyV2Vo updateKeyStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId, KeyStatus status) {
         var stored = load(ncaId, ownerType, ownerId, issuerServiceId, keyId);
         var key = stored.key();
-        if (key.getKeyStatus() == status) {
+        assertKeyScope(key, ncaId, ownerType, ownerId, issuerServiceId, keyId);
+        if (key.getKeyStatus() == status && status != KeyStatus.REVOKED) {
             return key;
         }
-        if (FINAL_KEY_STATUSES.contains(key.getKeyStatus())) {
+        if (FINAL_KEY_STATUSES.contains(key.getKeyStatus()) && status != KeyStatus.REVOKED) {
             throw new ConflictException(MESG_KEY_STATUS_FINAL.formatted(key.getKeyStatus()));
         }
 
+        var legacyCopy = status == KeyStatus.REVOKED && !stored.legacy()
+                ? findLegacyKeyRow(ncaId, ownerType, ownerId, issuerServiceId, keyId)
+                        .map(row -> keysDao.getKeyByHash(row.getKeyHash())
+                                .orElseThrow(() -> new NotFoundException(MESG_KEY_NOT_FOUND)))
+                        .map(legacyAccount::fromLegacy)
+                : Optional.<KeyV2Vo>empty();
+        legacyCopy.ifPresent(copy -> assertKeyScope(copy, ncaId, ownerType, ownerId, issuerServiceId, keyId));
+
         var updated = key.toBuilder().keyStatus(status).build();
         save(stored, updated);
+        legacyCopy.ifPresent(copy -> save(new StoredKey(copy, true), copy.toBuilder().keyStatus(status).build()));
         recordKeyAction(updated, switch (status) {
             case SUSPENDED -> SUSPEND;
             case REVOKED -> REVOKE;
@@ -207,6 +219,12 @@ public class KeysV2Service {
         if (v2Key.isEmpty() && legacyKey.isEmpty()) {
             throw new NotFoundException(MESG_KEY_NOT_FOUND);
         }
+
+        v2Key.flatMap(row -> keysV2Dao.getKeyByHash(row.getKeyHash()))
+                .ifPresent(key -> assertKeyScope(key, ncaId, ownerType, ownerId, issuerServiceId, keyId));
+        legacyKey.flatMap(row -> keysDao.getKeyByHash(row.getKeyHash()))
+                .map(legacyAccount::fromLegacy)
+                .ifPresent(key -> assertKeyScope(key, ncaId, ownerType, ownerId, issuerServiceId, keyId));
 
         v2Key.ifPresent(keysV2Dao::delete);
         legacyKey.ifPresent(keysDao::deleteKey);
@@ -305,6 +323,17 @@ public class KeysV2Service {
             keysDao.save(legacyAccount.toLegacy(updated), owner);
         } else {
             keysV2Dao.save(updated);
+        }
+    }
+
+    private static void assertKeyScope(
+            KeyV2Vo key, String ncaId, KeyOwnerType ownerType, String ownerId,
+            String issuerServiceId, String keyId) {
+        if (!Objects.equals(key.getNcaId(), ncaId) || key.getOwnerType() != ownerType
+                || !Objects.equals(key.getOwnerId(), ownerId)
+                || !Objects.equals(key.getIssuerServiceId(), issuerServiceId)
+                || !Objects.equals(key.getKeyId(), keyId)) {
+            throw new BadRequestException("Key does not match the requested scope");
         }
     }
 

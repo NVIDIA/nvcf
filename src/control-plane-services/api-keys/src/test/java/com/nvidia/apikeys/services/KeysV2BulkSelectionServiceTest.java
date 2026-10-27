@@ -85,7 +85,7 @@ class KeysV2BulkSelectionServiceTest {
                 .thenReturn(Optional.empty());
         try (var selected = service.select(null, null, null, CUTOFF)) {
             assertThat(selected).extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
-                    .containsExactly("current", "migrated", "legacy-only");
+                    .containsExactly("legacy-only", "current", "migrated");
         }
     }
 

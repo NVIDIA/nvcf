@@ -26,6 +26,8 @@ import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nvidia.apikeys.App;
+import com.nvidia.apikeys.caching.CachingKeysLoader;
+import com.nvidia.apikeys.caching.IntrospectionLocalCache;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
 import com.nvidia.apikeys.dto.keysV2.KeysOperationType;
@@ -59,6 +61,11 @@ import org.springframework.test.context.ContextConfiguration;
         properties = "spring.profiles.active=integrationtest")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class KeysV2BulkSelectionIntegrationTest {
+
+    @Autowired
+    private CachingKeysLoader keyCache;
+    @Autowired
+    private IntrospectionLocalCache introspectionCache;
 
     private static final String LEGACY_ACCOUNT = "test-nca-id";
     private static final int PAGE_SIZE = 2;
@@ -142,7 +149,8 @@ class KeysV2BulkSelectionIntegrationTest {
         keysDao.save(KEY_VO_1.toBuilder().ownerId("u1").keyId("legacy-later")
                 .keyHash("legacy-later-hash").createdAt(TEST_TIME.plusMillis(1)).build(), owner);
         var bulk = new SyncKeysV2OperationsService(keys, services, legacyAccount,
-                new MillisecondPrecisionClock(Clock.fixed(TEST_TIME, ZoneOffset.UTC)), 10, selector());
+                new MillisecondPrecisionClock(Clock.fixed(TEST_TIME, ZoneOffset.UTC)), 10, selector(),
+                keyCache, introspectionCache);
 
         var response = bulk.operateAsPlatformAdmin(PlatformAdminKeysOperationRequest.builder()
                 .operation(operation).accounts(List.of("*")).users(List.of("*"))

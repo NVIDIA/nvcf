@@ -18,6 +18,7 @@
 package com.nvidia.apikeys.services;
 
 import static com.nvidia.apikeys.TestData.API_KEY_HASH_1;
+import static com.nvidia.apikeys.TestData.INTROSPECTION_REQUEST_1;
 import static com.nvidia.apikeys.TestData.KEY_AUTHZ_2;
 import static com.nvidia.apikeys.TestData.KEY_ID_1;
 import static com.nvidia.apikeys.TestData.KEY_ID_2;
@@ -34,6 +35,7 @@ import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.nvidia.apikeys.App;
+import com.nvidia.apikeys.caching.CachingKeysLoader;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
 import com.nvidia.apikeys.persistance.dao.KeysDao;
@@ -44,6 +46,7 @@ import com.nvidia.apikeys.persistance.models.KeyV2Model;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.utils.TestClock;
+import com.nvidia.apikeys.validators.IntrospectionValidator;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
@@ -60,6 +63,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -105,6 +110,12 @@ class KeysV2ServiceIntegrationTest {
 
     @Autowired
     private RowUpdateLockDao rowUpdateLockDao;
+
+    @Autowired
+    private CachingKeysLoader cachingKeysLoader;
+
+    @Autowired
+    private IntrospectionValidator introspectionValidator;
 
     @BeforeEach
     void setUp() {
@@ -285,21 +296,19 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void updateKeyStatusOfMigratedKeyWritesKeysV2Only() {
+    void revokingMigratedKeyDeniesLegacyIntrospection() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysV2Dao.save(LEGACY_KEY_V2);
 
         service.updateKeyStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
                              KeyStatus.REVOKED);
 
-        assertThat(keysV2Dao.getKeyByHash(API_KEY_HASH_1))
-                .get()
-                .extracting(KeyV2Vo::getKeyStatus)
-                .isEqualTo(KeyStatus.REVOKED);
-        assertThat(keysDao.getKeyByHash(API_KEY_HASH_1))
-                .get()
-                .extracting(KeyVo::getKeyStatus)
-                .isEqualTo(KeyStatus.ACTIVE);
+        assertRevokedCopies(false, LEGACY_KEY_V2);
+        assertRevokedCopies(true, LEGACY_KEY_V2);
+        cachingKeysLoader.invalidate();
+        assertThrowsExceptionWithDetails(NotFoundException.class,
+                () -> introspectionValidator.validate(INTROSPECTION_REQUEST_1, API_KEY_HASH_1),
+                "Key not found");
     }
 
     @Test
@@ -317,6 +326,68 @@ class KeysV2ServiceIntegrationTest {
                 .get()
                 .extracting(KeyV2Vo::getKeyStatus)
                 .isEqualTo(KeyStatus.REVOKED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void revokeExpiredKeyUpdatesBothStoredCopies(boolean legacy) {
+        var expiredAt = TEST_TIME.minusSeconds(1);
+        var key = (legacy ? LEGACY_KEY_V2 : KEY_V2_VO_1).toBuilder().expiresAt(expiredAt).build();
+        if (legacy) {
+            keysDao.save(KEY_VO_1.toBuilder().expiresAt(expiredAt).build(), KEY_OWNER_VO_1);
+        } else {
+            keysV2Dao.save(key);
+        }
+        assertThat(service.getKeyById(key.getNcaId(), USER, key.getOwnerId(),
+                key.getIssuerServiceId(), key.getKeyId())).get()
+                .extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.EXPIRED);
+
+        service.updateKeyStatus(key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
+                key.getKeyId(), KeyStatus.REVOKED);
+
+        assertRevokedCopies(legacy, key);
+        assertThat(service.getKeyByHash(key.getKeyHash())).get()
+                .extracting(KeyV2Vo::getExpiresAt).isEqualTo(expiredAt);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void repeatedRevocationRepairsStaleManagementStatus(boolean legacy) {
+        var key = (legacy ? LEGACY_KEY_V2 : KEY_V2_VO_1).toBuilder()
+                .keyStatus(KeyStatus.REVOKED).build();
+        if (legacy) {
+            keysDao.save(KEY_VO_1.toBuilder().keyStatus(KeyStatus.REVOKED).build(), KEY_OWNER_VO_1);
+            IntegrationTestConfiguration.CQL_SESSION.execute(
+                    "UPDATE " + KEY_SPACE + ".keys_by_owner_and_service SET key_status = 'ACTIVE'"
+                            + " WHERE owner_type = 'USER' AND owner_id = ? AND issuer_service_id = ? AND key_id = ?",
+                    key.getOwnerId(), SERVICE_ID_1, key.getKeyId());
+        } else {
+            keysV2Dao.save(key);
+            IntegrationTestConfiguration.CQL_SESSION.execute(
+                    "UPDATE " + KEY_SPACE + ".keys_by_owner_and_account_and_service SET key_status = 'ACTIVE'"
+                            + " WHERE nca_id = ? AND owner_type = 'USER' AND owner_id = ?"
+                            + " AND issuer_service_id = ? AND key_id = ?",
+                    key.getNcaId(), key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId());
+        }
+
+        service.updateKeyStatus(key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(),
+                key.getKeyId(), KeyStatus.REVOKED);
+
+        assertRevokedCopies(legacy, key);
+    }
+
+    private void assertRevokedCopies(boolean legacy, KeyV2Vo key) {
+        if (legacy) {
+            assertThat(keysDao.getKeyByHash(key.getKeyHash())).get()
+                    .extracting(KeyVo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+            assertThat(keysDao.getKeyByOwnerAndServiceAndId(USER, key.getOwnerId(), SERVICE_ID_1, key.getKeyId()))
+                    .get().extracting(row -> row.getKeyStatus()).isEqualTo(KeyStatus.REVOKED);
+        } else {
+            assertThat(keysV2Dao.getKeyByHash(key.getKeyHash())).get()
+                    .extracting(KeyV2Vo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+            assertThat(keysV2Dao.get(key.getNcaId(), USER, key.getOwnerId(), key.getIssuerServiceId(), key.getKeyId()))
+                    .get().extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus).isEqualTo(KeyStatus.REVOKED);
+        }
     }
 
     @Test
@@ -535,9 +606,10 @@ class KeysV2ServiceIntegrationTest {
     }
 
     private static void deleteLock(String table) {
+        // Use the same conditional-write timestamps as lock acquisition.
         IntegrationTestConfiguration.CQL_SESSION.execute(
                 "DELETE FROM " + KEY_SPACE + ".row_update_lock"
-                        + " WHERE table_name = ? AND record_key = ?",
+                        + " WHERE table_name = ? AND record_key = ? IF EXISTS",
                 table, KeysService.UPDATE_LOCK_KEY_PREFIX + API_KEY_HASH_1);
     }
 }

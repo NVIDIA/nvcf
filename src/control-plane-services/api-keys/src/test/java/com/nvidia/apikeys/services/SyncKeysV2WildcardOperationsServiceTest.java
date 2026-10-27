@@ -31,6 +31,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nvidia.apikeys.caching.CachingKeysLoader;
+import com.nvidia.apikeys.caching.IntrospectionLocalCache;
 import com.nvidia.apikeys.config.NakProperties;
 import com.nvidia.apikeys.dto.keysV2.AccountAdminKeysOperationRequest;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerKeysOperationRequest;
@@ -71,6 +73,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class SyncKeysV2WildcardOperationsServiceTest {
 
+    @Mock
+    private CachingKeysLoader keyCache;
+    @Mock
+    private IntrospectionLocalCache introspectionCache;
+
     private static final Instant CUTOFF = Instant.parse("2026-10-26T12:00:00Z");
     private static final List<String> ALL = List.of("*");
     private static final List<String> ACCOUNTS = List.of("a1", "a2");
@@ -88,7 +95,7 @@ class SyncKeysV2WildcardOperationsServiceTest {
         var legacy = new LegacyAccountTranslator(NakProperties.builder()
                 .ncaId("legacy").serviceIdMap(Map.of("s1", "legacy-s1")).build());
         var clock = new MillisecondPrecisionClock(Clock.fixed(CUTOFF, ZoneOffset.UTC));
-        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection);
+        service = new SyncKeysV2OperationsService(keys, services, legacy, clock, 10, selection, keyCache, introspectionCache);
         lenient().when(services.getServiceById(anyString())).thenAnswer(call ->
                 Optional.of(ServiceVo.builder().serviceId(call.getArgument(0)).build()));
         lenient().doAnswer(call -> {

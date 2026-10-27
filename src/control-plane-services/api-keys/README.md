@@ -3,6 +3,34 @@
 NVIDIA API Keys service manages the lifecycle of API keys (issue,
 authenticate, introspect, rotate, revoke).
 
+## Synchronous bulk operations
+
+The trusted management boundary submits `PUT` requests to:
+
+- `/v2/api-keys/key-owner/users/{userId}/key-operations`
+- `/v2/api-keys/account-admin/accounts/{ncaId}/key-operations`
+- `/v2/api-keys/platform-admin/key-operations`
+
+Set `operation` to `REVOKED` or `DELETE`. Each dimension not fixed by the route
+requires an `accounts`, `users`, or `issuerServices` array of distinct IDs or
+the singleton `["*"]`. Platform requests selecting all three wildcards also
+require `confirm_platform_wide: true`. Configure the array limit with
+`apikeys.bulk-max-selector-values` (default 10).
+
+HTTP 200 returns `KeyOperationResponse` after processing finishes. Selection
+uses the submission time as its creation cutoff. Processing stops on failure,
+and problem details include `bulkOperation` with `FAILED` status and counts
+for keys visited so far. `partialApplication` indicates that a mutation was
+attempted. Earlier writes remain applied. Retries start a new selection with
+a new cutoff.
+
+Bulk mutations clear this instance's key and introspection caches before the
+response, including after partial failure. Other replicas expire cached key
+rows after 60 seconds and cached introspection responses after 60 seconds.
+These layers can retain a successful decision for up to 120 seconds after a
+mutation, plus in-flight request time. Existing caller-side HTTP caching can
+add another 360 seconds for introspection or 60 seconds for evaluation.
+
 ## Minimum Requirements
 
 - [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)

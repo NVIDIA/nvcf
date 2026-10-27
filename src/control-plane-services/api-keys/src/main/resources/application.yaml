@@ -164,6 +164,7 @@ springdoc:
   packages-to-scan: "com.nvidia.apikeys"
 
 apikeys:
+  bulk-max-selector-values: 10
   jwks:
     private-jwks: ${kv.private-key-jwks.keys}
     jwe-key-mapping:
