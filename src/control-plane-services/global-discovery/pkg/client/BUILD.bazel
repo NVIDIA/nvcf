@@ -18,6 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "client",
     srcs = [
+        "cache.go",
         "client.go",
         "config.go",
         "conntrack.go",
@@ -25,7 +26,9 @@ go_library(
         "errors.go",
         "generation.go",
         "metrics.go",
+        "poolcache.go",
         "resolver.go",
+        "routercache.go",
         "subclients.go",
         "watch.go",
     ],
@@ -58,6 +61,7 @@ alias(
 go_test(
     name = "client_test",
     srcs = [
+        "cache_test.go",
         "client_test.go",
         "config_test.go",
         "generation_test.go",
