@@ -71,7 +71,14 @@
             "enabled": { "type": "boolean" },
             "serviceName": { "type": "string", "minLength": 1 },
             "namespace": { "type": "string" },
-            "port": { "$ref": "#/definitions/port" }
+            "port": { "$ref": "#/definitions/port" },
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
           }
         },
         "tls": {

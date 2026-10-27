@@ -117,10 +117,12 @@ spec:
             - name: config
               mountPath: /etc/envoy/config
               readOnly: true
-            {{- if $c.grpcProxy.enabled }}
+            {{- if include "workerCallbackProxy.frontendTls" . }}
             - name: frontend-tls
               mountPath: /etc/envoy/tls/frontend
               readOnly: true
+            {{- end }}
+            {{- if $c.grpcProxy.enabled }}
             - name: grpc-proxy-ca
               mountPath: /etc/envoy/tls/grpc-proxy-ca
               readOnly: true
@@ -129,7 +131,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "workerCallbackProxy.fullname" . }}-config
-        {{- if $c.grpcProxy.enabled }}
+        {{- if include "workerCallbackProxy.frontendTls" . }}
         - name: frontend-tls
           secret:
             secretName: {{ include "workerCallbackProxy.frontendSecretName" . | quote }}
@@ -138,6 +140,8 @@ spec:
                 path: tls.crt
               - key: tls.key
                 path: tls.key
+        {{- end }}
+        {{- if $c.grpcProxy.enabled }}
         - name: grpc-proxy-ca
           secret:
             secretName: {{ $c.grpcProxy.caSecret.name | quote }}

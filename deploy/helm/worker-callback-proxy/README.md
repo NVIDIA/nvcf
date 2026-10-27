@@ -17,7 +17,7 @@ source in `src/`; the Envoy configuration is rendered by the chart.
 | Port | Protocol | Purpose |
 | --- | --- | --- |
 | 10443 | UDP, HTTP/3 | grpc-proxy worker tunnels. TLS for `*.<workerDomain>` terminates here and is re-encrypted to the grpc-proxy pod on its HTTP/3 port. |
-| 10084 | TCP, HTTP/1 | invocation-service worker tunnels. CONNECT and forward-proxy requests, allowed only to `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`. |
+| 10084 | TCP, HTTP/1 over TLS | invocation-service worker tunnels. CONNECT and forward-proxy requests, allowed only to `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`. TLS for `*.<workerDomain>` unless `invocation.tls.enabled` is false. |
 | 8081 | TCP | Probe listener. Serves only `/ready`; not exposed by any Service. |
 | 9902 | TCP | Metrics listener. Serves only `/stats/prometheus`, through the `<fullname>-metrics` ClusterIP Service. |
 | 9901 | TCP | Envoy admin, on `127.0.0.1` only. Not configurable. |
@@ -36,6 +36,19 @@ same namespace: Secret `grpc-proxy-worker-tls`, key `ca.crt`, and SAN
 Envoy reads the CA through file-based SDS and watches the mounted Secret
 directory, so a rotated CA is applied without a restart.
 
+## invocation-service TLS
+
+An invocation callback has two TLS layers. The worker opens TLS to Envoy on
+10084 with the `*.<workerDomain>` frontend certificate, so the CONNECT request
+and its target are encrypted. Inside the tunnel the worker runs a second TLS
+session to the invocation-service pod on `invocation.port`, 8443 by default,
+which is the pod's worker TLS listener (`invocation.workerTls` in the
+http-invocation chart). Envoy does not terminate that inner session.
+
+Workers use `https://<name>.<workerDomain>:10084` as the proxy address and must
+trust the CA that issued both certificates. Set `invocation.tls.enabled: false`
+and `invocation.port: 8080` only for a plaintext test setup.
+
 ## Destination trust boundary
 
 Envoy checks the identity of the upstream, not its address. On the grpc-proxy
@@ -46,7 +59,8 @@ grpc-proxy certificate, so callback data never reaches another host, but
 Envoy still starts a QUIC handshake with any IP a caller names. The
 invocation path only accepts
 `<dashed-pod-ip>.<serviceName>.<namespace>.svc.<clusterDomain>:<port>`,
-resolved through cluster DNS, and has no upstream TLS yet.
+resolved through cluster DNS. The worker's inner TLS session checks the pod
+certificate, not Envoy.
 
 Where the cluster's CNI enforces NetworkPolicy, add an egress policy that
 limits the proxy to the backend pods and callback ports, plus cluster DNS.
@@ -84,7 +98,7 @@ spec:
               app.kubernetes.io/name: helm-nvcf-invocation-service
               app.kubernetes.io/instance: invocation-service
       ports:
-        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
     # Cluster DNS, for the invocation hostnames
     - to:
         - namespaceSelector:

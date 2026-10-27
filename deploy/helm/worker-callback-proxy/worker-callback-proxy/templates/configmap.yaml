@@ -24,7 +24,7 @@ metadata:
 data:
   envoy.yaml: |
     {{- include "workerCallbackProxy.envoyConfig" . | nindent 4 }}
-  {{- if $c.grpcProxy.enabled }}
+  {{- if include "workerCallbackProxy.frontendTls" . }}
   sds_frontend.yaml: |
     resources:
       - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
@@ -33,6 +33,8 @@ data:
           certificate_chain: { filename: /etc/envoy/tls/frontend/tls.crt }
           private_key: { filename: /etc/envoy/tls/frontend/tls.key }
           watched_directory: { path: /etc/envoy/tls/frontend }
+  {{- end }}
+  {{- if $c.grpcProxy.enabled }}
   sds_grpc_proxy_ca.yaml: |
     resources:
       - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
