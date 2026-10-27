@@ -1,0 +1,235 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Values marked required have no default and fail the render when empty.
+# Every controller flag is documented in
+# src/control-plane-services/global-discovery/docs/mcs-controller.md.
+
+# gds-mcs-controller image. repository is required. tag defaults to the chart
+# appVersion; a value starting with sha256: is used as a digest.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Image pull Secrets of the controller pods, as {name: <Secret>} entries.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Controller replicas. Only the elected leader talks to GDS and applies
+# imports; the others take over within a few seconds when it goes away. More
+# than one replica needs leaderElection.enabled.
+replicaCount: 2
+
+gds:
+  # GDS gRPC URLs in failover order, the global name first, for example
+  # https://gds.prod.internal. All use one scheme. Required. Passed as one
+  # --gds-url per entry.
+  urls: []
+  # Existing ConfigMap in the release namespace whose ca.crt key holds the CA
+  # bundle that signs the GDS server certificate. Mounted at /etc/gds/ca and
+  # passed as --gds-tls-ca-file. Empty trusts the system roots.
+  tlsCaConfigMap: ""
+  # Permit plaintext http:// URLs. Development only. Passed as
+  # --gds-allow-insecure-http.
+  allowInsecureHttp: false
+
+clusterset:
+  # Clusterset id, a DNS label shared by every cluster of the clusterset.
+  # Required with identity.source flags. Passed as --clusterset-id.
+  id: ""
+
+cluster:
+  # This cluster's id, a DNS label unique in the clusterset. It must equal the
+  # LLM stack clusterId of the cluster. Required with identity.source flags.
+  # Passed as --cluster-id.
+  id: ""
+  # Region of the registration. Empty uses the most common
+  # topology.kubernetes.io/region node label. Passed as --region.
+  region: ""
+  # Labels of the cluster registration. Passed as --cluster-labels.
+  labels: {}
+
+identity:
+  # Where the clusterset and cluster ids come from. Passed as
+  # --cluster-identity-source.
+  #   flags           - clusterset.id and cluster.id, both required.
+  #   auto            - each id from its value when set, else from the
+  #                     ClusterProperty clusterset.k8s.io or
+  #                     cluster.clusterset.k8s.io.
+  #   clusterproperty - the ClusterProperty objects, which must exist; ids
+  #                     set here must agree with them.
+  source: flags
+  # Publish the resolved ids as ClusterProperty objects for other MCS tools.
+  # Grants create, update and patch on clusterproperties. Passed as
+  # --write-cluster-properties.
+  writeClusterProperties: false
+
+lease:
+  # Cluster lease TTL requested from GDS, 10s to 5m. Heartbeats run every
+  # TTL/3. Passed as --lease-ttl.
+  ttl: 30s
+
+# Deregister the cluster from GDS when the controller stops, which deletes
+# every export of the cluster in GDS. Leave it off: a restart or an upgrade
+# would otherwise withdraw the cluster's Services from every other cluster.
+# Passed as --deregister-on-shutdown.
+deregisterOnShutdown: false
+
+imports:
+  # Create the namespace of an import that has none instead of holding the
+  # import pending. Grants create on namespaces. Passed as
+  # --create-namespaces.
+  createNamespaces: false
+  # Take over ServiceImports another MCS implementation created. Passed as
+  # --adopt-unmanaged-imports.
+  adoptUnmanaged: false
+
+pools:
+  # Create ServiceExports for the services[] of the pools registered through
+  # the GDS Pool API for this cluster. Passed as --auto-export-pools.
+  autoExport: true
+
+# Namespaces exported from and imported into. Empty means all namespaces.
+# Passed as a comma-separated --watch-namespaces.
+watchNamespaces: []
+
+# Endpoints per imported EndpointSlice, 1 to 1000. Passed as
+# --endpoints-per-slice.
+endpointsPerSlice: 100
+
+# Workers of each controller. Passed as --max-concurrent-reconciles.
+maxConcurrentReconciles: 4
+
+leaderElection:
+  # Passed as --leader-elect. The chart creates a Role for the Lease
+  # gds-mcs-controller.gds.nvidia.com in the release namespace. When disabled,
+  # replicaCount must be 1 and the Deployment uses the Recreate strategy, so
+  # two controllers never write to GDS at once.
+  enabled: true
+
+crds:
+  # Render the ServiceExport, ServiceImport (multicluster.x-k8s.io) and
+  # ClusterProperty (about.k8s.io) CRDs. They carry
+  # helm.sh/resource-policy: keep, so turning this off or uninstalling leaves
+  # them and every ServiceExport and ServiceImport in place. Set false when
+  # another MCS implementation or a platform installs them.
+  install: true
+
+otel:
+  # OpenTelemetry tracing over OTLP/gRPC. Passed as --otel-enabled.
+  enabled: false
+  # OTEL_EXPORTER_OTLP_ENDPOINT, for example http://otel-collector:4317.
+  # Empty uses the SDK default (localhost:4317).
+  endpoint: ""
+  # Extra OTEL_RESOURCE_ATTRIBUTES entries. The chart always adds
+  # k8s.pod.name and k8s.namespace.name.
+  resourceAttributes: {}
+
+# Controller log level, passed as --zap-log-level: debug, info or error.
+logLevel: info
+
+# Additional controller arguments, appended after the chart's arguments. A
+# flag given twice takes its last value.
+extraArgs: []
+# Additional container environment variables, as Kubernetes EnvVar objects.
+extraEnv: []
+
+serviceAccount:
+  # Create the controller ServiceAccount. The controller calls the API
+  # server, so its token is mounted.
+  create: true
+  # Name of the ServiceAccount. Defaults to the release full name.
+  name: ""
+  annotations: {}
+
+metrics:
+  # Port of /metrics and of the metrics Service. Passed as
+  # --metrics-bind-address.
+  port: 8080
+  serviceMonitor:
+    # Prometheus Operator ServiceMonitor scraping /metrics.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Extra labels, for example the selector label of your Prometheus.
+    labels: {}
+
+healthProbe:
+  # Port of /healthz and /readyz. Passed as --health-probe-bind-address.
+  port: 8081
+
+probes:
+  # /readyz: connected to GDS once and, on the leader, the cluster lease is
+  # registered.
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  # /healthz: a ping.
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+podDisruptionBudget:
+  # Rendered only with more than one replica: with one replica it would
+  # block node drains.
+  enabled: true
+  # Set exactly one of minAvailable or maxUnavailable.
+  minAvailable: 1
+  maxUnavailable: ""
+
+# Time the controller has to release the leader Lease and, with
+# deregisterOnShutdown, deregister from GDS.
+terminationGracePeriodSeconds: 30
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  # The distroless base image runs as the non-numeric user nvs (uid 1000).
+  # runAsNonRoot needs a numeric uid to verify.
+  runAsUser: 1000
+  runAsGroup: 1000
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+# Replicas prefer separate nodes when affinity is empty; set it to replace
+# that preference.
+affinity: {}

@@ -17,14 +17,21 @@
 # End-to-end test of the Global Discovery Service on local k3d clusters. See
 # README.md for prerequisites, settings and the assertions of each phase.
 #
-# Phase 1: one cluster, gds-server from the chart with the memory store and one
-# replica, driven over REST through a port-forward.
+# Phase 1: one cluster (the hub), gds-server from the chart with the memory
+# store and one replica, driven over REST through a port-forward.
+# Phase 2: the hub plus clusters a and b on one Docker network, with distinct
+# pod and service CIDRs and static routes between the node containers, and
+# gds-mcs-controller from its chart in a and b: export, import, pools, a
+# controller restart and unexport.
+# Phase 3: Stargate (llm-request-router chart) exporting itself from a, and a
+# Pylon in b that finds it only through GDS and registers with it.
 #
 # The script is compatible with bash 3.2 (the macOS default). It talks to its
-# clusters through its own kubeconfig file in the work directory, so it never
+# clusters through its own kubeconfig files in the work directory, so it never
 # reads, writes or switches the default kubeconfig or its current context. It
-# only creates k3d clusters whose names start with gds-e2e, records them in
-# the work directory, and with E2E_CLEANUP=1 deletes only the recorded ones.
+# only creates k3d clusters and Docker networks whose names start with
+# gds-e2e, records them in the work directory, and with E2E_CLEANUP=1 deletes
+# only the recorded ones.
 
 set -euo pipefail
 
@@ -32,29 +39,55 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 MANIFESTS="${SCRIPT_DIR}/manifests"
 
-# Phases to run, separated by spaces or commas. Only phase 1 exists so far;
-# phase 2 (three clusters with the MCS controller) adds run_phase_2.
-E2E_PHASES="${E2E_PHASES:-1}"
+# Phases to run, separated by spaces or commas.
+E2E_PHASES="${E2E_PHASES:-1 2 3}"
+# The hub cluster: gds-server for every phase. Phases 2 and 3 add
+# <E2E_CLUSTER>-a and <E2E_CLUSTER>-b on the Docker network <E2E_CLUSTER>-net.
 E2E_CLUSTER="${E2E_CLUSTER:-gds-e2e}"
+E2E_CLUSTER_A="${E2E_CLUSTER_A:-${E2E_CLUSTER}-a}"
+E2E_CLUSTER_B="${E2E_CLUSTER_B:-${E2E_CLUSTER}-b}"
+E2E_NETWORK="${E2E_NETWORK:-${E2E_CLUSTER}-net}"
 E2E_CREATE_CLUSTERS="${E2E_CREATE_CLUSTERS:-1}"
+E2E_CROSS_CLUSTER_ROUTES="${E2E_CROSS_CLUSTER_ROUTES:-1}"
 E2E_CLEANUP="${E2E_CLEANUP:-0}"
 E2E_CLEANUP_ONLY="${E2E_CLEANUP_ONLY:-0}"
 E2E_DEPLOY_ONLY="${E2E_DEPLOY_ONLY:-0}"
 E2E_DRY_RUN="${E2E_DRY_RUN:-0}"
+E2E_BUILD_ONLY="${E2E_BUILD_ONLY:-0}"
 E2E_SKIP_BUILD="${E2E_SKIP_BUILD:-0}"
 E2E_TIMEOUT="${E2E_TIMEOUT:-60}"
 E2E_HELM_TIMEOUT="${E2E_HELM_TIMEOUT:-5m}"
 E2E_NAMESPACE="${E2E_NAMESPACE:-global-discovery}"
+E2E_CONTROLLER_NAMESPACE="${E2E_CONTROLLER_NAMESPACE:-gds-system}"
+E2E_DEMO_NAMESPACE="${E2E_DEMO_NAMESPACE:-gds-e2e-demo}"
+E2E_ROUTER_NAMESPACE="${E2E_ROUTER_NAMESPACE:-gds-e2e-router}"
+E2E_PYLON_NAMESPACE="${E2E_PYLON_NAMESPACE:-gds-e2e-pylon}"
 E2E_REGION="${E2E_REGION:-e2e-local}"
 E2E_CLUSTERSET="${E2E_CLUSTERSET:-e2e}"
+E2E_MCS_CLUSTERSET="${E2E_MCS_CLUSTERSET:-e2e-mcs}"
+E2E_CLUSTER_ID_A="${E2E_CLUSTER_ID_A:-a}"
+E2E_CLUSTER_ID_B="${E2E_CLUSTER_ID_B:-b}"
+E2E_POD_CIDR_A="${E2E_POD_CIDR_A:-10.44.0.0/16}"
+E2E_SERVICE_CIDR_A="${E2E_SERVICE_CIDR_A:-10.45.0.0/16}"
+E2E_POD_CIDR_B="${E2E_POD_CIDR_B:-10.46.0.0/16}"
+E2E_SERVICE_CIDR_B="${E2E_SERVICE_CIDR_B:-10.47.0.0/16}"
 E2E_HTTP_LOCAL_PORT="${E2E_HTTP_LOCAL_PORT:-28080}"
 E2E_ADMIN_LOCAL_PORT="${E2E_ADMIN_LOCAL_PORT:-29091}"
+E2E_ROUTER_LOCAL_PORT="${E2E_ROUTER_LOCAL_PORT:-28000}"
+# The name Stargate in a advertises for the reverse tunnel. Pylons of other
+# clusters must resolve it (design 4.5); the Pylon of phase 3 maps it to the
+# Stargate pod IP with a hostAliases entry.
+E2E_ROUTER_HOST="${E2E_ROUTER_HOST:-llm-router.${E2E_CLUSTER_ID_A:-a}.gds-e2e.test}"
 E2E_IMAGE_REPOSITORY="${E2E_IMAGE_REPOSITORY:-gds-e2e/gds-server}"
+E2E_CONTROLLER_IMAGE_REPOSITORY="${E2E_CONTROLLER_IMAGE_REPOSITORY:-gds-e2e/gds-mcs-controller}"
+E2E_STARGATE_IMAGE_REPOSITORY="${E2E_STARGATE_IMAGE_REPOSITORY:-gds-e2e/stargate}"
+E2E_PYLON_IMAGE_REPOSITORY="${E2E_PYLON_IMAGE_REPOSITORY:-gds-e2e/pylon}"
+E2E_BUSYBOX_IMAGE="${E2E_BUSYBOX_IMAGE:-busybox:1.37}"
+E2E_SAMPLE_IMAGE="${E2E_SAMPLE_IMAGE:-openai-compatible-sample:e2e}"
 E2E_WORK_DIR="${E2E_WORK_DIR:-${TMPDIR:-/tmp}/global-discovery-k3d-e2e}"
 E2E_WORK_DIR="${E2E_WORK_DIR%/}"
-# Where the server image comes from. local builds it with Bazel from this
-# checkout, tags it by image id and imports it into k3d. No published image
-# exists yet.
+# Where the images come from. local builds them with Bazel from this
+# checkout and imports them into k3d. No published image exists yet.
 IMAGE_SOURCE="${IMAGE_SOURCE:-local}"
 BAZEL="${BAZEL:-bazel}"
 BAZEL_FLAGS="${BAZEL_FLAGS:-}"
@@ -62,10 +95,22 @@ BAZEL_FLAGS="${BAZEL_FLAGS:-}"
 readonly SERVER_RELEASE="global-discovery"
 readonly SERVER_CHART="${REPO_ROOT}/deploy/helm/global-discovery/global-discovery"
 readonly SERVER_SELECTOR="app.kubernetes.io/instance=${SERVER_RELEASE}"
-readonly IMAGE_TARGET="//src/control-plane-services/global-discovery:image_load"
-# The repository:tag the Bazel image_load target loads into Docker.
-readonly BAZEL_IMAGE="src/control-plane-services/global-discovery:latest"
+readonly CONTROLLER_RELEASE="gds-mcs-controller"
+readonly CONTROLLER_CHART="${REPO_ROOT}/deploy/helm/global-discovery-mcs-controller/global-discovery-mcs-controller"
+readonly CONTROLLER_SELECTOR="app.kubernetes.io/instance=${CONTROLLER_RELEASE}"
+readonly ROUTER_RELEASE="llm-request-router"
+readonly ROUTER_CHART="${REPO_ROOT}/deploy/helm/llm-request-router/llm-request-router"
+readonly ROUTER_SELECTOR="app.kubernetes.io/instance=${ROUTER_RELEASE}"
+readonly SAMPLE_DIR="${REPO_ROOT}/examples/function-samples/openai-compatible-sample"
+readonly SERVER_TARGET="//src/control-plane-services/global-discovery:image"
+readonly CONTROLLER_TARGET="//src/control-plane-services/global-discovery:controller_image"
+readonly STARGATE_TARGET="//src/libraries/rust/stargate/crates/stargate:image"
+readonly PYLON_TARGET="//src/libraries/rust/stargate/crates/pylon:image"
+readonly LEADER_LEASE="gds-mcs-controller.gds.nvidia.com"
 readonly CREATED_CLUSTERS_FILE="${E2E_WORK_DIR}/created-clusters"
+readonly CREATED_NETWORKS_FILE="${E2E_WORK_DIR}/created-networks"
+readonly CONNECTED_NETWORKS_FILE="${E2E_WORK_DIR}/connected-networks"
+readonly ROUTES_FILE="${E2E_WORK_DIR}/routes"
 readonly CURL_ERR="${E2E_WORK_DIR}/curl.err"
 readonly PF_LOG="${E2E_WORK_DIR}/port-forward.log"
 
@@ -73,9 +118,20 @@ REST_URL="http://127.0.0.1:${E2E_HTTP_LOCAL_PORT}"
 ADMIN_URL="http://127.0.0.1:${E2E_ADMIN_LOCAL_PORT}"
 CS_PATH="/v1/clustersets/${E2E_CLUSTERSET}"
 PF_PID=""
-IMAGE_TAG=""
+ROUTER_PF_PID=""
 REST_STATUS=""
 REST_BODY=""
+# Image tags of this run, e2e-<image id>, set by build_images.
+IMAGE_TAG=""
+CONTROLLER_IMAGE_TAG=""
+STARGATE_IMAGE_TAG=""
+PYLON_IMAGE_TAG=""
+# Set by the phase 2 setup: the GDS gRPC URL the other clusters dial, and
+# whether pod IPs are routed between a and b.
+GDS_GRPC_URL=""
+ROUTES_OK=0
+HUB_READY=0
+MCS_READY=0
 
 RESULTS=()
 PASS_COUNT=0
@@ -85,6 +141,8 @@ LAST_OBSERVED=""
 ABORTED=0
 # Remaining step names, recorded as skipped when a required step fails.
 REMAINING_STEPS=""
+# Phases after the running one, recorded as skipped on an abort.
+LATER_PHASES=""
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -112,6 +170,7 @@ fail() {
 skip() {
   SKIP_COUNT=$((SKIP_COUNT + 1))
   RESULTS+=("SKIP  $1")
+  log "SKIP  $1"
 }
 
 die() {
@@ -152,6 +211,13 @@ check_cluster_name() {
   esac
 }
 
+check_network_name() {
+  case "$1" in
+    gds-e2e-*) ;;
+    *) die "Docker network name '$1' must start with gds-e2e-; run.sh never touches other networks" ;;
+  esac
+}
+
 cluster_exists() {
   k3d cluster get "$1" >/dev/null 2>&1
 }
@@ -175,16 +241,59 @@ node_start_hint() {
   fi
 }
 
+# node_containers CLUSTER: the Docker containers of the cluster's k3s nodes.
+node_containers() {
+  docker ps --filter "label=k3d.cluster=$1" --format '{{.Names}} {{.Label "k3d.role"}}' 2>/dev/null |
+    awk '$2 == "server" || $2 == "agent" {print $1}' | sort
+}
+
+# node_ip CONTAINER: the container's address on E2E_NETWORK.
+node_ip() {
+  docker inspect -f "{{with index .NetworkSettings.Networks \"${E2E_NETWORK}\"}}{{.IPAddress}}{{end}}" "$1" 2>/dev/null
+}
+
+# ensure_network: the Docker network the phase 2 clusters share. Created and
+# recorded when missing; k3d then uses it without owning it.
+ensure_network() {
+  check_network_name "${E2E_NETWORK}"
+  if docker network inspect "${E2E_NETWORK}" >/dev/null 2>&1; then
+    return 0
+  fi
+  [ "${E2E_CREATE_CLUSTERS}" = "1" ] || die "Docker network ${E2E_NETWORK} does not exist; set E2E_CREATE_CLUSTERS=1"
+  log "creating Docker network ${E2E_NETWORK}"
+  printf '%s\n' "${E2E_NETWORK}" >>"${CREATED_NETWORKS_FILE}"
+  docker network create "${E2E_NETWORK}" >/dev/null || die "docker network create ${E2E_NETWORK} failed"
+}
+
+# attach_network CLUSTER: connects the node containers of a reused cluster to
+# E2E_NETWORK, so the other clusters reach its NodePorts. Recorded for
+# cleanup.
+attach_network() {
+  local container
+  for container in $(node_containers "$1"); do
+    [ -n "$(node_ip "${container}")" ] && continue
+    log "connecting ${container} to Docker network ${E2E_NETWORK}"
+    docker network connect "${E2E_NETWORK}" "${container}" || return 1
+    printf '%s %s\n' "${E2E_NETWORK}" "${container}" >>"${CONNECTED_NETWORKS_FILE}"
+  done
+}
+
 # ensure_cluster NAME [K3D CREATE ARGS...]: reuses k3d cluster NAME or, with
-# E2E_CREATE_CLUSTERS=1, creates it without touching the default kubeconfig.
-# Then writes the cluster's kubeconfig into the work directory and waits for
-# a Ready node. Returns 1 with LAST_OBSERVED set when the cluster is unusable.
+# E2E_CREATE_CLUSTERS=1, creates it on E2E_NETWORK without touching the
+# default kubeconfig. Then writes the cluster's kubeconfig into the work
+# directory and waits for a Ready node. Returns 1 with LAST_OBSERVED set when
+# the cluster is unusable.
 ensure_cluster() {
   local name="$1"
   shift
   check_cluster_name "${name}"
+  ensure_network
   if cluster_exists "${name}"; then
     log "reusing k3d cluster ${name}"
+    if ! attach_network "${name}"; then
+      LAST_OBSERVED="cannot connect the nodes of ${name} to Docker network ${E2E_NETWORK}"
+      return 1
+    fi
   else
     [ "${E2E_CREATE_CLUSTERS}" = "1" ] ||
       die "k3d cluster ${name} does not exist; create it with 'make cluster' or set E2E_CREATE_CLUSTERS=1"
@@ -193,12 +302,13 @@ ensure_cluster() {
     printf '%s\n' "${name}" >>"${CREATED_CLUSTERS_FILE}"
     if ! k3d cluster create "${name}" \
       --servers 1 --agents 0 --no-lb \
+      --network "${E2E_NETWORK}" \
       --k3s-arg '--disable=traefik@server:*' \
       --kubeconfig-update-default=false \
       --kubeconfig-switch-context=false \
       --wait --timeout 180s \
-      "$@"; then
-      LAST_OBSERVED="k3d cluster create ${name} failed"
+      ${1+"$@"} >"${E2E_WORK_DIR}/k3d-create-${name}.log" 2>&1; then
+      LAST_OBSERVED="k3d cluster create ${name} failed: $(tail -n 3 "${E2E_WORK_DIR}/k3d-create-${name}.log" | decolor | tr '\n' ' ') $(node_start_hint "${name}")"
       return 1
     fi
   fi
@@ -223,44 +333,220 @@ delete_created_clusters() {
     check_cluster_name "${name}"
     if cluster_exists "${name}"; then
       log "deleting k3d cluster ${name} (created by run.sh)"
-      k3d cluster delete "${name}" || true
+      # k3d cluster delete rewrites the kubeconfig it loads; point it at a
+      # scratch file so the default kubeconfig stays untouched.
+      KUBECONFIG="${E2E_WORK_DIR}/k3d-delete-kubeconfig" k3d cluster delete "${name}" \
+        >"${E2E_WORK_DIR}/k3d-delete-${name}.log" 2>&1 || log "k3d cluster delete ${name} failed; see ${E2E_WORK_DIR}/k3d-delete-${name}.log"
     fi
   done <"${CREATED_CLUSTERS_FILE}"
   rm -f "${CREATED_CLUSTERS_FILE}"
 }
 
+# delete_created_networks: disconnects the reused node containers run.sh
+# connected, then deletes the networks it created once nothing uses them.
+delete_created_networks() {
+  local network container
+  if [ -f "${CONNECTED_NETWORKS_FILE}" ]; then
+    while read -r network container; do
+      [ -n "${container}" ] || continue
+      check_network_name "${network}"
+      docker network disconnect "${network}" "${container}" >/dev/null 2>&1 || true
+    done <"${CONNECTED_NETWORKS_FILE}"
+    rm -f "${CONNECTED_NETWORKS_FILE}"
+  fi
+  [ -f "${CREATED_NETWORKS_FILE}" ] || return 0
+  while IFS= read -r network; do
+    [ -n "${network}" ] || continue
+    check_network_name "${network}"
+    if docker network inspect "${network}" >/dev/null 2>&1; then
+      if [ "$(docker network inspect -f '{{len .Containers}}' "${network}" 2>/dev/null)" = "0" ]; then
+        log "deleting Docker network ${network} (created by run.sh)"
+        docker network rm "${network}" >/dev/null || true
+      else
+        log "Docker network ${network} still has containers; not deleted"
+      fi
+    fi
+  done <"${CREATED_NETWORKS_FILE}"
+  rm -f "${CREATED_NETWORKS_FILE}"
+}
+
+# route_pod_cidrs FROM TO: on every node container of cluster FROM, a static
+# route to the pod CIDR of every node of cluster TO through that node's
+# address on E2E_NETWORK. Recorded, so cleanup removes them from reused
+# clusters.
+route_pod_cidrs() {
+  local from="$1" to="$2" target src cidr via
+  for target in $(node_containers "${to}"); do
+    cidr="$(kc "${to}" get node "${target}" -o jsonpath='{.spec.podCIDR}' 2>/dev/null)" || cidr=""
+    via="$(node_ip "${target}")"
+    if [ -z "${cidr}" ] || [ -z "${via}" ]; then
+      LAST_OBSERVED="node ${target} of ${to} has no pod CIDR or no address on ${E2E_NETWORK}"
+      return 1
+    fi
+    for src in $(node_containers "${from}"); do
+      if ! docker exec "${src}" ip route replace "${cidr}" via "${via}" 2>"${E2E_WORK_DIR}/route.err"; then
+        LAST_OBSERVED="ip route replace ${cidr} via ${via} in ${src} failed: $(tr '\n' ' ' <"${E2E_WORK_DIR}/route.err")"
+        return 1
+      fi
+      printf '%s %s\n' "${src}" "${cidr}" >>"${ROUTES_FILE}"
+    done
+  done
+}
+
+# remove_routes: deletes the routes run.sh added to node containers that
+# still exist.
+remove_routes() {
+  local container cidr
+  [ -f "${ROUTES_FILE}" ] || return 0
+  while read -r container cidr; do
+    [ -n "${cidr}" ] || continue
+    docker exec "${container}" ip route del "${cidr}" >/dev/null 2>&1 || true
+  done <"${ROUTES_FILE}"
+  rm -f "${ROUTES_FILE}"
+}
+
 # ---------------------------------------------------------------------------
 # Images
 
-# build_image: builds the gds-server image with Bazel unless E2E_SKIP_BUILD=1,
-# then tags it as E2E_IMAGE_REPOSITORY:e2e-<image id>, so a rebuilt image gets
-# a new tag and helm upgrade rolls the pod.
-build_image() {
-  case "${IMAGE_SOURCE}" in
-    local) ;;
-    *) die "IMAGE_SOURCE must be local, got '${IMAGE_SOURCE}'; no published gds-server image exists yet" ;;
-  esac
-  if [ "${E2E_SKIP_BUILD}" != "1" ]; then
-    log "bazel run ${IMAGE_TARGET}"
+# load_bazel_image TARGET REPOSITORY ENTRYPOINT: builds TARGET.tar with Bazel
+# (unless E2E_SKIP_BUILD=1), loads it into Docker as REPOSITORY:e2e-<image
+# id> and REPOSITORY:e2e-latest, checks that its entrypoint is ENTRYPOINT,
+# and prints the e2e-<image id> tag on stdout (logs go to stderr). The tarball names the shared tag of the
+# Bazel load target (<package>:latest); run.sh rewrites it before loading, so
+# concurrent builds of other images in the same package cannot swap them.
+# With E2E_SKIP_BUILD=1 it reuses REPOSITORY:e2e-latest.
+load_bazel_image() {
+  local target="$1" repo="$2" entrypoint="$3" id tarball dir got
+  if [ "${E2E_SKIP_BUILD}" = "1" ]; then
+    id="$(docker image inspect --format '{{.Id}}' "${repo}:e2e-latest" 2>/dev/null)" ||
+      die "image ${repo}:e2e-latest is not in Docker; run without E2E_SKIP_BUILD=1 or with E2E_BUILD_ONLY=1 first"
+  else
+    log "bazel build ${target}.tar" >&2
     # BAZEL_FLAGS is a list of flags.
     # shellcheck disable=SC2086
-    (cd "${REPO_ROOT}" && "${BAZEL}" run ${BAZEL_FLAGS} "${IMAGE_TARGET}") || die "bazel run ${IMAGE_TARGET} failed"
+    (cd "${REPO_ROOT}" && "${BAZEL}" build ${BAZEL_FLAGS} "${target}.tar" >"${E2E_WORK_DIR}/bazel-build.log" 2>&1) ||
+      { tail -n 30 "${E2E_WORK_DIR}/bazel-build.log" >&2; die "bazel build ${target}.tar failed; log ${E2E_WORK_DIR}/bazel-build.log"; }
+    # shellcheck disable=SC2086
+    tarball="$(cd "${REPO_ROOT}" && "${BAZEL}" cquery ${BAZEL_FLAGS} --output=files "${target}.tar" 2>/dev/null | tail -n 1)"
+    if [ -z "${tarball}" ] || [ ! -f "${REPO_ROOT}/${tarball}" ]; then
+      die "bazel cquery found no tarball for ${target}.tar"
+    fi
+    dir="${E2E_WORK_DIR}/image-load"
+    chmod -R u+w "${dir}" 2>/dev/null || true
+    rm -rf "${dir}"
+    mkdir -p "${dir}/root"
+    tar -xf "${REPO_ROOT}/${tarball}" -C "${dir}/root"
+    chmod -R u+w "${dir}"
+    jq --arg tag "${repo}:e2e-loading" '.[0].RepoTags = [$tag]' "${dir}/root/manifest.json" >"${dir}/manifest.json" ||
+      die "${tarball} has no Docker manifest.json"
+    mv "${dir}/manifest.json" "${dir}/root/manifest.json"
+    (cd "${dir}/root" && tar -cf ../image.tar manifest.json blobs)
+    docker load -i "${dir}/image.tar" >/dev/null || die "docker load of ${tarball} failed"
+    rm -rf "${dir}"
+    id="$(docker image inspect --format '{{.Id}}' "${repo}:e2e-loading")" || die "docker load did not tag ${repo}:e2e-loading"
+    docker tag "${repo}:e2e-loading" "${repo}:e2e-latest"
+    docker rmi "${repo}:e2e-loading" >/dev/null 2>&1 || true
   fi
-  local id
-  id="$(docker image inspect --format '{{.Id}}' "${BAZEL_IMAGE}" 2>/dev/null)" ||
-    die "image ${BAZEL_IMAGE} is not in Docker; run without E2E_SKIP_BUILD=1"
+  got="$(docker image inspect --format '{{join .Config.Entrypoint " "}}' "${id}" 2>/dev/null)" || got=""
+  case " ${got} " in
+    *" ${entrypoint} "*) ;;
+    *) die "image ${repo} (${id}) runs '${got}', expected ${entrypoint}" ;;
+  esac
   id="${id#sha256:}"
-  IMAGE_TAG="e2e-$(printf '%s' "${id}" | cut -c1-12)"
-  docker tag "${BAZEL_IMAGE}" "${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG}"
-  log "gds-server image ${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  local tag
+  tag="e2e-$(printf '%s' "${id}" | cut -c1-12)"
+  docker tag "${id}" "${repo}:${tag}"
+  log "image ${repo}:${tag}" >&2
+  printf '%s' "${tag}"
 }
 
-# import_image CLUSTER: imports the tagged image into k3d cluster CLUSTER.
+# build_images PHASES...: builds and loads the images the phases need, once.
+build_images() {
+  case "${IMAGE_SOURCE}" in
+    local) ;;
+    *) die "IMAGE_SOURCE must be local, got '${IMAGE_SOURCE}'; no published images exist yet" ;;
+  esac
+  local phase need_mcs=0 need_llm=0
+  for phase in "$@"; do
+    case "${phase}" in
+      2) need_mcs=1 ;;
+      3) need_mcs=1 need_llm=1 ;;
+    esac
+  done
+  [ -n "${IMAGE_TAG}" ] || IMAGE_TAG="$(load_bazel_image "${SERVER_TARGET}" "${E2E_IMAGE_REPOSITORY}" /usr/bin/gds-server)"
+  if [ "${need_mcs}" = "1" ]; then
+    [ -n "${CONTROLLER_IMAGE_TAG}" ] ||
+      CONTROLLER_IMAGE_TAG="$(load_bazel_image "${CONTROLLER_TARGET}" "${E2E_CONTROLLER_IMAGE_REPOSITORY}" /usr/bin/gds-mcs-controller)"
+    ensure_docker_image "${E2E_BUSYBOX_IMAGE}"
+  fi
+  if [ "${need_llm}" = "1" ]; then
+    [ -n "${STARGATE_IMAGE_TAG}" ] ||
+      STARGATE_IMAGE_TAG="$(load_bazel_image "${STARGATE_TARGET}" "${E2E_STARGATE_IMAGE_REPOSITORY}" /usr/local/bin/stargate)"
+    [ -n "${PYLON_IMAGE_TAG}" ] ||
+      PYLON_IMAGE_TAG="$(load_bazel_image "${PYLON_TARGET}" "${E2E_PYLON_IMAGE_REPOSITORY}" /usr/local/bin/pylon)"
+    if ! docker image inspect "${E2E_SAMPLE_IMAGE}" >/dev/null 2>&1; then
+      log "docker build -t ${E2E_SAMPLE_IMAGE} ${SAMPLE_DIR}"
+      docker build -q -t "${E2E_SAMPLE_IMAGE}" "${SAMPLE_DIR}" >/dev/null || die "docker build of ${E2E_SAMPLE_IMAGE} failed"
+    fi
+  fi
+}
+
+# ensure_docker_image IMAGE: pulls a third-party image when Docker lacks it.
+ensure_docker_image() {
+  docker image inspect "$1" >/dev/null 2>&1 && return 0
+  log "docker pull $1"
+  docker pull -q "$1" >/dev/null || die "docker pull $1 failed"
+}
+
+# cri_ref IMAGE: the reference containerd in the k3s node stores IMAGE under.
+cri_ref() {
+  case "$1" in
+    */*)
+      case "${1%%/*}" in
+        *.* | *:* | localhost) printf '%s' "$1" ;;
+        *) printf 'docker.io/%s' "$1" ;;
+      esac
+      ;;
+    *) printf 'docker.io/library/%s' "$1" ;;
+  esac
+}
+
+# image_in_nodes CLUSTER IMAGE: every node of the cluster has the image.
+image_in_nodes() {
+  local node
+  for node in $(node_containers "$1"); do
+    docker exec "${node}" crictl inspecti "$(cri_ref "$2")" >/dev/null 2>&1 || return 1
+  done
+}
+
+# import_image CLUSTER IMAGE...: imports images into k3d cluster CLUSTER one
+# at a time and checks that every node has them; k3d reports success even
+# when the import into a node fails. Dies when one is missing: the charts
+# run these images with imagePullPolicy Never.
 import_image() {
-  k3d image import -c "$1" "${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG}" >/dev/null ||
-    die "k3d image import into $1 failed"
+  local cluster="$1" image
+  shift
+  for image in "$@"; do
+    k3d image import -c "${cluster}" "${image}" >"${E2E_WORK_DIR}/k3d-import.log" 2>&1 || true
+    image_in_nodes "${cluster}" "${image}" ||
+      die "k3d image import of ${image} into ${cluster} failed: $(grep -m1 -i 'erro' "${E2E_WORK_DIR}/k3d-import.log" | decolor)"
+  done
 }
 
+# import_or_pull CLUSTER IMAGE...: like import_image for third-party images
+# with imagePullPolicy IfNotPresent. A multi-platform image pulled into a
+# containerd-backed Docker cannot always be imported (missing platform
+# blobs); the cluster then pulls it from its registry.
+import_or_pull() {
+  local cluster="$1" image
+  shift
+  for image in "$@"; do
+    k3d image import -c "${cluster}" "${image}" >"${E2E_WORK_DIR}/k3d-import.log" 2>&1 || true
+    if ! image_in_nodes "${cluster}" "${image}"; then
+      log "${image} could not be imported into ${cluster} ($(grep -m1 -i 'erro' "${E2E_WORK_DIR}/k3d-import.log" | decolor | cut -c1-160)); the cluster pulls it"
+    fi
+  done
+}
 # ---------------------------------------------------------------------------
 # Polling. A check function returns 0 when satisfied and may set
 # LAST_OBSERVED to describe what it saw.
@@ -356,19 +642,24 @@ rest_json() {
 }
 
 # ---------------------------------------------------------------------------
-# Port-forward
+# Port-forward to the gds-server of the hub
 
 start_port_forward() {
   local cluster="$1"
   if [ -n "${PF_PID}" ] && kill -0 "${PF_PID}" 2>/dev/null; then
     return 0
   fi
+  if curl -s -o /dev/null --max-time 2 "${ADMIN_URL}/healthz"; then
+    printf 'port 127.0.0.1:%s already answers: another port-forward or run uses it; set E2E_HTTP_LOCAL_PORT and E2E_ADMIN_LOCAL_PORT\n' \
+      "${E2E_ADMIN_LOCAL_PORT}" >>"${PF_LOG}"
+    return 1
+  fi
   kc "${cluster}" -n "${E2E_NAMESPACE}" port-forward --address 127.0.0.1 "svc/${SERVER_RELEASE}" \
     "${E2E_HTTP_LOCAL_PORT}:8080" "${E2E_ADMIN_LOCAL_PORT}:9091" >>"${PF_LOG}" 2>&1 &
   PF_PID=$!
   local i=0
   while [ "${i}" -lt 30 ]; do
-    if curl -s -o /dev/null --max-time 2 "${ADMIN_URL}/healthz"; then
+    if curl -s -o /dev/null --max-time 2 "${ADMIN_URL}/healthz" && kill -0 "${PF_PID}" 2>/dev/null; then
       return 0
     fi
     kill -0 "${PF_PID}" 2>/dev/null || break
@@ -383,6 +674,7 @@ stop_port_forward() {
     kill "${PF_PID}" 2>/dev/null || true
     wait "${PF_PID}" 2>/dev/null || true
     PF_PID=""
+ROUTER_PF_PID=""
   fi
 }
 
@@ -393,14 +685,35 @@ decolor() {
   sed $'s/\033\\[[0-9;]*m//g'
 }
 
+# dump_namespace CLUSTER NAMESPACE SELECTOR: pods, recent events and logs.
+dump_namespace() {
+  local cluster="$1" ns="$2" selector="$3"
+  kc "${cluster}" --request-timeout=10s get namespace "${ns}" >/dev/null 2>&1 || return 0
+  section "Pods in ${ns} (${cluster})"
+  kc "${cluster}" --request-timeout=10s -n "${ns}" get pods -o wide 2>&1 || true
+  section "Events in ${ns} (${cluster}, last 20)"
+  kc "${cluster}" --request-timeout=10s -n "${ns}" get events --sort-by=.lastTimestamp 2>&1 | tail -n 20 || true
+  if [ -n "${selector}" ]; then
+    section "Logs of ${selector} in ${ns} (${cluster}, tail 80)"
+    kc "${cluster}" --request-timeout=10s -n "${ns}" logs -l "${selector}" --tail=80 --all-containers --prefix 2>&1 | decolor || true
+  fi
+}
+
 dump_diagnostics() {
-  local cluster="$1"
-  section "Pods in ${E2E_NAMESPACE} (${cluster})"
-  kc "${cluster}" --request-timeout=10s -n "${E2E_NAMESPACE}" get pods -o wide 2>&1 || true
-  section "Events in ${E2E_NAMESPACE} (last 30)"
-  kc "${cluster}" --request-timeout=10s -n "${E2E_NAMESPACE}" get events --sort-by=.lastTimestamp 2>&1 | tail -n 30 || true
-  section "gds-server logs (tail 100)"
-  kc "${cluster}" --request-timeout=10s -n "${E2E_NAMESPACE}" logs -l "${SERVER_SELECTOR}" --tail=100 --all-containers --prefix 2>&1 | decolor || true
+  local cluster
+  if [ -s "$(kubeconfig_of "${E2E_CLUSTER}")" ]; then
+    dump_namespace "${E2E_CLUSTER}" "${E2E_NAMESPACE}" "${SERVER_SELECTOR}"
+  fi
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    [ -s "$(kubeconfig_of "${cluster}")" ] || continue
+    dump_namespace "${cluster}" "${E2E_CONTROLLER_NAMESPACE}" "${CONTROLLER_SELECTOR}"
+    if kc "${cluster}" --request-timeout=10s get namespace "${E2E_DEMO_NAMESPACE}" >/dev/null 2>&1; then
+      section "MCS objects in ${E2E_DEMO_NAMESPACE} (${cluster})"
+      kc "${cluster}" --request-timeout=10s -n "${E2E_DEMO_NAMESPACE}" get serviceexports,serviceimports,services,endpointslices -o wide 2>&1 || true
+    fi
+    dump_namespace "${cluster}" "${E2E_ROUTER_NAMESPACE}" "${ROUTER_SELECTOR}"
+    dump_namespace "${cluster}" "${E2E_PYLON_NAMESPACE}" "app=gds-e2e-pylon"
+  done
   section "Port-forward log (tail 20)"
   tail -n 20 "${PF_LOG}" 2>/dev/null || true
 }
@@ -419,16 +732,20 @@ print_summary() {
   fi
 }
 
-# abort CLUSTER: a required step failed. Records the remaining steps as
+# abort: a required step failed. Records the remaining steps and phases as
 # skipped, dumps diagnostics and exits. E2E_CLEANUP=1 still cleans up.
 abort() {
   ABORTED=1
-  local s
+  local s p
   local IFS='|'
   for s in ${REMAINING_STEPS}; do
     [ -n "${s}" ] && skip "${s}"
   done
-  dump_diagnostics "$1"
+  IFS=' '
+  for p in ${LATER_PHASES}; do
+    skip "phase ${p} (not run)"
+  done
+  dump_diagnostics
   if [ "${E2E_CLEANUP}" = "1" ]; then
     cleanup
   fi
@@ -443,6 +760,7 @@ step_done() {
 
 on_exit() {
   stop_port_forward
+  stop_router_port_forward
 }
 trap on_exit EXIT
 
@@ -451,11 +769,11 @@ trap on_exit EXIT
 
 preflight() {
   local tool
-  for tool in k3d docker kubectl helm curl jq; do
+  for tool in k3d docker kubectl helm curl jq tar; do
     command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
   done
   if [ "${IMAGE_SOURCE}" = "local" ] && [ "${E2E_SKIP_BUILD}" != "1" ]; then
-    command -v "${BAZEL}" >/dev/null 2>&1 || die "${BAZEL} is required to build the image; or set E2E_SKIP_BUILD=1"
+    command -v "${BAZEL}" >/dev/null 2>&1 || die "${BAZEL} is required to build the images; or set E2E_SKIP_BUILD=1"
   fi
   docker info >/dev/null 2>&1 || die "Docker is not reachable"
   mkdir -p "${E2E_WORK_DIR}"
@@ -465,7 +783,8 @@ preflight() {
   log "work dir ${E2E_WORK_DIR}, phases ${E2E_PHASES}"
 }
 
-# server_args: the helm arguments of the gds-server release.
+# server_args: the helm arguments of the gds-server release. The Service is a
+# NodePort, which the controllers of phase 2 dial over the Docker network.
 server_args() {
   printf '%s\n' \
     --namespace "${E2E_NAMESPACE}" \
@@ -473,7 +792,8 @@ server_args() {
     --set-string "image.repository=${E2E_IMAGE_REPOSITORY}" \
     --set-string "image.tag=${IMAGE_TAG}" \
     --set-string "image.pullPolicy=Never" \
-    --set-string "region=${E2E_REGION}"
+    --set-string "region=${E2E_REGION}" \
+    --set-string "service.type=NodePort"
 }
 
 # install_server CLUSTER: installs or upgrades the gds-server release and
@@ -484,28 +804,112 @@ install_server() {
     args+=("${line}")
   done < <(server_args)
   hm "${cluster}" upgrade --install "${SERVER_RELEASE}" "${SERVER_CHART}" "${args[@]}" \
-    --create-namespace --wait --timeout "${E2E_HELM_TIMEOUT}" >/dev/null
+    --create-namespace --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-server.log" 2>&1
+}
+
+# setup_hub: the hub cluster with gds-server and the REST port-forward, once
+# per run. Every failure aborts.
+setup_hub() {
+  local cluster="${E2E_CLUSTER}"
+  [ "${HUB_READY}" = "1" ] && return 0
+  if ensure_cluster "${cluster}"; then
+    pass "k3d cluster ${cluster} (hub) has a Ready node; kubeconfig $(kubeconfig_of "${cluster}")"
+  else
+    fail "k3d cluster ${cluster}" "${LAST_OBSERVED}"
+    abort
+  fi
+  import_image "${cluster}" "${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  pass "image ${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG} imported into ${cluster}"
+  local existed=0
+  hm "${cluster}" status "${SERVER_RELEASE}" --namespace "${E2E_NAMESPACE}" >/dev/null 2>&1 && existed=1
+  if install_server "${cluster}"; then
+    pass "helm upgrade --install ${SERVER_RELEASE}: Deployment ready"
+  else
+    fail "helm upgrade --install ${SERVER_RELEASE}" "$(tail -n 5 "${E2E_WORK_DIR}/helm-server.log" | tr '\n' ' ')"
+    abort
+  fi
+  # A release from an earlier run keeps that run's registry in memory; a
+  # restart starts every phase from an empty store.
+  if [ "${existed}" = "1" ]; then
+    if kc "${cluster}" -n "${E2E_NAMESPACE}" rollout restart "deploy/${SERVER_RELEASE}" >/dev/null &&
+      kc "${cluster}" -n "${E2E_NAMESPACE}" rollout status "deploy/${SERVER_RELEASE}" --timeout=120s >/dev/null 2>&1; then
+      pass "gds-server restarted with an empty memory store (release from an earlier run)"
+    else
+      fail "restart of gds-server from an earlier run"
+      abort
+    fi
+  fi
+  if ! start_port_forward "${cluster}"; then
+    fail "port-forward to svc/${SERVER_RELEASE}" "$(tail -n 5 "${PF_LOG}" | tr '\n' ' ')"
+    abort
+  fi
+  pass "port-forward REST 127.0.0.1:${E2E_HTTP_LOCAL_PORT}, admin 127.0.0.1:${E2E_ADMIN_LOCAL_PORT}"
+  HUB_READY=1
+}
+
+# ensure_kubeconfig CLUSTER: the work directory kubeconfig of a cluster that
+# exists, for cleanup of an earlier run.
+ensure_kubeconfig() {
+  [ -s "$(kubeconfig_of "$1")" ] && return 0
+  k3d kubeconfig get "$1" >"$(kubeconfig_of "$1")" 2>/dev/null || return 1
+  chmod 600 "$(kubeconfig_of "$1")"
+}
+
+# delete_namespace CLUSTER NAMESPACE: deletes a namespace and waits. When the
+# ServiceExport finalizer holds it (the controller or GDS is gone), removes
+# the finalizers and waits again.
+delete_namespace() {
+  local cluster="$1" ns="$2" se
+  kc "${cluster}" get namespace "${ns}" >/dev/null 2>&1 || return 0
+  log "deleting namespace ${ns} in ${cluster}"
+  kc "${cluster}" delete namespace "${ns}" --wait=true --timeout=120s >/dev/null 2>&1 && return 0
+  for se in $(kc "${cluster}" -n "${ns}" get serviceexports -o name 2>/dev/null); do
+    kc "${cluster}" -n "${ns}" patch "${se}" --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
+  done
+  kc "${cluster}" wait --for=delete "namespace/${ns}" --timeout=60s >/dev/null 2>&1 || true
+}
+
+# cleanup_member CLUSTER: removes what phases 2 and 3 installed in a member
+# cluster run.sh did not create. The workloads go first, while the controller
+# and gds-server still run, so the ServiceExport finalizers can deregister.
+# The CRDs stay (helm.sh/resource-policy: keep).
+cleanup_member() {
+  local cluster="$1" ns
+  check_cluster_name "${cluster}"
+  cluster_exists "${cluster}" || return 0
+  cluster_created_here "${cluster}" && return 0
+  ensure_kubeconfig "${cluster}" || return 0
+  for ns in "${E2E_PYLON_NAMESPACE}" "${E2E_ROUTER_NAMESPACE}" "${E2E_DEMO_NAMESPACE}"; do
+    delete_namespace "${cluster}" "${ns}"
+  done
+  hm "${cluster}" uninstall "${CONTROLLER_RELEASE}" --namespace "${E2E_CONTROLLER_NAMESPACE}" --wait >/dev/null 2>&1 || true
+  delete_namespace "${cluster}" "${E2E_CONTROLLER_NAMESPACE}"
+}
+
+cleanup_hub() {
+  local cluster="${E2E_CLUSTER}"
+  check_cluster_name "${cluster}"
+  cluster_exists "${cluster}" || return 0
+  if cluster_created_here "${cluster}"; then
+    log "k3d cluster ${cluster} was created by run.sh; deleting it removes the release"
+    return 0
+  fi
+  ensure_kubeconfig "${cluster}" || return 0
+  hm "${cluster}" uninstall "${SERVER_RELEASE}" --namespace "${E2E_NAMESPACE}" --wait >/dev/null 2>&1 || true
+  delete_namespace "${cluster}" "${E2E_NAMESPACE}"
 }
 
 cleanup() {
   section "Cleanup"
   stop_port_forward
-  if cluster_exists "${E2E_CLUSTER}" && ! cluster_created_here "${E2E_CLUSTER}" &&
-    [ ! -f "$(kubeconfig_of "${E2E_CLUSTER}")" ]; then
-    k3d kubeconfig get "${E2E_CLUSTER}" >"$(kubeconfig_of "${E2E_CLUSTER}")" 2>/dev/null || true
-  fi
-  if cluster_exists "${E2E_CLUSTER}" && [ -s "$(kubeconfig_of "${E2E_CLUSTER}")" ]; then
-    if cluster_created_here "${E2E_CLUSTER}"; then
-      log "k3d cluster ${E2E_CLUSTER} was created by run.sh; deleting it removes the release"
-    else
-      hm "${E2E_CLUSTER}" uninstall "${SERVER_RELEASE}" --namespace "${E2E_NAMESPACE}" --wait || true
-      kc "${E2E_CLUSTER}" delete namespace "${E2E_NAMESPACE}" --ignore-not-found --wait=true --timeout=120s || true
-    fi
-  fi
+  cleanup_member "${E2E_CLUSTER_A}"
+  cleanup_member "${E2E_CLUSTER_B}"
+  cleanup_hub
+  remove_routes
   delete_created_clusters
-  rm -f "${E2E_WORK_DIR}"/kubeconfig-* "${E2E_WORK_DIR}/rest-body.json"
+  delete_created_networks
+  rm -f "${E2E_WORK_DIR}"/kubeconfig-* "${E2E_WORK_DIR}/k3d-delete-kubeconfig" "${E2E_WORK_DIR}/rest-body.json"
 }
-
 # ---------------------------------------------------------------------------
 # Phase 1 checks: one cluster, memory store, REST through a port-forward.
 
@@ -528,8 +932,10 @@ serverinfo_ok() {
     ".region == \"${E2E_REGION}\" and (.viewEpoch | length > 0)" '{region, version, viewEpoch}'
 }
 
-clustersets_empty() {
-  rest_expect GET /v1/clustersets "" 200 '(.clustersets // []) | length == 0'
+# clusterset_absent: phase 1 starts without its clusterset; phase 2 may have
+# created its own on the same server.
+clusterset_absent() {
+  rest_expect GET /v1/clustersets "" 200 "all(.clustersets[]?; .clusterset != \"${E2E_CLUSTERSET}\")"
 }
 
 # register_cluster CLUSTER TTL: RegisterCluster; the response carries an
@@ -711,42 +1117,24 @@ watch_bookmark_ok() {  # watch_bookmark_ok MAX_SECONDS
 }
 
 run_phase_1() {
-  local cluster="${E2E_CLUSTER}" T="${E2E_TIMEOUT}"
+  local T="${E2E_TIMEOUT}"
+  CS_PATH="/v1/clustersets/${E2E_CLUSTERSET}"
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
     REMAINING_STEPS="phase 1 setup|phase 1 server|"
   else
     REMAINING_STEPS="phase 1 setup|phase 1 server|phase 1 clusters|phase 1 pools|phase 1 service export and import|phase 1 pools watch|phase 1 heartbeats and leases|phase 1 deregister|"
   fi
 
-  section "Phase 1 setup: k3d cluster ${cluster}, gds-server with the memory store"
-  if ensure_cluster "${cluster}"; then
-    pass "k3d cluster ${cluster} has a Ready node; kubeconfig $(kubeconfig_of "${cluster}")"
-  else
-    fail "k3d cluster ${cluster}" "${LAST_OBSERVED}"
-    abort "${cluster}"
-  fi
-  build_image
-  import_image "${cluster}"
-  pass "image ${E2E_IMAGE_REPOSITORY}:${IMAGE_TAG} imported into ${cluster}"
-  if install_server "${cluster}"; then
-    pass "helm upgrade --install ${SERVER_RELEASE}: Deployment ready"
-  else
-    fail "helm upgrade --install ${SERVER_RELEASE}"
-    abort "${cluster}"
-  fi
-  if ! start_port_forward "${cluster}"; then
-    fail "port-forward to svc/${SERVER_RELEASE}" "$(tail -n 5 "${PF_LOG}" | tr '\n' ' ')"
-    abort "${cluster}"
-  fi
-  pass "port-forward REST 127.0.0.1:${E2E_HTTP_LOCAL_PORT}, admin 127.0.0.1:${E2E_ADMIN_LOCAL_PORT}"
+  section "Phase 1 setup: k3d cluster ${E2E_CLUSTER} (hub), gds-server with the memory store"
+  setup_hub
   step_done
 
   section "Phase 1: server"
-  expect "admin /readyz is ok" "${T}" admin_says_ok /readyz || abort "${cluster}"
+  expect "admin /readyz is ok" "${T}" admin_says_ok /readyz || abort
   expect "admin /healthz is ok" "${T}" admin_says_ok /healthz || true
   expect "/metrics has nvcf_gds_build_info" "${T}" metrics_have nvcf_gds_build_info || true
   expect "GET /v1/serverinfo reports region ${E2E_REGION}" "${T}" serverinfo_ok || true
-  expect "GET /v1/clustersets is empty" "${T}" clustersets_empty || true
+  expect "GET /v1/clustersets has no clusterset ${E2E_CLUSTERSET}" "${T}" clusterset_absent || true
   step_done
 
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
@@ -754,13 +1142,13 @@ run_phase_1() {
   fi
 
   section "Phase 1: clusters"
-  once "PUT cluster-a registers it with an ACTIVE lease" register_cluster cluster-a 300s || abort "${cluster}"
-  once "PUT cluster-b registers it with an ACTIVE lease" register_cluster cluster-b 300s || abort "${cluster}"
+  once "PUT cluster-a registers it with an ACTIVE lease" register_cluster cluster-a 300s || abort
+  once "PUT cluster-b registers it with an ACTIVE lease" register_cluster cluster-b 300s || abort
   expect "GET /v1/clustersets lists ${E2E_CLUSTERSET} with 2 active clusters" "${T}" clusterset_lists 2 || true
   step_done
 
   section "Phase 1: pools"
-  once "POST pool blue registers it (REGISTERED, with a lease)" register_pool || abort "${cluster}"
+  once "POST pool blue registers it (REGISTERED, with a lease)" register_pool || abort
   once "pool heartbeat with the lease epoch turns blue ACTIVE" heartbeat_pool || true
   expect "GET pools?model=llama-3&region=${E2E_REGION} lists blue" "${T}" \
     pools_are "model=llama-3&region=${E2E_REGION}" "cluster-a/blue=POOL_STATE_ACTIVE" || true
@@ -819,16 +1207,668 @@ run_phase_1() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 2 (three clusters with the MCS controller) adds run_phase_2 here and
-# to the case in run_phases. It reuses ensure_cluster with per-cluster
-# --k3s-arg CIDRs and a shared --network, build_image and import_image.
+# Phase 2: clusters a and b with gds-mcs-controller, the hub with gds-server.
+# Kubernetes objects are read as JSON and fed to jq through here-strings.
+
+# kjson CLUSTER ARGS...: kubectl get ... -o json, or empty when it fails.
+kjson() {
+  local cluster="$1"
+  shift
+  kc "${cluster}" --request-timeout=10s get "$@" -o json 2>/dev/null || true
+}
+
+# render_manifest FILE: a manifest with the run's placeholders replaced.
+render_manifest() {
+  sed -e "s|__BUSYBOX_IMAGE__|${E2E_BUSYBOX_IMAGE}|g" \
+    -e "s|__SAMPLE_IMAGE__|${E2E_SAMPLE_IMAGE}|g" \
+    -e "s|__PYLON_IMAGE__|${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG}|g" \
+    -e "s|__GDS_URL__|${GDS_GRPC_URL}|g" \
+    -e "s|__CLUSTERSET__|${E2E_MCS_CLUSTERSET}|g" \
+    -e "s|__CLUSTER_ID__|${E2E_CLUSTER_ID_B}|g" \
+    -e "s|__ROUTER_IP__|${ROUTER_IP}|g" \
+    -e "s|__ROUTER_HOST__|${E2E_ROUTER_HOST}|g" \
+    "$1"
+}
+
+# controller_args CLUSTER_ID: the helm arguments of the controller release.
+controller_args() {
+  printf '%s\n' \
+    --namespace "${E2E_CONTROLLER_NAMESPACE}" \
+    --values "${MANIFESTS}/gds-mcs-controller-values.yaml" \
+    --set-string "image.repository=${E2E_CONTROLLER_IMAGE_REPOSITORY}" \
+    --set-string "image.tag=${CONTROLLER_IMAGE_TAG}" \
+    --set-string "image.pullPolicy=Never" \
+    --set-string "gds.urls[0]=${GDS_GRPC_URL}" \
+    --set-string "clusterset.id=${E2E_MCS_CLUSTERSET}" \
+    --set-string "cluster.id=$1"
+}
+
+# install_controller CLUSTER CLUSTER_ID: helm --wait returns when both
+# replicas are ready: connected to GDS and, on the leader, registered.
+install_controller() {
+  local cluster="$1" args=() line
+  while IFS= read -r line; do
+    args+=("${line}")
+  done < <(controller_args "$2")
+  hm "${cluster}" upgrade --install "${CONTROLLER_RELEASE}" "${CONTROLLER_CHART}" "${args[@]}" \
+    --create-namespace --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-controller-${cluster}.log" 2>&1
+}
+
+# hub_grpc_url: GDS_GRPC_URL, the hub node's address on E2E_NETWORK and the
+# gRPC NodePort of gds-server.
+hub_grpc_url() {
+  local container ip port
+  container="$(awk 'NR == 1' <<<"$(node_containers "${E2E_CLUSTER}")")"
+  ip="$(node_ip "${container}")"
+  port="$(kc "${E2E_CLUSTER}" -n "${E2E_NAMESPACE}" get svc "${SERVER_RELEASE}" \
+    -o jsonpath='{.spec.ports[?(@.name=="grpc")].nodePort}' 2>/dev/null)" || port=""
+  LAST_OBSERVED="hub node ${container:-none} address ${ip:-none}, gRPC NodePort ${port:-none}"
+  [ -n "${ip}" ] && [ -n "${port}" ] || return 1
+  GDS_GRPC_URL="http://${ip}:${port}"
+}
+
+pod_cidrs() {  # pod_cidrs CLUSTER: the podCIDR of every node
+  kc "$1" get nodes -o jsonpath='{range .items[*]}{.spec.podCIDR}{"\n"}{end}' 2>/dev/null | sort
+}
+
+# pod_cidrs_assigned CLUSTER: every node has its podCIDR; a node can turn
+# Ready a moment before node IPAM assigns it.
+pod_cidrs_assigned() {
+  local got
+  got="$(kc "$1" get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.spec.podCIDR}{" "}{end}' 2>/dev/null)" || got=""
+  LAST_OBSERVED="pod CIDRs of $1: ${got:-none}"
+  [ -n "${got}" ] && ! grep -qE '=( |$)' <<<"${got}"
+}
+
+# setup_routes: static routes between the pod CIDRs of a and b, unless
+# E2E_CROSS_CLUSTER_ROUTES=0 or they cannot be added. Without them the data
+# path checks are skipped and only the control plane objects are asserted.
+setup_routes() {
+  local a="${E2E_CLUSTER_A}" b="${E2E_CLUSTER_B}" overlap
+  ROUTES_OK=0
+  if [ "${E2E_CROSS_CLUSTER_ROUTES}" != "1" ]; then
+    skip "static routes between ${a} and ${b}: E2E_CROSS_CLUSTER_ROUTES=0; the data path checks (curl through the derived ClusterIP, Pylon registration) are skipped"
+    return 0
+  fi
+  if ! poll 60 pod_cidrs_assigned "${a}" || ! poll 60 pod_cidrs_assigned "${b}"; then
+    skip "static routes between ${a} and ${b}: ${LAST_OBSERVED}; the data path checks are skipped"
+    return 0
+  fi
+  overlap="$(comm -12 <(pod_cidrs "${a}") <(pod_cidrs "${b}") | tr '\n' ' ')"
+  if [ -n "${overlap}" ]; then
+    skip "static routes between ${a} and ${b}: the clusters share pod CIDRs (${overlap}); recreate them with distinct --cluster-cidr. The data path checks are skipped"
+    return 0
+  fi
+  if route_pod_cidrs "${a}" "${b}" && route_pod_cidrs "${b}" "${a}"; then
+    ROUTES_OK=1
+    pass "static routes between the pod CIDRs of ${a} ($(pod_cidrs "${a}" | tr '\n' ' ')) and ${b} ($(pod_cidrs "${b}" | tr '\n' ' '))"
+  else
+    skip "static routes between ${a} and ${b} could not be added (${LAST_OBSERVED}); the data path checks are skipped, the control plane objects are still asserted"
+  fi
+}
+
+# setup_members: clusters a and b, routes, images and the controller in each,
+# once per run. Every failure aborts.
+setup_members() {
+  local cluster id
+  [ "${MCS_READY}" = "1" ] && return 0
+  if ensure_cluster "${E2E_CLUSTER_A}" \
+    --k3s-arg "--cluster-cidr=${E2E_POD_CIDR_A}@server:*" \
+    --k3s-arg "--service-cidr=${E2E_SERVICE_CIDR_A}@server:*"; then
+    pass "k3d cluster ${E2E_CLUSTER_A} (pods ${E2E_POD_CIDR_A}, services ${E2E_SERVICE_CIDR_A}) has a Ready node"
+  else
+    fail "k3d cluster ${E2E_CLUSTER_A}" "${LAST_OBSERVED}"
+    abort
+  fi
+  if ensure_cluster "${E2E_CLUSTER_B}" \
+    --k3s-arg "--cluster-cidr=${E2E_POD_CIDR_B}@server:*" \
+    --k3s-arg "--service-cidr=${E2E_SERVICE_CIDR_B}@server:*"; then
+    pass "k3d cluster ${E2E_CLUSTER_B} (pods ${E2E_POD_CIDR_B}, services ${E2E_SERVICE_CIDR_B}) has a Ready node"
+  else
+    fail "k3d cluster ${E2E_CLUSTER_B}" "${LAST_OBSERVED}"
+    abort
+  fi
+  setup_routes
+  once "gds-server gRPC NodePort reachable address on ${E2E_NETWORK}" hub_grpc_url || abort
+  log "GDS URL of the controllers: ${GDS_GRPC_URL}"
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    import_image "${cluster}" "${E2E_CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_IMAGE_TAG}"
+    import_or_pull "${cluster}" "${E2E_BUSYBOX_IMAGE}"
+  done
+  pass "image ${E2E_CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_IMAGE_TAG} imported into ${E2E_CLUSTER_A} and ${E2E_CLUSTER_B}"
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    id="${E2E_CLUSTER_ID_A}"
+    [ "${cluster}" = "${E2E_CLUSTER_B}" ] && id="${E2E_CLUSTER_ID_B}"
+    if install_controller "${cluster}" "${id}"; then
+      pass "helm upgrade --install ${CONTROLLER_RELEASE} in ${cluster} (cluster id ${id}): 2 replicas ready"
+    else
+      fail "helm upgrade --install ${CONTROLLER_RELEASE} in ${cluster}" "$(tail -n 5 "${E2E_WORK_DIR}/helm-controller-${cluster}.log" | tr '\n' ' ')"
+      abort
+    fi
+  done
+  MCS_READY=1
+}
+
+# leader_held CLUSTER: the leader election Lease names a running controller
+# pod.
+leader_held() {
+  local holder pods
+  holder="$(kc "$1" -n "${E2E_CONTROLLER_NAMESPACE}" get lease "${LEADER_LEASE}" -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)" || holder=""
+  pods="$(kc "$1" -n "${E2E_CONTROLLER_NAMESPACE}" get pods -l "${CONTROLLER_SELECTOR}" \
+    --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)" || pods=""
+  LAST_OBSERVED="holder ${holder:-none}; running pods $(tr '\n' ' ' <<<"${pods}")"
+  [ -n "${holder}" ] || return 1
+  # controller-runtime names the holder <pod>_<uuid>.
+  grep -qx -- "${holder%%_*}" <<<"${pods}"
+}
+
+# apply_demo: the echo workload in a, the client in b, the demo namespace in
+# both (namespace sameness).
+apply_demo() {
+  local cluster
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    kc "${cluster}" create namespace "${E2E_DEMO_NAMESPACE}" --dry-run=client -o yaml | kc "${cluster}" apply -f - >/dev/null || return 1
+  done
+  render_manifest "${MANIFESTS}/mcs-demo.yaml" | kc "${E2E_CLUSTER_A}" -n "${E2E_DEMO_NAMESPACE}" apply -f - >/dev/null || return 1
+  render_manifest "${MANIFESTS}/mcs-client.yaml" | kc "${E2E_CLUSTER_B}" -n "${E2E_DEMO_NAMESPACE}" apply -f - >/dev/null || return 1
+  kc "${E2E_CLUSTER_A}" -n "${E2E_DEMO_NAMESPACE}" rollout status deploy/echo --timeout=120s >/dev/null 2>&1 ||
+    { LAST_OBSERVED="deploy/echo in ${E2E_CLUSTER_A} not ready"; return 1; }
+  kc "${E2E_CLUSTER_B}" -n "${E2E_DEMO_NAMESPACE}" wait --for=condition=Ready pod/client --timeout=120s >/dev/null 2>&1 ||
+    { LAST_OBSERVED="pod/client in ${E2E_CLUSTER_B} not ready"; return 1; }
+}
+
+scale_echo() {  # scale_echo REPLICAS
+  kc "${E2E_CLUSTER_A}" -n "${E2E_DEMO_NAMESPACE}" scale deploy/echo --replicas="$1" >/dev/null 2>"${E2E_WORK_DIR}/kubectl.err" ||
+    { LAST_OBSERVED="$(cat "${E2E_WORK_DIR}/kubectl.err")"; return 1; }
+}
+
+label_service() {  # label_service CLUSTER NAME LABEL...
+  local cluster="$1" name="$2"
+  shift 2
+  kc "${cluster}" -n "${E2E_DEMO_NAMESPACE}" label service "${name}" "$@" --overwrite >/dev/null 2>"${E2E_WORK_DIR}/kubectl.err" ||
+    { LAST_OBSERVED="$(cat "${E2E_WORK_DIR}/kubectl.err")"; return 1; }
+}
+
+# serviceexport_is CLUSTER NAME EXPECTED: "<managed-by>|Valid=<s>|Ready=<s>
+# [|pool-id=<id>]" of the ServiceExport.
+serviceexport_is() {
+  local got
+  got="$(jq -r '"\(.metadata.labels["gds.nvidia.com/managed-by"] // "-")|Valid=\([.status.conditions[]? | select(.type == "Valid") | .status][0] // "-")|Ready=\([.status.conditions[]? | select(.type == "Ready") | .status][0] // "-")" + (if .metadata.labels["gds.nvidia.com/pool-id"] then "|pool-id=" + .metadata.labels["gds.nvidia.com/pool-id"] else "" end)' \
+    <<<"$(kjson "$1" -n "${E2E_DEMO_NAMESPACE}" serviceexport "$2")" 2>/dev/null)" || got=""
+  LAST_OBSERVED="ServiceExport ${2}: ${got:-absent}"
+  [ "${got}" = "$3" ]
+}
+
+object_absent() {  # object_absent CLUSTER NAMESPACE KIND/NAME
+  if kc "$1" --request-timeout=10s -n "$2" get "$3" >/dev/null 2>&1; then
+    LAST_OBSERVED="$3 still exists in $1"
+    return 1
+  fi
+  LAST_OBSERVED="$3 absent"
+}
+
+object_present() {  # object_present CLUSTER NAMESPACE KIND/NAME
+  kc "$1" --request-timeout=10s -n "$2" get "$3" >/dev/null 2>&1 && return 0
+  LAST_OBSERVED="$3 absent in $1"
+  return 1
+}
+
+# Set by serviceimport_ok: the derived Service, its ClusterIP and the
+# ServiceImport UID in b.
+DERIVED_NAME=""
+DERIVED_IP=""
+IMPORT_UID=""
+
+# serviceimport_ok CLUSTER NAME: a ClusterSetIP ServiceImport whose spec.ips
+# is the ClusterIP of its derived Service.
+serviceimport_ok() {
+  local cluster="$1" name="$2" si svc_ip type
+  si="$(kjson "${cluster}" -n "${E2E_DEMO_NAMESPACE}" serviceimport "${name}")"
+  [ -n "${si}" ] || si='{}'
+  DERIVED_NAME="$(jq -r '.metadata.annotations["multicluster.kubernetes.io/derived-service"] // ""' <<<"${si}")"
+  DERIVED_IP="$(jq -r '.spec.ips[0] // ""' <<<"${si}")"
+  IMPORT_UID="$(jq -r '.metadata.uid // ""' <<<"${si}")"
+  type="$(jq -r '.spec.type // ""' <<<"${si}")"
+  svc_ip=""
+  if [ -n "${DERIVED_NAME}" ]; then
+    svc_ip="$(kc "${cluster}" -n "${E2E_DEMO_NAMESPACE}" get service "${DERIVED_NAME}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)" || svc_ip=""
+  fi
+  LAST_OBSERVED="ServiceImport ${name}: type ${type:-none}, ips ${DERIVED_IP:-none}, derived ${DERIVED_NAME:-none} ClusterIP ${svc_ip:-none}"
+  [ "${type}" = "ClusterSetIP" ] && [ -n "${DERIVED_IP}" ] && [ "${DERIVED_IP}" = "${svc_ip}" ]
+}
+
+# ready_pod_ips CLUSTER: sorted IPs of the ready echo pods.
+ready_pod_ips() {
+  jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .status.podIP] | sort | join(",")' \
+    <<<"$(kjson "$1" -n "${E2E_DEMO_NAMESPACE}" pods -l app=echo)" 2>/dev/null
+}
+
+# slices_match CLUSTER NAME SOURCE_CLUSTER SOURCE_ID COUNT: the imported
+# EndpointSlices of NAME from SOURCE_ID hold COUNT ready endpoints, the ready
+# echo pod IPs of SOURCE_CLUSTER.
+slices_match() {
+  local got want
+  got="$(jq -r '[.items[].endpoints[]? | select(.conditions.ready != false) | .addresses[0]] | sort | join(",")' \
+    <<<"$(kjson "$1" -n "${E2E_DEMO_NAMESPACE}" endpointslices \
+      -l "multicluster.kubernetes.io/service-name=$2,multicluster.kubernetes.io/source-cluster=$4")" 2>/dev/null)" || got=""
+  want="$(ready_pod_ips "$3")"
+  LAST_OBSERVED="slices from $4: ${got:-none}; ready pods in $3: ${want:-none}"
+  [ -n "${got}" ] && [ "${got}" = "${want}" ] && [ "$(awk -F, '{print NF}' <<<"${got}")" = "$5" ]
+}
+
+# gds_import_ready NAME EXPECTED: "<cluster>:<ready count> ..." of the
+# participating clusters of the GDS import.
+gds_import_ready() {
+  rest GET "${CS_PATH}/imports/${E2E_DEMO_NAMESPACE}/$1?includeEndpoints=true"
+  local got
+  # $i and $c are jq variables.
+  # shellcheck disable=SC2016
+  got="$(rest_json '.serviceImport as $i | [$i.clusters[]? | select(.participating) | .cluster as $c
+      | $c + ":" + ([$i.endpoints[]? | select(.cluster == $c) | .endpoints[]? | select(.conditions.ready)] | length | tostring)] | join(" ")' 2>/dev/null)" || got="<not JSON>"
+  LAST_OBSERVED="HTTP ${REST_STATUS} ${got}"
+  [ "${REST_STATUS}" = "200" ] && [ "${got}" = "$2" ]
+}
+
+gds_import_absent() {  # gds_import_absent NAME
+  rest GET "${CS_PATH}/imports/${E2E_DEMO_NAMESPACE}/$1"
+  observe '{code, message}'
+  [ "${REST_STATUS}" = "404" ]
+}
+
+# curl_derived: a request from the client pod in b to the derived ClusterIP
+# answers with the name of an echo pod in a.
+curl_derived() {
+  local got
+  got="$(kc "${E2E_CLUSTER_B}" -n "${E2E_DEMO_NAMESPACE}" exec client -- wget -qO- -T 5 "http://${DERIVED_IP}:8080/" 2>&1)" || got="failed: ${got}"
+  LAST_OBSERVED="wget http://${DERIVED_IP}:8080/: $(head -c 200 <<<"${got}")"
+  grep -q '^echo-' <<<"${got}"
+}
+
+POOL_DEMO_ID=""
+POOL_API_ID=""
+
+pool_id_of() {  # pool_id_of NAME: from ListPools of cluster a
+  rest GET "${CS_PATH}/pools?cluster=${E2E_CLUSTER_ID_A}"
+  rest_json "[.pools[]? | select(.name == \"$1\") | .poolId][0] // \"\""
+}
+
+# demo_pool_frontend: pool demo names Service frontend as its OPENAI frontend.
+demo_pool_frontend() {
+  rest_expect GET "${CS_PATH}/pools?model=demo-model" "" 200 \
+    'any(.pools[]?; .name == "demo" and any(.frontends[]?; .role == "FRONTEND_ROLE_OPENAI" and .service.name == "frontend"))' \
+    '[.pools[]? | {name, state, frontends}]'
+}
+
+drain_demo_pool() {
+  POOL_DEMO_ID="$(pool_id_of demo)"
+  [ -n "${POOL_DEMO_ID}" ] || { LAST_OBSERVED="pool demo not listed"; return 1; }
+  rest_expect PATCH "${CS_PATH}/pools/${POOL_DEMO_ID}" \
+    '{"pool":{"desiredState":"POOL_STATE_DRAINING"},"updateMask":"desiredState"}' \
+    200 '.pool.desiredState == "POOL_STATE_DRAINING" and .pool.state == "POOL_STATE_DRAINING"' \
+    '.pool | {poolId, desiredState, state}'
+}
+
+register_api_pool() {
+  rest_expect POST "${CS_PATH}/pools" \
+    "{\"pool\":{\"name\":\"api\",\"location\":{\"cluster\":\"${E2E_CLUSTER_ID_A}\",\"region\":\"${E2E_REGION}\"},\"models\":[{\"modelId\":\"api-model\"}],\"services\":[{\"namespace\":\"${E2E_DEMO_NAMESPACE}\",\"name\":\"api-svc\",\"role\":\"FRONTEND_ROLE_OPENAI\"}]},\"leaseTtl\":\"300s\"}" \
+    200 '.pool.name == "api" and (.pool.poolId | length > 0)' '.pool | {poolId, name, state, services}' || return 1
+  POOL_API_ID="$(rest_json .pool.poolId)"
+}
+
+deregister_api_pool() {
+  rest_expect DELETE "${CS_PATH}/pools/${POOL_API_ID}" "" 200 '. == {}'
+}
+
+restart_controllers() {
+  local cluster
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    kc "${cluster}" -n "${E2E_CONTROLLER_NAMESPACE}" rollout restart "deploy/${CONTROLLER_RELEASE}" >/dev/null || return 1
+  done
+  for cluster in "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}"; do
+    kc "${cluster}" -n "${E2E_CONTROLLER_NAMESPACE}" rollout status "deploy/${CONTROLLER_RELEASE}" --timeout=180s >/dev/null 2>&1 ||
+      { LAST_OBSERVED="rollout of ${CONTROLLER_RELEASE} in ${cluster} did not finish"; return 1; }
+  done
+}
+
+# import_kept UID IP: the ServiceImport echo in b still has UID and IP.
+import_kept() {
+  local uid="$1" ip="$2"
+  serviceimport_ok "${E2E_CLUSTER_B}" echo || return 1
+  LAST_OBSERVED="uid ${IMPORT_UID} (was ${uid}), ip ${DERIVED_IP} (was ${ip})"
+  [ "${IMPORT_UID}" = "${uid}" ] && [ "${DERIVED_IP}" = "${ip}" ]
+}
+
+# derived_gone CLUSTER: no ServiceImport echo, derived Service or slice of it.
+derived_gone() {
+  local slices
+  object_absent "$1" "${E2E_DEMO_NAMESPACE}" serviceimport/echo || return 1
+  if [ -n "${DERIVED_NAME}" ]; then
+    object_absent "$1" "${E2E_DEMO_NAMESPACE}" "service/${DERIVED_NAME}" || return 1
+  fi
+  slices="$(kc "$1" -n "${E2E_DEMO_NAMESPACE}" get endpointslices -l multicluster.kubernetes.io/service-name=echo -o name 2>/dev/null)" || slices=""
+  LAST_OBSERVED="imported slices left: ${slices:-none}"
+  [ -z "${slices}" ]
+}
+
+run_phase_2() {
+  local T="${E2E_TIMEOUT}" a="${E2E_CLUSTER_A}" b="${E2E_CLUSTER_B}" ida="${E2E_CLUSTER_ID_A}" idb="${E2E_CLUSTER_ID_B}"
+  local uid ip
+  CS_PATH="/v1/clustersets/${E2E_MCS_CLUSTERSET}"
+  if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
+    REMAINING_STEPS="phase 2 setup|phase 2 controllers|"
+  else
+    REMAINING_STEPS="phase 2 setup|phase 2 controllers|phase 2 export and import|phase 2 scale down|phase 2 labelled pool|phase 2 API-registered pool|phase 2 controller restart|phase 2 unexport|"
+  fi
+
+  section "Phase 2 setup: clusters ${a} and ${b} with gds-mcs-controller, gds-server in ${E2E_CLUSTER}"
+  setup_hub
+  setup_members
+  step_done
+
+  section "Phase 2: controllers"
+  expect "GDS lists clusters ${ida} and ${idb} in clusterset ${E2E_MCS_CLUSTERSET}" "${T}" clusters_are "" "${ida},${idb}" || abort
+  expect "cluster ${ida} holds an ACTIVE lease" "${T}" cluster_lease_is "${ida}" LEASE_STATE_ACTIVE || true
+  expect "cluster ${idb} holds an ACTIVE lease" "${T}" cluster_lease_is "${idb}" LEASE_STATE_ACTIVE || true
+  expect "Lease ${LEADER_LEASE} in ${a} is held by a running controller pod" "${T}" leader_held "${a}" || true
+  expect "Lease ${LEADER_LEASE} in ${b} is held by a running controller pod" "${T}" leader_held "${b}" || true
+  step_done
+
+  if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
+    return 0
+  fi
+
+  section "Phase 2: export and import"
+  once "echo (2 replicas) and Services in ${a}, client pod in ${b}, namespace ${E2E_DEMO_NAMESPACE} in both" apply_demo || abort
+  once "label Service echo in ${a} gds.nvidia.com/export=true" label_service "${a}" echo gds.nvidia.com/export=true || abort
+  expect "ServiceExport echo in ${a}: created by the controller, Valid=True, Ready=True" "${T}" \
+    serviceexport_is "${a}" echo "gds-mcs-controller|Valid=True|Ready=True" || true
+  expect "GDS import echo: cluster ${ida} with 2 ready endpoints" "${T}" gds_import_ready echo "${ida}:2" || true
+  expect "ServiceImport echo in ${a} too: the exporting cluster imports its own export" "${T}" serviceimport_ok "${a}" echo || true
+  expect "ServiceImport echo in ${b}: ClusterSetIP, spec.ips = the derived Service's ClusterIP" "${T}" serviceimport_ok "${b}" echo || abort
+  expect "EndpointSlices in ${b} labelled source-cluster=${ida}: the 2 ready echo pod IPs of ${a}" "${T}" \
+    slices_match "${b}" echo "${a}" "${ida}" 2 || true
+  if [ "${ROUTES_OK}" = "1" ]; then
+    expect "a pod in ${b} reaches echo in ${a} through the derived ClusterIP" "${T}" curl_derived || true
+  else
+    skip "a pod in ${b} reaches echo in ${a} through the derived ClusterIP: no routes between the pod CIDRs"
+  fi
+  step_done
+
+  section "Phase 2: scale down"
+  once "scale echo in ${a} to 1 replica" scale_echo 1 || true
+  expect "EndpointSlices in ${b} from ${ida} drop to the 1 remaining pod" "${T}" slices_match "${b}" echo "${a}" "${ida}" 1 || true
+  expect "GDS import echo: cluster ${ida} with 1 ready endpoint" "${T}" gds_import_ready echo "${ida}:1" || true
+  step_done
+
+  section "Phase 2: labelled pool"
+  expect "labelled Service frontend in ${a} appears as pool demo, ACTIVE, in ListPools" "${T}" \
+    pools_are "model=demo-model" "${ida}/demo=POOL_STATE_ACTIVE" || true
+  expect "pool demo names Service frontend as its OPENAI frontend" "${T}" demo_pool_frontend || true
+  once "UpdatePool overlay sets pool demo DRAINING" drain_demo_pool || true
+  expect "ListPools reports pool demo DRAINING" "${T}" pools_are "model=demo-model" "${ida}/demo=POOL_STATE_DRAINING" || true
+  expect "draining pool demo keeps ServiceExport frontend in ${a}" "${T}" \
+    serviceexport_is "${a}" frontend "gds-mcs-controller|Valid=True|Ready=True" || true
+  expect "draining pool demo keeps ServiceImport frontend in ${b}" "${T}" object_present "${b}" "${E2E_DEMO_NAMESPACE}" serviceimport/frontend || true
+  step_done
+
+  section "Phase 2: API-registered pool"
+  if once "RegisterPool api in ${ida} with services[] = ${E2E_DEMO_NAMESPACE}/api-svc" register_api_pool; then
+    expect "ServiceExport api-svc in ${a}: created for the pool, labelled with its pool id" "${T}" \
+      serviceexport_is "${a}" api-svc "gds-mcs-controller|Valid=True|Ready=True|pool-id=${POOL_API_ID}" || true
+    expect "ServiceImport api-svc appears in ${b}" "${T}" object_present "${b}" "${E2E_DEMO_NAMESPACE}" serviceimport/api-svc || true
+    once "DeregisterPool api" deregister_api_pool || true
+    expect "ServiceExport api-svc in ${a} is removed with the pool" "${T}" object_absent "${a}" "${E2E_DEMO_NAMESPACE}" serviceexport/api-svc || true
+    expect "ServiceImport api-svc in ${b} is removed" "${T}" object_absent "${b}" "${E2E_DEMO_NAMESPACE}" serviceimport/api-svc || true
+  fi
+  step_done
+
+  section "Phase 2: controller restart"
+  serviceimport_ok "${b}" echo || true
+  uid="${IMPORT_UID}"
+  ip="${DERIVED_IP}"
+  once "rollout restart of the controllers in ${a} and ${b}" restart_controllers || true
+  expect "ServiceImport echo in ${b} keeps its UID and ClusterIP" "${T}" import_kept "${uid}" "${ip}" || true
+  expect "EndpointSlices in ${b} still hold the ready echo pod of ${a}" "${T}" slices_match "${b}" echo "${a}" "${ida}" 1 || true
+  expect "ServiceExport echo in ${a} stays Valid and Ready" "${T}" serviceexport_is "${a}" echo "gds-mcs-controller|Valid=True|Ready=True" || true
+  expect "a restarted controller pod holds the Lease in ${a}" "${T}" leader_held "${a}" || true
+  expect "cluster ${ida} lease is ACTIVE after the restart" "${T}" cluster_lease_is "${ida}" LEASE_STATE_ACTIVE || true
+  if [ "${ROUTES_OK}" = "1" ]; then
+    expect "a pod in ${b} still reaches echo through the derived ClusterIP" "${T}" curl_derived || true
+  fi
+  step_done
+
+  section "Phase 2: unexport"
+  once "remove the label gds.nvidia.com/export from Service echo in ${a}" label_service "${a}" echo gds.nvidia.com/export- || true
+  expect "ServiceExport echo in ${a} is deleted" "${T}" object_absent "${a}" "${E2E_DEMO_NAMESPACE}" serviceexport/echo || true
+  expect "GDS no longer has an import echo" "${T}" gds_import_absent echo || true
+  expect "ServiceImport echo, its derived Service and its slices are deleted in ${b}" "${T}" derived_gone "${b}" || true
+  step_done
+}
+
+# ---------------------------------------------------------------------------
+# Phase 3: Stargate in a exports itself through the controller; a Pylon in b
+# finds it only through GDS and registers with it.
+
+router_args() {
+  printf '%s\n' \
+    --namespace "${E2E_ROUTER_NAMESPACE}" \
+    --values "${MANIFESTS}/router-values.yaml" \
+    --set-string "llmRequestRouter.image.repository=${E2E_STARGATE_IMAGE_REPOSITORY}" \
+    --set-string "llmRequestRouter.image.tag=${STARGATE_IMAGE_TAG}" \
+    --set-string "llmRequestRouter.globalDiscovery.urls[0]=${GDS_GRPC_URL}" \
+    --set-string "llmRequestRouter.globalDiscovery.clustersetId=${E2E_MCS_CLUSTERSET}" \
+    --set-string "llmRequestRouter.globalDiscovery.clusterId=${E2E_CLUSTER_ID_A}" \
+    --set-string "llmRequestRouter.kubernetes.advertisedHostnameTemplate=${E2E_ROUTER_HOST}"
+}
+
+install_router() {
+  local args=() line
+  while IFS= read -r line; do
+    args+=("${line}")
+  done < <(router_args)
+  hm "${E2E_CLUSTER_A}" upgrade --install "${ROUTER_RELEASE}" "${ROUTER_CHART}" "${args[@]}" \
+    --create-namespace --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-router.log" 2>&1
+}
+
+ROUTER_IP=""
+PYLON_POD=""
+
+# router_ready_ip: ROUTER_IP, the pod IP of the ready Stargate pod in a.
+router_ready_ip() {
+  ROUTER_IP="$(jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .status.podIP][0] // ""' \
+    <<<"$(kjson "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" pods -l "${ROUTER_SELECTOR}")" 2>/dev/null)" || ROUTER_IP=""
+  LAST_OBSERVED="ready Stargate pod IP: ${ROUTER_IP:-none}"
+  [ -n "${ROUTER_IP}" ]
+}
+
+router_export_ok() {
+  local got
+  got="$(jq -r '"\(.metadata.labels["gds.nvidia.com/managed-by"] // "-")|Valid=\([.status.conditions[]? | select(.type == "Valid") | .status][0] // "-")|Ready=\([.status.conditions[]? | select(.type == "Ready") | .status][0] // "-")"' \
+    <<<"$(kjson "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" serviceexport "${ROUTER_RELEASE}")" 2>/dev/null)" || got=""
+  LAST_OBSERVED="ServiceExport ${ROUTER_RELEASE}: ${got:-absent}"
+  [ "${got}" = "gds-mcs-controller|Valid=True|Ready=True" ]
+}
+
+# gds_router_ok: ListRouters has the router of cluster a with its pod as a
+# ready replica, dial scheme http and the gRPC port.
+gds_router_ok() {
+  rest_expect GET "${CS_PATH}/routers" "" 200 \
+    "any(.routers[]?; .cluster == \"${E2E_CLUSTER_ID_A}\" and .namespace == \"${E2E_ROUTER_NAMESPACE}\" and .name == \"${ROUTER_RELEASE}\" and .dialScheme == \"http\" and .grpcPort == 50071 and any(.replicas[]?; .address == \"${ROUTER_IP}\" and .ready))" \
+    '[.routers[]? | {cluster, namespace, name, dialScheme, grpcPort, replicas}]'
+}
+
+apply_pylon() {
+  local cluster="${E2E_CLUSTER_B}"
+  kc "${cluster}" create namespace "${E2E_PYLON_NAMESPACE}" --dry-run=client -o yaml | kc "${cluster}" apply -f - >/dev/null || return 1
+  render_manifest "${MANIFESTS}/pylon.yaml" | kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" apply -f - >/dev/null || return 1
+  kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" rollout status deploy/pylon --timeout=180s >/dev/null 2>&1 ||
+    { LAST_OBSERVED="deploy/pylon in ${cluster} did not roll out"; return 1; }
+  PYLON_POD="$(kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" get pods -l app=gds-e2e-pylon \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || PYLON_POD=""
+  LAST_OBSERVED="pylon pod ${PYLON_POD:-none}"
+  [ -n "${PYLON_POD}" ]
+}
+
+pylon_log_has() {  # pylon_log_has TEXT
+  local logs
+  logs="$(kc "${E2E_CLUSTER_B}" -n "${E2E_PYLON_NAMESPACE}" logs "${PYLON_POD}" -c pylon --tail=-1 2>/dev/null | decolor)" || logs=""
+  LAST_OBSERVED="$(grep -F -m1 -- "$1" <<<"${logs}" || tail -n 2 <<<"${logs}" | tr '\n' ' ')"
+  grep -qF -- "$1" <<<"${logs}"
+}
+
+# pylon_gauge NAME: the Pylon gauge pylon_NAME is 1 for a router address that
+# names the Stargate pod of a. Read through the API server's pod proxy.
+pylon_gauge() {
+  local metrics
+  metrics="$(kc "${E2E_CLUSTER_B}" get --raw "/api/v1/namespaces/${E2E_PYLON_NAMESPACE}/pods/${PYLON_POD}:9089/proxy/metrics" 2>/dev/null)" || metrics=""
+  LAST_OBSERVED="$(grep "^pylon_$1" <<<"${metrics}" | tr '\n' ' ')"
+  [ -n "${LAST_OBSERVED}" ] || LAST_OBSERVED="no pylon_$1 series"
+  grep -q "^pylon_$1{.*${ROUTER_IP//./\\.}.*} 1\$" <<<"${metrics}"
+}
+
+# router_has_pylon: Stargate in a lists model test-model with a registered
+# and healthy server of cluster b. Read through the API server's service
+# proxy.
+router_has_pylon() {
+  local got
+  got="$(kc "${E2E_CLUSTER_A}" get --raw "/api/v1/namespaces/${E2E_ROUTER_NAMESPACE}/services/${ROUTER_RELEASE}:8000/proxy/v1/models" 2>&1)" || got="failed: ${got}"
+  LAST_OBSERVED="GET /v1/models: $(head -c 300 <<<"${got}")"
+  jq -e --arg c "${E2E_CLUSTER_ID_B}" \
+    'any(.models[]?; .model_id == "test-model" and any(.clusters[]?; .cluster_id == $c and .registered_servers >= 1 and .healthy_servers >= 1))' \
+    <<<"${got}" >/dev/null 2>&1
+}
+
+start_router_port_forward() {
+  local i=0
+  if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${E2E_ROUTER_LOCAL_PORT}/"; then
+    LAST_OBSERVED="127.0.0.1:${E2E_ROUTER_LOCAL_PORT} is already in use; set E2E_ROUTER_LOCAL_PORT"
+    return 1
+  fi
+  kc "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" port-forward --address 127.0.0.1 "svc/${ROUTER_RELEASE}" \
+    "${E2E_ROUTER_LOCAL_PORT}:8000" >>"${PF_LOG}" 2>&1 &
+  ROUTER_PF_PID=$!
+  while [ "${i}" -lt 30 ]; do
+    if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${E2E_ROUTER_LOCAL_PORT}/v1/models" && kill -0 "${ROUTER_PF_PID}" 2>/dev/null; then
+      return 0
+    fi
+    kill -0 "${ROUTER_PF_PID}" 2>/dev/null || break
+    sleep 1
+    i=$((i + 1))
+  done
+  LAST_OBSERVED="$(tail -n 3 "${PF_LOG}" | tr '\n' ' ')"
+  return 1
+}
+
+stop_router_port_forward() {
+  if [ -n "${ROUTER_PF_PID}" ]; then
+    kill "${ROUTER_PF_PID}" 2>/dev/null || true
+    wait "${ROUTER_PF_PID}" 2>/dev/null || true
+    ROUTER_PF_PID=""
+  fi
+}
+
+# chat_through_router: a streamed chat completion sent to Stargate in a is
+# answered by the sample backend behind the Pylon in b, over the reverse
+# tunnel. Stargate needs the x-request-id, x-model and x-input-tokens
+# headers the LLM gateway sets; the sample backend serves streams only.
+chat_through_router() {
+  local body="${E2E_WORK_DIR}/chat.json" got
+  printf '%s' '{"model":"test-model","messages":[{"role":"user","content":"hello from gds-e2e"}],"max_tokens":8,"stream":true}' >"${body}"
+  got="$(curl -sS -i -N --max-time 20 -X POST "http://127.0.0.1:${E2E_ROUTER_LOCAL_PORT}/v1/chat/completions" \
+    -H 'Content-Type: application/json' -H 'x-request-id: gds-e2e-phase-3' -H 'x-model: test-model' \
+    -H 'x-input-tokens: 8' --data-binary @"${body}" 2>&1 | tr -d '\r')" || got="failed: ${got}"
+  LAST_OBSERVED="$(head -c 400 <<<"${got}" | tr '\n' ' ')"
+  grep -qix "x-stargate-cluster-id: ${E2E_CLUSTER_ID_B}" <<<"${got}" &&
+    grep -q 'chat.completion.chunk' <<<"${got}" && grep -qF 'data: [DONE]' <<<"${got}"
+}
+
+run_phase_3() {
+  local T="${E2E_TIMEOUT}" a="${E2E_CLUSTER_A}" b="${E2E_CLUSTER_B}" ida="${E2E_CLUSTER_ID_A}"
+  CS_PATH="/v1/clustersets/${E2E_MCS_CLUSTERSET}"
+  if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
+    REMAINING_STEPS="phase 3 setup|phase 3 router export|phase 3 pylon|"
+  else
+    REMAINING_STEPS="phase 3 setup|phase 3 router export|phase 3 pylon|phase 3 registration|"
+  fi
+
+  section "Phase 3 setup: Stargate in ${a}, Pylon in ${b}"
+  setup_hub
+  setup_members
+  import_image "${a}" "${E2E_STARGATE_IMAGE_REPOSITORY}:${STARGATE_IMAGE_TAG}"
+  import_image "${b}" "${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG}" "${E2E_SAMPLE_IMAGE}"
+  pass "images ${E2E_STARGATE_IMAGE_REPOSITORY}:${STARGATE_IMAGE_TAG} into ${a}; ${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG} and ${E2E_SAMPLE_IMAGE} into ${b}"
+  if install_router; then
+    pass "helm upgrade --install ${ROUTER_RELEASE} in ${a} (globalDiscovery and export enabled): ready"
+  else
+    fail "helm upgrade --install ${ROUTER_RELEASE} in ${a}" "$(tail -n 5 "${E2E_WORK_DIR}/helm-router.log" | tr '\n' ' ')"
+    abort
+  fi
+  step_done
+
+  section "Phase 3: router export"
+  expect "Stargate pod in ${a} is ready" "${T}" router_ready_ip || abort
+  expect "ServiceExport ${ROUTER_RELEASE} in ${a} (role router): created by the controller, Valid and Ready" "${T}" router_export_ok || true
+  expect "GDS ListRouters: cluster ${ida}, dial scheme http, port 50071, replica ${ROUTER_IP} ready" "${T}" gds_router_ok || abort
+  step_done
+
+  section "Phase 3: pylon"
+  once "Pylon with --gds-url and no --stargate-address, and the sample backend, in ${b}" apply_pylon || abort
+  expect "Pylon in ${b} learns the router seed from GDS (log: GDS Stargate seeds changed)" "${T}" pylon_log_has "GDS Stargate seeds changed" || true
+  step_done
+
+  if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
+    return 0
+  fi
+
+  section "Phase 3: registration"
+  if [ "${ROUTES_OK}" != "1" ]; then
+    skip "Pylon in ${b} registers with Stargate in ${a}: no routes between the pod CIDRs, so the seed ${ROUTER_IP}:50071 is unreachable"
+    step_done
+    return 0
+  fi
+  expect "Pylon registration stream to Stargate ${ROUTER_IP} is connected (pylon_registration_stream_connected)" 90 pylon_gauge registration_stream_connected || true
+  expect "Pylon reverse tunnel to Stargate ${ROUTER_IP} is connected (pylon_reverse_tunnel_connected)" 90 pylon_gauge reverse_tunnel_connected || true
+  expect "Stargate in ${a} lists test-model with a registered, healthy server of cluster ${E2E_CLUSTER_ID_B}" "${T}" router_has_pylon || true
+  if start_router_port_forward; then
+    expect "a streamed chat completion sent to Stargate in ${a} is answered by the backend behind the Pylon in ${b}" "${T}" chat_through_router || true
+  else
+    fail "port-forward to svc/${ROUTER_RELEASE} in ${a}" "${LAST_OBSERVED}"
+  fi
+  stop_router_port_forward
+  step_done
+}
+
+# ---------------------------------------------------------------------------
+# Phases
+
+phase_list() {
+  printf '%s' "${E2E_PHASES}" | tr ',' ' '
+}
 
 run_phases() {
   local phase
-  for phase in $(printf '%s' "${E2E_PHASES}" | tr ',' ' '); do
+  # shellcheck disable=SC2046
+  set -- $(phase_list)
+  while [ $# -gt 0 ]; do
+    phase="$1"
+    shift
+    LATER_PHASES="$*"
     case "${phase}" in
       1) run_phase_1 ;;
-      *) die "unknown phase '${phase}'; available: 1" ;;
+      2) run_phase_2 ;;
+      3) run_phase_3 ;;
+    esac
+  done
+  LATER_PHASES=""
+}
+
+check_phases() {
+  local phase
+  [ -n "$(phase_list | tr -d ' ')" ] || die "E2E_PHASES is empty"
+  for phase in $(phase_list); do
+    case "${phase}" in
+      1 | 2 | 3) ;;
+      *) die "unknown phase '${phase}'; available: 1, 2, 3" ;;
     esac
   done
 }
@@ -836,30 +1876,87 @@ run_phases() {
 # ---------------------------------------------------------------------------
 # Dry run
 
-# E2E_DRY_RUN=1: renders the chart with the phase 1 values and prints the
-# commands a run would use. It touches no cluster and builds nothing.
+# print_args LABEL ARGS...: one helm command line.
+print_args() {
+  printf '  %s' "$1"
+  shift
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+# E2E_DRY_RUN=1: renders the charts of the selected phases with their values
+# and prints the commands a run would use. It touches no cluster and builds
+# nothing.
 dry_run() {
   command -v helm >/dev/null 2>&1 || die "helm is required"
   mkdir -p "${E2E_WORK_DIR}"
   chmod 700 "${E2E_WORK_DIR}"
   section "Dry run (E2E_DRY_RUN=1): no cluster access"
   IMAGE_TAG="e2e-dryrun"
-  local args=() line manifest="${E2E_WORK_DIR}/dry-run-${SERVER_RELEASE}.yaml"
+  CONTROLLER_IMAGE_TAG="e2e-dryrun"
+  STARGATE_IMAGE_TAG="e2e-dryrun"
+  PYLON_IMAGE_TAG="e2e-dryrun"
+  GDS_GRPC_URL="http://hub-node:30090"
+  ROUTER_IP="10.44.0.10"
+  local args=() line phase mcs=0 llm=0 manifest
+  for phase in $(phase_list); do
+    case "${phase}" in
+      2) mcs=1 ;;
+      3) mcs=1 llm=1 ;;
+    esac
+  done
+
+  manifest="${E2E_WORK_DIR}/dry-run-${SERVER_RELEASE}.yaml"
   while IFS= read -r line; do
     args+=("${line}")
   done < <(server_args)
   helm template "${SERVER_RELEASE}" "${SERVER_CHART}" "${args[@]}" >"${manifest}" ||
     die "helm template ${SERVER_RELEASE} failed"
-  printf 'Rendered %s\n\nA run with these settings:\n' "${manifest}"
-  printf '  k3d cluster create %s ... (only when it does not exist and E2E_CREATE_CLUSTERS=1)\n' "${E2E_CLUSTER}"
-  printf '  (cd %s && %s run %s %s)\n' "${REPO_ROOT}" "${BAZEL}" "${BAZEL_FLAGS}" "${IMAGE_TARGET}"
-  printf '  docker tag %s %s:e2e-<image id>\n' "${BAZEL_IMAGE}" "${E2E_IMAGE_REPOSITORY}"
+  printf 'Rendered %s\n' "${manifest}"
+  printf '\nA run with these settings, phases %s:\n' "$(phase_list)"
+  printf '  docker network create %s (when missing)\n' "${E2E_NETWORK}"
+  printf '  k3d cluster create %s --network %s ... (only when it does not exist and E2E_CREATE_CLUSTERS=1)\n' "${E2E_CLUSTER}" "${E2E_NETWORK}"
+  printf '  (cd %s && %s build %s %s.tar), then docker load as %s:e2e-<image id>\n' "${REPO_ROOT}" "${BAZEL}" "${BAZEL_FLAGS}" "${SERVER_TARGET}" "${E2E_IMAGE_REPOSITORY}"
   printf '  k3d image import -c %s %s:e2e-<image id>\n' "${E2E_CLUSTER}" "${E2E_IMAGE_REPOSITORY}"
-  printf '  helm upgrade --install %s %s' "${SERVER_RELEASE}" "${SERVER_CHART}"
-  printf ' %q' "${args[@]}"
-  printf ' --create-namespace --wait\n'
-  printf '\nImage and arguments in the rendered Deployment:\n'
-  grep -E -- '^ *image: |^ *- "--' "${manifest}" || true
+  print_args "helm upgrade --install ${SERVER_RELEASE} ${SERVER_CHART}" "${args[@]}" --create-namespace --wait
+  if [ "${mcs}" = "1" ]; then
+    args=()
+    while IFS= read -r line; do
+      args+=("${line}")
+    done < <(controller_args "${E2E_CLUSTER_ID_A}")
+    manifest="${E2E_WORK_DIR}/dry-run-${CONTROLLER_RELEASE}.yaml"
+    helm template "${CONTROLLER_RELEASE}" "${CONTROLLER_CHART}" "${args[@]}" >"${manifest}" ||
+      die "helm template ${CONTROLLER_RELEASE} failed"
+    printf 'Rendered %s\n' "${manifest}"
+    printf '  k3d cluster create %s --network %s --k3s-arg --cluster-cidr=%s@server:* --k3s-arg --service-cidr=%s@server:*\n' \
+      "${E2E_CLUSTER_A}" "${E2E_NETWORK}" "${E2E_POD_CIDR_A}" "${E2E_SERVICE_CIDR_A}"
+    printf '  k3d cluster create %s --network %s --k3s-arg --cluster-cidr=%s@server:* --k3s-arg --service-cidr=%s@server:*\n' \
+      "${E2E_CLUSTER_B}" "${E2E_NETWORK}" "${E2E_POD_CIDR_B}" "${E2E_SERVICE_CIDR_B}"
+    if [ "${E2E_CROSS_CLUSTER_ROUTES}" = "1" ]; then
+      printf '  docker exec k3d-%s-server-0 ip route replace <pod CIDR of each node of %s> via <its address on %s>, and back\n' \
+        "${E2E_CLUSTER_A}" "${E2E_CLUSTER_B}" "${E2E_NETWORK}"
+    fi
+    printf '  (cd %s && %s build %s %s.tar), then docker load as %s:e2e-<image id>\n' "${REPO_ROOT}" "${BAZEL}" "${BAZEL_FLAGS}" "${CONTROLLER_TARGET}" "${E2E_CONTROLLER_IMAGE_REPOSITORY}"
+    print_args "helm upgrade --install ${CONTROLLER_RELEASE} ${CONTROLLER_CHART}" "${args[@]}" --create-namespace --wait
+    printf '  (and the same in %s with cluster.id=%s; gds.urls[0] is the hub node address and gRPC NodePort)\n' "${E2E_CLUSTER_B}" "${E2E_CLUSTER_ID_B}"
+  fi
+  if [ "${llm}" = "1" ]; then
+    args=()
+    while IFS= read -r line; do
+      args+=("${line}")
+    done < <(router_args)
+    manifest="${E2E_WORK_DIR}/dry-run-${ROUTER_RELEASE}.yaml"
+    helm template "${ROUTER_RELEASE}" "${ROUTER_CHART}" "${args[@]}" >"${manifest}" ||
+      die "helm template ${ROUTER_RELEASE} failed"
+    printf 'Rendered %s\n' "${manifest}"
+    print_args "helm upgrade --install ${ROUTER_RELEASE} ${ROUTER_CHART}" "${args[@]}" --create-namespace --wait
+    manifest="${E2E_WORK_DIR}/dry-run-pylon.yaml"
+    render_manifest "${MANIFESTS}/pylon.yaml" >"${manifest}"
+    printf 'Rendered %s\n' "${manifest}"
+    printf '  kubectl -n %s apply -f %s   (in %s)\n' "${E2E_PYLON_NAMESPACE}" "${manifest}" "${E2E_CLUSTER_B}"
+  fi
+  printf '\nImages and arguments in the rendered manifests:\n'
+  grep -hE -- '^ *image: |^ *- "?--' "${E2E_WORK_DIR}"/dry-run-*.yaml || true
 }
 
 # ---------------------------------------------------------------------------
@@ -870,18 +1967,32 @@ print_access() {
   cat <<EOF
 gds-server stays installed in k3d cluster ${E2E_CLUSTER}, namespace ${E2E_NAMESPACE}.
 
-  export KUBECONFIG=$(kubeconfig_of "${E2E_CLUSTER}")
-  kubectl --context $(context_of "${E2E_CLUSTER}") -n ${E2E_NAMESPACE} port-forward svc/${SERVER_RELEASE} ${E2E_HTTP_LOCAL_PORT}:8080 ${E2E_ADMIN_LOCAL_PORT}:9091
+  kubectl --kubeconfig $(kubeconfig_of "${E2E_CLUSTER}") --context $(context_of "${E2E_CLUSTER}") \\
+    -n ${E2E_NAMESPACE} port-forward svc/${SERVER_RELEASE} ${E2E_HTTP_LOCAL_PORT}:8080 ${E2E_ADMIN_LOCAL_PORT}:9091
 
   curl -s ${ADMIN_URL}/readyz
   curl -s ${REST_URL}/v1/clustersets
+  curl -s ${REST_URL}/v1/clustersets/${E2E_MCS_CLUSTERSET}/routers
   curl -sN ${REST_URL}${CS_PATH}/pools:watch
+EOF
+  if [ "${MCS_READY}" = "1" ]; then
+    cat <<EOF
 
-Remove everything with E2E_CLEANUP=1 $0 (deletes only clusters run.sh created).
+gds-mcs-controller runs in ${E2E_CLUSTER_A} and ${E2E_CLUSTER_B}, namespace ${E2E_CONTROLLER_NAMESPACE}:
+
+  kubectl --kubeconfig $(kubeconfig_of "${E2E_CLUSTER_A}") --context $(context_of "${E2E_CLUSTER_A}") get serviceexports,serviceimports -A
+  kubectl --kubeconfig $(kubeconfig_of "${E2E_CLUSTER_B}") --context $(context_of "${E2E_CLUSTER_B}") get serviceexports,serviceimports -A
+EOF
+  fi
+  cat <<EOF
+
+Remove everything with E2E_CLEANUP_ONLY=1 $0 and the same E2E_CLUSTER and
+E2E_WORK_DIR (deletes only clusters and networks run.sh created).
 EOF
 }
 
 main() {
+  check_phases
   if [ "${E2E_DRY_RUN}" = "1" ]; then
     dry_run
     return
@@ -890,16 +2001,25 @@ main() {
     die "E2E_DEPLOY_ONLY=1 leaves everything installed and cannot be combined with E2E_CLEANUP=1"
   fi
   check_cluster_name "${E2E_CLUSTER}"
+  check_cluster_name "${E2E_CLUSTER_A}"
+  check_cluster_name "${E2E_CLUSTER_B}"
+  check_network_name "${E2E_NETWORK}"
   if [ "${E2E_CLEANUP_ONLY}" = "1" ]; then
     mkdir -p "${E2E_WORK_DIR}"
     cleanup
     return
   fi
   preflight
+  # shellcheck disable=SC2046
+  build_images $(phase_list)
+  if [ "${E2E_BUILD_ONLY}" = "1" ]; then
+    log "images built and loaded into Docker (E2E_BUILD_ONLY=1); run with E2E_SKIP_BUILD=1 to use them"
+    return
+  fi
   run_phases
 
   if [ "${FAIL_COUNT}" -gt 0 ]; then
-    dump_diagnostics "${E2E_CLUSTER}"
+    dump_diagnostics
   fi
   if [ "${E2E_CLEANUP}" = "1" ]; then
     cleanup

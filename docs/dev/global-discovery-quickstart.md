@@ -49,9 +49,10 @@ flowchart LR
 
 ## Prerequisites
 
-- A GDS deployment reachable from every cluster, see
-  `src/control-plane-services/global-discovery/README.md`, and the GDS MCS
-  controller in every router cluster.
+- A GDS deployment reachable from every cluster (chart
+  `deploy/helm/global-discovery`), and the GDS MCS controller (chart
+  `deploy/helm/global-discovery-mcs-controller`) in every router cluster. See
+  [Install GDS and the MCS controller](#install-gds-and-the-mcs-controller).
 - One clusterset id shared by all clusters and a cluster id per cluster, the
   one the MCS controller registers. Ids are DNS labels.
 - Routable pod IPs: pylons dial the router replica pod IPs on the gRPC port
@@ -70,6 +71,49 @@ flowchart LR
   cluster work with the defaults.
 - Credentials: every router cluster's worker auth file holds the credential
   entry of every cluster whose pylons register with it.
+
+## Install GDS and the MCS controller
+
+GDS runs in its own hub clusters, one release per GDS region; the module
+README (`src/control-plane-services/global-discovery/README.md`,
+"Deployment") and the chart README describe the DynamoDB table, IAM and the
+internal load balancer. For development, one replica with the memory store
+is enough:
+
+```bash
+helm install global-discovery deploy/helm/global-discovery/global-discovery \
+  --namespace global-discovery --create-namespace \
+  --set image.repository=<registry>/nvcf-global-discovery \
+  --set region=dev --set store.kind=memory --set replicaCount=1 --wait
+```
+
+Every router cluster runs the MCS controller with its cluster id. It
+registers the cluster, exports the labelled router Service and keeps the
+cluster lease that decides whether the router's seeds are listed:
+
+```bash
+helm install gds-mcs-controller deploy/helm/global-discovery-mcs-controller/global-discovery-mcs-controller \
+  --namespace gds-system --create-namespace \
+  --set fullnameOverride=gds-mcs-controller \
+  --set image.repository=<registry>/nvcf-gds-mcs-controller \
+  --set 'gds.urls={https://gds.example.internal}' \
+  --set gds.tlsCaConfigMap=gds-ca \
+  --set clusterset.id=prod --set cluster.id=cluster-a \
+  --wait
+```
+
+The ConfigMap `gds-ca` (key `ca.crt`) must exist in `gds-system` when GDS
+serves TLS with a private CA. A plaintext development GDS needs
+`gds.allowInsecureHttp=true` and an `http://` URL. The chart installs the
+ServiceExport, ServiceImport and ClusterProperty CRDs; set
+`crds.install=false` when another MCS implementation owns them. Pylon
+clusters need the controller only when they export or import Services
+themselves; pylons read GDS directly.
+
+`tests/e2e/global-discovery-k3d` runs this whole path on three k3d
+clusters: gds-server in a hub, the controller in clusters `a` and `b`,
+Stargate exported from `a`, and a Pylon in `b` that registers with it
+through GDS (phase 3).
 
 ## TLS
 

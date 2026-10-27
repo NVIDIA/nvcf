@@ -151,9 +151,19 @@ code.
 - `config/rbac/role.yaml` is generated: change the `+kubebuilder:rbac`
   markers, run `make codegen-update` and commit the result
   (`make codegen-check` verifies). Leader election RBAC belongs to the chart.
+  The chart's ClusterRole must follow: its render checks fail until
+  `templates/clusterrole.yaml` grants what `role.yaml` grants.
+- Controller flags reach the chart `deploy/helm/global-discovery-mcs-controller`:
+  a new flag gets a value, a line in `templates/_helpers.tpl`, an assertion in
+  `scripts/check-render.sh` and a README row. Run
+  `make -C deploy/helm/global-discovery-mcs-controller lint test`.
 - CRDs are not generated here: ServiceExport and ServiceImport come from
   `sigs.k8s.io/mcs-api` (`config/crd` embeds them), the ClusterProperty CRD
-  is kept by hand in `config/crd/bases`.
+  is kept by hand in `config/crd/bases`. After changing the mcs-api version
+  or that file, run `make -C deploy/helm/global-discovery-mcs-controller
+  sync-crds` and commit the chart copies.
+- Controller behaviour visible across clusters (exports, imports, pools,
+  restarts) is covered by phases 2 and 3 of `tests/e2e/global-discovery-k3d`.
 - Label, annotation, finalizer, field manager and condition values come
   from `api/labels.go` and `api/errors.go`; they are a contract with the
   charts and the Rust crate.

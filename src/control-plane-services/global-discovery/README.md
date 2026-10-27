@@ -51,11 +51,12 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   pool exports, ServiceImports with derived Services and EndpointSlices,
   and the cluster lease. See [gds-mcs-controller](#gds-mcs-controller) and
   `docs/mcs-controller.md`.
-- Packaging: the `nvcf-global-discovery` and gds-admin OCI images, the
-  `deploy/helm/global-discovery` chart, `docs/networking.md`, and phase 1 of
-  the k3d end-to-end test in `tests/e2e/global-discovery-k3d`.
-- Not yet: the MCS controller chart and the multi-cluster end-to-end
-  phases.
+- Packaging: the `nvcf-global-discovery`, gds-admin and
+  `nvcf-gds-mcs-controller` OCI images, the `deploy/helm/global-discovery`
+  and `deploy/helm/global-discovery-mcs-controller` charts,
+  `docs/networking.md`, and the k3d end-to-end test in
+  `tests/e2e/global-discovery-k3d` (phase 1: the server; phase 2: the
+  controller in two clusters; phase 3: Stargate and Pylon through GDS).
 
 ## Layout
 
@@ -256,6 +257,21 @@ lists every value. Per GDS region:
    the region's entry of the global latency name (`docs/networking.md`).
 5. Configure clients with the global name first (`docs/networking.md`,
    Clients).
+6. Install the MCS controller in every member cluster with the chart
+   `deploy/helm/global-discovery-mcs-controller` (its README lists the
+   values, the RBAC it grants and the CRDs it owns):
+
+   ```yaml
+   image:
+     repository: <registry>/nvcf-gds-mcs-controller
+   gds:
+     urls: [https://gds.prod.internal]
+     tlsCaConfigMap: gds-ca
+   clusterset:
+     id: prod
+   cluster:
+     id: use1-a
+   ```
 
 The chart runs three replicas spread over zones with a zero-unavailable
 rolling update, readiness on `/readyz` and liveness on `/healthz` of the
@@ -279,9 +295,14 @@ prints what it would delete and exits with status 2 without `--yes`.
 ## gds-mcs-controller
 
 The MCS controller runs in every member cluster (chart
-`deploy/helm/global-discovery-mcs-controller`). It needs the CRDs of
-`config/crd` and the ClusterRole of `config/rbac/role.yaml`, plus a Role for
-leader election Leases in its namespace. `docs/mcs-controller.md` describes
+`deploy/helm/global-discovery-mcs-controller`, two replicas with leader
+election). It needs the CRDs of `config/crd` and the ClusterRole of
+`config/rbac/role.yaml`, plus a Role for leader election Leases in its
+namespace; the chart installs all of them. Its `scripts/sync-crds.sh`
+copies the CRDs from this module and its render checks compare the
+ClusterRole with `config/rbac/role.yaml`, so run
+`make -C deploy/helm/global-discovery-mcs-controller sync-crds test` after
+changing either. `docs/mcs-controller.md` describes
 its behaviour, labels, conditions, garbage collection, pending namespaces,
 the reachability prerequisite, the optional CoreDNS multicluster plugin,
 every flag, RBAC and metrics.

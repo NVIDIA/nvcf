@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The rules of src/control-plane-services/global-discovery/config/rbac/role.yaml,
+# which hack/codegen.sh generates from the controller's RBAC markers, trimmed
+# by the chart values: namespaces create only with imports.createNamespaces,
+# clusterproperties create, update and patch only with
+# identity.writeClusterProperties. With both on, the rules equal role.yaml;
+# scripts/check-render.sh verifies that. serviceexports create and delete
+# stay: label-driven export (gds.nvidia.com/export=true) always runs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gds-mcs-controller.fullname" . }}
+  labels:
+    {{- include "gds-mcs-controller.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  {{- if .Values.imports.createNamespaces }}
+  - create
+  {{- end }}
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - about.k8s.io
+  resources:
+  - clusterproperties
+  verbs:
+  {{- if .Values.identity.writeClusterProperties }}
+  - create
+  {{- end }}
+  - get
+  - list
+  {{- if .Values.identity.writeClusterProperties }}
+  - patch
+  - update
+  {{- end }}
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - multicluster.x-k8s.io
+  resources:
+  - serviceexports
+  - serviceimports
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - multicluster.x-k8s.io
+  resources:
+  - serviceexports/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - multicluster.x-k8s.io
+  resources:
+  - serviceexports/status
+  - serviceimports/status
+  verbs:
+  - get
+  - patch
+  - update

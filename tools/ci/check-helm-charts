@@ -45,6 +45,7 @@ chart_map=(
     "ess                      encrypted-secret-store/ess-api"
     "function-autoscaler      function-autoscaler"
     "global-discovery         global-discovery/global-discovery"
+    "global-discovery-mcs-controller global-discovery-mcs-controller/global-discovery-mcs-controller"
     "gateway-routes-vanity    gateway-routes/chart"
     "grpc-proxy               grpc-proxy/grpc-proxy"
     "helm-reval               helm-reval"
