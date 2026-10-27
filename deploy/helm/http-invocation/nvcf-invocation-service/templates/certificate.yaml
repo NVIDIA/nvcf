@@ -16,7 +16,21 @@
 {{- $workerTls := .Values.invocation.workerTls }}
 {{- $certificate := $workerTls.tls.certificate }}
 {{- if and $workerTls.enabled $certificate.enabled }}
-{{- $dnsNames := $certificate.dnsNames | default (list (printf "*.%s" (include "nvcf-invocation-service.serviceHost" .))) }}
+{{- $callbackName := include "nvcf-invocation-service.workerTlsCallbackName" . }}
+{{- $dnsNames := $certificate.dnsNames | default (list ($callbackName | default (printf "*.%s" (include "nvcf-invocation-service.serviceHost" .)))) }}
+{{- if $callbackName }}
+{{- $covered := false }}
+{{- $parent := ternary "" (splitn "." 2 $callbackName)._1 (hasPrefix "*." $callbackName) }}
+{{- range $dnsNames }}
+{{- $name := . | toString | lower }}
+{{- if or (eq $name $callbackName) (and $parent (eq $name (printf "*.%s" $parent))) }}
+{{- $covered = true }}
+{{- end }}
+{{- end }}
+{{- if not $covered }}
+{{- fail (printf "invocation.workerTls.tls.certificate.dnsNames must cover %s, the name workers verify for the callback address" $callbackName) }}
+{{- end }}
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

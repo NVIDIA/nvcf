@@ -89,6 +89,28 @@ count="$(awk '$1 == "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS:" { count++ } END
 [[ "$count" == 1 ]] || fail "duplicate SERVICE_ADDRESS key"
 [[ "$(yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "$work_dir/override.yaml")" == '*.callbacks.example' ]] || fail "custom dnsNames not rendered"
 
+dns_names() {
+  yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "$1"
+}
+
+render "$work_dir/service-address.yaml" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS=https://callbacks.example.test:8443
+[[ "$(dns_names "$work_dir/service-address.yaml")" == '*.callbacks.example.test' ]] || fail "default dnsNames must follow SERVICE_ADDRESS"
+
+render "$work_dir/self-address.yaml" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS=https://Callbacks.Example.test:8443 \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS=https://ignored.example.test
+[[ "$(dns_names "$work_dir/self-address.yaml")" == callbacks.example.test ]] || fail "default dnsNames must follow SELF_ADDRESS without a pod prefix"
+
+render "$work_dir/self-wildcard.yaml" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS=https://callbacks.example.test \
+  --set-string 'invocation.workerTls.tls.certificate.dnsNames[0]=*.example.test'
+[[ "$(dns_names "$work_dir/self-wildcard.yaml")" == '*.example.test' ]] || fail "a parent wildcard must cover SELF_ADDRESS"
+
+render "$work_dir/self-http.yaml" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS=http://10.0.0.5:8080
+[[ "$(dns_names "$work_dir/self-http.yaml")" == '*.invocation.nvcf.svc.cluster.local' ]] || fail "an http callback must keep the default dnsNames"
+
 render "$work_dir/no-env.yaml" "${enable_cert[@]}" --set invocation.env=null
 [[ "$(env_value "$work_dir/no-env.yaml" WORKER_TLS__ENABLED)" == true ]] || fail "worker TLS must work without the default env map"
 [[ "$(deployment "$work_dir/no-env.yaml" '.spec.template.spec.containers[0].envFrom[0].configMapRef.name')" == *-env ]] || fail "worker TLS ConfigMap must reach the pod"
@@ -112,5 +134,15 @@ expect_failure "already used by invocation.metrics.port" "${enable_cert[@]}" --s
 expect_failure "is set by invocation.workerTls" "${enable_cert[@]}" --set-string invocation.env.WORKER_TLS__PORT=1
 expect_failure "must be a boolean" --set-string invocation.workerTls.enabled=yes
 expect_failure "must be a boolean" --set-string invocation.workerTls.advertise=yes
+expect_failure "dnsNames must cover \*.callbacks.example.test" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS=https://callbacks.example.test:8443 \
+  --set-string 'invocation.workerTls.tls.certificate.dnsNames[0]=callbacks.example.test'
+expect_failure "dnsNames must cover callbacks.example.test" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS=https://callbacks.example.test \
+  --set-string 'invocation.workerTls.tls.certificate.dnsNames[0]=*.invocation.nvcf.svc.cluster.local'
+expect_failure 'dnsNames must cover \*.invocation.nvcf.svc.cluster.local' "${enable_cert[@]}" \
+  --set-string 'invocation.workerTls.tls.certificate.dnsNames[0]=*.callbacks.example'
+expect_failure "not an IP address" "${enable_cert[@]}" \
+  --set-string invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS=https://10.0.0.5:8443
 
 echo "worker_tls_test.sh: default-off, cert-manager, existing secret, overrides, and validation passed"

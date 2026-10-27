@@ -123,6 +123,38 @@ Service name suffix of the per-pod callback names.
 {{- end -}}
 
 {{/*
+Name a worker verifies when it calls back over https, or empty when the
+callback is not https. The service advertises SELF_ADDRESS as is; otherwise
+each pod advertises <dashed-pod-ip>.<SERVICE_ADDRESS host>, which needs a
+wildcard.
+*/}}
+{{- define "nvcf-invocation-service.workerTlsCallbackName" -}}
+{{- $env := .Values.invocation.env | default dict -}}
+{{- $w := .Values.invocation.workerTls -}}
+{{- $self := index $env "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" | default "" | toString -}}
+{{- $service := index $env "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS" | default "" | toString -}}
+{{- if not $service -}}
+{{- if $w.advertise -}}
+{{- $service = printf "https://%s:%v" (include "nvcf-invocation-service.serviceHost" .) $w.port -}}
+{{- else -}}
+{{- $service = printf "http://%s" (include "nvcf-invocation-service.serviceHost" .) -}}
+{{- end -}}
+{{- end -}}
+{{- $key := ternary "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS" (ne $self "") -}}
+{{- $url := urlParse (ternary $self $service (ne $self "")) -}}
+{{- if eq (lower $url.scheme) "https" -}}
+{{- $host := $url.hostname | lower -}}
+{{- if not (regexMatch `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$` $host) -}}
+{{- fail (printf "invocation.env.%s must use a DNS host for the worker TLS certificate; got %q" $key $host) -}}
+{{- end -}}
+{{- if regexMatch `^[0-9.]+$` $host -}}
+{{- fail (printf "invocation.env.%s must use a DNS host for the worker TLS certificate, not an IP address; got %q" $key $host) -}}
+{{- end -}}
+{{- ternary $host (printf "*.%s" $host) (ne $self "") -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Environment owned by invocation.workerTls, as a YAML map. Empty when it is off.
 */}}
 {{- define "nvcf-invocation-service.workerTlsEnv" -}}

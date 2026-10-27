@@ -136,8 +136,21 @@ invocation:
 ```
 
 With `tls.certificate.enabled`, the chart creates a cert-manager Certificate
-for `*.invocation.<namespace>.svc.cluster.local`, which covers the per-pod
-callback names. To use an existing `kubernetes.io/tls` Secret instead, leave the
+for the name workers verify when they call back:
+
+- By default, `*.invocation.<namespace>.svc.cluster.local`, which covers the
+  per-pod callback names.
+- If you override `WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS`, a wildcard for
+  its host, because each pod still advertises `<pod-ip>.<host>`.
+- If you set `WORKER_STREAM_PROPERTIES__SELF_ADDRESS`, its exact host. The
+  service advertises that address as-is, without a pod prefix, and it wins
+  over `SERVICE_ADDRESS`.
+
+If you set `tls.certificate.dnsNames` yourself, the chart fails to render
+unless they cover that name. An HTTPS callback address must use a DNS name,
+not an IP address.
+
+To use an existing `kubernetes.io/tls` Secret instead, leave the
 certificate disabled and set `invocation.workerTls.tls.secretName`. The
 service reloads the certificate from the mounted Secret without a restart.
 
@@ -145,10 +158,22 @@ While `invocation.workerTls.advertise` is true (the default), the chart sets
 `WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS` to
 `https://invocation.<namespace>.svc.cluster.local:<port>`, so workers call back
 over TLS. Workers must trust the issuing CA through `NVCF_PROXY_CA_FILE` or
-`NVCF_PROXY_CA_PEM`. Set `advertise: false` to serve the listener before you
-switch workers to it. An explicit `invocation.env` value for the callback
+`NVCF_PROXY_CA_PEM`. An explicit `invocation.env` value for the callback
 address takes precedence. The `WORKER_TLS__*` keys are reserved for this
 setting.
+
+`advertise` applies to the whole invocation service: once it is on, every
+worker of every function gets an HTTPS callback address. Roll it out in this
+order:
+
+1. Deploy a worker image that supports HTTPS callbacks and configure its CA.
+   Older workers reject an HTTPS callback address even when they trust the CA.
+2. Recreate the function pods that are already running so they pick up the
+   new worker and CA. Pods keep the worker they started with.
+3. Upgrade this chart with `enabled: true` and `advertise: false`. The HTTPS
+   listener starts, but workers keep calling back over HTTP.
+4. Check that the Certificate is ready and the listener serves it, then set
+   `advertise: true`. To roll back, set `advertise: false` again.
 
 Validate the chart wiring locally with:
 
