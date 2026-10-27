@@ -1,0 +1,58 @@
+{{- /*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{- $ns := .Release.Namespace -}}
+{{- $svc := include "global-discovery.fullname" . -}}
+{{- $http := int .Values.ports.http -}}
+{{- $admin := int .Values.ports.admin -}}
+Global Discovery Service {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }} in namespace {{ $ns }}.
+
+  Region:    {{ .Values.region }}
+  Store:     {{ .Values.store.kind }}{{ if eq .Values.store.kind "dynamodb" }} (table {{ .Values.store.dynamodb.table }}{{ with .Values.store.dynamodb.endpoint }}, endpoint {{ . }}{{ end }}){{ end }}
+  Replicas:  {{ include "global-discovery.effectiveReplicas" . }}{{ if .Values.autoscaling.enabled }} to {{ .Values.autoscaling.maxReplicas }} (HPA){{ end }}
+  In-cluster gRPC:  {{ $svc }}.{{ $ns }}.svc:{{ .Values.ports.grpc }}
+  In-cluster REST:  http{{ if .Values.tls.existingSecret }}s{{ end }}://{{ $svc }}.{{ $ns }}.svc:{{ $http }}
+{{- if eq .Values.store.kind "memory" }}
+
+store.kind=memory keeps the registry in the pod. A restart loses every
+cluster, export and pool; writers re-register on their next heartbeat. Use it
+for development and tests only.
+{{- else }}
+
+The server role needs the DynamoDB policy of docs/iam.md in the module
+src/control-plane-services/global-discovery.{{ if .Values.serviceAccount.irsaRoleArn }} ServiceAccount
+{{ include "global-discovery.serviceAccountName" . }} assumes {{ .Values.serviceAccount.irsaRoleArn }}.{{ else }} Set serviceAccount.irsaRoleArn
+on EKS, or provide AWS credentials another way.{{ end }} Create the table first:
+
+  gds-admin create-table --table {{ .Values.store.dynamodb.table }} --region {{ .Values.region }}
+{{- end }}
+{{- if .Values.externalService.enabled }}
+
+Load balancer Service {{ include "global-discovery.externalServiceName" . }} exposes gRPC on port
+{{ .Values.externalService.grpcPort }}{{ if gt (int .Values.externalService.httpPort) 0 }} and REST on port {{ .Values.externalService.httpPort }}{{ end }}. Its address:
+
+  kubectl -n {{ $ns }} get service {{ include "global-discovery.externalServiceName" . }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+Point the regional Route53 record gds.{{ .Values.region }}.<env>.internal and this region's
+entry of the latency record gds.<env>.internal at it (docs/networking.md).
+{{- end }}
+
+Check readiness and the API from your machine:
+
+  kubectl -n {{ $ns }} port-forward service/{{ $svc }} {{ $http }}:{{ $http }} {{ $admin }}:{{ $admin }}
+  curl -s http://127.0.0.1:{{ $admin }}/readyz
+  curl -s http{{ if .Values.tls.existingSecret }}s{{ end }}://127.0.0.1:{{ $http }}/v1/serverinfo
+  curl -s http{{ if .Values.tls.existingSecret }}s{{ end }}://127.0.0.1:{{ $http }}/v1/clustersets

@@ -44,6 +44,7 @@ chart_map=(
     "container-cache          container-cache/deploy"
     "ess                      encrypted-secret-store/ess-api"
     "function-autoscaler      function-autoscaler"
+    "global-discovery         global-discovery/global-discovery"
     "gateway-routes-vanity    gateway-routes/chart"
     "grpc-proxy               grpc-proxy/grpc-proxy"
     "helm-reval               helm-reval"
