@@ -295,9 +295,31 @@ jobs:
           mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
+      - name: Log in to the chart registry
+        id: registry
+        if: steps.render.outputs.needed == 'true'
+        # The render pulls the charts the stack pins from this registry. Same
+        # login as chart-push-manual.yml. Not fatal: a failed login fails the
+        # render below, which is reported like any other render failure.
+        continue-on-error: true
+        env:
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "::warning::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set, so the compute-plane goldens are not rendered"
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          REGISTRY="${REGISTRY%/}"
+          host="${REGISTRY%%/*}"
+          printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
       - name: Refresh the compute-plane goldens
         id: goldens
-        if: steps.render.outputs.needed == 'true'
+        if: steps.render.outputs.needed == 'true' && steps.registry.outputs.ready != 'false'
         env:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -354,6 +376,7 @@ jobs:
           PR_TYPE: ${{ steps.commit.outputs.pr_type }}
           REFUSED: ${{ steps.bump.outputs.refused }}
           GOLDENS_FAILED: ${{ steps.goldens.outputs.failed }}
+          GOLDENS_SKIPPED: ${{ steps.registry.outputs.ready == 'false' }}
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
         run: |
@@ -392,6 +415,11 @@ jobs:
               '```' \
               "" \
               "Render them with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` and push the result, or let the next bump run render them again.")"
+          elif [ "${GOLDENS_SKIPPED}" = true ]; then
+            notes="${notes}$(printf '%s\n' \
+              "" \
+              "" \
+              "The compute-plane golden render fixtures were not rendered again because the \`NGC_NCP_DEV_KEY\` and \`NCP_DEV_REGISTRY\` secrets are not set. They may be stale; render them with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` and push the result.")"
           fi
 
           body="$(printf '%s\n' \

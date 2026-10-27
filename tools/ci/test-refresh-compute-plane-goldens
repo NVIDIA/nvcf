@@ -17,35 +17,83 @@ stack=deploy/stacks/nvcf-compute-plane
 golden="${stack}/testdata/golden"
 helmfile="${stack}/helmfile.d/02-nvca.yaml.gotmpl"
 
-# The stack's Makefile writes its fixtures under the path this tool commits,
-# and both workflows name that path as derived, check whether a render is
-# needed, and commit it.
-# shellcheck disable=SC2016 # Makefile and workflow text; $(...) and ${...} stay literal
-{
-  grep -Fq 'GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/' "${repo_root}/${stack}/Makefile" \
-    || fail "${stack}/Makefile no longer writes its fixtures under ${golden}"
-  for workflow in chart-version-bump.yml stack-pin-bump.yml; do
-    for line in \
-      "tools/ci/prepare-stack-pin-branch --derived ${golden} \\" \
-      'tools/ci/refresh-compute-plane-goldens needed "origin/${BASE_BRANCH}"' \
-      'tools/ci/refresh-compute-plane-goldens commit "origin/${BASE_BRANCH}"'; do
-      grep -Fq -- "${line}" "${repo_root}/.github/workflows/${workflow}" \
-        || fail "${workflow} no longer contains: ${line}"
-    done
-  done
+workflows="${repo_root}/.github/workflows"
+workflow_has() {
+  local workflow=$1 line=$2
+  grep -Fq -- "${line}" "${workflows}/${workflow}" || fail "${workflow} no longer contains: ${line}"
 }
 
-# Stand-ins for `make generate-golden`. Each replaces the fixture directory,
-# as the Makefile does, with output derived from the pinned version only.
+# The stack's Makefile renders to and keeps its fixtures in the paths this tool
+# uses, and ends test-local with the comparison check runs.
+# shellcheck disable=SC2016 # Makefile and workflow text; $(...) and ${...} stay literal
+{
+  for line in \
+    'DIST_DIR ?= $(MAKEFILE_DIR)/dist' \
+    'GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local' \
+    '@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"'; do
+    grep -Fq -- "${line}" "${repo_root}/${stack}/Makefile" \
+      || fail "${stack}/Makefile no longer contains: ${line}"
+  done
+
+  # Both bump workflows name the fixtures as derived, check whether a render
+  # is needed, and commit it. The check workflow runs the comparison whenever
+  # the stack or this tool changes.
+  for workflow in chart-version-bump.yml stack-pin-bump.yml; do
+    workflow_has "${workflow}" "tools/ci/prepare-stack-pin-branch --derived ${golden} \\"
+    workflow_has "${workflow}" 'tools/ci/refresh-compute-plane-goldens needed "origin/${BASE_BRANCH}"'
+    workflow_has "${workflow}" 'tools/ci/refresh-compute-plane-goldens commit "origin/${BASE_BRANCH}"'
+  done
+  workflow_has compute-plane-goldens.yml "run: tools/ci/refresh-compute-plane-goldens check"
+  workflow_has compute-plane-goldens.yml "- '${stack}/**'"
+  workflow_has compute-plane-goldens.yml "- 'tools/ci/refresh-compute-plane-goldens'"
+}
+
+# All three render the same way: helm and helmfile at the pins build-test.yml
+# renders the charts with, and the registry login chart-push-manual.yml uses.
+# Both are read from those workflows rather than repeated here.
+login="$(grep -F 'helm registry login' "${workflows}/chart-push-manual.yml" | sed 's/^[[:space:]]*//')"
+test -n "${login}" || fail "chart-push-manual.yml no longer logs in with helm registry login"
+pins="$(grep -E '^[[:space:]]+HELM(FILE)?_(VERSION|SHA256): ' "${workflows}/build-test.yml" | sed 's/^[[:space:]]*//' | sort -u)"
+test "$(wc -l <<<"${pins}")" -eq 4 || fail "build-test.yml no longer pins one helm and one helmfile: ${pins}"
+for workflow in chart-version-bump.yml stack-pin-bump.yml compute-plane-goldens.yml; do
+  test "$(grep -cF -- "${login}" "${workflows}/${workflow}")" -eq 1 \
+    || fail "${workflow} does not log in to the chart registry once, as chart-push-manual.yml does"
+  while IFS= read -r pin; do
+    workflow_has "${workflow}" "${pin}"
+  done <<<"${pins}"
+done
+
+# Stand-ins for `make render-local` and `make generate-golden`. The first
+# renders into dist/out, output derived from the pinned version only; the
+# second then replaces the fixture directory with it, as the Makefile does.
+fake_render_local="${work_dir}/fake-render-local"
+cat > "${fake_render_local}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+version="\$(sed -n 's/^version: //p' "${helmfile}")"
+rm -rf "${stack}/dist"
+mkdir -p "${stack}/dist/out/versions"
+printf 'image: nvca:%s\n' "\${version}" > "${stack}/dist/out/nvca.yaml"
+printf '%s\n' "\${version}" > "${stack}/dist/out/versions/\${version}"
+EOF
 fake_render="${work_dir}/fake-render"
 cat > "${fake_render}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-version="\$(sed -n 's/^version: //p' "${helmfile}")"
+"${fake_render_local}"
 rm -rf "${golden}/local"
-mkdir -p "${golden}/local/versions"
-printf 'image: nvca:%s\n' "\${version}" > "${golden}/local/nvca.yaml"
-printf '%s\n' "\${version}" > "${golden}/local/versions/\${version}"
+mkdir -p "${golden}"
+cp -r "${stack}/dist/out" "${golden}/local"
+EOF
+# Renders as fake-render-local does, but with whitespace-only changes, which
+# the stack's comparison ignores.
+spaced_render_local="${work_dir}/spaced-render-local"
+cat > "${spaced_render_local}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${fake_render_local}"
+sed -i.bak 's/\$/  /' "${stack}/dist/out/nvca.yaml"
+mv "${stack}/dist/out/nvca.yaml.bak" "${work_dir}/spaced.bak"
 EOF
 failing_render="${work_dir}/failing-render"
 cat > "${failing_render}" <<EOF
@@ -67,7 +115,8 @@ cat > "${untouchable_render}" <<'EOF'
 echo "the render ran" >&2
 exit 99
 EOF
-chmod +x "${fake_render}" "${failing_render}" "${stray_render}" "${untouchable_render}"
+chmod +x "${fake_render_local}" "${fake_render}" "${spaced_render_local}" \
+  "${failing_render}" "${stray_render}" "${untouchable_render}"
 
 identity=(-c user.name="Test User" -c user.email="test@example.com")
 
@@ -76,10 +125,14 @@ identity=(-c user.name="Test User" -c user.email="test@example.com")
 new_repo() {
   local dir=$1 version=$2
   git init --quiet --initial-branch=main "${dir}"
-  mkdir -p "${dir}/${stack}/helmfile.d" "${dir}/deploy/helm/chart"
+  mkdir -p "${dir}/${stack}/helmfile.d" "${dir}/${stack}/tests" "${dir}/deploy/helm/chart"
+  printf 'dist/\n' > "${dir}/.gitignore"
   printf 'version: %s\n' "${version}" > "${dir}/${helmfile}"
   printf 'stack notes\n' > "${dir}/${stack}/README.md"
   printf 'version: 1.0.0\n' > "${dir}/deploy/helm/chart/Chart.yaml"
+  # The stack's real comparison, which check runs.
+  cp -p "${repo_root}/${stack}/tests/verify-golden.sh" "${repo_root}/${stack}/tests/compare-golden.sh" \
+    "${dir}/${stack}/tests/"
   (cd "${dir}" && "${fake_render}")
   git -C "${dir}" add .
   git -C "${dir}" "${identity[@]}" commit --quiet -m "ci: seed"
@@ -186,7 +239,35 @@ new_repo "${t}" 1.0.0
   test "${status}" -eq 2 || fail "an unknown base exited ${status}, want 2"
 )
 
-# 4. With the branch helper, as the workflows run them: main moved the same
+# 4. check compares a fresh render with the fixtures through the stack's own
+# comparison: whitespace-only differences pass, a moved pin without new
+# fixtures fails with the command that renders them again, and so does a
+# failed render. It never edits the fixtures.
+t="${work_dir}/check"
+new_repo "${t}" 1.0.0
+(
+  cd "${t}"
+  "${tool}" check "${fake_render_local}" > "${t}/match.log" 2>&1 || fail "matching fixtures failed: $(cat "${t}/match.log")"
+  "${tool}" check "${spaced_render_local}" > "${t}/spaced.log" 2>&1 \
+    || fail "a whitespace-only difference failed: $(cat "${t}/spaced.log")"
+
+  edit "${helmfile}" 'version: 1.1.0' "fix(stack): pin nvca-operator/v1.1.0"
+  if "${tool}" check "${fake_render_local}" > "${t}/stale.out" 2> "${t}/stale.err"; then
+    fail "stale fixtures passed"
+  fi
+  grep -Fq "versions/1.1.0" "${t}/stale.out" || fail "the differing files are not listed: $(cat "${t}/stale.out")"
+  grep -Fq "does not match what the stack renders" "${t}/stale.err" || fail "the failure does not say why: $(cat "${t}/stale.err")"
+  grep -Fq "make -C ${stack} generate-golden DEV_MODE=1" "${t}/stale.err" \
+    || fail "the failure does not name the command that renders the fixtures again"
+  test -z "$(git status --porcelain --untracked-files=all -- "${golden}")" || fail "check edited the fixtures"
+
+  if "${tool}" check "${failing_render}" >/dev/null 2> "${t}/failed.err"; then
+    fail "a failed render passed"
+  fi
+  grep -Fq "was not checked" "${t}/failed.err" || fail "the render failure is not reported: $(cat "${t}/failed.err")"
+)
+
+# 5. With the branch helper, as the workflows run them: main moved the same
 # pin and rendered its own fixtures. The bump commit is regenerated, the old
 # fixture commit is dropped, and one fresh fixture commit lands on top.
 fake_bump="${work_dir}/fake-bump"

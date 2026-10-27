@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fail when the compute-plane golden render fixtures no longer match what the
+# stack renders.
+#
+# The stack keeps what it renders for its local test environment under
+# deploy/stacks/nvcf-compute-plane/testdata/golden. This renders the stack
+# afresh and compares the two with the stack's own tests/verify-golden.sh, the
+# comparison its test-local target ends with, through
+# tools/ci/refresh-compute-plane-goldens check. On a difference the log names
+# the files that differ and the command that renders them again.
+#
+# The render reads nothing outside the stack directory: `make dist` copies only
+# the stack, its local chart lives under it, and every other chart it renders
+# is pulled from a registry at the version the stack pins. So the paths below
+# are the stack itself, plus this workflow and the script it runs.
+#
+# The render pulls charts from the registry named by NCP_DEV_REGISTRY, so it
+# runs for pushes and for pull requests from branches of this repository. A
+# pull request from a fork gets a notice instead.
+
+name: compute-plane goldens
+
+on:
+  pull_request:
+    branches: [main, 'release-**', 'release/**']
+    paths:
+      - 'deploy/stacks/nvcf-compute-plane/**'
+      - '.github/workflows/compute-plane-goldens.yml'
+      - 'tools/ci/refresh-compute-plane-goldens'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/stacks/nvcf-compute-plane/**'
+      - '.github/workflows/compute-plane-goldens.yml'
+      - 'tools/ci/refresh-compute-plane-goldens'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compute-plane-goldens-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fork:
+    name: compute-plane goldens (fork)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip the render for a fork
+        run: |
+          echo "::notice::The compute-plane goldens are checked on main and for pull requests from branches of this repository, not for pull requests from forks."
+
+  goldens:
+    name: compute-plane goldens
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install helm and helmfile (pinned, checksum-verified)
+        # The same pins as the helm charts job in build-test.yml. helmfile
+        # v1.2.0+ breaks the ordering the stacks rely on, and the stacks
+        # require helm v3.x.
+        env:
+          HELM_VERSION: "3.21.4"
+          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+          HELMFILE_VERSION: "1.1.9"
+          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Log in to the chart registry
+        id: registry
+        # The render pulls the charts the stack pins from this registry. Same
+        # login as chart-push-manual.yml.
+        env:
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "::warning::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set, so the compute-plane goldens are not checked"
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          REGISTRY="${REGISTRY%/}"
+          host="${REGISTRY%%/*}"
+          printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Compare the goldens with a fresh render
+        if: steps.registry.outputs.ready == 'true'
+        run: tools/ci/refresh-compute-plane-goldens check

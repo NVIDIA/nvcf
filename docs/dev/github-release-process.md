@@ -265,7 +265,13 @@ bumps. Each run drops the previous fixture commit and renders them again
 for what the branch then pins. If the render fails, the pull request says
 so and the run fails. Render them by hand with
 `make -C deploy/stacks/nvcf-compute-plane generate-golden`, or let the
-next bump run render them again.
+next bump run render them again. A chart reaches its registry after its
+GitHub release, so the first render after a chart release can fail this
+way.
+
+The `compute-plane goldens` workflow renders the stack for every pull
+request and `main` push that changes it, and fails when the fixtures do
+not match.
 
 ## Release branches
 

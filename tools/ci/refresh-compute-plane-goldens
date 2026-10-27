@@ -2,16 +2,27 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Render the compute-plane golden fixtures again on a bump branch and commit
-# them.
+# Check the compute-plane golden fixtures, or render them again on a bump
+# branch and commit them.
 #
+#   refresh-compute-plane-goldens check [<render-command>...]
 #   refresh-compute-plane-goldens needed <base-ref>
 #   refresh-compute-plane-goldens commit <base-ref> [<render-command>...]
 #
 # The compute-plane stack keeps what it renders for its local test environment
 # under deploy/stacks/nvcf-compute-plane/testdata/golden, and its golden check
-# fails when a pin under the stack moves and those files do not. The chart
-# version bump and stack pin bump workflows run this after they commit a bump.
+# fails when a pin under the stack moves and those files do not. The
+# compute-plane goldens workflow runs check. The chart version bump and stack
+# pin bump workflows run needed and commit after they commit a bump.
+#
+# check renders the stack afresh, by running
+#
+#   make -C deploy/stacks/nvcf-compute-plane render-local DEV_MODE=1
+#
+# or <render-command>, and compares the result with the fixtures through the
+# stack's tests/verify-golden.sh, the comparison its test-local target ends
+# with. It exits 1, naming the command that renders them again, when they
+# differ.
 #
 # needed prints true when HEAD changes anything under the stack, apart from
 # the fixtures, that <base-ref> does not, and false otherwise. The render
@@ -22,22 +33,28 @@
 #
 #   make -C deploy/stacks/nvcf-compute-plane generate-golden DEV_MODE=1
 #
-# or <render-command>, with helm and helmfile taken from PATH, and commits any
-# change to the fixtures as a commit of its own. No change, no commit. A
-# failed render restores the fixtures, commits nothing, and exits 1.
+# or <render-command>, and commits any change to the fixtures as a commit of
+# its own. No change, no commit. A failed render restores the fixtures,
+# commits nothing, and exits 1.
 #
 # That commit changes only the fixtures. The workflows pass the fixture
 # directory to prepare-stack-pin-branch as --derived, so the next run drops it
 # rather than replaying it, and renders the fixtures again for whatever the
 # branch then pins. They are never carried forward stale.
+#
+# Both renders take helm and helmfile from PATH and pull the charts the stack
+# pins, so the caller logs in to their registries first.
 
 set -euo pipefail
 
 stack=deploy/stacks/nvcf-compute-plane
 golden="${stack}/testdata/golden"
+# The paths the stack's Makefile renders to and keeps its fixtures in.
+rendered="${stack}/dist/out"
+fixtures="${golden}/local"
 
 usage() {
-  sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '5,10p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -114,16 +131,46 @@ commit() {
   echo "committed $(git log -1 --format='%h %s')"
 }
 
-[ $# -ge 2 ] || usage
+check() {
+  local render=("$@")
+  if [ "${#render[@]}" -eq 0 ]; then
+    render=(make -C "${stack}" render-local DEV_MODE=1)
+  fi
+
+  echo "rendering ${rendered}: ${render[*]}"
+  if ! "${render[@]}" </dev/null; then
+    echo "error: ${render[*]} failed; ${fixtures} was not checked" >&2
+    exit 1
+  fi
+  if ! "${stack}/tests/verify-golden.sh" "${fixtures}" "${rendered}"; then
+    cat >&2 <<EOF
+
+error: ${fixtures} does not match what the stack renders.
+Render it again from the repository root, logged in to the chart registry
+the stack pins, and commit the result:
+
+  make -C ${stack} ensure-binaries
+  PATH="\$PWD/${stack}/bin:\$PATH" HELM_PLUGINS="\$PWD/${stack}/bin/helm-plugins" \\
+    make -C ${stack} generate-golden DEV_MODE=1 </dev/null
+EOF
+    exit 1
+  fi
+}
+
+[ $# -ge 1 ] || usage
 command=$1
-base=$2
-shift 2
-check_base "${base}"
+shift
 case "${command}" in
+  check) check "$@" ;;
   needed)
-    [ $# -eq 0 ] || usage
-    needed "${base}"
+    [ $# -eq 1 ] || usage
+    check_base "$1"
+    needed "$1"
     ;;
-  commit) commit "${base}" "$@" ;;
+  commit)
+    [ $# -ge 1 ] || usage
+    check_base "$1"
+    commit "$@"
+    ;;
   *) usage ;;
 esac
