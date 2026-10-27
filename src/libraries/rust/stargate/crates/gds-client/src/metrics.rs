@@ -16,9 +16,9 @@
 //! Client metrics.
 //!
 //! With the `metrics` feature, [`GdsClientMetrics`] registers the
-//! `nvcf_gds_client_*` Prometheus metrics below; the Go client
-//! (`pkg/client`) uses the same names and labels. Without the feature the
-//! crate records nothing and has no Prometheus dependency.
+//! `nvcf_gds_client_*` Prometheus metrics below. The names and labels are
+//! the contract for the Go client (`pkg/client`) too. Without the feature
+//! the crate records nothing and has no Prometheus dependency.
 //!
 //! | Metric | Type | Labels |
 //! | :---- | :---- | :---- |
