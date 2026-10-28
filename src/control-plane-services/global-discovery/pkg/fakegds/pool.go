@@ -19,7 +19,6 @@ package fakegds
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"maps"
 	"slices"
@@ -36,15 +35,6 @@ import (
 type poolService struct {
 	gdsv1.UnimplementedPoolServiceServer
 	s *Server
-}
-
-// newPoolID returns a random version 4 UUID.
-func newPoolID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // writerFields copies the writer-owned fields of a pool.
@@ -90,6 +80,34 @@ func poolByNameLocked(cs *clusterSet, cluster, name string) *poolRec {
 	return nil
 }
 
+// poolHolderLocked returns the id of the pool that holds a name in a
+// cluster through a pool or agent registration, or "". A pool known only
+// from labelled exports holds no id of its own: it has LabelPoolID.
+func poolHolderLocked(cs *clusterSet, cluster, name string) string {
+	if rec := poolByNameLocked(cs, cluster, name); rec != nil {
+		return rec.p.GetPoolId()
+	}
+	for _, ag := range cs.agents {
+		if agentPoolKey(cs, ag) == (poolKey{cluster, name}) {
+			return ag.poolID
+		}
+	}
+	return ""
+}
+
+// poolIDInUseLocked reports whether a pool or agent registration uses id.
+func poolIDInUseLocked(cs *clusterSet, id string) bool {
+	if cs.pools[id] != nil {
+		return true
+	}
+	for k := range cs.agents {
+		if k.poolID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (ps *poolService) RegisterPool(_ context.Context, req *gdsv1.RegisterPoolRequest) (*gdsv1.RegisterPoolResponse, error) {
 	pool := req.GetPool()
 	if err := require("clusterset", req.GetClusterset(), "pool.name", pool.GetName(),
@@ -106,17 +124,16 @@ func (ps *poolService) RegisterPool(_ context.Context, req *gdsv1.RegisterPoolRe
 	cs := s.setLocked(req.GetClusterset())
 	cluster, name := pool.GetLocation().GetCluster(), pool.GetName()
 	id := pool.GetPoolId()
-	old := poolByNameLocked(cs, cluster, name)
+	holder := poolHolderLocked(cs, cluster, name)
 	switch {
-	case old != nil && id != "" && id != old.p.GetPoolId():
-		return nil, errPoolNameTaken(cluster, name, old.p.GetPoolId())
-	case old != nil:
-		id = old.p.GetPoolId()
-	case id != "":
-		old = cs.pools[id]
-	default:
-		id = newPoolID()
+	case holder != "" && id != "" && id != holder:
+		return nil, errPoolNameTaken(cluster, name, holder)
+	case holder != "":
+		id = holder
+	case id == "":
+		id = LabelPoolID(cs.name, cluster, name)
 	}
+	old := cs.pools[id]
 	var prevEpoch uint64
 	registered := now
 	if old != nil {
@@ -209,8 +226,8 @@ func (ps *poolService) UpdatePool(_ context.Context, req *gdsv1.UpdatePoolReques
 	if next.DesiredState == gdsv1.PoolState_POOL_STATE_UNSPECIFIED {
 		next.DesiredState = gdsv1.PoolState_POOL_STATE_ACTIVE
 	}
-	if other := poolByNameLocked(cs, next.GetLocation().GetCluster(), next.GetName()); other != nil && other != rec {
-		return nil, errPoolNameTaken(next.GetLocation().GetCluster(), next.GetName(), other.p.GetPoolId())
+	if holder := poolHolderLocked(cs, next.GetLocation().GetCluster(), next.GetName()); holder != "" && holder != rec.p.GetPoolId() {
+		return nil, errPoolNameTaken(next.GetLocation().GetCluster(), next.GetName(), holder)
 	}
 	next.Generation = req.GetGeneration()
 	next.UpdatedAt = timestamppb.New(s.now())
@@ -268,8 +285,15 @@ func (ps *poolService) DeregisterPool(_ context.Context, req *gdsv1.DeregisterPo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cs := s.setLocked(req.GetClusterset())
-	if _, ok := cs.pools[req.GetPoolId()]; ok {
-		delete(cs.pools, req.GetPoolId())
+	_, changed := cs.pools[req.GetPoolId()]
+	delete(cs.pools, req.GetPoolId())
+	for k := range cs.agents {
+		if k.poolID == req.GetPoolId() {
+			delete(cs.agents, k)
+			changed = true
+		}
+	}
+	if changed {
 		s.commitLocked(cs)
 	}
 	return &gdsv1.DeregisterPoolResponse{}, nil

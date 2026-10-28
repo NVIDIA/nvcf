@@ -67,6 +67,30 @@ type poolRec struct {
 	started bool
 }
 
+// poolKey is the (cluster, pool name) every pool source merges on.
+type poolKey struct {
+	cluster, name string
+}
+
+// agentKey identifies one pool agent registration: one process instance
+// (agent_id) of one role of a pool.
+type agentKey struct {
+	cluster, poolID string
+	role            gdsv1.FrontendRole
+	agentID         string
+}
+
+type agentRec struct {
+	// cluster and pool are the (cluster, pool name) of the registration;
+	// poolID is the pool id it resolved to.
+	cluster, pool, poolID string
+	role                  gdsv1.FrontendRole
+	// r holds the writer-owned fields (agent_id, attributes), the
+	// generation, the timestamps and the lease (state filled when read).
+	r   *gdsv1.PoolAgentRegistration
+	ttl time.Duration
+}
+
 // event is one change of one object, in the order the server made it.
 type event struct {
 	typ gdsv1.EventType
@@ -91,8 +115,12 @@ type clusterSet struct {
 	exports   map[exportKey]*gdsv1.ServiceExport
 	endpoints map[exportKey]*endpointRec
 	pools     map[string]*poolRec
-	views     [numKinds]map[string]proto.Message
-	history   [numKinds]history
+	agents    map[agentKey]*agentRec
+	// started holds the pools that have been live once (registry
+	// PoolStateInput.Started), updated whenever the views are computed.
+	started map[poolKey]bool
+	views   [numKinds]map[string]proto.Message
+	history [numKinds]history
 }
 
 func (s *Server) setLocked(name string) *clusterSet {
@@ -104,6 +132,8 @@ func (s *Server) setLocked(name string) *clusterSet {
 			exports:   map[exportKey]*gdsv1.ServiceExport{},
 			endpoints: map[exportKey]*endpointRec{},
 			pools:     map[string]*poolRec{},
+			agents:    map[agentKey]*agentRec{},
+			started:   map[poolKey]bool{},
 		}
 		for k := range cs.views {
 			cs.views[k] = map[string]proto.Message{}

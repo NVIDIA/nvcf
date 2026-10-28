@@ -18,11 +18,13 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "fakegds",
     srcs = [
+        "agent.go",
         "cluster.go",
         "doc.go",
         "errors.go",
         "mcs.go",
         "pool.go",
+        "poolstate.go",
         "seed.go",
         "server.go",
         "state.go",
@@ -55,11 +57,16 @@ alias(
 
 go_test(
     name = "fakegds_test",
-    srcs = ["fakegds_test.go"],
+    srcs = [
+        "agents_test.go",
+        "fakegds_test.go",
+        "poolstate_test.go",
+    ],
+    embed = [":fakegds"],
     deps = [
-        ":fakegds",
         "//src/control-plane-services/global-discovery/api",
         "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
+        "//src/control-plane-services/global-discovery/internal/registry",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",

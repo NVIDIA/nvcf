@@ -166,6 +166,15 @@ ServiceExport; deleting the Service deletes it through the owner
 reference. A ServiceExport without the managed-by label is never created,
 changed or deleted by the controller.
 
+The controller does not interpret role values. A Pylon Service
+(`gds.nvidia.com/role: pylon`), a Service that fills several pool roles
+(annotation `gds.nvidia.com/roles: pool-frontend,pylon`) and a router
+Service naming its tunnel port (`gds.nvidia.com/quic-port-name`) are exported
+like any other: their `gds.nvidia.com/*` labels and annotations are
+forwarded as they are (step 3 of the ServiceExport reconciler), and GDS
+derives the pool agents, `kv_relay_live`, `ready_ingress_count` and the
+router ports from them. New role values need no controller change.
+
 ### Pool exports
 
 With `--auto-export-pools` (default true) the leader watches the pools of
@@ -182,6 +191,12 @@ deletes the exports it labelled; if the Service is also labelled for
 export, only the pool label is removed. When two pools list the same
 Service, the export carries the smaller pool id. Nothing is removed before the first pool list or while the cache
 is stale.
+
+The pool half is role-agnostic: it keeps an export for every entry of
+`services[]` whatever its role (OPENAI, KV_RELAY or PYLON). Pool agent
+registrations (`RegisterPoolAgent`) are not pool registrations: a pool known
+only from agents has no pool lease and no `services[]`, so it gets no pool
+exports. A Pylon or relay Service reaches GDS through label-driven export.
 
 ## Imports
 
@@ -241,7 +256,7 @@ the controller never deletes namespaces.
 | Key | On | Value |
 | :---- | :---- | :---- |
 | `gds.nvidia.com/export` | Service | `"true"` enables label-driven export |
-| `gds.nvidia.com/role`, `gds.nvidia.com/pool` and the `gds.nvidia.com/*` annotations | Service | Forwarded to GDS as exported labels and annotations |
+| `gds.nvidia.com/role` (`router`, `pool-frontend`, `kv-relay`, `pylon`), `gds.nvidia.com/pool` and the `gds.nvidia.com/*` annotations (`gds.nvidia.com/roles` and `gds.nvidia.com/quic-port-name` included) | Service | Forwarded to GDS as exported labels and annotations |
 | `gds.nvidia.com/managed-by` | ServiceExports, ServiceImports, derived Services, slices, namespaces the controller creates | `gds-mcs-controller` |
 | `gds.nvidia.com/clusterset` | same | the clusterset |
 | `gds.nvidia.com/pool-id` | pool ServiceExports | the pool id |
