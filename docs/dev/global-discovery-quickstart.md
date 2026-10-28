@@ -65,13 +65,16 @@ flowchart LR
 - Reachable dial addresses: after `WatchStargates`, a pylon registers and
   opens its QUIC tunnel through the addresses the router advertises. With the
   backend router those are `backendRouter.pylonGrpcDialAddress` and
-  `backendRouter.pylonReverseTunnelDialAddress`; without it, the advertised
-  hostname (`kubernetes.advertisedHostnameTemplate`). The in-cluster defaults
+  `backendRouter.pylonReverseTunnelDialAddress`; with one replica and no
+  backend router, the advertised hostname
+  (`kubernetes.advertisedHostnameTemplate`). The in-cluster defaults
   resolve in every cluster to that cluster's own router, which cannot forward
   to another cluster's Stargate pods. For cross-cluster pylons set them to
   addresses of the router cluster that the pylon clusters reach, such as the
   gateway listener in front of the backend router. Pylons in the router's own
-  cluster work with the defaults.
+  cluster work with the defaults. In direct mode (see
+  [Router modes](#router-modes)) the dial addresses are the Stargate pod IPs
+  from GDS, so routable pod IPs on TCP 50071 and UDP 50072 are enough.
 - Credentials: every router cluster's worker auth file holds the credential
   entry of every cluster whose pylons register with it.
 
@@ -168,8 +171,52 @@ The Stargate flags behind `enabled`:
 | `--gds-cluster-id` | `GDS_CLUSTER_ID` | This cluster's id; its routers are not remote. Required with `--gds-url` |
 | `--gds-tls-ca-cert-path` | `GDS_TLS_CA_CERT_PATH` | PEM CA bundle for `https://` GDS URLs |
 
-Stargate keeps advertising `--grpc-pylon-dial-addr` unchanged. Its own
-cluster's peers still come from DNS discovery.
+In backend-router mode Stargate keeps advertising `--grpc-pylon-dial-addr`
+unchanged, and its own cluster's peers still come from DNS discovery. In
+direct mode the peer identities come from GDS: Stargate lists each pod of its
+own cluster's router record under the record's replica identity (the pod
+name), with the hostname template as authority and
+`<dial scheme>://<pod IP>:50071` as dial address, so every replica names each
+pod the same way and a pylon registers once per pod. Peers that GDS does not
+list keep the names DNS gives them.
+
+### Router modes
+
+The chart records the mode in the annotation `gds.nvidia.com/router-mode`
+of the exported Service, and GDS reports it as `routerMode` on the Router
+record:
+
+- `backend-router` (the default for a multi-replica Deployment): the
+  exported Service is the backend-router Service and the replicas are
+  `stargate-k8s-router` pods, which forward registration and tunnels to the
+  Stargate pods. Pylons register through `backendRouter.pylonGrpcDialAddress`
+  and `pylonReverseTunnelDialAddress`, as without GDS.
+- `direct`: the exported ClusterIP Service selects the Stargate pods, and
+  pylons dial each pod IP: TCP 50071 for registration and UDP 50072 for the
+  QUIC tunnel, with the pod's templated hostname as authority and SNI. Set
+  `backendRouter.enabled: false` with `globalDiscovery.enabled: true` on a
+  multi-replica Deployment; the hostname template must contain `{pod_name}`
+  once (the chart default is
+  `{pod_name}.<headless Service>.<namespace>.svc.cluster.local`). The Router
+  record then carries `hostnameTemplate` and one `identity` per replica.
+  Pylons need routable pod IPs on both ports and do not resolve the
+  hostnames.
+
+```yaml
+llmRequestRouter:
+  replicaCount: 2
+  backendRouter:
+    enabled: false
+  globalDiscovery:
+    enabled: true
+    urls:
+      - https://gds.example.internal
+    clustersetId: prod
+    clusterId: cluster-a
+    export:
+      enabled: true
+    dialScheme: http
+```
 
 The backend router answers `WatchStargates` itself and publishes only the
 static `discovery.remoteWatchUrls`. Pylons that dial the backend router learn

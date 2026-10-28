@@ -260,12 +260,17 @@ clusters to `cleanup_member`.
 Runs on macOS with colima (Docker with the containerd image store), k3d 5.9.0
 and k3s v1.35.5, with `/bin/bash` 3.2:
 
-- Phases 1, 2 and 3 from scratch with the Bazel builds and `E2E_CLEANUP=1`:
-  125 checks passed (phase 1: 61, phase 2: 51, phase 3: 13, setup checks
-  included), then the three clusters and the network were deleted.
-  `E2E_PHASES=1`: 61 passed. Keep the host awake during a run (for example
-  `caffeinate -i make test-cleanup` on macOS): when it sleeps, the VM stops
-  and the controllers' GDS leases expire, which fails the lease checks.
+- Phases 1, 2 and 3 from scratch with the Bazel builds and `E2E_CLEANUP=1`,
+  phase 3 in direct mode (`E2E_ROUTER_MODE=direct`, two Stargate replicas):
+  128 checks passed (phase 1: 61, phase 2: 51, phase 3: 16, setup checks
+  included), then the three clusters and the network were deleted. Phase 3
+  alone on the reused clusters with `E2E_SKIP_BUILD=1`: 28 passed in direct
+  mode and 26 with `E2E_ROUTER_MODE=single` (the hub and member setup checks
+  included). Before direct mode, with one Stargate replica: 125 passed
+  (phase 3: 13). `E2E_PHASES=1`: 61 passed. Keep the host awake during a run
+  (for example `caffeinate -i make test-cleanup` on macOS): when it sleeps,
+  the VM stops and the controllers' GDS leases expire, which fails the lease
+  checks.
 - Before the pool agent checks, with reused clusters and
   `E2E_SKIP_BUILD=1`: 101 passed (the extra check is the restart of the
   reused gds-server).

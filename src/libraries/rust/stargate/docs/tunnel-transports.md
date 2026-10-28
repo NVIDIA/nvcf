@@ -98,9 +98,20 @@ In direct router mode, used with the Global Discovery Service (GDS) instead of
 `--advertise-addr=$(POD_IP):50071` and
 `--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072` and sets no
 `--grpc-pylon-dial-addr`. `GdsDiscovery` finds this cluster's GDS router
-record, the one annotated `gds.nvidia.com/router-mode: direct` whose replicas
-include the pod's own IP, and fills `StargateInfo.grpc_pylon_dial_addr` of each
-local Stargate it matches with `<dial scheme>://<pod IP>:<gRPC port>`.
+record, the one in mode `direct` (annotation `gds.nvidia.com/router-mode`)
+whose replicas include the pod's own IP, and takes the peer identities from
+it. Headless DNS lists Deployment pods by their dashed IP while each pod lists
+itself by its pod name, so without GDS a pylon would see every pod under two
+authorities and register twice. Each replica with an identity (its
+EndpointSlice hostname, else its pod name) is listed with `stargate_id` set to
+the identity, `advertise_addr` set to the record's hostname template with
+`{pod_name}` replaced by the identity plus the gRPC port, and
+`grpc_pylon_dial_addr` set to `<dial scheme>://<pod IP>:<gRPC port>`. Every
+replica therefore lists every pod under one authority. This applies when the
+record names the pod itself that way, that is, when its hostname template and
+gRPC port match `--advertised-hostname-template` and the port of
+`--advertise-addr`. Replicas without an identity and peers GDS does not list
+keep the names DNS gives them and get their dial address by those names.
 `advertise_addr` stays the per-pod gRPC authority and `reverse_tunnel_target`
 the QUIC SNI, so registration and tunnel land on the same pod without a relay.
 Pylons need TCP 50071 and UDP 50072 to the router pod IPs.

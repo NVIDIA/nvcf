@@ -181,17 +181,23 @@ root; the client is `crates/gds-client`.
   still come from DNS discovery, and `--grpc-pylon-dial-addr` is advertised
   unchanged. An `http://` GDS URL requires
   `--allow-insecure-remote-watch-http`.
-- Stargate in direct router mode: without `--grpc-pylon-dial-addr`, when this
-  cluster's router record is annotated `gds.nvidia.com/router-mode: direct`
-  and lists this pod's IP (from `--advertise-addr`), every local Stargate
-  that matches a replica of the record gets
-  `<dial scheme>://<replica address>:<grpc port>` as its
-  `grpc_pylon_dial_addr`; this Stargate dials its own advertise address. A
-  peer matches by IP address, by the `gds.nvidia.com/hostname-template` with
-  the replica's EndpointSlice hostname, or by that template with the
-  dashed-IP name Kubernetes DNS gives Deployment pods. A peer listed by a pod
-  name without an EndpointSlice hostname keeps an empty dial address until
-  the router record carries pod names.
+- Stargate in direct router mode: when this cluster's router record is in
+  mode `direct` (annotation `gds.nvidia.com/router-mode: direct`) and lists
+  this pod's IP (from `--advertise-addr`), the peer identities come from GDS.
+  If the record's hostname template and gRPC port name this Stargate by the
+  host and port it advertises, every replica with an identity (EndpointSlice
+  hostname, else pod name) is listed with that identity as `stargate_id`,
+  the template with `{pod_name}` replaced by the identity plus the gRPC port
+  as `advertise_addr`, and `<dial scheme>://<replica address>:<grpc port>`
+  as `grpc_pylon_dial_addr`. Peers that DNS lists by another name of such a
+  replica, such as the dashed-IP name Kubernetes DNS gives Deployment pods,
+  are replaced by that entry, so every replica lists each pod once and a
+  pylon registers once per pod. Without `--grpc-pylon-dial-addr`, this
+  Stargate dials its own advertise address, and peers without an identity or
+  unknown to GDS keep their DNS names and get a dial address by IP address,
+  by the template with the EndpointSlice hostname, or by the template with
+  the dashed-IP name. A configured `--grpc-pylon-dial-addr` still applies to
+  every entry.
 - Pylon: `--gds-url`, `--gds-clusterset` and `--gds-tls-ca-cert-path`. Pylon
   watches the seeds of every router cluster with a live lease and follows
   changes without a restart: new seeds start `WatchStargates`, removed seeds
