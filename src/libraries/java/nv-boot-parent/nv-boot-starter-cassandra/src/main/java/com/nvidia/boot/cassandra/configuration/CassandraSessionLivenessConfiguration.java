@@ -20,10 +20,17 @@ import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.RETRY_
 
 import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.CqlSessionBuilder;
+import com.datastax.oss.driver.api.core.config.DriverConfig;
+import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
+import com.datastax.oss.driver.api.core.config.OptionsMap;
+import com.datastax.oss.driver.api.core.config.TypedDriverOption;
+import com.datastax.oss.driver.api.core.context.DriverContext;
 import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.nvidia.boot.cassandra.retry.NextHostRetryPolicy;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -49,6 +56,7 @@ public class CassandraSessionLivenessConfiguration {
     CassandraSessionLivenessIndicator cassandraSessionHealthIndicator(
             ObjectProvider<CqlSession> sessions,
             ObjectProvider<CqlSessionBuilder> sessionBuilders,
+            ObjectProvider<DriverConfigLoader> configLoaders,
             Environment environment) {
         var gracePeriod = DurationStyle.detectAndParse(
                 environment.getProperty("app.cassandra.session-liveness.grace-period", "3m"));
@@ -67,15 +75,20 @@ public class CassandraSessionLivenessConfiguration {
                 .build();
         return new CassandraSessionLivenessIndicator(
                 () -> succeeds(() -> session.execute(healthQuery)),
-                () -> freshSessionSucceeds(sessionBuilders),
+                () -> freshSessionSucceeds(sessionBuilders, configLoaders),
                 gracePeriod,
                 checkInterval);
     }
 
-    static boolean freshSessionSucceeds(ObjectProvider<CqlSessionBuilder> sessionBuilders) {
+    static boolean freshSessionSucceeds(ObjectProvider<CqlSessionBuilder> sessionBuilders,
+                                        ObjectProvider<DriverConfigLoader> configLoaders) {
         var builder = sessionBuilders.getIfAvailable();
         if (builder == null) {
             return false;
+        }
+        var configLoader = configLoaders.getIfUnique();
+        if (configLoader != null) {
+            builder.withConfigLoader(probeConfigLoader(configLoader));
         }
         // The probe shares the application session's name and meter IDs, and closing a session
         // removes its meters. A private registry keeps the application's driver metrics intact.
@@ -85,6 +98,44 @@ public class CassandraSessionLivenessConfiguration {
         } catch (RuntimeException e) {
             log.debug("New Cassandra session could not connect", e);
             return false;
+        }
+    }
+
+    /**
+     * The application's driver settings with schema metadata off, which keeps the probe cheap
+     * when many pods check at once. The probe only reads the application's loader: a session
+     * registers with its loader on start and closes it on close.
+     */
+    static DriverConfigLoader probeConfigLoader(DriverConfigLoader applicationLoader) {
+        var overrides = new OptionsMap();
+        overrides.put(TypedDriverOption.METADATA_SCHEMA_ENABLED, false);
+        return DriverConfigLoader.compose(DriverConfigLoader.fromMap(overrides),
+                                          new ReadOnlyConfigLoader(applicationLoader));
+    }
+
+    private record ReadOnlyConfigLoader(DriverConfigLoader delegate) implements DriverConfigLoader {
+
+        @Override
+        public DriverConfig getInitialConfig() {
+            return delegate.getInitialConfig();
+        }
+
+        @Override
+        public void onDriverInit(DriverContext context) {
+        }
+
+        @Override
+        public CompletionStage<Boolean> reload() {
+            return CompletableFuture.completedFuture(false);
+        }
+
+        @Override
+        public boolean supportsReloading() {
+            return false;
+        }
+
+        @Override
+        public void close() {
         }
     }
 

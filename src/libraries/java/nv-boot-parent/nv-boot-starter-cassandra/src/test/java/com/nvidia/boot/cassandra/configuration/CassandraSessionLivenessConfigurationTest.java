@@ -16,22 +16,30 @@
  */
 package com.nvidia.boot.cassandra.configuration;
 
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.METADATA_SCHEMA_ENABLED;
+import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.REQUEST_TIMEOUT;
 import static com.datastax.oss.driver.api.core.config.DefaultDriverOption.RETRY_POLICY_CLASS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.CqlSessionBuilder;
 import com.datastax.oss.driver.api.core.config.DriverConfig;
+import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
 import com.datastax.oss.driver.api.core.config.DriverExecutionProfile;
+import com.datastax.oss.driver.api.core.config.OptionsMap;
+import com.datastax.oss.driver.api.core.config.TypedDriverOption;
 import com.datastax.oss.driver.api.core.context.DriverContext;
+import com.datastax.oss.driver.internal.core.context.InternalDriverContext;
 import com.nvidia.boot.cassandra.retry.NextHostRetryPolicy;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -80,13 +88,56 @@ class CassandraSessionLivenessConfigurationTest {
         var builders = (ObjectProvider<CqlSessionBuilder>) mock(ObjectProvider.class);
         when(builders.getIfAvailable()).thenReturn(builder);
 
-        assertThat(CassandraSessionLivenessConfiguration.freshSessionSucceeds(builders)).isTrue();
+        assertThat(CassandraSessionLivenessConfiguration.freshSessionSucceeds(
+                builders, mock(ObjectProvider.class))).isTrue();
 
         var registry = ArgumentCaptor.forClass(Object.class);
         verify(builder).withMetricRegistry(registry.capture());
         assertThat(registry.getValue())
                 .isInstanceOf(SimpleMeterRegistry.class)
                 .isNotSameAs(Metrics.globalRegistry);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void freshSessionSkipsSchemaMetadataAndKeepsApplicationSettings() {
+        var builder = mock(CqlSessionBuilder.class);
+        when(builder.withMetricRegistry(any())).thenReturn(builder);
+        when(builder.build()).thenReturn(mock(CqlSession.class));
+        var builders = (ObjectProvider<CqlSessionBuilder>) mock(ObjectProvider.class);
+        when(builders.getIfAvailable()).thenReturn(builder);
+        var configLoaders = (ObjectProvider<DriverConfigLoader>) mock(ObjectProvider.class);
+        when(configLoaders.getIfUnique()).thenReturn(applicationLoader());
+
+        assertThat(CassandraSessionLivenessConfiguration.freshSessionSucceeds(
+                builders, configLoaders)).isTrue();
+
+        var loader = ArgumentCaptor.forClass(DriverConfigLoader.class);
+        verify(builder).withConfigLoader(loader.capture());
+        var profile = loader.getValue().getInitialConfig().getDefaultProfile();
+        assertThat(profile.getBoolean(METADATA_SCHEMA_ENABLED)).isFalse();
+        assertThat(profile.getDuration(REQUEST_TIMEOUT)).isEqualTo(Duration.ofSeconds(7));
+    }
+
+    @Test
+    void probeLoaderLeavesApplicationLoaderAlone() {
+        var applicationLoader = mock(DriverConfigLoader.class);
+        when(applicationLoader.getInitialConfig())
+                .thenReturn(applicationLoader().getInitialConfig());
+
+        var probeLoader = CassandraSessionLivenessConfiguration.probeConfigLoader(applicationLoader);
+        probeLoader.getInitialConfig();
+        probeLoader.onDriverInit(mock(InternalDriverContext.class));
+        probeLoader.close();
+
+        verify(applicationLoader, never()).onDriverInit(any());
+        verify(applicationLoader, never()).close();
+    }
+
+    private static DriverConfigLoader applicationLoader() {
+        var options = OptionsMap.driverDefaults();
+        options.put(TypedDriverOption.REQUEST_TIMEOUT, Duration.ofSeconds(7));
+        return DriverConfigLoader.fromMap(options);
     }
 
     private static CqlSession session() {
