@@ -180,6 +180,9 @@ is reported at once. Renders nothing.
 {{- if ne .Values.credential.key "cluster-token" -}}
 {{- fail (printf "pylon-operator: credential.key must be cluster-token, got %q; the operator reads only that key" .Values.credential.key) -}}
 {{- end -}}
+{{- if and (include "pylon-operator.poolExport" .) (not $gds) -}}
+{{- fail "pylon-operator: globalDiscovery.poolExport.enabled requires router.source=gds" -}}
+{{- end -}}
 {{- if $gds -}}
 {{- $schemes := dict -}}
 {{- range .Values.globalDiscovery.urls -}}
@@ -192,6 +195,16 @@ is reported at once. Renders nothing.
 {{- if and $gdsCA .Values.trustBundle.configMap (ne $gdsCA .Values.trustBundle.configMap) -}}
 {{- fail (printf "pylon-operator: globalDiscovery.trustBundle.configMap %q and trustBundle.configMap %q must name the same ConfigMap; put both CAs in its ca.crt" $gdsCA .Values.trustBundle.configMap) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+True when globalDiscovery.poolExport.enabled is set; the operator flag is
+--gds-pool-export. Empty otherwise.
+*/}}
+{{- define "pylon-operator.poolExport" -}}
+{{- if dig "poolExport" "enabled" false (.Values.globalDiscovery | default dict) -}}
+true
 {{- end -}}
 {{- end -}}
 

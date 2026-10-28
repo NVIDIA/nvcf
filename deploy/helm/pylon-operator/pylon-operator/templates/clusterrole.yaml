@@ -16,6 +16,7 @@ rules:
   resources:
   - configmaps
   - secrets
+  - services
   verbs:
   - create
   - get
@@ -35,7 +36,6 @@ rules:
   resources:
   - nodes
   - pods
-  - services
   verbs:
   - get
   - list

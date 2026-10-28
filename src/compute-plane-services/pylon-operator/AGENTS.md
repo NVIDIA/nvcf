@@ -16,8 +16,10 @@ code with NVCA.
 - `internal/prober/`: the `Ready` condition (Service, endpoints, health, model listing)
 - `internal/gpu/`: `status.gpu` from `spec.gpu.product` or `nvidia.com/gpu.product` node labels
 - `internal/transport/`: the transport Deployment (`pylon-<name>`, owned by the
-  endpoint) and replication of the cluster credential Secret and trust bundle
-  ConfigMap from the operator namespace into the endpoint's namespace
+  endpoint), the pool export Service of the same name with
+  `--gds-pool-export`, and replication of the cluster credential Secret and
+  trust bundle ConfigMap from the operator namespace into the endpoint's
+  namespace
 - `internal/registration/`: the registration observer (`TransportReady`,
   `Registered`, `status.registration`, `status.servers`) from the transport
   pods' Pylon metrics
@@ -163,6 +165,23 @@ ConfigMap. The operator's own router cache (`internal/gds`) only logs a
 startup error when no router is visible and fills
 `status.registration.routers`; a failure to start it does not stop the
 operator.
+
+`--gds-pool-export` (valid only with `--router-source=gds`) makes each
+transport the PYLON agent of a GDS pool: `spec.globalDiscovery.poolName`, or
+the endpoint name made a DNS label with the `bounded` helper. The transport
+step passes `--gds-pool-name` to Pylon and, once the Deployment is written,
+keeps a ClusterIP Service `pylon-<name>` over the transport pods, controlled
+by the endpoint: port `metrics`, the GDS labels `export=true`, `role=pylon`,
+`pool=<pool name>` and the annotations `pool-models` (`spec.modelName`) and
+`hardware-class` (`status.gpu.product`, only when known). The label and
+annotation keys come from the global-discovery `api` package. Drift of the
+rendered labels, the two annotations, type, selector or ports is patched back;
+other labels and annotations stay. A Service of that name the endpoint does
+not control is left alone and reported once as a `TransportObjectConflict`
+Warning, without a condition change. Without the flag no Service is written,
+and one created earlier is neither updated nor deleted. The hardware class
+reaches the Service only, so a GPU type change still never rolls the
+transport.
 
 ## Registration observer
 

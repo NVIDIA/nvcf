@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -150,6 +151,7 @@ func TestCRDValidation(t *testing.T) {
 	valid.Spec.MaxEngineConcurrency = ptr.To[int32](8)
 	valid.Spec.GPU = &pylonv1alpha1.GPUSpec{Product: "NVIDIA-GB10"}
 	valid.Spec.Canary = &pylonv1alpha1.CanarySpec{TimeoutSeconds: ptr.To[int32](180), IntervalSeconds: ptr.To[int32](60)}
+	valid.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: strings.Repeat("p", 63)}
 	require.NoError(t, k8sClient.Create(ctx, valid))
 
 	tests := []struct {
@@ -177,6 +179,15 @@ func TestCRDValidation(t *testing.T) {
 		{name: "excessive canary interval", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
 			e.Spec.Canary = &pylonv1alpha1.CanarySpec{IntervalSeconds: ptr.To[int32](3601)}
 		}, field: "spec.canary.intervalSeconds"},
+		{name: "pool name not a DNS label", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "Llama_Pool"}
+		}, field: "spec.globalDiscovery.poolName"},
+		{name: "pool name with a dot", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "llama.pool"}
+		}, field: "spec.globalDiscovery.poolName"},
+		{name: "pool name too long", mutate: func(e *pylonv1alpha1.InferenceEndpoint) {
+			e.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: strings.Repeat("p", 64)}
+		}, field: "spec.globalDiscovery.poolName"},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -332,6 +343,7 @@ func TestControllerReconcilesThroughWatches(t *testing.T) {
 
 	cfg := config.Config{
 		ClusterID:               "spark-berlin",
+		RouterSource:            config.RouterSourceStatic,
 		RouterGRPCAddress:       "router:50071",
 		PylonImage:              "nvcr.io/nvidia/pylon:0.15.2",
 		OperatorNamespace:       operatorNS,
@@ -530,6 +542,170 @@ func TestControllerReconcilesThroughWatches(t *testing.T) {
 	assert.Empty(t, got.Status.Conditions)
 	err = k8sClient.Get(ctx, client.ObjectKey{Namespace: otherNS, Name: "pylon-llama"}, &appsv1.Deployment{})
 	assert.True(t, apierrors.IsNotFound(err), "no transport outside --watch-namespaces")
+}
+
+// TestPoolExportService runs the operator with --gds-pool-export and checks
+// that the API server accepts the pool export Service, and that a drift or
+// deletion of the Service reaches the endpoint through the owner watch: the
+// probe and scrape intervals are an hour, so nothing else requeues it.
+func TestPoolExportService(t *testing.T) {
+	requireEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ns := createNamespace(t)
+	operatorNS := createNamespace(t)
+	require.NoError(t, k8sClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: config.DefaultClusterCredentialSecret, Namespace: operatorNS},
+		Data:       map[string][]byte{transport.CredentialKey: []byte("t0-token")},
+	}))
+
+	cfg := config.Config{
+		ClusterID:               "spark-berlin",
+		RouterSource:            config.RouterSourceGDS,
+		GDSURLs:                 []string{"https://gds.example.test"},
+		GDSClustersetID:         "prod",
+		GDSPoolExport:           true,
+		PylonImage:              "nvcr.io/nvidia/pylon:0.15.2",
+		OperatorNamespace:       operatorNS,
+		InitialInputTPS:         config.DefaultInitialInputTPS,
+		WatchNamespaces:         []string{ns},
+		TransportReplicas:       1,
+		ProbeInterval:           time.Hour,
+		ScrapeInterval:          time.Hour,
+		MetricsBindAddress:      "0",
+		HealthProbeBindAddress:  "0",
+		ClusterCredentialSecret: config.DefaultClusterCredentialSecret,
+	}
+	require.NoError(t, cfg.Validate())
+	opts := cfg.ManagerOptions(scheme)
+	opts.Logger = testr.New(t)
+	// Another test in this process registers the same controller name.
+	opts.Controller.SkipNameValidation = ptr.To(true)
+	mgr, err := ctrl.NewManager(restConfig, opts)
+	require.NoError(t, err)
+
+	m := metrics.New()
+	require.NoError(t, m.Register(prometheus.NewRegistry()))
+	p := prober.New(m)
+	p.BaseURL = func(*pylonv1alpha1.InferenceEndpoint) string { return "http://127.0.0.1:1" }
+	r := controller.NewReconciler(controller.Options{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorderFor("pylon-operator"),
+		Config:   cfg,
+		Metrics:  m,
+		Steps: controller.DefaultSteps(mgr.GetClient(), p, &gpu.Resolver{Reader: mgr.GetClient()},
+			transport.New(mgr.GetClient(), cfg), registration.New(mgr.GetClient(), m)),
+	})
+	require.NoError(t, r.SetupWithManager(ctx, mgr))
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-done)
+	})
+
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		GenerateName: "spark-",
+		Labels:       map[string]string{gpu.ProductLabel: "NVIDIA-GB10"},
+	}}
+	require.NoError(t, k8sClient.Create(ctx, node))
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), node) })
+	require.NoError(t, k8sClient.Create(ctx, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "llama-nim", Namespace: ns},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 8000}}},
+	}))
+	require.NoError(t, k8sClient.Create(ctx, &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "llama-nim-abc",
+			Namespace: ns,
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "llama-nim"},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       []discoveryv1.EndpointPort{{Name: ptr.To("http"), Port: ptr.To[int32](8000)}},
+		Endpoints: []discoveryv1.Endpoint{{
+			Addresses:  []string{"10.0.0.1"},
+			Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)},
+			NodeName:   ptr.To(node.Name),
+		}},
+	}))
+
+	ep := newEndpoint(ns, "llama")
+	ep.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "llama-pool"}
+	require.NoError(t, k8sClient.Create(ctx, ep))
+
+	key := client.ObjectKey{Namespace: ns, Name: "pylon-llama"}
+	wantLabels := map[string]string{
+		"app.kubernetes.io/name":       "pylon",
+		"app.kubernetes.io/managed-by": "pylon-operator",
+		"pylon.nvidia.com/endpoint":    "llama",
+		"gds.nvidia.com/export":        "true",
+		"gds.nvidia.com/role":          "pylon",
+		"gds.nvidia.com/pool":          "llama-pool",
+	}
+	wantAnnotations := map[string]string{
+		"gds.nvidia.com/pool-models":    testModel,
+		"gds.nvidia.com/hardware-class": "NVIDIA-GB10",
+	}
+	waitForService := func(what string, check func(*assert.CollectT, *corev1.Service)) {
+		t.Helper()
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			svc := &corev1.Service{}
+			if assert.NoError(c, k8sClient.Get(ctx, key, svc)) {
+				check(c, svc)
+			}
+		}, waitTimeout, pollInterval, what)
+	}
+	waitForService("the pool export Service", func(c *assert.CollectT, svc *corev1.Service) {
+		assert.Equal(c, wantLabels, svc.Labels)
+		assert.Equal(c, wantAnnotations, svc.Annotations)
+	})
+
+	svc := &corev1.Service{}
+	require.NoError(t, k8sClient.Get(ctx, key, svc))
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(ep), ep))
+	assert.True(t, metav1.IsControlledBy(svc, ep))
+	assert.Equal(t, corev1.ServiceTypeClusterIP, svc.Spec.Type)
+	assert.NotEmpty(t, svc.Spec.ClusterIP)
+	assert.Equal(t, map[string]string{"app.kubernetes.io/name": "pylon", "pylon.nvidia.com/endpoint": "llama"}, svc.Spec.Selector)
+	require.Len(t, svc.Spec.Ports, 1)
+	assert.Equal(t, "metrics", svc.Spec.Ports[0].Name)
+	assert.Equal(t, corev1.ProtocolTCP, svc.Spec.Ports[0].Protocol)
+	assert.Equal(t, int32(9089), svc.Spec.Ports[0].Port)
+	assert.Equal(t, "metrics", svc.Spec.Ports[0].TargetPort.String())
+	deploy := &appsv1.Deployment{}
+	require.NoError(t, k8sClient.Get(ctx, key, deploy))
+	assert.Contains(t, deploy.Spec.Template.Spec.Containers[0].Args, "--gds-pool-name=llama-pool")
+
+	// A drift reaches the endpoint through the Service owner watch.
+	patch := client.MergeFrom(svc.DeepCopy())
+	svc.Labels["gds.nvidia.com/pool"] = "other"
+	svc.Labels["team"] = "a"
+	delete(svc.Annotations, "gds.nvidia.com/hardware-class")
+	require.NoError(t, k8sClient.Patch(ctx, svc, patch))
+	waitForService("the drift is undone", func(c *assert.CollectT, got *corev1.Service) {
+		assert.Equal(c, "llama-pool", got.Labels["gds.nvidia.com/pool"])
+		assert.Equal(c, "a", got.Labels["team"], "foreign labels stay")
+		assert.Equal(c, wantAnnotations, got.Annotations)
+	})
+
+	// A deleted Service is recreated.
+	require.NoError(t, k8sClient.Delete(ctx, svc))
+	waitForService("the Service is recreated", func(c *assert.CollectT, got *corev1.Service) {
+		assert.NotEqual(c, svc.UID, got.UID)
+		assert.Equal(c, wantLabels, got.Labels)
+	})
+
+	// The GPU product reaches the Service through the Node watch and leaves
+	// the transport template alone.
+	templateHash := deploy.Spec.Template.Annotations[transport.SpecHashAnnotation]
+	nodePatch := client.MergeFrom(node.DeepCopy())
+	node.Labels[gpu.ProductLabel] = "NVIDIA-GB300"
+	require.NoError(t, k8sClient.Patch(ctx, node, nodePatch))
+	waitForService("the hardware class follows the GPU", func(c *assert.CollectT, got *corev1.Service) {
+		assert.Equal(c, "NVIDIA-GB300", got.Annotations["gds.nvidia.com/hardware-class"])
+	})
+	require.NoError(t, k8sClient.Get(ctx, key, deploy))
+	assert.Equal(t, templateHash, deploy.Spec.Template.Annotations[transport.SpecHashAnnotation])
 }
 
 // runningPod creates a pod and reports it running and ready, as the kubelet

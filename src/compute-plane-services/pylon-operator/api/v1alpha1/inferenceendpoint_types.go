@@ -88,6 +88,19 @@ type GPUSpec struct {
 	Product string `json:"product,omitempty"`
 }
 
+// GlobalDiscoverySpec configures how the endpoint appears in the Global
+// Discovery Service when the operator runs with --gds-pool-export.
+type GlobalDiscoverySpec struct {
+	// PoolName is the GDS pool whose PYLON agent the transport pods are, a
+	// DNS label. When empty, the pool is named after the InferenceEndpoint,
+	// shortened with a hash suffix when that name is not a DNS label. Used
+	// only with --gds-pool-export.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +optional
+	PoolName string `json:"poolName,omitempty"`
+}
+
 // InferenceEndpointSpec is the desired state of an InferenceEndpoint.
 type InferenceEndpointSpec struct {
 	// ModelName is the exact string clients send in the OpenAI model field.
@@ -119,6 +132,11 @@ type InferenceEndpointSpec struct {
 	// GPU optionally overrides the GPU type derived from node labels.
 	// +optional
 	GPU *GPUSpec `json:"gpu,omitempty"`
+
+	// GlobalDiscovery optionally configures the endpoint's pool in the
+	// Global Discovery Service.
+	// +optional
+	GlobalDiscovery *GlobalDiscoverySpec `json:"globalDiscovery,omitempty"`
 }
 
 // GPUSource records where status.gpu.product came from.

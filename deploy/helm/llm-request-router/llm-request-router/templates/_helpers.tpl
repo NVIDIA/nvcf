@@ -153,9 +153,11 @@ configuration at startup, so the chart rejects it at render time.
 {{- end -}}
 
 {{/*
-Labels and annotation that make the GDS MCS controller export the Service
+Labels and annotations that make the GDS MCS controller export the Service
 pylons dial as this cluster's router. Rendered on the backend-router Service
-when the backend router is enabled, else on the ClusterIP Service.
+when the backend router is enabled, else on the ClusterIP Service. Both name
+their QUIC reverse tunnel port (UDP) quic, and have it whenever
+transport.reverseTunnelListenAddr is set, which the backend router requires.
 */}}
 {{- define "llm-request-router.gdsExportLabels" -}}
 {{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
@@ -167,6 +169,9 @@ gds.nvidia.com/role: router
 {{- define "llm-request-router.gdsExportAnnotations" -}}
 {{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
 gds.nvidia.com/dial-scheme: {{ include "llm-request-router.gdsDialScheme" . | quote }}
+{{- if dig "transport" "reverseTunnelListenAddr" "" .Values.llmRequestRouter }}
+gds.nvidia.com/quic-port-name: quic
+{{- end }}
 {{- end -}}
 {{- end -}}
 

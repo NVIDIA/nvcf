@@ -55,6 +55,14 @@ globalDiscovery:
     # ConfigMap, whose ca.crt then holds both CAs. Passed as
     # --gds-tls-ca-configmap.
     configMap: ""
+  poolExport:
+    # Export every transport to GDS as the Pylon agent of its pool: the
+    # operator renders a Service over the transport pods with the GDS export
+    # labels, which the GDS MCS controller of this cluster exports, and gives
+    # Pylon --gds-pool-name. The pool is spec.globalDiscovery.poolName of the
+    # InferenceEndpoint, default its name. Requires router.source=gds. Passed
+    # as --gds-pool-export.
+    enabled: false
 
 pylon:
   # Enable only on networks that drop UDP segmentation offload batches.

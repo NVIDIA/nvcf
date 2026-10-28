@@ -83,7 +83,7 @@ func NewReconciler(o Options) *Reconciler {
 // +kubebuilder:rbac:groups=pylon.nvidia.com,resources=inferenceendpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups=pylon.nvidia.com,resources=inferenceendpoints/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=pylon.nvidia.com,resources=inferenceendpoints/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -92,11 +92,13 @@ func NewReconciler(o Options) *Reconciler {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 
-// The finalizers rule lets the transport Deployment's ownerReference set
-// blockOwnerDeletion where the OwnerReferencesPermissionEnforcement admission
-// plugin is enabled. Secrets and ConfigMaps are cached only under the
-// configured names, and Pods only with the managed-by label of transport
-// pods; see config.ManagerOptions.
+// The finalizers rule lets the ownerReference of the transport Deployment and
+// the pool export Service set blockOwnerDeletion where the
+// OwnerReferencesPermissionEnforcement admission plugin is enabled. Services
+// are written only with --gds-pool-export and never deleted: garbage
+// collection removes a pool export Service with its endpoint. Secrets and
+// ConfigMaps are cached only under the configured names, and Pods only with
+// the managed-by label of transport pods; see config.ManagerOptions.
 
 // Reconcile runs the steps for one InferenceEndpoint, patches its status and
 // emits Events for condition transitions. It requeues after the probe
@@ -141,6 +143,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	r.emitConditionEvents(ep, original.Status.Conditions)
 	for _, e := range rc.events {
 		r.recorder.Event(ep, e.eventType, e.reason, e.message)
+	}
+	for _, f := range rc.afterEvents {
+		f()
 	}
 	r.metrics.SetEndpointConditions(req.String(), ep.Status.Conditions)
 	if rc.Transport != nil {

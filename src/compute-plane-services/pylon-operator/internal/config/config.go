@@ -110,6 +110,11 @@ type Config struct {
 	// whose ca.crt then holds both CAs: the operator caches ConfigMaps by a
 	// single name.
 	GDSTLSCAConfigMap string
+	// GDSPoolExport makes every transport the PYLON agent of a pool in the
+	// Global Discovery Service: the operator renders a Service over the
+	// transport pods with the GDS export labels and passes --gds-pool-name to
+	// Pylon. Valid only with RouterSourceGDS.
+	GDSPoolExport bool
 	// PylonImage is the image of the transport pods.
 	PylonImage string
 	// PylonDisableQuicGSO disables UDP segmentation offload on transport pods.
@@ -162,6 +167,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.Var((*urlList)(&c.GDSURLs), "gds-url", "Global Discovery Service gRPC URL, http:// or https://; repeatable or comma-separated, in failover order. Used with --router-source=gds.")
 	fs.StringVar(&c.GDSClustersetID, "gds-clusterset-id", "", "Global Discovery Service clusterset id. Required with --router-source=gds.")
 	fs.StringVar(&c.GDSTLSCAConfigMap, "gds-tls-ca-configmap", "", "ConfigMap in the operator namespace whose ca.crt key is the CA bundle of the GDS server certificate. Must equal --trust-bundle-configmap when both are set. Empty trusts the system roots.")
+	fs.BoolVar(&c.GDSPoolExport, "gds-pool-export", false, "Export every transport to the Global Discovery Service as the Pylon agent of its pool: render a Service over the transport pods with the GDS export labels and pass --gds-pool-name to Pylon. Requires --router-source=gds.")
 	fs.StringVar(&c.PylonImage, "pylon-image", "", "Container image of the Pylon transport pods. Required.")
 	fs.BoolVar(&c.PylonDisableQuicGSO, "pylon-disable-quic-gso", false, "Disable QUIC UDP segmentation offload on networks that drop GSO batches.")
 	fs.StringVar(&c.PylonImagePullPolicy, "pylon-image-pull-policy", "", "imagePullPolicy of the Pylon transport container: Always, IfNotPresent or Never. Empty uses the Kubernetes default.")
@@ -302,6 +308,12 @@ func (c *Config) GDS() bool {
 	return c.RouterSource == RouterSourceGDS
 }
 
+// PoolExport reports whether transports are exported to the Global
+// Discovery Service as the Pylon agents of their pools.
+func (c *Config) PoolExport() bool {
+	return c.GDS() && c.GDSPoolExport
+}
+
 // CABundleConfigMap is the one ConfigMap the operator replicates and mounts:
 // the router trust bundle, the GDS CA bundle, or both when they are the
 // same. Empty when neither is configured.
@@ -327,6 +339,9 @@ func (c *Config) validateRouterSource() []error {
 		}
 		if len(c.GDSURLs) > 0 || c.GDSClustersetID != "" || c.GDSTLSCAConfigMap != "" {
 			errs = append(errs, errors.New("--gds-url, --gds-clusterset-id and --gds-tls-ca-configmap require --router-source=gds"))
+		}
+		if c.GDSPoolExport {
+			errs = append(errs, errors.New("--gds-pool-export requires --router-source=gds"))
 		}
 	case RouterSourceGDS:
 		if len(c.GDSURLs) == 0 {

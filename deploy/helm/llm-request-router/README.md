@@ -205,9 +205,11 @@ independent parts of the chart take part.
 Export makes this cluster's router visible in GDS. With
 `globalDiscovery.export.enabled=true` the chart labels the Service pylons dial
 with `gds.nvidia.com/export: "true"` and `gds.nvidia.com/role: router` and
-annotates it with `gds.nvidia.com/dial-scheme`. That Service is the
-backend-router Service when the backend router runs, else the ClusterIP
-Service. The GDS MCS controller of this cluster exports it, and GDS lists one
+annotates it with `gds.nvidia.com/dial-scheme` and, while
+`transport.reverseTunnelListenAddr` is set,
+`gds.nvidia.com/quic-port-name: quic`, the name of its QUIC reverse tunnel
+port (UDP). That Service is the backend-router Service when the backend
+router runs, else the ClusterIP Service. The GDS MCS controller of this cluster exports it, and GDS lists one
 seed per ready replica: `<dialScheme>://<pod IP>:<gRPC port>`. The Stargate
 and backend router gRPC listeners serve plaintext gRPC on the pod port, so
 keep `dialScheme: http` unless TLS is terminated on that port.

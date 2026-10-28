@@ -27,12 +27,15 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	gdsapi "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api"
 
 	pylonv1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/api/v1alpha1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/pylon-operator/internal/config"
@@ -101,6 +104,22 @@ func DeploymentName(ep *pylonv1alpha1.InferenceEndpoint) string {
 	return bounded(namePrefix+ep.Name, ep.Name, validation.IsDNS1123Label)
 }
 
+// ServiceName names the pool export Service of ep, the same name as the
+// transport Deployment.
+func ServiceName(ep *pylonv1alpha1.InferenceEndpoint) string {
+	return DeploymentName(ep)
+}
+
+// PoolName is the Global Discovery Service pool of ep:
+// spec.globalDiscovery.poolName when set, else the endpoint name, shortened
+// with a hash suffix when it is not a DNS label.
+func PoolName(ep *pylonv1alpha1.InferenceEndpoint) string {
+	if gd := ep.Spec.GlobalDiscovery; gd != nil && gd.PoolName != "" {
+		return gd.PoolName
+	}
+	return bounded(ep.Name, ep.Name, validation.IsDNS1123Label)
+}
+
 // PodLabels are the labels of the transport pods of ep and the Deployment's
 // selector. The registration observer lists the pods with them.
 func PodLabels(ep *pylonv1alpha1.InferenceEndpoint) map[string]string {
@@ -153,11 +172,12 @@ func InferenceServerID(ep *pylonv1alpha1.InferenceEndpoint, clusterID string) st
 
 // Args are Pylon's arguments, in the order of the design. Optional flags are
 // present only when their value is: --max-engine-concurrency when the spec
-// sets it and --quic-insecure with --dev-insecure-transport. status.gpu is
-// not passed to Pylon, so a GPU type change never rolls the transport.
+// sets it, --gds-pool-name with --gds-pool-export and --quic-insecure with
+// --dev-insecure-transport. status.gpu is not passed to Pylon, so a GPU type
+// change never rolls the transport.
 func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
 	args := []string{"--upstream-http-base-url=" + UpstreamURL(ep)}
-	args = append(args, routerArgs(cfg)...)
+	args = append(args, routerArgs(ep, cfg)...)
 	args = append(args,
 		"--inference-server-id="+InferenceServerID(ep, cfg.ClusterID),
 		"--cluster-id="+cfg.ClusterID,
@@ -187,20 +207,24 @@ func Args(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
 
 // routerArgs tell Pylon where the routers are. With the static source it
 // is --stargate-address. With GDS it is the GDS URLs and clusterset, the GDS
-// CA when configured, and --stargate-address only when a router address is
-// also configured; the router seeds then come from GDS at runtime, so router
-// churn never changes the pod template.
-func routerArgs(cfg config.Config) []string {
+// CA when configured, the pool of ep with pool export, and
+// --stargate-address only when a router address is also configured; the
+// router seeds then come from GDS at runtime, so router churn never changes
+// the pod template.
+func routerArgs(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) []string {
 	if !cfg.GDS() {
 		return []string{"--stargate-address=" + escape(cfg.RouterGRPCAddress)}
 	}
-	args := make([]string, 0, len(cfg.GDSURLs)+3)
+	args := make([]string, 0, len(cfg.GDSURLs)+4)
 	for _, u := range cfg.GDSURLs {
 		args = append(args, "--gds-url="+escape(u))
 	}
 	args = append(args, "--gds-clusterset="+escape(cfg.GDSClustersetID))
 	if cfg.GDSTLSCAConfigMap != "" {
 		args = append(args, "--gds-tls-ca-cert-path="+path.Join(TrustBundleMountPath, TrustBundleCAKey))
+	}
+	if cfg.PoolExport() {
+		args = append(args, "--gds-pool-name="+PoolName(ep))
 	}
 	if cfg.RouterGRPCAddress != "" {
 		args = append(args, "--stargate-address="+escape(cfg.RouterGRPCAddress))
@@ -233,6 +257,52 @@ func Deployment(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config, replicas
 			Template: template,
 		},
 	}
+}
+
+// Service renders the pool export Service of ep: a ClusterIP Service over
+// the transport pods that the GDS MCS controller exports as the PYLON agent
+// of the pool PoolName(ep). GDS counts its ready endpoints; nothing dials it,
+// since Pylon's tunnel to the routers is outbound. Its one port is Pylon's
+// metrics port. The pool-models annotation is spec.modelName and the
+// hardware-class annotation the effective GPU product, present only when
+// known. ep controls the Service, so deleting ep garbage-collects it.
+func Service(ep *pylonv1alpha1.InferenceEndpoint) *corev1.Service {
+	labels := objectLabels(ep)
+	labels[gdsapi.LabelExport] = gdsapi.ExportEnabled
+	labels[gdsapi.LabelRole] = gdsapi.RolePylon
+	labels[gdsapi.LabelPool] = PoolName(ep)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ServiceName(ep),
+			Namespace:       ep.Namespace,
+			Labels:          labels,
+			Annotations:     serviceAnnotations(ep),
+			OwnerReferences: []metav1.OwnerReference{*controllerRef(ep)},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: PodLabels(ep),
+			Ports: []corev1.ServicePort{{
+				Name:       MetricsPortName,
+				Protocol:   corev1.ProtocolTCP,
+				Port:       MetricsPort,
+				TargetPort: intstr.FromString(MetricsPortName),
+			}},
+		},
+	}
+}
+
+// ownedServiceAnnotations are the annotations of the pool export Service
+// the operator owns. An update removes an owned annotation that Service does
+// not render and leaves every other annotation alone.
+var ownedServiceAnnotations = []string{gdsapi.AnnotationPoolModels, gdsapi.AnnotationHardwareClass}
+
+func serviceAnnotations(ep *pylonv1alpha1.InferenceEndpoint) map[string]string {
+	a := map[string]string{gdsapi.AnnotationPoolModels: ep.Spec.ModelName}
+	if gpu := ep.Status.GPU; gpu != nil && gpu.Product != "" {
+		a[gdsapi.AnnotationHardwareClass] = gpu.Product
+	}
+	return a
 }
 
 // controllerRef makes ep the controller of an object, so deleting ep

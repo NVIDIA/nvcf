@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -251,6 +252,120 @@ func TestEndpointsForReplicated(t *testing.T) {
 	}))
 	step.reader = failing.client
 	assert.Nil(t, mapSecret(ctx, secret(operatorNamespace, config.DefaultClusterCredentialSecret, false)))
+}
+
+// withPoolExport runs the fixture with the GDS router source and
+// --gds-pool-export.
+func withPoolExport() fixtureOption {
+	return withConfig(func(c *config.Config) {
+		c.RouterSource = config.RouterSourceGDS
+		c.GDSURLs = []string{"https://gds.example.test"}
+		c.GDSClustersetID = "prod"
+		c.GDSPoolExport = true
+	})
+}
+
+func (f *fixture) poolService() (*corev1.Service, error) {
+	s := &corev1.Service{}
+	err := f.client.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: "pylon-llama"}, s)
+	return s, err
+}
+
+func TestTransportStepCreatesPoolExportService(t *testing.T) {
+	f := newFixture(t, withPoolExport(), withObjects(healthyObjects()...))
+	f.mustReconcile()
+	svc, err := f.poolService()
+	require.NoError(t, err)
+	assert.True(t, metav1.IsControlledBy(svc, f.endpoint()))
+	assert.Equal(t, "pylon", svc.Labels["gds.nvidia.com/role"])
+	assert.Equal(t, "llama", svc.Labels["gds.nvidia.com/pool"])
+	assert.Equal(t, testGPU, svc.Annotations["gds.nvidia.com/hardware-class"], "the GPU step runs first")
+	assert.Equal(t, testModel, svc.Annotations["gds.nvidia.com/pool-models"])
+	assert.Contains(t, f.deployment().Spec.Template.Spec.Containers[0].Args, "--gds-pool-name=llama")
+
+	without := newFixture(t, withObjects(healthyObjects()...))
+	without.mustReconcile()
+	_, err = without.poolService()
+	assert.True(t, apierrors.IsNotFound(err), "no Service without pool export")
+}
+
+// TestTransportStepServiceProblemEvent checks that a Service conflict emits
+// one Warning Event, leaves the conditions to the registration observer, and
+// warns again only after it was resolved and came back.
+func TestTransportStepServiceProblemEvent(t *testing.T) {
+	foreign := service(testNamespace, "pylon-llama")
+	f := newFixture(t, withPoolExport(), withObjects(append(healthyObjects(), foreign)...))
+	warning := `Warning TransportObjectConflict Service "pylon-llama" exists and is not controlled by this InferenceEndpoint; the transport is not exported to the Global Discovery Service`
+
+	f.mustReconcile()
+	assert.Contains(t, f.events(), warning)
+	assert.Equal(t, "TunnelNotConnected", f.condition(pylonv1alpha1.ConditionTransportReady).Reason, "no fast negative")
+
+	f.mustReconcile()
+	assert.NotContains(t, f.events(), warning, "not repeated while it lasts")
+
+	// Resolved: the operator creates its Service.
+	require.NoError(t, f.client.Delete(context.Background(), foreign))
+	f.mustReconcile()
+	svc, err := f.poolService()
+	require.NoError(t, err)
+	assert.NotContains(t, f.events(), warning)
+
+	// Back again: a new Warning.
+	require.NoError(t, f.client.Delete(context.Background(), svc))
+	require.NoError(t, f.client.Create(context.Background(), service(testNamespace, "pylon-llama")))
+	f.mustReconcile()
+	assert.Contains(t, f.events(), warning)
+}
+
+// TestTransportStepServiceProblemEventAfterFailedPatch checks that a Warning
+// lost with a failed status patch is emitted by the next reconcile.
+func TestTransportStepServiceProblemEventAfterFailedPatch(t *testing.T) {
+	var failPatch atomic.Bool
+	failPatch.Store(true)
+	f := newFixture(t, withPoolExport(), withObjects(append(healthyObjects(), service(testNamespace, "pylon-llama"))...),
+		withInterceptors(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if failPatch.Load() {
+					return fmt.Errorf("apiserver says no")
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}))
+	_, err := f.reconcile()
+	require.Error(t, err)
+	assert.Empty(t, f.events(), "no Event without a status patch")
+
+	failPatch.Store(false)
+	f.mustReconcile()
+	assert.Contains(t, f.events(), `Warning TransportObjectConflict Service "pylon-llama" exists and is not controlled by this InferenceEndpoint; the transport is not exported to the Global Discovery Service`)
+}
+
+func TestTransportStepForget(t *testing.T) {
+	step := &transportStep{}
+	rc := newReconcileContext(inferenceEndpoint(1), testConfig())
+	problem := &transport.Problem{EventReason: transport.EventReasonTransportObjectConflict, Message: "conflict"}
+	step.noteServiceProblem(rc, problem)
+	for _, f := range rc.afterEvents {
+		f()
+	}
+	require.Len(t, rc.events, 1)
+
+	rc = newReconcileContext(inferenceEndpoint(1), testConfig())
+	step.noteServiceProblem(rc, problem)
+	assert.Empty(t, rc.events, "remembered")
+
+	step.Forget(testKey)
+	step.noteServiceProblem(rc, problem)
+	assert.Len(t, rc.events, 1, "forgotten with the endpoint")
+}
+
+func TestTransportStepOwnsServices(t *testing.T) {
+	var kinds []string
+	for _, obj := range ownedTypes() {
+		kinds = append(kinds, fmt.Sprintf("%T", obj))
+	}
+	assert.Equal(t, []string{"*v1.Deployment", "*v1.Service"}, kinds)
 }
 
 func TestTransportStepSetupWithManager(t *testing.T) {

@@ -64,6 +64,7 @@ func main() {
 		"routerSource", cfg.RouterSource,
 		"gdsURLs", cfg.GDSURLs,
 		"gdsClustersetId", cfg.GDSClustersetID,
+		"gdsPoolExport", cfg.PoolExport(),
 		"operatorNamespace", cfg.OperatorNamespace,
 		"watchNamespaces", cfg.WatchNamespaces,
 		"pylonImagePullSecrets", cfg.PylonImagePullSecrets,
