@@ -69,6 +69,10 @@ func (sc *ScenarioContext) prepareHelmfileEnvironment(environment, stack, fixtur
 	if err := copyFile(sc.resolvePath(dsl.Interpolate(fixture)), dest); err != nil {
 		return err
 	}
+	// Environment values can include authenticated chart repository credentials.
+	if err := os.Chmod(dest, 0o600); err != nil {
+		return fmt.Errorf("secure Helmfile environment %s: %w", dest, err)
+	}
 	return dsl.UpdateYAMLKeys(dest, keys)
 }
 
