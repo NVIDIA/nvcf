@@ -1090,3 +1090,29 @@ Issues found and not fixed:
   `crictl` and lets the cluster pull third-party images it cannot import.
 - ws7's cleanup let `k3d cluster delete` rewrite the default kubeconfig (it removes the cluster's
   entries from the file it loads, even when there are none); fixed in `run.sh`.
+
+## Revision v0.5: typed pool agents (PoolRelay and Pylon)
+
+Design v0.5 (sections 3, 4.2, 4.3, 4.5, 4.6, 5.4, 9, 10) models the Dynamo PoolRelay and Pylon
+as distinct processes of a pool, each with its own Service, role label and typed registration.
+Decisions: relay dials Stargate's existing 50071 gRPC listener; GDS side only; the Pylon
+Operator creates the Pylon Service; roles reuse `FrontendRole` with `PYLON = 3`; combined
+processes use the `gds.nvidia.com/roles` annotation; agent registrations are new RPCs keyed
+(cluster, pool name, role) with their own lease; pool liveness needs a live ingress agent
+(OPENAI or PYLON); a relay-only pool is REGISTERED; the Router gains `quic_port` and `ports[]`;
+agent-only pools resolve `pool_id` through the deterministic UUIDv5 without a name reservation.
+
+| Workstream | Scope | Depends on |
+|---|---|---|
+| ws-d | design doc v0.5, this section | |
+| ws0 | proto additions, labels (Go and Rust), limits, `litePool`, generated code, vendored proto | ws-d |
+| ws1 | store (memory, DynamoDB, storetest), view and state derivation, agent RPC handlers, docs/api.md, docs/storage.md, docs/consistency.md | ws0 |
+| ws2 | fakegds agent RPCs, agents in pool views, router quic/ports, seed helpers; docs/mcs-controller.md | ws0 |
+| ws3 | Go client relay and QUIC helpers, pool agent helpers, README | ws0, ws2 for tests |
+| ws4 | Rust client (`relay_seed_urls`, `quic_port`, agent RPCs, `AgentRegistration`), Pylon `--gds-pool-name`, READMEs | ws0 |
+| ws5 | Pylon Operator Service and `--gds-pool-export`, CRD `spec.globalDiscovery.poolName`, charts (pylon-operator, llm-request-router quic-port-name) | ws0 |
+| ws6 | e2e phases 1 to 3, e2e README, module README, quickstart, Status below | ws1, ws2, ws4, ws5 |
+
+### Status (v0.5)
+
+- ws-d: design doc and this section written.

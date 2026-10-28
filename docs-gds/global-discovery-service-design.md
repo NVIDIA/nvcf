@@ -1,10 +1,12 @@
 # Global Discovery Service (GDS): Design
 
-Status: Draft v0.4, 2026-10-27 (v0.1 initial design; v0.2 adds the cross-region request path
+Status: Draft v0.5, 2026-10-28 (v0.1 initial design; v0.2 adds the cross-region request path
 flow and its prerequisites, the explicit pool dispatch address, the draining order and the
 registration-direction neutrality, from `network-interaction-comparison.md`; v0.3 replaces the
 derived-VIP pylon seed with per-cluster router replica seeds, 4.5; v0.4 records the integration
-decisions on the advertised dial address and the seed scheme, 4.5 and 10). Author:
+decisions on the advertised dial address and the seed scheme, 4.5 and 10; v0.5 models the
+PoolRelay and Pylon as distinct typed pool agents with their own Services and registrations,
+3, 4.2, 4.3, 4.5, 4.6, 5.4, 9 and 10). Author:
 E. Stroczynski. Design for the Global Discovery Service
 of the Dynamo Global Router (Global Router HLD, Kiro edition, section 2.4 "Discovery", and the
 "LLD: The Global View" GDS requirements), scoped by the "Global Discovery Service" workstreams of
@@ -15,8 +17,11 @@ plan derived from this document lives at
 `docs-gds/implementation-plan.md`.
 
 Vocabulary: "router" means the LLM Request Router (Stargate) and the HLD's Global Router.
-"Pylon" means the LLM stack's Pylon transport and the HLD's Pool Relay. "Pool" is the HLD's unit
-of routing (nominally one DGD); "clusterset" and "cluster id" follow KEP-1645.
+"Pylon" means the LLM stack's Pylon transport, an ingress of a pool interchangeable with the
+HLD's local frontend (a frontend may embed Pylon). "PoolRelay" means the Dynamo Pool Relay
+(formerly KV DC Relay), the publisher of a pool's KV catalog, readiness and load; it is a
+separate process from Pylon with its own Service. "Pool" is the HLD's unit of routing
+(nominally one DGD); "clusterset" and "cluster id" follow KEP-1645.
 
 ## 0. Scope and summary
 
@@ -221,7 +226,8 @@ and fetch router endpoints on startup.
 | pool name | Client-chosen DNS label, unique within (clusterset, cluster). From label `gds.nvidia.com/pool` or `RegisterPool`. | Pool records, API overlay join key |
 | `pool_id` | Server-assigned UUID unless provided; stable for the pool's life. | Pool API paths |
 | `generation` | Writer-supplied monotonic integer per record, `max(previous+1, unix_ms)`. | Export and endpoint writes |
-| `lease.epoch` | Server-minted incarnation number per cluster or API pool registration. | Heartbeats |
+| `lease.epoch` | Server-minted incarnation number per cluster, API pool registration or pool agent registration. | Heartbeats |
+| agent role | One of the pool roles (`pool-frontend`, `kv-relay`, `pylon`); keys an agent within a pool. | `agents[]`, agent API paths |
 | `revision` | Opaque `view_epoch:seq` token per GDS replica. | Watch resume |
 
 Well-known labels and annotations (constants in `api/labels.go`, mirrored in the Rust crate):
@@ -229,13 +235,14 @@ Well-known labels and annotations (constants in `api/labels.go`, mirrored in the
 | Key | Kind | Values | Meaning |
 | :---- | :---- | :---- | :---- |
 | `gds.nvidia.com/export` | Service label | `"true"` | Controller creates and owns a ServiceExport for this Service |
-| `gds.nvidia.com/role` | Service label | `router`, `pool-frontend`, `kv-relay` | What GDS derives from the export |
+| `gds.nvidia.com/role` | Service label | `router`, `pool-frontend`, `kv-relay`, `pylon` | What GDS derives from the export |
+| `gds.nvidia.com/roles` | Service annotation | comma list of pool roles | A process that fills several roles (a frontend embedding Pylon); overrides the `role` label for pool derivation; `router` not allowed |
 | `gds.nvidia.com/pool` | Service label | pool name | Associates the export with a Pool record |
 | `gds.nvidia.com/pool-models` | Service annotation | comma list of model ids | Pool metadata |
 | `gds.nvidia.com/hardware-class` | Service annotation | free string, e.g. `b200-ib` | Pool metadata |
 | `gds.nvidia.com/dc` | Service annotation | DC name | Pool location |
 | `gds.nvidia.com/dial-scheme` | Service annotation | `http`, `https` | Scheme clients use for router seeds and the derived VIP |
-| `gds.nvidia.com/grpc-port-name`, `gds.nvidia.com/http-port-name` | Service annotation | port names, default `grpc`, `http` | Which Service ports carry gRPC and HTTP |
+| `gds.nvidia.com/grpc-port-name`, `gds.nvidia.com/http-port-name`, `gds.nvidia.com/quic-port-name` | Service annotation | port names, default `grpc`, `http`, `quic` | Which Service ports carry gRPC, HTTP and the QUIC tunnel |
 | `gds.nvidia.com/managed-by` | label on objects the controller creates | `gds-mcs-controller` | Ownership marker |
 | `gds.nvidia.com/clusterset` | label on objects the controller creates | clusterset | Scoping |
 | `gds.nvidia.com/pool-id` | label on auto-created ServiceExports | pool id | Created from an API-registered pool |
@@ -295,18 +302,29 @@ Pool layer:
 
 - Pool: name, pool_id, location (region, dc, cluster, zones), hardware class, models, worker
   counts, frontends (static URLs and/or references to exported Services), `services[]`
-  (exported Services in the pool's cluster used for the endpoint join), labels, desired state
-  (ACTIVE or DRAINING), derived state (REGISTERED, ACTIVE, DRAINING, UNHEALTHY, GONE), optional
-  lease, generation, owner.
+  (exported Services in the pool's cluster used for the endpoint join), `agents[]` (one per
+  pool role present, see below), labels, desired state (ACTIVE or DRAINING), derived state
+  (REGISTERED, ACTIVE, DRAINING, UNHEALTHY, GONE), `kv_relay_live`, `ready_ingress_count`,
+  optional pool lease, generation, owner.
+- Pool agent (per pool and role): role (OPENAI, KV_RELAY or PYLON), source (LABEL, API or BOTH),
+  the exported Service and port name when label-derived, endpoint and ready endpoint counts,
+  dial mode (INBOUND for OPENAI, OUTBOUND for PYLON and KV_RELAY), the agent's own lease, agent
+  id and attributes when API-registered, and a derived `live` flag. Stored as its own record
+  (`PA#`) when API-registered; computed from exports otherwise.
 - Router (computed): one per exported Service with role `router`: cluster, region, namespace,
-  name, type, port numbers, dial scheme, replicas (address, ready, hostname, zone), labels and
-  annotations.
+  name, type, port numbers (gRPC, HTTP, QUIC) and the full Service port list, dial scheme,
+  replicas (address, ready, hostname, zone), labels and annotations.
 
-A Pool record exists when a labelled export names it, when the API registered it, or both; the
-two are merged by (cluster, pool name). Static metadata comes from labels and annotations;
-dynamic state (worker counts, DRAINING) comes from the API overlay. Liveness of a label-derived
-pool is the cluster lease plus at least one ready endpoint; an API-only pool (no `services[]`,
-no labelled export) uses its own lease.
+A Pool record exists when a labelled export names it, when the API registered it or one of its
+agents, or any combination; all are merged by (cluster, pool name), and the deterministic
+`pool_id` (UUIDv5 of clusterset, cluster and name) makes independent writers converge on one
+record. Static metadata comes from labels and annotations; dynamic state (worker counts,
+DRAINING) comes from the API overlay; per-process liveness and identity come from the agents.
+Ingress agents are OPENAI and PYLON: they take requests, by inbound dispatch or by the reverse
+tunnel. A pool is live when its cluster lease is active and at least one ingress agent has a
+ready endpoint, or when an ingress agent's lease is active; an API-only pool with no agents
+keeps using its pool lease. A live KV_RELAY alone makes a pool known (REGISTERED) but not
+routable; it sets `kv_relay_live` so KV-aware routers know the pool's cache facts are available.
 
 ### 4.3 Data flows
 
@@ -363,18 +381,20 @@ Pool path (a Global Router learning pools):
 
 ```mermaid
 sequenceDiagram
-    participant F as pool frontend / PoolRelay Services (cluster C)
+    participant F as frontend, PoolRelay and Pylon Services (cluster C)
     participant CC as gds-mcs-controller (C)
     participant G as GDS
-    participant O as pool operator or PoolRelay (optional overlay)
+    participant O as pool operator (optional overlay)
+    participant A as PoolRelay and Pylon processes (typed agents)
     participant GR as Global Router (gds-client PoolCache)
-    F->>CC: labels export=true, role=pool-frontend | kv-relay, pool=<name>, annotations
-    CC->>G: PutServiceExport + ReplaceEndpoints
+    F->>CC: labels export=true, role=pool-frontend | kv-relay | pylon, pool=<name>, annotations
+    CC->>G: PutServiceExport + ReplaceEndpoints (one export per Service)
     O->>G: RegisterPool / UpdatePool / HeartbeatPool (worker counts, DRAINING)
-    G->>G: derive Pool: labels + overlay, liveness = lease + ready endpoints
+    A->>G: RegisterPoolAgent(role KV_RELAY | PYLON, agent_id) + HeartbeatPoolAgent
+    G->>G: derive Pool: exports + overlay + agents; live = cluster lease and a live ingress agent
     GR->>G: ListPools(filter) then WatchPools, full re-list every TTL
-    G-->>GR: Pool{..., endpoints grouped by cluster}
-    GR->>GR: dial frontend via derived VIP or per-replica endpoints
+    G-->>GR: Pool{..., agents[], kv_relay_live, endpoints grouped by cluster}
+    GR->>GR: dial frontend via derived VIP or per-replica endpoints; use KV facts when kv_relay_live
 ```
 
 Cross-region request path (a Global Router in cluster A dispatching to a Pool Frontend in
@@ -523,6 +543,18 @@ Service per import, and a unique router Service name per cluster is an operation
 for it (`RouterState.DerivedServiceURL`, `derived_service_url`) for callers that deliberately
 want the merged VIP; it is never returned as a seed.
 
+Two kinds of pool-side process dial routers, and both start from the same Router record. Pylon
+opens `WatchStargates` on the gRPC seed, then one registration stream and one QUIC tunnel per
+Stargate replica; the Router's `quic_port` (annotation `gds.nvidia.com/quic-port-name`, default
+`quic`) is informational for Pylon, whose tunnel address comes from the registration ack. The
+PoolRelay opens its state streams over gRPC to the same 50071 listener and uses no QUIC. The
+clients therefore expose two helpers over the same data, `pylon_seed_urls` and
+`relay_seed_urls` (Go `SeedURLs` and `RelayURLs`), both `<scheme>://<replica>:<grpc_port>`
+today, kept separate so that a relay-specific listener or scheme can be introduced without
+touching Pylon. The Router record also carries `ports[]`, every port of the exported Service
+with name and protocol, so a consumer with a protocol GDS does not name can still find its
+port.
+
 A Stargate learns other clusters' routers the same way (for `watch_stargate_urls`): the Rust
 client's `remote_watch_urls` returns the replica seeds of every router in another cluster, which
 `WatchStargates` unions with the static `--remote-stargate-url` list every poll tick.
@@ -532,37 +564,72 @@ exact advertised addresses that pylons do not need, since they never resolve per
 Explicit registration stays an extension point (a `RouterService` could be added without changing
 existing messages) for routers that are not Kubernetes Services.
 
-### 4.6 Pools, pool HA and the PoolRelay
+### 4.6 Pools, pool agents and pool HA
 
-A pool's chart labels its frontend Service (`role=pool-frontend`, `gds.nvidia.com/pool`, model
-and hardware annotations) and its PoolRelay Service (`role=kv-relay`). The operator chooses the
-Service type: a ClusterIP Service exports as CLUSTER_SET_IP, giving one VIP per importing cluster
-with kube-proxy spreading over the replicas; a headless Service exports as HEADLESS, giving
-per-replica endpoints so a consumer (a Global Router subscribing to every PoolRelay replica, the
-HLD's open question 7) can address each one. GDS returns both the derivable VIP name and the
-per-replica endpoints; the consumer picks.
+A pool is served by up to three kinds of process, each a typed agent of the pool with its own
+Kubernetes Service in the pool's namespace and its own role label:
 
-Pylon high availability in the LLM stack is unchanged: N transport pods, each with its own
-`inference_server_id`, each registering with every router replica through the seeds above. No
-Service fronts them and none is needed.
+| Role | Label | Process | Dial mode | What routers get from it |
+| :---- | :---- | :---- | :---- | :---- |
+| OPENAI | `pool-frontend` | The HLD local frontend (Dynamo frontend) | INBOUND: routers dispatch HTTP to it through the derived VIP or per-replica endpoints | The dispatch address; `ready_endpoint_count` |
+| PYLON | `pylon` | Pylon transport | OUTBOUND: dials every router replica, gRPC registration plus QUIC tunnel; routers proxy requests back over the tunnel | Per-server stats and a request path that needs no inbound reachability |
+| KV_RELAY | `kv-relay` | Dynamo PoolRelay | OUTBOUND: dials router replicas over gRPC and publishes KV catalog, readiness and load (its own gRPC server stays for pull consumers) | KV-aware pool selection; `kv_relay_live` |
 
-Every pool record carries an explicit dispatch address for routers: a `frontends[]` entry with
-role OPENAI that GDS fills from the labelled frontend export (role `pool-frontend`), which
-clients resolve to the derived Service name in their own cluster, or a static `url` supplied
-through the API for pools fronted by a LoadBalancer. `ready_endpoint_count` on the pool lets a
-router skip pools with no ready frontend.
+OPENAI and PYLON are the ingress roles; they are interchangeable from the pool's point of view
+(a pool reachable by inbound dispatch, by reverse tunnel, or both), and a frontend process that
+embeds Pylon is one Service with the annotation `gds.nvidia.com/roles: pool-frontend,pylon`,
+which yields two agents backed by the same endpoints. A pool may have any subset of the three:
+frontend only (HLD default), Pylon only (the LLM stack), frontend plus relay (KV-aware Global
+Router), or all three. The exports are independent Services, so each process scales, restarts
+and drains on its own and GDS reports each one's readiness separately in `agents[]`.
+
+Each agent has two optional sources that GDS merges by (pool, role). The label source is the
+exported Service: endpoint counts and readiness, the Service reference and port name, and
+liveness through the cluster lease. The API source is a typed registration,
+`RegisterPoolAgent(cluster, pool name, role, agent_id, attributes)` with its own lease and
+`HeartbeatPoolAgent`, made by the process itself: Pylon with `--gds-pool-name`, the PoolRelay
+through the Rust `AgentRegistration` helper. The registration carries what the Service cannot
+(the process identity and writer-owned attributes such as the model list) and keeps the pool
+visible for the lease when no export exists yet or the pool is not a Kubernetes Service. A
+registration before any export creates the pool under the deterministic `pool_id`, so the
+export and the registration converge on one record whichever arrives first. `source` reports
+LABEL, API or BOTH.
+
+Pool state follows from the agents: REGISTERED until an ingress agent is live; then
+`desired_state` (ACTIVE or DRAINING) while the cluster lease is active and an ingress agent has
+a ready endpoint, or while an ingress agent's lease is active; UNHEALTHY otherwise. A pool whose
+only live agent is the relay stays REGISTERED: routers can learn its cache facts but have
+nowhere to send requests. An API-only pool registered with `RegisterPool` and no agents keeps
+the pool-lease rule of earlier versions. GONE after `DeregisterPool`, or when the exports, the
+overlay and every agent registration are gone.
+
+Pylon high availability is N transport pods, each with its own `inference_server_id`, each
+registering with every router replica through the seeds in 4.5. The Pylon Operator creates the
+Service in front of them when pool export is enabled (10), with the `pylon` role and the pool
+name of the InferenceEndpoint; the Service exists for GDS to count ready Pylons and for policy,
+not for routers to dial, since the tunnel is outbound. The PoolRelay's Service type is the
+operator's choice as before: ClusterIP exports as CLUSTER_SET_IP for pull consumers that want
+any replica, headless as HEADLESS for consumers that subscribe to every replica. The frontend
+Service follows the same rule for inbound dispatch.
+
+Every pool record still carries an explicit dispatch address for routers: a `frontends[]` entry
+with role OPENAI that GDS fills from the labelled frontend export, which clients resolve to the
+derived Service name in their own cluster, or a static `url` supplied through the API for pools
+fronted by a LoadBalancer. A Pylon-only pool has no OPENAI entry and `ready_endpoint_count` 0;
+its `ready_ingress_count` counts the ready Pylons and routers that work through the tunnel use
+that instead.
 
 Pool departure follows the HLD order: set the pool DRAINING (through the overlay; routers stop
 choosing it), keep the frontend export until in-flight traffic completes, then remove the
-Service or its label. Deleting the Service first would remove the import and the VIP in every
-cluster and break in-flight responses. The controller keeps a pool's exports while the pool is
-DRAINING and removes them only on GONE.
+Services or their labels and let the agents deregister. Deleting a Service first would remove
+the import and the VIP in every cluster and break in-flight responses. The controller keeps a
+pool's exports while the pool is DRAINING and removes them only on GONE. Pylon deregisters its
+agent after its tunnel drain; a failed deregistration is covered by the agent lease.
 
-The Pool API overlay (`RegisterPool`, `UpdatePool`, `HeartbeatPool`, `DeregisterPool`) adds
-worker counts, ready counts and the DRAINING signal for blue/green, and registers pools that are
-not Kubernetes Services (static frontend URLs). The Rust `PoolRegistration` helper is the
-intended integration surface for the Dynamo PoolRelay, which today has no outbound path; wiring
-it into `kv_dc_relay` happens in the Dynamo repository.
+The Pool API overlay (`RegisterPool`, `UpdatePool`, `HeartbeatPool`, `DeregisterPool`) is
+unchanged: worker counts, ready counts and the DRAINING signal for blue/green, and pools that are
+not Kubernetes Services (static frontend URLs). Wiring `AgentRegistration` and `relay_seed_urls`
+into the Dynamo PoolRelay happens in the Dynamo repository (10).
 
 ### 4.7 Bootstrap and failover
 
@@ -680,7 +747,10 @@ mcs-api constants (`NoConflicts`, `PortConflict`, `TypeConflict`, `SessionAffini
 | RegisterPool | POST `/v1/clustersets/{clusterset}/pools` | Idempotent on (cluster, name); server assigns `pool_id` unless given |
 | UpdatePool | PATCH `.../pools/{pool_id}` | FieldMask; generation must exceed stored |
 | HeartbeatPool | POST `.../pools/{pool_id}:heartbeat` | Epoch; optional worker counts and `desired_state` |
-| DeregisterPool | DELETE `.../pools/{pool_id}` | Tombstone visible to watchers |
+| DeregisterPool | DELETE `.../pools/{pool_id}` | Tombstone visible to watchers; cascades to the pool's agents |
+| RegisterPoolAgent | POST `/v1/clustersets/{clusterset}/pool-agents` | Idempotent on (cluster, pool name, role); creates the pool if absent; mints the agent's lease epoch |
+| HeartbeatPoolAgent | POST `.../pools/{pool_id}/agents/{role}:heartbeat` | Agent epoch; optional attribute replacement |
+| DeregisterPoolAgent | DELETE `.../pools/{pool_id}/agents/{role}` | Idempotent |
 | GetPool, ListPools, WatchPools | GET `.../pools[/{pool_id}]`, `...:watch` | Filters: region, dc, cluster, hardware_class, model, states, selector, include_endpoints |
 | ListRouters, WatchRouters | GET `.../routers`, `...:watch` | Filters: region, cluster |
 
@@ -688,14 +758,23 @@ mcs-api constants (`NoConflicts`, `PortConflict`, `TypeConflict`, `SessionAffini
 message Pool { string clusterset; string pool_id; string name; Location location; string hardware_class;
   repeated ModelServed models; int32 worker_count; int32 ready_worker_count; repeated FrontendEndpoint frontends;
   repeated ServiceRef services; map<string,string> labels; PoolState desired_state; PoolState state; Lease lease;
-  uint64 generation; string owner_id; Timestamp registered_at; Timestamp updated_at; repeated ClusterEndpoints endpoints; }
+  uint64 generation; string owner_id; Timestamp registered_at; Timestamp updated_at; repeated ClusterEndpoints endpoints;
+  int32 ready_endpoint_count; repeated PoolAgent agents; bool kv_relay_live; int32 ready_ingress_count; }
+enum FrontendRole { OPENAI; KV_RELAY; PYLON; }
+enum AgentSource { LABEL; API; BOTH; }   enum DialMode { INBOUND; OUTBOUND; }
+message PoolAgent { FrontendRole role; AgentSource source; ServiceRef service; string port_name; int32 endpoint_count;
+  int32 ready_endpoint_count; Lease lease; string agent_id; DialMode dial_mode; map<string,string> attributes; bool live;
+  uint64 generation; Timestamp registered_at; Timestamp updated_at; }
+message RegisterPoolAgentRequest { string clusterset; string cluster; string pool_name; string pool_id; PoolAgent agent;
+  Duration lease_ttl; uint64 generation; }
+message HeartbeatPoolAgentRequest { string clusterset; string pool_id; FrontendRole role; uint64 epoch; map<string,string> attributes; }
 message Location { string region; string dc; string cluster; repeated string zones; }
 message ModelServed { string model_id; repeated string aliases; map<string,string> attributes; }
 message FrontendEndpoint { FrontendRole role; string url; ServiceRef service; string port_name; }
 message ServiceRef { string namespace; string name; FrontendRole role; }
 message Router { string cluster; string region; string namespace; string name; ServiceType type; LeaseState cluster_lease_state;
   int32 grpc_port; int32 http_port; string dial_scheme; repeated RouterReplica replicas; map<string,string> labels;
-  map<string,string> annotations; }
+  map<string,string> annotations; int32 quic_port; repeated ServicePort ports; }
 message RouterReplica { string address; AddressType address_type; bool ready; string hostname; string zone; }
 ```
 
@@ -705,11 +784,16 @@ name; for an API-registered pool the caller supplies `url`. `ready_worker_count`
 frontend `ready_endpoint_count` (reported in `endpoints[]`) let routers avoid pools with no
 ready frontend.
 
-Pool state derivation: REGISTERED until the first heartbeat or ready endpoint; then
-`desired_state` (ACTIVE or DRAINING) while the owning cluster lease is active and, for
-label-derived pools, at least one endpoint is ready, or, for API-only pools, the pool lease is
-active; UNHEALTHY otherwise; GONE after `DeregisterPool` or when the labelled export and overlay
-are both gone, retained for one bookmark interval as a tombstone.
+Pool state derivation: REGISTERED until an ingress agent (OPENAI or PYLON) is live; then
+`desired_state` (ACTIVE or DRAINING) while the owning cluster lease is active and an ingress
+agent has a ready endpoint, or while an ingress agent's lease is active, or, for API-only pools
+without agents, while the pool lease is active; UNHEALTHY otherwise; GONE after
+`DeregisterPool` or when the labelled exports, the overlay and every agent registration are
+gone, retained for one bookmark interval as a tombstone. `kv_relay_live` is true while a
+KV_RELAY agent is live; `ready_ingress_count` sums ready OPENAI and PYLON endpoints;
+`ready_endpoint_count` keeps counting OPENAI endpoints only. Agent registrations accept the
+roles OPENAI, KV_RELAY and PYLON; errors are `LEASE_EPOCH_MISMATCH`, `STALE_GENERATION` and
+`POOL_NAME_TAKEN` when an explicit `pool_id` disagrees with the pool's.
 
 ### 5.5 ServerInfoService
 
@@ -857,8 +941,9 @@ primary. One `ClientConn` serves unary calls and streams. Helpers: `WatchLoop[T]
 backoff, snapshot handling, resync callback), `PoolCache` and `RouterCache` (initial list, watch
 deltas, anti-entropy full list every TTL, `Stale` after two TTLs, `Snapshot`, `Updates`,
 `WaitSynced`), router seeds (`RouterState.SeedURLs`, `RouterSeedURLs` and `SeedRouters`, one URL
-per ready replica as in 4.5, and `DerivedServiceURL` for the merged VIP), a monotonic generation
-helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*` through interceptors. Consumers: the
+per ready replica as in 4.5, `RelayURLs` and `RouterRelayURLs` for the PoolRelay, `RouterQUICAddrs`,
+and `DerivedServiceURL` for the merged VIP), pool helpers (`PoolState.Ingress`, pools with a live
+ingress agent, and `Agent(pool, role)`), a monotonic generation helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*` through interceptors. Consumers: the
 controller, Pylon Operator, optionally the gateway.
 
 ### 9.2 Rust (`crates/gds-client`)
@@ -879,11 +964,15 @@ DEADLINE_EXCEEDED); `cache` (`PoolState` with by-cluster, by-model and active it
 full re-list every TTL, stale flag); `routers` (`RouterCache`; `router_seed_urls(router)`, one
 `<scheme>://<replica address>:<grpc_port>` per ready replica; `pylon_seed_urls(state)` and
 `remote_watch_urls(state, own_cluster)`, the replica seeds of every router cluster, or of every
-other one, whose lease has not expired; `derived_service_url(router)`, the merged VIP of the
+other one, whose lease has not expired; `relay_seed_urls(state)` and `router_relay_urls(router)`
+for the PoolRelay; `quic_port(router)`; `derived_service_url(router)`, the merged VIP of the
 router's import, never a seed, per 4.5); `derived`
 (`derived_service_name`, golden-tested against the Go implementation); `register`
 (`PoolRegistration::register` with a heartbeat task, `set_desired_state`, `update`, graceful
-`shutdown` that drains then deregisters, cancellation through `CancellationToken`); `stargate`
+`shutdown` that drains then deregisters, cancellation through `CancellationToken`;
+`AgentRegistration::register(client, AgentSpec{clusterset, cluster, pool_name, role, agent_id,
+attributes, lease_ttl}, stop)` with its own heartbeat task, `state`, `subscribe` and
+`shutdown`, the typed registration of a Pylon or PoolRelay); `stargate`
 (diagnostic conversions to `StargateInfo`); `metrics`.
 
 ## 10. Integration
@@ -903,15 +992,26 @@ router's import, never a seed, per 4.5); `derived`
 - Pylon. `InferenceServerRegistrationConfig.seeds` becomes a watch receiver of a URL set; the
   watch discovery loop reacts to changes (it already diffs desired watch URLs each iteration).
   `--stargate-address` becomes optional when `--gds-url` is set; both are unioned when present.
-  Existing tests asserting `seeds` are updated.
+  Existing tests asserting `seeds` are updated. `--gds-pool-name` (env `GDS_POOL_NAME`, requires
+  `--gds-url`) registers the process as the pool's PYLON agent with `--cluster-id` as the cluster,
+  `--inference-server-id` as the agent id and the served model list as an attribute; the agent
+  is deregistered after the tunnel drain on shutdown.
 - Pylon Operator. `--router-source=static|gds` with `--gds-url`, `--gds-clusterset-id` and
   `--gds-tls-ca-configmap` (the same ConfigMap as the router trust bundle when both are set). In
   `gds` mode the transport renderer passes the GDS flags to Pylon instead of `--stargate-address`,
   so router churn never rolls transport pods; the operator uses a `RouterCache` only for a startup
-  warning and `status.registration.routers`.
-- Dynamo. Pool charts label their frontend and PoolRelay Services; the PoolRelay may use
-  `PoolRegistration` for worker counts and draining and `RouterCache` to find Global Routers.
-  Those changes land in the Dynamo repository.
+  warning and `status.registration.routers`. With `--gds-pool-export` (chart
+  `globalDiscovery.poolExport.enabled`, valid only with `router.source=gds`) the operator also
+  renders, per InferenceEndpoint, a Service over the transport pods (port `metrics`, labels
+  `gds.nvidia.com/export=true`, `role=pylon`, `pool=<pool name>`, annotations `pool-models` from
+  `spec.modelName` and `hardware-class` from the GPU product when known) and passes
+  `--gds-pool-name` to Pylon. The pool name is `spec.globalDiscovery.poolName`, default the
+  bounded InferenceEndpoint name.
+- Dynamo. Pool charts label their frontend (`pool-frontend`) and PoolRelay (`kv-relay`)
+  Services; the PoolRelay registers itself as the pool's KV_RELAY agent with
+  `AgentRegistration`, finds Global Router replicas with `RouterCache` and `relay_seed_urls`,
+  and may use `PoolRegistration` for worker counts and draining. Those changes land in the
+  Dynamo repository.
 
 ## 11. Packaging
 
