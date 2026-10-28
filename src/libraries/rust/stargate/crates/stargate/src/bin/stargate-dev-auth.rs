@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -25,8 +26,11 @@ use axum::{Router, extract::State};
 use clap::Parser;
 use prometheus::{Encoder, IntCounterVec, Opts, Registry, TextEncoder};
 use serde::Deserialize;
+use stargate_proto::gateway_pb::auth_llm_invoke_response::ModelSpec;
 use stargate_proto::gateway_pb::llm_gateway_server::{LlmGateway, LlmGatewayServer};
-use stargate_proto::gateway_pb::{AuthLlmWorkerRequest, AuthLlmWorkerResponse};
+use stargate_proto::gateway_pb::{
+    AuthLlmInvokeRequest, AuthLlmInvokeResponse, AuthLlmWorkerRequest, AuthLlmWorkerResponse,
+};
 use stargate_runtime::wait_for_termination_signal;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -34,6 +38,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 const WORKER_RPC: &str = "auth_llm_worker";
+const INVOCATION_RPC: &str = "auth_llm_invocation";
 const OK_RESULT: &str = "ok";
 
 #[derive(Debug, Parser)]
@@ -58,6 +63,33 @@ struct Config {
     service_token: String,
     worker_token: String,
     routing_key: String,
+    /// Enables the invocation RPC used by the LLM API gateway. Without it the
+    /// RPC stays unimplemented.
+    #[serde(default)]
+    invocation: Option<InvocationConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InvocationConfig {
+    client_token: String,
+    nca_id: String,
+    #[serde(default = "default_client_auth_subject")]
+    client_auth_subject: String,
+    /// Per-model endpoint allow-lists, as the function API reports them.
+    #[serde(default)]
+    model_specs: BTreeMap<String, ModelSpecConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelSpecConfig {
+    #[serde(default)]
+    uris: Vec<String>,
+}
+
+fn default_client_auth_subject() -> String {
+    "stargate-dev-client".to_string()
 }
 
 struct DevAuth {
@@ -73,6 +105,14 @@ impl DevAuth {
             ("routingKey", &config.routing_key),
         ] {
             ensure!(!value.is_empty(), "{name} must not be empty");
+        }
+        // An empty token would authorize a request that omits clientAuthorizationToken,
+        // because an omitted proto3 string is "".
+        if let Some(invocation) = &config.invocation {
+            ensure!(
+                !invocation.client_token.is_empty(),
+                "invocation.clientToken must not be empty"
+            );
         }
         Ok(Self {
             config,
@@ -135,6 +175,46 @@ impl LlmGateway for DevAuth {
             routing_key: self.config.routing_key.clone(),
         }))
     }
+
+    #[tracing::instrument(name = "stargate_dev_auth.auth_llm_invocation", skip_all)]
+    async fn auth_llm_invocation(
+        &self,
+        request: Request<AuthLlmInvokeRequest>,
+    ) -> Result<Response<AuthLlmInvokeResponse>, Status> {
+        let Some(invocation) = &self.config.invocation else {
+            return Err(Status::unimplemented("invocation auth is not configured"));
+        };
+        self.authorize_service(&request, INVOCATION_RPC)?;
+
+        let request = request.into_inner();
+        if request.client_authorization_token != invocation.client_token {
+            return Err(self.reject(
+                INVOCATION_RPC,
+                "client_token",
+                Status::unauthenticated("unknown client token"),
+            ));
+        }
+        self.record_success(INVOCATION_RPC);
+        Ok(Response::new(AuthLlmInvokeResponse {
+            routing_key: request.routing_key,
+            client_auth_subject: invocation.client_auth_subject.clone(),
+            auth_context: [("ncaId".to_string(), invocation.nca_id.clone())].into(),
+            model_specs: invocation
+                .model_specs
+                .iter()
+                .map(|(model, spec)| {
+                    (
+                        model.clone(),
+                        ModelSpec {
+                            uris: spec.uris.clone(),
+                            ..ModelSpec::default()
+                        },
+                    )
+                })
+                .collect(),
+            priority: None,
+        }))
+    }
 }
 
 #[derive(Clone)]
@@ -155,10 +235,13 @@ impl AuthMetrics {
         )?;
         registry.register(Box::new(requests_total.clone()))?;
 
-        for result in [OK_RESULT, "service_token", "worker_token"] {
-            requests_total
-                .with_label_values(&[WORKER_RPC, result])
-                .inc_by(0);
+        for (rpc, rejection) in [
+            (WORKER_RPC, "worker_token"),
+            (INVOCATION_RPC, "client_token"),
+        ] {
+            for result in [OK_RESULT, "service_token", rejection] {
+                requests_total.with_label_values(&[rpc, result]).inc_by(0);
+            }
         }
 
         Ok(Self {
@@ -261,7 +344,102 @@ mod tests {
             service_token: service.to_string(),
             worker_token: worker.to_string(),
             routing_key: routing_key.to_string(),
+            invocation: None,
         }
+    }
+
+    fn invocation_auth() -> DevAuth {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "serviceToken": "service-token",
+                "workerToken": "worker-token",
+                "routingKey": "mockdc-usw2-a",
+                "invocation": {
+                    "clientToken": "client-token",
+                    "ncaId": "nca-1",
+                    "modelSpecs": {"m": {"uris": ["/v1/decisions", "/v1/systemone"]}}
+                }
+            }"#,
+        )
+        .expect("invocation config should parse");
+        DevAuth::new(config).expect("valid test config")
+    }
+
+    fn invoke_request(token: &str) -> Request<AuthLlmInvokeRequest> {
+        Request::new(AuthLlmInvokeRequest {
+            client_authorization_token: token.to_string(),
+            routing_key: "function-1".to_string(),
+        })
+    }
+
+    #[tokio::test]
+    async fn invocation_returns_model_specs_for_the_configured_client() {
+        let auth = invocation_auth();
+        let mut request = invoke_request("client-token");
+        authorize(&mut request);
+
+        let response = auth
+            .auth_llm_invocation(request)
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.routing_key, "function-1");
+        assert_eq!(response.client_auth_subject, "stargate-dev-client");
+        assert_eq!(response.auth_context["ncaId"], "nca-1");
+        assert_eq!(
+            response.model_specs["m"].uris,
+            ["/v1/decisions", "/v1/systemone"]
+        );
+    }
+
+    #[tokio::test]
+    async fn invocation_rejects_missing_service_token_and_unknown_client_token() {
+        let auth = invocation_auth();
+        assert_eq!(
+            auth.auth_llm_invocation(invoke_request("client-token"))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unauthenticated
+        );
+        let mut request = invoke_request("other");
+        authorize(&mut request);
+        assert_eq!(
+            auth.auth_llm_invocation(request).await.unwrap_err().code(),
+            Code::Unauthenticated
+        );
+    }
+
+    #[test]
+    fn invocation_rejects_an_empty_client_token_at_startup() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "serviceToken": "service-token",
+                "workerToken": "worker-token",
+                "routingKey": "mockdc-usw2-a",
+                "invocation": {"clientToken": "", "ncaId": "nca-1"}
+            }"#,
+        )
+        .expect("config should parse");
+        let error = DevAuth::new(config)
+            .err()
+            .expect("an empty client token must be rejected");
+        assert!(error.to_string().contains("clientToken"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn invocation_stays_unimplemented_without_configuration() {
+        let mut request = invoke_request("client-token");
+        authorize(&mut request);
+        assert_eq!(
+            auth()
+                .auth_llm_invocation(request)
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Unimplemented
+        );
     }
 
     fn auth() -> DevAuth {
@@ -330,6 +508,9 @@ mod tests {
             "nvcf_stargate_dev_auth_requests_total{result=\"ok\",rpc=\"auth_llm_worker\"} 0",
             "nvcf_stargate_dev_auth_requests_total{result=\"service_token\",rpc=\"auth_llm_worker\"} 0",
             "nvcf_stargate_dev_auth_requests_total{result=\"worker_token\",rpc=\"auth_llm_worker\"} 0",
+            "nvcf_stargate_dev_auth_requests_total{result=\"ok\",rpc=\"auth_llm_invocation\"} 0",
+            "nvcf_stargate_dev_auth_requests_total{result=\"service_token\",rpc=\"auth_llm_invocation\"} 0",
+            "nvcf_stargate_dev_auth_requests_total{result=\"client_token\",rpc=\"auth_llm_invocation\"} 0",
         ] {
             assert!(body.contains(series), "missing {series}");
         }
