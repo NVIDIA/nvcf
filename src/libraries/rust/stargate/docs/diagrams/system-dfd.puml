@@ -42,7 +42,7 @@ rectangle "stargate" #f0f7e8 {
   rectangle "Control Plane gRPC\nRegisterInferenceServer\nWatchStargates" as ControlPlane
   rectangle "Model Discovery gRPC\nListModels" as ModelDiscovery
   rectangle "Forwarding Dispatch\ngRPC: :authority check\nQUIC: SNI check" as Forwarding
-  rectangle "HTTP Proxy\n/v1/chat/completions\n/v1/responses\n/v1/embeddings" as HttpProxy
+  rectangle "HTTP Proxy\n/v1/chat/completions\n/v1/responses\n/v1/embeddings\n/v1/decisions\n/v1/systemone" as HttpProxy
   rectangle "QUIC Tunnel Client\n+ Reverse Listener" as Quic
   rectangle "Load Balancer Router" as Router
   database "Routing State\nkeyed by RoutingTargetKey\n(conn + RTT gated)" as State
@@ -59,7 +59,7 @@ rectangle "pylon" #e8f4fd {
 }
 
 rectangle "Dynamo Instance" #fdf5e6 {
-  rectangle "Upstream HTTP\n/v1/chat/completions\n/v1/responses\n/v1/embeddings\n/pylon/v1/stats/stream\n/health" as Upstream
+  rectangle "Upstream HTTP\n/v1/chat/completions\n/v1/responses\n/v1/embeddings\n/v1/decisions\n/v1/systemone\n/pylon/v1/stats/stream\n/health" as Upstream
 }
 
 cloud "Metrics / OTEL\nCollectors" as Obs
