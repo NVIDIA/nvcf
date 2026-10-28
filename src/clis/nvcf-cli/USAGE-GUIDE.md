@@ -873,9 +873,12 @@ optionally followed by `;name=value` tuning parameters, such as
 `pulsar;seed=stable-a`. The CLI sends the value unchanged; the API checks it
 and the CLI prints the API error.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
-and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
-Stargate, and Pylon build and a backend that serves that protocol. Published
-stack releases must qualify and include those builds before use.
+native Anthropic `/v1/messages`, and the beta decision model paths
+`/v1/decisions` and `/v1/systemone`. Messages and the decision paths require a
+compatible gateway, Stargate, and Pylon build and a backend that serves that
+protocol. Published stack releases must qualify and include those builds before
+use. Declare a decision path in `uris` when you create the function, because
+`uris` cannot change afterward.
 
 ### 5. List Functions
 
