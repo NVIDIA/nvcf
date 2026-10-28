@@ -667,7 +667,7 @@
     },
     "/v1/clustersets/{clusterset}/pool-agents": {
       "post": {
-        "summary": "RegisterPoolAgent registers one process kind of a pool, or re-registers\nit. It is idempotent on (cluster, pool_name, agent.role): a new agent\nlease epoch is minted. The pool is created when it does not exist, under\nthe deterministic pool_id of (clusterset, cluster, pool_name); a pool_id\nin the request that differs from the pool holding the name fails with\nALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the\nstored one (STALE_GENERATION).",
+        "summary": "RegisterPoolAgent registers one process instance of a pool agent, or\nre-registers it. It is idempotent on (cluster, pool_name, agent.role,\nagent.agent_id): a new lease epoch is minted for that registration. The\npool is created when it does not exist, under\nthe deterministic pool_id of (clusterset, cluster, pool_name); a pool_id\nin the request that differs from the pool holding the name fails with\nALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the\nstored one (STALE_GENERATION).",
         "operationId": "PoolService_RegisterPoolAgent",
         "responses": {
           "200": {
@@ -957,7 +957,7 @@
     },
     "/v1/clustersets/{clusterset}/pools/{poolId}/agents/{role}": {
       "delete": {
-        "summary": "DeregisterPoolAgent removes one agent registration. The pool stays while\nan export, the pool registration or another agent remains. Deregistering\nan unknown agent succeeds.",
+        "summary": "DeregisterPoolAgent removes one registration. The agent stays while its\nexport or another registration remains; the pool stays while an export,\nthe pool registration or another agent remains. Deregistering an unknown\nregistration succeeds.",
         "operationId": "PoolService_DeregisterPoolAgent",
         "responses": {
           "200": {
@@ -997,6 +997,13 @@
               "FRONTEND_ROLE_KV_RELAY",
               "FRONTEND_ROLE_PYLON"
             ]
+          },
+          {
+            "name": "agentId",
+            "description": "The registering process; required. A REST caller passes it as the\nagent_id query parameter.",
+            "in": "query",
+            "required": false,
+            "type": "string"
           }
         ],
         "tags": [
@@ -1006,7 +1013,7 @@
     },
     "/v1/clustersets/{clusterset}/pools/{poolId}/agents/{role}:heartbeat": {
       "post": {
-        "summary": "HeartbeatPoolAgent renews one agent's lease and optionally replaces its\nattributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).",
+        "summary": "HeartbeatPoolAgent renews one registration's lease and optionally\nreplaces its attributes. The epoch must be the current one\n(LEASE_EPOCH_MISMATCH).",
         "operationId": "PoolService_HeartbeatPoolAgent",
         "responses": {
           "200": {
@@ -1396,7 +1403,11 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Replaces the agent's attributes when non-empty."
+          "description": "Replaces the registration's attributes when non-empty."
+        },
+        "agentId": {
+          "type": "string",
+          "description": "The registering process; required."
         }
       }
     },
@@ -1440,7 +1451,7 @@
         },
         "agent": {
           "$ref": "#/definitions/v1PoolAgent",
-          "description": "Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id and\nattributes. Other fields are ignored."
+          "description": "Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id\n(required, at most 253 bytes) and attributes. Other fields are ignored."
         },
         "leaseTtl": {
           "type": "string",
@@ -2383,11 +2394,10 @@
         },
         "lease": {
           "$ref": "#/definitions/v1Lease",
-          "description": "Lease of the API registration; unset without one."
+          "description": "Fields 7, 8, 10, 12, 13 and 14 mirror the registration in registrations\nwhose lease expires last (the freshest); unset without a registration."
         },
         "agentId": {
-          "type": "string",
-          "description": "Identity of the registering process (a Pylon inference_server_id, a\nrelay pod name); writer-owned."
+          "type": "string"
         },
         "dialMode": {
           "$ref": "#/definitions/v1DialMode"
@@ -2396,17 +2406,61 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          },
-          "description": "Writer-owned, at most 16 entries."
+          }
         },
         "live": {
           "type": "boolean",
-          "description": "Derived: a ready endpoint while the cluster lease is active, or an\nactive agent lease."
+          "description": "Derived: a ready endpoint while the cluster lease is active, or any\nactive registration lease."
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "registrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1PoolAgentRegistration"
+          },
+          "description": "Every registration of this role, sorted by agent_id. One per process\ninstance, for example one per Pylon pod."
+        },
+        "activeRegistrationCount": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Registrations whose lease is active."
+        }
+      },
+      "description": "PoolAgent is one process kind of a pool, merged from its exported Service\nand its API registrations. There is at most one per (pool, role)."
+    },
+    "v1PoolAgentRegistration": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "Identity of the registering process (a Pylon inference_server_id, a\nrelay pod name); unique within the agent."
+        },
+        "lease": {
+          "$ref": "#/definitions/v1Lease"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Writer-owned, at most 16 entries."
         },
         "generation": {
           "type": "string",
           "format": "uint64",
-          "description": "Writer generation of the API registration."
+          "description": "Writer generation."
         },
         "registeredAt": {
           "type": "string",
@@ -2417,7 +2471,7 @@
           "format": "date-time"
         }
       },
-      "description": "PoolAgent is one process kind of a pool, merged from its exported Service\nand its API registration. There is at most one per (pool, role)."
+      "description": "PoolAgentRegistration is one process instance's registration of an agent\nrole, with its own lease."
     },
     "v1PoolState": {
       "type": "string",
@@ -2472,7 +2526,10 @@
         },
         "agent": {
           "$ref": "#/definitions/v1PoolAgent",
-          "description": "The stored agent with its newly minted lease."
+          "description": "The merged agent; registration carries this process's newly minted\nlease."
+        },
+        "registration": {
+          "$ref": "#/definitions/v1PoolAgentRegistration"
         },
         "poolState": {
           "$ref": "#/definitions/v1PoolState",

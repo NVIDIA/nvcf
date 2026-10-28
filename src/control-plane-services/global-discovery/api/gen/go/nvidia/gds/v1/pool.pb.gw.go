@@ -398,6 +398,8 @@ func local_request_PoolService_HeartbeatPoolAgent_0(ctx context.Context, marshal
 	return msg, metadata, err
 }
 
+var filter_PoolService_DeregisterPoolAgent_0 = &utilities.DoubleArray{Encoding: map[string]int{"clusterset": 0, "pool_id": 1, "role": 2}, Base: []int{1, 1, 2, 3, 0, 0, 0}, Check: []int{0, 1, 1, 1, 2, 3, 4}}
+
 func request_PoolService_DeregisterPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, client PoolServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq DeregisterPoolAgentRequest
@@ -433,6 +435,12 @@ func request_PoolService_DeregisterPoolAgent_0(ctx context.Context, marshaler ru
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
 	}
 	protoReq.Role = FrontendRole(e)
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PoolService_DeregisterPoolAgent_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 	msg, err := client.DeregisterPoolAgent(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
@@ -469,6 +477,12 @@ func local_request_PoolService_DeregisterPoolAgent_0(ctx context.Context, marsha
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
 	}
 	protoReq.Role = FrontendRole(e)
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PoolService_DeregisterPoolAgent_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 	msg, err := server.DeregisterPoolAgent(ctx, &protoReq)
 	return msg, metadata, err
 }
