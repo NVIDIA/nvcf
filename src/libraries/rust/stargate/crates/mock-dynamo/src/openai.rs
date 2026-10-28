@@ -14,7 +14,8 @@
 // limitations under the License.
 
 use axum::Json;
-use axum::extract::State;
+use axum::body::Bytes;
+use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -479,6 +480,204 @@ pub(crate) async fn embeddings(
         },
     }))
     .into_response()
+}
+
+const DECISION_ECHO_HEADERS: [&str; 5] = [
+    "typesafe-danger-zone-images",
+    "x-model",
+    "x-input-tokens",
+    "x-request-id",
+    "x-vendor-test",
+];
+const DECISION_MOCK_PROBABILITY: f64 = 0.99;
+const DECISION_MOCK_RETRY_AFTER_SECONDS: &str = "7";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DecisionRoute {
+    Decisions,
+    Systemone,
+}
+
+/// Canned OpenAI Decisions response. The body is not validated, so tests can
+/// send large or loosely shaped payloads.
+pub(crate) async fn decisions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Response {
+    decision_response(state, headers, query, body, DecisionRoute::Decisions).await
+}
+
+/// Canned System One response.
+pub(crate) async fn systemone(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+    body: Bytes,
+) -> Response {
+    decision_response(state, headers, query, body, DecisionRoute::Systemone).await
+}
+
+async fn decision_response(
+    state: AppState,
+    headers: HeaderMap,
+    query: Option<String>,
+    body: Bytes,
+    route: DecisionRoute,
+) -> Response {
+    let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let model = request
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| state.model_name.clone(), str::to_string);
+    let endpoint = match route {
+        DecisionRoute::Decisions => TestEndpoint::Decisions,
+        DecisionRoute::Systemone => TestEndpoint::Systemone,
+    };
+    state.record_request(&headers, endpoint, &model).await;
+    let _request_slot = state.acquire_request_slot().await;
+    let input_tokens = optional_header(&headers, "x-input-tokens")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(|| (body.len() / 4).max(1));
+    let output_tokens = 1;
+    let request_id = optional_header(&headers, "x-request-id")
+        .unwrap_or_else(|| format!("decision-mock-{}", rand_id()));
+    info!(
+        request_id = %request_id,
+        model = %model,
+        input_tokens = input_tokens,
+        body_len = body.len(),
+        "received decision request"
+    );
+    state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
+
+    let mock_error = query
+        .as_deref()
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| pair.strip_prefix("mock_error="));
+    match mock_error {
+        Some("429") => {
+            let mut response = decision_error(route, StatusCode::TOO_MANY_REQUESTS);
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static(DECISION_MOCK_RETRY_AFTER_SECONDS),
+            );
+            return response;
+        }
+        Some("400") => return decision_error(route, StatusCode::BAD_REQUEST),
+        _ => {}
+    }
+
+    let echo: serde_json::Map<String, serde_json::Value> = DECISION_ECHO_HEADERS
+        .iter()
+        .map(|name| ((*name).to_string(), optional_header(&headers, name).into()))
+        .chain([("body_len".to_string(), body.len().into())])
+        .collect();
+    let payload = match route {
+        DecisionRoute::Decisions => {
+            let answers: Vec<_> = request
+                .get("questions")
+                .and_then(serde_json::Value::as_array)
+                .map(|questions| {
+                    questions
+                        .iter()
+                        .enumerate()
+                        .map(|(index, question)| {
+                            serde_json::json!({
+                                "type": question.get("type").and_then(serde_json::Value::as_str).unwrap_or("predicate"),
+                                "name": question.get("name").and_then(serde_json::Value::as_str).map_or_else(|| format!("q{index}"), str::to_string),
+                                "probability": DECISION_MOCK_PROBABILITY,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "model": model,
+                "answers": answers,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                    "output_tokens": output_tokens,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": input_tokens + output_tokens,
+                },
+                "echo": echo,
+            })
+        }
+        DecisionRoute::Systemone => {
+            let answers: serde_json::Map<String, serde_json::Value> = request
+                .get("questions")
+                .and_then(serde_json::Value::as_object)
+                .map(|questions| {
+                    questions
+                        .keys()
+                        .map(|name| {
+                            (
+                                name.clone(),
+                                serde_json::json!({"type": "noul", "noul": DECISION_MOCK_PROBABILITY}),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "model": model,
+                "answers": answers,
+                "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+                "echo": echo,
+            })
+        }
+    };
+    let mut response = Json(payload).into_response();
+    if let Some(value) = headers.get("typesafe-danger-zone-images") {
+        response
+            .headers_mut()
+            .insert("x-mock-echo-typesafe-danger-zone-images", value.clone());
+    }
+    response
+}
+
+/// Error bodies follow each route's native shape: OpenAI style for decisions,
+/// FastAPI style for System One.
+fn decision_error(route: DecisionRoute, status: StatusCode) -> Response {
+    let rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
+    match route {
+        DecisionRoute::Decisions if rate_limited => error_response(
+            status,
+            serde_json::json!({
+                "message": "Rate limit exceeded",
+                "type": "rate_limit_error",
+                "param": null,
+                "code": "rate_limit_exceeded",
+            }),
+        ),
+        DecisionRoute::Decisions => error_response(
+            status,
+            serde_json::json!({
+                "message": "Invalid question",
+                "type": "invalid_request_error",
+                "param": "questions",
+                "code": "invalid_question",
+            }),
+        ),
+        DecisionRoute::Systemone if rate_limited => (
+            status,
+            Json(serde_json::json!({"detail": "Rate limit exceeded"})),
+        )
+            .into_response(),
+        DecisionRoute::Systemone => (
+            status,
+            Json(serde_json::json!({"detail": [{
+                "loc": ["body", "questions"],
+                "msg": "Invalid question",
+                "type": "value_error",
+            }]})),
+        )
+            .into_response(),
+    }
 }
 
 pub(crate) async fn health(State(state): State<AppState>) -> &'static str {
