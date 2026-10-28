@@ -81,6 +81,12 @@ func TestLoadConfigAppliesTheOptions(t *testing.T) {
 		"invalid value": {
 			env: map[string]string{config.EnvBackend: debug, config.EnvScanInterval: secret}, named: config.EnvScanInterval,
 		},
+		"backend not linked into this build": {
+			env: map[string]string{config.EnvBackend: secret}, named: config.EnvBackend,
+		},
+		"default backend not linked into this build": {
+			env: map[string]string{}, opts: []Option{WithDefaultBackend(secret)}, named: config.EnvBackend,
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -209,22 +215,33 @@ func TestRunServesUntilShutdownThenExitsZero(t *testing.T) {
 	}
 }
 
+// TestRunExitsOneWithoutStartingOnABadConfiguration also checks that the
+// startup log names the bad setting and never prints a configured value.
 func TestRunExitsOneWithoutStartingOnABadConfiguration(t *testing.T) {
+	const marker = "value-marker-41c"
 	tests := map[string]struct {
 		env   map[string]string
 		opts  []Option
 		named string
 	}{
 		"unknown setting": {
-			env:   map[string]string{"REQUEST_TRACE_UPLOADER_SCAN_INTERVAL": "30"},
+			env:   map[string]string{"REQUEST_TRACE_UPLOADER_SCAN_INTERVAL": marker},
 			named: "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL",
+		},
+		"invalid value": {
+			env:   map[string]string{config.EnvScanInterval: marker},
+			named: config.EnvScanInterval,
+		},
+		"backend not linked into this build": {
+			env:   map[string]string{config.EnvBackend: marker},
+			named: config.EnvBackend,
 		},
 		"required setting absent": {
 			opts:  []Option{WithRequiredSettings(config.EnvSuppressNCAIDs)},
 			named: config.EnvSuppressNCAIDs,
 		},
 		"metrics endpoint without protocol": {
-			env:   map[string]string{otlp.EnvMetricsEndpoint: "http://127.0.0.1:4318/v1/metrics"},
+			env:   map[string]string{otlp.EnvMetricsEndpoint: "http://" + marker + ":4318/v1/metrics"},
 			named: otlp.EnvMetricsProtocol,
 		},
 	}
@@ -253,6 +270,9 @@ func TestRunExitsOneWithoutStartingOnABadConfiguration(t *testing.T) {
 			}
 			if strings.Contains(out, "request trace uploader starting") {
 				t.Fatalf("log = %s, want no start", out)
+			}
+			if strings.Contains(out, marker) {
+				t.Fatalf("log = %s, contains the configured value", out)
 			}
 		})
 	}

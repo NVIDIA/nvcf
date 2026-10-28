@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -136,8 +137,10 @@ func flushMetrics(exporter *otlp.Exporter) {
 
 // loadConfig reads configuration strictly, so an invalid value or an
 // unknown uploader setting in environ stops startup, as does a required
-// setting of o that is absent. A backend set in the environment wins over
-// the default of o.
+// setting of o that is absent or a backend this build does not link. A
+// backend set in the environment wins over the default of o. Errors name
+// settings, never their values, and the backend is checked here so nothing
+// logs a name that is not a linked backend.
 func loadConfig(lookup config.LookupFunc, environ []string, o options) (config.Config, error) {
 	for _, name := range o.required {
 		if _, ok := lookup(name); !ok {
@@ -154,5 +157,12 @@ func loadConfig(lookup config.LookupFunc, environ []string, o options) (config.C
 			return value, ok
 		}
 	}
-	return config.LoadStrict(lookup, environ)
+	cfg, err := config.LoadStrict(lookup, environ)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if linked := backend.Registered(); !slices.Contains(linked, string(cfg.Backend)) {
+		return config.Config{}, fmt.Errorf("%s names a backend this build does not link (available: %s)", config.EnvBackend, strings.Join(linked, ", "))
+	}
+	return cfg, nil
 }
