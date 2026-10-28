@@ -214,10 +214,14 @@ func isDecisionRoute(r *http.Request) bool {
 }
 
 // bareRouterErrorStatuses are the statuses Stargate answers with no body and
-// no X-Stargate-Error-Code when the router itself fails (for example a replay
-// buffer overflow, a failed tunnel or a client that went away).
+// no X-Stargate-Error-Code when the router itself fails: a replay buffer
+// overflow (413), a client that went away (499) and tunnel or transport
+// failures (502, 503, 504). Stargate marks only routing rejections and overload
+// with the header. Its bare 400s come from malformed gateway-set headers, which
+// the gateway never sends, so 400 is left out and an empty 400 is the
+// backend's. Marking every Stargate-generated error would remove this
+// heuristic (follow-up).
 var bareRouterErrorStatuses = map[int]bool{
-	http.StatusBadRequest:            true,
 	http.StatusRequestEntityTooLarge: true,
 	499:                              true,
 	http.StatusBadGateway:            true,

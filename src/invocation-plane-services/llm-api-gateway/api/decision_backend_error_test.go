@@ -135,7 +135,6 @@ func TestDecisionRoutesRenderBareRouterErrorsNatively(t *testing.T) {
 			openAIType    string
 			systemOneCode string
 		}{
-			{http.StatusBadRequest, "invalid_request_error", "invalid_request"},
 			{http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large"},
 			{499, "invalid_request_error", "invalid_request"},
 			{http.StatusServiceUnavailable, "server_error", "provider_unavailable"},
@@ -160,7 +159,7 @@ func TestDecisionRoutesRelayEmptyBackendErrorsUnchanged(t *testing.T) {
 	t.Parallel()
 
 	for _, route := range decisionRoutes {
-		for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusNotImplemented} {
+		for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusNotImplemented} {
 			t.Run(route.name+"/"+http.StatusText(status), func(t *testing.T) {
 				t.Parallel()
 				headers := http.Header{"Content-Type": {"application/json"}, "Retry-After": {"7"}, "X-System-One-Error-Code": {"backend_code"}, "X-Vendor": {"kept"}}
