@@ -88,7 +88,9 @@ by all replicas through Cassandra.
      See Completion marker.
   2. Take the lease. Blocked calls start returning 503.
   3. Wait `maintenance-grace-period` (`PT15S`, longer than the Cassandra
-     request timeout) so in-flight writes finish.
+     request timeout) so in-flight writes finish. The lease is not renewed
+     during the wait, so startup fails unless the grace period is shorter than
+     `lease-duration`.
   4. Copy in batches. Renew the lease before each batch and stop if renewal
      fails.
   5. If the run was clean, write the completion marker.
@@ -161,6 +163,104 @@ new 503 window, even when nothing is left to copy.
   ```
 - The authorization throttle always uses the `keys_v2` lock name, so a migrated
   key keeps its update interval.
+
+## Run lifecycle
+
+This walks through Option B with the settings in Configuration and three
+replicas, A, B, and C.
+
+### Phase 0: deploy with the task disabled
+
+- Every replica runs the `assertWritable` check. It returns 503 only while the
+  lease row exists, so nothing is blocked yet.
+- Every pod must run this release before any pod enables the task. A pod on
+  the old code skips the check and can write during a run.
+- v1 key management must be cut off, and introspection moved to
+  `KeysV2Service`, before the next phase. See the failure table.
+
+### Phase 1: enable
+
+- Each replica schedules the task after `initial-delay`, then every
+  `fixed-delay` after the previous run ends.
+
+### Phase 2: first run
+
+1. Each replica reads the completion marker. It is absent.
+2. Each replica tries to take the lease. A wins. B and C end with
+   `lease_not_acquired` and try again after `fixed-delay`.
+3. The 503 window opens on every replica for legacy-account status updates,
+   authorization updates, and deletes. The response has `Retry-After` equal to
+   `lease-duration`.
+4. A waits `maintenance-grace-period` without renewing the lease.
+5. A copies page by page. It renews the lease before each page and waits
+   `batch-delay` after it. Each key ends as `migrated`, `already_migrated`,
+   `skipped`, or `failed`.
+6. Keys were copied, so the run is not clean and no marker is written.
+7. A releases the lease. The window closes.
+
+During the window:
+
+| Call for the legacy account | Behavior |
+|---|---|
+| v2 create | Allowed, written to `keys_v2` |
+| v2 status update, authorization update, delete | 503 |
+| v2 get and list | Allowed, `keys_v2` first, then legacy fallback |
+| Introspection | Allowed, legacy lookup path and its local cache |
+| v1 writes | Allowed, legacy tables only, no check |
+| Any other account | Never blocked |
+
+### Phase 3: between runs
+
+- Writes are open. A v2 update of a copied key writes only `keys_v2`. The
+  legacy row goes stale, which v2 reads never see.
+- Keys created through v1 exist only in the legacy tables until the next run.
+
+### Phase 4: second run
+
+1. The first replica to take the lease runs. It does not have to be A.
+2. Marker check, lease, grace period, and copy run as in phase 2. Most keys
+   are `already_migrated`, so the pass only reads.
+3. With no `migrated` or `failed` keys, the run is clean. The replica writes
+   the marker, releases the lease, cancels its schedule, and sets the
+   `completed` gauge to `1`.
+4. If v1 created keys during phase 3, this run copies them and is not clean.
+   Phase 4 repeats.
+
+### Phase 5: other replicas stop
+
+- On their next run, B and C find the marker. They end with
+  `already_completed`, take no lease, wait no grace period, and cancel their
+  schedules.
+- A restarted pod with the task still enabled does the same after
+  `initial-delay`. No further 503 windows open.
+
+### Phase 6: cleanup
+
+- Set `enabled=false` at the next deploy.
+- Remove the task and the write check in one later release. The marker row can
+  be deleted then.
+
+### Failures
+
+| Event | What happens | Effect |
+|---|---|---|
+| Pod killed during a run | The lease expires `lease-duration` after the last renewal. The next run starts from the first page. Copied keys are `already_migrated`. | Up to one `lease-duration` of extra 503s |
+| Graceful shutdown during a run | The run is interrupted (`interrupted`) and releases the lease. | The window ends at shutdown |
+| Page read fails `page-fetch-attempts` times | Outcome `failed`. The lease is released. The next run starts over. | One window with no progress |
+| One key fails | Counted as `failed`. The run continues and is not clean. The next run retries the key. | One more window |
+| The same key fails on every run | No run is ever clean. A window opens every `fixed-delay`. | Repeated 503s until the key is fixed or the task is disabled. Alert on `failed` keys across runs. |
+| One page takes longer than `lease-duration` | The next renewal fails. Outcome `lease_lost`. | Writes reopen while the run stops early. Lower `page-size` or raise `lease-duration`. |
+| `maintenance-grace-period` reaches `lease-duration` | The lease expires during the wait. Writes reopen and the first renewal fails with `lease_lost`. | A window that copies nothing |
+| Lease row deleted by hand | The 503s stop. The next renewal fails with `lease_lost`. | Writes resume, the run is lost |
+| Marker write fails | Warning logged. The lease is still released. Another replica runs one more clean pass and writes the marker. | One more short window |
+| Cassandra unavailable | The marker read or the lease insert fails. Outcome `failed`, no lease. | No 503s from the migration |
+| A request passes the check just before the lease is taken and is slow | If its write lands within the grace period, the copy reads the final state. If it lands later, the copy can write the old state to `keys_v2`, which can undo a revoke or bring back a deleted key. `already_migrated` never corrects it. | The risk the grace period reduces but cannot remove |
+| v1 updates or deletes a key after it was copied | Only the legacy row changes. `keys_v2` keeps the old copy, because the copy checks only that the key exists. | Stale v2 data. v1 must be cut off first. |
+| Key skipped for an unmapped issuer | Does not block completion. Not retried after the marker exists. | Fix the mapping, then delete the marker to run again |
+
+To run the migration again, delete the marker row (see Completion marker). The
+next run starts from phase 2, and it takes two runs again: one that copies and
+one clean run that writes the marker.
 
 ## Configuration
 

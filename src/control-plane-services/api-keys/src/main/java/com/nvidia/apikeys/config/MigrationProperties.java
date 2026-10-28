@@ -18,6 +18,7 @@
 package com.nvidia.apikeys.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import java.time.Duration;
@@ -66,8 +67,15 @@ public class MigrationProperties {
         @NotNull
         private Duration leaseDuration = Duration.ofMinutes(2);
 
-        // Must be longer than the Cassandra request timeout so in-flight writes finish.
+        // Must be longer than the Cassandra request timeout so in-flight writes finish. The
+        // lease is not renewed during this wait.
         @NotNull
         private Duration maintenanceGracePeriod = Duration.ofSeconds(15);
+
+        @AssertTrue(message = "maintenance-grace-period must be shorter than lease-duration")
+        public boolean isMaintenanceGracePeriodShorterThanLease() {
+            return maintenanceGracePeriod == null || leaseDuration == null
+                    || maintenanceGracePeriod.compareTo(leaseDuration) < 0;
+        }
     }
 }

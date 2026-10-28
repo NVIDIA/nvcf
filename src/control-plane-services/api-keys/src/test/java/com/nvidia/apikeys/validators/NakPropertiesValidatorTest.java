@@ -302,4 +302,26 @@ class NakPropertiesValidatorTest {
         assertThat(violations).hasSize(1);
         assertThat(firstViolatedProperty(violations)).isEqualTo("keepAfterExpiredDuration");
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PT2M", "PT3M"})
+    void beanValidation_shouldRejectGracePeriodNotShorterThanLease(String gracePeriod) {
+        NakProperties config = validBuilder().build();
+        var legacyKeys = config.getMigration().getLegacyKeys();
+        legacyKeys.setLeaseDuration(Duration.ofMinutes(2));
+        legacyKeys.setMaintenanceGracePeriod(Duration.parse(gracePeriod));
+
+        Set<ConstraintViolation<NakProperties>> violations = beanValidator.validate(config);
+
+        assertThat(violations).hasSize(1);
+        assertThat(firstViolatedProperty(violations))
+                .isEqualTo("migration.legacyKeys.maintenanceGracePeriodShorterThanLease");
+    }
+
+    @Test
+    void migrationDefaults_gracePeriodIsShorterThanLease() {
+        var legacyKeys = validBuilder().build().getMigration().getLegacyKeys();
+
+        assertThat(legacyKeys.getMaintenanceGracePeriod()).isLessThan(legacyKeys.getLeaseDuration());
+    }
 }
