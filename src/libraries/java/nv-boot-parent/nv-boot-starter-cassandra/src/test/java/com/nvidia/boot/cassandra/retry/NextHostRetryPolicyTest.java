@@ -55,7 +55,9 @@ class NextHostRetryPolicyTest extends RetryPolicyTestBase {
     void shouldProcessReadTimeouts() {
         assertOnReadTimeout(QUORUM, 2, 2, false, 1).hasDecision(RETHROW);
         assertOnReadTimeout(QUORUM, 2, 1, false, 0).hasDecision(RETRY_NEXT);
-        assertOnReadTimeout(QUORUM, 2, 1, true, 0).hasDecision(RETHROW);
+        assertOnReadTimeout(QUORUM, 2, 1, true, 0).hasDecision(RETRY_NEXT);
+        assertOnReadTimeout(QUORUM, 2, 1, true, 1).hasDecision(RETHROW);
+        assertOnReadTimeout(QUORUM, 2, 2, true, 0).hasDecision(RETHROW);
     }
 
     @Test

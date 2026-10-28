@@ -33,7 +33,7 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Retry policy that retries on the next host for transient failures (connection/heartbeat,
- * read timeout without data, write timeout, unavailable). Rethrows for ReadFailure, WriteFailure,
+ * read timeout without data or with too few responses, write timeout, unavailable). Rethrows for ReadFailure, WriteFailure,
  * and after one retry attempt.
  */
 @Slf4j
@@ -68,7 +68,9 @@ public class NextHostRetryPolicy implements RetryPolicy {
             int received,
             boolean dataPresent,
             int retryCount) {
-        var verdict = retryCount == 0 && !dataPresent ?
+        // A range read (secondary index) always has data present, from the coordinator's own
+        // replica, so a timeout there only shows as fewer responses than required.
+        var verdict = retryCount == 0 && (!dataPresent || received < blockFor) ?
                                                 RetryVerdict.RETRY_NEXT : RetryVerdict.RETHROW;
         log.info(VERDICT_ON_READ_TIMEOUT, logPrefix, cl, blockFor, received, dataPresent,
                  retryCount, verdict);
