@@ -56,6 +56,9 @@ func TestKeyHelpers(t *testing.T) {
 	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c1"}, ek.ClusterKey())
 	pk := PoolKey{ClusterSet: "cs", Cluster: "c2", PoolID: "p"}
 	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c2"}, pk.ClusterKey())
+	ak := PoolAgentKey{ClusterSet: "cs", Cluster: "c2", PoolID: "p", Role: FrontendRolePylon}
+	assert.Equal(t, pk, ak.PoolKey())
+	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c2"}, ak.ClusterKey())
 }
 
 func TestSnapshotSort(t *testing.T) {
@@ -69,6 +72,11 @@ func TestSnapshotSort(t *testing.T) {
 		},
 		EndpointSets: []EndpointSetRecord{{Key: ExportKey{"cs", "b", "ns", "a"}}, {Key: ExportKey{"cs", "a", "ns", "a"}}},
 		Pools:        []PoolRecord{{Key: PoolKey{"cs", "b", "1"}}, {Key: PoolKey{"cs", "a", "2"}}, {Key: PoolKey{"cs", "a", "1"}}},
+		PoolAgents: []PoolAgentRecord{
+			{Key: PoolAgentKey{"cs", "a", "2", FrontendRoleOpenAI}},
+			{Key: PoolAgentKey{"cs", "a", "1", FrontendRolePylon}},
+			{Key: PoolAgentKey{"cs", "a", "1", FrontendRoleKVRelay}},
+		},
 	}
 	snap.Sort()
 
@@ -84,6 +92,11 @@ func TestSnapshotSort(t *testing.T) {
 		pools = append(pools, p.Key)
 	}
 	assert.Equal(t, []PoolKey{{"cs", "a", "1"}, {"cs", "a", "2"}, {"cs", "b", "1"}}, pools)
+	var agents []PoolAgentKey
+	for _, a := range snap.PoolAgents {
+		agents = append(agents, a.Key)
+	}
+	assert.Equal(t, []PoolAgentKey{{"cs", "a", "1", FrontendRoleKVRelay}, {"cs", "a", "1", FrontendRolePylon}, {"cs", "a", "2", FrontendRoleOpenAI}}, agents)
 
 	assert.Negative(t, CompareClusterKeys(ClusterKey{"a", "z"}, ClusterKey{"b", "a"}))
 	assert.Zero(t, CompareExportKeys(ExportKey{"a", "b", "c", "d"}, ExportKey{"a", "b", "c", "d"}))
@@ -101,6 +114,17 @@ func TestPoolHeartbeatPatchApply(t *testing.T) {
 	workers, ready := int32(8), int32(6)
 	assert.True(t, PoolHeartbeatPatch{WorkerCount: &workers, ReadyWorkerCount: &ready, DesiredState: DesiredStateDraining}.Apply(&spec))
 	assert.Equal(t, PoolSpec{WorkerCount: 8, ReadyWorkerCount: 6, DesiredState: DesiredStateDraining}, spec)
+}
+
+func TestPoolAgentHeartbeatPatchApply(t *testing.T) {
+	rec := PoolAgentRecord{Attributes: map[string]string{"k": "v"}}
+	assert.False(t, PoolAgentHeartbeatPatch{}.Apply(&rec), "an empty patch changes nothing")
+	assert.False(t, PoolAgentHeartbeatPatch{Attributes: map[string]string{"k": "v"}}.Apply(&rec), "equal attributes change nothing")
+	patch := PoolAgentHeartbeatPatch{Attributes: map[string]string{"k": "w"}}
+	assert.True(t, patch.Apply(&rec))
+	assert.Equal(t, map[string]string{"k": "w"}, rec.Attributes)
+	patch.Attributes["k"] = "mutated"
+	assert.Equal(t, "w", rec.Attributes["k"], "the patch is copied")
 }
 
 func TestCloneIsDeep(t *testing.T) {
@@ -160,4 +184,9 @@ func TestCloneIsDeep(t *testing.T) {
 	assert.Nil(t, pc.Spec.Frontends[1].Service)
 	assert.Equal(t, "svc", pool.Spec.Services[0].Name)
 	assert.Equal(t, "v", pool.Spec.Labels["k"])
+
+	agent := PoolAgentRecord{Attributes: map[string]string{"k": "v"}}
+	ac := agent.Clone()
+	ac.Attributes["k"] = "x"
+	assert.Equal(t, "v", agent.Attributes["k"])
 }

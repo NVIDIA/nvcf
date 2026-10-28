@@ -65,8 +65,9 @@ const (
 
 // Lease kinds of lease_expirations_total.
 const (
-	LeaseCluster = "cluster"
-	LeasePool    = "pool"
+	LeaseCluster   = "cluster"
+	LeasePool      = "pool"
+	LeasePoolAgent = "pool_agent"
 )
 
 // Record kinds of compaction_deleted_total.
@@ -75,6 +76,7 @@ const (
 	RecordExport      = "export"
 	RecordEndpointSet = "endpoint_set"
 	RecordPool        = "pool"
+	RecordPoolAgent   = "pool_agent"
 )
 
 // Store operations of the store metrics.
@@ -82,6 +84,7 @@ var StoreOperations = []string{
 	"put_cluster", "renew_cluster_lease", "get_cluster", "delete_cluster",
 	"put_export", "delete_export", "put_endpoint_set", "delete_endpoint_set",
 	"put_pool", "renew_pool_lease", "delete_pool",
+	"put_pool_agent", "renew_pool_agent_lease", "delete_pool_agent",
 	"list_cluster_sets", "load_cluster_set", "ping",
 }
 
@@ -92,11 +95,13 @@ var StoreResults = []string{"ok", "conditional", "error"}
 // Conditional failure reasons of store_conditional_failures_total, keyed by
 // the operations that can produce them.
 var ConditionalFailures = map[string][]string{
-	"renew_cluster_lease": {"lease_epoch_mismatch", "not_found"},
-	"put_export":          {"stale_generation"},
-	"put_endpoint_set":    {"stale_generation", "too_large"},
-	"put_pool":            {"stale_generation", "pool_name_taken"},
-	"renew_pool_lease":    {"lease_epoch_mismatch", "not_found"},
+	"renew_cluster_lease":    {"lease_epoch_mismatch", "not_found"},
+	"put_export":             {"stale_generation"},
+	"put_endpoint_set":       {"stale_generation", "too_large"},
+	"put_pool":               {"stale_generation", "pool_name_taken"},
+	"renew_pool_lease":       {"lease_epoch_mismatch", "not_found"},
+	"put_pool_agent":         {"stale_generation"},
+	"renew_pool_agent_lease": {"lease_epoch_mismatch", "not_found"},
 }
 
 // Metrics holds every gds-server collector.
@@ -157,7 +162,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"clusterset"}),
 		LeaseExpirations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: Namespace, Name: "lease_expirations_total",
-			Help: "Leases seen expiring by this replica, by kind (cluster, pool).",
+			Help: "Leases seen expiring by this replica, by kind (cluster, pool, pool_agent).",
 		}, []string{"kind"}),
 		Watchers: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace, Name: "watchers",
@@ -199,7 +204,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"operation", "reason"}),
 		CompactionDeleted: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: Namespace, Name: "compaction_deleted_total",
-			Help: "Records removed by compaction, by kind (cluster, export, endpoint_set, pool).",
+			Help: "Records removed by compaction, by kind (cluster, export, endpoint_set, pool, pool_agent).",
 		}, []string{"kind"}),
 		BuildInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: Namespace, Name: "build_info",
@@ -219,7 +224,7 @@ func New(reg prometheus.Registerer) *Metrics {
 }
 
 func (m *Metrics) init() {
-	for _, k := range []string{LeaseCluster, LeasePool} {
+	for _, k := range []string{LeaseCluster, LeasePool, LeasePoolAgent} {
 		m.LeaseExpirations.WithLabelValues(k)
 	}
 	for _, k := range Kinds {
@@ -244,7 +249,7 @@ func (m *Metrics) init() {
 			m.StoreConditionalFailures.WithLabelValues(op, r)
 		}
 	}
-	for _, k := range []string{RecordCluster, RecordExport, RecordEndpointSet, RecordPool} {
+	for _, k := range []string{RecordCluster, RecordExport, RecordEndpointSet, RecordPool, RecordPoolAgent} {
 		m.CompactionDeleted.WithLabelValues(k)
 	}
 }

@@ -20,15 +20,17 @@ limitations under the License.
 // by every gds-server replica in every region.
 //
 // The table has a partition key pk and a sort key sk (both strings). A
-// clusterset's metadata (clusters, exports, pools and pool name
-// reservations) lives in partition CS#<clusterset>; the endpoint sets of
-// each cluster live in their own partition EP#<clusterset>#<cluster>, so
-// the heartbeat-heavy metadata partition stays small and cluster deletion
-// and loading need prefix queries only. keys.go lists every item kind.
+// clusterset's metadata (clusters, exports, pools, pool name reservations
+// and pool agent registrations) lives in partition CS#<clusterset>; the
+// endpoint sets of each cluster live in their own partition
+// EP#<clusterset>#<cluster>, so the heartbeat-heavy metadata partition
+// stays small and cluster deletion and loading need prefix queries only.
+// keys.go lists every item kind.
 //
 // Record bodies are serialized nvidia.gds.v1 messages (codec.go). The
 // attributes that conditions and updates need are top level: gen,
-// lease_epoch, lease_renewed_at, owner_id, updated_at and expires_at.
+// lease_epoch, lease_renewed_at, owner_id, updated_at and expires_at, plus
+// pool_id on name reservations and pool_name on agent registrations.
 //
 // Writes are conditional, so that every replica can serve every write:
 //
@@ -44,14 +46,20 @@ limitations under the License.
 //     pool name reservation, guarded by the generation and body the store
 //     read. A stale reservation, whose pool no longer exists (for example
 //     after a TTL deletion) or now carries another name, is taken over.
+//     DeletePool then removes the pool's agent registrations by a prefix
+//     query.
+//   - PutPoolAgent: attribute_not_exists(pk) for a new registration, else
+//     gen = :seen AND lease_epoch = :seen (plus lease_renewed_at = :seen
+//     when the lease is kept), retried with the item returned on a failed
+//     condition.
 //   - DeleteCluster: prefix queries, then BatchWriteItem deletes in chunks
 //     of 25 with retries of unprocessed items. It is idempotent.
 //
 // LoadClusterSet is one paginated, eventually consistent query of the
 // clusterset partition plus one per cluster endpoint partition, run in
-// parallel. expires_at (Unix seconds) on cluster and pool items is a
-// garbage-collection safety net for abandoned records; leases are never
-// expired by the store.
+// parallel. expires_at (Unix seconds) on cluster, pool and pool agent items
+// is a garbage-collection safety net for abandoned records; leases are
+// never expired by the store.
 package dynamodb
 
 import (
@@ -417,8 +425,8 @@ func (s *Store) GetCluster(ctx context.Context, k store.ClusterKey) (store.Clust
 }
 
 // DeleteCluster implements store.ClusterStore. It deletes the registration,
-// then every export, pool, pool name reservation and endpoint set of the
-// cluster found by prefix queries. Records the cluster writes while the
+// then every export, pool, pool name reservation, pool agent registration
+// and endpoint set of the cluster found by prefix queries. Records the cluster writes while the
 // deletion runs may survive it; running it again removes them.
 func (s *Store) DeleteCluster(ctx context.Context, k store.ClusterKey) error {
 	const op = "DeleteCluster"
@@ -431,7 +439,7 @@ func (s *Store) DeleteCluster(ctx context.Context, k store.ClusterKey) error {
 		return nil
 	}
 	pk := clusterSetPK(k.ClusterSet)
-	for _, prefix := range []string{exportSKPrefix(k.Cluster), poolSKPrefix(k.Cluster), poolNameSKPrefix(k.Cluster)} {
+	for _, prefix := range []string{exportSKPrefix(k.Cluster), poolSKPrefix(k.Cluster), poolNameSKPrefix(k.Cluster), poolAgentSKPrefix(k.Cluster)} {
 		if err := s.query(ctx, op, pk, prefix, queryOptions{consistent: true, keysOnly: true}, collect); err != nil {
 			return err
 		}
@@ -853,12 +861,22 @@ func (s *Store) RenewPoolLease(ctx context.Context, k store.PoolKey, epoch uint6
 }
 
 // DeletePool implements store.PoolStore. It deletes the pool and its name
-// reservation in one transaction.
+// reservation in one transaction, then the pool's agent registrations
+// found by a prefix query.
 func (s *Store) DeletePool(ctx context.Context, k store.PoolKey) error {
 	const op = "DeletePool"
 	if err := s.begin(ctx); err != nil {
 		return err
 	}
+	if err := s.deletePoolRecord(ctx, op, k); err != nil {
+		return err
+	}
+	return s.deletePrefix(ctx, op, clusterSetPK(k.ClusterSet), poolAgentPoolSKPrefix(k))
+}
+
+// deletePoolRecord deletes a pool and its name reservation in one
+// transaction, guarded by the generation and body it read.
+func (s *Store) deletePoolRecord(ctx context.Context, op string, k store.PoolKey) error {
 	pk := poolKey(k)
 	stored, found, err := s.getItem(ctx, op, pk)
 	if err != nil {
@@ -923,6 +941,203 @@ func (s *Store) DeletePool(ctx context.Context, k store.PoolKey) error {
 	return fmt.Errorf("dynamodb: %s: %w", op, errContention)
 }
 
+// deletePrefix deletes every item of partition pk whose sort key begins
+// with prefix.
+func (s *Store) deletePrefix(ctx context.Context, op, pk, prefix string) error {
+	var keys []key
+	err := s.query(ctx, op, pk, prefix, queryOptions{consistent: true, keysOnly: true}, func(it item) error {
+		keys = append(keys, key{pk: it.PK, sk: it.SK})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return s.deleteKeys(ctx, op, keys)
+}
+
+// Pool agents.
+
+// PutPoolAgent implements store.PoolAgentStore. Like PutCluster it reads the
+// registration, derives the lease and RegisteredAt from it and writes under
+// a condition that pins what it read: attribute_not_exists(pk) for a new
+// registration, else gen = :seen AND lease_epoch = :seen, plus
+// lease_renewed_at = :seen when the lease is kept. The pinned epoch implies
+// the designed lease_epoch < :new for a minted lease. A lost race starts
+// over from the item DynamoDB returns.
+func (s *Store) PutPoolAgent(ctx context.Context, rec store.PoolAgentRecord, opts store.PutPoolAgentOptions) (store.PoolAgentRecord, error) {
+	const op = "PutPoolAgent"
+	if err := s.begin(ctx); err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	if err := s.ensureClusterSet(ctx, rec.Key.ClusterSet); err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	stored, found, err := s.getItem(ctx, op, poolAgentKey(rec.Key))
+	if err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	for range maxAttempts {
+		var prev store.PoolAgentRecord
+		if found {
+			if prev, err = decodePoolAgent(stored); err != nil {
+				return store.PoolAgentRecord{}, err
+			}
+			if rec.Generation <= prev.Generation {
+				return store.PoolAgentRecord{}, store.ErrStaleGeneration{Current: prev.Generation}
+			}
+		}
+		out := rec.Clone()
+		switch {
+		case opts.MintLease:
+			out.Lease = store.Lease{Epoch: store.NextEpoch(prev.Lease.Epoch, opts.Now), TTL: rec.Lease.TTL, RenewedAt: opts.Now}
+		case found:
+			out.Lease = prev.Lease
+		default:
+			out.Lease = store.Lease{}
+		}
+		out.RegisteredAt = opts.Now
+		if found {
+			out.RegisteredAt = prev.RegisteredAt
+		}
+		out.UpdatedAt = opts.Now
+
+		it, err := encodePoolAgent(out, s.expiresAt(opts.Now))
+		if err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+		av, err := s.attributes(it)
+		if err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+		var e expr
+		var cond string
+		if found {
+			cond = genIs(&e, prev.Generation) + " AND " + epochIs(&e, stored.LeaseEpoch)
+			if !opts.MintLease {
+				// The kept lease must not undo a heartbeat that landed
+				// after the read.
+				cond += " AND " + renewedIs(&e, stored.LeaseRenewedAt)
+			}
+		} else {
+			cond = notExists(&e, attrPK)
+		}
+		_, err = s.client.PutItem(ctx, &ddb.PutItemInput{
+			TableName:                           &s.table,
+			Item:                                av,
+			ConditionExpression:                 &cond,
+			ExpressionAttributeNames:            e.names,
+			ExpressionAttributeValues:           e.values,
+			ReturnValuesOnConditionCheckFailure: ddbtypes.ReturnValuesOnConditionCheckFailureAllOld,
+		})
+		if err == nil {
+			return out, nil
+		}
+		old, ok := conditionFailed(err)
+		if !ok {
+			return store.PoolAgentRecord{}, mapError(op, err)
+		}
+		if stored, found, err = parseOptionalItem(old); err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+	}
+	return store.PoolAgentRecord{}, fmt.Errorf("dynamodb: %s: %w", op, errContention)
+}
+
+// RenewPoolAgentLease implements store.PoolAgentStore. A heartbeat without
+// attributes, or with the stored ones, updates only lease_renewed_at;
+// otherwise the store reads the registration, replaces the attributes and
+// writes the body under the condition that the epoch and the body it read
+// are unchanged.
+func (s *Store) RenewPoolAgentLease(ctx context.Context, k store.PoolAgentKey, epoch uint64, now time.Time, patch store.PoolAgentHeartbeatPatch) (store.PoolAgentRecord, error) {
+	const op = "RenewPoolAgentLease"
+	if err := s.begin(ctx); err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	ak := poolAgentKey(k)
+	renewOnly := func() (store.PoolAgentRecord, error) {
+		var e expr
+		var u update
+		u.setTime(&e, attrLeaseRenewedAt, now)
+		u.setExpiry(&e, s.expiresAt(now))
+		it, err := s.renew(ctx, op, ak, &e, &u, epoch)
+		if err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+		return decodePoolAgent(it)
+	}
+	if len(patch.Attributes) == 0 {
+		return renewOnly()
+	}
+
+	stored, found, err := s.getItem(ctx, op, ak)
+	if err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	for range maxAttempts {
+		if !found {
+			return store.PoolAgentRecord{}, store.ErrNotFound
+		}
+		cur, err := decodePoolAgent(stored)
+		if err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+		if cur.Lease.Epoch == 0 || cur.Lease.Epoch != epoch {
+			return store.PoolAgentRecord{}, store.ErrLeaseEpochMismatch
+		}
+		if !patch.Apply(&cur) {
+			return renewOnly()
+		}
+		cur.Lease.RenewedAt = now
+		cur.UpdatedAt = now
+		body, err := encodePoolAgentBody(cur)
+		if err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+		var e expr
+		var u update
+		u.setValue(&e, attrBody, bin(body))
+		u.setTime(&e, attrLeaseRenewedAt, now)
+		u.setTime(&e, attrUpdatedAt, now)
+		u.setExpiry(&e, s.expiresAt(now))
+		cond := epochIs(&e, epoch) + " AND " + bodyIs(&e, stored.Body)
+		expression := u.String()
+		out, err := s.client.UpdateItem(ctx, &ddb.UpdateItemInput{
+			TableName:                           &s.table,
+			Key:                                 ak.attributes(),
+			UpdateExpression:                    &expression,
+			ConditionExpression:                 &cond,
+			ExpressionAttributeNames:            e.names,
+			ExpressionAttributeValues:           e.values,
+			ReturnValues:                        ddbtypes.ReturnValueAllNew,
+			ReturnValuesOnConditionCheckFailure: ddbtypes.ReturnValuesOnConditionCheckFailureAllOld,
+		})
+		if err == nil {
+			it, err := parseItem(out.Attributes)
+			if err != nil {
+				return store.PoolAgentRecord{}, err
+			}
+			return decodePoolAgent(it)
+		}
+		old, ok := conditionFailed(err)
+		if !ok {
+			return store.PoolAgentRecord{}, mapError(op, err)
+		}
+		if stored, found, err = parseOptionalItem(old); err != nil {
+			return store.PoolAgentRecord{}, err
+		}
+	}
+	return store.PoolAgentRecord{}, fmt.Errorf("dynamodb: %s: %w", op, errContention)
+}
+
+// DeletePoolAgent implements store.PoolAgentStore.
+func (s *Store) DeletePoolAgent(ctx context.Context, k store.PoolAgentKey) error {
+	if err := s.begin(ctx); err != nil {
+		return err
+	}
+	_, err := s.client.DeleteItem(ctx, &ddb.DeleteItemInput{TableName: &s.table, Key: poolAgentKey(k).attributes()})
+	return mapError("DeletePoolAgent", err)
+}
+
 // Snapshots.
 
 // ListClusterSets implements store.Store.
@@ -947,7 +1162,8 @@ func (s *Store) ListClusterSets(ctx context.Context) ([]string, error) {
 
 // LoadClusterSet implements store.Store. It queries the clusterset
 // partition, then the endpoint partition of every cluster that has a
-// registration, an export, a pool or an endpoint partition marker, at most
+// registration, an export, a pool, a pool agent or an endpoint partition
+// marker, at most
 // Options.QueryConcurrency at a time. Reads are eventually consistent.
 func (s *Store) LoadClusterSet(ctx context.Context, clusterSet string) (store.ClusterSetSnapshot, error) {
 	const op = "LoadClusterSet"
@@ -978,6 +1194,13 @@ func (s *Store) LoadClusterSet(ctx context.Context, clusterSet string) (store.Cl
 				return err
 			}
 			snap.Pools = append(snap.Pools, rec)
+			clusters[rec.Key.Cluster] = struct{}{}
+		case strings.HasPrefix(it.SK, poolAgentPrefix):
+			rec, err := decodePoolAgent(it)
+			if err != nil {
+				return err
+			}
+			snap.PoolAgents = append(snap.PoolAgents, rec)
 			clusters[rec.Key.Cluster] = struct{}{}
 		case strings.HasPrefix(it.SK, endpointMarkPfx):
 			if cluster, ok := parseEndpointMarkSK(it.SK); ok {

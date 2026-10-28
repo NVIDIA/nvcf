@@ -69,6 +69,10 @@ func ek(cluster, name string) store.ExportKey {
 	return store.ExportKey{ClusterSet: "cs", Cluster: cluster, Namespace: "ns", Name: name}
 }
 
+func ak(cluster, id string, role store.FrontendRole) store.PoolAgentKey {
+	return store.PoolAgentKey{ClusterSet: "cs", Cluster: cluster, PoolID: id, Role: role}
+}
+
 func pk(cluster, id string) store.PoolKey {
 	return store.PoolKey{ClusterSet: "cs", Cluster: cluster, PoolID: id}
 }
@@ -117,6 +121,11 @@ func allCalls(t *testing.T, st *Store) map[string]error {
 	w := int32(1)
 	_, errs["RenewPoolLeasePatch"] = st.RenewPoolLease(ctx, pk("c1", "p"), 1, t0, store.PoolHeartbeatPatch{WorkerCount: &w})
 	errs["DeletePool"] = st.DeletePool(ctx, pk("c1", "p"))
+	agent := store.PoolAgentRecord{Key: ak("c1", "p", store.FrontendRolePylon), PoolName: "n", Generation: 1}
+	_, errs["PutPoolAgent"] = st.PutPoolAgent(ctx, agent, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	_, errs["RenewPoolAgentLease"] = st.RenewPoolAgentLease(ctx, agent.Key, 1, t0, store.PoolAgentHeartbeatPatch{})
+	_, errs["RenewPoolAgentLeasePatch"] = st.RenewPoolAgentLease(ctx, agent.Key, 1, t0, store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"a": "b"}})
+	errs["DeletePoolAgent"] = st.DeletePoolAgent(ctx, agent.Key)
 	_, errs["ListClusterSets"] = st.ListClusterSets(ctx)
 	_, errs["LoadClusterSet"] = st.LoadClusterSet(ctx, "cs")
 	errs["Ping"] = st.Ping(ctx)
@@ -585,6 +594,10 @@ func TestLoadClusterSetErrors(t *testing.T) {
 	delete(db.items, setID)
 
 	for _, write := range []func(){
+		func() {
+			_, _ = st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: ak("c2", "p", store.FrontendRoleOpenAI), Generation: 1},
+				store.PutPoolAgentOptions{Now: t0, MintLease: true})
+		},
 		func() { _, _ = st.PutCluster(ctx, store.ClusterRecord{Key: ck("c2")}, t0) },
 		func() { _ = st.PutExport(ctx, store.ExportRecord{Key: ek("c2", "s"), Generation: 1}) },
 		func() {
@@ -632,6 +645,20 @@ func TestCorruptItemsFailReadModifyWrite(t *testing.T) {
 	_, err = st.RenewPoolLease(ctx, pk("c1", "p1"), 1, t0, store.PoolHeartbeatPatch{WorkerCount: &w})
 	assert.Error(t, err)
 	assert.Error(t, st.DeletePool(ctx, pk("c1", "p1")))
+
+	agent := store.PoolAgentRecord{Key: ak("c1", "p1", store.FrontendRolePylon), Generation: 1, Lease: store.Lease{TTL: time.Minute}}
+	reg, err = st.PutCluster(ctx, store.ClusterRecord{Key: ck("c9")}, t0)
+	require.NoError(t, err)
+	_, err = st.PutPoolAgent(ctx, agent, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	db.items[itemID(poolAgentKey(agent.Key).attributes())][attrBody] = bin([]byte{0xff})
+	agent.Generation = 2
+	_, err = st.PutPoolAgent(ctx, agent, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	assert.Error(t, err)
+	_, err = st.RenewPoolAgentLease(ctx, agent.Key, reg.Lease.Epoch, t0, store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"a": "b"}})
+	assert.Error(t, err)
+	_, err = st.RenewPoolAgentLease(ctx, agent.Key, reg.Lease.Epoch, t0, store.PoolAgentHeartbeatPatch{})
+	assert.Error(t, err)
 }
 
 func TestInvalidRecords(t *testing.T) {
@@ -651,6 +678,11 @@ func TestInvalidRecords(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrTooLarge)
 	_, err = st.PutPool(ctx, store.PoolRecord{Key: pk("c1", "p"), Spec: store.PoolSpec{Labels: map[string]string{"big": big}}}, store.PutPoolOptions{Now: t0})
 	assert.ErrorIs(t, err, store.ErrTooLarge)
+	_, err = st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: ak("c1", "p", store.FrontendRolePylon), Attributes: map[string]string{"big": big}},
+		store.PutPoolAgentOptions{Now: t0})
+	assert.ErrorIs(t, err, store.ErrTooLarge)
+	_, err = st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: ak("c1", "p", "ROUTER")}, store.PutPoolAgentOptions{Now: t0})
+	assert.ErrorContains(t, err, "unknown frontend role")
 
 	_, err = st.PutPool(ctx, store.PoolRecord{Key: pk("c1", "p"), Name: "n", Generation: 1, Lease: store.Lease{TTL: time.Minute}}, store.PutPoolOptions{Now: t0, MintLease: true})
 	require.NoError(t, err)
@@ -687,6 +719,129 @@ func TestExpiry(t *testing.T) {
 	_, err = off.PutPool(ctx, store.PoolRecord{Key: pk("c2", "p"), Name: "n", Generation: 1}, store.PutPoolOptions{Now: t0})
 	require.NoError(t, err)
 	assert.NotContains(t, db.items[itemID(poolKey(pk("c2", "p")).attributes())], attrExpiresAt)
+
+	// Agent registrations expire like pools, and a heartbeat extends them.
+	agent := store.PoolAgentRecord{Key: ak("c1", "p", store.FrontendRolePylon), Generation: 1, Lease: store.Lease{TTL: time.Minute}}
+	areg, err := st.PutPoolAgent(ctx, agent, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	agentID := itemID(poolAgentKey(agent.Key).attributes())
+	assert.Equal(t, numI(t0.Add(time.Hour).Unix()), db.items[agentID][attrExpiresAt])
+	_, err = st.RenewPoolAgentLease(ctx, agent.Key, areg.Lease.Epoch, t0.Add(time.Minute), store.PoolAgentHeartbeatPatch{})
+	require.NoError(t, err)
+	assert.Equal(t, numI(t0.Add(time.Minute+time.Hour).Unix()), db.items[agentID][attrExpiresAt])
+}
+
+// TestPoolAgentWritesRetryLostRaces makes an agent registration change
+// between the store's read and its write.
+func TestPoolAgentWritesRetryLostRaces(t *testing.T) {
+	db := newFakeDB()
+	st := newTestStore(t, db)
+	ctx := t.Context()
+	key := ak("c1", "p1", store.FrontendRolePylon)
+	agentID := itemID(poolAgentKey(key).attributes())
+	rec := store.PoolAgentRecord{Key: key, PoolName: "pool-a", Generation: 1, Lease: store.Lease{TTL: time.Minute}}
+	reg, err := st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+
+	// A concurrent registration with a higher generation wins.
+	first := true
+	db.before = func(op string) error {
+		if op == "PutItem" && first {
+			first = false
+			db.items[agentID][attrGen] = numU(5)
+		}
+		return nil
+	}
+	rec.Generation = 3
+	_, err = st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0.Add(time.Second), MintLease: true})
+	current, ok := store.StaleGeneration(err)
+	require.True(t, ok, "got %v", err)
+	assert.Equal(t, uint64(5), current)
+
+	// A put that keeps the lease does not undo a heartbeat that lands
+	// between its read and its write.
+	first = true
+	renewed := t0.Add(time.Minute)
+	db.before = func(op string) error {
+		if op == "PutItem" && first {
+			first = false
+			db.items[agentID][attrLeaseRenewedAt] = numI(renewed.UnixNano())
+		}
+		return nil
+	}
+	rec.Generation = 6
+	got, err := st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0.Add(2 * time.Minute)})
+	require.NoError(t, err)
+	assert.Equal(t, reg.Lease.Epoch, got.Lease.Epoch)
+	assert.True(t, got.Lease.RenewedAt.Equal(renewed), "got %v", got.Lease.RenewedAt)
+
+	// A registration deleted between the read and the write is created
+	// again.
+	first = true
+	db.before = func(op string) error {
+		if op == "PutItem" && first {
+			first = false
+			delete(db.items, agentID)
+		}
+		return nil
+	}
+	rec.Generation = 7
+	got, err = st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0.Add(3 * time.Minute), MintLease: true})
+	require.NoError(t, err)
+	assert.True(t, got.RegisteredAt.Equal(t0.Add(3*time.Minute)), "a new registration")
+	epoch := got.Lease.Epoch
+
+	// An attribute heartbeat that races with another writer of the body
+	// starts over from the new body.
+	updates := 0
+	db.before = func(op string) error {
+		if op == "UpdateItem" {
+			updates++
+			if updates == 1 {
+				db.items[agentID][attrBody] = bin([]byte{0x42, 0x00})
+			}
+		}
+		return nil
+	}
+	got, err = st.RenewPoolAgentLease(ctx, key, epoch, t0.Add(4*time.Minute), store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"a": "b"}})
+	require.NoError(t, err)
+	assert.Equal(t, 2, updates)
+	assert.Equal(t, map[string]string{"a": "b"}, got.Attributes)
+
+	// The same attributes renew without a body write.
+	db.before = nil
+	got, err = st.RenewPoolAgentLease(ctx, key, epoch, t0.Add(5*time.Minute), store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"a": "b"}})
+	require.NoError(t, err)
+	assert.True(t, got.UpdatedAt.Equal(t0.Add(4*time.Minute)))
+
+	// A registration deleted between the read and the write is not found.
+	db.before = func(op string) error {
+		if op == "UpdateItem" {
+			delete(db.items, agentID)
+		}
+		return nil
+	}
+	_, err = st.RenewPoolAgentLease(ctx, key, epoch, t0, store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"c": "d"}})
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	// Another writer that changes the registration before every write
+	// exhausts the attempts.
+	db.before = nil
+	_, err = st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	gen := uint64(100)
+	db.before = func(op string) error {
+		if op == "PutItem" || op == "UpdateItem" {
+			gen++
+			db.items[agentID][attrGen] = numU(gen)
+			db.items[agentID][attrLeaseEpoch] = numU(gen)
+			db.items[agentID][attrBody] = bin([]byte(fmt.Sprintf("\x42\x01%c", 'a'+gen%26)))
+		}
+		return nil
+	}
+	rec.Generation = 1 << 40
+	_, err = st.PutPoolAgent(ctx, rec, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	assert.ErrorContains(t, err, "too many concurrent writes")
 }
 
 func TestHeartbeatPatchWithoutChange(t *testing.T) {

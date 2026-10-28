@@ -49,6 +49,7 @@ type clusterSet struct {
 	pools     map[store.PoolKey]store.PoolRecord
 	// poolNames maps (cluster, name) to the pool id that owns the name.
 	poolNames map[poolName]string
+	agents    map[store.PoolAgentKey]store.PoolAgentRecord
 }
 
 var _ store.Store = (*Store)(nil)
@@ -95,6 +96,7 @@ func (s *Store) set(name string, create bool) *clusterSet {
 			endpoints: map[store.ExportKey]store.EndpointSetRecord{},
 			pools:     map[store.PoolKey]store.PoolRecord{},
 			poolNames: map[poolName]string{},
+			agents:    map[store.PoolAgentKey]store.PoolAgentRecord{},
 		}
 		s.clusterSets[name] = cs
 	}
@@ -193,6 +195,11 @@ func (s *Store) DeleteCluster(ctx context.Context, key store.ClusterKey) error {
 		for n := range cs.poolNames {
 			if n.cluster == key.Cluster {
 				delete(cs.poolNames, n)
+			}
+		}
+		for k := range cs.agents {
+			if k.Cluster == key.Cluster {
+				delete(cs.agents, k)
 			}
 		}
 		return nil
@@ -325,6 +332,11 @@ func (s *Store) DeletePool(ctx context.Context, key store.PoolKey) error {
 		if cs == nil {
 			return nil
 		}
+		for k := range cs.agents {
+			if k.PoolKey() == key {
+				delete(cs.agents, k)
+			}
+		}
 		stored, ok := cs.pools[key]
 		if !ok {
 			return nil
@@ -333,6 +345,76 @@ func (s *Store) DeletePool(ctx context.Context, key store.PoolKey) error {
 		name := poolName{cluster: key.Cluster, name: stored.Name}
 		if cs.poolNames[name] == key.PoolID {
 			delete(cs.poolNames, name)
+		}
+		return nil
+	})
+}
+
+// PutPoolAgent implements store.PoolAgentStore.
+func (s *Store) PutPoolAgent(ctx context.Context, rec store.PoolAgentRecord, opts store.PutPoolAgentOptions) (store.PoolAgentRecord, error) {
+	var out store.PoolAgentRecord
+	err := s.write(ctx, func() error {
+		cs := s.set(rec.Key.ClusterSet, true)
+		stored, exists := cs.agents[rec.Key]
+		if exists && rec.Generation <= stored.Generation {
+			return store.ErrStaleGeneration{Current: stored.Generation}
+		}
+		out = rec.Clone()
+		switch {
+		case opts.MintLease:
+			out.Lease = store.Lease{
+				Epoch:     store.NextEpoch(stored.Lease.Epoch, opts.Now),
+				TTL:       rec.Lease.TTL,
+				RenewedAt: opts.Now,
+			}
+		case exists:
+			out.Lease = stored.Lease
+		default:
+			out.Lease = store.Lease{}
+		}
+		out.RegisteredAt = opts.Now
+		if exists {
+			out.RegisteredAt = stored.RegisteredAt
+		}
+		out.UpdatedAt = opts.Now
+		cs.agents[rec.Key] = out
+		out = out.Clone()
+		return nil
+	})
+	return out, err
+}
+
+// RenewPoolAgentLease implements store.PoolAgentStore.
+func (s *Store) RenewPoolAgentLease(ctx context.Context, key store.PoolAgentKey, epoch uint64, now time.Time, patch store.PoolAgentHeartbeatPatch) (store.PoolAgentRecord, error) {
+	var out store.PoolAgentRecord
+	err := s.write(ctx, func() error {
+		cs := s.set(key.ClusterSet, false)
+		if cs == nil {
+			return store.ErrNotFound
+		}
+		stored, ok := cs.agents[key]
+		if !ok {
+			return store.ErrNotFound
+		}
+		if stored.Lease.Epoch == 0 || epoch != stored.Lease.Epoch {
+			return store.ErrLeaseEpochMismatch
+		}
+		stored.Lease.RenewedAt = now
+		if patch.Apply(&stored) {
+			stored.UpdatedAt = now
+		}
+		cs.agents[key] = stored
+		out = stored.Clone()
+		return nil
+	})
+	return out, err
+}
+
+// DeletePoolAgent implements store.PoolAgentStore.
+func (s *Store) DeletePoolAgent(ctx context.Context, key store.PoolAgentKey) error {
+	return s.write(ctx, func() error {
+		if cs := s.set(key.ClusterSet, false); cs != nil {
+			delete(cs.agents, key)
 		}
 		return nil
 	})
@@ -371,6 +453,9 @@ func (s *Store) LoadClusterSet(ctx context.Context, clusterSet string) (store.Cl
 		}
 		for _, r := range cs.pools {
 			snap.Pools = append(snap.Pools, r.Clone())
+		}
+		for _, r := range cs.agents {
+			snap.PoolAgents = append(snap.PoolAgents, r.Clone())
 		}
 		return nil
 	})

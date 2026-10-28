@@ -46,7 +46,8 @@ properties of its writers and records:
 1. One logical writer per item. A cluster's records (registration,
    exports, endpoint sets) are written only by that cluster's
    gds-mcs-controller, which runs one leader at a time. A pool is written
-   only by its operator. Different writers never race on one item.
+   only by its operator, a pool agent registration only by its process.
+   Different writers never race on one item.
 2. Monotonic generations. Writers send `generation = max(previous + 1,
    now in unix ms)`, so a writer that restarts or fails over to another GDS
    region starts above everything it wrote before. Lease epochs are minted

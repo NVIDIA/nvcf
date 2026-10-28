@@ -79,12 +79,13 @@ const (
 	AddressTypeFQDN AddressType = "FQDN"
 )
 
-// FrontendRole is what a pool Service or frontend serves.
+// FrontendRole is what a pool Service, frontend or agent serves.
 type FrontendRole string
 
 const (
 	FrontendRoleOpenAI  FrontendRole = "OPENAI"
 	FrontendRoleKVRelay FrontendRole = "KV_RELAY"
+	FrontendRolePylon   FrontendRole = "PYLON"
 )
 
 // DesiredState is the writer-requested state of a pool; empty means ACTIVE.
@@ -219,6 +220,12 @@ func (r EndpointSetRecord) Clone() EndpointSetRecord {
 // Clone returns a deep copy.
 func (r PoolRecord) Clone() PoolRecord {
 	r.Spec = r.Spec.Clone()
+	return r
+}
+
+// Clone returns a deep copy.
+func (r PoolAgentRecord) Clone() PoolAgentRecord {
+	r.Attributes = maps.Clone(r.Attributes)
 	return r
 }
 

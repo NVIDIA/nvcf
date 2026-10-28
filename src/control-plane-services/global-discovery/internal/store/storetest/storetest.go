@@ -96,6 +96,14 @@ func Run(t *testing.T, newStore Factory) {
 		{"PoolDeleteIdempotent", poolDeleteIdempotent},
 		{"PoolHeartbeat", poolHeartbeat},
 		{"PoolHeartbeatErrors", poolHeartbeatErrors},
+		{"PoolDeleteCascadesAgents", poolDeleteCascadesAgents},
+		{"PoolAgentRegister", poolAgentRegister},
+		{"PoolAgentReregisterMintsNewEpoch", poolAgentReregisterMintsNewEpoch},
+		{"PoolAgentPutKeepsLease", poolAgentPutKeepsLease},
+		{"PoolAgentStaleGeneration", poolAgentStaleGeneration},
+		{"PoolAgentHeartbeat", poolAgentHeartbeat},
+		{"PoolAgentHeartbeatErrors", poolAgentHeartbeatErrors},
+		{"PoolAgentDeleteIdempotent", poolAgentDeleteIdempotent},
 		{"LoadClusterSetComplete", loadClusterSetComplete},
 		{"LoadClusterSetUnknown", loadClusterSetUnknown},
 		{"LoadClusterSetReturnsCopies", loadClusterSetReturnsCopies},
@@ -210,6 +218,21 @@ func poolRecord(key store.PoolKey, name string, gen uint64) store.PoolRecord {
 		Lease:      store.Lease{TTL: time.Minute},
 		Generation: gen,
 		OwnerID:    "pool-operator",
+	}
+}
+
+func poolAgentKey(cs, cluster, poolID string, role store.FrontendRole) store.PoolAgentKey {
+	return store.PoolAgentKey{ClusterSet: cs, Cluster: cluster, PoolID: poolID, Role: role}
+}
+
+func poolAgentRecord(key store.PoolAgentKey, poolName string, gen uint64) store.PoolAgentRecord {
+	return store.PoolAgentRecord{
+		Key:        key,
+		PoolName:   poolName,
+		AgentID:    "pylon-" + string(key.Role),
+		Attributes: map[string]string{"models": "llama-3", "version": "v1"},
+		Lease:      store.Lease{TTL: time.Minute},
+		Generation: gen,
 	}
 }
 
@@ -438,7 +461,7 @@ func clusterRecordsAreCopies(t *testing.T, st store.Store, cs string) {
 }
 
 // populateCluster writes a registration, two exports with endpoint sets and
-// two pools for one cluster.
+// two pools with one agent each for one cluster.
 func populateCluster(t *testing.T, st store.Store, cs, cluster string) {
 	t.Helper()
 	_, err := st.PutCluster(ctx(t), clusterRecord(cs, cluster), t0)
@@ -449,7 +472,11 @@ func populateCluster(t *testing.T, st store.Store, cs, cluster string) {
 		require.NoError(t, st.PutEndpointSet(ctx(t), endpointSetRecord(key, 1, 2)))
 	}
 	for i, name := range []string{"pool-a", "pool-b"} {
-		_, err := st.PutPool(ctx(t), poolRecord(poolKey(cs, cluster, fmt.Sprintf("%s-id-%d", cluster, i)), name, 1), store.PutPoolOptions{Now: t0, MintLease: true})
+		id := fmt.Sprintf("%s-id-%d", cluster, i)
+		_, err := st.PutPool(ctx(t), poolRecord(poolKey(cs, cluster, id), name, 1), store.PutPoolOptions{Now: t0, MintLease: true})
+		require.NoError(t, err)
+		_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(cs, cluster, id, store.FrontendRolePylon), name, 1),
+			store.PutPoolAgentOptions{Now: t0, MintLease: true})
 		require.NoError(t, err)
 	}
 }
@@ -491,6 +518,12 @@ func clusterDeleteCascades(t *testing.T, st store.Store, cs string) {
 			want.Pools = append(want.Pools, r)
 		}
 	}
+	for _, r := range before.PoolAgents {
+		if r.Key.Cluster != "c1" {
+			want.PoolAgents = append(want.PoolAgents, r)
+		}
+	}
+	assert.Len(t, want.PoolAgents, 2)
 	assertRecord(t, want, after, "only the deleted cluster's records are gone")
 	assertRecord(t, otherBefore, load(t, st, other), "other clustersets are untouched")
 
@@ -515,6 +548,7 @@ func clusterDeleteIdempotent(t *testing.T, st store.Store, cs string) {
 	assert.Empty(t, snap.Exports)
 	assert.Empty(t, snap.EndpointSets)
 	assert.Empty(t, snap.Pools)
+	assert.Empty(t, snap.PoolAgents)
 }
 
 func clusterDeleteUnregistered(t *testing.T, st store.Store, cs string) {
@@ -523,12 +557,16 @@ func clusterDeleteUnregistered(t *testing.T, st store.Store, cs string) {
 	require.NoError(t, st.PutEndpointSet(ctx(t), endpointSetRecord(key, 1, 1)))
 	_, err := st.PutPool(ctx(t), poolRecord(poolKey(cs, "c1", "p1"), "pool-a", 1), store.PutPoolOptions{Now: t0})
 	require.NoError(t, err)
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(cs, "c1", "p2", store.FrontendRoleKVRelay), "pool-b", 1),
+		store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
 
 	require.NoError(t, st.DeleteCluster(ctx(t), store.ClusterKey{ClusterSet: cs, Cluster: "c1"}))
 	snap := load(t, st, cs)
 	assert.Empty(t, snap.Exports)
 	assert.Empty(t, snap.EndpointSets)
 	assert.Empty(t, snap.Pools)
+	assert.Empty(t, snap.PoolAgents)
 }
 
 // Exports.
@@ -882,6 +920,224 @@ func poolHeartbeatErrors(t *testing.T, st store.Store, cs string) {
 	assertRecord(t, reg, snap.Pools[0], "a rejected heartbeat changes nothing")
 }
 
+// Pool agents.
+
+func poolDeleteCascadesAgents(t *testing.T, st store.Store, cs string) {
+	p1 := poolKey(cs, "c1", "p1")
+	_, err := st.PutPool(ctx(t), poolRecord(p1, "pool-a", 1), store.PutPoolOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	put := func(cluster, id string, role store.FrontendRole, name string) store.PoolAgentRecord {
+		t.Helper()
+		rec, err := st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(cs, cluster, id, role), name, 1),
+			store.PutPoolAgentOptions{Now: t0, MintLease: true})
+		require.NoError(t, err)
+		return rec
+	}
+	put("c1", "p1", store.FrontendRoleOpenAI, "pool-a")
+	put("c1", "p1", store.FrontendRolePylon, "pool-a")
+	keep := []store.PoolAgentRecord{
+		put("c1", "p10", store.FrontendRolePylon, "pool-b"), // a pool id extending p1
+		put("c2", "p1", store.FrontendRolePylon, "pool-a"),  // the same pool id in another cluster
+		put("c1", "p2", store.FrontendRoleKVRelay, "pool-c"),
+	}
+
+	require.NoError(t, st.DeletePool(ctx(t), p1))
+	snap := load(t, st, cs)
+	assert.Empty(t, snap.Pools)
+	want := store.ClusterSetSnapshot{ClusterSet: cs, PoolAgents: keep}
+	want.Sort()
+	assertRecord(t, want.PoolAgents, snap.PoolAgents, "only the deleted pool's agents are gone")
+
+	// A pool known from its agents alone has no record; deleting it removes
+	// the agents.
+	require.NoError(t, st.DeletePool(ctx(t), poolKey(cs, "c1", "p2")))
+	assert.Len(t, load(t, st, cs).PoolAgents, 2)
+	require.NoError(t, st.DeletePool(ctx(t), poolKey(cs, "c1", "p2")), "idempotent")
+}
+
+func poolAgentRegister(t *testing.T, st store.Store, cs string) {
+	rec := poolAgentRecord(poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon), "pool-a", 5)
+	got, err := st.PutPoolAgent(ctx(t), rec, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+
+	want := rec.Clone()
+	want.Lease = store.Lease{Epoch: ms(t0), TTL: time.Minute, RenewedAt: t0}
+	want.RegisteredAt = t0
+	want.UpdatedAt = t0
+	assertRecord(t, want, got)
+
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1)
+	assertRecord(t, want, snap.PoolAgents[0])
+
+	// Records are copies.
+	rec.Attributes["models"] = "mutated-input"
+	got.Attributes["models"] = "mutated-output"
+	snap.PoolAgents[0].Attributes["models"] = "mutated-load"
+	assert.Equal(t, "llama-3", load(t, st, cs).PoolAgents[0].Attributes["models"])
+}
+
+func poolAgentReregisterMintsNewEpoch(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRoleKVRelay)
+	first, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+
+	rec := poolAgentRecord(key, "pool-a", 2)
+	rec.AgentID = "relay-1"
+	rec.Attributes = map[string]string{"models": "mistral"}
+	rec.Lease.TTL = 2 * time.Minute
+	t1 := t0.Add(5 * time.Second)
+	second, err := st.PutPoolAgent(ctx(t), rec, store.PutPoolAgentOptions{Now: t1, MintLease: true})
+	require.NoError(t, err)
+	assert.Equal(t, ms(t1), second.Lease.Epoch)
+	assert.Greater(t, second.Lease.Epoch, first.Lease.Epoch)
+	assert.Equal(t, 2*time.Minute, second.Lease.TTL)
+	assert.True(t, second.Lease.RenewedAt.Equal(t1))
+	assert.True(t, second.RegisteredAt.Equal(t0), "RegisteredAt is kept")
+	assert.True(t, second.UpdatedAt.Equal(t1))
+	assert.Equal(t, "relay-1", second.AgentID)
+	assert.Equal(t, map[string]string{"models": "mistral"}, second.Attributes)
+
+	// The same millisecond still mints a new epoch.
+	third, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 3), store.PutPoolAgentOptions{Now: t1, MintLease: true})
+	require.NoError(t, err)
+	assert.Equal(t, second.Lease.Epoch+1, third.Lease.Epoch)
+
+	_, err = st.RenewPoolAgentLease(ctx(t), key, second.Lease.Epoch, t1, store.PoolAgentHeartbeatPatch{})
+	assert.ErrorIs(t, err, store.ErrLeaseEpochMismatch, "the old incarnation is fenced")
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1)
+	assertRecord(t, third, snap.PoolAgents[0])
+}
+
+func poolAgentPutKeepsLease(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRoleOpenAI)
+	reg, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	t1 := t0.Add(10 * time.Second)
+	_, err = st.RenewPoolAgentLease(ctx(t), key, reg.Lease.Epoch, t1, store.PoolAgentHeartbeatPatch{})
+	require.NoError(t, err)
+
+	t2 := t1.Add(10 * time.Second)
+	got, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 2), store.PutPoolAgentOptions{Now: t2})
+	require.NoError(t, err)
+	assert.Equal(t, store.Lease{Epoch: reg.Lease.Epoch, TTL: time.Minute, RenewedAt: t1}, normalize(got.Lease), "the lease is kept")
+	assert.True(t, got.UpdatedAt.Equal(t2))
+
+	// A new registration written without MintLease has no lease.
+	other := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	got, err = st.PutPoolAgent(ctx(t), poolAgentRecord(other, "pool-a", 1), store.PutPoolAgentOptions{Now: t0})
+	require.NoError(t, err)
+	assert.Equal(t, store.Lease{}, got.Lease)
+	for _, epoch := range []uint64{0, 1, ms(t0)} {
+		_, err = st.RenewPoolAgentLease(ctx(t), other, epoch, t0, store.PoolAgentHeartbeatPatch{})
+		assert.ErrorIs(t, err, store.ErrLeaseEpochMismatch, "epoch %d", epoch)
+	}
+	// It can be leased later.
+	got, err = st.PutPoolAgent(ctx(t), poolAgentRecord(other, "pool-a", 2), store.PutPoolAgentOptions{Now: t1, MintLease: true})
+	require.NoError(t, err)
+	assert.Equal(t, ms(t1), got.Lease.Epoch)
+}
+
+func poolAgentStaleGeneration(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	reg, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 7), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	for _, gen := range []uint64{0, 6, 7} {
+		stale := poolAgentRecord(key, "pool-a", gen)
+		stale.AgentID = "stale"
+		_, err = st.PutPoolAgent(ctx(t), stale, store.PutPoolAgentOptions{Now: t0.Add(time.Second), MintLease: true})
+		requireStale(t, err, 7)
+	}
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1)
+	assertRecord(t, reg, snap.PoolAgents[0], "a stale put changes nothing")
+}
+
+func poolAgentHeartbeat(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	reg, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 5), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+
+	t1 := t0.Add(20 * time.Second)
+	got, err := st.RenewPoolAgentLease(ctx(t), key, reg.Lease.Epoch, t1, store.PoolAgentHeartbeatPatch{})
+	require.NoError(t, err)
+	want := reg.Clone()
+	want.Lease.RenewedAt = t1
+	assertRecord(t, want, got, "an empty patch changes only Lease.RenewedAt")
+
+	t2 := t1.Add(20 * time.Second)
+	got, err = st.RenewPoolAgentLease(ctx(t), key, reg.Lease.Epoch, t2, store.PoolAgentHeartbeatPatch{
+		Attributes: map[string]string{"models": "llama-3,mistral"},
+	})
+	require.NoError(t, err)
+	want.Lease.RenewedAt = t2
+	want.UpdatedAt = t2
+	want.Attributes = map[string]string{"models": "llama-3,mistral"}
+	assertRecord(t, want, got, "attributes are replaced")
+	assert.Equal(t, uint64(5), got.Generation, "a heartbeat keeps the generation")
+
+	t3 := t2.Add(20 * time.Second)
+	got, err = st.RenewPoolAgentLease(ctx(t), key, reg.Lease.Epoch, t3, store.PoolAgentHeartbeatPatch{
+		Attributes: map[string]string{"models": "llama-3,mistral"},
+	})
+	require.NoError(t, err)
+	want.Lease.RenewedAt = t3
+	assertRecord(t, want, got, "unchanged attributes keep UpdatedAt")
+
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1)
+	assertRecord(t, want, snap.PoolAgents[0])
+}
+
+func poolAgentHeartbeatErrors(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	_, err := st.RenewPoolAgentLease(ctx(t), key, 1, t0, store.PoolAgentHeartbeatPatch{})
+	assert.ErrorIs(t, err, store.ErrNotFound)
+
+	reg, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	patch := store.PoolAgentHeartbeatPatch{Attributes: map[string]string{"x": "y"}}
+	for _, epoch := range []uint64{0, reg.Lease.Epoch + 1} {
+		_, err = st.RenewPoolAgentLease(ctx(t), key, epoch, t0.Add(time.Second), patch)
+		assert.ErrorIs(t, err, store.ErrLeaseEpochMismatch, "epoch %d with a patch", epoch)
+		_, err = st.RenewPoolAgentLease(ctx(t), key, epoch, t0.Add(time.Second), store.PoolAgentHeartbeatPatch{})
+		assert.ErrorIs(t, err, store.ErrLeaseEpochMismatch, "epoch %d", epoch)
+	}
+	for _, other := range []store.PoolAgentKey{
+		poolAgentKey(cs, "c2", "p1", store.FrontendRolePylon),
+		poolAgentKey(cs, "c1", "p2", store.FrontendRolePylon),
+		poolAgentKey(cs, "c1", "p1", store.FrontendRoleOpenAI),
+	} {
+		_, err = st.RenewPoolAgentLease(ctx(t), other, reg.Lease.Epoch, t0, patch)
+		assert.ErrorIs(t, err, store.ErrNotFound, "%+v", other)
+	}
+
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1)
+	assertRecord(t, reg, snap.PoolAgents[0], "a rejected heartbeat changes nothing")
+}
+
+func poolAgentDeleteIdempotent(t *testing.T, st store.Store, cs string) {
+	key := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	require.NoError(t, st.DeletePoolAgent(ctx(t), key), "unknown clusterset")
+	_, err := st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	relay, err := st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(cs, "c1", "p1", store.FrontendRoleKVRelay), "pool-a", 1),
+		store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+
+	require.NoError(t, st.DeletePoolAgent(ctx(t), key))
+	require.NoError(t, st.DeletePoolAgent(ctx(t), key))
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 1, "roles are independent")
+	assertRecord(t, relay, snap.PoolAgents[0])
+
+	// A deleted registration starts over: any generation is accepted.
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	assert.NoError(t, err)
+}
+
 // Snapshots.
 
 func loadClusterSetComplete(t *testing.T, st store.Store, cs string) {
@@ -915,6 +1171,12 @@ func loadClusterSetComplete(t *testing.T, st store.Store, cs string) {
 				p, err := st.PutPool(ctx(t), poolRecord(poolKey(set, c, id), "pool-"+id, 1), store.PutPoolOptions{Now: t0, MintLease: id == "a"})
 				require.NoError(t, err)
 				snap.Pools = append(snap.Pools, p)
+				for _, role := range []store.FrontendRole{store.FrontendRolePylon, store.FrontendRoleOpenAI} {
+					a, err := st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(set, c, id, role), "pool-"+id, 1),
+						store.PutPoolAgentOptions{Now: t0, MintLease: true})
+					require.NoError(t, err)
+					snap.PoolAgents = append(snap.PoolAgents, a)
+				}
 			}
 		}
 	}
@@ -922,6 +1184,11 @@ func loadClusterSetComplete(t *testing.T, st store.Store, cs string) {
 	p, err := st.PutPool(ctx(t), poolRecord(poolKey(cs, "c0", "p"), "pool-p", 1), store.PutPoolOptions{Now: t0})
 	require.NoError(t, err)
 	want[cs].Pools = append(want[cs].Pools, p)
+	// So does an agent of a cluster with nothing else.
+	a, err := st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(cs, "c9", "q", store.FrontendRoleKVRelay), "pool-q", 1),
+		store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	want[cs].PoolAgents = append(want[cs].PoolAgents, a)
 
 	for set, snap := range want {
 		snap.Sort()
@@ -930,6 +1197,7 @@ func loadClusterSetComplete(t *testing.T, st store.Store, cs string) {
 		assert.Len(t, got.Clusters, 3)
 		assert.Len(t, got.Exports, 6)
 		assert.Len(t, got.EndpointSets, 9)
+		assert.GreaterOrEqual(t, len(got.PoolAgents), 12)
 	}
 }
 
@@ -940,6 +1208,7 @@ func loadClusterSetUnknown(t *testing.T, st store.Store, cs string) {
 	assert.Empty(t, snap.Exports)
 	assert.Empty(t, snap.EndpointSets)
 	assert.Empty(t, snap.Pools)
+	assert.Empty(t, snap.PoolAgents)
 }
 
 func loadClusterSetReturnsCopies(t *testing.T, st store.Store, cs string) {
@@ -953,16 +1222,20 @@ func loadClusterSetReturnsCopies(t *testing.T, st store.Store, cs string) {
 	first.EndpointSets[0].Endpoints[0].Addresses[0] = "192.0.2.1"
 	first.Pools[0].Spec.Models[0].Aliases[0] = "mutated"
 	first.Pools[0].Spec.Frontends[0].Service.Name = "mutated"
+	first.PoolAgents[0].Attributes["models"] = "mutated"
 
 	assertRecord(t, want, load(t, st, cs))
 }
 
 func listClusterSets(t *testing.T, st store.Store, cs string) {
-	names := []string{clusterSetName(t, "c"), clusterSetName(t, "a"), clusterSetName(t, "b")}
+	names := []string{clusterSetName(t, "c"), clusterSetName(t, "a"), clusterSetName(t, "b"), clusterSetName(t, "d")}
 	_, err := st.PutCluster(ctx(t), clusterRecord(names[0], "c1"), t0)
 	require.NoError(t, err)
 	require.NoError(t, st.PutExport(ctx(t), exportRecord(exportKey(names[1], "c1", "ns", "svc"), 1)))
 	_, err = st.PutPool(ctx(t), poolRecord(poolKey(names[2], "c1", "p"), "pool", 1), store.PutPoolOptions{Now: t0})
+	require.NoError(t, err)
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(poolAgentKey(names[3], "c1", "p", store.FrontendRolePylon), "pool", 1),
+		store.PutPoolAgentOptions{Now: t0, MintLease: true})
 	require.NoError(t, err)
 
 	got, err := st.ListClusterSets(ctx(t))
@@ -985,6 +1258,7 @@ func canceledContext(t *testing.T, st store.Store, cs string) {
 	ck := store.ClusterKey{ClusterSet: cs, Cluster: "c1"}
 	ek := exportKey(cs, "c1", "ns", "svc")
 	pk := poolKey(cs, "c1", "p")
+	ak := poolAgentKey(cs, "c1", "p", store.FrontendRolePylon)
 
 	calls := map[string]func() error{
 		"PutCluster": func() error { _, err := st.PutCluster(c, clusterRecord(cs, "c1"), t0); return err },
@@ -1006,7 +1280,16 @@ func canceledContext(t *testing.T, st store.Store, cs string) {
 			_, err := st.RenewPoolLease(c, pk, 1, t0, store.PoolHeartbeatPatch{})
 			return err
 		},
-		"DeletePool":      func() error { return st.DeletePool(c, pk) },
+		"DeletePool": func() error { return st.DeletePool(c, pk) },
+		"PutPoolAgent": func() error {
+			_, err := st.PutPoolAgent(c, poolAgentRecord(ak, "pool", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+			return err
+		},
+		"RenewPoolAgentLease": func() error {
+			_, err := st.RenewPoolAgentLease(c, ak, 1, t0, store.PoolAgentHeartbeatPatch{})
+			return err
+		},
+		"DeletePoolAgent": func() error { return st.DeletePoolAgent(c, ak) },
 		"ListClusterSets": func() error { _, err := st.ListClusterSets(c); return err },
 		"LoadClusterSet":  func() error { _, err := st.LoadClusterSet(c, cs); return err },
 		"Ping":            func() error { return st.Ping(c) },
