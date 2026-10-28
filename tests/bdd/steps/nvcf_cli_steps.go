@@ -295,9 +295,13 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 // isNoEligibleCandidates reports whether the router has not registered the
 // model yet. Chat completions return the router message; passthrough
 // endpoints return the router code.
+// isNoEligibleCandidates reports a function that is deployed but not yet
+// routable: the gateway has no route for it yet (404), or its backend is
+// connected but still calibrating at startup (503 Service Unavailable).
 func isNoEligibleCandidates(output string) bool {
 	return strings.Contains(output, "no_eligible_candidates") ||
-		strings.Contains(output, "no eligible candidates")
+		strings.Contains(output, "no eligible candidates") ||
+		strings.Contains(output, `API error 503: {"message":"Service Unavailable"}`)
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(

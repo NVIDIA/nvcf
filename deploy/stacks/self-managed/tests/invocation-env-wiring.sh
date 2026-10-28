@@ -55,6 +55,7 @@ assert_yq_eq() {
 }
 
 default_values="$work_dir/default-values.yaml"
+tracing_values="$work_dir/tracing-values.yaml"
 custom_values="$work_dir/custom-values.yaml"
 invalid_values="$work_dir/invalid-values.yaml"
 invalid_log="$work_dir/invalid.log"
@@ -85,6 +86,36 @@ global:
   image:
     registry: nvcr.io
     repository: test/nvcf
+  observability:
+    tracing:
+      enabled: true
+      collectorProtocol: http
+      collectorEndpoint: collector.monitoring.svc.cluster.local
+      collectorPort: 4317
+EOF
+
+render_invocation_values "$tracing_values" >/dev/null
+assert_yq_eq \
+  "$tracing_values" \
+  '.invocation.env.SERVER__ENVFILTER_DIRECTIVE' \
+  info,otel::tracing=debug
+assert_yq_eq \
+  "$tracing_values" \
+  '.invocation.env.SERVER__TRACING__ENDPOINT_IP' \
+  http://collector.monitoring.svc.cluster.local
+assert_yq_eq \
+  "$tracing_values" \
+  '.invocation.env.SERVER__TRACING__ENDPOINT_PORT' \
+  4317
+
+write_environment <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+  observability:
+    tracing:
+      enabled: true
 invocation:
   env:
     CUSTOM_INVOCATION_ENV: retained

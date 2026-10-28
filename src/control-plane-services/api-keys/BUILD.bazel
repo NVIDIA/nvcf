@@ -56,6 +56,7 @@ API_KEYS_DEPS = [
     "@nv_third_party_deps//:org_springframework_spring_beans",
     "@nv_third_party_deps//:org_springframework_spring_context",
     "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_tx",
     "@nv_third_party_deps//:org_springframework_spring_web",
     "@nv_third_party_deps//:org_springframework_spring_webmvc",
     "@nv_third_party_deps//:tools_jackson_core_jackson_core",

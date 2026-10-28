@@ -36,7 +36,8 @@ import (
 )
 
 // NewTLSReloader returns a [tls.Config] with GetCertificate or GetConfigForClient set
-// to reload certificates from the given paths on SIGHUP or on file creates (atomic update via rename).
+// to reload certificates from the given paths on SIGHUP, on file creates (atomic update via rename),
+// or when a Kubernetes volume swaps its ..data symlink.
 func NewTLSReloader(certFile, keyFile, caFile string, baseConfig *tls.Config) (*tls.Config, error) {
 	// trigger reload on channel
 	sigc := make(chan os.Signal, 1)
@@ -98,7 +99,7 @@ func NewTLSReloader(certFile, keyFile, caFile string, baseConfig *tls.Config) (*
 			case sig := <-sigc:
 				zap.L().Debug("reloading cert from signal", zap.Any("signal", sig))
 			case evt := <-watcher.Events:
-				if _, ok := watchFiles[evt.Name]; !ok || !evt.Has(fsnotify.Create) {
+				if !shouldReload(evt, watchFiles) {
 					continue loop
 				}
 				zap.L().Debug("reloading cert from fsnotify", zap.String("name", evt.Name), zap.Any("operation", evt.Op))
@@ -127,6 +128,22 @@ func NewTLSReloader(certFile, keyFile, caFile string, baseConfig *tls.Config) (*
 		conf.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) { return &ptr.Load().Certificates[0], nil }
 	}
 	return conf, nil
+}
+
+// kubernetesDataDir is the symlink a Kubernetes Secret or ConfigMap volume
+// swaps on update. The key files are symlinks through it and never change
+// themselves, so only this entry sees a create event.
+const kubernetesDataDir = "..data"
+
+// shouldReload reports whether a watcher event can have replaced the files.
+func shouldReload(evt fsnotify.Event, watchFiles map[string]struct{}) bool {
+	if !evt.Has(fsnotify.Create) {
+		return false
+	}
+	if _, ok := watchFiles[evt.Name]; ok {
+		return true
+	}
+	return filepath.Base(evt.Name) == kubernetesDataDir
 }
 
 // loadTLSConfig loads the given file paths into a [tls.Config]

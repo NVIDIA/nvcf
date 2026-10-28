@@ -154,7 +154,13 @@ jobs:
           make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
           make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
           make -C deploy/helm/nvca-operator test-render-values
-          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images test-nvca-callback-ca
+
+      - name: Test invocation-service chart rendering
+        run: |
+          for test in deploy/helm/http-invocation/tests/*_test.sh; do
+            bash "${test}"
+          done
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
@@ -173,6 +179,9 @@ jobs:
 
       - name: Test LLM request router chart rendering
         run: make -C deploy/helm/llm-request-router test
+
+      - name: Test grpc-proxy HTTP/3 chart rendering
+        run: bash deploy/helm/grpc-proxy/tests/http3-render.sh
 
       - name: Run Stargate dev stack render tests
         run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
@@ -299,6 +308,9 @@ jobs:
 
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
+
+      - name: Test compute-plane golden refresh on bump branches
+        run: bash tools/ci/test-refresh-compute-plane-goldens
 
       - name: Test bump workflow push credentials
         run: bash tools/ci/test-bump-workflow-push
