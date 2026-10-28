@@ -36,11 +36,14 @@ for kv in ENABLED=false TTL=10m LOOKUP_TIMEOUT=20ms LOCAL_MAX_ENTRIES=100000; do
   test "$(read_config "$default_manifest" "STARGATE_LAST_CLUSTER_${kv%%=*}")" = "${kv#*=}" ||
     fail "STARGATE_LAST_CLUSTER_${kv%%=*} default must be ${kv#*=}"
 done
+test "$(read_config "$default_manifest" NVCF_DECISION_IMAGE_TOKENS)" = 1024 ||
+  fail "NVCF_DECISION_IMAGE_TOKENS default must be 1024"
 
 helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
   --set-string llmApiGateway.image.repository=example.invalid/llm-api-gateway \
   --set llmApiGateway.config.nvcfGrpcInsecure=true \
+  --set llmApiGateway.config.decisionImageTokens=2048 \
   --set llmApiGateway.metrics.enabled=true \
   --set llmApiGateway.metrics.serviceMonitor.enabled=true \
   --set llmApiGateway.config.lastCluster.enabled=true \
@@ -49,6 +52,8 @@ helm template llm-api-gateway "$chart_dir" \
 
 test "$(read_config "$override_manifest" NVCF_GRPC_INSECURE)" = true ||
   fail "explicit plaintext transport override did not reach the ConfigMap"
+test "$(read_config "$override_manifest" NVCF_DECISION_IMAGE_TOKENS)" = 2048 ||
+  fail "decisionImageTokens override must render as NVCF_DECISION_IMAGE_TOKENS"
 # 1000000 checks that a large cap renders as a plain integer.
 for kv in ENABLED=true LOCAL_MAX_ENTRIES=1000000; do
   test "$(read_config "$override_manifest" "STARGATE_LAST_CLUSTER_${kv%%=*}")" = "${kv#*=}" ||
