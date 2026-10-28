@@ -137,6 +137,73 @@ assert_render_fails "llmRequestRouter.backendRouter.enabled must be true when ll
   --set llmRequestRouter.replicaCount=2 \
   --set llmRequestRouter.backendRouter.enabled=false
 
+gds_args=(
+  --set llmRequestRouter.globalDiscovery.enabled=true
+  --set 'llmRequestRouter.globalDiscovery.urls={https://gds.example.test}'
+  --set llmRequestRouter.globalDiscovery.clustersetId=prod
+  --set llmRequestRouter.globalDiscovery.clusterId=cluster-a
+)
+
+# Direct mode: with the Global Discovery Service a multi-replica Deployment
+# may run without the backend router. Each pod advertises its pod IP for gRPC
+# and the reverse tunnel, keeps headless DNS discovery and its templated
+# hostname, and sets no shared pylon gRPC dial address.
+direct_deployment_manifest="${tmp_dir}/direct-deployment.yaml"
+render "${direct_deployment_manifest}" \
+  --set llmRequestRouter.workload.kind=Deployment \
+  --set llmRequestRouter.replicaCount=2 \
+  --set llmRequestRouter.backendRouter.enabled=false \
+  "${gds_args[@]}" \
+  --set llmRequestRouter.certificate.enabled=true \
+  --set llmRequestRouter.certificate.issuerRef.name=test-issuer \
+  --set 'llmRequestRouter.certificate.dnsNames[0]=llm-request-router.nvcf.svc.cluster.local'
+
+[ "$(workload_field "${direct_deployment_manifest}" Deployment .spec.replicas)" = "2" ] || fail "direct mode Deployment replica count is not 2"
+direct_backend_kind="$(yq -r 'select(.metadata.name == "llm-request-router-backend-router") | .kind' "${direct_deployment_manifest}" | head -n1)"
+[ -z "${direct_backend_kind}" ] || fail "direct mode must not render backend-router resources"
+direct_deployment_args="$(workload_args "${direct_deployment_manifest}" Deployment)"
+for expected in \
+  '--advertise-addr=$(POD_IP):50071' \
+  '--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072' \
+  "--stargate-discovery-dns-name=llm-request-router-headless.${namespace}.svc.cluster.local" \
+  '--pod-name=$(POD_NAME)' \
+  '--pod-namespace=$(POD_NAMESPACE)' \
+  "--advertised-hostname-template={pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local" \
+  '--gds-cluster-id=cluster-a'; do
+  printf '%s\n' "${direct_deployment_args}" | grep -qxF -- "${expected}" || fail "direct mode Deployment missing ${expected}"
+done
+! printf '%s\n' "${direct_deployment_args}" | grep -q -- '^--grpc-pylon-dial-addr' || fail "direct mode Deployment must not set --grpc-pylon-dial-addr"
+! printf '%s\n' "${direct_deployment_args}" | grep -qx -- '--disable-dns-discovery' || fail "direct mode Deployment must keep headless DNS discovery"
+yq -r 'select(.kind == "Certificate") | .spec.dnsNames[]' "${direct_deployment_manifest}" | grep -qxF -- "*.llm-request-router-headless.${namespace}.svc.cluster.local" || fail "direct mode certificate must cover the per-pod advertised hostnames"
+
+# A multi-replica Deployment with GDS keeps the backend router by default, so
+# existing values files render as before.
+gds_default_manifest="${tmp_dir}/gds-default.yaml"
+render "${gds_default_manifest}" "${gds_args[@]}"
+gds_default_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .kind' "${gds_default_manifest}" | head -n1)"
+[ "${gds_default_backend_kind}" = "Deployment" ] || fail "globalDiscovery.enabled alone must not switch a multi-replica Deployment to direct mode"
+
+assert_render_fails "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" \
+  --set llmRequestRouter.workload.kind=Deployment \
+  --set llmRequestRouter.replicaCount=2 \
+  --set llmRequestRouter.backendRouter.enabled=false \
+  --set llmRequestRouter.globalDiscovery.enabled=false \
+  --set llmRequestRouter.globalDiscovery.export.enabled=true
+
+assert_render_fails "llmRequestRouter.kubernetes.advertisedHostnameTemplate must contain exactly one {pod_name} in direct mode" \
+  --set llmRequestRouter.workload.kind=Deployment \
+  --set llmRequestRouter.replicaCount=2 \
+  --set llmRequestRouter.backendRouter.enabled=false \
+  "${gds_args[@]}" \
+  --set llmRequestRouter.kubernetes.advertisedHostnameTemplate=llm-request-router.nvcf.svc.cluster.local
+
+assert_render_fails "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" \
+  --set llmRequestRouter.workload.kind=Deployment \
+  --set llmRequestRouter.replicaCount=2 \
+  --set llmRequestRouter.backendRouter.enabled=false \
+  "${gds_args[@]}" \
+  --set llmRequestRouter.discovery.disableDnsDiscovery=true
+
 single_deployment_manifest="${tmp_dir}/single-deployment.yaml"
 render "${single_deployment_manifest}" \
   --set llmRequestRouter.workload.kind=Deployment \

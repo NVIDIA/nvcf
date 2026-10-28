@@ -181,6 +181,17 @@ root; the client is `crates/gds-client`.
   still come from DNS discovery, and `--grpc-pylon-dial-addr` is advertised
   unchanged. An `http://` GDS URL requires
   `--allow-insecure-remote-watch-http`.
+- Stargate in direct router mode: without `--grpc-pylon-dial-addr`, when this
+  cluster's router record is annotated `gds.nvidia.com/router-mode: direct`
+  and lists this pod's IP (from `--advertise-addr`), every local Stargate
+  that matches a replica of the record gets
+  `<dial scheme>://<replica address>:<grpc port>` as its
+  `grpc_pylon_dial_addr`; this Stargate dials its own advertise address. A
+  peer matches by IP address, by the `gds.nvidia.com/hostname-template` with
+  the replica's EndpointSlice hostname, or by that template with the
+  dashed-IP name Kubernetes DNS gives Deployment pods. A peer listed by a pod
+  name without an EndpointSlice hostname keeps an empty dial address until
+  the router record carries pod names.
 - Pylon: `--gds-url`, `--gds-clusterset` and `--gds-tls-ca-cert-path`. Pylon
   watches the seeds of every router cluster with a live lease and follows
   changes without a restart: new seeds start `WatchStargates`, removed seeds

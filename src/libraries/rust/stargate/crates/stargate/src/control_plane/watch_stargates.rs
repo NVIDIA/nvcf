@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ use url::Url;
 use stargate_proto::pb::{StargateInfo, WatchStargatesResponse};
 use stargate_protocol::parse_explicit_http_uri;
 
-use crate::discovery::Discovery;
+use crate::discovery::{Discovery, advertise_host};
 use stargate_runtime::CriticalTaskGroup;
 
 pub(super) struct WatchStargatesPublisherConfig {
@@ -55,6 +55,9 @@ pub(super) fn spawn_watch_stargates_publisher(
     let local_watch_endpoint_keys = local_watch_endpoint_keys(advertise_addr, &discovery_dns_name);
     let remote_watch_stargate_urls =
         normalize_remote_watch_urls(remote_watch_stargate_urls, &local_watch_endpoint_keys);
+    let grpc_pylon_dial_addr = grpc_pylon_dial_addr
+        .map(|addr| addr.trim().to_string())
+        .filter(|addr| !addr.is_empty());
     let (watch_stargates_tx, watch_stargates_rx) =
         watch::channel(WatchStargatesResponse::default());
 
@@ -72,10 +75,19 @@ pub(super) fn spawn_watch_stargates_publisher(
 
             let event = tokio::select! {
                 _ = stop.cancelled() => break,
-                (stargates, dynamic_watch_urls) = async {
+                (stargates, dynamic_watch_urls, peer_dial_addrs) = async {
                     tokio::join!(
                         discovery.discover_stargates(),
                         discovery.discover_remote_watch_urls(),
+                        async {
+                            // A configured dial address applies to every
+                            // entry, so discovered ones are not needed.
+                            if grpc_pylon_dial_addr.is_some() {
+                                HashMap::new()
+                            } else {
+                                discovery.peer_dial_addrs().await
+                            }
+                        },
                     )
                 } => {
                     let remote_watch_urls = union_remote_watch_urls(
@@ -87,6 +99,7 @@ pub(super) fn spawn_watch_stargates_publisher(
                         stargates,
                         &remote_watch_urls,
                         grpc_pylon_dial_addr.as_deref(),
+                        &peer_dial_addrs,
                     )
                 },
             };
@@ -114,10 +127,15 @@ pub(super) fn spawn_watch_stargates_publisher(
     watch_stargates_rx
 }
 
+/// The `WatchStargates` snapshot. A configured `grpc_pylon_dial_addr`
+/// applies to every Stargate. Without it, a Stargate whose advertise host is
+/// in `peer_dial_addrs` (from [`Discovery::peer_dial_addrs`]) gets that dial
+/// URL, and the others keep dialing their advertise address.
 fn build_watch_stargates_response(
     stargates: Vec<StargateInfo>,
     remote_watch_stargate_urls: &[String],
     grpc_pylon_dial_addr: Option<&str>,
+    peer_dial_addrs: &HashMap<String, String>,
 ) -> WatchStargatesResponse {
     let mut stargates = normalize_stargates(stargates);
     if let Some(grpc_pylon_dial_addr) = grpc_pylon_dial_addr
@@ -126,6 +144,17 @@ fn build_watch_stargates_response(
     {
         for stargate in &mut stargates {
             stargate.grpc_pylon_dial_addr = grpc_pylon_dial_addr.to_string();
+        }
+    } else if !peer_dial_addrs.is_empty() {
+        for stargate in &mut stargates {
+            if !stargate.grpc_pylon_dial_addr.is_empty() {
+                continue;
+            }
+            if let Some(dial_addr) =
+                advertise_host(&stargate.advertise_addr).and_then(|host| peer_dial_addrs.get(&host))
+            {
+                stargate.grpc_pylon_dial_addr.clone_from(dial_addr);
+            }
         }
     }
     WatchStargatesResponse {
@@ -259,6 +288,7 @@ fn watch_response_has_entries(response: &WatchStargatesResponse) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use futures::{Stream, StreamExt};
     use parking_lot::Mutex;
@@ -292,6 +322,7 @@ mod tests {
             ],
             &remote_watch_urls,
             None,
+            &HashMap::new(),
         );
 
         let ids: Vec<&str> = response
@@ -318,6 +349,7 @@ mod tests {
             ],
             &[],
             None,
+            &HashMap::new(),
         );
 
         assert_eq!(response.stargates.len(), 1);
@@ -331,11 +363,115 @@ mod tests {
             vec![stargate("stargate-0", "stargate-0.region-a:50071", "")],
             &[],
             Some(" https://stargate-grpc-lb.region-a:443 "),
+            &HashMap::new(),
         );
 
         assert_eq!(
             response.stargates[0].grpc_pylon_dial_addr,
             "https://stargate-grpc-lb.region-a:443"
+        );
+    }
+
+    fn dial_addrs(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(host, url)| (host.to_string(), url.to_string()))
+            .collect()
+    }
+
+    fn dial_addrs_by_id(response: &WatchStargatesResponse) -> BTreeMap<&str, &str> {
+        response
+            .stargates
+            .iter()
+            .map(|info| {
+                (
+                    info.stargate_id.as_str(),
+                    info.grpc_pylon_dial_addr.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn watch_stargates_response_fills_discovered_dial_addrs_by_advertise_host() {
+        let stargates = vec![
+            stargate(
+                "stargate-0",
+                "stargate-0.headless.ns.svc.cluster.local:50071",
+                "",
+            ),
+            stargate(
+                "10-0-0-2",
+                "10-0-0-2.Headless.ns.svc.cluster.local:50071",
+                "",
+            ),
+            stargate("10.0.0.3:50071", "10.0.0.3:50071", ""),
+            stargate(
+                "stargate-9",
+                "stargate-9.headless.ns.svc.cluster.local:50071",
+                "",
+            ),
+        ];
+        let response = build_watch_stargates_response(
+            stargates.clone(),
+            &[],
+            None,
+            &dial_addrs(&[
+                (
+                    "stargate-0.headless.ns.svc.cluster.local",
+                    "http://10.0.0.1:50071",
+                ),
+                (
+                    "10-0-0-2.headless.ns.svc.cluster.local",
+                    "http://10.0.0.2:50071",
+                ),
+                ("10.0.0.3", "http://10.0.0.3:50071"),
+            ]),
+        );
+
+        assert_eq!(
+            dial_addrs_by_id(&response),
+            BTreeMap::from([
+                ("10-0-0-2", "http://10.0.0.2:50071"),
+                ("10.0.0.3:50071", "http://10.0.0.3:50071"),
+                ("stargate-0", "http://10.0.0.1:50071"),
+                // Unknown to the map: pylons keep dialing its advertise address.
+                ("stargate-9", ""),
+            ])
+        );
+        // The advertise address stays the authority and SNI identity.
+        let mut advertised: Vec<&str> = response
+            .stargates
+            .iter()
+            .map(|info| info.advertise_addr.as_str())
+            .collect();
+        advertised.sort_unstable();
+        let mut expected: Vec<&str> = stargates
+            .iter()
+            .map(|info| info.advertise_addr.as_str())
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(advertised, expected);
+    }
+
+    #[test]
+    fn configured_grpc_pylon_dial_addr_wins_over_discovered_dial_addrs() {
+        let response = build_watch_stargates_response(
+            vec![
+                stargate("stargate-0", "stargate-0.headless:50071", ""),
+                stargate("stargate-1", "stargate-1.headless:50071", ""),
+            ],
+            &[],
+            Some("https://stargate-grpc-lb.region-a:443"),
+            &dial_addrs(&[("stargate-0.headless", "http://10.0.0.1:50071")]),
+        );
+
+        assert_eq!(
+            dial_addrs_by_id(&response),
+            BTreeMap::from([
+                ("stargate-0", "https://stargate-grpc-lb.region-a:443"),
+                ("stargate-1", "https://stargate-grpc-lb.region-a:443"),
+            ])
         );
     }
 
@@ -403,6 +539,19 @@ mod tests {
     struct FakeDiscovery {
         stargates: Vec<StargateInfo>,
         remote_watch_urls: Arc<Mutex<Vec<String>>>,
+        peer_dial_addrs: HashMap<String, String>,
+        peer_dial_addr_calls: Arc<AtomicUsize>,
+    }
+
+    impl FakeDiscovery {
+        fn new(stargates: Vec<StargateInfo>, remote_watch_urls: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                stargates,
+                remote_watch_urls,
+                peer_dial_addrs: HashMap::new(),
+                peer_dial_addr_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -417,6 +566,11 @@ mod tests {
 
         async fn discover_remote_watch_urls(&self) -> Vec<String> {
             self.remote_watch_urls.lock().clone()
+        }
+
+        async fn peer_dial_addrs(&self) -> HashMap<String, String> {
+            self.peer_dial_addr_calls.fetch_add(1, Ordering::Relaxed);
+            self.peer_dial_addrs.clone()
         }
     }
 
@@ -447,10 +601,10 @@ mod tests {
         let mut rx = spawn_watch_stargates_publisher(WatchStargatesPublisherConfig {
             advertise_addr: "10.0.0.1:50071".parse().unwrap(),
             discovery_dns_name: "stargate-headless.ns.svc.cluster.local".to_string(),
-            discovery: Box::new(FakeDiscovery {
-                stargates: vec![stargate("stargate-0", "10.0.0.1:50071", "")],
-                remote_watch_urls: remote_watch_urls.clone(),
-            }),
+            discovery: Box::new(FakeDiscovery::new(
+                vec![stargate("stargate-0", "10.0.0.1:50071", "")],
+                remote_watch_urls.clone(),
+            )),
             remote_watch_stargate_urls: vec!["https://remote-b.stargate:50071".to_string()],
             grpc_pylon_dial_addr: None,
             discovery_poll_interval: Duration::from_millis(10),
@@ -483,6 +637,67 @@ mod tests {
 
         tasks.begin_shutdown();
         tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn publisher_fills_discovered_dial_addrs_only_without_a_configured_one() {
+        for (configured, expected) in [
+            (None, "http://10.0.0.2:50071"),
+            (
+                Some(" https://stargate-grpc-lb.region-a:443 "),
+                "https://stargate-grpc-lb.region-a:443",
+            ),
+        ] {
+            let mut discovery = FakeDiscovery::new(
+                vec![stargate(
+                    "10-0-0-2",
+                    "10-0-0-2.stargate-headless.ns.svc.cluster.local:50071",
+                    "",
+                )],
+                Arc::new(Mutex::new(Vec::new())),
+            );
+            discovery.peer_dial_addrs = dial_addrs(&[(
+                "10-0-0-2.stargate-headless.ns.svc.cluster.local",
+                "http://10.0.0.2:50071",
+            )]);
+            let calls = discovery.peer_dial_addr_calls.clone();
+            let (tasks, _failures) = CriticalTaskGroup::new("watch-stargates-test");
+            let mut rx = spawn_watch_stargates_publisher(WatchStargatesPublisherConfig {
+                advertise_addr: "10.0.0.1:50071".parse().unwrap(),
+                discovery_dns_name: "stargate-headless.ns.svc.cluster.local".to_string(),
+                discovery: Box::new(discovery),
+                remote_watch_stargate_urls: Vec::new(),
+                grpc_pylon_dial_addr: configured.map(str::to_string),
+                discovery_poll_interval: Duration::from_millis(10),
+                watch_heartbeat_interval: Duration::from_secs(60),
+                tasks: tasks.clone(),
+            });
+
+            let snapshot = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let current = rx.borrow_and_update().clone();
+                    if !current.stargates.is_empty() {
+                        return current;
+                    }
+                    rx.changed().await.expect("publisher should be running");
+                }
+            })
+            .await
+            .expect("publisher never published a snapshot");
+
+            assert_eq!(
+                snapshot.stargates[0].grpc_pylon_dial_addr, expected,
+                "configured {configured:?}"
+            );
+            assert_eq!(
+                calls.load(Ordering::Relaxed) > 0,
+                configured.is_none(),
+                "discovered dial addresses are read only without a configured one"
+            );
+
+            tasks.begin_shutdown();
+            tasks.wait().await;
+        }
     }
 
     #[test]

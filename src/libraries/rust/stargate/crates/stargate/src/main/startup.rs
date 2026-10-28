@@ -227,13 +227,22 @@ pub(super) fn make_discovery_with_resolver_and_addresses(
     validate_discovery_args(args)?;
     let (local, forwarding) =
         make_local_discovery(args, advertise_addr, http_listen_addr, make_resolver)?;
-    Ok((with_global_discovery(args, local)?, forwarding))
+    Ok((
+        with_global_discovery(args, local, advertise_addr)?,
+        forwarding,
+    ))
 }
 
 /// Wraps the local peer discovery with GDS remote router discovery when
 /// `--gds-url` is set. Local discovery stays authoritative for this
-/// cluster's Stargates. Spawns the router cache, so it needs a Tokio runtime.
-fn with_global_discovery(args: &Args, local: Box<dyn Discovery>) -> Result<Box<dyn Discovery>> {
+/// cluster's Stargates; in direct router mode GDS adds their dial addresses,
+/// found through `advertise_addr`. Spawns the router cache, so it needs a
+/// Tokio runtime.
+fn with_global_discovery(
+    args: &Args,
+    local: Box<dyn Discovery>,
+    advertise_addr: SocketAddr,
+) -> Result<Box<dyn Discovery>> {
     let Some(config) = gds_client_config_from_args(args)? else {
         return Ok(local);
     };
@@ -248,7 +257,11 @@ fn with_global_discovery(args: &Args, local: Box<dyn Discovery>) -> Result<Box<d
         "discovering remote routers through GDS"
     );
     Ok(Box::new(GdsDiscovery::spawn(
-        local, client, clusterset, cluster_id,
+        local,
+        client,
+        clusterset,
+        cluster_id,
+        advertise_addr,
     )))
 }
 
