@@ -845,7 +845,8 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		return resolvedOpenAIRequest{}, true
 	}
 
-	if nvcfUrl.tooManyRequestsMessage != "" {
+	// Decision backend 429 bodies pass through byte for byte.
+	if nvcfUrl.tooManyRequestsMessage != "" && !isDecisionRoute(request) {
 		ctx := context.WithValue(request.Context(), tooManyRequestsKey, nvcfUrl.tooManyRequestsMessage)
 		request = request.WithContext(ctx)
 	}
