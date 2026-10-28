@@ -313,8 +313,14 @@ def release_branch_train(service, branch, root=None):
 
 
 def service_version_bump_branch(service, version):
+    """The branch that carries the default-branch VERSION bump for a new train.
+
+    It sits on the default branch's history, which holds merges, so it stays
+    outside the `release-*` namespace whose ruleset requires a merge-free
+    history.
+    """
     major, minor, _patch = [int(part) for part in version.split(".")]
-    return f"release-bump/{service['id']}/v{major}.{minor}-to-v{major}.{minor + 1}"
+    return f"chore/release-train/{service['id']}/v{major}.{minor}-to-v{major}.{minor + 1}"
 
 
 def next_release_train_version(version):
@@ -341,6 +347,11 @@ def linear_release_branch_base(root, base_sha):
     release branch is a parallel history: its tags are not ancestors of the
     default branch, which is why `release_baseline_version` filters on
     reachability.
+
+    The snapshot records base_sha in a `Snapshot-Of` trailer. Chart tags
+    released from the default branch are ancestors of base_sha but not of the
+    snapshot, and the stack inventory reads the trailer to prove each pinned
+    chart was released from source the stack contains.
     """
     merges = run(
         ["git", "rev-list", "--topo-order", "--reverse", "--merges", base_sha],
@@ -365,6 +376,8 @@ def linear_release_branch_base(root, base_sha):
             linear_parent,
             "-m",
             "chore(release): snapshot default branch for linear history",
+            "-m",
+            f"Snapshot-Of: {base_sha}",
         ],
         cwd=root,
         capture=True,
@@ -2176,13 +2189,11 @@ def branch_cut(args):
                 f"not selected base tree {base_tree}"
             )
         print(f"[github-release] {release_branch} already has the selected base tree")
-        bump_base = existing_release_sha
     else:
         ensure_git_identity(root)
         release_base = linear_release_branch_base(root, base_sha)
         run(["git", "push", "origin", f"{release_base}:refs/heads/{release_branch}"], cwd=root)
         print(f"[github-release] created {release_branch} from selected base {base_sha}")
-        bump_base = release_base
 
     existing_pr = open_pr_url(root, bump_branch, target_branch)
     if existing_pr:
@@ -2192,8 +2203,12 @@ def branch_cut(args):
     if remote_branch_sha(root, bump_branch):
         raise SystemExit(f"{bump_branch} already exists but has no open PR to {target_branch}")
 
+    # The bump targets the default branch, so it sits on the commit that was
+    # cut, not on the release branch snapshot. On the snapshot it would share
+    # no recent history with the default branch and its pull request would
+    # conflict.
     ensure_git_identity(root)
-    run(["git", "switch", "-C", bump_branch, bump_base], cwd=root)
+    run(["git", "switch", "-C", bump_branch, base_sha], cwd=root)
     version_path = root / version_file_path
     version_path.write_text(f"{next_version}\n")
     run(["git", "add", version_file_path], cwd=root)

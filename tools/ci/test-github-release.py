@@ -1767,7 +1767,7 @@ class GithubReleaseTest(unittest.TestCase):
 
             text = output.getvalue()
             self.assertIn("release-deploy/stacks/self-managed/v0.21", text)
-            self.assertIn("release-bump/nvcf-self-managed-stack/v0.21-to-v0.22", text)
+            self.assertIn("chore/release-train/nvcf-self-managed-stack/v0.21-to-v0.22", text)
             self.assertIn("deploy/stacks/self-managed/VERSION=0.21.0->0.22.0", text)
 
     def test_branch_cut_requires_a_release_branch_only_service(self):
@@ -1788,6 +1788,104 @@ class GithubReleaseTest(unittest.TestCase):
             )
             with chdir(root), self.assertRaisesRegex(SystemExit, "requires release.release_branch_only"):
                 self.github_release.branch_cut(args)
+
+    def _seed_default_branch_with_a_merge(self, root, remote, version):
+        """A stack repo whose default branch history holds a merge, pushed to a bare origin."""
+        self._seed_stack_release_branch(root, version, "")
+        main_branch = git_out(root, "branch", "--show-current").strip()
+        git(root, "switch", "-c", "merged-change")
+        (root / "merged.txt").write_text("merged change\n")
+        self.commit_all(root, "fix: merged change")
+        git(root, "switch", main_branch)
+        (root / "main.txt").write_text("main change\n")
+        self.commit_all(root, "fix: main change")
+        git(root, "merge", "--no-ff", "merged-change", "-m", "Merge merged-change")
+        init_bare_remote(remote)
+        git(root, "remote", "add", "origin", str(remote))
+        git(root, "push", "origin", "HEAD:refs/heads/main")
+        return git_out(root, "rev-parse", "HEAD").strip()
+
+    def fake_branch_cut_pull_requests(self):
+        """Answer `gh pr list` with no open pull request and record `gh pr create`."""
+        created = []
+        real_run = subprocess.run
+
+        def fake_run(args, *rest, **kwargs):
+            if list(args[:3]) == ["gh", "pr", "list"]:
+                return subprocess.CompletedProcess(args, 0, stdout="[]")
+            if list(args[:3]) == ["gh", "pr", "create"]:
+                created.append(list(args))
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            return real_run(args, *rest, **kwargs)
+
+        self.github_release.subprocess = SubprocessShim(fake_run)
+        return created
+
+    def test_branch_cut_builds_the_version_bump_on_the_selected_default_branch_commit(self):
+        # The release branch is a merge-free copy of the selected tree. The
+        # VERSION bump targets the default branch, so it must be one commit on
+        # top of the commit that was cut. Built on the release branch snapshot,
+        # it shares no recent history with the default branch and its pull
+        # request conflicts and lists the whole repository as changed.
+        release_branch = "release-deploy/stacks/self-managed/v1.1"
+        bump_branch = "chore/release-train/nvcf-self-managed-stack/v1.1-to-v1.2"
+        version_path = "deploy/stacks/self-managed/VERSION"
+        for release_branch_exists in (False, True):
+            with self.subTest(release_branch_exists=release_branch_exists), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "repo"
+                remote = Path(tmp) / "remote.git"
+                root.mkdir()
+                base_sha = self._seed_default_branch_with_a_merge(root, remote, "1.1.0")
+                if release_branch_exists:
+                    snapshot = self.github_release.linear_release_branch_base(root, base_sha)
+                    git(root, "push", "origin", f"{snapshot}:refs/heads/{release_branch}")
+                created = self.fake_branch_cut_pull_requests()
+                metadata_path = Path(tmp) / "metadata.json"
+                metadata_path.write_text(
+                    json.dumps({"version": 1, "services": [self.SELF_MANAGED_STACK_SERVICE]})
+                )
+
+                args = types.SimpleNamespace(
+                    metadata=str(metadata_path),
+                    service="nvcf-self-managed-stack",
+                    ref=base_sha,
+                    target_branch="main",
+                    dry_run=False,
+                )
+                with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                    self.github_release.branch_cut(args)
+
+                bump_head = git_out(remote, "rev-parse", f"refs/heads/{bump_branch}").strip()
+                self.assertEqual(git_out(remote, "rev-parse", f"{bump_head}^").strip(), base_sha)
+                self.assertEqual(git_out(remote, "rev-list", f"{base_sha}..{bump_head}").split(), [bump_head])
+                self.assertEqual(git_out(remote, "diff", "--name-only", base_sha, bump_head).strip(), version_path)
+                self.assertEqual(git_out(remote, "show", f"{bump_head}:{version_path}"), "1.2.0\n")
+                self.assertEqual(len(created), 1)
+                self.assertEqual(created[0][created[0].index("--head") + 1], bump_branch)
+                self.assertEqual(created[0][created[0].index("--base") + 1], "main")
+
+                # The release branch itself still holds the selected tree on a
+                # merge-free history, and records the commit it copies.
+                release_head = git_out(remote, "rev-parse", f"refs/heads/{release_branch}").strip()
+                self.assertEqual(
+                    git_out(remote, "rev-parse", f"{release_head}^{{tree}}"),
+                    git_out(remote, "rev-parse", f"{base_sha}^{{tree}}"),
+                )
+                self.assertEqual(git_out(remote, "rev-list", "--merges", release_head).strip(), "")
+                self.assertEqual(
+                    git_out(
+                        remote, "log", "-1", "--format=%(trailers:key=Snapshot-Of,valueonly)", release_head
+                    ).strip(),
+                    base_sha,
+                )
+
+    def test_version_bump_branch_is_outside_the_release_branch_namespace(self):
+        # Release branches require a merge-free history. The bump branch
+        # descends from the default branch, which holds merges, so it must not
+        # live under a release-* name.
+        bump_branch = self.github_release.service_version_bump_branch(self.SELF_MANAGED_STACK_SERVICE, "1.1.0")
+        self.assertEqual(bump_branch, "chore/release-train/nvcf-self-managed-stack/v1.1-to-v1.2")
+        self.assertFalse(bump_branch.startswith("release-"))
 
     def test_version_file_must_hold_a_stable_version(self):
         # A prerelease here would be cut verbatim as the train's first release.
@@ -1823,6 +1921,17 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertEqual(
                 self.github_release.commit_tree(root, release_base),
                 self.github_release.commit_tree(root, base_sha),
+            )
+            # The stack inventory reads this trailer to accept chart tags
+            # released from the default branch, which are not ancestors of
+            # the snapshot.
+            self.assertEqual(
+                git_out(root, "log", "-1", "--format=%(trailers:key=Snapshot-Of,valueonly)", release_base).strip(),
+                base_sha,
+            )
+            self.assertEqual(
+                git_out(root, "log", "-1", "--format=%s", release_base).strip(),
+                "chore(release): snapshot default branch for linear history",
             )
             self.assertEqual(
                 self.github_release.run(
@@ -1935,7 +2044,7 @@ class GithubReleaseTest(unittest.TestCase):
                     self.github_release.service_release_branch(service, version, root).startswith("release-")
                 )
                 self.assertTrue(
-                    self.github_release.service_version_bump_branch(service, version).startswith("release-bump/")
+                    self.github_release.service_version_bump_branch(service, version).startswith("chore/release-train/")
                 )
 
     def test_nvca_still_releases_from_main(self):
