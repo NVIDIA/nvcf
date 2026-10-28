@@ -447,7 +447,9 @@ func (u *Uploader) submitFailed(b batch.Batch, err error) error {
 	stored, _ := u.store.Batch(b.ID)
 	fault := backend.Classify(u.client, err)
 	u.countAuth(fault)
-	attempts := max(stored.Attempts+1, u.countFailure(stored.Members))
+	// The journal counted this attempt when the batch was recorded or
+	// resumed, so it is not added again.
+	attempts := max(stored.Attempts, u.countFailure(stored.Members))
 	decision := u.policy.Failed(now, u.caps, retry.Failure{Key: b.ID, Stage: retry.StageSubmit, Fault: fault, Attempts: attempts})
 	class := errorClass(fault)
 	slog.Warn("submit failed", "batch", shortID(b.ID), "segments", len(b.Members), "fault", faultText(fault), "action", decision.Action)
@@ -574,7 +576,7 @@ func (u *Uploader) applyStatus(b journal.Batch, status backend.Status, err error
 		}
 		fault := backend.Classify(u.client, err)
 		u.countAuth(fault)
-		attempts := max(b.Attempts+1, u.countFailure(b.Members))
+		attempts := max(b.Attempts, u.countFailure(b.Members))
 		decision := u.policy.Failed(now, u.caps, retry.Failure{Key: b.ID, Stage: retry.StageJob, Fault: fault, JobID: true, Attempts: attempts})
 		slog.Warn("job failed", "batch", shortID(b.ID), "fault", faultText(fault), "action", decision.Action)
 		if decision.Action == retry.ActionQuarantine {

@@ -259,3 +259,22 @@ func TestErrorLogsCarryNoSpoolPaths(t *testing.T) {
 		t.Fatalf("logs = %s, want no spool path", logs)
 	}
 }
+
+func TestASegmentIsRetriedUntilItReachesTheFailureThreshold(t *testing.T) {
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	fake := backendtest.NewFake()
+	refused := backendtest.SubmitStep{Outcome: backendtest.Refuse, Err: &backend.Fault{Class: backend.ClassRetryable, Scope: backend.ScopeSegment, Reason: backend.ReasonRejected}}
+	faults := fastFaults()
+	faults.SegmentScopeFailures = 5
+	for range faults.SegmentScopeFailures - 1 {
+		fake.Script(refused)
+	}
+	uploader := newUploader(t, spool, fake, service.Options{Faults: faults}, nil)
+	passUntil(t, uploader, func() bool { return gone(closed[0]) || fake.SubmitCalls() > faults.SegmentScopeFailures })
+	if err := uploader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if state := journalStates(t, spool)[filepath.Base(closed[0])]; state != journal.StateDone {
+		t.Fatalf("state = %q after %d refused submits under a threshold of %d, want done", state, faults.SegmentScopeFailures-1, faults.SegmentScopeFailures)
+	}
+}
