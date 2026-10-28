@@ -186,7 +186,9 @@ impl GdsDiscovery {
                 stargate_count,
                 "listing this cluster's Stargates under their GDS replica identities"
             ),
-            PeerNames::TemplateMismatch(router) => warn!(
+            // A single-replica router advertises a template without
+            // `{pod_name}` and lists no peers, so this is not a warning.
+            PeerNames::TemplateMismatch(router) => info!(
                 own_cluster = %self.own_cluster,
                 router,
                 advertise_addr = %self.advertise_addr,
