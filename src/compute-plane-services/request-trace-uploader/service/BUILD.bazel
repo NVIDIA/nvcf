@@ -47,6 +47,7 @@ go_test(
         "quarantine_e2e_test.go",
         "service_test.go",
         "settings_e2e_test.go",
+        "startup_e2e_test.go",
         "suppression_e2e_test.go",
         "version_e2e_test.go",
         "writer_version_e2e_test.go",

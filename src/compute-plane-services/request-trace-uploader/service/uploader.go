@@ -358,8 +358,8 @@ func (u *Uploader) pollInterval() time.Duration {
 }
 
 // start runs once: create directories, check the secrets file, take the
-// spool lock and load the journal, remove what another uploader left on the
-// spool, and repair what a crash left in the journal.
+// spool lock and load the journal, and repair what a crash left in the
+// journal.
 func (u *Uploader) start(ctx context.Context) error {
 	u.startOnce.Do(func() { u.startErr = u.open(ctx) })
 	return u.startErr
