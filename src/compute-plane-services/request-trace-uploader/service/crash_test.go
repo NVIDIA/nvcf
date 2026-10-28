@@ -63,10 +63,9 @@ func (d dirBackend) Status(_ context.Context, id string) (backend.Status, error)
 
 func (d dirBackend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		OutOfOrderTolerant: true,
-		AcceptedFormats:    []backend.Format{backend.FormatGzipJSONL},
-		Exports:            true,
-		MaxBatchFiles:      16,
+		AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+		Exports:         true,
+		MaxBatchFiles:   16,
 	}
 }
 

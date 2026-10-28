@@ -175,7 +175,7 @@ func loadCredentials(path string) (credentials, error) {
 
 // Submit uploads the file at request.Path and returns once the store has
 // durably accepted it. The returned id is the object key: Status looks
-// nothing up because Capabilities declares TerminalOutcomeSync.
+// nothing up because the outcome is already final.
 //
 // The key names the source segment, request.Segment.Path, when the request
 // carries one, so the object layout does not depend on what the uploader
@@ -231,22 +231,18 @@ func (c *Client) Status(context.Context, string) (backend.Status, error) {
 	return backend.StatusSuccess, nil
 }
 
-// Capabilities declares that PutObject is a single synchronous, idempotent
-// call: a Submit that returns success is already durable, resubmitting the
-// same segment overwrites the same key, and segments are independent objects
-// so nothing requires in-order delivery.
+// Capabilities declares that PutObject is idempotent: resubmitting the same
+// segment overwrites the same key.
 //
 // Exports is false in dry-run mode: nothing was sent anywhere, so a caller
 // must never delete a source segment on the strength of a dry-run Submit
 // succeeding, the same rule debug's Capabilities enforces for its own reads.
 func (c *Client) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		ResubmitSafe:        true,
-		TerminalOutcomeSync: true,
-		OutOfOrderTolerant:  true,
-		AcceptedFormats:     []backend.Format{backend.FormatGzipJSONL},
-		MaxObjectBytes:      maxObjectBytes,
-		Exports:             !c.dryRun,
+		ResubmitSafe:    true,
+		AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+		MaxObjectBytes:  maxObjectBytes,
+		Exports:         !c.dryRun,
 	}
 }
 

@@ -336,9 +336,6 @@ func TestCapabilitiesDeclareExportAndSyncOutcome(t *testing.T) {
 	if !caps.Exports {
 		t.Error("Capabilities().Exports = false, want true")
 	}
-	if !caps.TerminalOutcomeSync {
-		t.Error("Capabilities().TerminalOutcomeSync = false, want true")
-	}
 	if !caps.ResubmitSafe {
 		t.Error("Capabilities().ResubmitSafe = false, want true")
 	}

@@ -97,10 +97,9 @@ func TestPipelineBatchesExportsAndCleansUpThroughTheJournal(t *testing.T) {
 	)
 	fake := backendtest.NewFake()
 	fake.SetCapabilities(backend.Capabilities{
-		OutOfOrderTolerant: true,
-		AcceptedFormats:    []backend.Format{backend.FormatGzipJSONL},
-		Exports:            true,
-		MaxBatchFiles:      16,
+		AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+		Exports:         true,
+		MaxBatchFiles:   16,
 	})
 	exporter := newCapture(t, fake)
 	metrics, err := telemetry.NewMemory("fake")
