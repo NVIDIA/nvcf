@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use hickory_resolver::TokioAsyncResolver;
@@ -36,6 +37,15 @@ pub trait Discovery: Send + Sync + 'static {
     async fn discover_remote_watch_urls(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Dial URLs of this cluster's Stargates learned at runtime, keyed by the
+    /// [`advertise_host`] of their `advertise_addr`. The publisher sets
+    /// `grpc_pylon_dial_addr` of the matching `WatchStargates` entries from it
+    /// when `--grpc-pylon-dial-addr` is unset. Local peer discovery learns
+    /// none.
+    async fn peer_dial_addrs(&self) -> HashMap<String, String> {
+        HashMap::new()
+    }
 }
 
 #[async_trait::async_trait]
@@ -51,6 +61,44 @@ impl Discovery for Box<dyn Discovery> {
     async fn discover_remote_watch_urls(&self) -> Vec<String> {
         (**self).discover_remote_watch_urls().await
     }
+
+    async fn peer_dial_addrs(&self) -> HashMap<String, String> {
+        (**self).peer_dial_addrs().await
+    }
+}
+
+/// The host of an advertise address (`host:port`, `[ipv6]:port` or a bare
+/// host, optionally with an `http://` or `https://` scheme) as
+/// [`Discovery::peer_dial_addrs`] keys it: an IP address in canonical form
+/// without brackets, else the DNS name in lower case without a trailing dot.
+/// `None` when no host remains.
+pub fn advertise_host(advertise_addr: &str) -> Option<String> {
+    let addr = advertise_addr.trim();
+    let addr = addr.split_once("://").map_or(addr, |(_, rest)| rest);
+    let addr = addr.trim_end_matches('/');
+    if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
+        return Some(socket_addr.ip().to_string());
+    }
+    if let Ok(ip) = addr.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    let host = match addr.rsplit_once(':') {
+        Some((host, port))
+            if !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            host
+        }
+        _ => addr,
+    };
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty() && !host.contains([':', '[', ']', '/'])).then_some(host)
 }
 
 pub struct HeadlessDnsDiscoveryConfig {
@@ -320,6 +368,33 @@ mod tests {
             resolver,
             grpc_port: 50071,
         })
+    }
+
+    #[test]
+    fn advertise_host_is_the_canonical_host_without_port() {
+        for (advertise_addr, expected) in [
+            ("10.0.0.1:50071", Some("10.0.0.1")),
+            (" 10.0.0.1 ", Some("10.0.0.1")),
+            ("[fd00:0::1]:50071", Some("fd00::1")),
+            ("[fd00::1]", Some("fd00::1")),
+            ("fd00::1", Some("fd00::1")),
+            (
+                "Stargate-0.Headless.NS.svc.cluster.local.:50071",
+                Some("stargate-0.headless.ns.svc.cluster.local"),
+            ),
+            ("stargate-0.headless", Some("stargate-0.headless")),
+            ("http://10.0.0.1:50071/", Some("10.0.0.1")),
+            ("https://stargate-0.example:443", Some("stargate-0.example")),
+            ("", None),
+            (":50071", None),
+            ("host:port:50071", None),
+        ] {
+            assert_eq!(
+                advertise_host(advertise_addr).as_deref(),
+                expected,
+                "{advertise_addr:?}"
+            );
+        }
     }
 
     #[test]

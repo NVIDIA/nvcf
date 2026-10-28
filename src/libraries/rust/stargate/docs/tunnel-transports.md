@@ -93,6 +93,18 @@ endpoint so `InferenceServerAck.reverse_tunnel_pylon_dial_addr` tells pylon
 where to dial while `reverse_tunnel_target` remains the per-pod QUIC
 SNI/routing identity.
 
+In direct router mode, used with the Global Discovery Service (GDS) instead of
+`stargate-k8s-router`, pylons dial each Stargate pod. Each pod advertises
+`--advertise-addr=$(POD_IP):50071` and
+`--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072` and sets no
+`--grpc-pylon-dial-addr`. `GdsDiscovery` finds this cluster's GDS router
+record, the one annotated `gds.nvidia.com/router-mode: direct` whose replicas
+include the pod's own IP, and fills `StargateInfo.grpc_pylon_dial_addr` of each
+local Stargate it matches with `<dial scheme>://<pod IP>:<gRPC port>`.
+`advertise_addr` stays the per-pod gRPC authority and `reverse_tunnel_target`
+the QUIC SNI, so registration and tunnel land on the same pod without a relay.
+Pylons need TCP 50071 and UDP 50072 to the router pod IPs.
+
 When a reverse-tunnel dial address resolves to more than one socket address,
 pylon and the WebTransport router try IPv4 candidates first for compatibility,
 then IPv6 candidates, preserving DNS order within each family. They retry those

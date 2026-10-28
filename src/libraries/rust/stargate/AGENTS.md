@@ -72,6 +72,10 @@ Stargate and Pylon read routers from GDS through `crates/gds-client`. See
   returns the GDS `remote_watch_urls` of the other clusters, and
   `control_plane/watch_stargates.rs` unions them with `--remote-stargate-url`
   on every poll tick. Stargate advertises `--grpc-pylon-dial-addr` unchanged.
+  Without that flag, the defaulted `peer_dial_addrs` fills each local
+  Stargate's `grpc_pylon_dial_addr`: `GdsDiscovery` returns pod IP dial URLs
+  when this cluster's router record is in direct mode
+  (`gds.nvidia.com/router-mode: direct`) and lists this pod's IP.
 - `stargate-k8s-router` has no GDS client: it answers `WatchStargates` from
   EndpointSlices with its static remote URLs only.
 - Pylon: `InferenceServerRegistrationConfig.seeds` is a
