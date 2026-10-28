@@ -27,6 +27,11 @@ import com.nvidia.nvcf.util.NvcfUtils;
 import io.micrometer.tracing.Tracer;
 import jakarta.annotation.Nonnull;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.cassandra.CassandraConnectionFailureException;
+import org.springframework.data.cassandra.CassandraInsufficientReplicasAvailableException;
+import org.springframework.data.cassandra.CassandraReadTimeoutException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.WebRequest;
@@ -129,6 +134,19 @@ public class ExceptionTracingExceptionHandler extends BootMvcExceptionHandler {
             WebRequest request) throws Exception {
         return super.handleException(
                 new BadRequestException(ex.getMessage(), ex.getCause()), request);
+    }
+
+    // Keep in sync with GrpcConfiguration; StorageExceptions explains the choice.
+    @ExceptionHandler({
+            CassandraReadTimeoutException.class,
+            CassandraInsufficientReplicasAvailableException.class,
+            TransientDataAccessResourceException.class,
+            CassandraConnectionFailureException.class
+    })
+    protected ResponseEntity<Object> handleStorageUnavailable(
+            DataAccessException ex,
+            WebRequest request) throws Exception {
+        return super.handleException(StorageExceptions.storageUnavailable(ex), request);
     }
 
 }

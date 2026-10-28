@@ -21,11 +21,17 @@ import static com.nvidia.nvcf.util.NvcfConstants.TAG_NCA_ID;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
+import com.nvidia.nvcf.configuration.exceptions.StorageExceptions;
 import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.cassandra.CassandraConnectionFailureException;
+import org.springframework.data.cassandra.CassandraInsufficientReplicasAvailableException;
+import org.springframework.data.cassandra.CassandraReadTimeoutException;
 import org.springframework.grpc.server.GlobalServerInterceptor;
 import org.springframework.grpc.server.advice.GrpcAdvice;
 import org.springframework.grpc.server.advice.GrpcExceptionHandler;
@@ -79,6 +85,17 @@ public class GrpcConfiguration {
             metadata.put(NCA_ID_METADATA_KEY, e.getNcaId());
         }
         return status.asRuntimeException(metadata);
+    }
+
+    // Keep in sync with ExceptionTracingExceptionHandler; StorageExceptions explains the choice.
+    @GrpcExceptionHandler({
+            CassandraReadTimeoutException.class,
+            CassandraInsufficientReplicasAvailableException.class,
+            TransientDataAccessResourceException.class,
+            CassandraConnectionFailureException.class
+    })
+    public Status handleStorageUnavailable(DataAccessException e) {
+        return toGrpcStatus(StorageExceptions.storageUnavailable(e));
     }
 
     @GrpcExceptionHandler
