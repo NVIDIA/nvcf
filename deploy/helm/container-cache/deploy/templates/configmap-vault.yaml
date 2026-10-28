@@ -91,13 +91,19 @@ data:
       "address" = "{{ .Values.vault.vaultAddress }}"
     }
 
+  # The sign-intermediate call must carry an explicit ttl. Without one Vault
+  # applies the mount default, and when that default is longer than the
+  # signing CA's remaining life the request fails with "ttl must be set to
+  # ... or less". trunc_by_ca_not_after is deliberately not used: it would
+  # hand back a certificate whose life is tied to the CA's expiry instead of
+  # a short, predictable rotation period.
   template.hcl: |
     {{ "{{" }} with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/cert/ca_chain` {{ "}}" }}
     {{ "{{" }} .Data.ca_chain | writeToFile "/vault/secrets/certs/ca_chain_proxy.pem" "" "" "0644" {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}
     {{ "{{" }}  with $csrContents := file "/certs/leaf-ca.csr" {{ "}}" }}
     {{ "{{" }}  with $arg := printf "csr=%s" $csrContents {{ "}}" }}
-    {{ "{{" }}  with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/root/sign-intermediate` $arg {{ "}}" }}
+    {{ "{{" }}  with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/root/sign-intermediate` $arg "ttl={{ required "vault.intermediateCertTTL is required when vault.enabled=true" .Values.vault.intermediateCertTTL }}" {{ "}}" }}
     {{ "{{"}}  .Data.certificate |  writeToFile "/vault/secrets/certs/nginx-intermediate.pem" "" "" "0644" {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}

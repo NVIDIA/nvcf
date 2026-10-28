@@ -63,6 +63,7 @@ public class TelemetryService {
     private static final String MESG_DELETED_SECRETS =
             "Account '{}': Deleted secrets";
 
+    private final TelemetryAvailability telemetryAvailability;
     private final EssService essService;
     private final JsonMapper jsonMapper;
     private final TelemetriesByAccountRepository telemetryByAccountRepository;
@@ -71,12 +72,14 @@ public class TelemetryService {
     private final FunctionLookupService functionLookupService;
 
     public TelemetryService(
+            TelemetryAvailability telemetryAvailability,
             EssService essService,
             JsonMapper jsonMapper,
             TelemetriesByAccountRepository telemetryByAccountRepository,
             TelemetryMapperService telemetryMapperService,
             TelemetryLookupService telemetryLookupService,
             FunctionLookupService functionLookupService) {
+        this.telemetryAvailability = telemetryAvailability;
         this.essService = essService;
         this.jsonMapper = jsonMapper;
         this.telemetryByAccountRepository = telemetryByAccountRepository;
@@ -97,6 +100,7 @@ public class TelemetryService {
 
     public TelemetryByAccountEntity saveTelemetry(
             AccountEntity accountEntity, TelemetryRequest telemetryRequest) {
+        telemetryAvailability.requireEnabled();
         validateTelemetryRequest(accountEntity, telemetryRequest);
 
         // Save the Telemetry in the DB.

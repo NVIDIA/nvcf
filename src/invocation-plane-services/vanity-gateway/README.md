@@ -254,6 +254,13 @@ method unavailable, so evaluation continues to the next configured method. For
 existing scalar `perBearerKey` configuration, this changes missing bearer
 credentials from skipping the target to using the implicit random fallback.
 
+`perBearerKey` reads only `Authorization: Bearer`. It never reads `x-api-key`,
+including on `anthropicMessages` routes. A Messages request that authenticates
+only with `x-api-key` has no `perBearerKey` bucket, so evaluation continues to
+the next configured method. It reaches the implicit `random` fallback only if no
+later method can provide a bucket. Use `promptCacheKey` or `firstMessageHash` to
+keep such clients sticky.
+
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
 
@@ -685,6 +692,34 @@ never set this error-origin label. Their telemetry context and metric labeler
 are isolated from the primary request. Status codes and bodies are unchanged.
 Because the metric label set depends on the response status, the label values
 cannot be pre-initialized on the first scrape.
+
+### Outbound call classification
+
+The client histogram, `http_client_request_duration_seconds`, adds bounded
+labels to distinguish calls and failures:
+
+- `gateway_call_kind` is `inference` for proxied requests (including shadows),
+  `poll` for status polls on `/v1/status/{requestId}`, which can long-poll for
+  minutes, and `health` for upstream readiness checks.
+- `error_source` is present on non-2xx responses. It accepts
+  `invocation_service` or `worker` from the upstream `NVCF-Error-Source`
+  response header. Missing or unrecognized values become `unknown`.
+- `error_type` (`error.type` in OpenTelemetry) classifies calls that return
+  a transport error without a usable HTTP response: `canceled`, `timeout`,
+  or `transport_error`.
+
+Until an upstream emits `NVCF-Error-Source`, its non-2xx responses use
+`unknown`. The header is not authenticated today: the invocation service
+relays worker response headers unchanged, so a function can set it. Treat
+`error_source` as authoritative only once the service sets the header and
+drops any value supplied by a worker.
+
+These labels apply only to client metrics. The server
+`gateway_proxy_outcome` and response-header behavior described above remain
+unchanged. Existing queries that aggregate client metrics by all labels will
+see separate call-kind and error-source series. The same labels are also
+recorded on `http_client_request_body_size_bytes`, so queries that aggregate
+that metric by all labels will see extra series too.
 
 ### Request duration boundaries
 

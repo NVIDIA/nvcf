@@ -55,7 +55,7 @@ func (f *fixture) chart(t *testing.T, id, appVersion, values string) {
 func (f *fixture) run(t *testing.T, tag string, write bool) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code, err := Run(f.root, tag, write, &out, &errOut)
+	code, err := Run(f.root, tag, "", write, &out, &errOut)
 	if err != nil {
 		// A returned error is the failure path; surface it on stderr the way the
 		// command does so tests can assert on the message.
@@ -86,19 +86,45 @@ func (f *fixture) source(t *testing.T, path, content string) {
 
 func (f *fixture) tag(t *testing.T, tag string) {
 	t.Helper()
-	commands := [][]string{
-		{"init", "--quiet"},
-		{"add", "."},
-		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "fixture"},
-		{"tag", tag},
+	f.git(t, "init", "--quiet")
+	f.git(t, "add", ".")
+	f.git(t, "commit", "--quiet", "-m", "fixture")
+	f.git(t, "tag", tag)
+}
+
+func (f *fixture) git(t *testing.T, args ...string) {
+	t.Helper()
+	args = append([]string{"-C", f.root, "-c", "user.name=Test", "-c", "user.email=test@example.com"}, args...)
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
-	for _, args := range commands {
-		cmd := exec.Command("git", append([]string{"-C", f.root}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-		}
+}
+
+// onBranches commits the fixture to main, tags mainTag there, then tags
+// branchTag on a commit that only a release branch holds, the way a backport
+// is cut. The work tree is left on main.
+func (f *fixture) onBranches(t *testing.T, mainTag, branchTag string) {
+	t.Helper()
+	f.git(t, "init", "--quiet", "--initial-branch=main")
+	f.git(t, "add", ".")
+	f.git(t, "commit", "--quiet", "-m", "fixture")
+	f.git(t, "tag", mainTag)
+	f.git(t, "switch", "--quiet", "-c", "release-1")
+	f.git(t, "commit", "--quiet", "--allow-empty", "-m", "backport")
+	f.git(t, "tag", branchTag)
+	f.git(t, "switch", "--quiet", "main")
+}
+
+func (f *fixture) runOnBase(t *testing.T, tag, base string) (int, string, string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code, err := Run(f.root, tag, base, true, &out, &errOut)
+	if err != nil {
+		fmt.Fprintln(&errOut, err)
 	}
+	return code, out.String(), errOut.String()
 }
 
 const meta = `{"services":[
@@ -1033,7 +1059,7 @@ func TestWorkerReleasesMoveOnlyTheirOwnAPIChartTags(t *testing.T) {
 
 			release := "99.0.0"
 			var out, errOut bytes.Buffer
-			code, err := Run(f.root, "src/compute-plane-services/"+service+"/v"+release, true, &out, &errOut)
+			code, err := Run(f.root, "src/compute-plane-services/"+service+"/v"+release, "", true, &out, &errOut)
 			if err != nil || code != 0 {
 				t.Fatalf("want a clean bump, got %d, %v\n%s%s", code, err, out.String(), errOut.String())
 			}
@@ -1329,5 +1355,158 @@ func TestApplyPreservesTheQuotingOfEachLine(t *testing.T) {
 	}
 	if got := f.read(t, "bare", "values.yaml"); got != "image:\n  tag: 1.0.1\n" {
 		t.Errorf("bare image tag was quoted:\n%s", got)
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.1", "1.0.0", 1},
+		{"1.0.0", "1.0.0", 0},
+		{"v1.0.0", "1.0.0", 0},
+		{"1.0.0+build.2", "1.0.0+build.1", 0}, // build metadata has no precedence
+		{"1.9.0", "1.10.0", -1},               // numeric, not text
+		{"1.0.0-rc.1", "1.0.0", -1},           // a pre-release sorts below its release
+		{"1.0.0-rc.2", "1.0.0-rc.10", -1},
+		{"1.0.0-1", "1.0.0-alpha", -1}, // numeric identifiers sort below text
+		{"1.0.0-alpha", "1.0.0-alpha.1", -1},
+		// The collector's wrapper scheme: upstream core, then -nv-<release>.
+		{"0.160.0-nv-0.2.9", "0.160.0-nv-0.4.7", -1},
+		{"0.160.0-nv-0.4.7", "0.160.0-nv-0.4.7", 0},
+		{"0.160.0-nv-0.4.8", "0.160.0-nv-0.4.7", 1},
+		{"0.160.0-nv-10.0.0", "0.160.0-nv-9.9.9", 1}, // text order would say nv-1 < nv-9
+		{"0.161.0-nv-0.1.0", "0.160.0-nv-0.4.7", 1},  // a new upstream restarts the wrapper series
+		{"0.157.19", "0.160.0-nv-0.2.3", -1},
+		{"0.160.0-nv-0.1.0", "0.160.0", 1}, // a wrapper is not a pre-release of its upstream
+		{"0.160.0-nv-0.5.0-rc.1", "0.160.0-nv-0.5.0", -1},
+	}
+	for _, c := range cases {
+		got, ok := CompareVersions(c.a, c.b)
+		if !ok {
+			t.Errorf("CompareVersions(%q, %q) was not comparable", c.a, c.b)
+			continue
+		}
+		if sign(got) != c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", c.a, c.b, got, c.want)
+		}
+		if back, _ := CompareVersions(c.b, c.a); sign(back) != -c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", c.b, c.a, back, -c.want)
+		}
+	}
+	for _, c := range [][2]string{{"latest", "1.0.0"}, {"1.0", "1.0.0"}, {"1.0.0", "1.0.1-"}} {
+		if _, ok := CompareVersions(c[0], c[1]); ok {
+			t.Errorf("CompareVersions(%q, %q) should not be comparable", c[0], c[1])
+		}
+	}
+}
+
+func sign(n int) int {
+	switch {
+	case n < 0:
+		return -1
+	case n > 0:
+		return 1
+	}
+	return 0
+}
+
+// collectorMeta mirrors the collector's real edges: the nvca-operator chart
+// names its collector tag paths, and the compute-plane stack repeats them in a
+// values file. The release version carries the -nv-<release> wrapper suffix.
+const collectorMeta = `{"services":[
+ {"id":"byoo-otel-collector","path":"src/compute-plane-services/byoo-otel-collector"},
+ {"id":"op","path":"deploy/helm/op","deploys":[
+  {"service":"byoo-otel-collector","values_paths":["otelCollector.imageTag"]}
+ ]},
+ {"id":"stack","path":"deploy/stacks/s","deploys":[
+  {"service":"byoo-otel-collector","values_files":[{"file":"environments/base.yaml","paths":["global.op.otelCollector.imageTag"]}]}
+ ]}
+]}`
+
+func collectorFixture(t *testing.T, pinned string) *fixture {
+	f := newFixture(t, collectorMeta)
+	f.chart(t, "op", "9.9.9", "otelCollector:\n  imageTag: \""+pinned+"\"")
+	f.source(t, "deploy/stacks/s/environments/base.yaml", "global:\n  op:\n    otelCollector:\n      imageTag: \""+pinned+"\"\n")
+	return f
+}
+
+func (f *fixture) collectorPins(t *testing.T) string {
+	t.Helper()
+	return f.read(t, "op", "values.yaml") + readFile(t, filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+}
+
+func TestCollectorReleaseNeverLowersAPin(t *testing.T) {
+	const pinned = "0.160.0-nv-0.4.7"
+	for _, c := range []struct {
+		name, version, want string
+		moves               bool
+	}{
+		// The backport that opened a downgrade: same upstream, older wrapper.
+		{"lower", "0.160.0-nv-0.2.9", "skipped older release 0.160.0-nv-0.2.9; keeping " + pinned, false},
+		{"equal", pinned, "already " + pinned, false},
+		{"higher", "0.160.0-nv-0.4.8", pinned + " -> 0.160.0-nv-0.4.8", true},
+		{"higher wrapper minor", "0.160.0-nv-0.10.0", pinned + " -> 0.160.0-nv-0.10.0", true},
+		{"higher upstream", "0.161.0-nv-0.1.0", pinned + " -> 0.161.0-nv-0.1.0", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := collectorFixture(t, pinned)
+			before := f.collectorPins(t)
+			code, out, errOut := f.run(t, "src/compute-plane-services/byoo-otel-collector/v"+c.version, true)
+			if code != 0 {
+				t.Fatalf("want exit 0, got %d\n%s%s", code, out, errOut)
+			}
+			for _, id := range []string{"op", "stack"} {
+				if !strings.Contains(out, id+": "+c.want) {
+					t.Errorf("%s: output lacks %q:\n%s", id, c.want, out)
+				}
+			}
+			after := f.collectorPins(t)
+			if !c.moves {
+				if after != before {
+					t.Fatalf("a release not above the pin changed it:\n%s", after)
+				}
+				return
+			}
+			if strings.Count(after, `imageTag: "`+c.version+`"`) != 2 {
+				t.Fatalf("both pins must move to %s:\n%s", c.version, after)
+			}
+		})
+	}
+}
+
+func TestReleaseBranchTagIsSkipped(t *testing.T) {
+	// A backport cut on a release branch publishes a release like any other,
+	// and its version can sort above or below what main pins. Either way it is
+	// that branch's release. Even a higher version moves nothing here.
+	f := full(t)
+	f.onBranches(t, "src/svc/v1.0.1", "src/svc/v1.1.0")
+	before := f.read(t, "agree", "values.yaml")
+
+	code, out, errOut := f.runOnBase(t, "src/svc/v1.1.0", "main")
+	if code != 0 {
+		t.Fatalf("a release-branch tag is a skip, not a failure: code=%d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "src/svc/v1.1.0: skipped, its commit is not on main") {
+		t.Fatalf("the skip must say why:\n%s", out)
+	}
+	if strings.Contains(out, "bump:") || f.read(t, "agree", "values.yaml") != before {
+		t.Fatalf("a release-branch tag moved a pin:\n%s", out)
+	}
+
+	// The same check lets a release from main through.
+	code, out, _ = f.runOnBase(t, "src/svc/v1.0.1", "main")
+	if code != RefusedExit || !strings.Contains(out, "agree: 1.0.0 -> 1.0.1") {
+		t.Fatalf("a tag on main must still bump (drift still refuses): code=%d\n%s", code, out)
+	}
+	if !strings.Contains(f.read(t, "agree", "values.yaml"), `tag: "1.0.1"`) {
+		t.Fatal("a tag on main did not move the pin")
+	}
+
+	// A tag that does not resolve is an error, never a skip.
+	code, _, errOut = f.runOnBase(t, "src/svc/v9.9.9", "main")
+	if code != 1 || !strings.Contains(errOut, "check whether src/svc/v9.9.9 is on main") {
+		t.Fatalf("a missing tag must fail: code=%d\n%s", code, errOut)
 	}
 }

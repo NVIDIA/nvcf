@@ -112,6 +112,8 @@ type StreamDirector struct {
 	cors            *cors.Cors
 }
 
+var errShuttingDown = errors.New("proxy is shutting down")
+
 // workerConnectionKey
 // when a worker connects back to the proxy (this service), it sends a request id and an auth token
 // specific to the connection it wants to form. Since multiple connections are allowed per request
@@ -577,7 +579,17 @@ func (s *StreamDirector) RegisterWorker(requestId uuid.UUID, workerAuthToken str
 	if w == nil {
 		return fmt.Errorf("worker connection not found for request id %s", requestId)
 	}
-	return w.Value().SetConnection(workerLink)
+	if err := w.Value().SetConnection(workerLink); err != nil {
+		return err
+	}
+	// A tunnel accepted after Close drained the cache would never be closed.
+	// Deleting the entry closes it through the same eviction path as every
+	// other tunnel. If Close starts after this check, its drain closes it.
+	if s.shuttingDown.Load() {
+		s.workers.Delete(key)
+		return errShuttingDown
+	}
+	return nil
 }
 
 func (s *StreamDirector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
