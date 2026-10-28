@@ -8,6 +8,7 @@ go_library(
         "h2.go",
         "health.go",
         "llm_gateway_director.go",
+        "native_errors.go",
         "openai_director.go",
         "shadow.go",
         "shadow_metrics.go",
@@ -62,6 +63,7 @@ go_test(
     name = "gateway_test",
     srcs = [
         "client_metrics_test.go",
+        "decision_routes_test.go",
         "error_origin_test.go",
         "gateway_test.go",
         "h2_test.go",
