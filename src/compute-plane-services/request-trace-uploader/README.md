@@ -52,7 +52,9 @@ volume, so every step survives a restart.
 Faults follow `internal/retry`: auth failures and outages hold every submit
 without moving a segment; a segment fault quarantines that segment after a
 batch is split to find it. A backend that records its own metrics implements
-`telemetry.Receiver` and gets the shared recorder.
+`telemetry.Receiver` and gets the shared recorder. This binary records metrics
+through the `telemetry` package but does not export them; a distribution
+passes its own recorder in `service.Options.Metrics`.
 
 The `backend` package defines the export destination contract and a registry.
 Submit and status are separate operations so a slow confirmation cannot block
