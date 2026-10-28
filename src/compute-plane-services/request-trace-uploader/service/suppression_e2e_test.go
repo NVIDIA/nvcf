@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -173,5 +174,39 @@ func TestNoHeaderWarningOnceAHeaderIsSeen(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "suppression header") {
 		t.Fatalf("warned although a header was seen:\n%s", logs)
+	}
+}
+
+func TestATransportPreparedUnderAnotherPolicyIsPreparedAgainAfterARestart(t *testing.T) {
+	if uploadertest.CrashChild() {
+		t.Skip("runs only in the parent")
+	}
+	landing := t.TempDir()
+	spool, closed := spoolWith(t, []string{suppressedLine})
+	// The child prepares with suppression off and is killed before it
+	// submits.
+	result := uploadertest.RunCrash(t, "TestCrashChildRunsThePipeline", service.PointPrepared,
+		envCrashSpool+"="+spool.Dir, envCrashLanding+"="+landing)
+	if !result.Killed || result.Point != service.PointPrepared {
+		t.Fatalf("child was not killed at %s:\n%s", service.PointPrepared, result.Output)
+	}
+
+	logs := captureLogs(t)
+	restarted := newUploader(t, spool, dirBackend{root: landing}, service.Options{}, map[string]string{config.EnvSuppressNCAIDs: "nca-acme-nca"})
+	passUntil(t, restarted, func() bool { return gone(closed[0]) })
+	files, err := filepath.Glob(filepath.Join(landing, "*", "*.jsonl.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported []string
+	for _, file := range files {
+		exported = append(exported, readGzipLines(t, file)...)
+	}
+	joined := strings.Join(exported, "\n")
+	if strings.Contains(joined, "secret") || !strings.Contains(joined, `"payload_suppressed":true`) {
+		t.Fatalf("exported = %s, want the record suppressed under the policy now configured", joined)
+	}
+	if strings.Contains(logs.String(), "nca-acme-nca") {
+		t.Fatalf("logs carry a configured suppression value:\n%s", logs)
 	}
 }

@@ -100,6 +100,10 @@ type Transport struct {
 	SHA256 string `json:"sha256"`
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
+	// Policy fingerprints the record handling the transport was written
+	// under: suppression, redaction and format. It is a hash, never the
+	// configured values.
+	Policy string `json:"policy,omitempty"`
 }
 
 // Destination is one segment's progress toward one backend destination, for

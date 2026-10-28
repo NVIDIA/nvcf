@@ -89,12 +89,14 @@ type Options struct {
 // success. Every step is recorded first, so a restart resumes from the
 // journal: a saved job id is polled, never submitted again.
 type Uploader struct {
-	cfg        config.Config
-	client     backend.Client
-	caps       backend.Capabilities
-	name       string
-	preparer   *transform.Preparer
-	factory    format.Factory
+	cfg      config.Config
+	client   backend.Client
+	caps     backend.Capabilities
+	name     string
+	preparer *transform.Preparer
+	factory  format.Factory
+	// prepPolicy fingerprints how records are handled; see recordPolicy.
+	prepPolicy string
 	faults     retry.Config
 	policy     *retry.Policy
 	metrics    telemetry.Metrics
@@ -156,6 +158,10 @@ func NewUploader(cfg config.Config, client backend.Client, opts Options) (*Uploa
 	if err != nil {
 		return nil, err
 	}
+	prepPolicy, err := recordPolicy(prepareConfig, factory.Format())
+	if err != nil {
+		return nil, err
+	}
 	faults := retry.DefaultConfig()
 	if opts.Faults != nil {
 		faults = *opts.Faults
@@ -195,6 +201,7 @@ func NewUploader(cfg config.Config, client backend.Client, opts Options) (*Uploa
 		name:         string(cfg.Backend),
 		preparer:     preparer,
 		factory:      factory,
+		prepPolicy:   prepPolicy,
 		faults:       faults,
 		policy:       policy,
 		metrics:      metrics,
@@ -395,6 +402,9 @@ func (u *Uploader) open(ctx context.Context) error {
 	}
 	if plan.PreparesReset > 0 || plan.BackendResets > 0 {
 		slog.Info("recovered the journal", "prepares_reset", plan.PreparesReset, "backend_resets", plan.BackendResets)
+	}
+	if err := u.reprepareStale(); err != nil {
+		return fmt.Errorf("discard transports prepared under another policy: %w", err)
 	}
 	u.cleaner = cleanup.New(cleanupJournal{store: store, point: u.point}, spoolIndex{dir: u.cfg.SourceDir}, cleanup.Options{Counter: counterFor(u.metrics)})
 	u.batcher, err = batch.New(batch.DefaultConfig(), batch.Limits{

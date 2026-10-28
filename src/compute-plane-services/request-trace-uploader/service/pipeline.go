@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -273,7 +274,7 @@ func (u *Uploader) prepare(ctx context.Context, item segment.Segment, seg journa
 	}
 	transports := make(map[string]journal.Transport, len(outputs))
 	for _, output := range outputs {
-		transports[laneOf(output.Destination)] = journal.Transport{Path: output.Path, SHA256: output.SHA256, Rows: output.Rows, Bytes: output.Bytes}
+		transports[laneOf(output.Destination)] = journal.Transport{Path: output.Path, SHA256: output.SHA256, Rows: output.Rows, Bytes: output.Bytes, Policy: u.prepPolicy}
 	}
 	if err := u.store.MarkPrepared(seg.ID, u.name, transports); err != nil {
 		return err
@@ -281,6 +282,53 @@ func (u *Uploader) prepare(ctx context.Context, item segment.Segment, seg journa
 	u.point(PointPrepared)
 	slog.Info("prepared request trace segment", "segment", item.Index, "records", result.Written)
 	return nil
+}
+
+// recordPolicy fingerprints everything that decides what a transport holds:
+// the read bounds, suppression rules and headerless policy, redaction, and
+// the format. Only the hash is kept or logged, never the configured values.
+func recordPolicy(cfg transform.Config, f backend.Format) (string, error) {
+	raw, err := json.Marshal(struct {
+		Transform transform.Config
+		Format    backend.Format
+	}{cfg, f})
+	if err != nil {
+		return "", fmt.Errorf("fingerprint the record policy: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:16]), nil
+}
+
+// reprepareStale discards unsent transports written under a record policy
+// other than the one now configured, so newly enabled suppression or
+// redaction applies to them. Their segments are prepared again from the
+// source, which is still on the spool. Transports already in a batch may
+// have been sent and are left alone.
+func (u *Uploader) reprepareStale() error {
+	var errs []error
+	discarded := 0
+	for _, seg := range u.store.Segments() {
+		if seg.State != journal.StatePrepared || seg.Backend != u.name {
+			continue
+		}
+		stale, batched := false, false
+		for _, dest := range seg.Destinations {
+			stale = stale || dest.Transport.Policy != u.prepPolicy
+			batched = batched || dest.BatchID != ""
+		}
+		if !stale || batched {
+			continue
+		}
+		if err := u.store.Reprepare(seg.ID); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		discarded++
+	}
+	if discarded > 0 {
+		slog.Info("record policy changed; unsent segments are prepared again", "segments", discarded)
+	}
+	return errors.Join(errs...)
 }
 
 // quarantineSegment records a quarantine and then moves the files, so a crash

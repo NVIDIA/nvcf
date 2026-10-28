@@ -331,3 +331,25 @@ func indexOf(list []string, item string) int {
 	}
 	return -1
 }
+
+func TestReprepareResetsOnlyAnUnbatchedPreparedSegment(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 2, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids[1:], transports[1:]))
+
+	if err := store.Reprepare(ids[0]); err != nil {
+		t.Fatalf("Reprepare of an unbatched segment: %v", err)
+	}
+	seg := mustState(t, store, ids[0], journal.StateDiscovered)
+	if len(seg.Destinations) != 0 {
+		t.Fatalf("destinations = %v, want the transports dropped", seg.Destinations)
+	}
+	if _, err := os.Stat(transports[0]["primary"].Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("transport stat = %v, want it removed", err)
+	}
+	if err := store.Reprepare(ids[1]); !errors.Is(err, journal.ErrInvalidTransition) {
+		t.Fatalf("Reprepare of a batched segment error = %v, want ErrInvalidTransition", err)
+	}
+	mustState(t, store, ids[1], journal.StateSubmitting)
+}
