@@ -73,6 +73,8 @@ render "${default_manifest}"
 ! stargate_args "${default_manifest}" | grep -q -- '^--gds-' || fail "default must not render GDS flags"
 [ "$(yq -r 'select(.kind == "Service") | .metadata.labels["gds.nvidia.com/export"] // ""' "${default_manifest}" | grep -c true || true)" = "0" ] ||
   fail "default must not export any Service"
+[ "$(yq -r 'select(.kind == "Service") | .metadata.annotations["gds.nvidia.com/quic-port-name"] // ""' "${default_manifest}" | grep -c . || true)" = "0" ] ||
+  fail "default must not annotate any Service with a QUIC port name"
 
 # enabled renders the Stargate flags; the CA ConfigMap is mounted.
 gds_manifest="${tmp_dir}/gds.yaml"
@@ -149,6 +151,10 @@ backend_router="llm-request-router-backend-router"
   fail "export must label the backend-router Service gds.nvidia.com/role=router"
 [ "$(service_field "${export_manifest}" "${backend_router}" '.metadata.annotations["gds.nvidia.com/dial-scheme"]')" = "http" ] ||
   fail "export must annotate the backend-router Service with dial scheme http by default"
+[ "$(service_field "${export_manifest}" "${backend_router}" '.metadata.annotations["gds.nvidia.com/quic-port-name"]')" = "quic" ] ||
+  fail "export must annotate the backend-router Service with QUIC port name quic"
+[ "$(service_field "${export_manifest}" "${backend_router}" '.spec.ports[] | select(.name == "quic") | .protocol')" = "UDP" ] ||
+  fail "the backend-router Service must have the UDP port the QUIC port name annotation names"
 [ "$(service_field "${export_manifest}" "${backend_router}" '.spec.ports[] | select(.name == "grpc") | .port')" = \
   "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .spec.template.spec.containers[0].ports[] | select(.name == "grpc") | .containerPort' "${export_manifest}")" ] ||
   fail "the exported gRPC port must equal the backend router's container port, the seed port"
@@ -171,7 +177,25 @@ render "${single_manifest}" \
   fail "without the backend router, the ClusterIP Service must be the router"
 [ "$(service_field "${single_manifest}" llm-request-router '.metadata.annotations["gds.nvidia.com/dial-scheme"]')" = "https" ] ||
   fail "dialScheme must reach the annotation"
+[ "$(service_field "${single_manifest}" llm-request-router '.metadata.annotations["gds.nvidia.com/quic-port-name"]')" = "quic" ] ||
+  fail "without the backend router, export must annotate the ClusterIP Service with QUIC port name quic"
+[ "$(service_field "${single_manifest}" llm-request-router '.spec.ports[] | select(.name == "quic") | .protocol')" = "UDP" ] ||
+  fail "the ClusterIP Service must have the UDP port the QUIC port name annotation names"
 [ "$(service_field "${single_manifest}" llm-request-router-headless '.metadata.labels["gds.nvidia.com/export"] // ""')" = "" ] ||
   fail "the headless Service is never exported"
+
+# Without a reverse tunnel listener the ClusterIP Service has no QUIC port, so
+# the export names none.
+no_quic_manifest="${tmp_dir}/no-quic.yaml"
+render "${no_quic_manifest}" \
+  --set llmRequestRouter.replicaCount=1 \
+  --set llmRequestRouter.globalDiscovery.export.enabled=true \
+  --set-string llmRequestRouter.transport.reverseTunnelListenAddr=
+[ -z "$(service_field "${no_quic_manifest}" llm-request-router '.spec.ports[] | select(.name == "quic") | .name')" ] ||
+  fail "no QUIC port without transport.reverseTunnelListenAddr"
+[ "$(service_field "${no_quic_manifest}" llm-request-router '.metadata.annotations["gds.nvidia.com/quic-port-name"] // ""')" = "" ] ||
+  fail "no QUIC port name annotation without a QUIC port"
+[ "$(service_field "${no_quic_manifest}" llm-request-router '.metadata.annotations["gds.nvidia.com/dial-scheme"]')" = "http" ] ||
+  fail "the dial scheme annotation stays without a QUIC port"
 
 echo "global discovery render checks passed"
