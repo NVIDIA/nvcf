@@ -20,6 +20,7 @@ go_library(
         "@io_opentelemetry_go_otel_sdk//resource",
         "@io_opentelemetry_go_otel_sdk_metric//:metric",
         "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 
@@ -33,6 +34,7 @@ go_test(
     name = "telemetry_test",
     srcs = [
         "errors_test.go",
+        "otlp_env_test.go",
         "otlp_test.go",
         "receiver_test.go",
         "safe_test.go",

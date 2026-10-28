@@ -21,6 +21,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -168,35 +169,40 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 	return o, nil
 }
 
+// newExporter passes every setting the exporters would otherwise read from
+// OTEL_EXPORTER_OTLP_* variables, so only the endpoint and protocol decide
+// the export. TLS is set for both schemes: an http endpoint gets none, which
+// also clears a certificate the environment named, and an https endpoint
+// gets the system roots with no client certificate.
 func newExporter(ctx context.Context, cfg OTLPConfig) (sdkmetric.Exporter, error) {
-	secure := strings.HasPrefix(cfg.Endpoint, "https://")
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	var tlsConfig *tls.Config
+	if strings.HasPrefix(cfg.Endpoint, "https://") {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	if cfg.Protocol == ProtocolGRPC {
-		options := []otlpmetricgrpc.Option{
+		transport := insecure.NewCredentials()
+		if tlsConfig != nil {
+			transport = credentials.NewTLS(tlsConfig)
+		}
+		return otlpmetricgrpc.New(ctx,
 			otlpmetricgrpc.WithEndpointURL(cfg.Endpoint),
+			otlpmetricgrpc.WithTLSCredentials(transport),
 			otlpmetricgrpc.WithHeaders(map[string]string{}),
 			otlpmetricgrpc.WithTimeout(exportTimeout),
 			otlpmetricgrpc.WithCompressor(""),
 			otlpmetricgrpc.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector),
 			otlpmetricgrpc.WithAggregationSelector(sdkmetric.DefaultAggregationSelector),
-		}
-		if secure {
-			options = append(options, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(tlsConfig)))
-		}
-		return otlpmetricgrpc.New(ctx, options...)
+		)
 	}
-	options := []otlpmetrichttp.Option{
+	return otlpmetrichttp.New(ctx,
 		otlpmetrichttp.WithEndpointURL(cfg.Endpoint),
+		otlpmetrichttp.WithTLSClientConfig(tlsConfig),
 		otlpmetrichttp.WithHeaders(map[string]string{}),
 		otlpmetrichttp.WithTimeout(exportTimeout),
 		otlpmetrichttp.WithCompression(otlpmetrichttp.NoCompression),
 		otlpmetrichttp.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector),
 		otlpmetrichttp.WithAggregationSelector(sdkmetric.DefaultAggregationSelector),
-	}
-	if secure {
-		options = append(options, otlpmetrichttp.WithTLSClientConfig(tlsConfig))
-	}
-	return otlpmetrichttp.New(ctx, options...)
+	)
 }
 
 func (o *OTLP) Add(name string, delta float64, labels Labels) {
