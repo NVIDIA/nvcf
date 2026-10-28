@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Direct router mode for phase 3 (E2E_ROUTER_MODE=direct, the default), on
+# top of router-values.yaml: two Stargate replicas of a Deployment without
+# the backend router, with globalDiscovery enabled. The exported ClusterIP
+# Service selects the Stargate pods, each pod advertises its pod IP for gRPC
+# and the reverse tunnel, and the Pylon in b dials each pod. The hostname
+# template is each pod's identity (gRPC authority and QUIC SNI); Pylon only
+# sends it, so it needs no DNS entry in b.
+llmRequestRouter:
+  replicaCount: 2
+  backendRouter:
+    enabled: false
+  kubernetes:
+    advertisedHostnameTemplate: "{pod_name}.llm-request-router-headless.{namespace}.svc.cluster.local"

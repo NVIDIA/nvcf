@@ -15,9 +15,11 @@
 
 # Values of the llm-request-router chart (Stargate) for phase 3 in cluster a:
 # one replica, no backend router, open worker auth, and the GDS export of the
-# router Service. run.sh adds the image, the globalDiscovery URLs and ids, and
-# kubernetes.advertisedHostnameTemplate (a name the Pylon in b resolves) with
-# --set.
+# router Service. run.sh adds the image and the globalDiscovery URLs and ids
+# with --set. With E2E_ROUTER_MODE=direct (the default) it adds
+# router-direct-values.yaml (two replicas in direct mode); with
+# E2E_ROUTER_MODE=single it sets kubernetes.advertisedHostnameTemplate to a
+# name the Pylon in b resolves through a hosts entry.
 llmRequestRouter:
   replicaCount: 1
   image:

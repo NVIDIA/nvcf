@@ -18,10 +18,14 @@
 # through GDS (--gds-url, no --stargate-address). run.sh replaces the
 # __...__ placeholders and applies it in the pylon namespace.
 #
-# Registration dials the Stargate pod IP from GDS. The reverse tunnel dials
-# the hostname Stargate advertises (__ROUTER_HOST__), which a deployment
-# serves from DNS or a load balancer reachable from every cluster (design
-# 4.5); here a hosts entry maps it to the Stargate pod IP.
+# Registration dials the Stargate pod IPs from GDS. In direct router mode
+# (E2E_ROUTER_MODE=direct) the reverse tunnel dials each Stargate pod IP as
+# well, with the pod's hostname only as SNI, so run.sh removes the hosts
+# entry between the router-mode markers. With one Stargate replica
+# (E2E_ROUTER_MODE=single) the reverse tunnel dials the hostname Stargate
+# advertises (__ROUTER_HOST__), which a deployment serves from DNS or a load
+# balancer reachable from every cluster (design 4.5); here the hosts entry
+# maps it to the Stargate pod IP.
 #
 # The Pylon is also the PYLON agent of pool e2e-pylon in its cluster
 # (--cluster-id), from both sources: it registers itself with
@@ -64,10 +68,12 @@ spec:
         app: gds-e2e-pylon
     spec:
       terminationGracePeriodSeconds: 5
+      # router-mode single: begin
       hostAliases:
         - ip: __ROUTER_IP__
           hostnames:
             - __ROUTER_HOST__
+      # router-mode single: end
       containers:
         - name: backend
           image: __SAMPLE_IMAGE__
