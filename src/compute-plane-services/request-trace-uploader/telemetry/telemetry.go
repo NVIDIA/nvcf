@@ -114,7 +114,20 @@ type Instrument struct {
 	// Values enumerates the allowed values of a label key. A counter whose
 	// keys are all enumerated is preset to zero for every combination.
 	Values map[string][]string
+	// Buckets are a histogram's explicit upper bounds, chosen for its unit.
+	// Other kinds have none.
+	Buckets []float64
 }
+
+// Histogram boundaries by unit.
+var (
+	// secondsBuckets span a sub-second call to a confirmation a day later.
+	secondsBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400}
+	// bytesBuckets span 1 KiB to the 8 GiB a single job may carry.
+	bytesBuckets = []float64{1 << 10, 16 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20, 256 << 20, 1 << 30, 4 << 30, 8 << 30}
+	// countBuckets span one segment to the 500 files a single job may carry.
+	countBuckets = []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512}
+)
 
 var allowedLabelKeys = map[string]bool{
 	BackendLabel:  true,
@@ -142,10 +155,10 @@ var SuppressionActions = []string{"strip_payload", "drop_record"}
 
 var catalog = []Instrument{
 	{Name: Uploads, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
-	{Name: UploadDuration, Kind: Histogram, Unit: "s"},
+	{Name: UploadDuration, Kind: Histogram, Unit: "s", Buckets: secondsBuckets},
 	{Name: SourceBytes, Kind: Counter, Unit: "By"},
 	{Name: TransportBytes, Kind: Counter, Unit: "By"},
-	{Name: ConfirmLatency, Kind: Histogram, Unit: "s"},
+	{Name: ConfirmLatency, Kind: Histogram, Unit: "s", Buckets: secondsBuckets},
 	{Name: RecordsDropped, Kind: Counter, Unit: "1", Labels: []string{"record_type", "reason"}},
 	{Name: Deletions, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
 	{Name: PendingSegments, Kind: Gauge, Unit: "1"},
@@ -165,8 +178,8 @@ var catalog = []Instrument{
 	{Name: SpoolFreeBytes, Kind: Gauge, Unit: "By"},
 	{Name: PendingBytes, Kind: Gauge, Unit: "By"},
 	{Name: OldestPendingAge, Kind: Gauge, Unit: "s"},
-	{Name: BatchSegments, Kind: Histogram, Unit: "1"},
-	{Name: BatchBytes, Kind: Histogram, Unit: "By"},
+	{Name: BatchSegments, Kind: Histogram, Unit: "1", Buckets: countBuckets},
+	{Name: BatchBytes, Kind: Histogram, Unit: "By", Buckets: bytesBuckets},
 	{Name: BatchSplits, Kind: Counter, Unit: "1"},
 	{Name: LeftoversRemoved, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
 	{Name: LeftoversKept, Kind: Counter, Unit: "1", Labels: []string{"kind"}},

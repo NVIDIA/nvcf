@@ -35,6 +35,7 @@ alias(
 go_test(
     name = "telemetry_test",
     srcs = [
+        "buckets_test.go",
         "errors_test.go",
         "otlp_env_test.go",
         "otlp_test.go",

@@ -161,7 +161,7 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 		case Gauge:
 			o.gauges[instrument.Name], err = meter.Float64Gauge(name, unit)
 		case Histogram:
-			o.histograms[instrument.Name], err = meter.Float64Histogram(name, unit)
+			o.histograms[instrument.Name], err = meter.Float64Histogram(name, unit, metric.WithExplicitBucketBoundaries(instrument.Buckets...))
 		}
 		if err != nil {
 			_ = o.provider.Shutdown(ctx)
