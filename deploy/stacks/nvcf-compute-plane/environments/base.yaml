@@ -127,6 +127,18 @@ global:
       # InfraResourceOverhead on while any Enforce*ResourceLimits gate is on.
       # Example: ["SelfHosted", "LogPosting"]
       featureGateValues: []
+    agent:
+      # PEM bundle of the CA that signs the certificate workers see on TLS
+      # callbacks to the control plane, whether they call grpc-proxy directly
+      # or go through a callback proxy. Function pods receive it as
+      # NVCF_PROXY_CA_PEM and trust it in addition to the system roots. Leave
+      # empty when callbacks use plain HTTP or a publicly trusted certificate.
+      # Only function pods created after the change receive it.
+      # workerCallbackCaPem: |
+      #   -----BEGIN CERTIFICATE-----
+      #   ...
+      #   -----END CERTIFICATE-----
+      workerCallbackCaPem: ""
 
   # =============================================================================
   # Node Selector / Toleration Overlays
