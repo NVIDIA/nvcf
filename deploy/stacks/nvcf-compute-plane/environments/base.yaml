@@ -100,6 +100,10 @@ global:
       # reference here alongside the repository below.
       sharedStorage:
         imageTag: "1.0.9"
+      # The chart default predates the numeric non-root image user, so pin a
+      # credential helper release that runs as a non-root user.
+      imageCredHelper:
+        imageTag: "0.11.4"
       nvcaVersion: "3.18.6"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
