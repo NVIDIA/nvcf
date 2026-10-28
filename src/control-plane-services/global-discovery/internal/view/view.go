@@ -21,7 +21,7 @@ limitations under the License.
 // The view holds the raw store records of each clusterset and derives from
 // them the objects the API returns: clusters with their lease state, merged
 // ServiceImports (internal/registry/merge), Pools (labelled exports merged
-// with API pool records) and Routers. Every change of a derived object is
+// with API pool records and pool agent registrations) and Routers. Every change of a derived object is
 // numbered with a per-clusterset sequence and recorded in a ring buffer, so
 // that watchers can resume (revision "view_epoch:seq").
 //
@@ -32,8 +32,8 @@ limitations under the License.
 //   - API handlers apply their own successful writes immediately
 //     (ApplyCluster, ApplyExport, ... : the write-through, or ApplyLocal,
 //     family), so a writer reads its write at once on this replica.
-//   - EvaluateLeases re-evaluates leases every lease evaluation interval
-//     without a store read.
+//   - EvaluateLeases re-evaluates cluster, pool and pool agent leases every
+//     lease evaluation interval without a store read.
 //
 // A refresh that started before a local write cannot undo it: writes applied
 // locally win over a snapshot for LocalWriteWindow unless the snapshot holds
@@ -378,6 +378,9 @@ func (v *View) Records(clusterSet string) store.ClusterSetSnapshot {
 	}
 	for _, r := range cs.pools {
 		snap.Pools = append(snap.Pools, r.Clone())
+	}
+	for _, r := range cs.agents {
+		snap.PoolAgents = append(snap.PoolAgents, r.Clone())
 	}
 	snap.Sort()
 	return snap

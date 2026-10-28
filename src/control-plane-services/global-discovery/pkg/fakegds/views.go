@@ -417,13 +417,13 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 	p.ReadyEndpointCount = readyFrontend
 	p.UpdatedAt = timestamppb.New(updated)
 	in := registry.PoolStateInput{
-		LabelledExport:     len(a.exports) > 0,
-		Overlay:            a.rec != nil,
-		OverlayServices:    a.rec != nil && len(a.rec.p.GetServices()) > 0,
-		ClusterLeaseActive: active[a.cluster],
-		PoolLeaseActive:    p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
-		ReadyEndpoints:     int(readyTotal),
-		Started:            a.rec != nil && a.rec.started,
+		LabelledExport:        len(a.exports) > 0,
+		Overlay:               a.rec != nil,
+		OverlayServices:       a.rec != nil && len(a.rec.p.GetServices()) > 0,
+		ClusterLeaseActive:    active[a.cluster],
+		PoolLeaseActive:       p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
+		ReadyIngressEndpoints: int(readyTotal),
+		Started:               a.rec != nil && a.rec.started,
 	}
 	if p.GetDesiredState() == gdsv1.PoolState_POOL_STATE_DRAINING {
 		in.Desired = registry.PoolStateDraining

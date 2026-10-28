@@ -55,6 +55,7 @@ alias(
 go_test(
     name = "view_test",
     srcs = [
+        "agents_test.go",
         "helpers_test.go",
         "hub_test.go",
         "loops_test.go",

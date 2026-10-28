@@ -53,9 +53,13 @@ type CompactorOptions struct {
 //     everything it owns (store.DeleteCluster);
 //   - exports and pools of an unregistered cluster, and endpoint sets
 //     without an export, not updated for Retention;
+//   - pool agent registrations whose lease expired more than Retention
+//     ago, and registrations without a lease not updated for Retention;
 //   - API pools whose lease expired more than Retention ago, and API pool
 //     records without a lease (overlays of label-derived pools) whose
 //     labelled exports are gone and that were not updated for Retention.
+//     A pool record is kept while an agent registration of the pool
+//     remains, since deleting the pool would remove the registrations.
 //
 // Every replica compacts. Deletes are idempotent, so concurrent compactors
 // agree. The store has no conditional delete; a cluster is re-read just
@@ -172,7 +176,7 @@ func (c *Compactor) compactClusterSet(ctx context.Context, cs string) error {
 			continue
 		}
 		exports[r.Key] = true
-		if _, ok := poolRole(r.Spec.Labels); ok {
+		if len(poolRoles(r.Spec.Labels, r.Spec.Annotations)) > 0 {
 			labelled[poolIdent{cluster: r.Key.Cluster, name: r.Spec.Labels[api.LabelPool]}] = true
 		}
 		if registered[r.Key.Cluster] || !old(r.UpdatedAt) {
@@ -197,8 +201,32 @@ func (c *Compactor) compactClusterSet(ctx context.Context, cs string) error {
 		c.view.ApplyEndpointSetDelete(r.Key)
 		c.deleted(metrics.RecordEndpointSet, 1)
 	}
-	for _, r := range snap.Pools {
+	// Agent registrations go first, so that a pool record outlives them.
+	withAgents := map[poolIdent]bool{}
+	for _, r := range snap.PoolAgents {
 		if gone[r.Key.Cluster] {
+			continue
+		}
+		stale := c.dead(r.Lease, now)
+		if r.Lease.Epoch == 0 {
+			stale = old(r.UpdatedAt)
+		}
+		if !stale {
+			withAgents[poolIdent{cluster: r.Key.Cluster, name: r.PoolName}] = true
+			continue
+		}
+		if err := c.store.DeletePoolAgent(ctx, r.Key); err != nil {
+			errs = append(errs, fmt.Errorf("delete pool agent %s/%s/%s: %w", r.Key.PoolID, r.Key.Role, r.Key.AgentID, err))
+			withAgents[poolIdent{cluster: r.Key.Cluster, name: r.PoolName}] = true
+			continue
+		}
+		c.view.ApplyPoolAgentDelete(r.Key)
+		c.deleted(metrics.RecordPoolAgent, 1)
+		log.Info("compacted stale pool agent registration", zap.String("cluster", r.Key.Cluster), zap.String("pool_id", r.Key.PoolID),
+			zap.String("role", string(r.Key.Role)), zap.String("agent_id", r.Key.AgentID))
+	}
+	for _, r := range snap.Pools {
+		if gone[r.Key.Cluster] || withAgents[poolIdent{cluster: r.Key.Cluster, name: r.Name}] {
 			continue
 		}
 		var stale bool
