@@ -373,3 +373,47 @@ func TestLoadFromEnvReadsExposeRouterErrorCodes(t *testing.T) {
 		t.Fatal("NVCF_GATEWAY_EXPOSE_ROUTER_ERROR_CODES=true was not applied")
 	}
 }
+
+func TestLoadFromEnvDecisionImageTokens(t *testing.T) {
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens <= 0 {
+		t.Fatalf("default decision image tokens = %d, want a positive default", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "2048")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 2048 {
+		t.Fatalf("decision image tokens = %d, want 2048", cfg.DecisionImageTokens)
+	}
+
+	t.Setenv("NVCF_DECISION_IMAGE_TOKENS", "0")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.DecisionImageTokens != 0 {
+		t.Fatalf("decision image tokens = %d, want 0 (images not counted)", cfg.DecisionImageTokens)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidDecisionImageTokens(t *testing.T) {
+	for _, value := range []string{"-1", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_DECISION_IMAGE_TOKENS", value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "NVCF_DECISION_IMAGE_TOKENS") {
+				t.Fatalf("error %q does not mention NVCF_DECISION_IMAGE_TOKENS", err.Error())
+			}
+		})
+	}
+}
