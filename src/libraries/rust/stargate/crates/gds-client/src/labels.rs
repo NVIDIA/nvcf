@@ -89,7 +89,10 @@ pub fn is_exported<'a>(mut labels: impl Iterator<Item = (&'a String, &'a String)
 
 /// Whether `role` is a value of [`LABEL_ROLE`].
 pub fn is_role(role: &str) -> bool {
-    matches!(role, ROLE_ROUTER | ROLE_POOL_FRONTEND | ROLE_KV_RELAY | ROLE_PYLON)
+    matches!(
+        role,
+        ROLE_ROUTER | ROLE_POOL_FRONTEND | ROLE_KV_RELAY | ROLE_PYLON
+    )
 }
 
 /// Whether `role` attaches an export to a pool.
@@ -173,7 +176,10 @@ mod tests {
         assert_eq!(parse_roles(Some("pylon"), None), vec!["pylon"]);
         assert_eq!(parse_roles(Some("router"), None), Vec::<String>::new());
         assert_eq!(
-            parse_roles(Some("kv-relay"), Some(" pool-frontend, pylon ,router,pylon")),
+            parse_roles(
+                Some("kv-relay"),
+                Some(" pool-frontend, pylon ,router,pylon")
+            ),
             vec!["pool-frontend", "pylon"]
         );
         assert_eq!(parse_roles(Some("kv-relay"), Some("  ")), vec!["kv-relay"]);
