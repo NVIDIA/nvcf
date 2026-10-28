@@ -55,11 +55,51 @@ type anthropicError struct {
 	Message string `json:"message"`
 }
 
+type systemOneErrorResponse struct {
+	Error     systemOneError `json:"error"`
+	RequestID string         `json:"request_id"`
+}
+
+type systemOneError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+}
+
+// errorShape is the error envelope an endpoint speaks.
+type errorShape int
+
+const (
+	shapeOpenAI errorShape = iota
+	shapeAnthropic
+	shapeSystemOne
+)
+
+// errInvalidJSON marks a 400 caused by a body that is not valid JSON, so the
+// System One shape can report invalid_json instead of invalid_request.
+var errInvalidJSON = errors.New("request body is not valid JSON")
+
+// errorShapeFor returns the error envelope for the request's endpoint:
+// Anthropic on /v1/messages, System One on /v1/systemone and OpenAI everywhere
+// else, including /v1/decisions.
+func errorShapeFor(r *http.Request) errorShape {
+	switch r.URL.Path {
+	case messagesEndpointPath:
+		return shapeAnthropic
+	case systemOneEndpointPath:
+		return shapeSystemOne
+	default:
+		return shapeOpenAI
+	}
+}
+
 // newHTTPErrorHandler renders every error the gateway or the request router
-// produces in the endpoint's native envelope: Anthropic on /v1/messages and
-// OpenAI everywhere else. Model server errors already in that envelope are
-// relayed so their type and code reach the client; Anthropic ones get the
-// NVCF request_id.
+// produces in the endpoint's native envelope: Anthropic on /v1/messages,
+// System One on /v1/systemone and OpenAI everywhere else. Model server errors
+// already in the OpenAI or Anthropic envelope are relayed so their type and
+// code reach the client; Anthropic ones get the NVCF request_id. System One
+// has no relay: its backend errors never reach this handler (they are written
+// unchanged) and router errors always get the System One envelope.
 func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed {
@@ -84,9 +124,10 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 		// The handler always writes an uncompressed body; drop any encoding
 		// copied from the upstream response.
 		c.Response().Header().Del(echo.HeaderContentEncoding)
-		anthropic := isMessagesRequest(c.Request())
+		shape := errorShapeFor(c.Request())
+		anthropic := shape == shapeAnthropic
 		var upstream *provider.UpstreamError
-		if errors.As(err, &upstream) && upstream.RouterCode == "" {
+		if errors.As(err, &upstream) && upstream.RouterCode == "" && shape != shapeSystemOne {
 			native := isOpenAIErrorBody
 			if anthropic {
 				native = isAnthropicErrorBody
@@ -103,6 +144,14 @@ func newHTTPErrorHandler(exposeRouterErrorCodes bool) echo.HTTPErrorHandler {
 		}
 
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		if shape == shapeSystemOne {
+			requestID := errorRequestID(c)
+			_ = c.JSON(status, systemOneErrorResponse{
+				Error:     systemOneError{Code: systemOneErrorCode(status, err), Message: message, RequestID: requestID},
+				RequestID: requestID,
+			})
+			return
+		}
 		if anthropic {
 			_ = c.JSON(status, anthropicErrorResponse{
 				Type:      "error",
@@ -163,6 +212,31 @@ func anthropicErrorType(status int) string {
 		return "overloaded_error"
 	default:
 		return "api_error"
+	}
+}
+
+// systemOneErrorCode maps an HTTP status to the System One error code. Other
+// 4xx statuses are invalid_request and other 5xx statuses internal_error.
+func systemOneErrorCode(status int, err error) string {
+	switch {
+	case status == http.StatusBadRequest && errors.Is(err, errInvalidJSON):
+		return "invalid_json"
+	case status == http.StatusUnauthorized:
+		return "invalid_api_key"
+	case status == http.StatusNotFound:
+		return "not_found"
+	case status == http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case status == http.StatusBadGateway, status == http.StatusServiceUnavailable, status == statusOverloaded:
+		return "provider_unavailable"
+	case status == http.StatusGatewayTimeout:
+		return "provider_timeout"
+	case status >= http.StatusInternalServerError:
+		return "internal_error"
+	default:
+		return "invalid_request"
 	}
 }
 
