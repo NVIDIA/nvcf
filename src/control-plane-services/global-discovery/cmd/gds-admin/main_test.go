@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,24 @@ func seeded(t *testing.T) *memory.Store {
 		Lease: store.Lease{TTL: time.Minute}, Spec: store.PoolSpec{DesiredState: store.DesiredStateDraining},
 	}, store.PutPoolOptions{Now: t0, MintLease: true})
 	require.NoError(t, err)
+	// Agent registrations: two Pylons of pool mistral in b, one with a 5s
+	// lease that expires first, and a relay of the agent-only pool llama in a.
+	for _, r := range []struct {
+		cluster, poolID, pool string
+		role                  store.FrontendRole
+		agentID               string
+		ttl                   time.Duration
+	}{
+		{"b", "p1", "mistral", store.FrontendRolePylon, "pylon-0", time.Minute},
+		{"b", "p1", "mistral", store.FrontendRolePylon, "pylon-1", 5 * time.Second},
+		{"a", "p2", "llama", store.FrontendRoleKVRelay, "relay-0", time.Minute},
+	} {
+		_, err = st.PutPoolAgent(ctx, store.PoolAgentRecord{
+			Key:      store.PoolAgentKey{ClusterSet: "prod", Cluster: r.cluster, PoolID: r.poolID, Role: r.role, AgentID: r.agentID},
+			PoolName: r.pool, Generation: 1, Lease: store.Lease{TTL: r.ttl},
+		}, store.PutPoolAgentOptions{Now: t0, MintLease: true})
+		require.NoError(t, err)
+	}
 	_, err = st.PutCluster(ctx, store.ClusterRecord{Key: store.ClusterKey{ClusterSet: "dev", Cluster: "x"}}, t0)
 	require.NoError(t, err)
 	return st
@@ -90,11 +109,17 @@ func TestDescribeText(t *testing.T) {
 	code, out, errOut := runWith(t, st, t0.Add(10*time.Second), "describe")
 	require.Equal(t, 0, code, errOut)
 	assert.Contains(t, out, "Clusterset dev: 1 clusters")
-	assert.Contains(t, out, "Clusterset prod: 2 clusters (2 active), 2 exports, 2 endpoint sets (4 endpoints), 1 pools")
+	assert.Contains(t, out, "Clusterset prod: 2 clusters (2 active), 2 exports, 2 endpoint sets (4 endpoints), 1 pools, 3 pool agent registrations\n")
 	assert.Contains(t, out, "llm/router")
 	assert.Contains(t, out, "router")
 	assert.Contains(t, out, "mistral")
 	assert.Contains(t, out, "DRAINING")
+	// One row per pool and role: registrations, then active leases.
+	assert.Regexp(t, `POOL AGENT\s+POOL ID\s+CLUSTER\s+REGISTRATIONS\s+ACTIVE\n`, out)
+	assert.Regexp(t, `llama/KV_RELAY\s+p2\s+a\s+1\s+1\n`, out)
+	assert.Regexp(t, `mistral/PYLON\s+p1\s+b\s+2\s+1\n`, out)
+	assert.Contains(t, out, "Clusterset dev: 1 clusters (0 active), 0 exports, 0 endpoint sets (0 endpoints), 0 pools, 0 pool agent registrations\n")
+	assert.NotContains(t, out[:strings.Index(out, "Clusterset prod")], "POOL AGENT")
 
 	code, out, _ = runWith(t, st, t0.Add(time.Hour), "describe", "--clusterset", "prod")
 	require.Equal(t, 0, code)
@@ -115,6 +140,20 @@ func TestDescribeJSON(t *testing.T) {
 	assert.Equal(t, 1, d[0].EndpointSets[0].Ready)
 	assert.Equal(t, "router", d[0].Exports[0].Role)
 	assert.Equal(t, "p1", d[0].Pools[0].PoolID)
+	assert.Equal(t, []poolAgentRow{
+		{Cluster: "a", PoolID: "p2", Pool: "llama", Role: "KV_RELAY", Registrations: 1, Active: 1},
+		{Cluster: "b", PoolID: "p1", Pool: "mistral", Role: "PYLON", Registrations: 2, Active: 2},
+	}, d[0].PoolAgents)
+	assert.Equal(t, 3, d[0].Counts["poolAgentRegistrations"])
+
+	// Leases are evaluated at the time of the call: after an hour none is
+	// active, and the rows remain.
+	code, out, _ = runWith(t, seeded(t), t0.Add(time.Hour), "describe", "--clusterset=prod", "--output=json")
+	require.Equal(t, 0, code)
+	require.NoError(t, json.Unmarshal([]byte(out), &d))
+	require.Len(t, d[0].PoolAgents, 2)
+	assert.Equal(t, 2, d[0].PoolAgents[1].Registrations)
+	assert.Zero(t, d[0].PoolAgents[1].Active)
 
 	code, out, _ = runWith(t, memory.New(), t0, "describe")
 	require.Equal(t, 0, code)
@@ -125,15 +164,23 @@ func TestDeleteCluster(t *testing.T) {
 	st := seeded(t)
 	code, _, errOut := runWith(t, st, t0, "delete-cluster", "--clusterset=prod", "--cluster=b")
 	assert.Equal(t, 2, code)
-	assert.Contains(t, errOut, "would delete cluster prod/b: 1 exports, 1 endpoint sets, 1 pools; pass --yes")
+	assert.Contains(t, errOut, "would delete cluster prod/b: 1 exports, 1 endpoint sets, 1 pools, 2 pool agent registrations; pass --yes")
 
 	code, out, _ := runWith(t, st, t0, "delete-cluster", "--clusterset=prod", "--cluster=b", "--yes")
 	require.Equal(t, 0, code)
-	assert.Contains(t, out, "Deleted cluster prod/b")
+	assert.Contains(t, out, "Deleted cluster prod/b: 1 exports, 1 endpoint sets, 1 pools, 2 pool agent registrations.")
 	snap, err := st.LoadClusterSet(context.Background(), "prod")
 	require.NoError(t, err)
 	assert.Len(t, snap.Clusters, 1)
 	assert.Empty(t, snap.Pools)
+	// The registrations of cluster a stay.
+	require.Len(t, snap.PoolAgents, 1)
+	assert.Equal(t, "a", snap.PoolAgents[0].Key.Cluster)
+
+	// Cluster a owns no pool record, only the relay registration.
+	code, _, errOut = runWith(t, st, t0, "delete-cluster", "--clusterset=prod", "--cluster=a")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "would delete cluster prod/a: 1 exports, 1 endpoint sets, 0 pools, 1 pool agent registrations; pass --yes")
 
 	code, _, errOut = runWith(t, st, t0, "delete-cluster", "--clusterset=prod")
 	assert.Equal(t, 2, code)

@@ -288,9 +288,13 @@ gds-admin delete-cluster --clusterset=prod --cluster=use1-a --yes
 ```
 
 Store flags (`--store`, `--dynamodb-table`, `--dynamodb-endpoint`,
-`--region`) and their `GDS_` fallbacks match `gds-server`. `delete-cluster`
-prints what it would delete and exits with status 2 without `--yes`.
-`create-table` arrives with the DynamoDB store.
+`--region`) and their `GDS_` fallbacks match `gds-server`. `describe`
+lists the clusters, exports, endpoint sets and pools of each clusterset,
+and the pool agent registrations as one row per pool and role with the
+number of registrations and of active leases. `delete-cluster` prints what
+it would delete, agent registrations included, and exits with status 2
+without `--yes`. `create-table` creates the DynamoDB table
+(`docs/storage.md`).
 
 ## gds-mcs-controller
 
