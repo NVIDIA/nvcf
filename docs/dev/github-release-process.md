@@ -404,6 +404,21 @@ release branch is a parallel history: its tags are not ancestors of
 `main`, which is why `release_baseline_version` filters on
 reachability.
 
+The snapshot records the selected default-branch commit in a
+`Snapshot-Of: <sha>` trailer, and that commit must hold the snapshot's
+tree. Chart tags released from the default branch are ancestors of that
+commit but not of the snapshot. The stack inventory accepts a pinned
+source chart tag that is an ancestor of the stack commit or of the
+recorded commit. A snapshot cut before the trailer existed is matched to
+a commit in the checkout with the same tree.
+
+The `VERSION` bump pull request is a single commit on top of the
+selected default-branch commit, pushed to
+`chore/release-train/<service id>/vX.Y-to-vX.Y+1`. It carries the
+default branch's history, including its merges, so it stays outside the
+`release-*` branch names that the release ruleset holds to a linear
+history.
+
 Re-running `branch-cut` is safe. An existing release branch whose tree
 matches the selected base is reused, one whose tree differs is an
 error, and an open bump pull request is reported rather than replaced.
