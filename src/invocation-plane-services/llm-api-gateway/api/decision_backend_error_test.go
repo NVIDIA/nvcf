@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,7 +68,6 @@ func TestDecisionRoutesRelayBackendErrorsUnchanged(t *testing.T) {
 			{"gzip body", http.StatusUnprocessableEntity, http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"gzip"}}, gzipped},
 			{"unsupported encoding", http.StatusBadRequest, http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"br"}}, []byte("\x1b\x00 compressed")},
 			{"plain text", http.StatusInternalServerError, http.Header{"Content-Type": {"text/plain"}}, []byte("upstream connect error")},
-			{"empty body with retry-after", http.StatusTooManyRequests, http.Header{"Retry-After": {"7"}}, nil},
 			{"backend overload status", 529, http.Header{"Content-Type": {"application/json"}}, []byte(`{"detail":"busy"}`)},
 			{"backend request id", http.StatusBadRequest, http.Header{"Content-Type": {"application/json"}, HeaderRequestID: {"backend-request-id"}}, []byte(`{"detail":"x"}`)},
 		} {
@@ -122,6 +122,57 @@ func TestDecisionRoutesRouterErrorsUseNativeShape(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A router failure that is not a routing rejection is a bare status with no
+// body and no X-Stargate-Error-Code. It must not be relayed raw.
+func TestDecisionRoutesRenderBareRouterErrorsNatively(t *testing.T) {
+	t.Parallel()
+
+	for _, route := range decisionRoutes {
+		for _, tc := range []struct {
+			status        int
+			openAIType    string
+			systemOneCode string
+		}{
+			{http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large"},
+			{http.StatusBadGateway, "server_error", "provider_unavailable"},
+			{http.StatusGatewayTimeout, "server_error", "provider_timeout"},
+		} {
+			t.Run(route.name+"/"+http.StatusText(tc.status), func(t *testing.T) {
+				t.Parallel()
+				rec := serveDecisionUpstream(t, route, config.Default(), nil, tc.status, http.Header{"Retry-After": {"3"}}, nil)
+				requireNativeError(t, route, rec, tc.status, tc.openAIType, tc.systemOneCode)
+				require.Equal(t, "3", rec.Header().Get("Retry-After"))
+			})
+		}
+	}
+}
+
+type peekCountingReader struct {
+	r    io.Reader
+	read int
+}
+
+func (c *peekCountingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.read += n
+	return n, err
+}
+
+func TestBackendErrorPeekDoesNotBufferBody(t *testing.T) {
+	t.Parallel()
+
+	payload := strings.Repeat("x", 4<<20)
+	counter := &peekCountingReader{r: strings.NewReader(payload)}
+	resp := &provider.ProxyResponse{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: io.NopCloser(counter)}
+	req := httptest.NewRequest(http.MethodPost, decisionsEndpointPath, nil)
+
+	require.True(t, isBackendErrorOnDecisionRoute(req, resp))
+	require.LessOrEqual(t, counter.read, 1, "the peek must read at most one byte")
+	rest, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, payload, string(rest), "the peeked byte must not be lost")
 }
 
 func TestDecisionRoutesRequestIDHeader(t *testing.T) {
