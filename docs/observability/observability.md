@@ -2,6 +2,9 @@
 
 This page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.
 
+Obtain the selected Observability package through [Consume an NVCF release](../overview/umbrella-releases.md).
+Keep its directory beside the selected control-plane and compute-plane stacks.
+
 ## Find the answer to your question
 
 Common operator questions and where to look on this page or in linked references.

@@ -378,7 +378,7 @@ kubectl get httproute -n <gateway-namespace> llm-invocation -o yaml
 Apply the self-managed environment from the unpacked stack directory:
 
 ```bash
-cd path/to/nvcf-self-managed-stack
+cd "$BUNDLE_DIR/deploy/stacks/self-managed"
 make apply HELMFILE_ENV=<environment-name>
 ```
 

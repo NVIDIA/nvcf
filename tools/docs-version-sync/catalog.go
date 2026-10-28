@@ -238,7 +238,6 @@ type DenylistEntry struct {
 
 var defaultDenylist = []DenylistEntry{
 	{Name: "nvcf-base", Reason: "retired repository"},
-	{Name: "samba", Reason: "retired internal dependency"},
 }
 
 // Artifact identifies one versioned chart, image, or downloadable resource in the catalog.
@@ -820,6 +819,9 @@ func (catalog *Catalog) publicationFor(artifact Artifact) (Publication, bool) {
 }
 
 func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
+	if artifact.Type == ArtifactTypeChart && isBundledChartRepository(artifact.UpstreamRepository) {
+		return "", fmt.Errorf("chart %s is bundled with its stack, not a standalone Helm repository", artifact.Name)
+	}
 	if catalog.publicationIsPending(artifact) {
 		variable := strings.ToUpper(strings.ReplaceAll(artifact.Name, "-", "_")) + "_REFERENCE"
 		return fmt.Sprintf("\"${%s:?set %s to a published or mirrored %s reference}\"", variable, variable, artifact.Name), nil
@@ -858,6 +860,9 @@ func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
 }
 
 func (catalog *Catalog) artifactDistribution(artifact Artifact) (string, error) {
+	if artifact.Type == ArtifactTypeChart && isBundledChartRepository(artifact.UpstreamRepository) {
+		return "Bundled with stack", nil
+	}
 	if catalog.publicationIsPending(artifact) {
 		return "Publication pending", nil
 	}
@@ -945,6 +950,25 @@ func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
 	catalog.Compatibility = append(catalog.Compatibility, base.Compatibility...)
+	// A release-selection table describes bundle membership, not compatibility
+	// ranges. Refresh pins without changing that catalog-owned presentation.
+	for _, output := range base.Outputs {
+		for _, block := range output.Blocks {
+			if block.Renderer != "release-selection" {
+				continue
+			}
+			for i := range catalog.Outputs {
+				if catalog.Outputs[i].Path != output.Path {
+					continue
+				}
+				for j := range catalog.Outputs[i].Blocks {
+					if catalog.Outputs[i].Blocks[j].Marker == block.Marker {
+						catalog.Outputs[i].Blocks[j].Renderer = block.Renderer
+					}
+				}
+			}
+		}
+	}
 	resolvedArtifacts := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
 		resolvedArtifacts[artifactNameAndTypeKey(artifact)] = struct{}{}
@@ -1076,24 +1100,15 @@ func defaultOutputs() []OutputFile {
 			}},
 		},
 		{
+			Path: "docs/overview/umbrella-releases.md",
+			Blocks: []OutputBlock{{
+				Marker:   "stack-package-downloads",
+				Renderer: "stack-package-downloads",
+			}},
+		},
+		{
 			Path: "docs/overview/image-mirroring.md",
 			Blocks: []OutputBlock{
-				{
-					Marker:   "image-mirroring-resource-examples",
-					Renderer: "image-mirroring-resource-examples",
-				},
-				{
-					Marker:   "image-mirroring-stack-snippet",
-					Renderer: "image-mirroring-stack-snippet",
-				},
-				{
-					Marker:   "image-mirroring-compute-stack-snippet",
-					Renderer: "image-mirroring-compute-stack-snippet",
-				},
-				{
-					Marker:   "image-mirroring-observability-stack-snippet",
-					Renderer: "image-mirroring-observability-stack-snippet",
-				},
 				{
 					Marker:   "image-mirroring-cli-snippet",
 					Renderer: "image-mirroring-cli-snippet",

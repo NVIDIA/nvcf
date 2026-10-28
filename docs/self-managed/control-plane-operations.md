@@ -8,14 +8,14 @@ Self-hosted NVCF uses a two-tier encryption hierarchy to protect secrets stored 
 
 | Key | Purpose |
 | --- | --- |
-| **MEK** (Master Encryption Key) | A single AES-256-GCM key stored in OpenBAO. The MEK encrypts (wraps) all NEKs. It is shared across NVCF services in the control plane. |
-| **NEK** (Namespace Encryption Key) | Per-namespace AES-256-GCM keys stored in Cassandra (encrypted by the MEK). NEKs directly encrypt user secrets such as API keys and registry credentials. |
+| MEK (Master Encryption Key) | A single AES-256-GCM key stored in OpenBAO. The MEK encrypts (wraps) all NEKs. It is shared across NVCF services in the control plane. |
+| NEK (Namespace Encryption Key) | Per-namespace AES-256-GCM keys stored in Cassandra (encrypted by the MEK). NEKs directly encrypt user secrets such as API keys and registry credentials. |
 
 When a user stores a secret through the NVCF API, ESS encrypts it with the active NEK for that namespace. The NEK itself is stored in Cassandra, encrypted by the MEK. To decrypt a secret, ESS retrieves the NEK from Cassandra, decrypts it using the MEK from OpenBAO, then decrypts the secret.
 
 ### Key Rotation Runbooks
 
-- [control-plane-runbook-mek-rotation](./runbooks/control-plane-key-rotation-mek.md) — Rotate the master encryption key stored in OpenBAO.
+- [control-plane-runbook-mek-rotation](./runbooks/control-plane-key-rotation-mek.md). Rotate the master encryption key stored in OpenBAO.
 
 ## Basic Operations
 
@@ -42,7 +42,7 @@ and resource type. Use these values in the commands throughout this section.
 
 ### Restarting a Service
 
-**Restarting a Deployment:**
+Restarting a Deployment:
 
 ```bash
 kubectl rollout restart deployment/<name> -n <namespace>
@@ -54,7 +54,7 @@ kubectl rollout restart deployment/nvcf-api -n nvcf
 kubectl rollout status deployment/<name> -n <namespace> --timeout=120s
 ```
 
-**Restarting a StatefulSet:**
+Restarting a StatefulSet:
 
 StatefulSets using `RollingUpdate` restart one pod at a time in reverse ordinal
 order. Check the update strategy before using the commands below. OpenBao uses
@@ -83,7 +83,7 @@ kubectl exec -n vault-system openbao-server-0 -c openbao -- sh -c \
 
 </Note>
 
-**Restarting all Deployments in a namespace:**
+Restarting all Deployments in a namespace:
 
 ```bash
 kubectl rollout restart deployment -n <namespace>
@@ -94,7 +94,7 @@ kubectl rollout restart deployment -n nvcf
 
 ### Checking Service Health
 
-**List pods and their status:**
+List pods and their status:
 
 ```bash
 # All pods in a namespace
@@ -107,7 +107,7 @@ for ns in nvcf sis api-keys ess nats-system vault-system cassandra-system; do
 done
 ```
 
-**Check logs for a service:**
+Check logs for a service:
 
 ```bash
 # Recent logs
@@ -117,7 +117,7 @@ kubectl logs -n <namespace> -l app.kubernetes.io/name=<name> --tail=50
 kubectl logs -n <namespace> -l app.kubernetes.io/name=<name> -f
 ```
 
-**Describe a pod for events and conditions:**
+Describe a pod for events and conditions:
 
 ```bash
 kubectl describe pod -n <namespace> -l app.kubernetes.io/name=<name>
@@ -149,24 +149,14 @@ outage. Only do this if you understand the implications for data availability an
 
 ## Upgrading Services
 
-<Warning>
-**Upgrades are not officially supported during the Early Access period.** The self-hosted
-NVCF stack does not yet have a validated upgrade path. Even a full `helmfile sync` may
-introduce breaking changes between releases — there is no guarantee of backward
-compatibility for configuration, database schemas, or inter-service APIs at this stage.
+For a stack upgrade, follow the [staged 1.0.2-to-1.0.4 procedure](../overview/release-notes/1.0.2-to-1.0.4-upgrade.md).
+It covers the docs edition 1.0.2 combination and the required hostname-policy,
+NVCA and control-plane ordering. Other source versions must complete their
+intermediate migration steps first.
 
-</Warning>
-
-The guidance below is provided for **advanced users** who need to apply targeted fixes or
-hotfixes to individual services. It is not a substitute for a validated upgrade procedure.
-
-<Warning>
-**Spot upgrades carry additional risk.** Beyond the general Early Access limitations above,
-spot-upgrading an individual Helm chart bypasses the Helmfile's version coordination and
-automatic database migrations. Proceed only when you understand the compatibility
-implications for the specific version you are upgrading to.
-
-</Warning>
+The commands below are for targeted fixes to individual services. A spot
+upgrade bypasses the stack's coordinated versions and migrations. Review the
+specific chart's compatibility and rollback limits before using this path.
 
 ### When to Spot Upgrade
 
@@ -180,22 +170,22 @@ implications for the specific version you are upgrading to.
 
 Before upgrading any chart:
 
-1. **Note the current chart version and app version:**
+1. Note the current chart version and app version:
 
    ```bash
    helm list -n <namespace>
    ```
 
-2. **Back up the current Helm values:**
+2. Back up the current Helm values:
 
    ```bash
    helm get values <release> -n <namespace> -o yaml > <release>-values-backup.yaml
    ```
 
-3. **Review release notes** for the target version. Check for breaking changes, required
+3. Review release notes for the target version. Check for breaking changes, required
    value changes, or new dependencies.
 
-4. **Verify the cluster is healthy** before starting — all pods running, no pending operations.
+4. Verify the cluster is healthy before starting: all pods running, no pending operations.
 
 ### Spot Upgrading a Helm Chart
 
@@ -218,7 +208,7 @@ kubectl rollout status deployment/<name> -n <namespace> --timeout=120s
 helm list -n <namespace>
 ```
 
-**Example — upgrading the NVCF API chart:**
+Example: upgrading the NVCF API chart:
 
 ```bash
 helm upgrade api \
@@ -244,9 +234,9 @@ Cassandra, NATS, and OpenBao are deployed as StatefulSets. The `helm upgrade` co
 same, but rollout depends on the update strategy. The following rolling-update
 description does not apply to OpenBao's `OnDelete` strategy:
 
-- **Rolling update:** StatefulSets restart pods one at a time in reverse ordinal order,
+- Rolling update: StatefulSets restart pods one at a time in reverse ordinal order,
   waiting for each pod to become ready before proceeding to the next.
-- **Quorum preserved:** For 3-replica clusters, at most one pod is unavailable at a time,
+- Quorum preserved: For 3-replica clusters, at most one pod is unavailable at a time,
   maintaining quorum throughout the upgrade.
 
 ```bash
@@ -260,12 +250,12 @@ helm upgrade <release> \
 kubectl rollout status statefulset/<name> -n <namespace> --timeout=300s
 ```
 
-**Service-specific notes:**
+Service-specific notes:
 
-| **Cassandra** | After upgrading, check if the new version requires a schema migration. If a `cassandra-migrations` job exists in the chart, it will run automatically as a Helm post-upgrade hook. Verify it completes: `kubectl get jobs -n cassandra-system`. |
+| Cassandra | After upgrading, check if the new version requires a schema migration. If a `cassandra-migrations` job exists in the chart, it will run automatically as a Helm post-upgrade hook. Verify it completes: `kubectl get jobs -n cassandra-system`. |
 | --- | --- |
-| **OpenBao** | Helm success does not replace existing `OnDelete` pods. Use the [OpenBao patch upgrade runbook](./runbooks/openbao-patch-upgrade.md) for 2.6.2 to 2.6.3. Replace standbys first, transfer leadership, and verify each member is unsealed before proceeding. |
-| **NATS** | The NATS cluster maintains message availability during rolling updates as long as a majority of nodes remain online. Monitor the cluster state: `kubectl logs -n nats-system nats-0 --tail=10`. |
+| OpenBao | Helm success does not replace existing `OnDelete` pods. Use the [OpenBao patch upgrade runbook](./runbooks/openbao-patch-upgrade.md) for 2.6.2 to 2.6.3. Replace standbys first, transfer leadership, and verify each member is unsealed before proceeding. |
+| NATS | The NATS cluster maintains message availability during rolling updates as long as a majority of nodes remain online. Monitor the cluster state: `kubectl logs -n nats-system nats-0 --tail=10`. |
 
 ### Rolling Back
 
@@ -299,7 +289,7 @@ rollback.
 
 Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential, cluster-group listing and cluster-management scopes.
 
-**It does not authenticate callers** — the stack relies on the gateway in front of it for that.
+It does not authenticate callers. The stack relies on the gateway in front of it for that.
 
 It exists so a new install with no identity provider can mint its first admin token, and `nvcf-cli init` uses it.
 
@@ -318,7 +308,7 @@ Usage:
 
 It is not a graceful failure. The message is bare because the Gateway returns an empty body for an unrouted host, and Cobra then prints usage as though the command were mistyped, which points the operator at their own typing rather than at the missing component. Neither command has a flag to supply a token you already hold, so there is no fallback inside the CLI.
 
-**What to do instead:** obtain the admin token from your own identity provider and supply it as `NVCF_TOKEN`, the same credential `init` would have written. The CLI resolves a token in the order environment variable, then config file, then the state file `init` writes, so setting it by either of the first two makes `init` unnecessary rather than merely working around it:
+What to do instead: obtain the admin token from your own identity provider and supply it as `NVCF_TOKEN`, the same credential `init` would have written. The CLI resolves a token in the order environment variable, then config file, then the state file `init` writes, so setting it by either of the first two makes `init` unnecessary rather than merely working around it:
 
 ```bash
 export NVCF_TOKEN="<token from your identity provider>"
@@ -353,11 +343,11 @@ Setting `adminIssuerProxy.enabled: false` removes the route as well, so the two 
 
 ### Removing it from an existing install
 
-Setting the value to `false` on a stack where the proxy is already installed does **not** remove anything. The release condition stops Helmfile managing the release, and the migration stops creating the OpenBao grant, but both already exist and stay as they are.
+Setting the value to `false` on a stack where the proxy is already installed does not remove anything. The release condition stops Helmfile managing the release, and the migration stops creating the OpenBao grant, but both already exist and stay as they are.
 
 Removal is two steps, and both are required.
 
-**1. Uninstall the release.** This removes everything the chart owns: the Deployment, Service, ServiceAccount, HTTPRoute and ReferenceGrant, plus the PodDisruptionBudget if `adminIssuerProxy.podDisruptionBudget.enabled` is set.
+1. Uninstall the release. This removes everything the chart owns: the Deployment, Service, ServiceAccount, HTTPRoute and ReferenceGrant, plus the PodDisruptionBudget if `adminIssuerProxy.podDisruptionBudget.enabled` is set.
 
 ```bash
 helm uninstall admin-issuer-proxy -n api-keys
@@ -367,7 +357,7 @@ kubectl get pods,deploy,svc,sa,pdb -n api-keys | grep admin-token-issuer-proxy
 kubectl get httproute,referencegrant -A | grep admin-token-issuer-proxy
 ```
 
-**2. Revoke the OpenBao grant.** This is the step that is easy to miss.
+1. Revoke the OpenBao grant. This is the step that is easy to miss.
 
 OpenBao state is not owned by the Helm release, so uninstalling leaves the signing capability in place: any pod running as the `admin-issuer-proxy` service account in the `api-keys` namespace can still authenticate to OpenBao and sign admin-scoped tokens for the NVCF API issuer.
 
@@ -410,7 +400,7 @@ Re-enabling is simpler than disabling. Setting `adminIssuerProxy.enabled: true` 
 
 ### Verifying at the edge
 
-The route's hostname may have no DNS record, which does not by itself make it unreachable — a load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
+The route's hostname may have no DNS record, which does not by itself make it unreachable. A load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
@@ -419,14 +409,14 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 echo "curl exit: $?"
 ```
 
-`--resolve` rather than `-H "Host: …"`: the `Host` header is an HTTP header and does not set the TLS server name, so against a load-balancer IP the certificate would be checked against that IP and the request could fail before the Gateway ever saw it.
+`--resolve` rather than `-H "Host: ..."`: the `Host` header is an HTTP header and does not set the TLS server name, so against a load-balancer IP the certificate would be checked against that IP and the request could fail before the Gateway ever saw it.
 
-Read the two results together. **Exit 0 with `404`** means no route is attached, which is the outcome you want. **Exit 0 with anything else** means the route is still being served.
+Read the two results together. Exit 0 with `404` means no route is attached, which is the outcome you want. Exit 0 with anything else means the route is still being served.
 
-**A non-zero curl exit** means the request never reached the Gateway, so the check is inconclusive rather than a pass — the printed status will be `000`.
+A non-zero curl exit means the request never reached the Gateway, so the check is inconclusive rather than a pass. The printed status will be `000`.
 
 <Note>
-If curl exits with a certificate error (exit 60), the edge is presenting a certificate that does not cover this hostname — expected when the route's hostname has no certificate of its own. Re-run with `-k` to get past the TLS check and read the routing result.
+If curl exits with a certificate error (exit 60), the edge is presenting a certificate that does not cover this hostname. This is expected when the route's hostname has no certificate of its own. Re-run with `-k` to get past the TLS check and read the routing result.
 
 Only do this when diagnosing that specific failure: `-k` disables certificate verification and says nothing about whether the edge's TLS is sound.
 

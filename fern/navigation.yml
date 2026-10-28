@@ -32,6 +32,9 @@ navigation:
   - page: Overview
     path: ../docs/overview/index.md
     slug: overview
+  - page: Consume an NVCF Release
+    path: ../docs/overview/umbrella-releases.md
+    slug: umbrella-releases
   - page: Quickstart
     path: ../docs/overview/quickstart.md
     slug: quickstart
@@ -447,6 +450,9 @@ navigation:
   - section: Upgrade Notes
     skip-slug: true
     contents:
+    - page: 1.0.2 to 1.0.4 Upgrade
+      path: ../docs/overview/release-notes/1.0.2-to-1.0.4-upgrade.md
+      slug: 1-0-2-to-1-0-4-upgrade
     - page: 0.6.2 to 1.0.1 Upgrade
       path: ../docs/overview/release-notes/0.6.1-to-1.0.1-upgrade.md
       slug: 0-6-1-to-1-0-1-upgrade

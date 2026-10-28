@@ -45,6 +45,12 @@ reads `fern/changelog/`. Existing frozen copies (`docs/<stack>-<version>/`)
 remain historical archives and are never regenerated. New editions create a
 branch, not a new source directory. See [the release and rollback workflow](../../docs/dev/docs-editions.md).
 
+`docs/overview/umbrella-releases.md` owns the generated `stack-package-downloads`
+block. It places each selected package in the sibling directory expected by
+the packaged Helmfiles. Pending resources have no executable download command.
+Installation and image-mirroring pages link to this procedure; the CLI download
+block stays on the image-mirroring page.
+
 ## Compatibility matrix
 
 `docs/overview/compatibility-matrix.md` carries the `compatibility-matrix`
@@ -67,6 +73,13 @@ Self-managed 1.0.0 or later, Compute plane 1.0.0 or later". Stack names use the 
 (`control-plane`, `compute-plane`, `observability`). Add an entry when a stack
 release changes compatibility, and raise a minimum when a release stops working
 with an older release of another stack. Then regenerate the documentation.
+
+For an umbrella candidate whose exact peer pins describe bundle membership,
+use the `release-selection` renderer for that page's generated block. It renders
+`release_set.stacks` as selected versions without interpreting exact peer pins
+as supported compatibility ranges. Explain the stack train policy and upgrade
+prerequisites separately in the page. Keep the product manifest and catalog
+selection exact; do not widen their pins to express a general support policy.
 
 Each registered stack publishes its own inventory:
 
