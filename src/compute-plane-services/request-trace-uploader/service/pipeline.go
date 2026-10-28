@@ -72,6 +72,16 @@ func (u *Uploader) destinationOf(lane string) backend.Destination {
 // startup steps Run runs, so a test can drive the pipeline one pass at a
 // time.
 func (u *Uploader) Pass(ctx context.Context) error {
+	return u.pass(ctx, true)
+}
+
+// scan is the pass Run repeats on the scan interval. It does not poll: Run
+// polls on the status interval, so a short scan interval never shortens it.
+func (u *Uploader) scan(ctx context.Context) error {
+	return u.pass(ctx, false)
+}
+
+func (u *Uploader) pass(ctx context.Context, poll bool) error {
 	if err := u.start(ctx); err != nil {
 		return err
 	}
@@ -79,11 +89,11 @@ func (u *Uploader) Pass(ctx context.Context) error {
 	if !u.draining.Load() {
 		errs = append(errs, u.locked(&u.intakeMu, func() error { return u.intake(ctx) }))
 	}
-	errs = append(errs,
-		u.locked(&u.submitMu, func() error { return errors.Join(u.submitPrepared(ctx), u.resend(ctx)) }),
-		u.locked(&u.pollMu, func() error { return u.pollRound(ctx) }),
-		u.locked(&u.cleanupMu, func() error { return u.cleanupRound(ctx) }),
-	)
+	errs = append(errs, u.locked(&u.submitMu, func() error { return errors.Join(u.submitPrepared(ctx), u.resend(ctx)) }))
+	if poll {
+		errs = append(errs, u.locked(&u.pollMu, func() error { return u.pollRound(ctx) }))
+	}
+	errs = append(errs, u.locked(&u.cleanupMu, func() error { return u.cleanupRound(ctx) }))
 	u.housekeeping()
 	return errors.Join(errs...)
 }

@@ -385,3 +385,29 @@ func TestSIGTERMStopsWithinTheDrainTimeoutAndKeepsTheBatchForTheNextStart(t *tes
 		return gone(closed[0])
 	})
 }
+
+func TestRunPollsOnTheStatusIntervalNotOnEveryScan(t *testing.T) {
+	spool, _ := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	fake := backendtest.NewFake()
+	fake.Script(backendtest.SubmitStep{Statuses: []backendtest.StatusStep{{Status: backend.StatusPending}}})
+	listener, _ := listen(t)
+	uploader := newUploader(t, spool, fake, service.Options{Listener: listener}, map[string]string{
+		config.EnvScanInterval:   "1",
+		config.EnvStatusInterval: "3600",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- uploader.Run(ctx) }()
+
+	waitFor(t, "the first submit", func() bool { return len(fake.Jobs()) == 1 })
+	// Three more scan passes run in this time.
+	time.Sleep(3500 * time.Millisecond)
+	statusCalls := fake.Jobs()[0].StatusCalls
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if statusCalls > 1 {
+		t.Fatalf("status calls = %d over several 1s scans with a 1h status interval, want at most 1", statusCalls)
+	}
+}

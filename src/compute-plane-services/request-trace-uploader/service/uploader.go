@@ -226,7 +226,8 @@ func (u *Uploader) Handler() http.Handler {
 var errNotReady = errors.New("request trace uploader cannot start safely")
 
 // Run serves health at once, runs the startup steps, reports ready, and then
-// runs passes and poll rounds until ctx ends. Then it drains: it stops taking
+// runs scan passes on the scan interval and poll rounds on the status
+// interval until ctx ends. Then it drains: it stops taking
 // new segments, lets work in progress finish, submits what is already
 // prepared and polls once more, all within the drain timeout, and releases
 // the spool. A backend or spool fault never stops the process; a journal it
@@ -278,15 +279,25 @@ func (u *Uploader) Run(ctx context.Context) error {
 	work, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
 	stop := make(chan struct{})
+	// Polling starts once the first scan has submitted what it found, and
+	// then runs only on the status interval.
+	scanned := make(chan struct{})
 	var loops sync.WaitGroup
 	loops.Add(2)
 	go func() {
 		defer loops.Done()
-		u.loop(work, stop, u.cfg.ScanInterval, u.Pass)
+		u.loop(work, stop, u.cfg.ScanInterval, u.scan, func() { close(scanned) })
 	}()
 	go func() {
 		defer loops.Done()
-		u.loop(work, stop, u.pollInterval(), u.Poll)
+		select {
+		case <-scanned:
+		case <-stop:
+			return
+		case <-work.Done():
+			return
+		}
+		u.loop(work, stop, u.pollInterval(), u.Poll, nil)
 	}()
 
 	select {
@@ -311,12 +322,18 @@ func (u *Uploader) Run(ctx context.Context) error {
 	return nil
 }
 
-func (u *Uploader) loop(ctx context.Context, stop <-chan struct{}, every time.Duration, run func(context.Context) error) {
+// loop runs run now and then on every tick until stop or ctx ends. afterFirst,
+// when set, is called once the first run returns.
+func (u *Uploader) loop(ctx context.Context, stop <-chan struct{}, every time.Duration, run func(context.Context) error, afterFirst func()) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		if err := run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("request trace pipeline step failed", "error", safeError(err))
+		}
+		if afterFirst != nil {
+			afterFirst()
+			afterFirst = nil
 		}
 		select {
 		case <-stop:
