@@ -102,6 +102,8 @@ type DBHandlerV2 interface {
 	GetStatsV3(traceCtx context.Context, namespace string) ([]StatsV3Record, error)
 	GetFilteredStatsV3(traceCtx context.Context, namespace string) ([]StatsV3Record, error)
 	GetEventsV3(traceCtx context.Context, namespace, eventContext string) ([]EventV3Record, error)
+	GetAccountEventsV3(traceCtx context.Context, namespace, eventContext, ncaID, functionID string) ([]EventV3Record, error)
+	GetAccountStatsV3(traceCtx context.Context, namespace, ncaID, functionID string) ([]StatsV3Record, error)
 	Close() error // Include Close in V2 as well, assuming the underlying connection needs closing.
 }
 
