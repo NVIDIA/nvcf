@@ -31,7 +31,10 @@ go_oci_image(
 
 go_test(
     name = "cmd_test",
-    srcs = ["main_test.go"],
+    srcs = [
+        "main_test.go",
+        "strict_test.go",
+    ],
     embed = [":cmd_lib"],
     deps = ["//src/compute-plane-services/request-trace-uploader/config"],
 )

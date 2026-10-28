@@ -5,11 +5,15 @@ go_library(
     srcs = [
         "aliases.go",
         "config.go",
+        "pipeline.go",
         "suppression.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config",
     visibility = ["//visibility:public"],
-    deps = ["//src/compute-plane-services/request-trace-uploader/transform/suppress"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/segment",
+        "//src/compute-plane-services/request-trace-uploader/transform/suppress",
+    ],
 )
 
 go_test(
@@ -17,6 +21,7 @@ go_test(
     srcs = [
         "aliases_test.go",
         "config_test.go",
+        "settings_test.go",
         "suppression_test.go",
     ],
     embed = [":config"],
