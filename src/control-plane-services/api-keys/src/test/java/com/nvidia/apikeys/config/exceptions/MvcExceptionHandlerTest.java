@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.cassandra.CassandraConnectionFailureException;
 import org.springframework.data.cassandra.CassandraReadTimeoutException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -52,7 +53,11 @@ class MvcExceptionHandlerTest {
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(response.getBody()).isInstanceOfSatisfying(ProblemDetail.class, body ->
-                assertThat(body.getDetail()).isEqualTo("Key storage is temporarily unavailable"));
+        assertThat(response.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("10");
+        assertThat(response.getBody()).isInstanceOfSatisfying(ProblemDetail.class, body -> {
+            assertThat(body.getDetail()).isEqualTo("Key storage is temporarily unavailable");
+            assertThat(body.getType())
+                    .hasToString("urn:nv-boot:problem-details:service-unavailable");
+        });
     }
 }
