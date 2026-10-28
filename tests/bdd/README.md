@@ -64,6 +64,25 @@ The Vanity Gateway shadow sampling scenario deploys two LLM functions from the
 same image, so it must also honor the `LOAD_TESTER_DEFAULT_*` container
 settings, and the cluster needs two free 1x GPU instances. It serves OpenAI
 routes on `vanity-openai.localhost`.
+The decision route scenarios (`@llm-decision-routes`) cover `POST /v1/decisions`
+and `POST /v1/systemone` through the LLM gateway and through the Vanity Gateway.
+They deploy the in-repo sample from `SAMPLE_LLM_DECISIONS_IMAGE`, which must
+serve both routes. The released `5.1.0` sample does not, so until a release
+includes them build the image from this checkout and make the cluster able to
+pull it. The default is
+`nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local`:
+
+```sh
+docker build --platform linux/amd64 \
+  -t nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local \
+  examples/function-samples/openai-compatible-sample
+k3d image import -c ncp-local \
+  nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local
+```
+
+Or push a tag and set `SAMPLE_LLM_DECISIONS_IMAGE` to it. The scenarios need the
+LLM gateway, Stargate, Pylon and Vanity Gateway builds that serve the routes,
+and the Vanity scenario needs two free 1x GPU instances.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -91,6 +110,7 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
   SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   SAMPLE_LLM_ECHO_IMAGE=<optional-image-reference> \
+  SAMPLE_LLM_DECISIONS_IMAGE=<optional-image-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Single-cluster HA Helmfile feature: installs the control plane with
