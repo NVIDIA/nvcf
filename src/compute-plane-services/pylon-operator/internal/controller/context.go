@@ -89,6 +89,7 @@ type ReconcileContext struct {
 
 	requeueAfter time.Duration
 	events       []pendingEvent
+	afterEvents  []func()
 }
 
 type pendingEvent struct {
@@ -113,6 +114,13 @@ func (rc *ReconcileContext) RequeueAfter(d time.Duration) {
 // after the status patch succeeds, so a failed reconcile does not repeat them.
 func (rc *ReconcileContext) Event(eventType, reason, messageFmt string, args ...any) {
 	rc.events = append(rc.events, pendingEvent{eventType: eventType, reason: reason, message: fmt.Sprintf(messageFmt, args...)})
+}
+
+// AfterEvents runs f once the reconcile has patched status and emitted the
+// queued Events, and not at all when the patch fails. A step that emits an
+// Event only on change uses it to remember the Event it sent.
+func (rc *ReconcileContext) AfterEvents(f func()) {
+	rc.afterEvents = append(rc.afterEvents, f)
 }
 
 // SetReady sets the Ready condition.

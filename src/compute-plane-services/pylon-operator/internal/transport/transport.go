@@ -20,7 +20,8 @@ limitations under the License.
 // that deleting it garbage-collects the Deployment, and the cluster
 // credential Secret (tier T0) and router trust bundle ConfigMap replicated
 // from the operator namespace into the endpoint's namespace for the pods to
-// mount.
+// mount. With --gds-pool-export it also keeps a Service over the transport
+// pods that exports them to the Global Discovery Service.
 package transport
 
 import (
@@ -85,6 +86,10 @@ type State struct {
 	ScaledToZero bool
 	// Problem is set when the Deployment could not be created or updated.
 	Problem *Problem
+	// ServiceProblem is set when the pool export Service could not be
+	// created or updated. It does not affect the transport Deployment or the
+	// fast negatives.
+	ServiceProblem *Problem
 }
 
 // FastNegative is a TransportReady and Registered verdict reached without
@@ -155,7 +160,21 @@ func (r *Reconciler) Config() config.Config {
 // the upstream. It is neither created nor updated while the credential or
 // trust bundle cannot be replicated, except that it is still scaled to zero
 // on a model name mismatch.
+//
+// With --gds-pool-export the pool export Service is created or updated once
+// the Deployment has been, and left as it is while the Deployment has a
+// Problem. Without it no Service is written, and one created earlier is
+// neither updated nor deleted.
 func (r *Reconciler) Reconcile(ctx context.Context, ep *pylonv1alpha1.InferenceEndpoint) (State, error) {
+	st, err := r.reconcileDeployment(ctx, ep)
+	if err != nil || st.Problem != nil || !r.config.PoolExport() {
+		return st, err
+	}
+	st.ServiceProblem, err = r.reconcileService(ctx, ep)
+	return st, err
+}
+
+func (r *Reconciler) reconcileDeployment(ctx context.Context, ep *pylonv1alpha1.InferenceEndpoint) (State, error) {
 	scaled := scaledToZero(ep)
 	replicas := r.config.TransportReplicas
 	if scaled {

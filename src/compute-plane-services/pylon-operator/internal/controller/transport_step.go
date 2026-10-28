@@ -20,7 +20,9 @@ package controller
 import (
 	"context"
 	"strings"
+	"sync"
 
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -39,17 +41,24 @@ import (
 
 // transportStep runs the transport reconciler, records its State on the
 // ReconcileContext and sets the fast negatives of TransportReady and
-// Registered. It owns the transport Deployments and watches the sources and
-// copies of the cluster credential and trust bundle.
+// Registered. It owns the transport Deployments and pool export Services and
+// watches the sources and copies of the cluster credential and trust bundle.
 type transportStep struct {
 	reconciler *transport.Reconciler
 	reader     client.Reader
+
+	mu sync.Mutex
+	// serviceProblems holds the last ServiceProblem message per endpoint, so
+	// its Warning Event is emitted once rather than on every reconcile.
+	serviceProblems map[types.NamespacedName]string
 }
 
 func (s *transportStep) Name() string { return StepTransport }
 
 // Run emits a Warning Event when a Problem first appears or changes; the
-// TransportReady message carries the Problem while it lasts.
+// TransportReady message carries the Problem while it lasts. A
+// ServiceProblem changes no condition; its Warning Event is emitted when it
+// first appears or changes.
 func (s *transportStep) Run(ctx context.Context, rc *ReconcileContext) error {
 	st, err := s.reconciler.Reconcile(ctx, rc.Endpoint)
 	if err != nil {
@@ -62,6 +71,11 @@ func (s *transportStep) Run(ctx context.Context, rc *ReconcileContext) error {
 			rc.Event(corev1.EventTypeWarning, st.Problem.EventReason, "%s", st.Problem.Message)
 		}
 	}
+	if st.Problem == nil {
+		// While the Deployment has a Problem the Service is not reconciled,
+		// and the recorded ServiceProblem is kept.
+		s.noteServiceProblem(rc, st.ServiceProblem)
+	}
 	if verdict, ok := st.FastNegative(); ok {
 		rc.SetTransportReady(metav1.ConditionFalse, verdict.TransportReady, verdict.Message)
 		rc.SetRegistered(metav1.ConditionFalse, verdict.Registered, verdict.Message)
@@ -69,14 +83,56 @@ func (s *transportStep) Run(ctx context.Context, rc *ReconcileContext) error {
 	return nil
 }
 
-// SetupWithManager owns the transport Deployments, so a change of their
-// status requeues the endpoint. It watches the credential Secret and, when
-// configured, the trust bundle or GDS CA ConfigMap; config.ManagerOptions
-// narrows both caches to those names.
+// noteServiceProblem queues a Warning Event for a ServiceProblem that differs
+// from the last one emitted for the endpoint, and records it once the Event
+// is out. No ServiceProblem clears the record.
+func (s *transportStep) noteServiceProblem(rc *ReconcileContext, p *transport.Problem) {
+	key := client.ObjectKeyFromObject(rc.Endpoint)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		delete(s.serviceProblems, key)
+		return
+	}
+	if s.serviceProblems[key] == p.Message {
+		return
+	}
+	rc.Event(corev1.EventTypeWarning, p.EventReason, "%s", p.Message)
+	rc.AfterEvents(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.serviceProblems == nil {
+			s.serviceProblems = map[types.NamespacedName]string{}
+		}
+		s.serviceProblems[key] = p.Message
+	})
+}
+
+// Forget drops the recorded ServiceProblem of a deleted endpoint.
+func (s *transportStep) Forget(key types.NamespacedName) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.serviceProblems, key)
+}
+
+// ownedTypes are the objects the transport step controls: a change of one
+// requeues its InferenceEndpoint. Services are owned whether or not pool
+// export is on, so a pool export Service created earlier is still watched.
+func ownedTypes() []client.Object {
+	return []client.Object{&appsv1.Deployment{}, &corev1.Service{}}
+}
+
+// SetupWithManager owns the transport Deployments and pool export Services,
+// so a change of their status or a drift of the Service requeues the
+// endpoint. It watches the credential Secret and, when configured, the trust
+// bundle or GDS CA ConfigMap; config.ManagerOptions narrows both caches to
+// those names.
 func (s *transportStep) SetupWithManager(_ context.Context, _ ctrl.Manager, b *builder.Builder) error {
 	cfg := s.reconciler.Config()
-	b.Owns(&appsv1.Deployment{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(cfg.ClusterCredentialSecret)))
+	for _, obj := range ownedTypes() {
+		b.Owns(obj)
+	}
+	b.Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(cfg.ClusterCredentialSecret)))
 	if bundle := cfg.CABundleConfigMap(); bundle != "" {
 		b.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(s.endpointsForReplicated(bundle)))
 	}

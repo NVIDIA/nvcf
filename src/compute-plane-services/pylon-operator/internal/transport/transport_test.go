@@ -137,6 +137,8 @@ func kindOf(obj client.Object) string {
 		return "Secret"
 	case *corev1.ConfigMap:
 		return "ConfigMap"
+	case *corev1.Service:
+		return "Service"
 	}
 	return fmt.Sprintf("%T", obj)
 }

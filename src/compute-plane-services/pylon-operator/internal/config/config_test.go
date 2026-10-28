@@ -260,12 +260,26 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name:    "pool export needs the gds router source",
+			args:    []string{"--gds-pool-export"},
+			wantErr: []string{"--gds-pool-export requires --router-source=gds"},
+		},
+		{
 			name: "gds router source",
 			args: []string{
 				"--router-source=gds",
 				"--gds-url=https://gds.example.test,https://gds.us-east-1.example.test:8443/",
 				"--gds-clusterset-id=prod",
 				"--gds-tls-ca-configmap=gds-ca",
+			},
+		},
+		{
+			name: "pool export with the gds router source",
+			args: []string{
+				"--router-source=gds",
+				"--gds-url=https://gds.example.test",
+				"--gds-clusterset-id=prod",
+				"--gds-pool-export",
 			},
 		},
 		{
@@ -410,6 +424,26 @@ func TestManagerOptions(t *testing.T) {
 	configMaps = byObject[*corev1.ConfigMap](t, opts.Cache.ByObject)
 	assert.Equal(t, fields.OneTermEqualSelector("metadata.name", "gds-ca").String(), configMaps.Field.String(),
 		"the GDS CA ConfigMap is cached like the trust bundle")
+}
+
+func TestPoolExport(t *testing.T) {
+	gds := []string{"--router-source=gds", "--gds-url=https://gds.example.test", "--gds-clusterset-id=prod"}
+	for _, tt := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "default"},
+		{name: "gds without pool export", args: gds},
+		{name: "gds with pool export", args: append(append([]string{}, gds...), "--gds-pool-export"), want: true},
+		{name: "pool export needs the gds source", args: []string{"--gds-pool-export"}},
+		{name: "explicitly off", args: append(append([]string{}, gds...), "--gds-pool-export=false")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := valid(t, tt.args...)
+			assert.Equal(t, tt.want, c.PoolExport())
+		})
+	}
 }
 
 func TestCABundleConfigMap(t *testing.T) {

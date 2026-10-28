@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 
@@ -374,6 +375,23 @@ func TestGDSArgs(t *testing.T) {
 			want:   withRouterArgs(append(gdsArgs, "--stargate-address="+testRouter)...),
 		},
 		{
+			name:   "pool export names the pool",
+			mutate: func(c *config.Config) { c.GDSPoolExport = true },
+			want:   withRouterArgs(append(gdsArgs, "--gds-pool-name=llama")...),
+		},
+		{
+			name: "pool export with every GDS flag",
+			mutate: func(c *config.Config) {
+				c.GDSPoolExport = true
+				c.GDSTLSCAConfigMap = "gds-ca"
+				c.RouterGRPCAddress = testRouter
+			},
+			want: withRouterArgs(append(gdsArgs,
+				"--gds-tls-ca-cert-path=/etc/pylon-operator/tls/ca.crt",
+				"--gds-pool-name=llama",
+				"--stargate-address="+testRouter)...),
+		},
+		{
 			name: "dollar signs are escaped",
 			mutate: func(c *config.Config) {
 				c.GDSURLs = []string{"https://gds$.example.test"}
@@ -429,6 +447,120 @@ func TestGDSCABundle(t *testing.T) {
 	static.GDSTLSCAConfigMap = "gds-ca"
 	assert.Len(t, Deployment(endpoint(), static, 1).Spec.Template.Spec.Volumes, 1,
 		"the static router source ignores the GDS CA")
+}
+
+// TestPoolExportArgs checks that --gds-pool-name follows the pool name and
+// is rendered only with pool export and the GDS router source.
+func TestPoolExportArgs(t *testing.T) {
+	ep := endpoint()
+	ep.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "llama-pool"}
+	cfg := gdsConfig()
+	cfg.GDSPoolExport = true
+	assert.Contains(t, Args(ep, cfg), "--gds-pool-name=llama-pool")
+
+	cfg.GDSPoolExport = false
+	assert.NotContains(t, strings.Join(Args(ep, cfg), " "), "--gds-pool-name", "no pool name without pool export")
+
+	static := testConfig()
+	static.GDSPoolExport = true
+	assert.Equal(t, minimalArgs, Args(ep, static), "the static source ignores pool export")
+}
+
+func TestPoolName(t *testing.T) {
+	long := strings.Repeat("a", 70)
+	tests := []struct {
+		name       string
+		endpoint   string
+		spec       *pylonv1alpha1.GlobalDiscoverySpec
+		want       string
+		wantHashed bool
+	}{
+		{name: "endpoint name", endpoint: "llama", want: "llama"},
+		{name: "empty spec", endpoint: "llama", spec: &pylonv1alpha1.GlobalDiscoverySpec{}, want: "llama"},
+		{name: "spec pool name", endpoint: "llama", spec: &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "shared-pool"}, want: "shared-pool"},
+		{name: "dots are not DNS labels", endpoint: "llama-3.1", wantHashed: true},
+		{name: "longer than a DNS label", endpoint: long, wantHashed: true},
+		{name: "exactly 63", endpoint: strings.Repeat("b", 63), want: strings.Repeat("b", 63)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := endpointNamed(testNamespace, tt.endpoint, testUID)
+			ep.Spec.GlobalDiscovery = tt.spec
+			got := PoolName(ep)
+			assert.Empty(t, validation.IsDNS1123Label(got), got)
+			if tt.wantHashed {
+				assert.Regexp(t, `-[0-9a-f]{8}$`, got)
+				assert.Equal(t, got, PoolName(endpointNamed("other", tt.endpoint, "other-uid")), "stable")
+				return
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+	assert.True(t, strings.HasPrefix(PoolName(endpointNamed(testNamespace, "llama-3.1", testUID)), "llama-3-1-"), "dots become dashes")
+}
+
+// TestServiceGolden pins the whole pool export Service, with a known GPU
+// product and a pool name from the spec.
+func TestServiceGolden(t *testing.T) {
+	ep := endpoint()
+	ep.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "llama-pool"}
+	ep.Status.GPU = &pylonv1alpha1.GPUStatus{Product: "NVIDIA-GB10", Source: pylonv1alpha1.GPUSourceNodeLabels}
+
+	want := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pylon-llama",
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "pylon",
+				"app.kubernetes.io/managed-by": "pylon-operator",
+				"pylon.nvidia.com/endpoint":    "llama",
+				"gds.nvidia.com/export":        "true",
+				"gds.nvidia.com/role":          "pylon",
+				"gds.nvidia.com/pool":          "llama-pool",
+			},
+			Annotations: map[string]string{
+				"gds.nvidia.com/pool-models":    testModel,
+				"gds.nvidia.com/hardware-class": "NVIDIA-GB10",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         "pylon.nvidia.com/v1alpha1",
+				Kind:               "InferenceEndpoint",
+				Name:               testName,
+				UID:                testUID,
+				Controller:         ptr.To(true),
+				BlockOwnerDeletion: ptr.To(true),
+			}},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{
+				"app.kubernetes.io/name":    "pylon",
+				"pylon.nvidia.com/endpoint": "llama",
+			},
+			Ports: []corev1.ServicePort{{
+				Name:       "metrics",
+				Protocol:   corev1.ProtocolTCP,
+				Port:       9089,
+				TargetPort: intstr.FromString("metrics"),
+			}},
+		},
+	}
+	got := Service(ep)
+	assert.Equal(t, want, got)
+	assert.Equal(t, DeploymentName(ep), got.Name, "named like the transport Deployment")
+	assert.Equal(t, Deployment(ep, gdsConfig(), 1).Spec.Selector.MatchLabels, got.Spec.Selector, "selects the transport pods")
+}
+
+func TestServiceAnnotations(t *testing.T) {
+	ep := endpoint()
+	assert.Equal(t, map[string]string{"gds.nvidia.com/pool-models": testModel}, Service(ep).Annotations, "no hardware class without a GPU status")
+	assert.Equal(t, "llama", Service(ep).Labels["gds.nvidia.com/pool"], "the pool defaults to the endpoint name")
+
+	ep.Status.GPU = &pylonv1alpha1.GPUStatus{Source: pylonv1alpha1.GPUSourceUnknown}
+	assert.NotContains(t, Service(ep).Annotations, "gds.nvidia.com/hardware-class", "no hardware class while the GPU is unknown")
+
+	ep.Status.GPU = &pylonv1alpha1.GPUStatus{Product: "NVIDIA-B200,NVIDIA-GB10", Source: pylonv1alpha1.GPUSourceNodeLabels}
+	assert.Equal(t, "NVIDIA-B200,NVIDIA-GB10", Service(ep).Annotations["gds.nvidia.com/hardware-class"])
 }
 
 func TestRouterUsesTLS(t *testing.T) {
@@ -560,6 +692,27 @@ func TestSpecHash(t *testing.T) {
 			assert.Equal(t, base, Deployment(ep, cfg, replicas).Spec.Template.Annotations[SpecHashAnnotation])
 		})
 	}
+}
+
+// TestSpecHashPoolExport checks that pool export and the pool name roll the
+// transport only while pool export is on, and that a GPU type change, which
+// reaches the Service, never does.
+func TestSpecHashPoolExport(t *testing.T) {
+	hash := func(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) string {
+		return Deployment(ep, cfg, 1).Spec.Template.Annotations[SpecHashAnnotation]
+	}
+	off := gdsConfig()
+	on := gdsConfig()
+	on.GDSPoolExport = true
+	named := endpoint()
+	named.Spec.GlobalDiscovery = &pylonv1alpha1.GlobalDiscoverySpec{PoolName: "llama-pool"}
+	withGPU := endpoint()
+	withGPU.Status.GPU = &pylonv1alpha1.GPUStatus{Product: "NVIDIA-GB10", Source: pylonv1alpha1.GPUSourceNodeLabels}
+
+	assert.NotEqual(t, hash(endpoint(), off), hash(endpoint(), on), "turning pool export on rolls")
+	assert.NotEqual(t, hash(endpoint(), on), hash(named, on), "a pool name change rolls with pool export")
+	assert.Equal(t, hash(endpoint(), off), hash(named, off), "the pool name is ignored without pool export")
+	assert.Equal(t, hash(endpoint(), on), hash(withGPU, on), "a GPU type change does not roll")
 }
 
 func TestDisableQuicGSOEnvironment(t *testing.T) {
