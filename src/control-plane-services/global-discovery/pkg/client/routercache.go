@@ -241,6 +241,33 @@ func (s *RouterState) DerivedServiceURL(r *gdsv1.Router) string {
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(r.GetGrpcPort())))
 }
 
+// RouterIsDirect reports whether the router's replicas are the Stargate pods
+// themselves (ROUTER_MODE_DIRECT, annotation gds.nvidia.com/router-mode:
+// direct), so a pylon dials each replica with the authority from
+// RouterReplicaAuthority. ROUTER_MODE_UNSPECIFIED and
+// ROUTER_MODE_BACKEND_ROUTER are false: the replicas are stargate-k8s-router
+// pods and the per-pod authorities come from WatchStargates.
+func RouterIsDirect(r *gdsv1.Router) bool {
+	return r.GetRouterMode() == gdsv1.RouterMode_ROUTER_MODE_DIRECT
+}
+
+// RouterReplicaAuthority returns the authority of one replica of a
+// direct-mode router, the router's hostname_template with {pod_name}
+// replaced by the replica's identity, plus ":" and the router's grpc_port
+// (api.ReplicaAuthority), for example stargate-0.stargate.example.com:50071.
+// Its host is also the replica's QUIC SNI and TLS name. It returns "" when
+// the router is not in direct mode (RouterIsDirect), since backend-router
+// replicas are k8s-router pods whose names are not authorities, and when
+// the template, the identity or the gRPC port is missing or the template
+// does not contain {pod_name} exactly once. The replica's readiness and the
+// cluster lease are not checked.
+func RouterReplicaAuthority(r *gdsv1.Router, rep *gdsv1.RouterReplica) string {
+	if !RouterIsDirect(r) {
+		return ""
+	}
+	return api.ReplicaAuthority(r.GetHostnameTemplate(), rep.GetIdentity(), r.GetGrpcPort())
+}
+
 // scheme returns the router's dial scheme, else the state's default scheme,
 // else DefaultDialScheme, lower-cased; ok is false unless it is http or
 // https.
