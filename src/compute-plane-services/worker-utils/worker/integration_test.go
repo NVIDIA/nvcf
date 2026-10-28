@@ -263,8 +263,34 @@ func TestIntegrationWorkDirsAreIsolated(t *testing.T) {
 	}
 }
 
+func TestIntegrationCallbackPreconnect(t *testing.T) {
+	env := newIntegrationEnv(t, func(cfg *Config) { cfg.CallbackPreconnectEnabled = true })
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%t", streaming), func(t *testing.T) {
+			req := defaultITRequest()
+			if streaming {
+				req.RequestHeaders = []*pb.StringKV{{Key: "Accept", Value: "text/event-stream"}}
+				req.RequestPath = "/echo-stream"
+			}
+			env.runWorker(t, itSerial(env.cfg.FunctionVersionId, itScenario{Region: "region-1", WorkerInvokeFunctionRequest: req}))
+		})
+	}
+}
+
+// Run the existing assets, large responses, regional work and both 202 polling
+// paths with preparation enabled too. Stateful work uses a separate proxy.
+func TestIntegrationCallbackPreconnectCompatibility(t *testing.T) {
+	t.Run("backwards-compatible", func(t *testing.T) { testIntegrationBackwardsCompatible(t, true) })
+	t.Run("current-http", func(t *testing.T) { testIntegrationNonBackwardsCompatible(t, true) })
+	t.Run("stateful-bypass", func(t *testing.T) { testIntegrationStateful(t, true) })
+}
+
 func TestIntegrationBackwardsCompatible(t *testing.T) {
-	env := newIntegrationEnv(t, nil)
+	testIntegrationBackwardsCompatible(t, false)
+}
+
+func testIntegrationBackwardsCompatible(t *testing.T, enabled bool) {
+	env := newIntegrationEnv(t, func(c *Config) { c.CallbackPreconnectEnabled = enabled })
 
 	t.Run("single request with asset", func(t *testing.T) {
 		req := defaultITRequest()
@@ -517,7 +543,11 @@ func TestIntegrationESSTokenRefresh(t *testing.T) {
 // stateful peer attached the proxy attempt fails, but the message is still
 // acked; we only need the worker to consume and process it.
 func TestIntegrationStateful(t *testing.T) {
-	env := newIntegrationEnv(t, nil)
+	testIntegrationStateful(t, false)
+}
+
+func testIntegrationStateful(t *testing.T, enabled bool) {
+	env := newIntegrationEnv(t, func(c *Config) { c.CallbackPreconnectEnabled = enabled })
 	req := defaultITRequest()
 	req.StatefulConfig = &pb.WorkerInvokeFunctionRequest_StatefulConfig{
 		NvcfRegionOfInvoker: "region-1",
@@ -563,7 +593,12 @@ func TestIntegrationStateful(t *testing.T) {
 }
 
 func TestIntegrationNonBackwardsCompatible(t *testing.T) {
+	testIntegrationNonBackwardsCompatible(t, false)
+}
+
+func testIntegrationNonBackwardsCompatible(t *testing.T, enabled bool) {
 	env := newIntegrationEnv(t, func(c *Config) {
+		c.CallbackPreconnectEnabled = enabled
 		c.V3BackwardsCompatibilityDisabled = true
 	})
 

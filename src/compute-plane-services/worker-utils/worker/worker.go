@@ -73,6 +73,7 @@ const defaultSharedConfigDir = "/config/shared"
 const EssTokenFileName = "jwt.token"
 
 type Config struct {
+	CallbackPreconnectEnabled           bool          `mapstructure:"NVCF_CALLBACK_PRECONNECT_ENABLED"`
 	NVCFWorkerToken                     string        `mapstructure:"NVCF_WORKER_TOKEN"`
 	NVCFFqdn                            string        `mapstructure:"NVCF_FQDN_GRPC"`
 	NVCFFqdnNATS                        string        `mapstructure:"NVCF_FQDN_NATS"`
@@ -296,7 +297,7 @@ func NewNVCFWorker(ctx context.Context, zapLogger *logs.ZapLogger, config Config
 		baseResponseDir:         baseResponseDir,
 		progressMonitor:         progressMonitor,
 		health:                  h,
-		sharedProxyClient:       httpstream.NewProxiedClient(),
+		sharedProxyClient:       httpstream.NewProxiedClient(httpstream.WithCallbackPreconnect(config.CallbackPreconnectEnabled)),
 		inFlightCancels:         make(map[string]context.CancelCauseFunc),
 		server: servers.NewGRPCServer(&servers.GRPCConfig{
 			HTTPAddr:  "0.0.0.0:9190",

@@ -28,6 +28,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
 	"github.com/valyala/bytebufferpool"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -44,7 +45,23 @@ const proxyURLKey proxyURLKeyType = "proxyURL"
 
 type ProxyClient *http.Client // new type to force usage of NewProxiedClient
 
-func NewProxiedClient() ProxyClient {
+// ClientOption configures optional behavior of the shared callback client.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	callbackPreconnect bool
+}
+
+// WithCallbackPreconnect enables bounded, speculative callback connection setup.
+func WithCallbackPreconnect(enabled bool) ClientOption {
+	return func(o *clientOptions) { o.callbackPreconnect = enabled }
+}
+
+func NewProxiedClient(options ...ClientOption) ProxyClient {
+	var opts clientOptions
+	for _, option := range options {
+		option(&opts)
+	}
 	protocols := &http.Protocols{}
 	// go's http2 proxy support is terrible. it currently does not allow http upstreams on https
 	// proxy connections because it is hardcoded to reject http schemes with the http1+http2
@@ -61,35 +78,38 @@ func NewProxiedClient() ProxyClient {
 	if err != nil {
 		zap.L().Fatal("failed to load proxy CA trust pool", zap.Error(err))
 	}
-	return &http.Client{
-		Transport: tracing.NewOtelTransport(&http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    proxyCAs,
-				MinVersion: tls.VersionTLS12,
-			},
-			MaxIdleConnsPerHost: 256,
-			// envoy is set to 1 hour 5 seconds.
-			// ensure we time out first so we never send a request on a dead connection.
-			IdleConnTimeout:    5 * time.Minute,
-			DisableCompression: true,
-			Protocols:          protocols,
-			HTTP2: &http.HTTP2Config{
-				MaxConcurrentStreams: 16, // try to avoid head of line blocking as much as possible
-			},
-			Proxy: func(r *http.Request) (*url.URL, error) {
-				// proxy url from request context with static typed key
-				value := r.Context().Value(proxyURLKey)
-				if value == nil {
-					return nil, nil
-				}
-				proxyURL, ok := value.(*url.URL)
-				if !ok {
-					return nil, fmt.Errorf("proxyURL is not a *url.URL")
-				}
-				return proxyURL, nil
-			},
-		}),
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs:    proxyCAs,
+			MinVersion: tls.VersionTLS12,
+		},
+		MaxIdleConnsPerHost: 256,
+		// envoy is set to 1 hour 5 seconds.
+		// ensure we time out first so we never send a request on a dead connection.
+		IdleConnTimeout:    5 * time.Minute,
+		DisableCompression: true,
+		Protocols:          protocols,
+		HTTP2: &http.HTTP2Config{
+			MaxConcurrentStreams: 16, // try to avoid head of line blocking as much as possible
+		},
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			// proxy url from request context with static typed key
+			value := r.Context().Value(proxyURLKey)
+			if value == nil {
+				return nil, nil
+			}
+			proxyURL, ok := value.(*url.URL)
+			if !ok {
+				return nil, fmt.Errorf("proxyURL is not a *url.URL")
+			}
+			return proxyURL, nil
+		},
 	}
+	var rt http.RoundTripper = tracing.NewOtelTransport(transport)
+	if opts.callbackPreconnect {
+		rt = newCallbackTransport(transport, defaultPreconnectConfig())
+	}
+	return &http.Client{Transport: rt}
 }
 
 const h1ContentType = "application/octet-stream+h1"
@@ -102,6 +122,8 @@ type RequestStreamHandler struct {
 	ResponseAuthorizationToken string // For POST request to send responses
 	RequestAuthorizationToken  string // For GET request to receive client data
 	httpClient                 ProxyClient
+	cancelPreconnect           context.CancelFunc
+	preconnectAttributes       []attribute.KeyValue
 
 	oneResponse                 sync.Once
 	cancelGetClientResponseBody context.CancelFunc
@@ -241,6 +263,15 @@ func NewRequestStreamHandler(ctx context.Context, sharedProxyClient ProxyClient,
 			}, nil
 		}
 	}
+	if preparer, ok := ((*http.Client)(sharedProxyClient)).Transport.(interface {
+		preconnect(context.Context, string, string)
+	}); ok {
+		prepareCtx, cancel := context.WithCancel(ctx)
+		handler.cancelPreconnect = cancel
+		handler.preconnectAttributes = callbackTraceAttributes(requestDataWritable)
+		prepareCtx = context.WithValue(prepareCtx, callbackTraceAttributesKey{}, handler.preconnectAttributes)
+		preparer.preconnect(prepareCtx, handler.TargetURI, requestDataWritable.GetRequestId())
+	}
 	return &handler, nil
 }
 
@@ -316,6 +347,10 @@ func (s *RequestStreamHandler) SendResponse(ctx context.Context, resp *http.Resp
 			ctx = context.WithValue(ctx, proxyURLKey, s.ProxyURI)
 		}
 
+		ctx = context.WithValue(ctx, callbackPostKey{}, true)
+		if s.cancelPreconnect != nil {
+			ctx = context.WithValue(ctx, callbackTraceAttributesKey{}, s.preconnectAttributes)
+		}
 		postReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, postTarget, attachRequestBody)
 		if reqErr != nil {
 			err = fmt.Errorf("failed to create POST request: %w", reqErr)
@@ -394,6 +429,9 @@ func (s *RequestStreamHandler) GetClientRequestBody() (io.ReadCloser, error) {
 
 // Close closes the pipe writer and response body
 func (s *RequestStreamHandler) Close() error {
+	if s.cancelPreconnect != nil {
+		s.cancelPreconnect()
+	}
 	// Cancel context to abort any in-progress requests
 	if s.cancelGetClientResponseBody != nil {
 		s.cancelGetClientResponseBody()
