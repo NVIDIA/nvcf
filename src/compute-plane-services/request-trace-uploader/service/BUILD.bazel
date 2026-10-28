@@ -4,8 +4,12 @@ go_library(
     name = "service",
     srcs = [
         "adapters.go",
+        "cleanup.go",
+        "confirm.go",
+        "intake.go",
         "pipeline.go",
         "service.go",
+        "submit.go",
         "suppression.go",
         "uploader.go",
     ],
