@@ -858,7 +858,12 @@ func materializeResolvedInventorySourceCharts(
 			return nil, fmt.Errorf("source chart %s: %w", name, err)
 		}
 		if !inSource {
-			return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s%s", name, tag, stackSource.Commit, lineage.describeOrigins())
+			branch, branches := chartReleaseBranchContaining(repoRoot, tag, sourceChart.TagPrefix, release.Version)
+			if branch == "" {
+				return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s%s, nor of chart release branch %s",
+					name, tag, stackSource.Commit, lineage.describeOrigins(), strings.Join(branches, " or "))
+			}
+			fmt.Fprintf(os.Stderr, "source chart %s tag %s is outside stack commit %s; using the release from %s\n", name, tag, stackSource.Commit, branch)
 		}
 		chartPath := filepath.Join(chartRoot, name, release.Version)
 		if err := extractResolvedInventoryGitChart(repoRoot, tag, sourceChart.Path, chartPath); err != nil {
@@ -980,6 +985,33 @@ func releaseSnapshotOrigins(repoRoot, stackCommit string) ([]string, error) {
 		}
 	}
 	return origins, nil
+}
+
+const (
+	// chartReleaseRemote holds a remote-tracking ref for every branch in the
+	// release workflow's full-history checkout.
+	chartReleaseRemote        = "origin"
+	chartReleaseDefaultBranch = "main"
+)
+
+// chartReleaseBranchContaining returns the reviewed branch a chart tag was
+// released from, or "" with the branches it checked. A chart releases from
+// the default branch or from its maintenance branch for the tag's minor,
+// release-<tagPrefix>X.Y. A stack patch can pin such a release after its
+// train was cut, when the tag is not in the stack's history.
+func chartReleaseBranchContaining(repoRoot, tag, tagPrefix, version string) (string, []string) {
+	major, rest, _ := strings.Cut(version, ".")
+	minor, _, _ := strings.Cut(rest, ".")
+	branches := []string{
+		chartReleaseRemote + "/" + chartReleaseDefaultBranch,
+		chartReleaseRemote + "/release-" + tagPrefix + major + "." + minor,
+	}
+	for _, branch := range branches {
+		if _, err := gitOutput(repoRoot, "merge-base", "--is-ancestor", tag, "refs/remotes/"+branch); err == nil {
+			return branch, nil
+		}
+	}
+	return "", branches
 }
 
 func extractResolvedInventoryGitChart(repoRoot, tag, sourcePath, destination string) error {
