@@ -22,6 +22,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/retry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/uploadertest"
 )
 
@@ -301,5 +302,34 @@ func TestIntakeStopsAsSoonAsTheQuarantineBreakerTrips(t *testing.T) {
 	}
 	if quarantined != faults.QuarantineTrip {
 		t.Fatalf("quarantined %d segments with a breaker that trips at %d, want intake to stop at the trip", quarantined, faults.QuarantineTrip)
+	}
+}
+
+func TestAConfirmationWhoseMembersWereNotRecordedIsFinishedWithoutARestart(t *testing.T) {
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	segments := filepath.Join(spool.Dir, "request-trace-uploader-state", "segments")
+	var restore func()
+	fake := backendtest.NewFake()
+	metrics, err := telemetry.NewMemory("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploader := newUploader(t, spool, fake, service.Options{Metrics: metrics, Point: func(name string) {
+		if name == service.PointReceiptSaved && restore == nil {
+			restore = readOnly(t, segments)
+		}
+	}}, nil)
+
+	_ = uploader.Pass(context.Background())
+	restore()
+	if gone(closed[0]) {
+		t.Fatal("source deleted while its confirmation was not recorded")
+	}
+	passUntil(t, uploader, func() bool { return gone(closed[0]) })
+	if fake.SubmitCalls() != 1 {
+		t.Fatalf("submit calls = %d, want 1", fake.SubmitCalls())
+	}
+	if got, _ := metrics.Value(telemetry.Uploads, telemetry.Labels{"status": "success"}); got != 1 {
+		t.Errorf("uploads{success} = %v, want 1", got)
 	}
 }

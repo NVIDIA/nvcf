@@ -536,6 +536,11 @@ func (u *Uploader) split(b journal.Batch, reason string) error {
 func (u *Uploader) pollRound(ctx context.Context) error {
 	now := time.Now()
 	u.saveUnsavedReceipts(now)
+	// A confirmation whose member records failed is finished here, so its
+	// segments reach cleanup without a restart.
+	if err := u.store.SettleBatches(); err != nil {
+		slog.Warn("finish recorded confirmations", "error", safeError(err))
+	}
 	for _, b := range u.store.Batches() {
 		if b.Receipt == nil || b.Receipt.Backend != u.name {
 			continue
@@ -575,6 +580,11 @@ func (u *Uploader) applyStatus(b journal.Batch, status backend.Status, err error
 	switch status {
 	case backend.StatusSuccess:
 		if err := u.store.ConfirmBatch(b.ID); err != nil {
+			if stored, ok := u.store.Batch(b.ID); ok && stored.State == journal.StateConfirmed {
+				// The batch is confirmed; only member records failed, and
+				// the next round finishes them.
+				u.confirmed(b, now)
+			}
 			return err
 		}
 		u.point(PointConfirmed)

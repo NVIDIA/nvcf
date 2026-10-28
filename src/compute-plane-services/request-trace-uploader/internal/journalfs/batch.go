@@ -278,8 +278,28 @@ func (s *Store) ReleaseBatch(batchID string) error {
 	return s.settleMembersLocked(s.batches[batchID])
 }
 
+// SettleBatches applies every confirmed or released batch to the members
+// it has not reached yet, such as after a member write failed during
+// ConfirmBatch. It writes nothing when every member is settled, so a caller
+// can run it on every round.
+func (s *Store) SettleBatches() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.openLocked(); err != nil {
+		return err
+	}
+	var errs []error
+	for _, b := range s.sortedBatchesLocked() {
+		if terminalBatch(b.State) {
+			errs = append(errs, s.settleMembersLocked(b))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // settleMembersLocked applies a terminal batch state to every member
-// destination that still points at the batch. It is idempotent.
+// destination that still points at the batch. It is idempotent and skips a
+// destination that is already settled.
 func (s *Store) settleMembersLocked(b *journal.Batch) error {
 	var errs []error
 	for _, m := range b.Members {
@@ -289,6 +309,9 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 		}
 		dest := seg.Destinations[b.Destination]
 		if dest == nil || dest.BatchID != b.ID {
+			continue
+		}
+		if b.State == journal.StateConfirmed && dest.State == journal.StateConfirmed && !inFlight(seg.State) {
 			continue
 		}
 		err := s.updateSegmentLocked(seg.ID, func(seg *journal.Segment) error {
