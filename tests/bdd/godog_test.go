@@ -495,6 +495,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
 	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("SAMPLE_LLM_ECHO_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-echo:test")
+	t.Setenv("SAMPLE_LLM_DECISIONS_IMAGE", "nvcr.io/test-org/test-team/openai-compatible-decisions:test")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -571,8 +572,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	seedFunctionAPIKey(t, home)
 
-	vanityShadow := newVanityShadowFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	decisionRoutes := newDecisionRoutesFake("", &llmRoutingHTTPFake{seen: map[string]bool{}})
+	vanityShadow := newVanityShadowFake("", decisionRoutes)
 	vanityShadow.attach(runner)
+	decisionRoutes.attach(runner)
 	suite.HTTP = vanityShadow
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
@@ -689,10 +692,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--function-type LLM") {
 		t.Fatal("LLM field-fidelity function was not created from SAMPLE_LLM_ECHO_IMAGE")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-llm-decision-routes",
+		"--image nvcr.io/test-org/test-team/openai-compatible-decisions:test",
+		"--function-type LLM") {
+		t.Fatal("decision route function was not created from SAMPLE_LLM_DECISIONS_IMAGE")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 8)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 11)
 	for _, key := range []string{"shadow-warmup", "promptCacheKey", "firstMessageHash", "continuation", "failing-shadow"} {
 		if !vanityShadow.seen[key] {
 			t.Errorf("vanity shadow scenario never exercised %s", key)
@@ -3078,8 +3087,21 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	if os.Getenv(sampleLLMEchoImageEnv) == "" {
 		t.Setenv(sampleLLMEchoImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMEchoDefaultImage)
 	}
+	if os.Getenv(sampleLLMDecisionsImageEnv) == "" {
+		t.Setenv(sampleLLMDecisionsImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMDecisionsDefaultImage)
+	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
 }
+
+// sampleLLMDecisionsImageEnv selects the OpenAI-compatible sample the decision
+// route scenarios deploy. The image must serve /v1/decisions and /v1/systemone,
+// which the released sample does not until a release includes them, so it
+// defaults to the :local tag an operator builds from the same checkout and
+// imports into the cluster.
+const (
+	sampleLLMDecisionsImageEnv     = "SAMPLE_LLM_DECISIONS_IMAGE"
+	sampleLLMDecisionsDefaultImage = "nvcf-openai-compatible-sample:local"
+)
 
 // sampleLLMEchoImageEnv selects the OpenAI-compatible sample the LLM
 // field-fidelity scenario deploys. It defaults to the released in-repo sample
@@ -4027,6 +4049,8 @@ func TestLLMRoutingFeaturesRejectIncompleteAndMisroutedResponses(t *testing.T) {
 		if !found {
 			t.Fatal("missing LLM scenario")
 		}
+		// The decision route scenarios have their own wiring test.
+		scenario, _, _ = strings.Cut(scenario, "\n    # Beta decision routes")
 		brokenModes := []string{"", "chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream", "long-nonstream-too-fast", "long-stream-too-fast"}
 		exercised := []string{"chat-stream", "responses", "classic", "pexec", "unlisted", "long-nonstream", "long-stream"}
 		// Field fidelity runs only in the single-cluster feature.
@@ -4117,6 +4141,9 @@ func (f *vanityShadowFake) Do(ctx context.Context, method, rawURL string, header
 		return harness.HTTPResponse{}, err
 	}
 	if u.Host != "vanity-openai.localhost:8080" {
+		return f.inner.Do(ctx, method, rawURL, headers, body)
+	}
+	if isDecisionRoutePath(u.Path) {
 		return f.inner.Do(ctx, method, rawURL, headers, body)
 	}
 	if method != "POST" || headers["Authorization"] != "Bearer wiring-function-api-key" || headers["Content-Type"] != "application/json" {
