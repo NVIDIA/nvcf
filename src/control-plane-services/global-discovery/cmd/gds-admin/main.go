@@ -184,6 +184,7 @@ type description struct {
 	Exports      []exportRow      `json:"exports"`
 	EndpointSets []endpointSetRow `json:"endpointSets"`
 	Pools        []poolRow        `json:"pools"`
+	PoolAgents   []poolAgentRow   `json:"poolAgents"`
 	Counts       map[string]int   `json:"counts"`
 }
 
@@ -224,6 +225,17 @@ type poolRow struct {
 	DesiredState string `json:"desiredState,omitempty"`
 	LeaseState   string `json:"leaseState,omitempty"`
 	Generation   uint64 `json:"generation"`
+}
+
+// poolAgentRow counts the agent registrations (RegisterPoolAgent) of one
+// role of one pool. A pool known only through its agents has no poolRow.
+type poolAgentRow struct {
+	Cluster       string `json:"cluster"`
+	PoolID        string `json:"poolId"`
+	Pool          string `json:"pool"`
+	Role          string `json:"role"`
+	Registrations int    `json:"registrations"`
+	Active        int    `json:"active"`
 }
 
 func leaseState(l store.Lease, now time.Time, skew time.Duration) string {
@@ -267,10 +279,27 @@ func describeClusterSet(snap store.ClusterSetSnapshot, now time.Time, skew time.
 			LeaseState: leaseState(p.Lease, now, skew), Generation: p.Generation,
 		})
 	}
+	// The snapshot is sorted by key, so the registrations of one pool role
+	// are adjacent.
+	for _, a := range snap.PoolAgents {
+		n := len(d.PoolAgents)
+		if n == 0 || d.PoolAgents[n-1].Cluster != a.Key.Cluster || d.PoolAgents[n-1].PoolID != a.Key.PoolID ||
+			d.PoolAgents[n-1].Role != string(a.Key.Role) {
+			d.PoolAgents = append(d.PoolAgents, poolAgentRow{
+				Cluster: a.Key.Cluster, PoolID: a.Key.PoolID, Pool: a.PoolName, Role: string(a.Key.Role),
+			})
+			n++
+		}
+		d.PoolAgents[n-1].Registrations++
+		if leaseState(a.Lease, now, skew) == string(registry.LeaseStateActive) {
+			d.PoolAgents[n-1].Active++
+		}
+	}
 	d.Counts["clusters"] = len(d.Clusters)
 	d.Counts["exports"] = len(d.Exports)
 	d.Counts["endpointSets"] = len(d.EndpointSets)
 	d.Counts["pools"] = len(d.Pools)
+	d.Counts["poolAgentRegistrations"] = len(snap.PoolAgents)
 	return d
 }
 
@@ -290,9 +319,9 @@ func orDash(s string) string {
 
 func printText(w io.Writer, d description) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "Clusterset %s: %d clusters (%d active), %d exports, %d endpoint sets (%d endpoints), %d pools\n\n",
+	fmt.Fprintf(tw, "Clusterset %s: %d clusters (%d active), %d exports, %d endpoint sets (%d endpoints), %d pools, %d pool agent registrations\n\n",
 		d.ClusterSet, d.Counts["clusters"], d.Counts["activeClusters"], d.Counts["exports"], d.Counts["endpointSets"],
-		d.Counts["endpoints"], d.Counts["pools"])
+		d.Counts["endpoints"], d.Counts["pools"], d.Counts["poolAgentRegistrations"])
 	if len(d.Clusters) > 0 {
 		fmt.Fprintln(tw, "CLUSTER\tREGION\tLEASE\tEPOCH\tRENEWED\tEXPIRES\tGENERATION")
 		for _, c := range d.Clusters {
@@ -320,6 +349,15 @@ func printText(w io.Writer, d description) {
 		fmt.Fprintln(tw, "POOL\tID\tCLUSTER\tDESIRED\tLEASE\tGENERATION")
 		for _, p := range d.Pools {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n", p.Name, p.PoolID, p.Cluster, orDash(p.DesiredState), orDash(p.LeaseState), p.Generation)
+		}
+		if len(d.PoolAgents) > 0 {
+			fmt.Fprintln(tw)
+		}
+	}
+	if len(d.PoolAgents) > 0 {
+		fmt.Fprintln(tw, "POOL AGENT\tPOOL ID\tCLUSTER\tREGISTRATIONS\tACTIVE")
+		for _, a := range d.PoolAgents {
+			fmt.Fprintf(tw, "%s/%s\t%s\t%s\t%d\t%d\n", orDash(a.Pool), a.Role, a.PoolID, a.Cluster, a.Registrations, a.Active)
 		}
 	}
 	_ = tw.Flush()
@@ -386,7 +424,7 @@ func deleteCluster(ctx context.Context, st store.Store, args []string, w io.Writ
 	if err != nil {
 		return fmt.Errorf("load clusterset %q: %w", *clusterSet, err)
 	}
-	var exports, sets, pools int
+	var exports, sets, pools, agents int
 	for _, e := range snap.Exports {
 		if e.Key.Cluster == *cluster {
 			exports++
@@ -402,7 +440,13 @@ func deleteCluster(ctx context.Context, st store.Store, args []string, w io.Writ
 			pools++
 		}
 	}
-	summary := fmt.Sprintf("cluster %s/%s: %d exports, %d endpoint sets, %d pools", *clusterSet, *cluster, exports, sets, pools)
+	for _, a := range snap.PoolAgents {
+		if a.Key.Cluster == *cluster {
+			agents++
+		}
+	}
+	summary := fmt.Sprintf("cluster %s/%s: %d exports, %d endpoint sets, %d pools, %d pool agent registrations",
+		*clusterSet, *cluster, exports, sets, pools, agents)
 	if !*yes {
 		return usageError{fmt.Errorf("would delete %s; pass --yes to delete", summary)}
 	}

@@ -18,13 +18,15 @@
 # README.md for prerequisites, settings and the assertions of each phase.
 #
 # Phase 1: one cluster (the hub), gds-server from the chart with the memory
-# store and one replica, driven over REST through a port-forward.
+# store and one replica, driven over REST through a port-forward, pool agent
+# registrations included.
 # Phase 2: the hub plus clusters a and b on one Docker network, with distinct
 # pod and service CIDRs and static routes between the node containers, and
-# gds-mcs-controller from its chart in a and b: export, import, pools, a
-# controller restart and unexport.
+# gds-mcs-controller from its chart in a and b: export, import, pools and
+# their label-derived agents, a controller restart and unexport.
 # Phase 3: Stargate (llm-request-router chart) exporting itself from a, and a
-# Pylon in b that finds it only through GDS and registers with it.
+# Pylon in b that finds it only through GDS, registers with it and is the
+# PYLON agent of its pool.
 #
 # The script is compatible with bash 3.2 (the macOS default). It talks to its
 # clusters through its own kubeconfig files in the work directory, so it never
@@ -674,7 +676,6 @@ stop_port_forward() {
     kill "${PF_PID}" 2>/dev/null || true
     wait "${PF_PID}" 2>/dev/null || true
     PF_PID=""
-ROUTER_PF_PID=""
   fi
 }
 
@@ -983,6 +984,89 @@ pools_are() {
   [ "${REST_STATUS}" = "200" ] && [ "${got}" = "$2" ]
 }
 
+# POOL_SUMMARY: a jq filter that summarises one pool and its agents as
+#   "<state> relay=<kvRelayLive> ready=<readyEndpointCount> ingress=<readyIngressCount> |"
+# followed by one entry per agent (sorted by role):
+#   " <role>:<source>:<Service or ->:ready=<ready endpoints>:regs=<active registrations>(<agent ids>):<live|dead>"
+# Fields the response omits count as their defaults.
+readonly POOL_SUMMARY='(.state | sub("POOL_STATE_"; "")) + " relay=" + ((.kvRelayLive // false) | tostring)
+  + " ready=" + ((.readyEndpointCount // 0) | tostring) + " ingress=" + ((.readyIngressCount // 0) | tostring) + " |"
+  + ([.agents[]? | " " + (.role | sub("FRONTEND_ROLE_"; "")) + ":" + (.source | sub("AGENT_SOURCE_"; ""))
+      + ":" + (.service.name // "-") + ":ready=" + ((.readyEndpointCount // 0) | tostring)
+      + ":regs=" + ((.activeRegistrationCount // 0) | tostring) + "(" + ([.registrations[]?.agentId] | join("+")) + ")"
+      + ":" + (if .live then "live" else "dead" end)] | join(""))'
+
+# pool_is POOL_ID EXPECTED: GetPool, summarised with POOL_SUMMARY.
+pool_is() {
+  rest GET "${CS_PATH}/pools/$1"
+  local got
+  got="$(rest_json ".pool | ${POOL_SUMMARY}" 2>/dev/null)" || got="<not JSON>"
+  LAST_OBSERVED="HTTP ${REST_STATUS} ${got}"
+  [ "${REST_STATUS}" = "200" ] && [ "${got}" = "$2" ]
+}
+
+# pool_named_is QUERY NAME EXPECTED: pool NAME of ListPools?QUERY,
+# summarised with POOL_SUMMARY, or "absent".
+pool_named_is() {
+  rest GET "${CS_PATH}/pools?$1"
+  local got
+  got="$(rest_json "[.pools[]? | select(.name == \"$2\") | ${POOL_SUMMARY}] | first // \"absent\"" 2>/dev/null)" || got="<not JSON>"
+  LAST_OBSERVED="HTTP ${REST_STATUS} $2: ${got}"
+  [ "${REST_STATUS}" = "200" ] && [ "${got}" = "$3" ]
+}
+
+# Pool agents: one registration per process, keyed (pool, role, agent_id),
+# each with its own lease epoch. Set by register_agent.
+AGENT_POOL_ID=""
+AGENT_EPOCH=""
+RELAY_1_EPOCH=""
+RELAY_ONLY_ID=""
+PYLON_ONLY_ID=""
+
+# register_agent CLUSTER POOL ROLE AGENT_ID POOL_STATE [ATTRIBUTES]:
+# RegisterPoolAgent with a 60s lease. The registration comes back with an
+# ACTIVE lease and an epoch, and the pool is in POOL_STATE. Sets
+# AGENT_POOL_ID and AGENT_EPOCH.
+register_agent() {
+  local attrs=""
+  [ -z "${6:-}" ] || attrs=",\"attributes\":$6"
+  rest_expect POST "${CS_PATH}/pool-agents" \
+    "{\"cluster\":\"$1\",\"poolName\":\"$2\",\"agent\":{\"role\":\"$3\",\"agentId\":\"$4\"${attrs}},\"leaseTtl\":\"60s\"}" \
+    200 "(.poolId | length > 0) and .registration.agentId == \"$4\" and .registration.lease.state == \"LEASE_STATE_ACTIVE\" and (.registration.lease.epoch | length > 0) and .poolState == \"$5\"" \
+    '{poolId, poolState, registration: (.registration | {agentId, lease})}' || return 1
+  AGENT_POOL_ID="$(rest_json .poolId)"
+  AGENT_EPOCH="$(rest_json .registration.lease.epoch)"
+}
+
+# register_blue_relay AGENT_ID: a KV_RELAY registration joins the API pool
+# blue under blue's pool id. With an agent registration blue is no longer
+# API-only, so it is live only through an ingress agent (OPENAI or PYLON);
+# a relay is none, and the started pool turns UNHEALTHY.
+register_blue_relay() {
+  register_agent cluster-a blue FRONTEND_ROLE_KV_RELAY "$1" POOL_STATE_UNHEALTHY || return 1
+  LAST_OBSERVED="${LAST_OBSERVED}; pool id of blue ${POOL_ID}"
+  [ "${AGENT_POOL_ID}" = "${POOL_ID}" ]
+}
+
+# heartbeat_agent POOL_ID ROLE AGENT_ID EPOCH: HeartbeatPoolAgent renews the
+# registration's lease under the same epoch.
+heartbeat_agent() {
+  rest_expect POST "${CS_PATH}/pools/$1/agents/$2:heartbeat" "{\"agentId\":\"$3\",\"epoch\":\"$4\"}" \
+    200 ".lease.state == \"LEASE_STATE_ACTIVE\" and .lease.epoch == \"$4\"" '{lease, poolState}'
+}
+
+# agent_heartbeat_rejected POOL_ID ROLE AGENT_ID EPOCH STATUS REASON
+agent_heartbeat_rejected() {
+  rest_expect POST "${CS_PATH}/pools/$1/agents/$2:heartbeat" "{\"agentId\":\"$3\",\"epoch\":\"$4\"}" \
+    "$5" "any(.details[]?; .reason == \"$6\" and .domain == \"gds.nvidia.com\")" '{code, message}'
+}
+
+# deregister_agent POOL_ID ROLE AGENT_ID: DeregisterPoolAgent; agent_id is a
+# query parameter over REST.
+deregister_agent() {
+  rest_expect DELETE "${CS_PATH}/pools/$1/agents/$2?agent_id=$3" "" 200 '. == {}'
+}
+
 put_export() {  # put_export CLUSTER
   rest_expect PUT "${CS_PATH}/clusters/$1/exports/llm/frontend" "$(cat "${MANIFESTS}/frontend-export.json")" \
     200 ".export.cluster == \"$1\" and .export.spec.type == \"SERVICE_TYPE_CLUSTER_SET_IP\"" \
@@ -1122,7 +1206,7 @@ run_phase_1() {
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
     REMAINING_STEPS="phase 1 setup|phase 1 server|"
   else
-    REMAINING_STEPS="phase 1 setup|phase 1 server|phase 1 clusters|phase 1 pools|phase 1 service export and import|phase 1 pools watch|phase 1 heartbeats and leases|phase 1 deregister|"
+    REMAINING_STEPS="phase 1 setup|phase 1 server|phase 1 clusters|phase 1 pools|phase 1 pool agents|phase 1 service export and import|phase 1 pools watch|phase 1 heartbeats and leases|phase 1 deregister|"
   fi
 
   section "Phase 1 setup: k3d cluster ${E2E_CLUSTER} (hub), gds-server with the memory store"
@@ -1154,6 +1238,54 @@ run_phase_1() {
     pools_are "model=llama-3&region=${E2E_REGION}" "cluster-a/blue=POOL_STATE_ACTIVE" || true
   expect "GET pools?model=mistral-7b lists nothing" "${T}" pools_are "model=mistral-7b" "" || true
   expect "GET pools?region=elsewhere lists nothing" "${T}" pools_are "region=elsewhere" "" || true
+  step_done
+
+  # Agent registrations of blue are removed again at the end of this
+  # section, so blue is an API-only pool for the checks that follow.
+  section "Phase 1: pool agents"
+  if once "RegisterPoolAgent relay-1 (KV_RELAY) on blue: lease ACTIVE, blue's pool id, pool UNHEALTHY (a relay is no ingress agent)" \
+    register_blue_relay relay-1; then
+    RELAY_1_EPOCH="${AGENT_EPOCH}"
+    expect "GET pool blue: agent KV_RELAY from the API, 1 active registration, kvRelayLive" "${T}" \
+      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-1):live" || true
+    once "relay-1 heartbeat with a stale epoch is 409 LEASE_EPOCH_MISMATCH" \
+      agent_heartbeat_rejected "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 1 409 LEASE_EPOCH_MISMATCH || true
+    once "relay-1 heartbeat with its epoch renews the lease" \
+      heartbeat_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 "${RELAY_1_EPOCH}" || true
+    once "RegisterPoolAgent relay-2 (KV_RELAY) on blue: its own ACTIVE lease" register_blue_relay relay-2 || true
+    expect "GET pool blue: 2 active KV_RELAY registrations, relay-1 and relay-2" "${T}" \
+      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=2(relay-1+relay-2):live" || true
+    once "relay-1 heartbeat with its epoch still succeeds after relay-2 registered (no fencing)" \
+      heartbeat_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 "${RELAY_1_EPOCH}" || true
+    once "DELETE agents/FRONTEND_ROLE_KV_RELAY?agent_id=relay-1 deregisters relay-1" \
+      deregister_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 || true
+    expect "GET pool blue: 1 active KV_RELAY registration, relay-2" "${T}" \
+      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-2):live" || true
+    once "DELETE agents/FRONTEND_ROLE_KV_RELAY?agent_id=relay-2 deregisters relay-2" \
+      deregister_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-2 || true
+    expect "GET pool blue: no agents, ACTIVE again through its pool lease" "${T}" \
+      pool_is "${POOL_ID}" "ACTIVE relay=false ready=0 ingress=0 |" || true
+  fi
+  if once "RegisterPoolAgent creates pool relay-only through a KV_RELAY agent (REGISTERED)" \
+    register_agent cluster-a relay-only FRONTEND_ROLE_KV_RELAY relay-only-0 POOL_STATE_REGISTERED; then
+    RELAY_ONLY_ID="${AGENT_POOL_ID}"
+  fi
+  if once "RegisterPoolAgent creates pool pylon-only through a PYLON agent (ACTIVE)" \
+    register_agent cluster-a pylon-only FRONTEND_ROLE_PYLON pylon-0 POOL_STATE_ACTIVE '{"models":"llama-3"}'; then
+    PYLON_ONLY_ID="${AGENT_POOL_ID}"
+  fi
+  expect "ListPools lists relay-only REGISTERED with kvRelayLive: a relay alone is not routable" "${T}" \
+    pool_named_is "cluster=cluster-a" relay-only "REGISTERED relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-only-0):live" || true
+  expect "ListPools lists pylon-only ACTIVE with readyIngressCount 0 and its PYLON agent live" "${T}" \
+    pool_named_is "cluster=cluster-a" pylon-only "ACTIVE relay=false ready=0 ingress=0 | PYLON:API:-:ready=0:regs=1(pylon-0):live" || true
+  if [ -n "${RELAY_ONLY_ID}" ]; then
+    once "DeregisterPoolAgent relay-only-0" deregister_agent "${RELAY_ONLY_ID}" FRONTEND_ROLE_KV_RELAY relay-only-0 || true
+  fi
+  if [ -n "${PYLON_ONLY_ID}" ]; then
+    once "DeregisterPoolAgent pylon-0" deregister_agent "${PYLON_ONLY_ID}" FRONTEND_ROLE_PYLON pylon-0 || true
+  fi
+  expect "pools relay-only and pylon-only are gone with their last registration" "${T}" \
+    pools_are "cluster=cluster-a" "cluster-a/blue=POOL_STATE_ACTIVE" || true
   step_done
 
   section "Phase 1: service export and import"
@@ -1557,7 +1689,7 @@ run_phase_2() {
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
     REMAINING_STEPS="phase 2 setup|phase 2 controllers|"
   else
-    REMAINING_STEPS="phase 2 setup|phase 2 controllers|phase 2 export and import|phase 2 scale down|phase 2 labelled pool|phase 2 API-registered pool|phase 2 controller restart|phase 2 unexport|"
+    REMAINING_STEPS="phase 2 setup|phase 2 controllers|phase 2 export and import|phase 2 pool agents from labels|phase 2 scale down|phase 2 labelled pool|phase 2 API-registered pool|phase 2 controller restart|phase 2 unexport|"
   fi
 
   section "Phase 2 setup: clusters ${a} and ${b} with gds-mcs-controller, gds-server in ${E2E_CLUSTER}"
@@ -1592,6 +1724,21 @@ run_phase_2() {
   else
     skip "a pod in ${b} reaches echo in ${a} through the derived ClusterIP: no routes between the pod CIDRs"
   fi
+  step_done
+
+  # Before the scale down: both echo replicas back every Service here.
+  section "Phase 2: pool agents from labels"
+  expect "ServiceExport echo-pylon in ${a} (role pylon, pool demo): Valid=True, Ready=True" "${T}" \
+    serviceexport_is "${a}" echo-pylon "gds-mcs-controller|Valid=True|Ready=True" || true
+  expect "pool demo: OPENAI agent frontend and PYLON agent echo-pylon from labels, 2 ready each, readyIngressCount 4" "${T}" \
+    pool_named_is "cluster=${ida}" demo \
+    "ACTIVE relay=false ready=2 ingress=4 | OPENAI:LABEL:frontend:ready=2:regs=0():live PYLON:LABEL:echo-pylon:ready=2:regs=0():live" || true
+  expect "pool demo with a PYLON agent still names Service frontend as its OPENAI frontend" "${T}" demo_pool_frontend || true
+  expect "ServiceExport echo-combined in ${a} (roles pool-frontend,pylon, pool combo): Valid=True, Ready=True" "${T}" \
+    serviceexport_is "${a}" echo-combined "gds-mcs-controller|Valid=True|Ready=True" || true
+  expect "pool combo: OPENAI and PYLON agents on Service echo-combined, its 2 ready endpoints counted once" "${T}" \
+    pool_named_is "cluster=${ida}" combo \
+    "ACTIVE relay=false ready=2 ingress=2 | OPENAI:LABEL:echo-combined:ready=2:regs=0():live PYLON:LABEL:echo-combined:ready=2:regs=0():live" || true
   step_done
 
   section "Phase 2: scale down"
@@ -1690,11 +1837,27 @@ router_export_ok() {
 }
 
 # gds_router_ok: ListRouters has the router of cluster a with its pod as a
-# ready replica, dial scheme http and the gRPC port.
+# ready replica, dial scheme http, the gRPC port, the QUIC port named by the
+# chart's gds.nvidia.com/quic-port-name annotation, and the Service ports.
 gds_router_ok() {
   rest_expect GET "${CS_PATH}/routers" "" 200 \
-    "any(.routers[]?; .cluster == \"${E2E_CLUSTER_ID_A}\" and .namespace == \"${E2E_ROUTER_NAMESPACE}\" and .name == \"${ROUTER_RELEASE}\" and .dialScheme == \"http\" and .grpcPort == 50071 and any(.replicas[]?; .address == \"${ROUTER_IP}\" and .ready))" \
-    '[.routers[]? | {cluster, namespace, name, dialScheme, grpcPort, replicas}]'
+    "any(.routers[]?; .cluster == \"${E2E_CLUSTER_ID_A}\" and .namespace == \"${E2E_ROUTER_NAMESPACE}\" and .name == \"${ROUTER_RELEASE}\" and .dialScheme == \"http\" and .grpcPort == 50071 and .quicPort == 50072 and any(.ports[]?; .name == \"grpc\" and .port == 50071) and any(.ports[]?; .name == \"quic\" and .port == 50072 and .protocol == \"PROTOCOL_UDP\") and any(.replicas[]?; .address == \"${ROUTER_IP}\" and .ready))" \
+    '[.routers[]? | {cluster, namespace, name, dialScheme, grpcPort, quicPort, ports: [.ports[]? | "\(.name)/\(.port)/\(.protocol)"], replicas}]'
+}
+
+# gds_pylon_pool_ok: pool e2e-pylon of cluster b is ACTIVE with one PYLON
+# agent from both sources: the exported Service pylon (1 ready endpoint) and
+# the Pylon's own registration under its inference server id.
+gds_pylon_pool_ok() {
+  pool_named_is "cluster=${E2E_CLUSTER_ID_B}" e2e-pylon \
+    "ACTIVE relay=false ready=0 ingress=1 | PYLON:BOTH:pylon:ready=1:regs=1(${E2E_CLUSTER_ID_B}.gds-e2e.pylon.${PYLON_POD}):live"
+}
+
+# pylon_agent_models_ok: the Pylon's registration lists its served model.
+pylon_agent_models_ok() {
+  rest_expect GET "${CS_PATH}/pools?cluster=${E2E_CLUSTER_ID_B}" "" 200 \
+    'any(.pools[]?; .name == "e2e-pylon" and any(.agents[]?; .role == "FRONTEND_ROLE_PYLON" and any(.registrations[]?; .attributes.models == "test-model")))' \
+    '[.pools[]? | select(.name == "e2e-pylon") | .agents[]? | {role, registrations: [.registrations[]? | {agentId, attributes}]}]'
 }
 
 apply_pylon() {
@@ -1808,12 +1971,16 @@ run_phase_3() {
   section "Phase 3: router export"
   expect "Stargate pod in ${a} is ready" "${T}" router_ready_ip || abort
   expect "ServiceExport ${ROUTER_RELEASE} in ${a} (role router): created by the controller, Valid and Ready" "${T}" router_export_ok || true
-  expect "GDS ListRouters: cluster ${ida}, dial scheme http, port 50071, replica ${ROUTER_IP} ready" "${T}" gds_router_ok || abort
+  expect "GDS ListRouters: cluster ${ida}, dial scheme http, gRPC port 50071, QUIC port 50072, ports grpc and quic, replica ${ROUTER_IP} ready" "${T}" gds_router_ok || abort
   step_done
 
   section "Phase 3: pylon"
-  once "Pylon with --gds-url and no --stargate-address, and the sample backend, in ${b}" apply_pylon || abort
+  once "Pylon with --gds-url, --gds-pool-name and no --stargate-address, its Service pylon, and the sample backend, in ${b}" apply_pylon || abort
   expect "Pylon in ${b} learns the router seed from GDS (log: GDS Stargate seeds changed)" "${T}" pylon_log_has "GDS Stargate seeds changed" || true
+  # GDS only: these hold without routes between the pod CIDRs.
+  expect "GDS pool e2e-pylon of cluster ${E2E_CLUSTER_ID_B}: ACTIVE, PYLON agent from the Service pylon and the Pylon's registration (BOTH)" "${T}" \
+    gds_pylon_pool_ok || true
+  expect "GDS pool e2e-pylon: the Pylon's registration lists models test-model" "${T}" pylon_agent_models_ok || true
   step_done
 
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then

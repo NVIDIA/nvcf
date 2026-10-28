@@ -26,6 +26,9 @@ static address. Use it to develop and test the integration. The design is
   Stargate pod directly and do not use GDS follow them.
 - Pylon Operator (`--router-source=gds`) gives transport pods the GDS flags
   instead of `--stargate-address`, so router churn never rolls transport pods.
+- Pools are known to GDS through their agents: the processes that serve a
+  pool, each with a role (see [Pool agents](#pool-agents)). A Pylon is the
+  PYLON agent of its pool.
 
 ```mermaid
 flowchart LR
@@ -194,6 +197,27 @@ watch it in addition. The operator caches one CA ConfigMap name, so when the
 router CA and the GDS CA are both needed, put both certificates in the
 `ca.crt` of one ConfigMap.
 
+To publish each InferenceEndpoint's transport as the PYLON agent of a GDS
+pool, also set:
+
+```yaml
+globalDiscovery:
+  poolExport:
+    enabled: true
+```
+
+The operator then passes `--gds-pool-name` to Pylon and keeps a Service over
+the transport pods with the labels `gds.nvidia.com/export: "true"`,
+`gds.nvidia.com/role: pylon` and `gds.nvidia.com/pool: <pool name>` (port
+`metrics`). The pool name is `spec.globalDiscovery.poolName` of the
+InferenceEndpoint, by default its name. The pool belongs to the cluster
+named by the operator's `clusterId` (Pylon's `--cluster-id`); set it to the
+cluster id the GDS MCS controller of that cluster registers, so that the
+exported Service and the Pylon registrations join one pool. The controller
+must run in the pylon cluster to export the Service; without it GDS still
+sees each Pylon's own registration. `poolExport.enabled` requires
+`router.source: gds`.
+
 A standalone Pylon takes the flags directly:
 
 | Flag | Environment | Meaning |
@@ -202,6 +226,7 @@ A standalone Pylon takes the flags directly:
 | `--gds-clusterset` | `GDS_CLUSTERSET_ID` | Clusterset id, required with `--gds-url` |
 | `--gds-tls-ca-cert-path` | `GDS_TLS_CA_CERT_PATH` | PEM CA bundle for `https://` GDS URLs |
 | `--stargate-address` | | Optional with `--gds-url` and unioned with the GDS seeds; defaults to `127.0.0.1:50071` without it |
+| `--gds-pool-name` | `GDS_POOL_NAME` | GDS pool this Pylon serves, a DNS label. Registers the Pylon as the pool's PYLON agent in cluster `--cluster-id`, with `--inference-server-id` as the agent id and the served models as the `models` attribute; deregisters after the tunnel drain. Requires `--gds-url` and an explicit `--cluster-id` |
 
 ```bash
 pylon \
@@ -211,9 +236,25 @@ pylon \
   --gds-tls-ca-cert-path /etc/pylon/gds-ca.crt \
   --inference-server-id cluster-b.models.llama.pylon-0 \
   --cluster-id cluster-b \
+  --gds-pool-name llama-blue \
   --backend-connectivity reverse \
   --auth-token-file /var/run/pylon/cluster-token
 ```
+
+## Pool agents
+
+GDS models the processes of a pool as typed agents, one per role: the
+OpenAI-compatible frontend (`pool-frontend`, role OPENAI), Pylon (`pylon`,
+PYLON) and the Dynamo PoolRelay (`kv-relay`, KV_RELAY). An agent has two
+sources that GDS merges: an exported Service labelled with
+`gds.nvidia.com/role` and `gds.nvidia.com/pool` (one process in several
+roles uses the annotation `gds.nvidia.com/roles: pool-frontend,pylon`), and
+the registrations the processes make themselves, one per process with its
+own lease, so the Pylon pods of a pool never fence each other. A pool whose
+Pylon agent is live is ACTIVE without an OpenAI frontend: `ready_ingress_count`
+counts its ready Pylons, while `ready_endpoint_count` stays 0. A pool with
+only a live relay is REGISTERED, known but not routable. The module's
+`docs/api.md` (Pools) describes the rules and the agent RPCs.
 
 ## Check it
 
@@ -228,6 +269,11 @@ pylon \
 - Pylon Operator logs `GDS lists routers for the clusterset` at startup, or an
   error when GDS lists none, and sets `status.registration.routers` on every
   InferenceEndpoint.
+- With `--gds-pool-name` or pool export, `GET
+  /v1/clustersets/prod/pools?cluster=cluster-b` lists the pool with an agent
+  of role `FRONTEND_ROLE_PYLON`: source `AGENT_SOURCE_API` for the Pylon
+  registrations, `AGENT_SOURCE_LABEL` for the exported Service, or
+  `AGENT_SOURCE_BOTH`, with one entry in `registrations[]` per Pylon pod.
 
 ## Behaviour to expect
 
