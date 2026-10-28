@@ -63,6 +63,7 @@ go_test(
     name = "telemetry_test",
     srcs = [
         "auth_metrics_test.go",
+        "decision_metrics_test.go",
         "metrics_test.go",
         "olric_collector_test.go",
     ],
@@ -74,6 +75,7 @@ go_test(
         "@com_github_prometheus_common//model",
         "@com_github_stretchr_testify//require",
         "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_metric//:metric",
         "@io_opentelemetry_go_otel_metric//noop",
         "@io_opentelemetry_go_otel_sdk//resource",
