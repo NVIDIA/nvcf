@@ -173,7 +173,7 @@ func valueMarker(v *compat.Value, field string, mime mimeType) marker {
 	if text, ok := v.String(); ok {
 		return stringMarker(text, field, mime)
 	}
-	return newMarker(string(compat.EncodeSorted(v)), "inline", mime)
+	return newMarker(string(compat.CanonicalSorted(v)), "inline", mime)
 }
 
 // Record redacts media anywhere in a decoded record and returns the record,

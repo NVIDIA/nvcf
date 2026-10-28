@@ -40,7 +40,7 @@ func Truthy(v *Value) bool {
 	case Bool:
 		return v.boolean
 	case Int:
-		return v.digits != "0"
+		return canonicalInt(v.number) != "0"
 	case Float:
 		return v.float != 0
 	case String:
@@ -73,7 +73,7 @@ func appendRepr(buf []byte, v *Value) []byte {
 		}
 		return append(buf, "False"...)
 	case Int:
-		return append(buf, v.digits...)
+		return append(buf, canonicalInt(v.number)...)
 	case Float:
 		return append(buf, FloatRepr(v.float)...)
 	case String:

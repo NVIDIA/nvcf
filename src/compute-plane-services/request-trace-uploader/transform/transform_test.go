@@ -412,3 +412,15 @@ func TestPrepareAbortsWhenCloseFails(t *testing.T) {
 		t.Fatal("writer not aborted after Close failed")
 	}
 }
+
+func TestPrepareReencodesChangedRecordsAsPlainJSON(t *testing.T) {
+	line := `{"event_type":"request_payload","event_time_unix_ms":1.5e3,"payload":{"note":"caf\u00e9","request":{"messages":[{"role":"user","content":"` + pngURL + `"}]}}}`
+	_, writer, _ := prepare(t, DefaultConfig(), segmentFile(t, line))
+	if len(writer.payloads) != 1 {
+		t.Fatalf("payloads = %d, want 1", len(writer.payloads))
+	}
+	payload := writer.payloads[0]
+	if !strings.Contains(payload, "\"note\":\"caf\u00e9\"") || !strings.Contains(payload, `"event_time_unix_ms":1.5e3`) || strings.Contains(payload, `\u00e9`) {
+		t.Fatalf("payload = %s, want UTF-8 text and the source number", payload)
+	}
+}

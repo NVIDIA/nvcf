@@ -42,26 +42,138 @@ func loadGolden(t *testing.T) golden {
 	return g
 }
 
-func TestRoundTripMatchesPython(t *testing.T) {
+// TestDecodeMatchesPython checks that Decode accepts what Python's json
+// module accepts and reads the same values, except NaN, Infinity and
+// -Infinity, which are not JSON and are rejected. CanonicalSorted must match
+// Python's sorted output byte for byte: redaction markers hash it.
+func TestDecodeMatchesPython(t *testing.T) {
 	for _, tc := range loadGolden(t).Roundtrip {
 		t.Run(tc.In, func(t *testing.T) {
 			value, err := Decode([]byte(tc.In))
-			if tc.Out == nil {
+			if tc.Out == nil || notJSON(tc.In) {
 				if err == nil {
-					t.Fatalf("Decode() = %s, want an error as Python raises", Encode(value))
+					t.Fatalf("Decode() = %s, want an error", Encode(value))
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("Decode() error = %v", err)
 			}
-			if got := string(Encode(value)); got != *tc.Out {
-				t.Errorf("Encode() = %s\nwant       %s", got, *tc.Out)
+			// Python writes a float that overflowed as Infinity, which is not
+			// JSON, so only the canonical form can be compared for it.
+			if !notJSON(*tc.Out) {
+				want, err := Decode([]byte(*tc.Out))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !Equal(value, want) {
+					t.Errorf("Decode() = %s, want the value of %s", Encode(value), *tc.Out)
+				}
 			}
-			if got := string(EncodeSorted(value)); got != *tc.Sorted {
-				t.Errorf("EncodeSorted() = %s\nwant             %s", got, *tc.Sorted)
+			if got := string(CanonicalSorted(value)); got != *tc.Sorted {
+				t.Errorf("CanonicalSorted() = %s\nwant               %s", got, *tc.Sorted)
 			}
 		})
+	}
+}
+
+// notJSON reports text with the NaN or Infinity tokens that Python's json
+// module reads and writes but JSON does not have.
+func notJSON(text string) bool {
+	return strings.Contains(text, "NaN") || strings.Contains(text, "Infinity")
+}
+
+func TestEncodeWritesPlainJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "compact", in: ` { "a" : [ 1 , true , null ] } `, want: `{"a":[1,true,null]}`},
+		{name: "non-ASCII stays UTF-8", in: `"caf\u00e9 \u2603 \ud83d\ude00"`, want: "\"caf\u00e9 \u2603 \U0001F600\""},
+		{name: "raw non-ASCII stays UTF-8", in: "\"caf\u00e9\"", want: "\"caf\u00e9\""},
+		{name: "quote and backslash", in: `"a\"b\\c\/d"`, want: `"a\"b\\c/d"`},
+		{name: "control characters", in: `"\n\r\t\b\f\u0001\u001f"`, want: `"\n\r\t\b\f\u0001\u001f"`},
+		{name: "delete stays as is", in: `"\u007f"`, want: "\"\x7f\""},
+		{name: "lone surrogate stays escaped", in: `"a\ud800b"`, want: `"a\ud800b"`},
+		{name: "numbers keep their source text", in: `[1.50,1e5,1E+2,-0,0.000001,12345678901234567890123]`, want: `[1.50,1e5,1E+2,-0,0.000001,12345678901234567890123]`},
+		{name: "duplicate key keeps first position and last value", in: `{"k":1,"z":2,"k":3}`, want: `{"k":3,"z":2}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := Decode([]byte(tt.in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(Encode(value)); got != tt.want {
+				t.Fatalf("Encode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsNonStandardNumbers(t *testing.T) {
+	for _, in := range []string{`NaN`, `Infinity`, `-Infinity`, `[1,NaN]`, `{"a":Infinity}`} {
+		if _, err := Decode([]byte(in)); err == nil {
+			t.Errorf("Decode(%s) accepted a value that is not JSON", in)
+		}
+	}
+}
+
+func TestText(t *testing.T) {
+	tests := map[string]string{
+		`"plain"`:         "plain",
+		`" spaced "`:      " spaced ",
+		`"caf\u00e9"`:     "caf\u00e9",
+		`123`:             "123",
+		`1.50`:            "1.50",
+		`1e5`:             "1e5",
+		`true`:            "true",
+		`false`:           "false",
+		`null`:            "",
+		`[1,"a",null]`:    `[1,"a",null]`,
+		`{"a":{"b":1.0}}`: `{"a":{"b":1.0}}`,
+	}
+	for in, want := range tests {
+		value, err := Decode([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Text(value); got != want {
+			t.Errorf("Text(%s) = %q, want %q", in, got, want)
+		}
+	}
+	if got := Text(nil); got != "" {
+		t.Errorf("Text(nil) = %q, want empty", got)
+	}
+}
+
+func TestEqual(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{a: `{"a":1,"b":[true,null]}`, b: `{"a":1,"b":[true,null]}`, want: true},
+		{a: `{"a":1,"b":2}`, b: `{"b":2,"a":1}`, want: false},
+		{a: `1.5e3`, b: `1500.0`, want: true},
+		{a: `-0`, b: `0`, want: true},
+		{a: `1`, b: `1.0`, want: false},
+		{a: `"a"`, b: `"b"`, want: false},
+		{a: `[1]`, b: `[1,2]`, want: false},
+		{a: `{"a":1}`, b: `{"a":1,"b":2}`, want: false},
+	}
+	for _, tt := range tests {
+		a, err := Decode([]byte(tt.a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := Decode([]byte(tt.b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Equal(a, b); got != tt.want {
+			t.Errorf("Equal(%s, %s) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
 	}
 }
 
@@ -151,6 +263,9 @@ func loadExtras(t *testing.T) pythonExtras {
 
 func TestPyStrMatchesPython(t *testing.T) {
 	for _, tc := range loadExtras(t).PyStr {
+		if notJSON(tc.In) {
+			continue
+		}
 		t.Run(tc.In, func(t *testing.T) {
 			value, err := Decode([]byte(tc.In))
 			if err != nil {
@@ -165,6 +280,9 @@ func TestPyStrMatchesPython(t *testing.T) {
 
 func TestTruthyMatchesPython(t *testing.T) {
 	for _, tc := range loadExtras(t).Truthy {
+		if notJSON(tc.In) {
+			continue
+		}
 		value, err := Decode([]byte(tc.In))
 		if err != nil {
 			t.Fatal(err)

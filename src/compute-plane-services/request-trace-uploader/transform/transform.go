@@ -98,9 +98,9 @@ type Record struct {
 	Line int
 	// Value is the record after suppression and redaction.
 	Value *compat.Value
-	// Payload is the source line unchanged, or Value re-serialized the way
-	// the earlier Python uploader wrote it when suppression or redaction
-	// changed the record.
+	// Payload is the source line unchanged, or Value written as compact
+	// UTF-8 JSON by compat.Encode when suppression or redaction changed the
+	// record.
 	Payload []byte
 	// Headers holds copies of the record's header objects as they were read,
 	// before any change, in lookup order. See suppress.ResolveHeader.

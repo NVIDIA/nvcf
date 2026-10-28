@@ -52,7 +52,10 @@ func mustEngine(t *testing.T, cfg Config) *Engine {
 	return engine
 }
 
-func TestStubMatchesPythonUploaderByteForByte(t *testing.T) {
+// TestStubMatchesPythonUploader checks that the stub has the earlier Python
+// uploader's keys, key order and values. Its bytes are plain JSON, so
+// formatting such as non-ASCII escapes may differ.
+func TestStubMatchesPythonUploader(t *testing.T) {
 	for _, tc := range loadGolden(t) {
 		t.Run(tc.In, func(t *testing.T) {
 			engine := mustEngine(t, FromIDs(strings.Split(tc.IDs, ",")))
@@ -72,8 +75,8 @@ func TestStubMatchesPythonUploaderByteForByte(t *testing.T) {
 			if outcome.Action != StripPayload || outcome.ID != tc.NCAID {
 				t.Fatalf("outcome = %+v, want stripPayload with id %q", outcome, tc.NCAID)
 			}
-			if encoded := string(compat.Encode(got)); encoded != *tc.Out {
-				t.Errorf("stub = %s\nwant   %s", encoded, *tc.Out)
+			if want := mustDecode(t, *tc.Out); !compat.Equal(got, want) {
+				t.Errorf("stub = %s\nwant   %s", compat.Encode(got), *tc.Out)
 			}
 		})
 	}
@@ -187,5 +190,16 @@ func TestConfigValidate(t *testing.T) {
 				t.Fatalf("New() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestStubIsPlainJSON(t *testing.T) {
+	engine := mustEngine(t, FromIDs([]string{"acme"}))
+	record := mustDecode(t, "{\"timestamp\":1.5e3,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"model\":\"caf\u00e9 \u2603\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}")
+	got, _ := engine.Apply(record)
+	want := "{\"timestamp\":1.5e3,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"model\":\"caf\u00e9 \u2603\",\"payload_complete\":false," +
+		"\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+	if encoded := string(compat.Encode(got)); encoded != want {
+		t.Fatalf("stub = %s\nwant   %s", encoded, want)
 	}
 }

@@ -50,10 +50,19 @@ func loadGolden(t *testing.T) golden {
 	return g
 }
 
+// TestRecordMatchesPythonUploader checks that redaction finds the same media
+// and writes the same markers as the earlier Python uploader. The record is
+// compared by keys, key order and values; its bytes are plain JSON.
 func TestRecordMatchesPythonUploader(t *testing.T) {
 	for _, tc := range loadGolden(t).Records {
 		t.Run(tc.Name, func(t *testing.T) {
 			record, err := compat.Decode([]byte(tc.In))
+			if strings.Contains(tc.In, "NaN") {
+				if err == nil {
+					t.Fatal("Decode() accepted NaN, which is not JSON")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,7 +78,11 @@ func TestRecordMatchesPythonUploader(t *testing.T) {
 				}
 				return
 			}
-			if encoded != *tc.Out {
+			want, err := compat.Decode([]byte(*tc.Out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !compat.Equal(got, want) {
 				t.Errorf("redacted =\n%s\nwant\n%s", encoded, *tc.Out)
 			}
 		})
@@ -215,5 +228,18 @@ func TestDataURLScanIsLinear(t *testing.T) {
 				t.Fatalf("redacting %d bytes of %q took over 10 s", len(text), unit)
 			}
 		})
+	}
+}
+
+func TestRedactedRecordIsPlainJSON(t *testing.T) {
+	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
+	record, err := compat.Decode([]byte("{\"score\":1.50,\"content\":\"caf\u00e9 " + png + "\"}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, count := Record(record)
+	encoded := string(compat.Encode(got))
+	if count != 1 || !strings.HasPrefix(encoded, "{\"score\":1.50,\"content\":\"caf\u00e9 [redacted:multimodal kind=data_url mime=image/png bytes=") {
+		t.Fatalf("redacted = %s, want UTF-8 text, the source number and an inline token", encoded)
 	}
 }
