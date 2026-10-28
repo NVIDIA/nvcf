@@ -32,6 +32,7 @@ go_oci_image(
 go_test(
     name = "cmd_test",
     srcs = [
+        "control_test.go",
         "main_test.go",
         "strict_test.go",
     ],

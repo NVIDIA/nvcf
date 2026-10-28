@@ -22,6 +22,8 @@ const runMainEnv = "REQUEST_TRACE_UPLOADER_TEST_RUN_MAIN"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(runMainEnv) == "1" {
+		// The sentinel is not a setting; strict loading would reject it.
+		_ = os.Unsetenv(runMainEnv)
 		main()
 		os.Exit(0)
 	}
