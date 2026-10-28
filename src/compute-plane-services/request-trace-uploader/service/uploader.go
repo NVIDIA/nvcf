@@ -393,7 +393,6 @@ func (u *Uploader) open(ctx context.Context) error {
 		return fmt.Errorf("open the journal: %w", err)
 	}
 	u.store = store
-	u.cleanLeftovers()
 	plan, err := store.Recover(journalfs.RecoverOptions{Backend: u.name})
 	if err != nil {
 		return fmt.Errorf("recover the journal: %w", err)

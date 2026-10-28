@@ -80,10 +80,6 @@ const (
 	BatchSegments     = "batch_segments"
 	BatchBytes        = "batch_bytes"
 	BatchSplits       = "batch_splits"
-	// LeftoversRemoved and LeftoversKept count files another uploader left on
-	// the spool, by registered kind.
-	LeftoversRemoved = "leftovers_removed"
-	LeftoversKept    = "leftovers_kept"
 	// RecordsEvaluated counts records checked against suppression rules,
 	// RecordsSuppressed the records a rule acted on, and
 	// SuppressionHeaderPresent the evaluated records that carried a rule's
@@ -181,8 +177,6 @@ var catalog = []Instrument{
 	{Name: BatchSegments, Kind: Histogram, Unit: "1", Buckets: countBuckets},
 	{Name: BatchBytes, Kind: Histogram, Unit: "By", Buckets: bytesBuckets},
 	{Name: BatchSplits, Kind: Counter, Unit: "1"},
-	{Name: LeftoversRemoved, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
-	{Name: LeftoversKept, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
 	{Name: RecordsEvaluated, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 	{Name: RecordsSuppressed, Kind: Counter, Unit: "1", Labels: []string{"rule", "action"},
 		Values: map[string][]string{"action": SuppressionActions}},
@@ -223,7 +217,7 @@ type Metrics interface {
 
 // ValidLabelValue reports whether value is a short lowercase token, the only
 // shape a label value may take. Packages that define label values at startup,
-// such as the backend name or a leftover kind, check them with it.
+// such as the backend name, check them with it.
 func ValidLabelValue(value string) error {
 	if !labelValuePattern.MatchString(value) {
 		return fmt.Errorf("telemetry label value %q must match %s", value, labelValuePattern)

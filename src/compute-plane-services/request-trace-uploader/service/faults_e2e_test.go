@@ -17,7 +17,6 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/backendtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/foreign"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/journalfs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/retry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
@@ -25,10 +24,6 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/uploadertest"
 )
-
-func init() {
-	foreign.Register(foreign.Pattern{Kind: "old_work_dir", Glob: "old-work-*", Action: foreign.Remove})
-}
 
 func batchingFake() *backendtest.Fake {
 	fake := backendtest.NewFake()
@@ -127,21 +122,6 @@ func TestABatchWhoseMembersCouldNotBeRecordedIsNotSentTwice(t *testing.T) {
 	}
 	if fake.Duplicates() != 0 {
 		t.Fatalf("duplicates = %d, want each segment landed once", fake.Duplicates())
-	}
-}
-
-func TestLeftoverCleanupNeverRemovesADirectoryThatHoldsTheJournal(t *testing.T) {
-	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
-	stateDir := filepath.Join(spool.Dir, "old-work-area", "state")
-	uploader := newUploader(t, spool, backendtest.NewFake(), service.Options{}, map[string]string{config.EnvStateDir: stateDir})
-	if err := uploader.Pass(context.Background()); err != nil {
-		t.Fatalf("Pass() error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(stateDir, "segments")); err != nil {
-		t.Fatalf("journal directory: %v, want it kept", err)
-	}
-	if !gone(closed[0]) {
-		t.Fatal("segment not exported")
 	}
 }
 

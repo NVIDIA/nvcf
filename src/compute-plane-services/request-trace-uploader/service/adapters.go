@@ -4,15 +4,9 @@
 package service
 
 import (
-	"log/slog"
-	"path/filepath"
-	"regexp"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/batch"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/foreign"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/cleanup"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/journalfs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
@@ -114,38 +108,4 @@ func (s spoolIndex) HighestIndex(prefix string) (int, bool, error) {
 		}
 	}
 	return highest, found, nil
-}
-
-// cleanLeftovers removes, and counts by kind, what another uploader left on
-// the spool, using the patterns linked modules registered. Dynamo segments
-// and this uploader's own directories are never touched.
-func (u *Uploader) cleanLeftovers() {
-	var segmentNames []*regexp.Regexp
-	for _, prefix := range u.cfg.Prefixes() {
-		segmentNames = append(segmentNames, regexp.MustCompile(`^`+regexp.QuoteMeta(prefix)+`\.[0-9]{6,}\.jsonl\.gz$`))
-	}
-	// Protect the top-level entry that holds each of this uploader's
-	// directories, however deep they sit inside the spool.
-	own := []string{}
-	for _, dir := range []string{u.cfg.StateDir, u.cfg.QuarantineDir} {
-		rel, err := filepath.Rel(u.cfg.SourceDir, dir)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		own = append(own, strings.SplitN(rel, string(filepath.Separator), 2)[0])
-	}
-	protected := func(name string) bool {
-		if strings.HasPrefix(name, ".rtu-") || slices.Contains(own, name) {
-			return true
-		}
-		return slices.ContainsFunc(segmentNames, func(pattern *regexp.Regexp) bool { return pattern.MatchString(name) })
-	}
-	report, err := foreign.DefaultConfig().Clean(u.cfg.SourceDir, protected)
-	foreign.Record(u.metrics, report)
-	if err != nil {
-		slog.Warn("remove leftovers of another uploader", "error", safeError(err))
-	}
-	if len(report.Removed) > 0 || len(report.Kept) > 0 {
-		slog.Info("found leftovers of another uploader", "removed", report.Removed, "kept", report.Kept)
-	}
 }

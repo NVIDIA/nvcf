@@ -20,11 +20,10 @@ volume, so every step survives a restart.
 
 1. Startup: health answers at once and reports not ready. The uploader
    takes the spool lock, waiting up to the drain timeout plus 10 seconds for
-   an earlier uploader. It loads the journal, removes what another uploader
-   left on the spool (patterns that linked modules register with
-   `foreign.Register`), repairs what a crash left, and reports ready. A
-   journal entry whose source it cannot identify keeps the process live and
-   not ready until an operator acts.
+   an earlier uploader. It loads the journal, repairs what a crash left, and
+   reports ready. Files another uploader left on the spool stay where they
+   are. A journal entry whose source it cannot identify keeps the process
+   live and not ready until an operator acts.
 2. Intake: each closed segment is fingerprinted (SHA-256) and recorded
    before it is read. The highest indexed segment is never read or deleted.
 3. Record handling: suppression, then redaction, then the backend's format
@@ -80,8 +79,8 @@ Submit and status are separate operations so a slow confirmation cannot block
 other segments. Backends register themselves from an init function, so a build
 links only the backends it imports. This binary links `debug` and
 `objectstore`. A distribution that needs another backend imports it in its own
-`main` and reuses the `config`, `backend`, `format`, `telemetry`, `foreign`,
-and `service` packages from this module.
+`main` and reuses the `config`, `backend`, `format`, `telemetry`, and `service`
+packages from this module.
 
 ## Configuration
 
