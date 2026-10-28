@@ -27,7 +27,7 @@ described in that module's `docs/api.md`.
 | --- | --- | --- |
 | 1 | hub | `gds-server` (chart `global-discovery`, memory store, one replica), driven over REST, pool agent registrations included |
 | 2 | hub, a, b | `gds-mcs-controller` (chart `global-discovery-mcs-controller`, two replicas) in a and b against the hub's gds-server; export, import, pools and their label-derived agents, restart, unexport |
-| 3 | hub, a, b | Stargate (chart `llm-request-router`, GDS export on) in a; a Pylon in b that finds it only through GDS, is the PYLON agent of its pool, registers and serves a request |
+| 3 | hub, a, b | Stargate (chart `llm-request-router`, GDS export on) in a, two replicas in direct router mode by default; a Pylon in b that finds them only through GDS, is the PYLON agent of its pool, registers once with each pod and serves a request through each |
 
 The hub is `$E2E_CLUSTER` (default `gds-e2e`); clusters a and b are
 `$E2E_CLUSTER-a` and `$E2E_CLUSTER-b`. All three share the Docker network
@@ -128,7 +128,8 @@ E2E_CLUSTER=gds-e2e-mine E2E_WORK_DIR=/tmp/gds-e2e-mine \
    and cluster ids `a` and `b`. The workload is `manifests/mcs-demo.yaml` in a
    and `manifests/mcs-client.yaml` in b, in namespace `gds-e2e-demo`.
 5. Phase 3: installs `llm-request-router` in a (namespace `gds-e2e-router`,
-   `manifests/router-values.yaml`) and `manifests/pylon.yaml` (the Pylon
+   `manifests/router-values.yaml`, plus `manifests/router-direct-values.yaml`
+   with `E2E_ROUTER_MODE=direct`) and `manifests/pylon.yaml` (the Pylon
    Deployment and its labelled Service `pylon`) in b (namespace
    `gds-e2e-pylon`).
 6. With `E2E_CLEANUP=1`, deletes the clusters and the network `run.sh`
@@ -173,20 +174,33 @@ Clusterset `e2e-mcs`, cluster ids `a` and `b`.
 
 ## Phase 3 checks
 
+`E2E_ROUTER_MODE` selects the router in a: `direct` (the default) runs two
+Stargate replicas of a Deployment in direct router mode
+(`backendRouter.enabled: false`, `globalDiscovery.enabled: true`,
+`manifests/router-direct-values.yaml`), `single` runs one replica as before
+direct mode existed. The checks are the same for both, with one replica and
+the hostname template `E2E_ROUTER_HOST` in `single`.
+
 | Area | Checks |
 | --- | --- |
-| Router export | Stargate (one replica, open worker auth, `globalDiscovery.enabled` and `export.enabled`, dial scheme `http`) is ready in a; the controller exports its Service (`gds.nvidia.com/role=router`) with `Valid` and `Ready`; `GET /v1/clustersets/e2e-mcs/routers` lists the router of cluster `a` with dial scheme `http`, gRPC port 50071, QUIC port 50072 (the chart's `gds.nvidia.com/quic-port-name: quic`), `ports[]` with `grpc` and `quic` (UDP), and the Stargate pod IP as a ready replica. |
+| Router export | Stargate (open worker auth, `globalDiscovery.enabled` and `export.enabled`, dial scheme `http`) is ready in a with 2 pods (`direct`) or 1 (`single`); the controller exports its ClusterIP Service (`gds.nvidia.com/role=router`) with `Valid` and `Ready`; `GET /v1/clustersets/e2e-mcs/routers` lists the router of cluster `a` with `routerMode` `ROUTER_MODE_DIRECT`, `hostnameTemplate` `{pod_name}.llm-request-router-headless.gds-e2e-router.svc.cluster.local` (`direct`) or `E2E_ROUTER_HOST` (`single`), dial scheme `http`, gRPC port 50071, QUIC port 50072 (the chart's `gds.nvidia.com/quic-port-name: quic`), `ports[]` with `grpc` and `quic` (UDP), and exactly the ready Stargate pods as ready replicas, each with its pod name as `identity`. |
 | Pylon | A plain Pylon Deployment in b with `--gds-url`, `--gds-clusterset`, `--cluster-id=b`, `--gds-pool-name=e2e-pylon` and no `--stargate-address`, next to the OpenAI-compatible sample backend, logs `GDS Stargate seeds changed`. GDS lists pool `b/e2e-pylon` ACTIVE with one PYLON agent of source BOTH: the Service `pylon` over the Pylon pod (labels `export=true`, `role=pylon`, `pool=e2e-pylon`, port `metrics` 9089, as the Pylon Operator renders with `--gds-pool-export`) with 1 ready endpoint, and the Pylon's own registration under its `--inference-server-id` (1 active) with attribute `models: test-model`. These checks need no routes between the pod CIDRs. |
-| Registration | `pylon_registration_stream_connected` and `pylon_reverse_tunnel_connected` are 1 for the Stargate pod of a; Stargate's `/v1/models` lists `test-model` with a registered and healthy server of cluster `b`; a streamed chat completion sent to Stargate in a (with the `x-request-id`, `x-model` and `x-input-tokens` headers the LLM gateway sets) is answered by the sample backend in b over the reverse tunnel (`x-stargate-cluster-id: b`). |
+| Registration | `pylon_registration_stream_connected` and `pylon_reverse_tunnel_connected` are 1 for every Stargate pod of a, under the authority Stargate advertises for it (`<pod name>.llm-request-router-headless.gds-e2e-router.svc.cluster.local:50071` in `direct`, `<pod IP>:50071` in `single`), and for no other router name, so the Pylon registers once per pod; over 20 s neither the Pylon log nor the Stargate logs show a rejected duplicate registration (`AlreadyExists`, `already registered`, `duplicate inference_server_id`); each Stargate pod's `/v1/models` lists `test-model` with a registered and healthy server of cluster `b`; a streamed chat completion sent to each Stargate pod (with the `x-request-id`, `x-model` and `x-input-tokens` headers the LLM gateway sets) is answered by the sample backend in b over the reverse tunnel (`x-stargate-cluster-id: b`). |
 
-Registration dials the Stargate pod IP that GDS lists as the seed. The
-reverse tunnel dials the hostname Stargate advertises, which a deployment
-serves from DNS or a load balancer that every cluster reaches (design 4.5).
-Phase 3 sets `kubernetes.advertisedHostnameTemplate` to
-`llm-router.a.gds-e2e.test` (`E2E_ROUTER_HOST`) and maps it to the Stargate
-pod IP with a `hostAliases` entry in the Pylon pod. Pylon runs with
-`--quic-insecure` against Stargate's self-signed QUIC identity; worker auth is
-open (`auth.allowOpen`). TLS and credentials are therefore not covered.
+Registration dials the Stargate pod IPs that GDS lists as the seeds, and
+each Stargate's `WatchStargates` lists every pod of a under its GDS replica
+identity with its pod IP as dial address, so both pods name each pod the
+same way. In `direct` the reverse tunnel dials each pod IP too
+(`--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072`), with the pod's
+hostname only as SNI; the Pylon never resolves the hostnames and needs no
+hosts entry. In `single` the reverse tunnel dials the hostname Stargate
+advertises, which a deployment serves from DNS or a load balancer that every
+cluster reaches (design 4.5): phase 3 sets
+`kubernetes.advertisedHostnameTemplate` to `llm-router.a.gds-e2e.test`
+(`E2E_ROUTER_HOST`) and maps it to the Stargate pod IP with a `hostAliases`
+entry in the Pylon pod. Pylon runs with `--quic-insecure` against
+Stargate's self-signed QUIC identity; worker auth is open
+(`auth.allowOpen`). TLS and credentials are therefore not covered.
 
 Without routes between the pod CIDRs (`E2E_CROSS_CLUSTER_ROUTES=0`, or when
 the routes cannot be added or the clusters share pod CIDRs) the setup records
@@ -221,7 +235,8 @@ registration checks) are recorded as `SKIP`.
 | `E2E_CLUSTER_ID_A`, `E2E_CLUSTER_ID_B` | `a`, `b` | Cluster ids the controllers register. |
 | `E2E_HTTP_LOCAL_PORT`, `E2E_ADMIN_LOCAL_PORT` | `28080`, `29091` | Local ports of the gds-server port-forward. |
 | `E2E_ROUTER_LOCAL_PORT` | `28000` | Local port of the Stargate HTTP port-forward (phase 3). |
-| `E2E_ROUTER_HOST` | `llm-router.a.gds-e2e.test` | Hostname Stargate advertises for the reverse tunnel. |
+| `E2E_ROUTER_MODE` | `direct` | Phase 3 router: `direct` (two Stargate replicas in direct router mode) or `single` (one replica). |
+| `E2E_ROUTER_HOST` | `llm-router.a.gds-e2e.test` | With `E2E_ROUTER_MODE=single`, the hostname Stargate advertises for the reverse tunnel. |
 | `E2E_IMAGE_REPOSITORY`, `E2E_CONTROLLER_IMAGE_REPOSITORY`, `E2E_STARGATE_IMAGE_REPOSITORY`, `E2E_PYLON_IMAGE_REPOSITORY` | `gds-e2e/gds-server`, `gds-e2e/gds-mcs-controller`, `gds-e2e/stargate`, `gds-e2e/pylon` | Repositories the built images are loaded as. |
 | `E2E_BUSYBOX_IMAGE`, `E2E_SAMPLE_IMAGE` | `busybox:1.37`, `openai-compatible-sample:e2e` | Workload images. |
 | `E2E_WORK_DIR` | `$TMPDIR/global-discovery-k3d-e2e` | Kubeconfig files, records of created clusters, networks and routes, logs. |
@@ -245,12 +260,17 @@ clusters to `cleanup_member`.
 Runs on macOS with colima (Docker with the containerd image store), k3d 5.9.0
 and k3s v1.35.5, with `/bin/bash` 3.2:
 
-- Phases 1, 2 and 3 from scratch with the Bazel builds and `E2E_CLEANUP=1`:
-  125 checks passed (phase 1: 61, phase 2: 51, phase 3: 13, setup checks
-  included), then the three clusters and the network were deleted.
-  `E2E_PHASES=1`: 61 passed. Keep the host awake during a run (for example
-  `caffeinate -i make test-cleanup` on macOS): when it sleeps, the VM stops
-  and the controllers' GDS leases expire, which fails the lease checks.
+- Phases 1, 2 and 3 from scratch with the Bazel builds and `E2E_CLEANUP=1`,
+  phase 3 in direct mode (`E2E_ROUTER_MODE=direct`, two Stargate replicas):
+  128 checks passed (phase 1: 61, phase 2: 51, phase 3: 16, setup checks
+  included), then the three clusters and the network were deleted. Phase 3
+  alone on the reused clusters with `E2E_SKIP_BUILD=1`: 28 passed in direct
+  mode and 26 with `E2E_ROUTER_MODE=single` (the hub and member setup checks
+  included). Before direct mode, with one Stargate replica: 125 passed
+  (phase 3: 13). `E2E_PHASES=1`: 61 passed. Keep the host awake during a run
+  (for example `caffeinate -i make test-cleanup` on macOS): when it sleeps,
+  the VM stops and the controllers' GDS leases expire, which fails the lease
+  checks.
 - Before the pool agent checks, with reused clusters and
   `E2E_SKIP_BUILD=1`: 101 passed (the extra check is the restart of the
   reused gds-server).

@@ -582,6 +582,13 @@ replicas contain its own pod IP), and fills each peer's `grpc_pylon_dial_addr` w
 peer's `<scheme>://<replica address>:<grpc_port>`, keeping the hostname as the authority. A
 pylon that follows `WatchStargates` from any one replica therefore gets a dialable address per
 peer, and Pylon itself needs no change: dial address and authority already differ today.
+Headless DNS names Deployment pods by their dashed IP while each pod names itself by its pod
+name, so the replicas would list one pod under two authorities and a pylon would register twice.
+`GdsDiscovery` therefore also takes the peer identities from the Router record: when the
+record's template and gRPC port name the Stargate itself by the host it advertises, each
+replica with an identity is listed with `stargate_id` set to the identity and `advertise_addr`
+set to `replica_authority(router, replica)`, replacing the peers DNS lists by another name of
+that replica; replicas without an identity and peers GDS does not list stay as DNS lists them.
 
 Network prerequisites of direct mode are the ones already stated for routable pod IPs (1.6,
 4.4) plus UDP: TCP 50071 and UDP 50072 must be admitted to router pod IPs from every pool

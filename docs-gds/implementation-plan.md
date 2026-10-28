@@ -1177,3 +1177,28 @@ backend-router templates, RBAC, image and crate stay.
 ### Status (v0.6)
 
 - design written; implementation follows the v0.5 merge.
+- ws7 (merged at `f1a1b0f94`): `RouterMode`, `Router.router_mode` and `hostname_template`,
+  `RouterReplica.identity` (slice hostname, else the `targetRef.name` pod name), the labels, the
+  server and fakegds derivation, and the Go and Rust `replica_authority` helpers.
+- ws8 (merged at `eab4988df`): chart direct mode for a multi-replica Deployment with
+  `globalDiscovery.enabled` and no backend router (pod IP advertise flags, annotations, wildcard
+  SAN, render checks), and `GdsDiscovery::peer_dial_addrs`, which fills each local peer's
+  `grpc_pylon_dial_addr` from the own-cluster Router record.
+- ws9 (branch `feat/gds-r2-ws9`): `GdsDiscovery` lists direct-mode peers under their GDS replica
+  identities (`replica_authority`, pod IP dial URL), so a Pylon registers once per pod (no more
+  AlreadyExists duplicates); e2e phase 3 runs two direct-mode replicas (`E2E_ROUTER_MODE`,
+  default `direct`); docs. Phases 1 to 3 from scratch with `E2E_CLEANUP=1`: 128 passed (61, 51,
+  16).
+
+Known follow-ups:
+
+- StatefulSet direct mode: the chart adds the wildcard SAN for the hostname template only for a
+  multi-replica Deployment with `globalDiscovery.enabled`; a StatefulSet without the backend
+  router gets none.
+- Direct mode does not require `export.enabled`: without the export GDS has no Router record for
+  the cluster, so Stargate fills neither peer identities nor dial addresses, and the chart does not
+  reject the combination.
+- fakegds router view differs from the server: it lists one replica per endpoint address (the
+  server uses the first address), passes the dial scheme annotation through (the server
+  normalises it to `http` or `https`), and lists replicas whatever the cluster lease (the server
+  only while the lease is active).

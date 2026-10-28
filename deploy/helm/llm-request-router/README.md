@@ -169,11 +169,16 @@ In direct mode on a multi-replica Deployment:
   and the QUIC SNI. The template must contain exactly one `{pod_name}`, and
   the issued certificate adds its wildcard form, as with the backend router.
 - Stargate finds this cluster's router record in GDS, the one whose replicas
-  include its own pod IP. When that record is in direct mode, Stargate sets
-  the dial address of each Stargate in its `WatchStargates` responses that it
-  matches to a replica to `<dialScheme>://<pod IP>:<gRPC port>`. Each
-  registration and its tunnel then land on the same pod, with no second TLS
-  termination and no relay. The Stargate README describes the matching.
+  include its own pod IP. When that record is in direct mode, Stargate lists
+  each Stargate in its `WatchStargates` responses under the replica identity
+  of the record (the pod name): the hostname template with `{pod_name}`
+  replaced by it as the authority, and `<dialScheme>://<pod IP>:<gRPC port>`
+  as the dial address. Headless DNS names Deployment pods by their dashed IP
+  and each pod names itself by its pod name, so without the identities a
+  pylon would register twice with each pod. Every replica now names each pod
+  the same way: a pylon registers once per pod, and each registration and its
+  tunnel land on the same pod, with no second TLS termination and no relay.
+  The Stargate README describes the matching.
 - The record comes from this chart's export, so also set
   `globalDiscovery.export.enabled=true`:
 

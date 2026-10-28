@@ -24,9 +24,10 @@
 # pod and service CIDRs and static routes between the node containers, and
 # gds-mcs-controller from its chart in a and b: export, import, pools and
 # their label-derived agents, a controller restart and unexport.
-# Phase 3: Stargate (llm-request-router chart) exporting itself from a, and a
-# Pylon in b that finds it only through GDS, registers with it and is the
-# PYLON agent of its pool.
+# Phase 3: Stargate (llm-request-router chart) exporting itself from a, two
+# replicas in direct router mode by default, and a Pylon in b that finds them
+# only through GDS, registers with each pod once and is the PYLON agent of its
+# pool.
 #
 # The script is compatible with bash 3.2 (the macOS default). It talks to its
 # clusters through its own kubeconfig files in the work directory, so it never
@@ -76,9 +77,13 @@ E2E_SERVICE_CIDR_B="${E2E_SERVICE_CIDR_B:-10.47.0.0/16}"
 E2E_HTTP_LOCAL_PORT="${E2E_HTTP_LOCAL_PORT:-28080}"
 E2E_ADMIN_LOCAL_PORT="${E2E_ADMIN_LOCAL_PORT:-29091}"
 E2E_ROUTER_LOCAL_PORT="${E2E_ROUTER_LOCAL_PORT:-28000}"
-# The name Stargate in a advertises for the reverse tunnel. Pylons of other
-# clusters must resolve it (design 4.5); the Pylon of phase 3 maps it to the
-# Stargate pod IP with a hostAliases entry.
+# The phase 3 router in a: direct (two Stargate replicas of a Deployment in
+# direct router mode; the Pylon dials each pod IP) or single (one replica;
+# the reverse tunnel dials E2E_ROUTER_HOST).
+E2E_ROUTER_MODE="${E2E_ROUTER_MODE:-direct}"
+# With E2E_ROUTER_MODE=single, the name Stargate in a advertises for the
+# reverse tunnel. Pylons of other clusters must resolve it (design 4.5); the
+# Pylon of phase 3 maps it to the Stargate pod IP with a hostAliases entry.
 E2E_ROUTER_HOST="${E2E_ROUTER_HOST:-llm-router.${E2E_CLUSTER_ID_A:-a}.gds-e2e.test}"
 E2E_IMAGE_REPOSITORY="${E2E_IMAGE_REPOSITORY:-gds-e2e/gds-server}"
 E2E_CONTROLLER_IMAGE_REPOSITORY="${E2E_CONTROLLER_IMAGE_REPOSITORY:-gds-e2e/gds-mcs-controller}"
@@ -103,6 +108,9 @@ readonly CONTROLLER_SELECTOR="app.kubernetes.io/instance=${CONTROLLER_RELEASE}"
 readonly ROUTER_RELEASE="llm-request-router"
 readonly ROUTER_CHART="${REPO_ROOT}/deploy/helm/llm-request-router/llm-request-router"
 readonly ROUTER_SELECTOR="app.kubernetes.io/instance=${ROUTER_RELEASE}"
+# The chart's headless Service, which names the Stargate pods in direct mode
+# (manifests/router-direct-values.yaml).
+readonly ROUTER_HEADLESS="llm-request-router-headless"
 readonly SAMPLE_DIR="${REPO_ROOT}/examples/function-samples/openai-compatible-sample"
 readonly SERVER_TARGET="//src/control-plane-services/global-discovery:image"
 readonly CONTROLLER_TARGET="//src/control-plane-services/global-discovery:controller_image"
@@ -197,6 +205,15 @@ kc() {
   local cluster="$1"
   shift
   kubectl --kubeconfig "$(kubeconfig_of "${cluster}")" --context "$(context_of "${cluster}")" "$@"
+}
+
+# kc_exec CLUSTER ARGS...: kc that replaces the shell with kubectl, for
+# background jobs: after "kc_exec ... &", $! is kubectl's PID, so killing it
+# stops kubectl instead of leaving it running without its subshell.
+kc_exec() {
+  local cluster="$1"
+  shift
+  exec kubectl --kubeconfig "$(kubeconfig_of "${cluster}")" --context "$(context_of "${cluster}")" "$@"
 }
 
 # hm CLUSTER ARGS...: helm against CLUSTER.
@@ -656,7 +673,7 @@ start_port_forward() {
       "${E2E_ADMIN_LOCAL_PORT}" >>"${PF_LOG}"
     return 1
   fi
-  kc "${cluster}" -n "${E2E_NAMESPACE}" port-forward --address 127.0.0.1 "svc/${SERVER_RELEASE}" \
+  kc_exec "${cluster}" -n "${E2E_NAMESPACE}" port-forward --address 127.0.0.1 "svc/${SERVER_RELEASE}" \
     "${E2E_HTTP_LOCAL_PORT}:8080" "${E2E_ADMIN_LOCAL_PORT}:9091" >>"${PF_LOG}" 2>&1 &
   PF_PID=$!
   local i=0
@@ -1348,9 +1365,16 @@ kjson() {
   kc "${cluster}" --request-timeout=10s get "$@" -o json 2>/dev/null || true
 }
 
-# render_manifest FILE: a manifest with the run's placeholders replaced.
+# render_manifest FILE: a manifest with the run's placeholders replaced. The
+# lines between "# router-mode single: begin" and "end" stay only with
+# E2E_ROUTER_MODE=single.
 render_manifest() {
-  sed -e "s|__BUSYBOX_IMAGE__|${E2E_BUSYBOX_IMAGE}|g" \
+  local router_mode='/# router-mode single: begin/,/# router-mode single: end/d'
+  if [ "${E2E_ROUTER_MODE}" = "single" ]; then
+    router_mode='/# router-mode single: /d'
+  fi
+  sed -e "${router_mode}" \
+    -e "s|__BUSYBOX_IMAGE__|${E2E_BUSYBOX_IMAGE}|g" \
     -e "s|__SAMPLE_IMAGE__|${E2E_SAMPLE_IMAGE}|g" \
     -e "s|__PYLON_IMAGE__|${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG}|g" \
     -e "s|__GDS_URL__|${GDS_GRPC_URL}|g" \
@@ -1793,18 +1817,54 @@ run_phase_2() {
 
 # ---------------------------------------------------------------------------
 # Phase 3: Stargate in a exports itself through the controller; a Pylon in b
-# finds it only through GDS and registers with it.
+# finds it only through GDS and registers with it. E2E_ROUTER_MODE=direct
+# runs two Stargate replicas in direct router mode, single runs one.
+
+# router_replicas: the number of Stargate replicas of E2E_ROUTER_MODE.
+router_replicas() {
+  if [ "${E2E_ROUTER_MODE}" = "direct" ]; then
+    printf '2'
+  else
+    printf '1'
+  fi
+}
+
+# router_hostname_template: the hostname template GDS reports for the router,
+# as the chart exports it ({namespace} resolved).
+router_hostname_template() {
+  if [ "${E2E_ROUTER_MODE}" = "direct" ]; then
+    printf '{pod_name}.%s.%s.svc.cluster.local' "${ROUTER_HEADLESS}" "${E2E_ROUTER_NAMESPACE}"
+  else
+    printf '%s' "${E2E_ROUTER_HOST}"
+  fi
+}
+
+# router_authority POD IP: the gRPC authority Stargate advertises for a pod,
+# which Pylon's router metrics are labelled with: the pod's hostname in direct
+# mode, its pod IP with one replica (self-only discovery).
+router_authority() {
+  if [ "${E2E_ROUTER_MODE}" = "direct" ]; then
+    printf '%s.%s.%s.svc.cluster.local:50071' "$1" "${ROUTER_HEADLESS}" "${E2E_ROUTER_NAMESPACE}"
+  else
+    printf '%s:50071' "$2"
+  fi
+}
 
 router_args() {
   printf '%s\n' \
     --namespace "${E2E_ROUTER_NAMESPACE}" \
-    --values "${MANIFESTS}/router-values.yaml" \
+    --values "${MANIFESTS}/router-values.yaml"
+  if [ "${E2E_ROUTER_MODE}" = "direct" ]; then
+    printf '%s\n' --values "${MANIFESTS}/router-direct-values.yaml"
+  else
+    printf '%s\n' --set-string "llmRequestRouter.kubernetes.advertisedHostnameTemplate=${E2E_ROUTER_HOST}"
+  fi
+  printf '%s\n' \
     --set-string "llmRequestRouter.image.repository=${E2E_STARGATE_IMAGE_REPOSITORY}" \
     --set-string "llmRequestRouter.image.tag=${STARGATE_IMAGE_TAG}" \
     --set-string "llmRequestRouter.globalDiscovery.urls[0]=${GDS_GRPC_URL}" \
     --set-string "llmRequestRouter.globalDiscovery.clustersetId=${E2E_MCS_CLUSTERSET}" \
-    --set-string "llmRequestRouter.globalDiscovery.clusterId=${E2E_CLUSTER_ID_A}" \
-    --set-string "llmRequestRouter.kubernetes.advertisedHostnameTemplate=${E2E_ROUTER_HOST}"
+    --set-string "llmRequestRouter.globalDiscovery.clusterId=${E2E_CLUSTER_ID_A}"
 }
 
 install_router() {
@@ -1816,15 +1876,30 @@ install_router() {
     --create-namespace --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-router.log" 2>&1
 }
 
+# ROUTER_PODS: "<pod name> <pod IP>" lines of the ready Stargate pods in a.
+# ROUTER_IP: the first pod IP, for the hosts entry of E2E_ROUTER_MODE=single.
+ROUTER_PODS=""
 ROUTER_IP=""
 PYLON_POD=""
 
-# router_ready_ip: ROUTER_IP, the pod IP of the ready Stargate pod in a.
-router_ready_ip() {
-  ROUTER_IP="$(jq -r '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .status.podIP][0] // ""' \
-    <<<"$(kjson "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" pods -l "${ROUTER_SELECTOR}")" 2>/dev/null)" || ROUTER_IP=""
-  LAST_OBSERVED="ready Stargate pod IP: ${ROUTER_IP:-none}"
-  [ -n "${ROUTER_IP}" ]
+# router_pods_ready: exactly router_replicas Stargate pods in a are ready;
+# sets ROUTER_PODS and ROUTER_IP.
+router_pods_ready() {
+  local pods count=0
+  pods="$(jq -r '.items[] | select(.metadata.deletionTimestamp == null) | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | "\(.metadata.name) \(.status.podIP)"' \
+    <<<"$(kjson "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" pods -l "${ROUTER_SELECTOR}")" 2>/dev/null)" || pods=""
+  if [ -n "${pods}" ]; then
+    count="$(awk 'END { print NR }' <<<"${pods}")"
+  fi
+  ROUTER_PODS="${pods}"
+  ROUTER_IP="$(awk 'NR == 1 { print $2 }' <<<"${pods}")"
+  LAST_OBSERVED="ready Stargate pods: $(tr '\n' ' ' <<<"${pods:-none}")"
+  [ "${count}" = "$(router_replicas)" ]
+}
+
+# router_pods_json: ROUTER_PODS as a JSON array of {name, ip}.
+router_pods_json() {
+  jq -cnR '[inputs | select(length > 0) | split(" ") | {name: .[0], ip: .[1]}]' <<<"${ROUTER_PODS}"
 }
 
 router_export_ok() {
@@ -1835,13 +1910,17 @@ router_export_ok() {
   [ "${got}" = "gds-mcs-controller|Valid=True|Ready=True" ]
 }
 
-# gds_router_ok: ListRouters has the router of cluster a with its pod as a
-# ready replica, dial scheme http, the gRPC port, the QUIC port named by the
-# chart's gds.nvidia.com/quic-port-name annotation, and the Service ports.
+# gds_router_ok: ListRouters has the router of cluster a in direct mode with
+# the chart's hostname template, dial scheme http, the gRPC port, the QUIC
+# port named by the chart's gds.nvidia.com/quic-port-name annotation and the
+# Service ports, and exactly the ready Stargate pods as ready replicas, each
+# with the pod name as its identity.
 gds_router_ok() {
+  local pods
+  pods="$(router_pods_json)" || return 1
   rest_expect GET "${CS_PATH}/routers" "" 200 \
-    "any(.routers[]?; .cluster == \"${E2E_CLUSTER_ID_A}\" and .namespace == \"${E2E_ROUTER_NAMESPACE}\" and .name == \"${ROUTER_RELEASE}\" and .dialScheme == \"http\" and .grpcPort == 50071 and .quicPort == 50072 and any(.ports[]?; .name == \"grpc\" and .port == 50071) and any(.ports[]?; .name == \"quic\" and .port == 50072 and .protocol == \"PROTOCOL_UDP\") and any(.replicas[]?; .address == \"${ROUTER_IP}\" and .ready))" \
-    '[.routers[]? | {cluster, namespace, name, dialScheme, grpcPort, quicPort, ports: [.ports[]? | "\(.name)/\(.port)/\(.protocol)"], replicas}]'
+    "${pods} as \$pods | any(.routers[]?; . as \$r | .cluster == \"${E2E_CLUSTER_ID_A}\" and .namespace == \"${E2E_ROUTER_NAMESPACE}\" and .name == \"${ROUTER_RELEASE}\" and .routerMode == \"ROUTER_MODE_DIRECT\" and .hostnameTemplate == \"$(router_hostname_template)\" and .dialScheme == \"http\" and .grpcPort == 50071 and .quicPort == 50072 and any(.ports[]?; .name == \"grpc\" and .port == 50071) and any(.ports[]?; .name == \"quic\" and .port == 50072 and .protocol == \"PROTOCOL_UDP\") and ([.replicas[]? | select(.ready)] | length) == (\$pods | length) and all(\$pods[]; . as \$p | any(\$r.replicas[]?; .address == \$p.ip and .ready and .identity == \$p.name)))" \
+    '[.routers[]? | {cluster, namespace, name, routerMode, hostnameTemplate, dialScheme, grpcPort, quicPort, ports: [.ports[]? | "\(.name)/\(.port)/\(.protocol)"], replicas: [.replicas[]? | "\(.address)/\(.identity // "-")/ready=\(.ready // false)"]}]'
 }
 
 # gds_pylon_pool_ok: pool e2e-pylon of cluster b is ACTIVE with one PYLON
@@ -1865,8 +1944,9 @@ apply_pylon() {
   render_manifest "${MANIFESTS}/pylon.yaml" | kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" apply -f - >/dev/null || return 1
   kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" rollout status deploy/pylon --timeout=180s >/dev/null 2>&1 ||
     { LAST_OBSERVED="deploy/pylon in ${cluster} did not roll out"; return 1; }
-  PYLON_POD="$(kc "${cluster}" -n "${E2E_PYLON_NAMESPACE}" get pods -l app=gds-e2e-pylon \
-    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || PYLON_POD=""
+  # A pod of an earlier rollout can still be Running while it terminates.
+  PYLON_POD="$(jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | .metadata.name][0] // ""' \
+    <<<"$(kjson "${cluster}" -n "${E2E_PYLON_NAMESPACE}" pods -l app=gds-e2e-pylon)" 2>/dev/null)" || PYLON_POD=""
   LAST_OBSERVED="pylon pod ${PYLON_POD:-none}"
   [ -n "${PYLON_POD}" ]
 }
@@ -1878,35 +1958,71 @@ pylon_log_has() {  # pylon_log_has TEXT
   grep -qF -- "$1" <<<"${logs}"
 }
 
-# pylon_gauge NAME: the Pylon gauge pylon_NAME is 1 for a router address that
-# names the Stargate pod of a. Read through the API server's pod proxy.
-pylon_gauge() {
-  local metrics
+# pylon_gauges NAME: the Pylon gauge pylon_NAME is 1 for the authority of
+# every ready Stargate pod of a (router_authority) and for no other router.
+# A pod listed under a second name would show up as another router. Read
+# through the API server's pod proxy.
+pylon_gauges() {
+  local metrics series name ip
   metrics="$(kc "${E2E_CLUSTER_B}" get --raw "/api/v1/namespaces/${E2E_PYLON_NAMESPACE}/pods/${PYLON_POD}:9089/proxy/metrics" 2>/dev/null)" || metrics=""
-  LAST_OBSERVED="$(grep "^pylon_$1" <<<"${metrics}" | tr '\n' ' ')"
-  [ -n "${LAST_OBSERVED}" ] || LAST_OBSERVED="no pylon_$1 series"
-  grep -q "^pylon_$1{.*${ROUTER_IP//./\\.}.*} 1\$" <<<"${metrics}"
+  series="$(grep "^pylon_$1{" <<<"${metrics}" || true)"
+  LAST_OBSERVED="$(tr '\n' ' ' <<<"${series:-no pylon_$1 series}")"
+  [ "$(grep -c ' 1$' <<<"${series}" || true)" = "$(router_replicas)" ] || return 1
+  while read -r name ip; do
+    [ -n "${name}" ] || continue
+    grep -qxF "pylon_$1{router=\"$(router_authority "${name}" "${ip}")\"} 1" <<<"${series}" || return 1
+  done <<<"${ROUTER_PODS}"
 }
 
-# router_has_pylon: Stargate in a lists model test-model with a registered
-# and healthy server of cluster b. Read through the API server's service
-# proxy.
+# The texts of a rejected duplicate registration: the Pylon logs the gRPC
+# status (AlreadyExists, "is already registered"), Stargate its warning.
+readonly DUPLICATE_REGISTRATION='AlreadyExists|already registered|duplicate inference_server_id'
+
+# no_duplicate_registrations WINDOW: waits WINDOW seconds, then neither the
+# Pylon log nor the log of any Stargate pod of a has a rejected duplicate
+# registration in that window. A Pylon that saw a pod under two names would
+# retry the second registration every second. LAST_OBSERVED also counts the
+# Pylon's lines since it started.
+no_duplicate_registrations() {
+  local window="$1" pylon_recent pylon_all stargate="" name ip n_recent n_all n_stargate
+  sleep "${window}"
+  pylon_recent="$(kc "${E2E_CLUSTER_B}" -n "${E2E_PYLON_NAMESPACE}" logs "${PYLON_POD}" -c pylon --since="${window}s" 2>/dev/null | decolor)" || pylon_recent=""
+  pylon_all="$(kc "${E2E_CLUSTER_B}" -n "${E2E_PYLON_NAMESPACE}" logs "${PYLON_POD}" -c pylon --tail=-1 2>/dev/null | decolor)" || pylon_all=""
+  while read -r name ip; do
+    [ -n "${name}" ] || continue
+    stargate="${stargate}$(kc "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" logs "${name}" --since="${window}s" 2>/dev/null | decolor)" || true
+  done <<<"${ROUTER_PODS}"
+  n_recent="$(grep -cE "${DUPLICATE_REGISTRATION}" <<<"${pylon_recent}" || true)"
+  n_all="$(grep -cE "${DUPLICATE_REGISTRATION}" <<<"${pylon_all}" || true)"
+  n_stargate="$(grep -cE "${DUPLICATE_REGISTRATION}" <<<"${stargate}" || true)"
+  LAST_OBSERVED="duplicate registration lines: Pylon last ${window}s ${n_recent}, Pylon since start ${n_all}, Stargate last ${window}s ${n_stargate}"
+  if [ "${n_recent}" != "0" ]; then
+    LAST_OBSERVED="${LAST_OBSERVED}; $(grep -m1 -E "${DUPLICATE_REGISTRATION}" <<<"${pylon_recent}" | head -c 300)"
+  fi
+  [ "${n_recent}" = "0" ] && [ "${n_stargate}" = "0" ]
+}
+
+# router_has_pylon POD: Stargate pod POD in a lists model test-model with a
+# registered and healthy server of cluster b. Read through the API server's
+# pod proxy.
 router_has_pylon() {
   local got
-  got="$(kc "${E2E_CLUSTER_A}" get --raw "/api/v1/namespaces/${E2E_ROUTER_NAMESPACE}/services/${ROUTER_RELEASE}:8000/proxy/v1/models" 2>&1)" || got="failed: ${got}"
+  got="$(kc "${E2E_CLUSTER_A}" get --raw "/api/v1/namespaces/${E2E_ROUTER_NAMESPACE}/pods/$1:8000/proxy/v1/models" 2>&1)" || got="failed: ${got}"
   LAST_OBSERVED="GET /v1/models: $(head -c 300 <<<"${got}")"
   jq -e --arg c "${E2E_CLUSTER_ID_B}" \
     'any(.models[]?; .model_id == "test-model" and any(.clusters[]?; .cluster_id == $c and .registered_servers >= 1 and .healthy_servers >= 1))' \
     <<<"${got}" >/dev/null 2>&1
 }
 
+# start_router_port_forward TARGET: port-forwards E2E_ROUTER_LOCAL_PORT to
+# port 8000 of TARGET (pod/<name>) in a.
 start_router_port_forward() {
   local i=0
   if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${E2E_ROUTER_LOCAL_PORT}/"; then
     LAST_OBSERVED="127.0.0.1:${E2E_ROUTER_LOCAL_PORT} is already in use; set E2E_ROUTER_LOCAL_PORT"
     return 1
   fi
-  kc "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" port-forward --address 127.0.0.1 "svc/${ROUTER_RELEASE}" \
+  kc_exec "${E2E_CLUSTER_A}" -n "${E2E_ROUTER_NAMESPACE}" port-forward --address 127.0.0.1 "$1" \
     "${E2E_ROUTER_LOCAL_PORT}:8000" >>"${PF_LOG}" 2>&1 &
   ROUTER_PF_PID=$!
   while [ "${i}" -lt 30 ]; do
@@ -1929,10 +2045,11 @@ stop_router_port_forward() {
   fi
 }
 
-# chat_through_router: a streamed chat completion sent to Stargate in a is
-# answered by the sample backend behind the Pylon in b, over the reverse
-# tunnel. Stargate needs the x-request-id, x-model and x-input-tokens
-# headers the LLM gateway sets; the sample backend serves streams only.
+# chat_through_router: a streamed chat completion sent to the port-forwarded
+# Stargate pod in a is answered by the sample backend behind the Pylon in b,
+# over the reverse tunnel. Stargate needs the x-request-id, x-model and
+# x-input-tokens headers the LLM gateway sets; the sample backend serves
+# streams only.
 chat_through_router() {
   local body="${E2E_WORK_DIR}/chat.json" got
   printf '%s' '{"model":"test-model","messages":[{"role":"user","content":"hello from gds-e2e"}],"max_tokens":8,"stream":true}' >"${body}"
@@ -1946,6 +2063,8 @@ chat_through_router() {
 
 run_phase_3() {
   local T="${E2E_TIMEOUT}" a="${E2E_CLUSTER_A}" b="${E2E_CLUSTER_B}" ida="${E2E_CLUSTER_ID_A}"
+  local replicas pods name ip i names=() ips=()
+  replicas="$(router_replicas)"
   CS_PATH="/v1/clustersets/${E2E_MCS_CLUSTERSET}"
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
     REMAINING_STEPS="phase 3 setup|phase 3 router export|phase 3 pylon|"
@@ -1953,14 +2072,18 @@ run_phase_3() {
     REMAINING_STEPS="phase 3 setup|phase 3 router export|phase 3 pylon|phase 3 registration|"
   fi
 
-  section "Phase 3 setup: Stargate in ${a}, Pylon in ${b}"
+  section "Phase 3 setup: Stargate in ${a} (E2E_ROUTER_MODE=${E2E_ROUTER_MODE}), Pylon in ${b}"
   setup_hub
   setup_members
   import_image "${a}" "${E2E_STARGATE_IMAGE_REPOSITORY}:${STARGATE_IMAGE_TAG}"
   import_image "${b}" "${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG}" "${E2E_SAMPLE_IMAGE}"
   pass "images ${E2E_STARGATE_IMAGE_REPOSITORY}:${STARGATE_IMAGE_TAG} into ${a}; ${E2E_PYLON_IMAGE_REPOSITORY}:${PYLON_IMAGE_TAG} and ${E2E_SAMPLE_IMAGE} into ${b}"
   if install_router; then
-    pass "helm upgrade --install ${ROUTER_RELEASE} in ${a} (globalDiscovery and export enabled): ready"
+    if [ "${E2E_ROUTER_MODE}" = "direct" ]; then
+      pass "helm upgrade --install ${ROUTER_RELEASE} in ${a} (${replicas} replicas, direct router mode: no backend router, globalDiscovery and export enabled): ready"
+    else
+      pass "helm upgrade --install ${ROUTER_RELEASE} in ${a} (one replica, globalDiscovery and export enabled): ready"
+    fi
   else
     fail "helm upgrade --install ${ROUTER_RELEASE} in ${a}" "$(tail -n 5 "${E2E_WORK_DIR}/helm-router.log" | tr '\n' ' ')"
     abort
@@ -1968,14 +2091,21 @@ run_phase_3() {
   step_done
 
   section "Phase 3: router export"
-  expect "Stargate pod in ${a} is ready" "${T}" router_ready_ip || abort
+  expect "${replicas} Stargate pod(s) in ${a} are ready" "${T}" router_pods_ready || abort
+  while read -r name ip; do
+    if [ -n "${name}" ]; then
+      names+=("${name}")
+      ips+=("${ip}")
+    fi
+  done <<<"${ROUTER_PODS}"
+  pods="${names[*]}"
   expect "ServiceExport ${ROUTER_RELEASE} in ${a} (role router): created by the controller, Valid and Ready" "${T}" router_export_ok || true
-  expect "GDS ListRouters: cluster ${ida}, dial scheme http, gRPC port 50071, QUIC port 50072, ports grpc and quic, replica ${ROUTER_IP} ready" "${T}" gds_router_ok || abort
+  expect "GDS ListRouters: cluster ${ida}, routerMode ROUTER_MODE_DIRECT, hostnameTemplate $(router_hostname_template), dial scheme http, gRPC port 50071, QUIC port 50072, ports grpc and quic, ${replicas} ready replica(s) whose identities are the pods ${pods}" "${T}" gds_router_ok || abort
   step_done
 
   section "Phase 3: pylon"
   once "Pylon with --gds-url, --gds-pool-name and no --stargate-address, its Service pylon, and the sample backend, in ${b}" apply_pylon || abort
-  expect "Pylon in ${b} learns the router seed from GDS (log: GDS Stargate seeds changed)" "${T}" pylon_log_has "GDS Stargate seeds changed" || true
+  expect "Pylon in ${b} learns the router seeds from GDS (log: GDS Stargate seeds changed)" "${T}" pylon_log_has "GDS Stargate seeds changed" || true
   # GDS only: these hold without routes between the pod CIDRs.
   expect "GDS pool e2e-pylon of cluster ${E2E_CLUSTER_ID_B}: ACTIVE, PYLON agent from the Service pylon and the Pylon's registration (BOTH)" "${T}" \
     gds_pylon_pool_ok || true
@@ -1988,19 +2118,23 @@ run_phase_3() {
 
   section "Phase 3: registration"
   if [ "${ROUTES_OK}" != "1" ]; then
-    skip "Pylon in ${b} registers with Stargate in ${a}: no routes between the pod CIDRs, so the seed ${ROUTER_IP}:50071 is unreachable"
+    skip "Pylon in ${b} registers with Stargate in ${a}: no routes between the pod CIDRs, so the seeds on port 50071 of ${a}'s pod IPs are unreachable"
     step_done
     return 0
   fi
-  expect "Pylon registration stream to Stargate ${ROUTER_IP} is connected (pylon_registration_stream_connected)" 90 pylon_gauge registration_stream_connected || true
-  expect "Pylon reverse tunnel to Stargate ${ROUTER_IP} is connected (pylon_reverse_tunnel_connected)" 90 pylon_gauge reverse_tunnel_connected || true
-  expect "Stargate in ${a} lists test-model with a registered, healthy server of cluster ${E2E_CLUSTER_ID_B}" "${T}" router_has_pylon || true
-  if start_router_port_forward; then
-    expect "a streamed chat completion sent to Stargate in ${a} is answered by the backend behind the Pylon in ${b}" "${T}" chat_through_router || true
-  else
-    fail "port-forward to svc/${ROUTER_RELEASE} in ${a}" "${LAST_OBSERVED}"
-  fi
-  stop_router_port_forward
+  expect "Pylon registration streams are connected to each of the ${replicas} Stargate pod(s), each under one name (pylon_registration_stream_connected)" 90 pylon_gauges registration_stream_connected || true
+  expect "Pylon reverse tunnels are connected to each of the ${replicas} Stargate pod(s) (pylon_reverse_tunnel_connected)" 90 pylon_gauges reverse_tunnel_connected || true
+  once "no rejected duplicate registration in the Pylon and Stargate logs over 20 s (${DUPLICATE_REGISTRATION})" no_duplicate_registrations 20 || true
+  for i in "${!names[@]}"; do
+    name="${names[${i}]}"
+    expect "Stargate pod ${name} (${ips[${i}]}) lists test-model with a registered, healthy server of cluster ${E2E_CLUSTER_ID_B}" "${T}" router_has_pylon "${name}" || true
+    if start_router_port_forward "pod/${name}"; then
+      expect "a streamed chat completion sent to Stargate pod ${name} is answered by the backend behind the Pylon in ${b}" "${T}" chat_through_router || true
+    else
+      fail "port-forward to pod/${name} in ${a}" "${LAST_OBSERVED}"
+    fi
+    stop_router_port_forward
+  done
   step_done
 }
 
@@ -2037,6 +2171,10 @@ check_phases() {
       *) die "unknown phase '${phase}'; available: 1, 2, 3" ;;
     esac
   done
+  case "${E2E_ROUTER_MODE}" in
+    direct | single) ;;
+    *) die "E2E_ROUTER_MODE must be direct or single, got '${E2E_ROUTER_MODE}'" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -2114,7 +2252,7 @@ dry_run() {
     manifest="${E2E_WORK_DIR}/dry-run-${ROUTER_RELEASE}.yaml"
     helm template "${ROUTER_RELEASE}" "${ROUTER_CHART}" "${args[@]}" >"${manifest}" ||
       die "helm template ${ROUTER_RELEASE} failed"
-    printf 'Rendered %s\n' "${manifest}"
+    printf 'Rendered %s (E2E_ROUTER_MODE=%s, %s replica(s), hostname template %s)\n' "${manifest}" "${E2E_ROUTER_MODE}" "$(router_replicas)" "$(router_hostname_template)"
     print_args "helm upgrade --install ${ROUTER_RELEASE} ${ROUTER_CHART}" "${args[@]}" --create-namespace --wait
     manifest="${E2E_WORK_DIR}/dry-run-pylon.yaml"
     render_manifest "${MANIFESTS}/pylon.yaml" >"${manifest}"

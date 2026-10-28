@@ -251,8 +251,9 @@ llmRequestRouter:
     # the other clusters of the clusterset to its WatchStargates remote URLs,
     # next to discovery.remoteWatchUrls. Local peers still come from DNS. A
     # multi-replica Deployment may then set backendRouter.enabled=false
-    # (direct mode), and Stargate gives each local peer its pod IP dial
-    # address from this cluster's router record in GDS.
+    # (direct mode), and Stargate lists each local peer under its replica
+    # identity with its pod IP dial address from this cluster's router record
+    # in GDS.
     enabled: false
     # GDS gRPC URLs in failover order, the global name first. Each must be an
     # explicit https:// URI; http:// needs

@@ -11,10 +11,13 @@ End-to-end test of the Global Discovery Service on local k3d clusters.
   checkout and runs the checks of each phase in `E2E_PHASES`. Keep it
   compatible with bash 3.2.
 - `manifests/`: chart values (`gds-server-values.yaml`,
-  `gds-mcs-controller-values.yaml`, `router-values.yaml`), the REST body of
-  phase 1 (`frontend-export.json`), and the workloads of phases 2 and 3
+  `gds-mcs-controller-values.yaml`, `router-values.yaml` and the
+  direct-mode overlay `router-direct-values.yaml`), the REST body of phase 1
+  (`frontend-export.json`), and the workloads of phases 2 and 3
   (`mcs-demo.yaml`, `mcs-client.yaml`, `pylon.yaml`) with `__NAME__`
-  placeholders that `render_manifest` fills.
+  placeholders that `render_manifest` fills. Lines between
+  `# router-mode single: begin` and `end` stay only with
+  `E2E_ROUTER_MODE=single`.
 - `Makefile`: `test`, `test-cleanup`, `clean`, `deploy`, `dry-run`, `check`,
   and the local workflow targets `cluster`, `images`, `all`, `test-unit`,
   `test-charts` and `destroy`.

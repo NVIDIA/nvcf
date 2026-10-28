@@ -15,44 +15,60 @@
 
 //! Remote router discovery through the Global Discovery Service (GDS).
 //!
-//! [`GdsDiscovery`] wraps the local peer discovery, which stays authoritative
-//! for the Stargates of this cluster, and adds the router replica seeds of
-//! every other cluster of the clusterset to `watch_stargate_urls`. Pylons
-//! that follow those URLs reach the routers of the other clusters through
-//! this Stargate's `WatchStargates`.
+//! [`GdsDiscovery`] wraps the local peer discovery and adds the router replica
+//! seeds of every other cluster of the clusterset to `watch_stargate_urls`.
+//! Pylons that follow those URLs reach the routers of the other clusters
+//! through this Stargate's `WatchStargates`.
 //!
-//! In direct router mode the exported router Service selects the Stargate
-//! pods themselves, and each pod advertises its pod IP. [`GdsDiscovery`]
-//! then finds the router record of its own cluster, the one whose replicas
-//! include this Stargate's address, and offers a dial URL for each local
-//! Stargate through [`Discovery::peer_dial_addrs`]:
-//! `<dial scheme>://<replica address>:<grpc port>`, keyed by the host the
-//! local discovery advertises for it. A replica is matched by
+//! In direct router mode ([`is_direct`]) the exported router Service selects
+//! the Stargate pods themselves, and each pod advertises its pod IP.
+//! [`GdsDiscovery`] then finds the router record of its own cluster, the one
+//! whose replicas include this Stargate's address, ready or not, and uses it
+//! for the names and the dial addresses of the local Stargates.
 //!
-//! - its address, for peers advertised by IP address;
-//! - the hostname template with `{pod_name}` replaced by the replica's
-//!   EndpointSlice hostname, when set;
-//! - the hostname template with `{pod_name}` replaced by the replica address
-//!   with `.` and `:` turned into `-`, the name Kubernetes DNS gives an
-//!   endpoint without a hostname in the SRV records of a headless Service,
-//!   which is how headless DNS discovery lists Deployment pods.
+//! Peer names ([`Discovery::discover_stargates`]). Headless DNS discovery
+//! lists Deployment pods by the dashed-IP name Kubernetes DNS gives an
+//! endpoint without a hostname, while each pod lists itself by its pod name.
+//! A pylon that watches every replica would see each pod under two
+//! authorities and open two registrations with it, which Stargate rejects
+//! as a duplicate. When the router record names this Stargate by the host it
+//! advertises (the record's hostname template with `{pod_name}` replaced by
+//! this Stargate's id, on the record's gRPC port), the peers are listed under
+//! their replica identities instead:
 //!
+//! - a peer that local discovery lists by a name of a replica with an
+//!   identity becomes `stargate_id` = the identity, `advertise_addr` =
+//!   [`replica_authority`] and `grpc_pylon_dial_addr` =
+//!   `<dial scheme>://<replica address>:<grpc port>`. The names of a replica
+//!   are the hostname template with `{pod_name}` replaced by its identity,
+//!   its EndpointSlice hostname, or its address with `.` and `:` turned into
+//!   `-` (the SRV name of an endpoint without a hostname);
+//! - a ready replica with an identity that local discovery does not list is
+//!   added the same way;
+//! - this Stargate keeps its own entry, and its other names are dropped;
+//! - every other peer, including peers advertised by IP address and replicas
+//!   without an identity, is kept as local discovery lists it.
+//!
+//! Otherwise the peers stay as local discovery lists them.
+//!
+//! Peer dial addresses ([`Discovery::peer_dial_addrs`]). A dial URL for each
+//! local Stargate, `<dial scheme>://<replica address>:<grpc port>`, keyed by
+//! the host local discovery advertises for it: the replica's address, for
+//! peers advertised by IP address, and each of the replica's names above.
 //! This Stargate itself is keyed by the host it advertises and dials its own
-//! advertise address. A peer listed by its pod name with no EndpointSlice
-//! hostname (StatefulSet pods behind the exported ClusterIP Service, or a
-//! DNS server that publishes pod names) matches only once the router record
-//! carries each replica's pod name.
+//! advertise address. The publisher fills the dial address of every entry
+//! that has none from this map, so this Stargate and the peers kept as listed
+//! get one too.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use gds_client::labels::{DIAL_SCHEME_HTTP, DIAL_SCHEME_HTTPS};
-use gds_client::routers::{DEFAULT_DIAL_SCHEME, router_key};
+use gds_client::labels::{self, DIAL_SCHEME_HTTP, DIAL_SCHEME_HTTPS};
+use gds_client::routers::{DEFAULT_DIAL_SCHEME, is_direct, replica_authority, router_key};
 use gds_client::v1::{Router, RouterReplica};
 use gds_client::{GdsClient, RouterCache, RouterCacheConfig, RouterState, remote_watch_urls};
 use parking_lot::Mutex;
-use stargate_forwarding::render_hostname;
 use stargate_proto::pb::StargateInfo;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -60,14 +76,19 @@ use tracing::{info, warn};
 
 use super::{Discovery, advertise_host};
 
-/// Export annotation that says what a router's replicas are:
-/// `backend-router` (stargate-k8s-router pods) or `direct` (Stargate pods).
-const ANNOTATION_ROUTER_MODE: &str = "gds.nvidia.com/router-mode";
-const ROUTER_MODE_DIRECT: &str = "direct";
-/// Export annotation with the advertised hostname template of a router's
-/// Stargate pods, `{pod_name}` unresolved.
-const ANNOTATION_HOSTNAME_TEMPLATE: &str = "gds.nvidia.com/hostname-template";
-const POD_NAME_PLACEHOLDER: &str = "{pod_name}";
+/// How [`GdsDiscovery`] last listed the local Stargates.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+enum PeerNames {
+    /// As local discovery lists them: no direct-mode router record of this
+    /// cluster lists this Stargate.
+    #[default]
+    Local,
+    /// As local discovery lists them, because the direct-mode router record
+    /// with this key does not name this Stargate by the host it advertises.
+    TemplateMismatch(String),
+    /// Under the replica identities of the router record with this key.
+    Identities(String),
+}
 
 /// What [`GdsDiscovery`] last published, so it logs only changes.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -76,6 +97,7 @@ struct Published {
     stale: bool,
     /// Key of the own direct-mode router record peer dial URLs come from.
     direct_router: Option<String>,
+    peer_names: PeerNames,
 }
 
 /// Local peer discovery plus the routers of the other clusters from GDS.
@@ -130,6 +152,58 @@ impl GdsDiscovery {
             published: Mutex::new(Published::default()),
             _cache: None,
         }
+    }
+
+    /// The local Stargates, under their replica identities when the own
+    /// router record is in direct mode and names this Stargate (module
+    /// documentation), from the latest router view. A stale view keeps its
+    /// last known routers.
+    fn direct_peers(&self, local: Vec<StargateInfo>) -> Vec<StargateInfo> {
+        let self_stargates = self.inner.initial_stargates();
+        let peers = {
+            let state = self.routers.borrow();
+            direct_peers(
+                &state,
+                &self.own_cluster,
+                self.advertise_addr,
+                &self_stargates,
+                local,
+            )
+        };
+        self.log_peer_names(peers.names, peers.stargates.len());
+        peers.stargates
+    }
+
+    fn log_peer_names(&self, names: PeerNames, stargate_count: usize) {
+        let mut published = self.published.lock();
+        if published.peer_names == names {
+            return;
+        }
+        match &names {
+            PeerNames::Identities(router) => info!(
+                own_cluster = %self.own_cluster,
+                router,
+                stargate_count,
+                "listing this cluster's Stargates under their GDS replica identities"
+            ),
+            // A single-replica router advertises a template without
+            // `{pod_name}` and lists no peers, so this is not a warning.
+            PeerNames::TemplateMismatch(router) => info!(
+                own_cluster = %self.own_cluster,
+                router,
+                advertise_addr = %self.advertise_addr,
+                "the GDS router of this cluster does not name this Stargate by the host it \
+                 advertises (hostname template, Stargate id or gRPC port differ); listing \
+                 peers as local discovery finds them"
+            ),
+            PeerNames::Local if matches!(published.peer_names, PeerNames::Identities(_)) => info!(
+                own_cluster = %self.own_cluster,
+                "no GDS router of this cluster in direct mode lists this Stargate; \
+                 listing peers as local discovery finds them"
+            ),
+            PeerNames::Local => {}
+        }
+        published.peer_names = names;
     }
 
     /// The dial URLs of this cluster's Stargates in direct mode, from the
@@ -217,7 +291,8 @@ impl Discovery for GdsDiscovery {
     }
 
     async fn discover_stargates(&self) -> Vec<StargateInfo> {
-        self.inner.discover_stargates().await
+        let local = self.inner.discover_stargates().await;
+        self.direct_peers(local)
     }
 
     async fn discover_remote_watch_urls(&self) -> Vec<String> {
@@ -230,6 +305,189 @@ impl Discovery for GdsDiscovery {
         let mut addrs = self.inner.peer_dial_addrs().await;
         addrs.extend(self.direct_peer_dial_addrs());
         addrs
+    }
+}
+
+/// The direct-mode router record of `own_cluster` that lists this
+/// Stargate's IP among its replicas, ready or not, with the scheme and port
+/// of its dial URLs.
+struct OwnDirectRouter<'a> {
+    router: &'a Router,
+    scheme: &'static str,
+    port: u16,
+}
+
+impl<'a> OwnDirectRouter<'a> {
+    /// `None` without such a record, or when its dial scheme is unknown or
+    /// its gRPC port unset.
+    fn find(state: &'a RouterState, own_cluster: &str, own_ip: IpAddr) -> Option<Self> {
+        let router = state.iter().find(|router| {
+            router.cluster == own_cluster
+                && is_direct(router)
+                && router
+                    .replicas
+                    .iter()
+                    .any(|replica| replica_ip(replica) == Some(own_ip))
+        })?;
+        Some(Self {
+            router,
+            scheme: dial_scheme(router)?,
+            port: grpc_port(router)?,
+        })
+    }
+
+    fn key(&self) -> String {
+        router_key(self.router)
+    }
+
+    /// `<scheme>://<replica address>:<grpc port>`, IPv6 in brackets.
+    fn dial_url(&self, replica: &RouterReplica) -> Option<String> {
+        url_host(&replica.address).map(|host| format!("{}://{host}:{}", self.scheme, self.port))
+    }
+
+    /// The hosts local discovery may list `replica` by: the hostname
+    /// template with `{pod_name}` replaced by its identity, its EndpointSlice
+    /// hostname, or its dashed-IP DNS name. Empty when the template does not
+    /// contain `{pod_name}` exactly once.
+    fn replica_names(&self, replica: &RouterReplica) -> Vec<String> {
+        let mut names: Vec<String> = [
+            Some(replica.identity.clone()),
+            Some(replica.hostname.clone()),
+            dns_endpoint_name(&replica.address),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|pod_name| self.host_for(&pod_name))
+        .collect();
+        names.dedup();
+        names
+    }
+
+    /// The host of the hostname template with `{pod_name}` replaced by
+    /// `pod_name`, as [`advertise_host`] spells it.
+    fn host_for(&self, pod_name: &str) -> Option<String> {
+        labels::replica_authority(
+            &self.router.hostname_template,
+            pod_name,
+            self.router.grpc_port,
+        )
+        .and_then(|authority| advertise_host(&authority))
+    }
+
+    /// Whether the record names `stargate` by its advertised authority: the
+    /// hostname template with `{pod_name}` replaced by its id, on the
+    /// record's gRPC port.
+    fn names(&self, stargate: &StargateInfo) -> bool {
+        labels::replica_authority(
+            &self.router.hostname_template,
+            &stargate.stargate_id,
+            self.router.grpc_port,
+        )
+        .and_then(|authority| authority_key(&authority))
+        .is_some_and(|key| Some(key) == authority_key(&stargate.advertise_addr))
+    }
+
+    /// The `WatchStargates` entry of `replica` under its identity, `None`
+    /// without an identity or a usable address.
+    fn identity_stargate(&self, replica: &RouterReplica) -> Option<StargateInfo> {
+        Some(StargateInfo {
+            stargate_id: replica.identity.trim().to_string(),
+            advertise_addr: replica_authority(self.router, replica)?,
+            http_advertise_addr: String::new(),
+            grpc_pylon_dial_addr: self.dial_url(replica)?,
+        })
+    }
+}
+
+/// The local Stargates as [`direct_peers`] lists them.
+#[derive(Debug, PartialEq, Eq)]
+struct DirectPeers {
+    names: PeerNames,
+    stargates: Vec<StargateInfo>,
+}
+
+/// `local`, the Stargates local discovery lists, rewritten under the
+/// replica identities of the own direct-mode router record as the module
+/// documentation describes. `self_stargates` are this Stargate's own
+/// entries ([`Discovery::initial_stargates`]). Without such a record, or
+/// when it does not name this Stargate by the host it advertises, `local`
+/// is returned unchanged.
+fn direct_peers(
+    state: &RouterState,
+    own_cluster: &str,
+    advertise_addr: SocketAddr,
+    self_stargates: &[StargateInfo],
+    local: Vec<StargateInfo>,
+) -> DirectPeers {
+    let own_ip = advertise_addr.ip();
+    let Some(own) = OwnDirectRouter::find(state, own_cluster, own_ip) else {
+        return DirectPeers {
+            names: PeerNames::Local,
+            stargates: local,
+        };
+    };
+    if self_stargates.is_empty() || !self_stargates.iter().all(|stargate| own.names(stargate)) {
+        return DirectPeers {
+            names: PeerNames::TemplateMismatch(own.key()),
+            stargates: local,
+        };
+    }
+    let self_hosts: HashSet<String> = self_stargates
+        .iter()
+        .filter_map(|stargate| advertise_host(&stargate.advertise_addr))
+        .collect();
+
+    // A replica at this Stargate's IP, or one named like it (a pod that kept
+    // its name and moved, still listed at its old address), is this
+    // Stargate: its other names are dropped and it is never added.
+    let mut own_names: HashSet<String> = HashSet::new();
+    let mut peers_by_name: HashMap<String, &RouterReplica> = HashMap::new();
+    let mut peers: Vec<&RouterReplica> = Vec::new();
+    for replica in &own.router.replicas {
+        let names = own.replica_names(replica);
+        if replica_ip(replica) == Some(own_ip) || names.iter().any(|name| self_hosts.contains(name))
+        {
+            own_names.extend(names);
+        } else if !replica.identity.trim().is_empty() {
+            for name in names {
+                peers_by_name.entry(name).or_insert(replica);
+            }
+            peers.push(replica);
+        }
+    }
+
+    let mut listed: HashSet<String> = HashSet::new();
+    let mut stargates = Vec::with_capacity(local.len());
+    for stargate in local {
+        let Some(host) = advertise_host(&stargate.advertise_addr) else {
+            stargates.push(stargate);
+            continue;
+        };
+        if self_hosts.contains(&host) {
+            stargates.push(stargate);
+        } else if own_names.contains(&host) {
+            // This Stargate under another name, for example its dashed IP.
+        } else if let Some(replica) = peers_by_name.get(&host) {
+            if listed.insert(replica.identity.trim().to_string()) {
+                stargates.extend(own.identity_stargate(replica));
+            }
+        } else {
+            stargates.push(stargate);
+        }
+    }
+    for replica in peers.into_iter().filter(|replica| replica.ready) {
+        if listed.insert(replica.identity.trim().to_string()) {
+            stargates.extend(own.identity_stargate(replica));
+        }
+    }
+    stargates.sort_by(|left, right| {
+        left.stargate_id
+            .cmp(&right.stargate_id)
+            .then_with(|| left.advertise_addr.cmp(&right.advertise_addr))
+    });
+    DirectPeers {
+        names: PeerNames::Identities(own.key()),
+        stargates,
     }
 }
 
@@ -255,73 +513,40 @@ fn direct_dial_addrs(
     self_hosts: &[String],
 ) -> DirectDialAddrs {
     let own_ip = advertise_addr.ip();
-    let Some(router) = state.by_cluster(own_cluster).find(|router| {
-        is_direct(router)
-            && router
-                .replicas
-                .iter()
-                .any(|replica| replica_ip(replica) == Some(own_ip))
-    }) else {
+    let Some(own) = OwnDirectRouter::find(state, own_cluster, own_ip) else {
         return DirectDialAddrs::default();
     };
-    let (Some(scheme), Some(port)) = (dial_scheme(router), grpc_port(router)) else {
-        return DirectDialAddrs::default();
-    };
-    let template = hostname_template(router);
     let mut addrs = HashMap::new();
-    for replica in &router.replicas {
-        let Some(url_host) = url_host(&replica.address) else {
+    for replica in &own.router.replicas {
+        let Some(url) = own.dial_url(replica) else {
             continue;
         };
-        let url = format!("{scheme}://{url_host}:{port}");
-        let mut hosts = vec![replica.address.clone()];
-        if let Some(template) = template {
-            let pod_names = replica_identity(replica)
-                .map(str::to_string)
-                .into_iter()
-                .chain(dns_endpoint_name(&replica.address));
-            hosts.extend(
-                pod_names.map(|pod_name| render_hostname(template, &pod_name, &router.namespace)),
-            );
-        }
-        for host in hosts.iter().filter_map(|host| advertise_host(host)) {
+        let hosts = advertise_host(&replica.address)
+            .into_iter()
+            .chain(own.replica_names(replica));
+        for host in hosts {
             addrs.insert(host, url.clone());
         }
     }
     if let Some(self_url_host) = url_host(&own_ip.to_string()) {
-        let self_url = format!("{scheme}://{self_url_host}:{}", advertise_addr.port());
+        let self_url = format!("{}://{self_url_host}:{}", own.scheme, advertise_addr.port());
         for host in self_hosts {
             addrs.insert(host.clone(), self_url.clone());
         }
     }
     DirectDialAddrs {
-        router: Some(router_key(router)),
+        router: Some(own.key()),
         addrs,
     }
 }
 
-fn is_direct(router: &Router) -> bool {
-    router
-        .annotations
-        .get(ANNOTATION_ROUTER_MODE)
-        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case(ROUTER_MODE_DIRECT))
-}
-
-/// The hostname template of `router`'s Stargate pods, when it names each pod
-/// by exactly one `{pod_name}`.
-fn hostname_template(router: &Router) -> Option<&str> {
-    router
-        .annotations
-        .get(ANNOTATION_HOSTNAME_TEMPLATE)
-        .map(|template| template.trim())
-        .filter(|template| template.matches(POD_NAME_PLACEHOLDER).count() == 1)
-}
-
-/// The name a replica's pod goes by in its advertised hostname: the
-/// EndpointSlice hostname when set. The router record does not carry the pod
-/// name of other replicas yet.
-fn replica_identity(replica: &RouterReplica) -> Option<&str> {
-    Some(replica.hostname.trim()).filter(|hostname| !hostname.is_empty())
+/// `host:port` of an authority, the host as [`advertise_host`] spells it.
+/// `None` without a host or a numeric port.
+fn authority_key(authority: &str) -> Option<String> {
+    let host = advertise_host(authority)?;
+    let (_, port) = authority.trim().trim_end_matches('/').rsplit_once(':')?;
+    let port: u16 = port.parse().ok()?;
+    Some(format!("{host}:{port}"))
 }
 
 /// The DNS label Kubernetes gives an endpoint without a hostname in the SRV
@@ -373,7 +598,7 @@ fn url_host(address: &str) -> Option<String> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use gds_client::v1::LeaseState;
+    use gds_client::v1::{LeaseState, RouterMode};
 
     use hickory_resolver::TokioAsyncResolver;
     use hickory_resolver::config::{ResolverConfig, ResolverOpts};
@@ -424,30 +649,36 @@ mod tests {
         ))
     }
 
+    /// The advertised hostname template Stargate runs with.
     const TEMPLATE: &str = "{pod_name}.stargate-headless.{namespace}.svc.cluster.local";
+    /// [`TEMPLATE`] as the chart exports it, `{namespace}` resolved.
+    const EXPORTED_TEMPLATE: &str = "{pod_name}.stargate-headless.nvcf.svc.cluster.local";
 
-    /// A router record of Stargate pods, annotated with `mode`.
-    fn stargate_router(cluster: &str, mode: &str, replicas: &[(&str, &str, bool)]) -> Router {
+    fn host(pod_name: &str) -> String {
+        EXPORTED_TEMPLATE.replace("{pod_name}", pod_name)
+    }
+
+    /// A router record of Stargate pods in `mode`; each replica is
+    /// `(address, identity, ready)`.
+    fn stargate_router(cluster: &str, mode: RouterMode, replicas: &[(&str, &str, bool)]) -> Router {
         let mut router = router(cluster, "http", &[]);
         router.name = "llm-request-router".to_string();
-        router.annotations = [
-            (ANNOTATION_ROUTER_MODE.to_string(), mode.to_string()),
-            (
-                ANNOTATION_HOSTNAME_TEMPLATE.to_string(),
-                TEMPLATE.to_string(),
-            ),
-        ]
-        .into();
+        router.router_mode = mode as i32;
+        router.hostname_template = EXPORTED_TEMPLATE.to_string();
         router.replicas = replicas
             .iter()
-            .map(|(address, hostname, ready)| RouterReplica {
+            .map(|(address, identity, ready)| RouterReplica {
                 address: address.to_string(),
-                hostname: hostname.to_string(),
+                identity: identity.to_string(),
                 ready: *ready,
                 ..RouterReplica::default()
             })
             .collect();
         router
+    }
+
+    fn direct_router(replicas: &[(&str, &str, bool)]) -> Router {
+        stargate_router("a", RouterMode::Direct, replicas)
     }
 
     fn addrs(entries: &[(&str, &str)]) -> HashMap<String, String> {
@@ -458,21 +689,19 @@ mod tests {
     }
 
     fn self_hosts() -> Vec<String> {
-        vec!["stargate-0.stargate-headless.nvcf.svc.cluster.local".to_string()]
+        vec![host("stargate-0")]
     }
 
     #[test]
-    fn direct_router_dial_addrs_cover_addresses_dns_endpoint_names_and_hostnames() {
-        let state = state(vec![stargate_router(
-            "a",
-            "direct",
-            &[
-                ("10.0.0.1", "", true),
-                ("10.0.0.2", "", true),
-                // Warming peers are listed by headless discovery too.
-                ("10.0.0.3", "stargate-3", false),
-            ],
-        )]);
+    fn direct_router_dial_addrs_cover_addresses_dns_endpoint_names_and_identities() {
+        let mut router = direct_router(&[
+            ("10.0.0.1", "", true),
+            ("10.0.0.2", "", true),
+            // Warming peers are listed by headless discovery too.
+            ("10.0.0.3", "stargate-3", false),
+        ]);
+        router.replicas[1].hostname = "stargate-2".to_string();
+        let state = state(vec![router]);
 
         let dial = direct_dial_addrs(&state, "a", self_addr(), &self_hosts());
 
@@ -481,40 +710,38 @@ mod tests {
             dial.addrs,
             addrs(&[
                 ("10.0.0.1", "http://10.0.0.1:50071"),
-                (
-                    "10-0-0-1.stargate-headless.nvcf.svc.cluster.local",
-                    "http://10.0.0.1:50071"
-                ),
+                (&host("10-0-0-1"), "http://10.0.0.1:50071"),
                 ("10.0.0.2", "http://10.0.0.2:50071"),
-                (
-                    "10-0-0-2.stargate-headless.nvcf.svc.cluster.local",
-                    "http://10.0.0.2:50071"
-                ),
+                (&host("10-0-0-2"), "http://10.0.0.2:50071"),
+                // The EndpointSlice hostname names a replica too.
+                (&host("stargate-2"), "http://10.0.0.2:50071"),
                 ("10.0.0.3", "http://10.0.0.3:50071"),
-                (
-                    "10-0-0-3.stargate-headless.nvcf.svc.cluster.local",
-                    "http://10.0.0.3:50071"
-                ),
-                (
-                    "stargate-3.stargate-headless.nvcf.svc.cluster.local",
-                    "http://10.0.0.3:50071"
-                ),
+                (&host("10-0-0-3"), "http://10.0.0.3:50071"),
+                (&host("stargate-3"), "http://10.0.0.3:50071"),
                 // This Stargate dials its own advertise address.
-                (
-                    "stargate-0.stargate-headless.nvcf.svc.cluster.local",
-                    "http://10.0.0.1:50071"
-                ),
+                (&host("stargate-0"), "http://10.0.0.1:50071"),
             ])
         );
     }
 
     #[test]
-    fn backend_router_mode_fills_no_dial_addrs() {
-        for mode in ["backend-router", "", "relay"] {
+    fn backend_router_mode_fills_no_dial_addrs_and_keeps_local_peers() {
+        let local = vec![
+            StargateInfo {
+                stargate_id: "10-0-0-2".to_string(),
+                advertise_addr: format!("{}:50071", host("10-0-0-2")),
+                ..StargateInfo::default()
+            },
+            self_stargate(),
+        ];
+        for mode in [RouterMode::BackendRouter, RouterMode::Unspecified] {
             let state = state(vec![stargate_router(
                 "a",
                 mode,
-                &[("10.0.0.1", "", true), ("10.0.0.2", "", true)],
+                &[
+                    ("10.0.0.1", "stargate-0", true),
+                    ("10.0.0.2", "stargate-1", true),
+                ],
             )]);
 
             assert_eq!(
@@ -522,23 +749,26 @@ mod tests {
                 DirectDialAddrs::default(),
                 "mode {mode:?}"
             );
+            assert_eq!(
+                direct_peers(&state, "a", self_addr(), &[self_stargate()], local.clone()),
+                DirectPeers {
+                    names: PeerNames::Local,
+                    stargates: local.clone()
+                },
+                "mode {mode:?}"
+            );
         }
-        let mut unannotated = stargate_router("a", "direct", &[("10.0.0.1", "", true)]);
-        unannotated.annotations.clear();
-        assert_eq!(
-            direct_dial_addrs(&state(vec![unannotated]), "a", self_addr(), &self_hosts()),
-            DirectDialAddrs::default()
-        );
     }
 
     #[test]
     fn own_router_is_the_direct_router_of_this_cluster_that_lists_this_stargate() {
         // Another cluster's router with this pod IP, and a router of this
         // cluster without it: neither is this Stargate's router.
-        let other_cluster = stargate_router("b", "direct", &[("10.0.0.1", "", true)]);
-        let mut other_router = stargate_router("a", "direct", &[("10.0.0.9", "", true)]);
+        let other_cluster = stargate_router("b", RouterMode::Direct, &[("10.0.0.1", "", true)]);
+        let mut other_router = direct_router(&[("10.0.0.9", "", true)]);
         other_router.name = "another-router".to_string();
-        let mut backend_router = stargate_router("a", "backend-router", &[("10.0.0.1", "", true)]);
+        let mut backend_router =
+            stargate_router("a", RouterMode::BackendRouter, &[("10.0.0.1", "", true)]);
         backend_router.name = "a-backend-router".to_string();
         assert_eq!(
             direct_dial_addrs(
@@ -555,7 +785,7 @@ mod tests {
         );
 
         // A not-ready replica of this Stargate still identifies its router.
-        let own = stargate_router("a", "direct", &[("10.0.0.1", "", false)]);
+        let own = direct_router(&[("10.0.0.1", "", false)]);
         let dial = direct_dial_addrs(
             &state(vec![other_cluster, other_router, backend_router, own]),
             "a",
@@ -564,8 +794,7 @@ mod tests {
         );
         assert_eq!(dial.router.as_deref(), Some("a/nvcf/llm-request-router"));
         assert_eq!(
-            dial.addrs
-                .get("stargate-0.stargate-headless.nvcf.svc.cluster.local"),
+            dial.addrs.get(&host("stargate-0")),
             Some(&"http://10.0.0.1:50071".to_string())
         );
         assert!(!dial.addrs.contains_key("10.0.0.9"));
@@ -573,11 +802,7 @@ mod tests {
 
     #[test]
     fn dial_addrs_use_the_dial_scheme_grpc_port_and_bracketed_ipv6() {
-        let mut router = stargate_router(
-            "a",
-            "direct",
-            &[("fd00::1", "", true), ("fd00::2", "", true)],
-        );
+        let mut router = direct_router(&[("fd00::1", "", true), ("fd00::2", "", true)]);
         router.dial_scheme = String::new();
         router.grpc_port = 50081;
         let advertise_addr: SocketAddr = "[fd00::1]:50071".parse().unwrap();
@@ -588,15 +813,9 @@ mod tests {
             dial.addrs,
             addrs(&[
                 ("fd00::1", "https://[fd00::1]:50081"),
-                (
-                    "fd00--1.stargate-headless.nvcf.svc.cluster.local",
-                    "https://[fd00::1]:50081"
-                ),
+                (&host("fd00--1"), "https://[fd00::1]:50081"),
                 ("fd00::2", "https://[fd00::2]:50081"),
-                (
-                    "fd00--2.stargate-headless.nvcf.svc.cluster.local",
-                    "https://[fd00::2]:50081"
-                ),
+                (&host("fd00--2"), "https://[fd00::2]:50081"),
             ])
         );
 
@@ -631,26 +850,16 @@ mod tests {
     #[test]
     fn hostname_keys_need_a_template_with_one_pod_name() {
         for template in [
-            None,
-            Some("stargate.nvcf.svc.cluster.local"),
-            Some("{pod_name}.{pod_name}.example"),
+            "",
+            "stargate.nvcf.svc.cluster.local",
+            "{pod_name}.{pod_name}.example",
         ] {
-            let mut router = stargate_router("a", "direct", &[("10.0.0.2", "stargate-2", true)]);
+            let mut router = direct_router(&[("10.0.0.2", "stargate-2", true)]);
             router.replicas.push(RouterReplica {
                 address: "10.0.0.1".to_string(),
                 ..RouterReplica::default()
             });
-            match template {
-                Some(template) => {
-                    router.annotations.insert(
-                        ANNOTATION_HOSTNAME_TEMPLATE.to_string(),
-                        template.to_string(),
-                    );
-                }
-                None => {
-                    router.annotations.remove(ANNOTATION_HOSTNAME_TEMPLATE);
-                }
-            }
+            router.hostname_template = template.to_string();
 
             assert_eq!(
                 direct_dial_addrs(&state(vec![router]), "a", self_addr(), &[]).addrs,
@@ -663,9 +872,9 @@ mod tests {
         }
     }
 
-    fn headless_discovery() -> HeadlessDnsDiscovery {
+    fn headless_discovery(self_pod_name: &str) -> HeadlessDnsDiscovery {
         HeadlessDnsDiscovery::new(HeadlessDnsDiscoveryConfig {
-            self_pod_name: "stargate-0".to_string(),
+            self_pod_name: self_pod_name.to_string(),
             pod_namespace: "nvcf".to_string(),
             advertised_hostname_template: TEMPLATE.to_string(),
             discovery_dns_name: "stargate-headless.nvcf.svc.cluster.local".to_string(),
@@ -674,60 +883,283 @@ mod tests {
         })
     }
 
-    #[test]
-    fn dial_addrs_match_what_headless_discovery_lists_for_deployment_pods() {
-        // Kubernetes DNS names Deployment endpoints by dashed IP in the SRV
-        // records of the headless Service, this pod included.
-        let local = headless_discovery().stargates_from_srv_records(vec![
-            (
-                "10-0-0-1.stargate-headless.nvcf.svc.cluster.local.".to_string(),
-                50071,
-            ),
-            (
-                "10-0-0-2.stargate-headless.nvcf.svc.cluster.local.".to_string(),
-                50071,
-            ),
-        ]);
-        let self_hosts: Vec<String> = headless_discovery()
+    /// The entry headless discovery lists `stargate-0` under for itself.
+    fn self_stargate() -> StargateInfo {
+        headless_discovery("stargate-0")
             .initial_stargates()
-            .iter()
-            .filter_map(|stargate| advertise_host(&stargate.advertise_addr))
-            .collect();
-        let dial = direct_dial_addrs(
-            &state(vec![stargate_router(
-                "a",
-                "direct",
-                &[("10.0.0.1", "", true), ("10.0.0.2", "", true)],
-            )]),
-            "a",
-            self_addr(),
-            &self_hosts,
-        );
+            .remove(0)
+    }
 
-        let matched: BTreeMap<&str, Option<&str>> = local
-            .iter()
-            .map(|stargate| {
+    /// Local discovery with a fixed peer list: what headless DNS discovery
+    /// lists for the given SRV endpoint names, this pod included.
+    struct ListedDiscovery {
+        headless: HeadlessDnsDiscovery,
+        listed: Vec<StargateInfo>,
+    }
+
+    impl ListedDiscovery {
+        fn new(self_pod_name: &str, srv_names: &[&str]) -> Self {
+            let headless = headless_discovery(self_pod_name);
+            let listed = headless.stargates_from_srv_records(srv_names.iter().map(|name| {
                 (
-                    stargate.stargate_id.as_str(),
-                    advertise_host(&stargate.advertise_addr)
-                        .and_then(|host| dial.addrs.get(&host))
-                        .map(String::as_str),
+                    format!("{name}.stargate-headless.nvcf.svc.cluster.local."),
+                    50071,
                 )
+            }));
+            Self { headless, listed }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Discovery for ListedDiscovery {
+        fn initial_stargates(&self) -> Vec<StargateInfo> {
+            self.headless.initial_stargates()
+        }
+
+        async fn discover_stargates(&self) -> Vec<StargateInfo> {
+            self.listed.clone()
+        }
+    }
+
+    /// What `WatchStargates` publishes from `discovery` without
+    /// `--grpc-pylon-dial-addr`: each entry as `(stargate_id, advertise_addr,
+    /// grpc_pylon_dial_addr)`, the dial address from
+    /// [`Discovery::peer_dial_addrs`] when discovery leaves it empty.
+    async fn published(discovery: &dyn Discovery) -> Vec<(String, String, String)> {
+        let dial_addrs = discovery.peer_dial_addrs().await;
+        discovery
+            .discover_stargates()
+            .await
+            .into_iter()
+            .map(|stargate| {
+                let dial = if stargate.grpc_pylon_dial_addr.is_empty() {
+                    advertise_host(&stargate.advertise_addr)
+                        .and_then(|host| dial_addrs.get(&host).cloned())
+                        .unwrap_or_default()
+                } else {
+                    stargate.grpc_pylon_dial_addr
+                };
+                (stargate.stargate_id, stargate.advertise_addr, dial)
             })
+            .collect()
+    }
+
+    fn entry(id: &str, pod_name: &str, dial: &str) -> (String, String, String) {
+        (
+            id.to_string(),
+            format!("{}:50071", host(pod_name)),
+            dial.to_string(),
+        )
+    }
+
+    /// A Deployment pod: its name, its pod IP, and what headless DNS lists.
+    const POD_0: (&str, &str) = ("stargate-0", "10.0.0.1");
+    const POD_1: (&str, &str) = ("stargate-1", "10.0.0.2");
+    const SRV_NAMES: [&str; 2] = ["10-0-0-1", "10-0-0-2"];
+
+    fn gds_discovery_of(
+        (pod_name, pod_ip): (&str, &str),
+        srv_names: &[&str],
+        routers: watch::Receiver<Arc<RouterState>>,
+    ) -> GdsDiscovery {
+        GdsDiscovery::from_routers(
+            Box::new(ListedDiscovery::new(pod_name, srv_names)),
+            routers,
+            "a",
+            format!("{pod_ip}:50071").parse().unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn deployment_pods_are_listed_once_under_their_identities_by_every_replica() {
+        // Kubernetes DNS names Deployment endpoints by dashed IP in the SRV
+        // records of the headless Service, the listing pod included, while
+        // each pod lists itself by its pod name. Without identities a pylon
+        // watching both pods saw each one under two authorities.
+        let (_tx, rx) = watch::channel(state(vec![direct_router(&[
+            ("10.0.0.1", "stargate-0", true),
+            ("10.0.0.2", "stargate-1", true),
+        ])]));
+        let pod_0 = gds_discovery_of(POD_0, &SRV_NAMES, rx.clone());
+        let pod_1 = gds_discovery_of(POD_1, &SRV_NAMES, rx);
+
+        let expected = vec![
+            entry("stargate-0", "stargate-0", "http://10.0.0.1:50071"),
+            entry("stargate-1", "stargate-1", "http://10.0.0.2:50071"),
+        ];
+        assert_eq!(published(&pod_0).await, expected);
+        assert_eq!(published(&pod_1).await, expected);
+
+        // A pylon opens one registration per (authority, dial address).
+        let endpoints: BTreeSet<(String, String)> = published(&pod_0)
+            .await
+            .into_iter()
+            .chain(published(&pod_1).await)
+            .map(|(_, authority, dial)| (authority, dial))
             .collect();
+        assert_eq!(endpoints.len(), 2, "{endpoints:?}");
         assert_eq!(
-            matched,
-            BTreeMap::from([
-                ("10-0-0-1", Some("http://10.0.0.1:50071")),
-                ("10-0-0-2", Some("http://10.0.0.2:50071")),
-                ("stargate-0", Some("http://10.0.0.1:50071")),
-            ])
+            pod_0.published.lock().peer_names,
+            PeerNames::Identities("a/nvcf/llm-request-router".to_string())
         );
     }
 
     #[tokio::test]
+    async fn ready_replicas_missing_from_dns_are_added_and_warming_ones_only_when_listed() {
+        let (_tx, rx) = watch::channel(state(vec![direct_router(&[
+            ("10.0.0.1", "stargate-0", true),
+            // Listed by DNS while warming: renamed, not dropped.
+            ("10.0.0.2", "stargate-1", false),
+            // Not in DNS yet: added only when ready.
+            ("10.0.0.3", "stargate-2", true),
+            ("10.0.0.4", "stargate-3", false),
+        ])]));
+        let discovery = gds_discovery_of(POD_0, &["10-0-0-2", "10-0-0-9"], rx);
+
+        assert_eq!(
+            published(&discovery).await,
+            vec![
+                // A peer GDS does not know is kept as DNS lists it.
+                (
+                    "10-0-0-9".to_string(),
+                    format!("{}:50071", host("10-0-0-9")),
+                    String::new()
+                ),
+                entry("stargate-0", "stargate-0", "http://10.0.0.1:50071"),
+                entry("stargate-1", "stargate-1", "http://10.0.0.2:50071"),
+                entry("stargate-2", "stargate-2", "http://10.0.0.3:50071"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn replicas_without_identity_keep_their_dns_names_and_dial_addrs() {
+        // The peer has no identity: it keeps its dashed-IP name and gets its
+        // dial address by that name, as before identities existed. This
+        // Stargate's dashed-IP name is still dropped next to its own entry.
+        let (_tx, rx) = watch::channel(state(vec![direct_router(&[
+            ("10.0.0.1", "stargate-0", true),
+            ("10.0.0.2", "", true),
+        ])]));
+        let discovery = gds_discovery_of(POD_0, &SRV_NAMES, rx);
+
+        assert_eq!(
+            published(&discovery).await,
+            vec![
+                entry("10-0-0-2", "10-0-0-2", "http://10.0.0.2:50071"),
+                entry("stargate-0", "stargate-0", "http://10.0.0.1:50071"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_router_that_names_this_stargate_differently_keeps_the_dns_names() {
+        let listed = ListedDiscovery::new(POD_0.0, &SRV_NAMES).listed;
+        let identities = [
+            ("10.0.0.1", "stargate-0", true),
+            ("10.0.0.2", "stargate-1", true),
+        ];
+        let mut other_template = direct_router(&identities);
+        other_template.hostname_template = "{pod_name}.stargate.example.com".to_string();
+        let mut other_port = direct_router(&identities);
+        other_port.grpc_port = 443;
+        let mut no_template = direct_router(&identities);
+        no_template.hostname_template.clear();
+
+        for router in [other_template, other_port, no_template] {
+            let state = state(vec![router.clone()]);
+            assert_eq!(
+                direct_peers(&state, "a", self_addr(), &[self_stargate()], listed.clone()),
+                DirectPeers {
+                    names: PeerNames::TemplateMismatch("a/nvcf/llm-request-router".to_string()),
+                    stargates: listed.clone(),
+                },
+                "{router:?}"
+            );
+        }
+
+        // A Stargate advertised by its IP address (DNS A-record discovery)
+        // is not named by the template either.
+        let state = state(vec![direct_router(&identities)]);
+        let self_by_ip = self_only().initial_stargates();
+        assert_eq!(
+            direct_peers(&state, "a", self_addr(), &self_by_ip, self_by_ip.clone()).names,
+            PeerNames::TemplateMismatch("a/nvcf/llm-request-router".to_string())
+        );
+    }
+
+    #[test]
+    fn a_replica_named_like_this_stargate_at_another_address_is_not_added() {
+        // A pod that kept its name and moved: GDS may still list its old
+        // address next to the new one.
+        let state = state(vec![direct_router(&[
+            ("10.0.0.7", "stargate-0", true),
+            ("10.0.0.1", "stargate-0", true),
+            ("10.0.0.2", "stargate-1", true),
+        ])]);
+        let local = vec![
+            StargateInfo {
+                stargate_id: "10-0-0-7".to_string(),
+                advertise_addr: format!("{}:50071", host("10-0-0-7")),
+                ..StargateInfo::default()
+            },
+            self_stargate(),
+        ];
+
+        let peers = direct_peers(&state, "a", self_addr(), &[self_stargate()], local);
+
+        assert_eq!(
+            peers
+                .stargates
+                .iter()
+                .map(|stargate| (
+                    stargate.stargate_id.as_str(),
+                    stargate.grpc_pylon_dial_addr.as_str()
+                ))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([("stargate-0", ""), ("stargate-1", "http://10.0.0.2:50071")])
+        );
+    }
+
+    #[tokio::test]
+    async fn peers_follow_router_changes_through_the_trait() {
+        let (tx, rx) = watch::channel(Arc::new(RouterState::default()));
+        let discovery: Box<dyn Discovery> = Box::new(gds_discovery_of(POD_0, &SRV_NAMES, rx));
+        let dns_names = vec![
+            entry("10-0-0-1", "10-0-0-1", ""),
+            entry("10-0-0-2", "10-0-0-2", ""),
+            entry("stargate-0", "stargate-0", ""),
+        ];
+        assert_eq!(published(discovery.as_ref()).await, dns_names);
+
+        tx.send(state(vec![direct_router(&[
+            ("10.0.0.1", "stargate-0", true),
+            ("10.0.0.2", "stargate-1", true),
+        ])]))
+        .unwrap();
+        assert_eq!(
+            published(discovery.as_ref()).await,
+            vec![
+                entry("stargate-0", "stargate-0", "http://10.0.0.1:50071"),
+                entry("stargate-1", "stargate-1", "http://10.0.0.2:50071"),
+            ]
+        );
+
+        tx.send(state(vec![stargate_router(
+            "a",
+            RouterMode::BackendRouter,
+            &[
+                ("10.0.0.1", "stargate-0", true),
+                ("10.0.0.2", "stargate-1", true),
+            ],
+        )]))
+        .unwrap();
+        assert_eq!(published(discovery.as_ref()).await, dns_names);
+    }
+
+    #[tokio::test]
     async fn peer_dial_addrs_follow_router_changes_through_the_trait() {
-        let inner = headless_discovery();
+        let inner = headless_discovery("stargate-0");
         let (tx, rx) = watch::channel(Arc::new(RouterState::default()));
         let discovery: Box<dyn Discovery> = Box::new(GdsDiscovery::from_routers(
             Box::new(inner),
@@ -737,25 +1169,24 @@ mod tests {
         ));
         assert!(discovery.peer_dial_addrs().await.is_empty());
 
-        tx.send(state(vec![stargate_router(
-            "a",
-            "direct",
-            &[("10.0.0.1", "", true), ("10.0.0.2", "", true)],
-        )]))
+        tx.send(state(vec![direct_router(&[
+            ("10.0.0.1", "", true),
+            ("10.0.0.2", "", true),
+        ])]))
         .unwrap();
         let dial_addrs = discovery.peer_dial_addrs().await;
         assert_eq!(
-            dial_addrs.get("stargate-0.stargate-headless.nvcf.svc.cluster.local"),
+            dial_addrs.get(&host("stargate-0")),
             Some(&"http://10.0.0.1:50071".to_string())
         );
         assert_eq!(
-            dial_addrs.get("10-0-0-2.stargate-headless.nvcf.svc.cluster.local"),
+            dial_addrs.get(&host("10-0-0-2")),
             Some(&"http://10.0.0.2:50071".to_string())
         );
 
         tx.send(state(vec![stargate_router(
             "a",
-            "backend-router",
+            RouterMode::BackendRouter,
             &[("10.0.0.1", "", true), ("10.0.0.2", "", true)],
         )]))
         .unwrap();
@@ -785,7 +1216,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_peers_stay_authoritative() {
+    async fn local_peers_stay_authoritative_without_a_direct_router() {
         let (_tx, rx) = watch::channel(state(vec![router("b", "http", &["10.2.0.1"])]));
         let inner = self_only();
         let expected = inner.initial_stargates();
