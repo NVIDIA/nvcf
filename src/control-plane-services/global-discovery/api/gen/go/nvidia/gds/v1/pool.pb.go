@@ -277,8 +277,98 @@ func (DialMode) EnumDescriptor() ([]byte, []int) {
 	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{3}
 }
 
+// PoolAgentRegistration is one process instance's registration of an agent
+// role, with its own lease.
+type PoolAgentRegistration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Identity of the registering process (a Pylon inference_server_id, a
+	// relay pod name); unique within the agent.
+	AgentId string `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Lease   *Lease `protobuf:"bytes,2,opt,name=lease,proto3" json:"lease,omitempty"`
+	// Writer-owned, at most 16 entries.
+	Attributes map[string]string `protobuf:"bytes,3,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Writer generation.
+	Generation    uint64                 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	RegisteredAt  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PoolAgentRegistration) Reset() {
+	*x = PoolAgentRegistration{}
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PoolAgentRegistration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PoolAgentRegistration) ProtoMessage() {}
+
+func (x *PoolAgentRegistration) ProtoReflect() protoreflect.Message {
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PoolAgentRegistration.ProtoReflect.Descriptor instead.
+func (*PoolAgentRegistration) Descriptor() ([]byte, []int) {
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PoolAgentRegistration) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *PoolAgentRegistration) GetLease() *Lease {
+	if x != nil {
+		return x.Lease
+	}
+	return nil
+}
+
+func (x *PoolAgentRegistration) GetAttributes() map[string]string {
+	if x != nil {
+		return x.Attributes
+	}
+	return nil
+}
+
+func (x *PoolAgentRegistration) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *PoolAgentRegistration) GetRegisteredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RegisteredAt
+	}
+	return nil
+}
+
+func (x *PoolAgentRegistration) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
 // PoolAgent is one process kind of a pool, merged from its exported Service
-// and its API registration. There is at most one per (pool, role).
+// and its API registrations. There is at most one per (pool, role).
 type PoolAgent struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Role   FrontendRole           `protobuf:"varint,1,opt,name=role,proto3,enum=nvidia.gds.v1.FrontendRole" json:"role,omitempty"`
@@ -291,28 +381,30 @@ type PoolAgent struct {
 	EndpointCount int32 `protobuf:"varint,5,opt,name=endpoint_count,json=endpointCount,proto3" json:"endpoint_count,omitempty"`
 	// Ready endpoints while the cluster lease is active.
 	ReadyEndpointCount int32 `protobuf:"varint,6,opt,name=ready_endpoint_count,json=readyEndpointCount,proto3" json:"ready_endpoint_count,omitempty"`
-	// Lease of the API registration; unset without one.
-	Lease *Lease `protobuf:"bytes,7,opt,name=lease,proto3" json:"lease,omitempty"`
-	// Identity of the registering process (a Pylon inference_server_id, a
-	// relay pod name); writer-owned.
-	AgentId  string   `protobuf:"bytes,8,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	DialMode DialMode `protobuf:"varint,9,opt,name=dial_mode,json=dialMode,proto3,enum=nvidia.gds.v1.DialMode" json:"dial_mode,omitempty"`
-	// Writer-owned, at most 16 entries.
+	// Fields 7, 8, 10, 12, 13 and 14 mirror the registration in registrations
+	// whose lease expires last (the freshest); unset without a registration.
+	Lease      *Lease            `protobuf:"bytes,7,opt,name=lease,proto3" json:"lease,omitempty"`
+	AgentId    string            `protobuf:"bytes,8,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	DialMode   DialMode          `protobuf:"varint,9,opt,name=dial_mode,json=dialMode,proto3,enum=nvidia.gds.v1.DialMode" json:"dial_mode,omitempty"`
 	Attributes map[string]string `protobuf:"bytes,10,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// Derived: a ready endpoint while the cluster lease is active, or an
-	// active agent lease.
-	Live bool `protobuf:"varint,11,opt,name=live,proto3" json:"live,omitempty"`
-	// Writer generation of the API registration.
-	Generation    uint64                 `protobuf:"varint,12,opt,name=generation,proto3" json:"generation,omitempty"`
-	RegisteredAt  *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Derived: a ready endpoint while the cluster lease is active, or any
+	// active registration lease.
+	Live         bool                   `protobuf:"varint,11,opt,name=live,proto3" json:"live,omitempty"`
+	Generation   uint64                 `protobuf:"varint,12,opt,name=generation,proto3" json:"generation,omitempty"`
+	RegisteredAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
+	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Every registration of this role, sorted by agent_id. One per process
+	// instance, for example one per Pylon pod.
+	Registrations []*PoolAgentRegistration `protobuf:"bytes,15,rep,name=registrations,proto3" json:"registrations,omitempty"`
+	// Registrations whose lease is active.
+	ActiveRegistrationCount int32 `protobuf:"varint,16,opt,name=active_registration_count,json=activeRegistrationCount,proto3" json:"active_registration_count,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *PoolAgent) Reset() {
 	*x = PoolAgent{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[0]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -324,7 +416,7 @@ func (x *PoolAgent) String() string {
 func (*PoolAgent) ProtoMessage() {}
 
 func (x *PoolAgent) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[0]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -337,7 +429,7 @@ func (x *PoolAgent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PoolAgent.ProtoReflect.Descriptor instead.
 func (*PoolAgent) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{0}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PoolAgent) GetRole() FrontendRole {
@@ -438,6 +530,20 @@ func (x *PoolAgent) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PoolAgent) GetRegistrations() []*PoolAgentRegistration {
+	if x != nil {
+		return x.Registrations
+	}
+	return nil
+}
+
+func (x *PoolAgent) GetActiveRegistrationCount() int32 {
+	if x != nil {
+		return x.ActiveRegistrationCount
+	}
+	return 0
+}
+
 // Location places a pool.
 type Location struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
@@ -453,7 +559,7 @@ type Location struct {
 
 func (x *Location) Reset() {
 	*x = Location{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[1]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +571,7 @@ func (x *Location) String() string {
 func (*Location) ProtoMessage() {}
 
 func (x *Location) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[1]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +584,7 @@ func (x *Location) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Location.ProtoReflect.Descriptor instead.
 func (*Location) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{1}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Location) GetRegion() string {
@@ -521,7 +627,7 @@ type ModelServed struct {
 
 func (x *ModelServed) Reset() {
 	*x = ModelServed{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[2]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -533,7 +639,7 @@ func (x *ModelServed) String() string {
 func (*ModelServed) ProtoMessage() {}
 
 func (x *ModelServed) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[2]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -546,7 +652,7 @@ func (x *ModelServed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelServed.ProtoReflect.Descriptor instead.
 func (*ModelServed) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{2}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ModelServed) GetModelId() string {
@@ -582,7 +688,7 @@ type ServiceRef struct {
 
 func (x *ServiceRef) Reset() {
 	*x = ServiceRef{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[3]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +700,7 @@ func (x *ServiceRef) String() string {
 func (*ServiceRef) ProtoMessage() {}
 
 func (x *ServiceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[3]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +713,7 @@ func (x *ServiceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceRef.ProtoReflect.Descriptor instead.
 func (*ServiceRef) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{3}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ServiceRef) GetNamespace() string {
@@ -652,7 +758,7 @@ type FrontendEndpoint struct {
 
 func (x *FrontendEndpoint) Reset() {
 	*x = FrontendEndpoint{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[4]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -664,7 +770,7 @@ func (x *FrontendEndpoint) String() string {
 func (*FrontendEndpoint) ProtoMessage() {}
 
 func (x *FrontendEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[4]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -677,7 +783,7 @@ func (x *FrontendEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FrontendEndpoint.ProtoReflect.Descriptor instead.
 func (*FrontendEndpoint) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{4}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FrontendEndpoint) GetRole() FrontendRole {
@@ -762,7 +868,7 @@ type Pool struct {
 
 func (x *Pool) Reset() {
 	*x = Pool{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[5]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -774,7 +880,7 @@ func (x *Pool) String() string {
 func (*Pool) ProtoMessage() {}
 
 func (x *Pool) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[5]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -787,7 +893,7 @@ func (x *Pool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pool.ProtoReflect.Descriptor instead.
 func (*Pool) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{5}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Pool) GetClusterset() string {
@@ -965,7 +1071,7 @@ type RouterReplica struct {
 
 func (x *RouterReplica) Reset() {
 	*x = RouterReplica{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[6]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -977,7 +1083,7 @@ func (x *RouterReplica) String() string {
 func (*RouterReplica) ProtoMessage() {}
 
 func (x *RouterReplica) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[6]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -990,7 +1096,7 @@ func (x *RouterReplica) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouterReplica.ProtoReflect.Descriptor instead.
 func (*RouterReplica) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{6}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RouterReplica) GetAddress() string {
@@ -1063,7 +1169,7 @@ type Router struct {
 
 func (x *Router) Reset() {
 	*x = Router{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[7]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1181,7 @@ func (x *Router) String() string {
 func (*Router) ProtoMessage() {}
 
 func (x *Router) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[7]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1194,7 @@ func (x *Router) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Router.ProtoReflect.Descriptor instead.
 func (*Router) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{7}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Router) GetCluster() string {
@@ -1206,7 +1312,7 @@ type RegisterPoolRequest struct {
 
 func (x *RegisterPoolRequest) Reset() {
 	*x = RegisterPoolRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[8]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1324,7 @@ func (x *RegisterPoolRequest) String() string {
 func (*RegisterPoolRequest) ProtoMessage() {}
 
 func (x *RegisterPoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[8]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1337,7 @@ func (x *RegisterPoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPoolRequest.ProtoReflect.Descriptor instead.
 func (*RegisterPoolRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{8}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RegisterPoolRequest) GetClusterset() string {
@@ -1273,7 +1379,7 @@ type RegisterPoolResponse struct {
 
 func (x *RegisterPoolResponse) Reset() {
 	*x = RegisterPoolResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[9]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1285,7 +1391,7 @@ func (x *RegisterPoolResponse) String() string {
 func (*RegisterPoolResponse) ProtoMessage() {}
 
 func (x *RegisterPoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[9]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1298,7 +1404,7 @@ func (x *RegisterPoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPoolResponse.ProtoReflect.Descriptor instead.
 func (*RegisterPoolResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{9}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RegisterPoolResponse) GetPool() *Pool {
@@ -1332,7 +1438,7 @@ type UpdatePoolRequest struct {
 
 func (x *UpdatePoolRequest) Reset() {
 	*x = UpdatePoolRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[10]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1344,7 +1450,7 @@ func (x *UpdatePoolRequest) String() string {
 func (*UpdatePoolRequest) ProtoMessage() {}
 
 func (x *UpdatePoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[10]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1357,7 +1463,7 @@ func (x *UpdatePoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePoolRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePoolRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{10}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UpdatePoolRequest) GetClusterset() string {
@@ -1404,7 +1510,7 @@ type UpdatePoolResponse struct {
 
 func (x *UpdatePoolResponse) Reset() {
 	*x = UpdatePoolResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[11]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1416,7 +1522,7 @@ func (x *UpdatePoolResponse) String() string {
 func (*UpdatePoolResponse) ProtoMessage() {}
 
 func (x *UpdatePoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[11]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1429,7 +1535,7 @@ func (x *UpdatePoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePoolResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePoolResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{11}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UpdatePoolResponse) GetPool() *Pool {
@@ -1456,7 +1562,7 @@ type HeartbeatPoolRequest struct {
 
 func (x *HeartbeatPoolRequest) Reset() {
 	*x = HeartbeatPoolRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[12]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1468,7 +1574,7 @@ func (x *HeartbeatPoolRequest) String() string {
 func (*HeartbeatPoolRequest) ProtoMessage() {}
 
 func (x *HeartbeatPoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[12]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1481,7 +1587,7 @@ func (x *HeartbeatPoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPoolRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatPoolRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{12}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *HeartbeatPoolRequest) GetClusterset() string {
@@ -1538,7 +1644,7 @@ type HeartbeatPoolResponse struct {
 
 func (x *HeartbeatPoolResponse) Reset() {
 	*x = HeartbeatPoolResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[13]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1550,7 +1656,7 @@ func (x *HeartbeatPoolResponse) String() string {
 func (*HeartbeatPoolResponse) ProtoMessage() {}
 
 func (x *HeartbeatPoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[13]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1563,7 +1669,7 @@ func (x *HeartbeatPoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPoolResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatPoolResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{13}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *HeartbeatPoolResponse) GetLease() *Lease {
@@ -1597,7 +1703,7 @@ type DeregisterPoolRequest struct {
 
 func (x *DeregisterPoolRequest) Reset() {
 	*x = DeregisterPoolRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[14]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1609,7 +1715,7 @@ func (x *DeregisterPoolRequest) String() string {
 func (*DeregisterPoolRequest) ProtoMessage() {}
 
 func (x *DeregisterPoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[14]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1622,7 +1728,7 @@ func (x *DeregisterPoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPoolRequest.ProtoReflect.Descriptor instead.
 func (*DeregisterPoolRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{14}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DeregisterPoolRequest) GetClusterset() string {
@@ -1647,7 +1753,7 @@ type DeregisterPoolResponse struct {
 
 func (x *DeregisterPoolResponse) Reset() {
 	*x = DeregisterPoolResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[15]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1659,7 +1765,7 @@ func (x *DeregisterPoolResponse) String() string {
 func (*DeregisterPoolResponse) ProtoMessage() {}
 
 func (x *DeregisterPoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[15]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1672,7 +1778,7 @@ func (x *DeregisterPoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPoolResponse.ProtoReflect.Descriptor instead.
 func (*DeregisterPoolResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{15}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{16}
 }
 
 type RegisterPoolAgentRequest struct {
@@ -1684,8 +1790,8 @@ type RegisterPoolAgentRequest struct {
 	PoolName string `protobuf:"bytes,3,opt,name=pool_name,json=poolName,proto3" json:"pool_name,omitempty"`
 	// Optional; must equal the pool's id when the pool exists.
 	PoolId string `protobuf:"bytes,4,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
-	// Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id and
-	// attributes. Other fields are ignored.
+	// Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id
+	// (required, at most 253 bytes) and attributes. Other fields are ignored.
 	Agent *PoolAgent `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
 	// Agent lease duration; clamped to [10 s, 5 m]; 60 s when unset.
 	LeaseTtl *durationpb.Duration `protobuf:"bytes,6,opt,name=lease_ttl,json=leaseTtl,proto3" json:"lease_ttl,omitempty"`
@@ -1697,7 +1803,7 @@ type RegisterPoolAgentRequest struct {
 
 func (x *RegisterPoolAgentRequest) Reset() {
 	*x = RegisterPoolAgentRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[16]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1709,7 +1815,7 @@ func (x *RegisterPoolAgentRequest) String() string {
 func (*RegisterPoolAgentRequest) ProtoMessage() {}
 
 func (x *RegisterPoolAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[16]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1722,7 +1828,7 @@ func (x *RegisterPoolAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPoolAgentRequest.ProtoReflect.Descriptor instead.
 func (*RegisterPoolAgentRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{16}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RegisterPoolAgentRequest) GetClusterset() string {
@@ -1777,8 +1883,10 @@ func (x *RegisterPoolAgentRequest) GetGeneration() uint64 {
 type RegisterPoolAgentResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	PoolId string                 `protobuf:"bytes,1,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
-	// The stored agent with its newly minted lease.
-	Agent *PoolAgent `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	// The merged agent; registration carries this process's newly minted
+	// lease.
+	Agent        *PoolAgent             `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	Registration *PoolAgentRegistration `protobuf:"bytes,5,opt,name=registration,proto3" json:"registration,omitempty"`
 	// Derived pool state after the registration.
 	PoolState     PoolState              `protobuf:"varint,3,opt,name=pool_state,json=poolState,proto3,enum=nvidia.gds.v1.PoolState" json:"pool_state,omitempty"`
 	ServerTime    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
@@ -1788,7 +1896,7 @@ type RegisterPoolAgentResponse struct {
 
 func (x *RegisterPoolAgentResponse) Reset() {
 	*x = RegisterPoolAgentResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[17]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1800,7 +1908,7 @@ func (x *RegisterPoolAgentResponse) String() string {
 func (*RegisterPoolAgentResponse) ProtoMessage() {}
 
 func (x *RegisterPoolAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[17]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1813,7 +1921,7 @@ func (x *RegisterPoolAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPoolAgentResponse.ProtoReflect.Descriptor instead.
 func (*RegisterPoolAgentResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{17}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RegisterPoolAgentResponse) GetPoolId() string {
@@ -1826,6 +1934,13 @@ func (x *RegisterPoolAgentResponse) GetPoolId() string {
 func (x *RegisterPoolAgentResponse) GetAgent() *PoolAgent {
 	if x != nil {
 		return x.Agent
+	}
+	return nil
+}
+
+func (x *RegisterPoolAgentResponse) GetRegistration() *PoolAgentRegistration {
+	if x != nil {
+		return x.Registration
 	}
 	return nil
 }
@@ -1851,15 +1966,17 @@ type HeartbeatPoolAgentRequest struct {
 	Role       FrontendRole           `protobuf:"varint,3,opt,name=role,proto3,enum=nvidia.gds.v1.FrontendRole" json:"role,omitempty"`
 	// The lease epoch returned by RegisterPoolAgent.
 	Epoch uint64 `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	// Replaces the agent's attributes when non-empty.
-	Attributes    map[string]string `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Replaces the registration's attributes when non-empty.
+	Attributes map[string]string `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The registering process; required.
+	AgentId       string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatPoolAgentRequest) Reset() {
 	*x = HeartbeatPoolAgentRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[18]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1871,7 +1988,7 @@ func (x *HeartbeatPoolAgentRequest) String() string {
 func (*HeartbeatPoolAgentRequest) ProtoMessage() {}
 
 func (x *HeartbeatPoolAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[18]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1884,7 +2001,7 @@ func (x *HeartbeatPoolAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPoolAgentRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatPoolAgentRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{18}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *HeartbeatPoolAgentRequest) GetClusterset() string {
@@ -1922,6 +2039,13 @@ func (x *HeartbeatPoolAgentRequest) GetAttributes() map[string]string {
 	return nil
 }
 
+func (x *HeartbeatPoolAgentRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
 type HeartbeatPoolAgentResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Lease *Lease                 `protobuf:"bytes,1,opt,name=lease,proto3" json:"lease,omitempty"`
@@ -1934,7 +2058,7 @@ type HeartbeatPoolAgentResponse struct {
 
 func (x *HeartbeatPoolAgentResponse) Reset() {
 	*x = HeartbeatPoolAgentResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[19]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1946,7 +2070,7 @@ func (x *HeartbeatPoolAgentResponse) String() string {
 func (*HeartbeatPoolAgentResponse) ProtoMessage() {}
 
 func (x *HeartbeatPoolAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[19]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1959,7 +2083,7 @@ func (x *HeartbeatPoolAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatPoolAgentResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatPoolAgentResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{19}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *HeartbeatPoolAgentResponse) GetLease() *Lease {
@@ -1984,17 +2108,20 @@ func (x *HeartbeatPoolAgentResponse) GetServerTime() *timestamppb.Timestamp {
 }
 
 type DeregisterPoolAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Clusterset    string                 `protobuf:"bytes,1,opt,name=clusterset,proto3" json:"clusterset,omitempty"`
-	PoolId        string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
-	Role          FrontendRole           `protobuf:"varint,3,opt,name=role,proto3,enum=nvidia.gds.v1.FrontendRole" json:"role,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Clusterset string                 `protobuf:"bytes,1,opt,name=clusterset,proto3" json:"clusterset,omitempty"`
+	PoolId     string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
+	Role       FrontendRole           `protobuf:"varint,3,opt,name=role,proto3,enum=nvidia.gds.v1.FrontendRole" json:"role,omitempty"`
+	// The registering process; required. A REST caller passes it as the
+	// agent_id query parameter.
+	AgentId       string `protobuf:"bytes,4,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeregisterPoolAgentRequest) Reset() {
 	*x = DeregisterPoolAgentRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[20]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2006,7 +2133,7 @@ func (x *DeregisterPoolAgentRequest) String() string {
 func (*DeregisterPoolAgentRequest) ProtoMessage() {}
 
 func (x *DeregisterPoolAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[20]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2019,7 +2146,7 @@ func (x *DeregisterPoolAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPoolAgentRequest.ProtoReflect.Descriptor instead.
 func (*DeregisterPoolAgentRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{20}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *DeregisterPoolAgentRequest) GetClusterset() string {
@@ -2043,6 +2170,13 @@ func (x *DeregisterPoolAgentRequest) GetRole() FrontendRole {
 	return FrontendRole_FRONTEND_ROLE_UNSPECIFIED
 }
 
+func (x *DeregisterPoolAgentRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
 type DeregisterPoolAgentResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -2051,7 +2185,7 @@ type DeregisterPoolAgentResponse struct {
 
 func (x *DeregisterPoolAgentResponse) Reset() {
 	*x = DeregisterPoolAgentResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[21]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2063,7 +2197,7 @@ func (x *DeregisterPoolAgentResponse) String() string {
 func (*DeregisterPoolAgentResponse) ProtoMessage() {}
 
 func (x *DeregisterPoolAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[21]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2076,7 +2210,7 @@ func (x *DeregisterPoolAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPoolAgentResponse.ProtoReflect.Descriptor instead.
 func (*DeregisterPoolAgentResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{21}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{22}
 }
 
 type GetPoolRequest struct {
@@ -2090,7 +2224,7 @@ type GetPoolRequest struct {
 
 func (x *GetPoolRequest) Reset() {
 	*x = GetPoolRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[22]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2102,7 +2236,7 @@ func (x *GetPoolRequest) String() string {
 func (*GetPoolRequest) ProtoMessage() {}
 
 func (x *GetPoolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[22]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2115,7 +2249,7 @@ func (x *GetPoolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPoolRequest.ProtoReflect.Descriptor instead.
 func (*GetPoolRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{22}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetPoolRequest) GetClusterset() string {
@@ -2148,7 +2282,7 @@ type GetPoolResponse struct {
 
 func (x *GetPoolResponse) Reset() {
 	*x = GetPoolResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[23]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2160,7 +2294,7 @@ func (x *GetPoolResponse) String() string {
 func (*GetPoolResponse) ProtoMessage() {}
 
 func (x *GetPoolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[23]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2173,7 +2307,7 @@ func (x *GetPoolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPoolResponse.ProtoReflect.Descriptor instead.
 func (*GetPoolResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{23}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetPoolResponse) GetPool() *Pool {
@@ -2206,7 +2340,7 @@ type ListPoolsRequest struct {
 
 func (x *ListPoolsRequest) Reset() {
 	*x = ListPoolsRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[24]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2218,7 +2352,7 @@ func (x *ListPoolsRequest) String() string {
 func (*ListPoolsRequest) ProtoMessage() {}
 
 func (x *ListPoolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[24]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2231,7 +2365,7 @@ func (x *ListPoolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoolsRequest.ProtoReflect.Descriptor instead.
 func (*ListPoolsRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{24}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListPoolsRequest) GetClusterset() string {
@@ -2308,7 +2442,7 @@ type ListPoolsResponse struct {
 
 func (x *ListPoolsResponse) Reset() {
 	*x = ListPoolsResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[25]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2320,7 +2454,7 @@ func (x *ListPoolsResponse) String() string {
 func (*ListPoolsResponse) ProtoMessage() {}
 
 func (x *ListPoolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[25]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2333,7 +2467,7 @@ func (x *ListPoolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoolsResponse.ProtoReflect.Descriptor instead.
 func (*ListPoolsResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{25}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListPoolsResponse) GetPools() []*Pool {
@@ -2370,7 +2504,7 @@ type WatchPoolsRequest struct {
 
 func (x *WatchPoolsRequest) Reset() {
 	*x = WatchPoolsRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[26]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2382,7 +2516,7 @@ func (x *WatchPoolsRequest) String() string {
 func (*WatchPoolsRequest) ProtoMessage() {}
 
 func (x *WatchPoolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[26]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2395,7 +2529,7 @@ func (x *WatchPoolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPoolsRequest.ProtoReflect.Descriptor instead.
 func (*WatchPoolsRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{26}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WatchPoolsRequest) GetClusterset() string {
@@ -2482,7 +2616,7 @@ type WatchPoolsResponse struct {
 
 func (x *WatchPoolsResponse) Reset() {
 	*x = WatchPoolsResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[27]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2494,7 +2628,7 @@ func (x *WatchPoolsResponse) String() string {
 func (*WatchPoolsResponse) ProtoMessage() {}
 
 func (x *WatchPoolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[27]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2507,7 +2641,7 @@ func (x *WatchPoolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPoolsResponse.ProtoReflect.Descriptor instead.
 func (*WatchPoolsResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{27}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *WatchPoolsResponse) GetType() EventType {
@@ -2542,7 +2676,7 @@ type ListRoutersRequest struct {
 
 func (x *ListRoutersRequest) Reset() {
 	*x = ListRoutersRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[28]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2554,7 +2688,7 @@ func (x *ListRoutersRequest) String() string {
 func (*ListRoutersRequest) ProtoMessage() {}
 
 func (x *ListRoutersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[28]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2567,7 +2701,7 @@ func (x *ListRoutersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutersRequest.ProtoReflect.Descriptor instead.
 func (*ListRoutersRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{28}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ListRoutersRequest) GetClusterset() string {
@@ -2602,7 +2736,7 @@ type ListRoutersResponse struct {
 
 func (x *ListRoutersResponse) Reset() {
 	*x = ListRoutersResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[29]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2614,7 +2748,7 @@ func (x *ListRoutersResponse) String() string {
 func (*ListRoutersResponse) ProtoMessage() {}
 
 func (x *ListRoutersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[29]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2627,7 +2761,7 @@ func (x *ListRoutersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutersResponse.ProtoReflect.Descriptor instead.
 func (*ListRoutersResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{29}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListRoutersResponse) GetRouters() []*Router {
@@ -2657,7 +2791,7 @@ type WatchRoutersRequest struct {
 
 func (x *WatchRoutersRequest) Reset() {
 	*x = WatchRoutersRequest{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[30]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2669,7 +2803,7 @@ func (x *WatchRoutersRequest) String() string {
 func (*WatchRoutersRequest) ProtoMessage() {}
 
 func (x *WatchRoutersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[30]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2682,7 +2816,7 @@ func (x *WatchRoutersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRoutersRequest.ProtoReflect.Descriptor instead.
 func (*WatchRoutersRequest) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{30}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *WatchRoutersRequest) GetClusterset() string {
@@ -2727,7 +2861,7 @@ type WatchRoutersResponse struct {
 
 func (x *WatchRoutersResponse) Reset() {
 	*x = WatchRoutersResponse{}
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[31]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2739,7 +2873,7 @@ func (x *WatchRoutersResponse) String() string {
 func (*WatchRoutersResponse) ProtoMessage() {}
 
 func (x *WatchRoutersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[31]
+	mi := &file_nvidia_gds_v1_pool_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2752,7 +2886,7 @@ func (x *WatchRoutersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRoutersResponse.ProtoReflect.Descriptor instead.
 func (*WatchRoutersResponse) Descriptor() ([]byte, []int) {
-	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{31}
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *WatchRoutersResponse) GetType() EventType {
@@ -2780,7 +2914,22 @@ var File_nvidia_gds_v1_pool_proto protoreflect.FileDescriptor
 
 const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\n" +
-	"\x18nvidia/gds/v1/pool.proto\x12\rnvidia.gds.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1anvidia/gds/v1/common.proto\x1a\x17nvidia/gds/v1/mcs.proto\"\xd1\x05\n" +
+	"\x18nvidia/gds/v1/pool.proto\x12\rnvidia.gds.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1anvidia/gds/v1/common.proto\x1a\x17nvidia/gds/v1/mcs.proto\"\x8f\x03\n" +
+	"\x15PoolAgentRegistration\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12*\n" +
+	"\x05lease\x18\x02 \x01(\v2\x14.nvidia.gds.v1.LeaseR\x05lease\x12T\n" +
+	"\n" +
+	"attributes\x18\x03 \x03(\v24.nvidia.gds.v1.PoolAgentRegistration.AttributesEntryR\n" +
+	"attributes\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x04R\n" +
+	"generation\x12?\n" +
+	"\rregistered_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a=\n" +
+	"\x0fAttributesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd9\x06\n" +
 	"\tPoolAgent\x12/\n" +
 	"\x04role\x18\x01 \x01(\x0e2\x1b.nvidia.gds.v1.FrontendRoleR\x04role\x122\n" +
 	"\x06source\x18\x02 \x01(\x0e2\x1a.nvidia.gds.v1.AgentSourceR\x06source\x123\n" +
@@ -2801,7 +2950,9 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"generation\x12?\n" +
 	"\rregistered_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a=\n" +
+	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12J\n" +
+	"\rregistrations\x18\x0f \x03(\v2$.nvidia.gds.v1.PoolAgentRegistrationR\rregistrations\x12:\n" +
+	"\x19active_registration_count\x18\x10 \x01(\x05R\x17activeRegistrationCount\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"b\n" +
@@ -2950,14 +3101,15 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\tlease_ttl\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\bleaseTtl\x12\x1e\n" +
 	"\n" +
 	"generation\x18\a \x01(\x04R\n" +
-	"generation\"\xda\x01\n" +
+	"generation\"\xa4\x02\n" +
 	"\x19RegisterPoolAgentResponse\x12\x17\n" +
 	"\apool_id\x18\x01 \x01(\tR\x06poolId\x12.\n" +
-	"\x05agent\x18\x02 \x01(\v2\x18.nvidia.gds.v1.PoolAgentR\x05agent\x127\n" +
+	"\x05agent\x18\x02 \x01(\v2\x18.nvidia.gds.v1.PoolAgentR\x05agent\x12H\n" +
+	"\fregistration\x18\x05 \x01(\v2$.nvidia.gds.v1.PoolAgentRegistrationR\fregistration\x127\n" +
 	"\n" +
 	"pool_state\x18\x03 \x01(\x0e2\x18.nvidia.gds.v1.PoolStateR\tpoolState\x12;\n" +
 	"\vserver_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime\"\xb4\x02\n" +
+	"serverTime\"\xcf\x02\n" +
 	"\x19HeartbeatPoolAgentRequest\x12\x1e\n" +
 	"\n" +
 	"clusterset\x18\x01 \x01(\tR\n" +
@@ -2967,7 +3119,8 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\x05epoch\x18\x04 \x01(\x04R\x05epoch\x12X\n" +
 	"\n" +
 	"attributes\x18\x05 \x03(\v28.nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntryR\n" +
-	"attributes\x1a=\n" +
+	"attributes\x12\x19\n" +
+	"\bagent_id\x18\x06 \x01(\tR\aagentId\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbe\x01\n" +
@@ -2976,13 +3129,14 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\n" +
 	"pool_state\x18\x02 \x01(\x0e2\x18.nvidia.gds.v1.PoolStateR\tpoolState\x12;\n" +
 	"\vserver_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime\"\x86\x01\n" +
+	"serverTime\"\xa1\x01\n" +
 	"\x1aDeregisterPoolAgentRequest\x12\x1e\n" +
 	"\n" +
 	"clusterset\x18\x01 \x01(\tR\n" +
 	"clusterset\x12\x17\n" +
 	"\apool_id\x18\x02 \x01(\tR\x06poolId\x12/\n" +
-	"\x04role\x18\x03 \x01(\x0e2\x1b.nvidia.gds.v1.FrontendRoleR\x04role\"\x1d\n" +
+	"\x04role\x18\x03 \x01(\x0e2\x1b.nvidia.gds.v1.FrontendRoleR\x04role\x12\x19\n" +
+	"\bagent_id\x18\x04 \x01(\tR\aagentId\"\x1d\n" +
 	"\x1bDeregisterPoolAgentResponse\"v\n" +
 	"\x0eGetPoolRequest\x12\x1e\n" +
 	"\n" +
@@ -3095,156 +3249,164 @@ func file_nvidia_gds_v1_pool_proto_rawDescGZIP() []byte {
 }
 
 var file_nvidia_gds_v1_pool_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_nvidia_gds_v1_pool_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_nvidia_gds_v1_pool_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_nvidia_gds_v1_pool_proto_goTypes = []any{
 	(PoolState)(0),                      // 0: nvidia.gds.v1.PoolState
 	(FrontendRole)(0),                   // 1: nvidia.gds.v1.FrontendRole
 	(AgentSource)(0),                    // 2: nvidia.gds.v1.AgentSource
 	(DialMode)(0),                       // 3: nvidia.gds.v1.DialMode
-	(*PoolAgent)(nil),                   // 4: nvidia.gds.v1.PoolAgent
-	(*Location)(nil),                    // 5: nvidia.gds.v1.Location
-	(*ModelServed)(nil),                 // 6: nvidia.gds.v1.ModelServed
-	(*ServiceRef)(nil),                  // 7: nvidia.gds.v1.ServiceRef
-	(*FrontendEndpoint)(nil),            // 8: nvidia.gds.v1.FrontendEndpoint
-	(*Pool)(nil),                        // 9: nvidia.gds.v1.Pool
-	(*RouterReplica)(nil),               // 10: nvidia.gds.v1.RouterReplica
-	(*Router)(nil),                      // 11: nvidia.gds.v1.Router
-	(*RegisterPoolRequest)(nil),         // 12: nvidia.gds.v1.RegisterPoolRequest
-	(*RegisterPoolResponse)(nil),        // 13: nvidia.gds.v1.RegisterPoolResponse
-	(*UpdatePoolRequest)(nil),           // 14: nvidia.gds.v1.UpdatePoolRequest
-	(*UpdatePoolResponse)(nil),          // 15: nvidia.gds.v1.UpdatePoolResponse
-	(*HeartbeatPoolRequest)(nil),        // 16: nvidia.gds.v1.HeartbeatPoolRequest
-	(*HeartbeatPoolResponse)(nil),       // 17: nvidia.gds.v1.HeartbeatPoolResponse
-	(*DeregisterPoolRequest)(nil),       // 18: nvidia.gds.v1.DeregisterPoolRequest
-	(*DeregisterPoolResponse)(nil),      // 19: nvidia.gds.v1.DeregisterPoolResponse
-	(*RegisterPoolAgentRequest)(nil),    // 20: nvidia.gds.v1.RegisterPoolAgentRequest
-	(*RegisterPoolAgentResponse)(nil),   // 21: nvidia.gds.v1.RegisterPoolAgentResponse
-	(*HeartbeatPoolAgentRequest)(nil),   // 22: nvidia.gds.v1.HeartbeatPoolAgentRequest
-	(*HeartbeatPoolAgentResponse)(nil),  // 23: nvidia.gds.v1.HeartbeatPoolAgentResponse
-	(*DeregisterPoolAgentRequest)(nil),  // 24: nvidia.gds.v1.DeregisterPoolAgentRequest
-	(*DeregisterPoolAgentResponse)(nil), // 25: nvidia.gds.v1.DeregisterPoolAgentResponse
-	(*GetPoolRequest)(nil),              // 26: nvidia.gds.v1.GetPoolRequest
-	(*GetPoolResponse)(nil),             // 27: nvidia.gds.v1.GetPoolResponse
-	(*ListPoolsRequest)(nil),            // 28: nvidia.gds.v1.ListPoolsRequest
-	(*ListPoolsResponse)(nil),           // 29: nvidia.gds.v1.ListPoolsResponse
-	(*WatchPoolsRequest)(nil),           // 30: nvidia.gds.v1.WatchPoolsRequest
-	(*WatchPoolsResponse)(nil),          // 31: nvidia.gds.v1.WatchPoolsResponse
-	(*ListRoutersRequest)(nil),          // 32: nvidia.gds.v1.ListRoutersRequest
-	(*ListRoutersResponse)(nil),         // 33: nvidia.gds.v1.ListRoutersResponse
-	(*WatchRoutersRequest)(nil),         // 34: nvidia.gds.v1.WatchRoutersRequest
-	(*WatchRoutersResponse)(nil),        // 35: nvidia.gds.v1.WatchRoutersResponse
-	nil,                                 // 36: nvidia.gds.v1.PoolAgent.AttributesEntry
-	nil,                                 // 37: nvidia.gds.v1.ModelServed.AttributesEntry
-	nil,                                 // 38: nvidia.gds.v1.Pool.LabelsEntry
-	nil,                                 // 39: nvidia.gds.v1.Router.LabelsEntry
-	nil,                                 // 40: nvidia.gds.v1.Router.AnnotationsEntry
-	nil,                                 // 41: nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
-	(*Lease)(nil),                       // 42: nvidia.gds.v1.Lease
-	(*timestamppb.Timestamp)(nil),       // 43: google.protobuf.Timestamp
-	(*ClusterEndpoints)(nil),            // 44: nvidia.gds.v1.ClusterEndpoints
-	(AddressType)(0),                    // 45: nvidia.gds.v1.AddressType
-	(ServiceType)(0),                    // 46: nvidia.gds.v1.ServiceType
-	(LeaseState)(0),                     // 47: nvidia.gds.v1.LeaseState
-	(*ServicePort)(nil),                 // 48: nvidia.gds.v1.ServicePort
-	(*durationpb.Duration)(nil),         // 49: google.protobuf.Duration
-	(*fieldmaskpb.FieldMask)(nil),       // 50: google.protobuf.FieldMask
-	(*LabelSelector)(nil),               // 51: nvidia.gds.v1.LabelSelector
-	(EventType)(0),                      // 52: nvidia.gds.v1.EventType
+	(*PoolAgentRegistration)(nil),       // 4: nvidia.gds.v1.PoolAgentRegistration
+	(*PoolAgent)(nil),                   // 5: nvidia.gds.v1.PoolAgent
+	(*Location)(nil),                    // 6: nvidia.gds.v1.Location
+	(*ModelServed)(nil),                 // 7: nvidia.gds.v1.ModelServed
+	(*ServiceRef)(nil),                  // 8: nvidia.gds.v1.ServiceRef
+	(*FrontendEndpoint)(nil),            // 9: nvidia.gds.v1.FrontendEndpoint
+	(*Pool)(nil),                        // 10: nvidia.gds.v1.Pool
+	(*RouterReplica)(nil),               // 11: nvidia.gds.v1.RouterReplica
+	(*Router)(nil),                      // 12: nvidia.gds.v1.Router
+	(*RegisterPoolRequest)(nil),         // 13: nvidia.gds.v1.RegisterPoolRequest
+	(*RegisterPoolResponse)(nil),        // 14: nvidia.gds.v1.RegisterPoolResponse
+	(*UpdatePoolRequest)(nil),           // 15: nvidia.gds.v1.UpdatePoolRequest
+	(*UpdatePoolResponse)(nil),          // 16: nvidia.gds.v1.UpdatePoolResponse
+	(*HeartbeatPoolRequest)(nil),        // 17: nvidia.gds.v1.HeartbeatPoolRequest
+	(*HeartbeatPoolResponse)(nil),       // 18: nvidia.gds.v1.HeartbeatPoolResponse
+	(*DeregisterPoolRequest)(nil),       // 19: nvidia.gds.v1.DeregisterPoolRequest
+	(*DeregisterPoolResponse)(nil),      // 20: nvidia.gds.v1.DeregisterPoolResponse
+	(*RegisterPoolAgentRequest)(nil),    // 21: nvidia.gds.v1.RegisterPoolAgentRequest
+	(*RegisterPoolAgentResponse)(nil),   // 22: nvidia.gds.v1.RegisterPoolAgentResponse
+	(*HeartbeatPoolAgentRequest)(nil),   // 23: nvidia.gds.v1.HeartbeatPoolAgentRequest
+	(*HeartbeatPoolAgentResponse)(nil),  // 24: nvidia.gds.v1.HeartbeatPoolAgentResponse
+	(*DeregisterPoolAgentRequest)(nil),  // 25: nvidia.gds.v1.DeregisterPoolAgentRequest
+	(*DeregisterPoolAgentResponse)(nil), // 26: nvidia.gds.v1.DeregisterPoolAgentResponse
+	(*GetPoolRequest)(nil),              // 27: nvidia.gds.v1.GetPoolRequest
+	(*GetPoolResponse)(nil),             // 28: nvidia.gds.v1.GetPoolResponse
+	(*ListPoolsRequest)(nil),            // 29: nvidia.gds.v1.ListPoolsRequest
+	(*ListPoolsResponse)(nil),           // 30: nvidia.gds.v1.ListPoolsResponse
+	(*WatchPoolsRequest)(nil),           // 31: nvidia.gds.v1.WatchPoolsRequest
+	(*WatchPoolsResponse)(nil),          // 32: nvidia.gds.v1.WatchPoolsResponse
+	(*ListRoutersRequest)(nil),          // 33: nvidia.gds.v1.ListRoutersRequest
+	(*ListRoutersResponse)(nil),         // 34: nvidia.gds.v1.ListRoutersResponse
+	(*WatchRoutersRequest)(nil),         // 35: nvidia.gds.v1.WatchRoutersRequest
+	(*WatchRoutersResponse)(nil),        // 36: nvidia.gds.v1.WatchRoutersResponse
+	nil,                                 // 37: nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
+	nil,                                 // 38: nvidia.gds.v1.PoolAgent.AttributesEntry
+	nil,                                 // 39: nvidia.gds.v1.ModelServed.AttributesEntry
+	nil,                                 // 40: nvidia.gds.v1.Pool.LabelsEntry
+	nil,                                 // 41: nvidia.gds.v1.Router.LabelsEntry
+	nil,                                 // 42: nvidia.gds.v1.Router.AnnotationsEntry
+	nil,                                 // 43: nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
+	(*Lease)(nil),                       // 44: nvidia.gds.v1.Lease
+	(*timestamppb.Timestamp)(nil),       // 45: google.protobuf.Timestamp
+	(*ClusterEndpoints)(nil),            // 46: nvidia.gds.v1.ClusterEndpoints
+	(AddressType)(0),                    // 47: nvidia.gds.v1.AddressType
+	(ServiceType)(0),                    // 48: nvidia.gds.v1.ServiceType
+	(LeaseState)(0),                     // 49: nvidia.gds.v1.LeaseState
+	(*ServicePort)(nil),                 // 50: nvidia.gds.v1.ServicePort
+	(*durationpb.Duration)(nil),         // 51: google.protobuf.Duration
+	(*fieldmaskpb.FieldMask)(nil),       // 52: google.protobuf.FieldMask
+	(*LabelSelector)(nil),               // 53: nvidia.gds.v1.LabelSelector
+	(EventType)(0),                      // 54: nvidia.gds.v1.EventType
 }
 var file_nvidia_gds_v1_pool_proto_depIdxs = []int32{
-	1,  // 0: nvidia.gds.v1.PoolAgent.role:type_name -> nvidia.gds.v1.FrontendRole
-	2,  // 1: nvidia.gds.v1.PoolAgent.source:type_name -> nvidia.gds.v1.AgentSource
-	7,  // 2: nvidia.gds.v1.PoolAgent.service:type_name -> nvidia.gds.v1.ServiceRef
-	42, // 3: nvidia.gds.v1.PoolAgent.lease:type_name -> nvidia.gds.v1.Lease
-	3,  // 4: nvidia.gds.v1.PoolAgent.dial_mode:type_name -> nvidia.gds.v1.DialMode
-	36, // 5: nvidia.gds.v1.PoolAgent.attributes:type_name -> nvidia.gds.v1.PoolAgent.AttributesEntry
-	43, // 6: nvidia.gds.v1.PoolAgent.registered_at:type_name -> google.protobuf.Timestamp
-	43, // 7: nvidia.gds.v1.PoolAgent.updated_at:type_name -> google.protobuf.Timestamp
-	37, // 8: nvidia.gds.v1.ModelServed.attributes:type_name -> nvidia.gds.v1.ModelServed.AttributesEntry
-	1,  // 9: nvidia.gds.v1.ServiceRef.role:type_name -> nvidia.gds.v1.FrontendRole
-	1,  // 10: nvidia.gds.v1.FrontendEndpoint.role:type_name -> nvidia.gds.v1.FrontendRole
-	7,  // 11: nvidia.gds.v1.FrontendEndpoint.service:type_name -> nvidia.gds.v1.ServiceRef
-	5,  // 12: nvidia.gds.v1.Pool.location:type_name -> nvidia.gds.v1.Location
-	6,  // 13: nvidia.gds.v1.Pool.models:type_name -> nvidia.gds.v1.ModelServed
-	8,  // 14: nvidia.gds.v1.Pool.frontends:type_name -> nvidia.gds.v1.FrontendEndpoint
-	7,  // 15: nvidia.gds.v1.Pool.services:type_name -> nvidia.gds.v1.ServiceRef
-	38, // 16: nvidia.gds.v1.Pool.labels:type_name -> nvidia.gds.v1.Pool.LabelsEntry
-	0,  // 17: nvidia.gds.v1.Pool.desired_state:type_name -> nvidia.gds.v1.PoolState
-	0,  // 18: nvidia.gds.v1.Pool.state:type_name -> nvidia.gds.v1.PoolState
-	42, // 19: nvidia.gds.v1.Pool.lease:type_name -> nvidia.gds.v1.Lease
-	43, // 20: nvidia.gds.v1.Pool.registered_at:type_name -> google.protobuf.Timestamp
-	43, // 21: nvidia.gds.v1.Pool.updated_at:type_name -> google.protobuf.Timestamp
-	44, // 22: nvidia.gds.v1.Pool.endpoints:type_name -> nvidia.gds.v1.ClusterEndpoints
-	4,  // 23: nvidia.gds.v1.Pool.agents:type_name -> nvidia.gds.v1.PoolAgent
-	45, // 24: nvidia.gds.v1.RouterReplica.address_type:type_name -> nvidia.gds.v1.AddressType
-	46, // 25: nvidia.gds.v1.Router.type:type_name -> nvidia.gds.v1.ServiceType
-	47, // 26: nvidia.gds.v1.Router.cluster_lease_state:type_name -> nvidia.gds.v1.LeaseState
-	10, // 27: nvidia.gds.v1.Router.replicas:type_name -> nvidia.gds.v1.RouterReplica
-	39, // 28: nvidia.gds.v1.Router.labels:type_name -> nvidia.gds.v1.Router.LabelsEntry
-	40, // 29: nvidia.gds.v1.Router.annotations:type_name -> nvidia.gds.v1.Router.AnnotationsEntry
-	48, // 30: nvidia.gds.v1.Router.ports:type_name -> nvidia.gds.v1.ServicePort
-	9,  // 31: nvidia.gds.v1.RegisterPoolRequest.pool:type_name -> nvidia.gds.v1.Pool
-	49, // 32: nvidia.gds.v1.RegisterPoolRequest.lease_ttl:type_name -> google.protobuf.Duration
-	9,  // 33: nvidia.gds.v1.RegisterPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	43, // 34: nvidia.gds.v1.RegisterPoolResponse.server_time:type_name -> google.protobuf.Timestamp
-	9,  // 35: nvidia.gds.v1.UpdatePoolRequest.pool:type_name -> nvidia.gds.v1.Pool
-	50, // 36: nvidia.gds.v1.UpdatePoolRequest.update_mask:type_name -> google.protobuf.FieldMask
-	9,  // 37: nvidia.gds.v1.UpdatePoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	0,  // 38: nvidia.gds.v1.HeartbeatPoolRequest.desired_state:type_name -> nvidia.gds.v1.PoolState
-	42, // 39: nvidia.gds.v1.HeartbeatPoolResponse.lease:type_name -> nvidia.gds.v1.Lease
-	0,  // 40: nvidia.gds.v1.HeartbeatPoolResponse.state:type_name -> nvidia.gds.v1.PoolState
-	43, // 41: nvidia.gds.v1.HeartbeatPoolResponse.server_time:type_name -> google.protobuf.Timestamp
-	4,  // 42: nvidia.gds.v1.RegisterPoolAgentRequest.agent:type_name -> nvidia.gds.v1.PoolAgent
-	49, // 43: nvidia.gds.v1.RegisterPoolAgentRequest.lease_ttl:type_name -> google.protobuf.Duration
-	4,  // 44: nvidia.gds.v1.RegisterPoolAgentResponse.agent:type_name -> nvidia.gds.v1.PoolAgent
-	0,  // 45: nvidia.gds.v1.RegisterPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
-	43, // 46: nvidia.gds.v1.RegisterPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
-	1,  // 47: nvidia.gds.v1.HeartbeatPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
-	41, // 48: nvidia.gds.v1.HeartbeatPoolAgentRequest.attributes:type_name -> nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
-	42, // 49: nvidia.gds.v1.HeartbeatPoolAgentResponse.lease:type_name -> nvidia.gds.v1.Lease
-	0,  // 50: nvidia.gds.v1.HeartbeatPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
-	43, // 51: nvidia.gds.v1.HeartbeatPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
-	1,  // 52: nvidia.gds.v1.DeregisterPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
-	9,  // 53: nvidia.gds.v1.GetPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	0,  // 54: nvidia.gds.v1.ListPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
-	51, // 55: nvidia.gds.v1.ListPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
-	9,  // 56: nvidia.gds.v1.ListPoolsResponse.pools:type_name -> nvidia.gds.v1.Pool
-	0,  // 57: nvidia.gds.v1.WatchPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
-	51, // 58: nvidia.gds.v1.WatchPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
-	52, // 59: nvidia.gds.v1.WatchPoolsResponse.type:type_name -> nvidia.gds.v1.EventType
-	9,  // 60: nvidia.gds.v1.WatchPoolsResponse.pool:type_name -> nvidia.gds.v1.Pool
-	11, // 61: nvidia.gds.v1.ListRoutersResponse.routers:type_name -> nvidia.gds.v1.Router
-	52, // 62: nvidia.gds.v1.WatchRoutersResponse.type:type_name -> nvidia.gds.v1.EventType
-	11, // 63: nvidia.gds.v1.WatchRoutersResponse.router:type_name -> nvidia.gds.v1.Router
-	12, // 64: nvidia.gds.v1.PoolService.RegisterPool:input_type -> nvidia.gds.v1.RegisterPoolRequest
-	14, // 65: nvidia.gds.v1.PoolService.UpdatePool:input_type -> nvidia.gds.v1.UpdatePoolRequest
-	16, // 66: nvidia.gds.v1.PoolService.HeartbeatPool:input_type -> nvidia.gds.v1.HeartbeatPoolRequest
-	18, // 67: nvidia.gds.v1.PoolService.DeregisterPool:input_type -> nvidia.gds.v1.DeregisterPoolRequest
-	20, // 68: nvidia.gds.v1.PoolService.RegisterPoolAgent:input_type -> nvidia.gds.v1.RegisterPoolAgentRequest
-	22, // 69: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:input_type -> nvidia.gds.v1.HeartbeatPoolAgentRequest
-	24, // 70: nvidia.gds.v1.PoolService.DeregisterPoolAgent:input_type -> nvidia.gds.v1.DeregisterPoolAgentRequest
-	26, // 71: nvidia.gds.v1.PoolService.GetPool:input_type -> nvidia.gds.v1.GetPoolRequest
-	28, // 72: nvidia.gds.v1.PoolService.ListPools:input_type -> nvidia.gds.v1.ListPoolsRequest
-	30, // 73: nvidia.gds.v1.PoolService.WatchPools:input_type -> nvidia.gds.v1.WatchPoolsRequest
-	32, // 74: nvidia.gds.v1.PoolService.ListRouters:input_type -> nvidia.gds.v1.ListRoutersRequest
-	34, // 75: nvidia.gds.v1.PoolService.WatchRouters:input_type -> nvidia.gds.v1.WatchRoutersRequest
-	13, // 76: nvidia.gds.v1.PoolService.RegisterPool:output_type -> nvidia.gds.v1.RegisterPoolResponse
-	15, // 77: nvidia.gds.v1.PoolService.UpdatePool:output_type -> nvidia.gds.v1.UpdatePoolResponse
-	17, // 78: nvidia.gds.v1.PoolService.HeartbeatPool:output_type -> nvidia.gds.v1.HeartbeatPoolResponse
-	19, // 79: nvidia.gds.v1.PoolService.DeregisterPool:output_type -> nvidia.gds.v1.DeregisterPoolResponse
-	21, // 80: nvidia.gds.v1.PoolService.RegisterPoolAgent:output_type -> nvidia.gds.v1.RegisterPoolAgentResponse
-	23, // 81: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:output_type -> nvidia.gds.v1.HeartbeatPoolAgentResponse
-	25, // 82: nvidia.gds.v1.PoolService.DeregisterPoolAgent:output_type -> nvidia.gds.v1.DeregisterPoolAgentResponse
-	27, // 83: nvidia.gds.v1.PoolService.GetPool:output_type -> nvidia.gds.v1.GetPoolResponse
-	29, // 84: nvidia.gds.v1.PoolService.ListPools:output_type -> nvidia.gds.v1.ListPoolsResponse
-	31, // 85: nvidia.gds.v1.PoolService.WatchPools:output_type -> nvidia.gds.v1.WatchPoolsResponse
-	33, // 86: nvidia.gds.v1.PoolService.ListRouters:output_type -> nvidia.gds.v1.ListRoutersResponse
-	35, // 87: nvidia.gds.v1.PoolService.WatchRouters:output_type -> nvidia.gds.v1.WatchRoutersResponse
-	76, // [76:88] is the sub-list for method output_type
-	64, // [64:76] is the sub-list for method input_type
-	64, // [64:64] is the sub-list for extension type_name
-	64, // [64:64] is the sub-list for extension extendee
-	0,  // [0:64] is the sub-list for field type_name
+	44, // 0: nvidia.gds.v1.PoolAgentRegistration.lease:type_name -> nvidia.gds.v1.Lease
+	37, // 1: nvidia.gds.v1.PoolAgentRegistration.attributes:type_name -> nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
+	45, // 2: nvidia.gds.v1.PoolAgentRegistration.registered_at:type_name -> google.protobuf.Timestamp
+	45, // 3: nvidia.gds.v1.PoolAgentRegistration.updated_at:type_name -> google.protobuf.Timestamp
+	1,  // 4: nvidia.gds.v1.PoolAgent.role:type_name -> nvidia.gds.v1.FrontendRole
+	2,  // 5: nvidia.gds.v1.PoolAgent.source:type_name -> nvidia.gds.v1.AgentSource
+	8,  // 6: nvidia.gds.v1.PoolAgent.service:type_name -> nvidia.gds.v1.ServiceRef
+	44, // 7: nvidia.gds.v1.PoolAgent.lease:type_name -> nvidia.gds.v1.Lease
+	3,  // 8: nvidia.gds.v1.PoolAgent.dial_mode:type_name -> nvidia.gds.v1.DialMode
+	38, // 9: nvidia.gds.v1.PoolAgent.attributes:type_name -> nvidia.gds.v1.PoolAgent.AttributesEntry
+	45, // 10: nvidia.gds.v1.PoolAgent.registered_at:type_name -> google.protobuf.Timestamp
+	45, // 11: nvidia.gds.v1.PoolAgent.updated_at:type_name -> google.protobuf.Timestamp
+	4,  // 12: nvidia.gds.v1.PoolAgent.registrations:type_name -> nvidia.gds.v1.PoolAgentRegistration
+	39, // 13: nvidia.gds.v1.ModelServed.attributes:type_name -> nvidia.gds.v1.ModelServed.AttributesEntry
+	1,  // 14: nvidia.gds.v1.ServiceRef.role:type_name -> nvidia.gds.v1.FrontendRole
+	1,  // 15: nvidia.gds.v1.FrontendEndpoint.role:type_name -> nvidia.gds.v1.FrontendRole
+	8,  // 16: nvidia.gds.v1.FrontendEndpoint.service:type_name -> nvidia.gds.v1.ServiceRef
+	6,  // 17: nvidia.gds.v1.Pool.location:type_name -> nvidia.gds.v1.Location
+	7,  // 18: nvidia.gds.v1.Pool.models:type_name -> nvidia.gds.v1.ModelServed
+	9,  // 19: nvidia.gds.v1.Pool.frontends:type_name -> nvidia.gds.v1.FrontendEndpoint
+	8,  // 20: nvidia.gds.v1.Pool.services:type_name -> nvidia.gds.v1.ServiceRef
+	40, // 21: nvidia.gds.v1.Pool.labels:type_name -> nvidia.gds.v1.Pool.LabelsEntry
+	0,  // 22: nvidia.gds.v1.Pool.desired_state:type_name -> nvidia.gds.v1.PoolState
+	0,  // 23: nvidia.gds.v1.Pool.state:type_name -> nvidia.gds.v1.PoolState
+	44, // 24: nvidia.gds.v1.Pool.lease:type_name -> nvidia.gds.v1.Lease
+	45, // 25: nvidia.gds.v1.Pool.registered_at:type_name -> google.protobuf.Timestamp
+	45, // 26: nvidia.gds.v1.Pool.updated_at:type_name -> google.protobuf.Timestamp
+	46, // 27: nvidia.gds.v1.Pool.endpoints:type_name -> nvidia.gds.v1.ClusterEndpoints
+	5,  // 28: nvidia.gds.v1.Pool.agents:type_name -> nvidia.gds.v1.PoolAgent
+	47, // 29: nvidia.gds.v1.RouterReplica.address_type:type_name -> nvidia.gds.v1.AddressType
+	48, // 30: nvidia.gds.v1.Router.type:type_name -> nvidia.gds.v1.ServiceType
+	49, // 31: nvidia.gds.v1.Router.cluster_lease_state:type_name -> nvidia.gds.v1.LeaseState
+	11, // 32: nvidia.gds.v1.Router.replicas:type_name -> nvidia.gds.v1.RouterReplica
+	41, // 33: nvidia.gds.v1.Router.labels:type_name -> nvidia.gds.v1.Router.LabelsEntry
+	42, // 34: nvidia.gds.v1.Router.annotations:type_name -> nvidia.gds.v1.Router.AnnotationsEntry
+	50, // 35: nvidia.gds.v1.Router.ports:type_name -> nvidia.gds.v1.ServicePort
+	10, // 36: nvidia.gds.v1.RegisterPoolRequest.pool:type_name -> nvidia.gds.v1.Pool
+	51, // 37: nvidia.gds.v1.RegisterPoolRequest.lease_ttl:type_name -> google.protobuf.Duration
+	10, // 38: nvidia.gds.v1.RegisterPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	45, // 39: nvidia.gds.v1.RegisterPoolResponse.server_time:type_name -> google.protobuf.Timestamp
+	10, // 40: nvidia.gds.v1.UpdatePoolRequest.pool:type_name -> nvidia.gds.v1.Pool
+	52, // 41: nvidia.gds.v1.UpdatePoolRequest.update_mask:type_name -> google.protobuf.FieldMask
+	10, // 42: nvidia.gds.v1.UpdatePoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	0,  // 43: nvidia.gds.v1.HeartbeatPoolRequest.desired_state:type_name -> nvidia.gds.v1.PoolState
+	44, // 44: nvidia.gds.v1.HeartbeatPoolResponse.lease:type_name -> nvidia.gds.v1.Lease
+	0,  // 45: nvidia.gds.v1.HeartbeatPoolResponse.state:type_name -> nvidia.gds.v1.PoolState
+	45, // 46: nvidia.gds.v1.HeartbeatPoolResponse.server_time:type_name -> google.protobuf.Timestamp
+	5,  // 47: nvidia.gds.v1.RegisterPoolAgentRequest.agent:type_name -> nvidia.gds.v1.PoolAgent
+	51, // 48: nvidia.gds.v1.RegisterPoolAgentRequest.lease_ttl:type_name -> google.protobuf.Duration
+	5,  // 49: nvidia.gds.v1.RegisterPoolAgentResponse.agent:type_name -> nvidia.gds.v1.PoolAgent
+	4,  // 50: nvidia.gds.v1.RegisterPoolAgentResponse.registration:type_name -> nvidia.gds.v1.PoolAgentRegistration
+	0,  // 51: nvidia.gds.v1.RegisterPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
+	45, // 52: nvidia.gds.v1.RegisterPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
+	1,  // 53: nvidia.gds.v1.HeartbeatPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
+	43, // 54: nvidia.gds.v1.HeartbeatPoolAgentRequest.attributes:type_name -> nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
+	44, // 55: nvidia.gds.v1.HeartbeatPoolAgentResponse.lease:type_name -> nvidia.gds.v1.Lease
+	0,  // 56: nvidia.gds.v1.HeartbeatPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
+	45, // 57: nvidia.gds.v1.HeartbeatPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
+	1,  // 58: nvidia.gds.v1.DeregisterPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
+	10, // 59: nvidia.gds.v1.GetPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	0,  // 60: nvidia.gds.v1.ListPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
+	53, // 61: nvidia.gds.v1.ListPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
+	10, // 62: nvidia.gds.v1.ListPoolsResponse.pools:type_name -> nvidia.gds.v1.Pool
+	0,  // 63: nvidia.gds.v1.WatchPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
+	53, // 64: nvidia.gds.v1.WatchPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
+	54, // 65: nvidia.gds.v1.WatchPoolsResponse.type:type_name -> nvidia.gds.v1.EventType
+	10, // 66: nvidia.gds.v1.WatchPoolsResponse.pool:type_name -> nvidia.gds.v1.Pool
+	12, // 67: nvidia.gds.v1.ListRoutersResponse.routers:type_name -> nvidia.gds.v1.Router
+	54, // 68: nvidia.gds.v1.WatchRoutersResponse.type:type_name -> nvidia.gds.v1.EventType
+	12, // 69: nvidia.gds.v1.WatchRoutersResponse.router:type_name -> nvidia.gds.v1.Router
+	13, // 70: nvidia.gds.v1.PoolService.RegisterPool:input_type -> nvidia.gds.v1.RegisterPoolRequest
+	15, // 71: nvidia.gds.v1.PoolService.UpdatePool:input_type -> nvidia.gds.v1.UpdatePoolRequest
+	17, // 72: nvidia.gds.v1.PoolService.HeartbeatPool:input_type -> nvidia.gds.v1.HeartbeatPoolRequest
+	19, // 73: nvidia.gds.v1.PoolService.DeregisterPool:input_type -> nvidia.gds.v1.DeregisterPoolRequest
+	21, // 74: nvidia.gds.v1.PoolService.RegisterPoolAgent:input_type -> nvidia.gds.v1.RegisterPoolAgentRequest
+	23, // 75: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:input_type -> nvidia.gds.v1.HeartbeatPoolAgentRequest
+	25, // 76: nvidia.gds.v1.PoolService.DeregisterPoolAgent:input_type -> nvidia.gds.v1.DeregisterPoolAgentRequest
+	27, // 77: nvidia.gds.v1.PoolService.GetPool:input_type -> nvidia.gds.v1.GetPoolRequest
+	29, // 78: nvidia.gds.v1.PoolService.ListPools:input_type -> nvidia.gds.v1.ListPoolsRequest
+	31, // 79: nvidia.gds.v1.PoolService.WatchPools:input_type -> nvidia.gds.v1.WatchPoolsRequest
+	33, // 80: nvidia.gds.v1.PoolService.ListRouters:input_type -> nvidia.gds.v1.ListRoutersRequest
+	35, // 81: nvidia.gds.v1.PoolService.WatchRouters:input_type -> nvidia.gds.v1.WatchRoutersRequest
+	14, // 82: nvidia.gds.v1.PoolService.RegisterPool:output_type -> nvidia.gds.v1.RegisterPoolResponse
+	16, // 83: nvidia.gds.v1.PoolService.UpdatePool:output_type -> nvidia.gds.v1.UpdatePoolResponse
+	18, // 84: nvidia.gds.v1.PoolService.HeartbeatPool:output_type -> nvidia.gds.v1.HeartbeatPoolResponse
+	20, // 85: nvidia.gds.v1.PoolService.DeregisterPool:output_type -> nvidia.gds.v1.DeregisterPoolResponse
+	22, // 86: nvidia.gds.v1.PoolService.RegisterPoolAgent:output_type -> nvidia.gds.v1.RegisterPoolAgentResponse
+	24, // 87: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:output_type -> nvidia.gds.v1.HeartbeatPoolAgentResponse
+	26, // 88: nvidia.gds.v1.PoolService.DeregisterPoolAgent:output_type -> nvidia.gds.v1.DeregisterPoolAgentResponse
+	28, // 89: nvidia.gds.v1.PoolService.GetPool:output_type -> nvidia.gds.v1.GetPoolResponse
+	30, // 90: nvidia.gds.v1.PoolService.ListPools:output_type -> nvidia.gds.v1.ListPoolsResponse
+	32, // 91: nvidia.gds.v1.PoolService.WatchPools:output_type -> nvidia.gds.v1.WatchPoolsResponse
+	34, // 92: nvidia.gds.v1.PoolService.ListRouters:output_type -> nvidia.gds.v1.ListRoutersResponse
+	36, // 93: nvidia.gds.v1.PoolService.WatchRouters:output_type -> nvidia.gds.v1.WatchRoutersResponse
+	82, // [82:94] is the sub-list for method output_type
+	70, // [70:82] is the sub-list for method input_type
+	70, // [70:70] is the sub-list for extension type_name
+	70, // [70:70] is the sub-list for extension extendee
+	0,  // [0:70] is the sub-list for field type_name
 }
 
 func init() { file_nvidia_gds_v1_pool_proto_init() }
@@ -3254,14 +3416,14 @@ func file_nvidia_gds_v1_pool_proto_init() {
 	}
 	file_nvidia_gds_v1_common_proto_init()
 	file_nvidia_gds_v1_mcs_proto_init()
-	file_nvidia_gds_v1_pool_proto_msgTypes[12].OneofWrappers = []any{}
+	file_nvidia_gds_v1_pool_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nvidia_gds_v1_pool_proto_rawDesc), len(file_nvidia_gds_v1_pool_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   38,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
