@@ -132,7 +132,10 @@ branch rather than the highest-sorting tag, because the highest tag can
 sit on a maintenance branch this history never contained. It covers
 every commit since that tag rather than only the tagged commit, because
 the workflow's concurrency group cancels queued runs and a superseded
-push is first tagged by the next run to finish.
+push is first tagged by the next run to finish. A dependency-triggered
+release, described below, comments only on the pull requests of the
+dependency commits it lists. The rest of the range did not change what
+it ships.
 
 For all three stacks, the tag workflow publishes the original resolved
 inventory. The scheduled dispatcher can start a separate resource packaging
@@ -172,7 +175,10 @@ the following hold:
 - semantic-release computed no version for that service on this run. If
   the same push also touched the service, semantic-release owns the
   version and nothing extra is tagged.
-- The service already has a release tag to bump from.
+- The service already has a stable release tag, reachable from the
+  branch, to bump from. This is the baseline semantic-release uses, so
+  a prerelease, or a higher tag on a maintenance branch this history
+  never contained, is never bumped.
 - At least one release-worthy commit touching a framework path landed
   since that tag. Release-worthiness uses the same rules listed above: a
   framework `feat:`, `fix:`, `perf:`, or breaking `!` commit fans out; a
@@ -193,6 +199,51 @@ changes in the service directory can see why the version moved.
 
 Dry-run mode prints the tag and notes it would create and creates
 nothing, the same as every other release path in this script.
+
+## Go SDK and base image dependency releases
+
+Go services have the same gap. Two shared inputs reach every Go service
+image without touching the service directory:
+
+- The Bazel Go SDK, declared once in `tools/go-toolchain/go.mod`.
+  `rules_go` compiles every `go_binary` with it.
+- The base images pinned by `oci.pull` in `MODULE.bazel`. An image
+  target takes one as its `base`, for example
+  `base = "@distroless_go"`.
+
+`tools/ci/github-release auto` fans these out as well. It parses each
+service's own `BUILD.bazel` files for the edge, so there is no second
+list to keep in sync:
+
+- A registered subproject is a Go service when a `BUILD.bazel` file
+  under its path declares a `go_binary`. Files under `vendor/` and
+  `node_modules/` are ignored.
+- Its base images are the `oci.pull` repositories its image targets
+  take as `base`. A repository named only in a comment or in another
+  attribute does not count.
+- An image target that sets no `base` is tied to no base image, even
+  though its image macro supplies a default. Not every image target is
+  shipped, and a repin of the default must not release a service that
+  only builds such an image for development. Set `base` on a published
+  image so that a repin of its base releases the service.
+- A `BUILD.bazel` file that does not parse stops the run with an error
+  naming the file.
+
+A Go service gets a dependency-triggered release under the same
+conditions as a Java service: semantic-release computed no version for
+it on this run, it has a stable release tag reachable from the branch,
+and at least one release-worthy commit since that tag changed one of
+its inputs. A commit counts when it changed the SDK version that
+`tools/go-toolchain/go.mod` selects, which is its `toolchain` line, or
+its `go` line when there is no `toolchain` line. It also counts when it
+changed the `oci.pull` declaration of one of the service's own bases.
+Other edits to either file release nothing, including comment and
+formatting edits. A base image bump releases only the services built on
+that base.
+
+The bump is always a patch. Use `fix:` for a Go SDK or base image
+update that must ship, such as a security fix. Use `build:` or `chore:`
+when the services can wait for their next release.
 
 ## Release notes for pushed tags
 
