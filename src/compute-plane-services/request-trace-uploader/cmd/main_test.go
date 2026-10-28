@@ -30,27 +30,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func mapLookup(env map[string]string) config.LookupFunc {
-	return func(name string) (string, bool) {
-		value, ok := env[name]
-		return value, ok
-	}
-}
-
-func TestLoadConfigReadsTheSuppressedNCAIDs(t *testing.T) {
-	cfg, _, err := loadConfig(mapLookup(map[string]string{
-		config.EnvSourceDir:      "/records",
-		config.EnvBackend:        string(config.BackendDebug),
-		config.EnvSuppressNCAIDs: "nca-acme-nca",
-	}))
-	if err != nil {
-		t.Fatalf("loadConfig() error = %v", err)
-	}
-	if len(cfg.Suppression.Rules) != 1 || cfg.Suppression.Rules[0].Values[0] != "acme" {
-		t.Fatalf("Suppression = %+v, want the NCA id list as one rule", cfg.Suppression)
-	}
-}
-
 func TestMainExitsNonZeroOnInvalidSuppression(t *testing.T) {
 	tests := map[string]map[string]string{
 		"unparseable rules":         {config.EnvSuppressionRules: `[{"name":`},
