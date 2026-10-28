@@ -223,6 +223,7 @@ func TestRouterCacheSeedURLs(t *testing.T) {
 		"http://[fd00::5]:50072",
 	}, st.SeedURLs(), "a and b keep separate seeds; c/router2 has no replica; d has no gRPC port")
 	assert.Equal(t, []string{"a", "b", "c"}, routerClusters(st.SeedRouters()))
+	assert.Equal(t, st.SeedURLs(), st.RelayURLs(), "the relay seeds equal the pylon seeds today")
 
 	vip := "https://" + api.DerivedServiceName("llm", "backend-router") + ".llm.svc.cluster.local:50071"
 	assert.Equal(t, vip, st.DerivedServiceURL(st.ByCluster("a")[0]))
@@ -308,4 +309,49 @@ func TestRouterStateDerivedServiceURL(t *testing.T) {
 	r.DialScheme = ""
 	st = &RouterState{Routers: []*gdsv1.Router{r}}
 	assert.Equal(t, []string{"https://10.0.0.1:443"}, st.SeedURLs(), "the derived VIP is not a seed")
+}
+
+func TestRouterStateRelayURLsAndQUICAddrs(t *testing.T) {
+	r := &gdsv1.Router{
+		Cluster: "a", Namespace: "ns", Name: "r", GrpcPort: 50071, QuicPort: 4433, DialScheme: "http",
+		Ports: []*gdsv1.ServicePort{
+			{Name: "grpc", Protocol: gdsv1.Protocol_PROTOCOL_TCP, Port: 50071},
+			{Name: "quic", Protocol: gdsv1.Protocol_PROTOCOL_UDP, Port: 4433},
+			{Name: "metrics", Protocol: gdsv1.Protocol_PROTOCOL_TCP, Port: 9090},
+		},
+		Replicas: []*gdsv1.RouterReplica{
+			replica("10.0.0.2", true),
+			replica("10.0.0.1", true),
+			replica("10.0.0.1", true),
+			replica("10.0.0.3", false),
+			replica("2001:db8::1", true),
+			replica("fe80::1%eth0", true),
+			replica("bad:host", true),
+		},
+	}
+	st := &RouterState{}
+	assert.Equal(t, []string{"http://10.0.0.1:50071", "http://10.0.0.2:50071", "http://[2001:db8::1]:50071"}, st.RouterRelayURLs(r),
+		"one gRPC URL per ready replica, sorted, once each")
+	assert.Equal(t, st.RouterSeedURLs(r), st.RouterRelayURLs(r))
+	assert.Equal(t, []string{"10.0.0.1:4433", "10.0.0.2:4433", "[2001:db8::1]:4433"}, st.RouterQUICAddrs(r),
+		"one QUIC address per ready replica, IPv6 bracketed")
+	assert.Len(t, r.GetPorts(), 3, "every Service port stays readable on the router")
+
+	r.DialScheme = "grpc"
+	assert.Nil(t, st.RouterRelayURLs(r), "unknown dial scheme")
+	assert.Len(t, st.RouterQUICAddrs(r), 3, "QUIC addresses do not depend on the dial scheme")
+	assert.Nil(t, st.RouterQUICAddrs(&gdsv1.Router{GrpcPort: 1, Replicas: r.Replicas}), "no QUIC port")
+	assert.Nil(t, st.RouterQUICAddrs(&gdsv1.Router{QuicPort: 4433}), "no replica")
+	assert.Nil(t, st.RouterRelayURLs(&gdsv1.Router{QuicPort: 4433, Replicas: r.Replicas}), "no gRPC port")
+
+	expired := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "dead", GrpcPort: 1, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_EXPIRED,
+		Replicas: []*gdsv1.RouterReplica{replica("10.9.0.1", true)}}
+	alive := &gdsv1.Router{Cluster: "x", Namespace: "ns", Name: "zz", GrpcPort: 2, ClusterLeaseState: gdsv1.LeaseState_LEASE_STATE_ACTIVE,
+		Replicas: []*gdsv1.RouterReplica{replica("10.9.0.2", true), replica("10.9.0.3", true)}}
+	shared := &gdsv1.Router{Cluster: "z", Namespace: "ns", Name: "r", GrpcPort: 2, Replicas: []*gdsv1.RouterReplica{replica("10.9.0.2", true)}}
+	st = &RouterState{Routers: []*gdsv1.Router{expired, alive, shared}, DefaultScheme: "http"}
+	assert.Equal(t, []string{"http://10.9.0.2:2", "http://10.9.0.3:2"}, st.RelayURLs(),
+		"routers of expired clusters are skipped and a URL is listed once")
+	assert.Equal(t, st.SeedURLs(), st.RelayURLs())
+	assert.Empty(t, (&RouterState{}).RelayURLs())
 }

@@ -99,6 +99,67 @@ func (s *PoolState) Active() []*gdsv1.Pool {
 	return filterPools(s.Pools, func(p *gdsv1.Pool) bool { return p.GetState() == gdsv1.PoolState_POOL_STATE_ACTIVE })
 }
 
+// Ingress returns the pools with a live ingress agent: a ready OPENAI or
+// PYLON endpoint (ready_ingress_count) or a live OPENAI or PYLON agent, see
+// IngressLive. A pool whose only live agent is its KV relay is not
+// included. It does not check the state, so a DRAINING pool that still
+// serves in-flight requests is included; routers choosing a pool for a new
+// request use Active. An API-only pool (RegisterPool with a static frontend
+// url and no agents) has no ingress agent and is not included.
+func (s *PoolState) Ingress() []*gdsv1.Pool {
+	return filterPools(s.Pools, IngressLive)
+}
+
+// IngressLive reports whether a pool has a live ingress:
+// ready_ingress_count above 0 or a live OPENAI or PYLON agent. A pool
+// reached only through Pylon's reverse tunnel has no OPENAI frontend and a
+// ready_endpoint_count of 0 but is live here.
+func IngressLive(p *gdsv1.Pool) bool {
+	if p.GetReadyIngressCount() > 0 {
+		return true
+	}
+	for _, a := range p.GetAgents() {
+		switch a.GetRole() {
+		case gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON:
+			if a.GetLive() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Agent returns the pool's agent with the role, or nil when the pool has
+// none. GDS keeps at most one agent per role, merged from the role's
+// exported Service and its RegisterPoolAgent registrations; its lease,
+// agent_id and attributes mirror the freshest registration. Do not modify
+// the agent of a cached pool.
+func Agent(p *gdsv1.Pool, role gdsv1.FrontendRole) *gdsv1.PoolAgent {
+	for _, a := range p.GetAgents() {
+		if a.GetRole() == role {
+			return a
+		}
+	}
+	return nil
+}
+
+// Registrations returns every registration of the pool's agent with the
+// role, one per process instance (for example one per Pylon pod), sorted
+// by agent id; nil when the pool has no such agent or it has no
+// registration. Registrations whose lease expired are included until GDS
+// removes them: check Lease.State, or read the agent's
+// active_registration_count. Do not modify them.
+func Registrations(p *gdsv1.Pool, role gdsv1.FrontendRole) []*gdsv1.PoolAgentRegistration {
+	return Agent(p, role).GetRegistrations()
+}
+
+// KVRelayLive reports whether the pool's KV relay (Dynamo PoolRelay) is
+// live, so that its KV cache facts are available: kv_relay_live, or a live
+// KV_RELAY agent.
+func KVRelayLive(p *gdsv1.Pool) bool {
+	return p.GetKvRelayLive() || Agent(p, gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY).GetLive()
+}
+
 func filterPools(pools []*gdsv1.Pool, keep func(*gdsv1.Pool) bool) []*gdsv1.Pool {
 	var out []*gdsv1.Pool
 	for _, p := range pools {

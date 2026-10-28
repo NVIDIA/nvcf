@@ -69,7 +69,9 @@ type RouterCacheConfig struct {
 // RouterState is an immutable snapshot of a RouterCache. Do not modify the
 // routers.
 type RouterState struct {
-	// Routers sorted by cluster, namespace and name.
+	// Routers sorted by cluster, namespace and name. Each carries the named
+	// ports (grpc_port, http_port, quic_port) and, in Ports, every port of
+	// the exported Service as GDS received it.
 	Routers []*gdsv1.Router
 	// Revision of the last list, snapshot, delta or bookmark applied.
 	Revision string
@@ -155,6 +157,68 @@ func (s *RouterState) RouterSeedURLs(r *gdsv1.Router) []string {
 	return slices.Compact(urls)
 }
 
+// RelayURLs returns the seeds a Dynamo PoolRelay dials: the
+// RouterRelayURLs of every router whose cluster lease has not expired, in
+// router order (cluster, namespace, name), each URL once. Today they equal
+// SeedURLs, since the PoolRelay opens its state streams over gRPC to the
+// same router listener as Pylon's WatchStargates. Use RelayURLs for the
+// relay and SeedURLs for Pylon, so that a relay-specific listener or scheme
+// can be introduced without touching Pylon.
+func (s *RouterState) RelayURLs() []string {
+	var urls []string
+	seen := map[string]bool{}
+	for _, r := range s.Routers {
+		if r.GetClusterLeaseState() == gdsv1.LeaseState_LEASE_STATE_EXPIRED {
+			continue
+		}
+		for _, u := range s.RouterRelayURLs(r) {
+			if !seen[u] {
+				seen[u] = true
+				urls = append(urls, u)
+			}
+		}
+	}
+	return urls
+}
+
+// RouterRelayURLs returns the relay seeds of one router,
+// <scheme>://<replica address>:<grpc_port> per ready replica, sorted and
+// without duplicates. Today it returns what RouterSeedURLs returns, with the
+// same scheme, port and replica rules; it is a separate function so that
+// the relay listener can diverge from Pylon's. The cluster lease is not
+// checked; RelayURLs checks it.
+func (s *RouterState) RouterRelayURLs(r *gdsv1.Router) []string {
+	return s.RouterSeedURLs(r)
+}
+
+// RouterQUICAddrs returns the reverse tunnel addresses of one router,
+// <replica address>:<quic_port> per ready replica (IPv6 addresses in
+// brackets), sorted and without duplicates. It returns nil when the router
+// has no QUIC port. Replicas are filtered as in RouterSeedURLs; the dial
+// scheme and the cluster lease are not checked.
+//
+// The QUIC port is informational for Pylon, whose tunnel address comes from
+// the registration ack. Consumers of a port GDS does not name read
+// Router.Ports, every port of the exported Service with its name and
+// protocol.
+func (s *RouterState) RouterQUICAddrs(r *gdsv1.Router) []string {
+	if r.GetQuicPort() <= 0 {
+		return nil
+	}
+	port := strconv.Itoa(int(r.GetQuicPort()))
+	var addrs []string
+	for _, replica := range r.GetReplicas() {
+		if !replica.GetReady() {
+			continue
+		}
+		if host, ok := seedHost(replica.GetAddress()); ok {
+			addrs = append(addrs, net.JoinHostPort(host, port))
+		}
+	}
+	slices.Sort(addrs)
+	return slices.Compact(addrs)
+}
+
 // DerivedServiceURL returns the URL of the derived Service of the router's
 // import in the caller's cluster,
 // <scheme>://derived-<hash>.<namespace>.svc.<cluster domain>:<grpc_port>.
@@ -222,7 +286,8 @@ func routerKey(r *gdsv1.Router) string {
 
 // RouterCache keeps the routers matching a filter, with the same list,
 // watch, TTL and stale behaviour as PoolCache. Pylons and Pylon Operator
-// use it for router seeds (RouterState.SeedURLs).
+// use it for router seeds (RouterState.SeedURLs), the Dynamo PoolRelay for
+// its relay seeds (RouterState.RelayURLs).
 type RouterCache struct {
 	core  *cache[*gdsv1.Router]
 	state atomic.Pointer[RouterState]
