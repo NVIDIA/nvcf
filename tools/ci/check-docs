@@ -13,14 +13,14 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
-python3 -m unittest discover -s docs/overview/samples/scripts -p 'test_*_upgrade_check.py'
-
 ./tools/ci/check-doc-version-sync
 docs_mode="$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")"
 case "$docs_mode" in
   umbrella|legacy) ;;
   *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
 esac
+python3 -m unittest discover -s docs/overview/samples/scripts -p 'test_*_upgrade_check.py'
+
 if [[ "$docs_mode" == umbrella ]]; then
   staged="$(mktemp -d)"
   trap 'rm -rf "$staged"' EXIT
