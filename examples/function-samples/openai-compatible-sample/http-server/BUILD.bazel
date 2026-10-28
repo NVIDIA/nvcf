@@ -22,6 +22,7 @@ load("//rules/oci:defs.bzl", "go_oci_image")
 go_library(
     name = "http-server_lib",
     srcs = [
+        "decisions.go",
         "main.go",
         "messages.go",
     ],
@@ -38,6 +39,7 @@ go_binary(
 go_test(
     name = "http-server_test",
     srcs = [
+        "decisions_test.go",
         "echo_test.go",
         "main_test.go",
         "messages_test.go",
