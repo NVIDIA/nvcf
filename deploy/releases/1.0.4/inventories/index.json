@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "umbrella_version": "1.0.4",
+  "qualification_reference": "https://github.com/NVIDIA/nvcf/issues/2432#issuecomment-6339954347",
+  "tracking_issue": "https://github.com/NVIDIA/nvcf/issues/2843",
+  "stacks": [
+    {
+      "name": "nvcf-self-managed-stack",
+      "version": "1.0.2",
+      "source": {
+        "version": "1.0.2",
+        "tag": "deploy/stacks/self-managed/v1.0.2",
+        "commit": "6133572633b5d37ef6b935854971fc024acc1b0a"
+      },
+      "inventory": "nvcf-self-managed-stack-1.0.2-inventory.json",
+      "sha256": "a6297837ac813bf67a93b7ecdfcf1f9160572a68bd13487772f8403979cbec3c",
+      "images": 41,
+      "charts": 25,
+      "resource": {
+        "name": "nvcf-self-managed-stack",
+        "version": "1.0.2",
+        "archive": "nvcf-self-managed-stack-1.0.2.tar.gz"
+      },
+      "tracking_issue": "https://github.com/NVIDIA/nvcf/issues/2844"
+    },
+    {
+      "name": "nvcf-compute-plane-stack",
+      "version": "1.0.1",
+      "source": {
+        "version": "1.0.1",
+        "tag": "deploy/stacks/nvcf-compute-plane/v1.0.1",
+        "commit": "6133572633b5d37ef6b935854971fc024acc1b0a"
+      },
+      "inventory": "nvcf-compute-plane-stack-1.0.1-inventory.json",
+      "sha256": "5add01f94a8aa27b16ec37e59587a7b721b34dcc1d1fa1a226703115b25c09d5",
+      "images": 23,
+      "charts": 5,
+      "resource": {
+        "name": "nvcf-compute-plane-stack",
+        "version": "1.0.1",
+        "archive": "nvcf-compute-plane-stack-1.0.1.tar.gz"
+      },
+      "tracking_issue": "https://github.com/NVIDIA/nvcf/issues/2845"
+    },
+    {
+      "name": "nvcf-observability-stack",
+      "version": "1.0.0",
+      "source": {
+        "version": "1.0.0",
+        "tag": "deploy/stacks/observability/v1.0.0",
+        "commit": "b77e96a3f8c18e9318b93e697e33e596c4ede7d7"
+      },
+      "inventory": "nvcf-observability-stack-1.0.0-inventory.json",
+      "sha256": "362ec5806a8fd7e206646bc13e531504cce958fa1212e88c76936285fdda38a2",
+      "images": 4,
+      "charts": 5,
+      "resource": {
+        "name": "nvcf-observability-stack",
+        "version": "1.0.0",
+        "archive": "nvcf-observability-stack-1.0.0.tar.gz"
+      },
+      "tracking_issue": "https://github.com/NVIDIA/nvcf/issues/2846"
+    }
+  ],
+  "unique_image_references": 67
+}

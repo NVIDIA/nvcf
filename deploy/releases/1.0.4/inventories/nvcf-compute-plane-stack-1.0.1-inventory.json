@@ -1,0 +1,457 @@
+{
+  "schema_version": 1,
+  "source": {
+    "version": "1.0.1",
+    "tag": "deploy/stacks/nvcf-compute-plane/v1.0.1",
+    "commit": "6133572633b5d37ef6b935854971fc024acc1b0a"
+  },
+  "releases": [
+    {
+      "plane": "compute-plane",
+      "name": "dynamo-operator",
+      "namespace": "dynamo-system",
+      "required": false,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/ai-dynamo/dynamo-platform",
+      "version": "1.4.2"
+    },
+    {
+      "plane": "compute-plane",
+      "name": "grove-operator",
+      "namespace": "grove-system",
+      "required": false,
+      "chart": "oci://ghcr.io/ai-dynamo/grove/grove-charts",
+      "version": "v0.1.0-alpha.12"
+    },
+    {
+      "plane": "compute-plane",
+      "name": "kai-scheduler",
+      "namespace": "kai-scheduler",
+      "required": false,
+      "chart": "oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler",
+      "version": "v0.17.1"
+    },
+    {
+      "plane": "compute-plane",
+      "name": "nvca-operator",
+      "namespace": "nvca-operator",
+      "required": true,
+      "chart": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator",
+      "version": "1.28.0"
+    },
+    {
+      "plane": "compute-plane",
+      "name": "nvcf-grove-topology",
+      "namespace": "nvca-operator",
+      "required": true,
+      "chart": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology",
+      "version": "0.1.0"
+    },
+    {
+      "plane": "compute-plane",
+      "name": "nvcf-kai-topology",
+      "namespace": "nvca-operator",
+      "required": true,
+      "chart": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology",
+      "version": "0.1.0"
+    }
+  ],
+  "artifacts": [
+    {
+      "type": "container-image",
+      "name": "nats",
+      "repository": "docker.io/library/nats",
+      "version": "2.10.21-alpine",
+      "reference": "docker.io/library/nats:2.10.21-alpine",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "dynamo-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nats-server-config-reloader",
+      "repository": "docker.io/natsio/nats-server-config-reloader",
+      "version": "0.24.0",
+      "reference": "docker.io/natsio/nats-server-config-reloader:0.24.0",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "dynamo-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "grove-install-crds",
+      "repository": "ghcr.io/ai-dynamo/grove/grove-install-crds",
+      "version": "v0.1.0-alpha.12",
+      "reference": "ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.12",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "grove-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "grove-operator",
+      "repository": "ghcr.io/ai-dynamo/grove/grove-operator",
+      "version": "v0.1.0-alpha.12",
+      "reference": "ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.12",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "grove-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "admission",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/admission",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/admission:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "binder",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/binder",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/binder:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "crd-upgrader",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nodescaleadjuster",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/nodescaleadjuster",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/nodescaleadjuster:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "numa-placement-exporter",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/numa-placement-exporter",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/numa-placement-exporter:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "operator",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/operator",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "podgroupcontroller",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/podgroupcontroller",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/podgroupcontroller:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "podgrouper",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/podgrouper",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/podgrouper:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "queuecontroller",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/queuecontroller",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/queuecontroller:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "resourcereservation",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/resourcereservation",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/resourcereservation:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "scalingpod",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/scalingpod",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/scalingpod:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "scheduler",
+      "repository": "ghcr.io/kai-scheduler/kai-scheduler/scheduler",
+      "version": "v0.17.1",
+      "reference": "ghcr.io/kai-scheduler/kai-scheduler/scheduler:v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "kubernetes-operator",
+      "repository": "nvcr.io/nvidia/ai-dynamo/kubernetes-operator",
+      "version": "1.4.2",
+      "reference": "nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "dynamo-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "byoo-otel-collector",
+      "repository": "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector",
+      "version": "0.160.0-nv-0.2.5",
+      "reference": "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.160.0-nv-0.2.5",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvca-operator",
+      "repository": "nvcr.io/nvidia/nvcf/nvca-operator",
+      "version": "3.10.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvca-operator:3.10.3",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvca",
+      "repository": "nvcr.io/nvidia/nvcf/nvca",
+      "version": "3.10.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvca:3.10.3",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-image-credential-helper",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-image-credential-helper",
+      "version": "0.11.3",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-image-credential-helper:0.11.3",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "nvcf-otel-collector",
+      "repository": "nvcr.io/nvidia/nvcf/nvcf-otel-collector",
+      "version": "0.157.0-nv-0.2.1",
+      "reference": "nvcr.io/nvidia/nvcf/nvcf-otel-collector:0.157.0-nv-0.2.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "container-image",
+      "name": "samba",
+      "repository": "nvcr.io/nvidia/nvcf/samba",
+      "version": "1.0.5",
+      "reference": "nvcr.io/nvidia/nvcf/samba:1.0.5",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "nvcf-cluster-topology",
+      "repository": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/nvcf-compute-plane/charts",
+      "version": "0.1.0",
+      "reference": "https://github.com/NVIDIA/nvcf/tree/6133572633b5d37ef6b935854971fc024acc1b0a/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology@0.1.0",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvcf-grove-topology",
+          "requirement": "required"
+        },
+        {
+          "plane": "compute-plane",
+          "release": "nvcf-kai-topology",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "dynamo-platform",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/ai-dynamo",
+      "version": "1.4.2",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/ai-dynamo/dynamo-platform@1.4.2",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "dynamo-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "helm-nvca-operator",
+      "repository": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+      "version": "1.28.0",
+      "reference": "https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator@1.28.0",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "nvca-operator",
+          "requirement": "required"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "grove-charts",
+      "repository": "oci://ghcr.io/ai-dynamo/grove",
+      "version": "v0.1.0-alpha.12",
+      "reference": "oci://ghcr.io/ai-dynamo/grove/grove-charts@v0.1.0-alpha.12",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "grove-operator",
+          "requirement": "optional"
+        }
+      ]
+    },
+    {
+      "type": "helm-chart",
+      "name": "kai-scheduler",
+      "repository": "oci://ghcr.io/kai-scheduler/kai-scheduler",
+      "version": "v0.17.1",
+      "reference": "oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler@v0.17.1",
+      "sources": [
+        {
+          "plane": "compute-plane",
+          "release": "kai-scheduler",
+          "requirement": "optional"
+        }
+      ]
+    }
+  ]
+}
