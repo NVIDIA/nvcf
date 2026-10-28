@@ -106,6 +106,14 @@ impl DevAuth {
         ] {
             ensure!(!value.is_empty(), "{name} must not be empty");
         }
+        // An empty token would authorize a request that omits clientAuthorizationToken,
+        // because an omitted proto3 string is "".
+        if let Some(invocation) = &config.invocation {
+            ensure!(
+                !invocation.client_token.is_empty(),
+                "invocation.clientToken must not be empty"
+            );
+        }
         Ok(Self {
             config,
             metrics: AuthMetrics::new()?,
@@ -401,6 +409,23 @@ mod tests {
             auth.auth_llm_invocation(request).await.unwrap_err().code(),
             Code::Unauthenticated
         );
+    }
+
+    #[test]
+    fn invocation_rejects_an_empty_client_token_at_startup() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "serviceToken": "service-token",
+                "workerToken": "worker-token",
+                "routingKey": "mockdc-usw2-a",
+                "invocation": {"clientToken": "", "ncaId": "nca-1"}
+            }"#,
+        )
+        .expect("config should parse");
+        let error = DevAuth::new(config)
+            .err()
+            .expect("an empty client token must be rejected");
+        assert!(error.to_string().contains("clientToken"), "{error}");
     }
 
     #[tokio::test]
