@@ -20,7 +20,7 @@ import (
 	"math"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/record"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/redact"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/suppress"
 )
@@ -95,14 +95,14 @@ type Record struct {
 	// Line is the 1-based line number in the segment.
 	Line int
 	// Value is the record after suppression and redaction.
-	Value *compat.Value
+	Value *jsonvalue.Value
 	// Payload is the source line unchanged, or Value written as compact
-	// UTF-8 JSON by compat.Encode when suppression or redaction changed the
+	// UTF-8 JSON by jsonvalue.Encode when suppression or redaction changed the
 	// record.
 	Payload []byte
 	// Headers holds copies of the record's header objects as they were read,
 	// before any change, in lookup order. See suppress.ResolveHeader.
-	Headers []*compat.Value
+	Headers []*jsonvalue.Value
 	// CarriesPayload reports a request_payload record.
 	CarriesPayload bool
 	// Suppression reports what the suppression rules did.
@@ -230,7 +230,7 @@ func (p *Preparer) Prepare(ctx context.Context, path string, w Writer, rejects i
 		}
 		result.Received++
 		line := lines.Line()
-		value, decodeErr := compat.Decode(line)
+		value, decodeErr := jsonvalue.Decode(line)
 		if decodeErr != nil {
 			result.Unparseable++
 			if err := reject(rejects, line); err != nil {
@@ -294,7 +294,7 @@ func (p *Preparer) Prepare(ctx context.Context, path string, w Writer, rejects i
 // record is dropped. A suppressed record is not redacted: the stub keeps no
 // body. The record is re-serialized only when something changed, so other
 // records keep their source bytes.
-func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (Record, bool) {
+func (p *Preparer) transform(value *jsonvalue.Value, line []byte, result *Result) (Record, bool) {
 	event := suppress.EventOf(value)
 	out := Record{
 		Headers:        cloneAll(suppress.HeaderSets(event)),
@@ -336,7 +336,7 @@ func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (
 	case suppress.StripPayload:
 		result.Suppressed++
 		out.Value = kept
-		out.Payload = compat.Encode(kept)
+		out.Payload = jsonvalue.Encode(kept)
 		return out, true
 	}
 	out.Value = value
@@ -344,7 +344,7 @@ func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (
 		redacted, parts := redact.Record(value)
 		if parts > 0 {
 			out.Value = redacted
-			out.Payload = compat.Encode(redacted)
+			out.Payload = jsonvalue.Encode(redacted)
 			out.RedactedParts = parts
 		}
 	}
@@ -361,9 +361,9 @@ func (r *Result) countRule(name string, count RuleCount) {
 // payloadIncomplete reports a payload whose payload_complete is JSON false.
 // A missing or non-boolean flag is not counted: the flag is parsed, never
 // assumed.
-func payloadIncomplete(event *compat.Value) bool {
+func payloadIncomplete(event *jsonvalue.Value) bool {
 	payload := event.Get("payload")
-	if payload == nil || payload.Kind() != compat.Object {
+	if payload == nil || payload.Kind() != jsonvalue.Object {
 		return false
 	}
 	complete, ok := payload.Get("payload_complete").Bool()
@@ -372,8 +372,8 @@ func payloadIncomplete(event *compat.Value) bool {
 
 // recordType returns event's type when Dynamo v1.4.0 defines it, and
 // "unknown" otherwise, so it is safe as a metric label.
-func recordType(event *compat.Value) string {
-	if event != nil && event.Kind() == compat.Object {
+func recordType(event *jsonvalue.Value) string {
+	if event != nil && event.Kind() == jsonvalue.Object {
 		if text, ok := event.Get("event_type").String(); ok && record.EventType(text).Known() {
 			return text
 		}
@@ -399,24 +399,24 @@ func (p *Preparer) quarantineReason(result Result) string {
 // isLegacyRecord detects a Dynamo v1.3.x AuditRecord: schema_version and no
 // event_type, bare or under "event". Parsing one as a v1.4.0 record would
 // produce empty fields rather than fail.
-func isLegacyRecord(value *compat.Value) bool {
+func isLegacyRecord(value *jsonvalue.Value) bool {
 	body := value
-	if value.Kind() == compat.Object && value.Has("event") {
+	if value.Kind() == jsonvalue.Object && value.Has("event") {
 		body = value.Get("event")
 	}
-	if body.Kind() != compat.Object {
+	if body.Kind() != jsonvalue.Object {
 		return false
 	}
 	version := body.Get("schema_version")
 	eventType := body.Get("event_type")
-	return version != nil && version.Kind() == compat.Int && (eventType == nil || eventType.Kind() == compat.Null)
+	return version != nil && version.Kind() == jsonvalue.Int && (eventType == nil || eventType.Kind() == jsonvalue.Null)
 }
 
-func cloneAll(values []*compat.Value) []*compat.Value {
+func cloneAll(values []*jsonvalue.Value) []*jsonvalue.Value {
 	if len(values) == 0 {
 		return nil
 	}
-	out := make([]*compat.Value, len(values))
+	out := make([]*jsonvalue.Value, len(values))
 	for i, v := range values {
 		out[i] = v.Clone()
 	}

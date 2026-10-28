@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // goldenCase holds what the earlier Python uploader produced for one line:
@@ -34,9 +34,9 @@ func loadGolden(t *testing.T) []goldenCase {
 	return cases
 }
 
-func mustDecode(t *testing.T, line string) *compat.Value {
+func mustDecode(t *testing.T, line string) *jsonvalue.Value {
 	t.Helper()
-	value, err := compat.Decode([]byte(line))
+	value, err := jsonvalue.Decode([]byte(line))
 	if err != nil {
 		t.Fatalf("Decode(%s) error = %v", line, err)
 	}
@@ -78,7 +78,7 @@ func TestStubMatchesPythonUploader(t *testing.T) {
 		t.Run(tc.In, func(t *testing.T) {
 			engine := mustEngine(t, FromIDs(strings.Split(tc.IDs, ",")))
 			record := mustDecode(t, tc.In)
-			before := string(compat.Encode(record))
+			before := string(jsonvalue.Encode(record))
 
 			got, outcome := engine.Apply(record)
 			if _, changed := plainValueChange(tc.In); changed {
@@ -91,7 +91,7 @@ func TestStubMatchesPythonUploader(t *testing.T) {
 				if outcome.Action != "" || got != record {
 					t.Fatalf("outcome = %+v, want the record passed through", outcome)
 				}
-				if after := string(compat.Encode(record)); after != before {
+				if after := string(jsonvalue.Encode(record)); after != before {
 					t.Fatalf("record changed to %s", after)
 				}
 				return
@@ -99,8 +99,8 @@ func TestStubMatchesPythonUploader(t *testing.T) {
 			if outcome.Action != StripPayload || outcome.ID != tc.NCAID {
 				t.Fatalf("outcome = %+v, want stripPayload with id %q", outcome, tc.NCAID)
 			}
-			if want := mustDecode(t, *tc.Out); !compat.Equal(got, want) {
-				t.Errorf("stub = %s\nwant   %s", compat.Encode(got), *tc.Out)
+			if want := mustDecode(t, *tc.Out); !jsonvalue.Equal(got, want) {
+				t.Errorf("stub = %s\nwant   %s", jsonvalue.Encode(got), *tc.Out)
 			}
 		})
 	}
@@ -227,7 +227,7 @@ func TestStubIsPlainJSON(t *testing.T) {
 	got, _ := engine.Apply(record)
 	want := "{\"timestamp\":1.5e3,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"model\":\"caf\u00e9 \u2603\",\"payload_complete\":false," +
 		"\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
-	if encoded := string(compat.Encode(got)); encoded != want {
+	if encoded := string(jsonvalue.Encode(got)); encoded != want {
 		t.Fatalf("stub = %s\nwant   %s", encoded, want)
 	}
 }

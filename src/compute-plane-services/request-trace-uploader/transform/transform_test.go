@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/suppress"
 )
 
@@ -40,7 +40,7 @@ func (w *memoryWriter) Write(r Record) error {
 	w.records = append(w.records, r)
 	var headers []string
 	for _, set := range r.Headers {
-		headers = append(headers, string(compat.Encode(set)))
+		headers = append(headers, string(jsonvalue.Encode(set)))
 	}
 	w.headers = append(w.headers, headers)
 	return nil

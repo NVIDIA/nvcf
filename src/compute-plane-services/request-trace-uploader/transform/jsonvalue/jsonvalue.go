@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package compat reads and writes the JSON of request trace records.
+// Package jsonvalue reads and writes the JSON of request trace records.
 //
 // Decode accepts standard JSON and keeps what a generic decoder loses: key
 // order, the source text of every number, and a \u escape for a lone
@@ -13,7 +13,7 @@
 // Strings hold UTF-8, except that a lone surrogate is stored as its 3-byte
 // generalized UTF-8 form, so it survives a round trip and hashes the way the
 // earlier uploader hashed it.
-package compat
+package jsonvalue
 
 import (
 	"errors"

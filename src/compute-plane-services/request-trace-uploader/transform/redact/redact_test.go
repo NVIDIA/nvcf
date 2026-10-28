@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // golden holds what the earlier Python uploader produced: the redacted
@@ -56,7 +56,7 @@ func loadGolden(t *testing.T) golden {
 func TestRecordMatchesPythonUploader(t *testing.T) {
 	for _, tc := range loadGolden(t).Records {
 		t.Run(tc.Name, func(t *testing.T) {
-			record, err := compat.Decode([]byte(tc.In))
+			record, err := jsonvalue.Decode([]byte(tc.In))
 			if strings.Contains(tc.In, "NaN") {
 				if err == nil {
 					t.Fatal("Decode() accepted NaN, which is not JSON")
@@ -66,23 +66,23 @@ func TestRecordMatchesPythonUploader(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := string(compat.Encode(record))
+			before := string(jsonvalue.Encode(record))
 			got, count := Record(record)
 			if count != tc.Count {
 				t.Fatalf("count = %d, want %d", count, tc.Count)
 			}
-			encoded := string(compat.Encode(got))
+			encoded := string(jsonvalue.Encode(got))
 			if tc.Out == nil {
 				if encoded != before {
 					t.Fatalf("record changed with nothing redacted:\n%s", encoded)
 				}
 				return
 			}
-			want, err := compat.Decode([]byte(*tc.Out))
+			want, err := jsonvalue.Decode([]byte(*tc.Out))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !compat.Equal(got, want) {
+			if !jsonvalue.Equal(got, want) {
 				t.Errorf("redacted =\n%s\nwant\n%s", encoded, *tc.Out)
 			}
 		})
@@ -162,7 +162,7 @@ func TestLargeRecordIsRedactedQuickly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := compat.Decode(line)
+	record, err := jsonvalue.Decode(line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestLargeRecordIsRedactedQuickly(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
 	}
-	if size := len(compat.Encode(got)); size > 4096 {
+	if size := len(jsonvalue.Encode(got)); size > 4096 {
 		t.Errorf("redacted record is %d bytes, want the media replaced", size)
 	}
 	if elapsed > 10*time.Second {
@@ -233,12 +233,12 @@ func TestDataURLScanIsLinear(t *testing.T) {
 
 func TestRedactedRecordIsPlainJSON(t *testing.T) {
 	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
-	record, err := compat.Decode([]byte("{\"score\":1.50,\"content\":\"caf\u00e9 " + png + "\"}"))
+	record, err := jsonvalue.Decode([]byte("{\"score\":1.50,\"content\":\"caf\u00e9 " + png + "\"}"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, count := Record(record)
-	encoded := string(compat.Encode(got))
+	encoded := string(jsonvalue.Encode(got))
 	if count != 1 || !strings.HasPrefix(encoded, "{\"score\":1.50,\"content\":\"caf\u00e9 [redacted:multimodal kind=data_url mime=image/png bytes=") {
 		t.Fatalf("redacted = %s, want UTF-8 text, the source number and an inline token", encoded)
 	}

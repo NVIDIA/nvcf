@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // The scanners below match exactly what the earlier uploader's Python
@@ -58,7 +58,7 @@ func mediaSpans(text string) []span {
 			}
 		}
 	}
-	if len(text) < base64RunMinChars || compat.CodePoints(text) < base64RunMinChars {
+	if len(text) < base64RunMinChars || jsonvalue.CodePoints(text) < base64RunMinChars {
 		return spans
 	}
 	runs := make([]span, 0)
@@ -109,7 +109,7 @@ func isHex(c byte) bool {
 // hasBase64Classes. A run must not follow a base64 character, even one
 // before start, and stops at end. Gaps shorter than the minimum are skipped.
 func base64Runs(text string, start, end int) []span {
-	if end-start < base64RunMinChars || compat.CodePoints(text[start:end]) < base64RunMinChars {
+	if end-start < base64RunMinChars || jsonvalue.CodePoints(text[start:end]) < base64RunMinChars {
 		return nil
 	}
 	var runs []span
@@ -158,7 +158,7 @@ func hasBase64Classes(text string, start, end int) bool {
 			digit = true
 		}
 	}
-	return separators*16 <= compat.CodePoints(text[start:end]) && upper && lower && digit
+	return separators*16 <= jsonvalue.CodePoints(text[start:end]) && upper && lower && digit
 }
 
 // isBase64String reports a full match of
@@ -375,7 +375,7 @@ func matchToken(text string, i int, subtype bool) (int, bool) {
 			}
 			break
 		}
-		r, size := compat.DecodeRune(text[i:])
+		r, size := jsonvalue.DecodeRune(text[i:])
 		if r != 0x130 && r != 0x131 && r != 0x17f && r != 0x212a {
 			break
 		}
@@ -407,7 +407,7 @@ func matchUnquoted(text string, i int) int {
 		if c == ';' || c == ',' || c == '"' || c == '\\' {
 			break
 		}
-		r, size := compat.DecodeRune(text[i:])
+		r, size := jsonvalue.DecodeRune(text[i:])
 		if isPySpace(r) {
 			break
 		}
@@ -491,7 +491,7 @@ func (s *headerScanner) urlBody(i int) (int, bool) {
 		if c < 0x80 && strings.IndexByte("\"'<>()[]{}`", c) >= 0 {
 			break
 		}
-		r, size := compat.DecodeRune(text[i:])
+		r, size := jsonvalue.DecodeRune(text[i:])
 		if isPySpace(r) {
 			break
 		}
@@ -566,7 +566,7 @@ func pyLower(s string) string {
 	var runes []rune
 	var widths []int
 	for i := 0; i < len(s); {
-		r, size := compat.DecodeRune(s[i:])
+		r, size := jsonvalue.DecodeRune(s[i:])
 		runes = append(runes, r)
 		widths = append(widths, size)
 		i += size
@@ -630,7 +630,7 @@ func isAlnum(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); {
-		r, size := compat.DecodeRune(s[i:])
+		r, size := jsonvalue.DecodeRune(s[i:])
 		i += size
 		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
 			return false

@@ -5,7 +5,7 @@ go_library(
     srcs = ["suppress.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/suppress",
     visibility = ["//visibility:public"],
-    deps = ["//src/compute-plane-services/request-trace-uploader/transform/compat"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/jsonvalue"],
 )
 
 alias(
@@ -23,5 +23,5 @@ go_test(
     ],
     data = glob(["testdata/**"]),
     embed = [":suppress"],
-    deps = ["//src/compute-plane-services/request-trace-uploader/transform/compat"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/jsonvalue"],
 )
