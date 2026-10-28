@@ -443,3 +443,19 @@ func TestAReceiptFromADryRunNeverDeletesTheSourceAfterARestart(t *testing.T) {
 		t.Fatal("source deleted on the strength of a dry-run receipt, want it kept")
 	}
 }
+
+func TestStartupDoesNotWarnWhenDefaultBatchLimitsExceedTheBackend(t *testing.T) {
+	for name, fake := range map[string]*backendtest.Fake{"one file per job": backendtest.NewFake(), "batching": batchingFake()} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			spool, _ := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+			uploader := newUploader(t, spool, fake, service.Options{}, nil)
+			if err := uploader.Pass(context.Background()); err != nil {
+				t.Fatalf("Pass() error = %v", err)
+			}
+			if strings.Contains(logs.String(), "batch setting lowered") {
+				t.Fatalf("logs = %s, want no warning for a default the operator did not set", logs)
+			}
+		})
+	}
+}

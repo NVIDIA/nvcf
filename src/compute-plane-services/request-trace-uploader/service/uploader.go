@@ -407,11 +407,15 @@ func (u *Uploader) open(ctx context.Context) error {
 		return fmt.Errorf("discard transports prepared under another policy: %w", err)
 	}
 	u.cleaner = cleanup.New(cleanupJournal{store: store, point: u.point}, spoolIndex{dir: u.cfg.SourceDir}, cleanup.Options{Counter: counterFor(u.metrics)})
-	u.batcher, err = batch.New(batch.DefaultConfig(), batch.Limits{
+	limits := batch.Limits{
 		Batching: u.caps.BatchFiles() > 1,
 		MaxBytes: u.caps.MaxBatchBytes,
 		MaxFiles: u.caps.BatchFiles(),
-	}, batch.Options{Metrics: batchMetrics{u.metrics}})
+	}
+	// The batch settings are defaults no operator sets, so lowering them to
+	// the backend's limits is expected and not worth a warning.
+	batchConfig, _ := batch.Resolve(batch.DefaultConfig(), limits)
+	u.batcher, err = batch.New(batchConfig, limits, batch.Options{Metrics: batchMetrics{u.metrics}})
 	return err
 }
 
