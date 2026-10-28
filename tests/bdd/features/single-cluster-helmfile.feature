@@ -964,3 +964,405 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the HTTP response JSON field "choices.0.message.content.reasoning_format" should be absent
 
       And I successfully undeploy the function selected by NVCF CLI
+
+    # Beta decision routes, POST /v1/decisions and POST /v1/systemone, through
+    # the LLM gateway. Both routes are passthrough, so the sample backend's
+    # canned answers and header echo prove what reached it.
+    # SAMPLE_LLM_DECISIONS_IMAGE must be an image of the in-repo
+    # openai-compatible sample that serves both routes. One function declares
+    # two models: bdd-decision-both on both routes and bdd-decision-only on
+    # /v1/decisions alone. A model is enabled for a route only when its uris
+    # list that route. Depends on the earlier install and registration
+    # scenarios.
+    @llm-function-type @llm-decision-routes
+    Scenario: LLM gateway serves the decisions and systemone routes and keeps each model on its declared routes
+      Given environment variable "SAMPLE_LLM_DECISIONS_IMAGE" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully create function "bdd-llm-decision-routes" from image "${SAMPLE_LLM_DECISIONS_IMAGE}" with CLI options:
+        | option           | value                                                                                    |
+        | --function-type  | LLM                                                                                      |
+        | --inference-url  | /v1/chat/completions                                                                     |
+        | --inference-port | 8000                                                                                     |
+        | --health-uri     | /health                                                                                  |
+        | --health-port    | 8000                                                                                     |
+        | --health-timeout | PT30S                                                                                    |
+        | --llm-model      | name=bdd-decision-both,uris=/v1/decisions\|/v1/systemone,routingMethod=round_robin       |
+        | --llm-model      | name=bdd-decision-only,uris=/v1/decisions,routingMethod=round_robin                      |
+      And I export the function selected by NVCF CLI to environment variables "BDD_DECISION_FUNCTION_ID" and "BDD_DECISION_VERSION_ID"
+      And function "${BDD_DECISION_FUNCTION_ID}" version "${BDD_DECISION_VERSION_ID}" is deleted at scenario teardown
+      And function "${BDD_DECISION_FUNCTION_ID}" version "${BDD_DECISION_VERSION_ID}" is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-llm-decision-routes                                             |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
+
+      # The first gateway call proves the route is ready before the raw checks.
+      When I successfully invoke model "bdd-decision-both" at "/v1/decisions" with timeout "120" seconds:
+        """
+        {"input":"bdd-decision-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        """
+      Then the command output should contain "answers"
+
+      # Decisions: answers keep the question order, and the vendor headers
+      # reach the backend, which echoes them.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-decision-input","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]},{"type":"score","name":"quality","text":"How good is it?"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.0.type" should equal "predicate"
+      And the HTTP response JSON field "answers.0.probability" should equal "0.99"
+      And the HTTP response JSON field "answers.1.type" should equal "choice"
+      And the HTTP response JSON field "answers.1.choice" should equal "cat"
+      And the HTTP response JSON field "answers.2.type" should equal "score"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+      And the HTTP response header "x-mock-echo-typesafe-danger-zone-images" should equal "true"
+
+      # System One: answers are keyed by question name.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","state":{"text":"bdd-systemone-state"},"questions":{"seen":{"type":"noul","text":"Is it seen?"},"animal":{"type":"choice","choices":["cat","dog"]},"quality":{"type":"score"}}}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.seen.type" should equal "noul"
+      And the HTTP response JSON field "answers.seen.noul" should equal "0.99"
+      And the HTTP response JSON field "answers.animal.choice" should equal "cat"
+      And the HTTP response JSON field "answers.quality.type" should equal "score"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+      And the HTTP response header "x-mock-echo-typesafe-danger-zone-images" should equal "true"
+
+      # Route isolation: bdd-decision-only declares /v1/decisions alone, so
+      # the declared route works and /v1/systemone is a 404 in the System One
+      # error shape (error.code, error.message, error.request_id and a
+      # top-level request_id that match).
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-only","input":"bdd-decision-only","questions":[{"type":"predicate","text":"Is it declared?"}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.0.type" should equal "predicate"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-only","state":{"text":"bdd"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 404
+      And the HTTP response JSON field "error.code" should equal "not_found"
+      And the HTTP response body should contain "is not enabled for /v1/systemone"
+      And I export the HTTP response JSON field "error.request_id" to environment variable "BDD_SYSTEMONE_ERROR_REQUEST_ID"
+      And the HTTP response JSON field "request_id" should equal "${BDD_SYSTEMONE_ERROR_REQUEST_ID}"
+
+      # A model that is not declared at all fails the same way on /v1/decisions,
+      # in the OpenAI error shape.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/not-a-model","input":"bdd-unlisted","questions":[{"type":"predicate","text":"Is it listed?"}]}
+        """
+      Then the HTTP status should be 404
+      And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+
+      # Backend errors pass through unchanged: status, Retry-After and body.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-429","questions":[{"type":"predicate","text":"Is it limited?"}]}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "error.type" should equal "rate_limit_error"
+      And the HTTP response JSON field "error.message" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone?mock_error=429" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","state":{"text":"bdd-429"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 429
+      And the HTTP response header "Retry-After" should equal "7"
+      And the HTTP response JSON field "detail.0.msg" should equal "mock rate limit"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/decisions?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","input":"bdd-400","questions":[{"type":"predicate","text":"Is it valid?"}]}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+      And the HTTP response JSON field "error.message" should equal "mock validation error"
+
+      # The System One backend error is FastAPI style, not the gateway's
+      # System One error shape, so the body reached the client unchanged.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://llm.localhost:8080/v1/systemone?mock_error=400" with timeout 120 seconds and body:
+        """
+        {"model":"${BDD_DECISION_FUNCTION_ID}/bdd-decision-both","state":{"text":"bdd-400"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 400
+      And the HTTP response JSON field "detail.0.msg" should equal "mock validation error"
+      And the HTTP response JSON field "detail.0.type" should equal "value_error"
+      And the HTTP response body should not contain "request_id"
+
+    # The same routes through the Vanity Gateway, on the OpenAI host
+    # vanity-openai.localhost. Two functions from SAMPLE_LLM_DECISIONS_IMAGE:
+    # a default-type function that the gateway calls directly with function
+    # ID headers (usePexec false, the path is kept), and an LLM-type function
+    # that it reaches through the LLM gateway director (functionType LLM).
+    # Mappings: decisions under v2config.openai and typesafeSystemOne under
+    # v2config. bdd-decision-direct and bdd-decision-llm are in both sections;
+    # bdd-decision-decisions-only and bdd-decision-systemone-only are in one.
+    # The Vanity Gateway build must serve these sections before this runs.
+    # Depends on the earlier install and registration scenarios.
+    @llm-function-type @llm-decision-routes @vanity-decision-routes
+    Scenario: Vanity Gateway serves the decisions and systemone routes directly and through the LLM gateway
+      Given environment variable "SAMPLE_LLM_DECISIONS_IMAGE" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully create function "bdd-vanity-decision-direct" from image "${SAMPLE_LLM_DECISIONS_IMAGE}" with CLI options:
+        | option           | value         |
+        | --inference-url  | /v1/decisions |
+        | --inference-port | 8000          |
+        | --health-uri     | /health       |
+        | --health-port    | 8000          |
+        | --health-timeout | PT30S         |
+      And I export the function selected by NVCF CLI to environment variables "BDD_DECISION_DIRECT_FUNCTION_ID" and "BDD_DECISION_DIRECT_VERSION_ID"
+      And function "${BDD_DECISION_DIRECT_FUNCTION_ID}" version "${BDD_DECISION_DIRECT_VERSION_ID}" is deleted at scenario teardown
+      And function "${BDD_DECISION_DIRECT_FUNCTION_ID}" version "${BDD_DECISION_DIRECT_VERSION_ID}" is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-vanity-decision-routes                                          |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
+
+      # The first call proves the direct function answers before the gateway
+      # is involved.
+      When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
+        """
+        {"input":"bdd-decision-direct-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        """
+      Then the command output should contain "answers"
+
+      When I successfully create function "bdd-vanity-decision-llm" from image "${SAMPLE_LLM_DECISIONS_IMAGE}" with CLI options:
+        | option           | value                                                                              |
+        | --function-type  | LLM                                                                                |
+        | --inference-url  | /v1/chat/completions                                                               |
+        | --inference-port | 8000                                                                               |
+        | --health-uri     | /health                                                                            |
+        | --health-port    | 8000                                                                               |
+        | --health-timeout | PT30S                                                                              |
+        | --llm-model      | name=bdd-decision-llm,uris=/v1/decisions\|/v1/systemone,routingMethod=round_robin |
+      And I export the function selected by NVCF CLI to environment variables "BDD_DECISION_LLM_FUNCTION_ID" and "BDD_DECISION_LLM_VERSION_ID"
+      And function "${BDD_DECISION_LLM_FUNCTION_ID}" version "${BDD_DECISION_LLM_VERSION_ID}" is deleted at scenario teardown
+      And function "${BDD_DECISION_LLM_FUNCTION_ID}" version "${BDD_DECISION_LLM_VERSION_ID}" is undeployed at scenario teardown
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value           |
+        | --gpu           | H100            |
+        | --instance-type | NCP.GPU.H100_1x |
+        | --backend       | ncp-local       |
+        | --regions       | us-west-1       |
+        | --min-instances | 1               |
+        | --max-instances | 1               |
+        | --timeout       | 900             |
+
+      # The LLM gateway needs a route to the new function before the first
+      # request through the Vanity Gateway.
+      When I successfully invoke model "bdd-decision-llm" at "/v1/decisions" with timeout "120" seconds:
+        """
+        {"input":"bdd-decision-llm-ready","questions":[{"type":"predicate","text":"Is it ready?"}]}
+        """
+      Then the command output should contain "answers"
+
+      When I set yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" key "addons.vanityGateway.mappingConfig.v2config.openai" to:
+        """
+        host: vanity-openai.localhost:8080
+        decisions:
+          bdd_decision_direct:
+            modelName: bdd-decision-direct
+            functionID: ${BDD_DECISION_DIRECT_FUNCTION_ID}
+            functionVersionID: ${BDD_DECISION_DIRECT_VERSION_ID}
+            usePexec: false
+          bdd_decision_llm:
+            modelName: bdd-decision-llm
+            functionID: ${BDD_DECISION_LLM_FUNCTION_ID}
+            functionType: LLM
+          bdd_decision_decisions_only:
+            modelName: bdd-decision-decisions-only
+            functionID: ${BDD_DECISION_DIRECT_FUNCTION_ID}
+            functionVersionID: ${BDD_DECISION_DIRECT_VERSION_ID}
+            usePexec: false
+        """
+      And I set yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" key "addons.vanityGateway.mappingConfig.v2config.typesafeSystemOne" to:
+        """
+        bdd_decision_direct:
+          modelName: bdd-decision-direct
+          functionID: ${BDD_DECISION_DIRECT_FUNCTION_ID}
+          functionVersionID: ${BDD_DECISION_DIRECT_VERSION_ID}
+          usePexec: false
+        bdd_decision_llm:
+          modelName: bdd-decision-llm
+          functionID: ${BDD_DECISION_LLM_FUNCTION_ID}
+          functionType: LLM
+        bdd_decision_systemone_only:
+          modelName: bdd-decision-systemone-only
+          functionID: ${BDD_DECISION_DIRECT_FUNCTION_ID}
+          functionVersionID: ${BDD_DECISION_DIRECT_VERSION_ID}
+          usePexec: false
+        """
+      And I set yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" key "ingress.gatewayApi.routes.vanityGateway.hostnames" to:
+        """
+        - vanity.localhost
+        - vanity-openai.localhost
+        """
+      When I successfully run command "k3d kubeconfig merge ncp-local --output ${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml --overwrite --kubeconfig-switch-context=false"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=ingress KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=vanity-gateway KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "kubectl --context k3d-ncp-local rollout restart deployment/vanity-gateway --namespace nvcf"
+      Then deployment "vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should complete rollout within "5m"
+      And Kubernetes resource "httproute/vanity-gateway" in namespace "envoy-gateway-system" using context "k3d-ncp-local" should contain:
+        """
+        spec:
+          hostnames:
+            - vanity.localhost
+            - vanity-openai.localhost
+        """
+      And these Gateway API routes should be accepted and resolved using context "k3d-ncp-local" within "2m":
+        | kind      | name           | namespace            | parent    |
+        | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
+
+      # Direct models: the gateway keeps the path and selects the function with
+      # function ID headers, so each route reaches the function as called.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","input":"bdd-vanity-direct","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.0.type" should equal "predicate"
+      And the HTTP response JSON field "answers.1.choice" should equal "cat"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-direct","state":{"text":"bdd-vanity-direct"},"questions":{"seen":{"type":"noul"},"animal":{"type":"choice","choices":["cat","dog"]}}}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.seen.noul" should equal "0.99"
+      And the HTTP response JSON field "answers.animal.choice" should equal "cat"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+
+      # LLM models: the gateway sends the request through the LLM gateway.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","input":"bdd-vanity-llm","questions":[{"type":"predicate","name":"red","text":"Is it red?"},{"type":"choice","name":"animal","text":"Which animal?","choices":["cat","dog"]}]}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.0.type" should equal "predicate"
+      And the HTTP response JSON field "answers.1.choice" should equal "cat"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      And the HTTP request header "TypeSafe-Danger-Zone-Images" is "true"
+      And the HTTP request header "X-Vendor-Test" is "bdd-vendor-value"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-llm","state":{"text":"bdd-vanity-llm"},"questions":{"seen":{"type":"noul"},"animal":{"type":"choice","choices":["cat","dog"]}}}
+        """
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "answers.seen.noul" should equal "0.99"
+      And the HTTP response JSON field "answers.animal.choice" should equal "cat"
+      And the HTTP response JSON field "echo.typesafe-danger-zone-images" should equal "true"
+      And the HTTP response JSON field "echo.x-vendor-test" should equal "bdd-vendor-value"
+
+      # A model listed only in the other section is a 404 in the native error
+      # shape of the route that was called, and never reaches a function.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/systemone" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-decisions-only","state":{"text":"bdd"},"questions":{"seen":{"type":"noul"}}}
+        """
+      Then the HTTP status should be 404
+      And the HTTP response JSON field "error.code" should equal "not_found"
+      And I export the HTTP response JSON field "error.request_id" to environment variable "BDD_VANITY_SYSTEMONE_ERROR_REQUEST_ID"
+      And the HTTP response JSON field "request_id" should equal "${BDD_VANITY_SYSTEMONE_ERROR_REQUEST_ID}"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      And the HTTP request header "Content-Type" is "application/json"
+      When I send a "POST" request to "http://vanity-openai.localhost:8080/v1/decisions" with timeout 120 seconds and body:
+        """
+        {"model":"bdd-decision-systemone-only","input":"bdd","questions":[{"type":"predicate","text":"Is it listed?"}]}
+        """
+      Then the HTTP status should be 404
+      And the HTTP response JSON field "error.type" should equal "invalid_request_error"
+
+      # Model discovery lists each decision model with the routes it serves.
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      When I send a "GET" request to "http://vanity-openai.localhost:8080/v1/models"
+      Then the HTTP status should be 200
+      And the HTTP response body should contain "bdd-decision-direct"
+      And the HTTP response body should contain "bdd-decision-decisions-only"
+      And the HTTP response body should contain "bdd-decision-systemone-only"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      When I send a "GET" request to "http://vanity-openai.localhost:8080/v1/models/bdd-decision-direct"
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "supported_endpoints.0" should equal "/v1/decisions"
+      And the HTTP response JSON field "supported_endpoints.1" should equal "/v1/systemone"
+
+      Given the HTTP request header "Authorization" is the NVCF CLI function API key with prefix "Bearer "
+      When I send a "GET" request to "http://vanity-openai.localhost:8080/v1/models/bdd-decision-decisions-only"
+      Then the HTTP status should be 200
+      And the HTTP response JSON field "supported_endpoints.0" should equal "/v1/decisions"
+      And the HTTP response body should not contain "/v1/systemone"
