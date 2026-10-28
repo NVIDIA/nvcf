@@ -80,3 +80,16 @@ func TestANewBackendNeedsNoConfigChange(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 }
+
+// A setting that holds something else by mistake, such as a credential, must
+// not reach the logs through this error.
+func TestNewDoesNotEchoAnUnregisteredName(t *testing.T) {
+	const marker = "value-marker-41c"
+	_, err := New(config.Config{Backend: marker})
+	if err == nil {
+		t.Fatal("New() error = nil, want not-compiled-in error")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("New() error = %v, want the configured value left out", err)
+	}
+}
