@@ -5,10 +5,9 @@
 //
 // A rule names a header group, the values that match, and an action. Only
 // records that carry a request payload are evaluated, because only those
-// carry request headers and bodies. A header value is looked up and
-// normalized exactly as the earlier Python uploader did, and stripPayload
-// writes that uploader's stub byte for byte, so suppressed rows do not change
-// shape for their consumers.
+// carry request headers and bodies. stripPayload writes the stub the earlier
+// uploader wrote, with the same keys in the same order, so suppressed rows
+// keep their shape for their consumers.
 package suppress
 
 import (
@@ -258,7 +257,8 @@ func CarriesPayload(event *compat.Value) bool {
 	if event == nil || event.Kind() != compat.Object || !event.Has("event_type") {
 		return false
 	}
-	return compat.PyStr(event.Get("event_type")) == "request_payload"
+	eventType, ok := event.Get("event_type").String()
+	return ok && eventType == "request_payload"
 }
 
 // HeaderSets returns the header objects of an event in lookup order: the
@@ -280,9 +280,10 @@ func HeaderSets(event *compat.Value) []*compat.Value {
 }
 
 // ResolveHeader returns the first non-blank value for names across sets. In
-// each set, each name takes the first key that lower-cases to it; a list
-// value gives its first truthy item; the value is Python's str() of it,
-// stripped.
+// each set, each name takes the first key that equals it ignoring ASCII
+// case. A header value is a string trimmed of white space or a number as it
+// was written; a list gives its first item that is a value. Booleans, null
+// and objects are not values.
 func ResolveHeader(sets []*compat.Value, names ...string) string {
 	for _, headers := range sets {
 		for _, name := range names {
@@ -291,15 +292,14 @@ func ResolveHeader(sets []*compat.Value, names ...string) string {
 				continue
 			}
 			if value.Kind() == compat.Array {
-				value = firstTruthy(value.Items())
-				if value == nil {
-					continue
+				for _, item := range value.Items() {
+					if text := headerText(item); text != "" {
+						return text
+					}
 				}
-			}
-			if !compat.Truthy(value) {
 				continue
 			}
-			if text := compat.PyStrip(compat.PyStr(value)); text != "" {
+			if text := headerText(value); text != "" {
 				return text
 			}
 		}
@@ -307,54 +307,53 @@ func ResolveHeader(sets []*compat.Value, names ...string) string {
 	return ""
 }
 
+func headerText(value *compat.Value) string {
+	switch value.Kind() {
+	case compat.String:
+		text, _ := value.String()
+		return strings.TrimSpace(text)
+	case compat.Int, compat.Float:
+		return compat.Text(value)
+	}
+	return ""
+}
+
 func firstKey(headers *compat.Value, name string) *compat.Value {
 	for _, m := range headers.Members() {
-		if lowerEquals(m.Key, name) {
+		if asciiEqualFold(m.Key, name) {
 			return m.Value
 		}
 	}
 	return nil
 }
 
-func firstTruthy(items []*compat.Value) *compat.Value {
-	for _, item := range items {
-		if compat.Truthy(item) {
-			return item
-		}
+// asciiEqualFold reports whether key equals the lower-case name when ASCII
+// capitals are lower-cased. Header names are ASCII, so no other character
+// folds.
+func asciiEqualFold(key, name string) bool {
+	if len(key) != len(name) {
+		return false
 	}
-	return nil
-}
-
-// lowerEquals reports whether Python's key.lower() equals the ASCII name.
-// Only ASCII capitals and the Kelvin sign lower-case to ASCII letters, so
-// any other non-ASCII rune cannot match.
-func lowerEquals(key, name string) bool {
-	i := 0
-	for _, r := range key {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			r += 'a' - 'A'
-		case r == '\u212a':
-			r = 'k'
-		case r >= 0x80:
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != name[i] {
 			return false
 		}
-		if i >= len(name) || name[i] != byte(r) {
-			return false
-		}
-		i++
 	}
-	return i == len(name)
+	return true
 }
 
 // NormalizeID strips white space and, when both are present, the "nca-"
 // prefix and "-nca" suffix, so "nca-abc-nca" and "abc" match.
 func NormalizeID(value string) string {
-	value = compat.PyStrip(value)
+	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "nca-") || !strings.HasSuffix(value, "-nca") {
 		return value
 	}
-	// The affixes can overlap, as in "nca-nca"; Python's slice is then empty.
+	// The affixes can overlap, as in "nca-nca"; that id is empty.
 	if len(value) < len("nca--nca") {
 		return ""
 	}

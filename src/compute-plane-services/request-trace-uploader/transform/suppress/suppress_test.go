@@ -52,6 +52,24 @@ func mustEngine(t *testing.T, cfg Config) *Engine {
 	return engine
 }
 
+// plainValueChanges lists the reference cases, by request id, where reading
+// header values as plain values resolves a different id than the earlier
+// Python uploader did: a boolean is no longer read as "True", and a zero is
+// a value instead of falling through to the next header.
+var plainValueChanges = map[string]string{
+	`"request_id":"r22"`: "",
+	`"request_id":"r23"`: "0",
+}
+
+func plainValueChange(line string) (string, bool) {
+	for key, id := range plainValueChanges {
+		if strings.Contains(line, key) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // TestStubMatchesPythonUploader checks that the stub has the earlier Python
 // uploader's keys, key order and values. Its bytes are plain JSON, so
 // formatting such as non-ASCII escapes may differ.
@@ -63,6 +81,12 @@ func TestStubMatchesPythonUploader(t *testing.T) {
 			before := string(compat.Encode(record))
 
 			got, outcome := engine.Apply(record)
+			if _, changed := plainValueChange(tc.In); changed {
+				if outcome.Action != "" || got != record {
+					t.Fatalf("outcome = %+v, want the record passed through", outcome)
+				}
+				return
+			}
 			if tc.Out == nil {
 				if outcome.Action != "" || got != record {
 					t.Fatalf("outcome = %+v, want the record passed through", outcome)
@@ -89,8 +113,12 @@ func TestResolveIDMatchesPythonUploader(t *testing.T) {
 		if CarriesPayload(event) {
 			got = NormalizeID(ResolveHeader(HeaderSets(event), DefaultHeaders...))
 		}
-		if got != tc.NCAID {
-			t.Errorf("%s: id = %q, want %q", tc.In, got, tc.NCAID)
+		want := tc.NCAID
+		if id, changed := plainValueChange(tc.In); changed {
+			want = id
+		}
+		if got != want {
+			t.Errorf("%s: id = %q, want %q", tc.In, got, want)
 		}
 	}
 }
