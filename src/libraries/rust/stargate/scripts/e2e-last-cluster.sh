@@ -454,6 +454,80 @@ expect_decision() {
         fail "${description}: expected ${expected_status}, got ${status}: $(head -c 300 "${run_dir}/decision-body.txt")"
 }
 
+sha256_stdin() {
+    if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
+}
+
+# The body the gateway should forward. It decodes the top-level JSON object,
+# sets model to the routed model, and re-marshals with sorted top-level keys and
+# compact separators. Member values are kept as raw JSON, so nested key order is
+# unchanged. jq builds the same bytes for this ASCII body, so the comparison is
+# on raw bytes, not on a canonical form.
+expected_forwarded_body() {
+    jq -c --arg model "${model}" '.model = $model | to_entries | sort_by(.key) | from_entries' "$1" |
+        tr -d '\n'
+}
+
+expected_forwarded_digest() {
+    expected_forwarded_body "$1" | sha256_stdin
+}
+
+# The canned error body mock-dynamo serves for ?mock_error=<status>.
+expected_decision_error() {
+    local route="$1" status="$2"
+    case "${route}:${status}" in
+        decisions:429) echo '{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","param":null,"code":"rate_limit_exceeded"}}' ;;
+        decisions:400) echo '{"error":{"message":"Invalid question","type":"invalid_request_error","param":"questions","code":"invalid_question"}}' ;;
+        systemone:429) echo '{"detail":"Rate limit exceeded"}' ;;
+        systemone:400) echo '{"detail":[{"loc":["body","questions"],"msg":"Invalid question","type":"value_error"}]}' ;;
+        *) fail "no expected body for ${route}:${status}" ;;
+    esac
+}
+
+# Fails unless the last response body equals the expected JSON, key order aside.
+expect_decision_json() {
+    local description="$1" expected="$2"
+    diff <(jq -S . <<<"${expected}") <(jq -S . "${run_dir}/decision-body.txt") >"${run_dir}/diff.txt" ||
+        fail "${description} differs from the canned response: $(head -c 600 "${run_dir}/diff.txt")"
+}
+
+# Checks the whole 200 response of the last request, which sent body_file. The
+# gateway-assigned request id and input token estimate vary, so they are
+# checked for shape and consistency and removed before the exact comparison.
+expect_decision_success() {
+    local route="$1" body_file="$2" answers usage_extra expected_digest body_bytes
+    if [[ "${route}" == decisions ]]; then
+        answers='[{"type":"predicate","name":"cat","probability":0.99}]'
+        usage_extra='"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0},'
+    else
+        answers='{"cat":{"type":"noul","noul":0.99}}'
+        usage_extra=''
+    fi
+    expected_digest=$(expected_forwarded_digest "${body_file}")
+    body_bytes=$(expected_forwarded_body "${body_file}" | wc -c | tr -d ' ')
+    jq -e '(.echo["x-request-id"] | length) > 0
+        and (.echo["x-input-tokens"] | tonumber) == .usage.input_tokens
+        and (.usage.total_tokens == null
+            or .usage.total_tokens == (.usage.input_tokens + .usage.output_tokens))' \
+        "${run_dir}/decision-body.txt" >/dev/null ||
+        fail "${route}: request id or token usage inconsistent: $(head -c 400 "${run_dir}/decision-body.txt")"
+    diff <(jq -S -n --arg model "${model}" --arg digest "${expected_digest}" --argjson len "${body_bytes}" \
+            --argjson answers "${answers}" '{
+                model: $model,
+                answers: $answers,
+                usage: {'"${usage_extra}"'output_tokens: 1},
+                echo: {
+                    "typesafe-danger-zone-images": "true",
+                    "x-model": $model,
+                    "x-vendor-test": "v",
+                    body_len: $len,
+                    body_sha256: $digest
+                }}') \
+        <(jq -S 'del(.echo["x-request-id"], .echo["x-input-tokens"], .usage.input_tokens, .usage.total_tokens)' \
+            "${run_dir}/decision-body.txt") >"${run_dir}/diff.txt" ||
+        fail "${route}: 200 body differs from the canned response or the forwarded body changed: $(head -c 600 "${run_dir}/diff.txt")"
+}
+
 run_decision_case() {
     run_dir="${work_dir}/decisions"
     mkdir -p "${run_dir}"
@@ -471,35 +545,23 @@ run_decision_case() {
         before=$(mock_endpoint_total "${route}")
         status=$(decision_request "${route}" "" "${small}")
         expect_decision "${route} 200" 200 "${status}"
-        jq -e --arg model "${model}" '.model == $model
-            and .echo["typesafe-danger-zone-images"] == "true"
-            and .echo["x-vendor-test"] == "v"
-            and (.echo["x-input-tokens"] | tonumber) > 0
-            and (.answers | length) > 0' "${run_dir}/decision-body.txt" >/dev/null ||
-            fail "${route} 200 body or echoed headers wrong: $(head -c 400 "${run_dir}/decision-body.txt")"
+        expect_decision_success "${route}" "${small}"
         grep -qi '^x-mock-echo-typesafe-danger-zone-images: true' "${run_dir}/decision-headers.txt" ||
             fail "${route}: TypeSafe-Danger-Zone-Images did not reach the backend"
 
         status=$(decision_request "${route}" "" "${large}")
         expect_decision "${route} 13 MB body" 200 "${status}"
-        jq -e '.echo.body_len > 13000000 and .echo["typesafe-danger-zone-images"] == "true"' \
-            "${run_dir}/decision-body.txt" >/dev/null ||
-            fail "${route}: 13 MB body did not arrive intact: $(head -c 300 "${run_dir}/decision-body.txt")"
+        expect_decision_success "${route}" "${large}"
 
         status=$(decision_request "${route}" "?mock_error=429" "${small}")
         expect_decision "${route} backend 429" 429 "${status}"
-        grep -qi '^retry-after: 7' "${run_dir}/decision-headers.txt" ||
-            fail "${route}: 429 lost its Retry-After header"
+        tr -d '\r' <"${run_dir}/decision-headers.txt" | grep -qix 'retry-after: 7' ||
+            fail "${route}: 429 Retry-After was not 7: $(grep -i '^retry-after' "${run_dir}/decision-headers.txt")"
+        expect_decision_json "${route} 429 body" "$(expected_decision_error "${route}" 429)"
 
         status=$(decision_request "${route}" "?mock_error=400" "${small}")
         expect_decision "${route} backend 400" 400 "${status}"
-        if [[ "${route}" == decisions ]]; then
-            jq -e '.error.type == "invalid_request_error"' "${run_dir}/decision-body.txt" >/dev/null ||
-                fail "decisions 400 body was changed: $(head -c 300 "${run_dir}/decision-body.txt")"
-        else
-            jq -e '.detail | type == "array"' "${run_dir}/decision-body.txt" >/dev/null ||
-                fail "systemone 400 body was changed: $(head -c 300 "${run_dir}/decision-body.txt")"
-        fi
+        expect_decision_json "${route} 400 body" "$(expected_decision_error "${route}" 400)"
 
         # Four requests, one backend attempt each: the 429 was not retried.
         after=$(mock_endpoint_total "${route}")
