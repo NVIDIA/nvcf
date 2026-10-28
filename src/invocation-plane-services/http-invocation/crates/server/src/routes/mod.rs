@@ -16,6 +16,7 @@
 mod app_error;
 mod attach;
 mod body_stream;
+mod error_source;
 mod get_exec;
 mod get_pexec;
 mod health;
@@ -29,6 +30,8 @@ mod tlb;
 
 pub use attach::get_attach::request_attach;
 pub use attach::post_attach::response_attach;
+pub(crate) use error_source::error_source_middleware;
+pub use error_source::WorkerResponse;
 pub use get_exec::exec_status;
 pub use get_pexec::pexec_status_route;
 pub use health::get_health;
