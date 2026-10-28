@@ -565,8 +565,12 @@ func (u *Uploader) submitFailed(b batch.Batch, err error) error {
 	case retry.ActionRetain:
 		// The create may have landed and the backend cannot take it twice,
 		// so the batch waits for an operator and is never sent again
-		// automatically, also after a restart.
+		// automatically, also after a restart. It is recorded as ambiguous
+		// first, so a restart never treats it as only refused.
 		slog.Warn("submit retained for an operator", "batch", shortID(b.ID))
+		if err := u.store.MarkBatchAmbiguous(b.ID, class); err != nil {
+			return err
+		}
 		return u.store.RetryBatch(b.ID, retainedUntil, reasonRetained)
 	}
 	next := now.Add(u.retryDelay(stored.Attempts))

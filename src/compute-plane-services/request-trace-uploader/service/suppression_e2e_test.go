@@ -249,3 +249,36 @@ func TestARefusedBatchIsPreparedAgainWhenThePolicyChangesBeforeItsRetry(t *testi
 		t.Fatalf("exported = %s, want the record suppressed under the policy now configured", joined)
 	}
 }
+
+// lostResponseBackend lands each job and then loses the response, so the
+// uploader cannot tell whether the submit committed.
+type lostResponseBackend struct{ dirBackend }
+
+func (b lostResponseBackend) Submit(ctx context.Context, request backend.SubmitRequest) (string, error) {
+	if _, err := b.dirBackend.Submit(ctx, request); err != nil {
+		return "", err
+	}
+	return "", &backend.Fault{Class: backend.ClassAmbiguous, Scope: backend.ScopeBackend, Reason: backend.ReasonTimeout, Err: errors.New("response lost")}
+}
+
+func TestARetainedSubmitIsNeitherPreparedAgainNorResentWhenThePolicyChanges(t *testing.T) {
+	landing := t.TempDir()
+	spool, closed := spoolWith(t, []string{suppressedLine})
+	first := newUploader(t, spool, lostResponseBackend{dirBackend{root: landing}}, service.Options{Faults: retainFaults()}, nil)
+	_ = first.Pass(context.Background())
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newUploader(t, spool, dirBackend{root: landing}, service.Options{Faults: retainFaults()}, map[string]string{config.EnvSuppressNCAIDs: "nca-acme-nca"})
+	for range 3 {
+		_ = restarted.Pass(context.Background())
+	}
+	jobs, err := filepath.Glob(filepath.Join(landing, "*", "landed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || gone(closed[0]) {
+		t.Fatalf("landed jobs = %d, source deleted = %t; want the retained submit left for an operator", len(jobs), gone(closed[0]))
+	}
+}
