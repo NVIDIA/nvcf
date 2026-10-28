@@ -39,6 +39,8 @@ func TestKeyLayout(t *testing.T) {
 		{"export", exportKey(ek), key{"CS#prod", "EX#c1#llm#router"}},
 		{"pool", poolKey(pk), key{"CS#prod", "PL#c1#1b4e28ba"}},
 		{"pool name", poolNameKey("prod", "c1", "pool-a"), key{"CS#prod", "PN#c1#pool-a"}},
+		{"pool agent", poolAgentKey(store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "1b4e28ba", Role: store.FrontendRolePylon, AgentID: "pylon-0"}),
+			key{"CS#prod", "PA#c1#1b4e28ba#PYLON#pylon-0"}},
 		{"endpoint partition marker", endpointMarkKey("prod", "c1"), key{"CS#prod", "EPX#c1"}},
 		{"endpoint set", endpointSetKey(ek), key{"EP#prod#c1", "llm#router"}},
 	}
@@ -48,6 +50,8 @@ func TestKeyLayout(t *testing.T) {
 	assert.Equal(t, "EX#c1#", exportSKPrefix("c1"))
 	assert.Equal(t, "PL#c1#", poolSKPrefix("c1"))
 	assert.Equal(t, "PN#c1#", poolNameSKPrefix("c1"))
+	assert.Equal(t, "PA#c1#", poolAgentSKPrefix("c1"))
+	assert.Equal(t, "PA#c1#1b4e28ba#", poolAgentPoolSKPrefix(pk))
 }
 
 func TestKeyEscaping(t *testing.T) {
@@ -77,6 +81,11 @@ func TestKeyEscaping(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, pk, gotPool)
 
+	ak := store.PoolAgentKey{ClusterSet: odd, Cluster: odd, PoolID: odd, Role: store.FrontendRole(odd), AgentID: odd}
+	gotAgent, ok := parsePoolAgentSK(odd, poolAgentKey(ak).sk)
+	assert.True(t, ok)
+	assert.Equal(t, ak, gotAgent)
+
 	ck := store.ClusterKey{ClusterSet: odd, Cluster: odd}
 	gotCluster, ok := parseClusterSK(odd, clusterKey(ck).sk)
 	assert.True(t, ok)
@@ -99,6 +108,10 @@ func TestKeyPrefixesDoNotCollide(t *testing.T) {
 	assert.False(t, strings.HasPrefix(p10.sk, poolSKPrefix("c1")))
 	n10 := poolNameKey("cs", "c10", "n")
 	assert.False(t, strings.HasPrefix(n10.sk, poolNameSKPrefix("c1")))
+	a10 := poolAgentKey(store.PoolAgentKey{ClusterSet: "cs", Cluster: "c10", PoolID: "p", Role: store.FrontendRoleOpenAI})
+	assert.False(t, strings.HasPrefix(a10.sk, poolAgentSKPrefix("c1")))
+	p10a := poolAgentKey(store.PoolAgentKey{ClusterSet: "cs", Cluster: "c1", PoolID: "p10", Role: store.FrontendRoleOpenAI})
+	assert.False(t, strings.HasPrefix(p10a.sk, poolAgentPoolSKPrefix(store.PoolKey{ClusterSet: "cs", Cluster: "c1", PoolID: "p1"})))
 	assert.NotEqual(t, endpointPK("cs", "c1#x"), endpointPK("cs#c1", "x"))
 }
 
@@ -108,6 +121,8 @@ func TestParseRejectsOtherShapes(t *testing.T) {
 	_, ok = parseExportSK("cs", "EX#c1#ns")
 	assert.False(t, ok)
 	_, ok = parsePoolSK("cs", "PL#c1")
+	assert.False(t, ok)
+	_, ok = parsePoolAgentSK("cs", "PA#c1#p#PYLON")
 	assert.False(t, ok)
 	_, ok = parseEndpointSetSK("cs", "c1", "ns")
 	assert.False(t, ok)

@@ -200,8 +200,21 @@ func TestWatchLaggedResync(t *testing.T) {
 	w := startWatch(t, h, ClusterFilter{}, "")
 	_, _ = w.snapshot(t)
 
-	// The watcher does not read while six changes are published.
-	for i := range 6 {
+	// The watcher does not read while six changes are published. It takes
+	// the first change and blocks sending it; the next five overflow its
+	// queue. Waiting for the first take keeps the watcher from waking up,
+	// and snapshotting, while the changes are still being published.
+	f.view.ApplyCluster(clusterRec("c0", "eu-west-1", t0))
+	require.Eventually(t, func() bool {
+		set := f.view.get(cs)
+		set.mu.Lock()
+		defer set.mu.Unlock()
+		for sub := range set.subs {
+			return len(sub.queue) == 0
+		}
+		return false
+	}, 5*time.Second, time.Millisecond)
+	for i := 1; i < 6; i++ {
 		f.view.ApplyCluster(clusterRec(fmt.Sprintf("c%d", i), "eu-west-1", t0))
 	}
 	for {

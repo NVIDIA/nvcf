@@ -93,6 +93,18 @@ var addressTypes = map[store.AddressType]gdsv1.AddressType{
 var frontendRoles = map[store.FrontendRole]gdsv1.FrontendRole{
 	store.FrontendRoleOpenAI:  gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI,
 	store.FrontendRoleKVRelay: gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY,
+	store.FrontendRolePylon:   gdsv1.FrontendRole_FRONTEND_ROLE_PYLON,
+}
+
+var agentSources = map[registry.AgentSource]gdsv1.AgentSource{
+	registry.AgentSourceLabel: gdsv1.AgentSource_AGENT_SOURCE_LABEL,
+	registry.AgentSourceAPI:   gdsv1.AgentSource_AGENT_SOURCE_API,
+	registry.AgentSourceBoth:  gdsv1.AgentSource_AGENT_SOURCE_BOTH,
+}
+
+var dialModes = map[registry.DialMode]gdsv1.DialMode{
+	registry.DialModeInbound:  gdsv1.DialMode_DIAL_MODE_INBOUND,
+	registry.DialModeOutbound: gdsv1.DialMode_DIAL_MODE_OUTBOUND,
 }
 
 var desiredStates = map[store.DesiredState]gdsv1.PoolState{
@@ -129,6 +141,8 @@ var (
 	trafficPoliciesRev   = reverse(trafficPolicies)
 	addressTypesRev      = reverse(addressTypes)
 	frontendRolesRev     = reverse(frontendRoles)
+	agentSourcesRev      = reverse(agentSources)
+	dialModesRev         = reverse(dialModes)
 	desiredStatesRev     = reverse(desiredStates)
 	poolStatesRev        = reverse(poolStates)
 )
@@ -182,6 +196,50 @@ func FrontendRoleToProto(r store.FrontendRole) gdsv1.FrontendRole { return front
 
 // FrontendRoleFromProto maps a proto frontend role.
 func FrontendRoleFromProto(r gdsv1.FrontendRole) store.FrontendRole { return frontendRolesRev[r] }
+
+// IsIngressRole reports whether agents of the role take requests: OPENAI
+// by inbound dispatch, PYLON over its reverse tunnel.
+func IsIngressRole(r store.FrontendRole) bool {
+	return r == store.FrontendRoleOpenAI || r == store.FrontendRolePylon
+}
+
+// DialModeOf returns how routers and an agent of the role connect: routers
+// dial the OPENAI frontend (INBOUND); PYLON and KV_RELAY dial the routers
+// (OUTBOUND). Unknown roles yield the empty value.
+func DialModeOf(r store.FrontendRole) registry.DialMode {
+	switch r {
+	case store.FrontendRoleOpenAI:
+		return registry.DialModeInbound
+	case store.FrontendRoleKVRelay, store.FrontendRolePylon:
+		return registry.DialModeOutbound
+	}
+	return ""
+}
+
+// AgentSourceToProto maps an agent source.
+func AgentSourceToProto(s registry.AgentSource) gdsv1.AgentSource { return agentSources[s] }
+
+// AgentSourceFromProto maps a proto agent source.
+func AgentSourceFromProto(s gdsv1.AgentSource) registry.AgentSource { return agentSourcesRev[s] }
+
+// DialModeToProto maps a dial mode.
+func DialModeToProto(m registry.DialMode) gdsv1.DialMode { return dialModes[m] }
+
+// DialModeFromProto maps a proto dial mode.
+func DialModeFromProto(m gdsv1.DialMode) registry.DialMode { return dialModesRev[m] }
+
+// PoolAgentRegistrationToProto converts an agent registration whose lease
+// evaluated to state.
+func PoolAgentRegistrationToProto(r store.PoolAgentRecord, state registry.LeaseState) *gdsv1.PoolAgentRegistration {
+	return &gdsv1.PoolAgentRegistration{
+		AgentId:      r.Key.AgentID,
+		Lease:        LeaseToProto(r.Lease, state),
+		Attributes:   maps.Clone(r.Attributes),
+		Generation:   r.Generation,
+		RegisteredAt: Timestamp(r.RegisteredAt),
+		UpdatedAt:    Timestamp(r.UpdatedAt),
+	}
+}
 
 // DesiredStateToProto maps a desired state; empty means ACTIVE.
 func DesiredStateToProto(s store.DesiredState) gdsv1.PoolState {

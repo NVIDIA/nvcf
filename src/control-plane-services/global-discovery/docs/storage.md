@@ -44,6 +44,7 @@ Server flags: `--store=dynamodb`, `--dynamodb-table` (default `gds`) and
 | ServiceExport | `CS#<clusterset>` | `EX#<cluster>#<namespace>#<name>` | `ServiceExportSpec` | `gen`, `updated_at` | no |
 | Pool | `CS#<clusterset>` | `PL#<cluster>#<pool_id>` | `Pool` | `gen`, `lease_epoch` (leased pools), `lease_renewed_at`, `owner_id`, `updated_at`, `expires_at` | yes |
 | Pool name reservation | `CS#<clusterset>` | `PN#<cluster>#<name>` | none | `pool_id` | no |
+| Pool agent registration | `CS#<clusterset>` | `PA#<cluster>#<pool_id>#<role>#<agent_id>` | `PoolAgentRegistration` | `gen`, `lease_epoch`, `lease_renewed_at`, `updated_at`, `expires_at`, `pool_name` | yes |
 | Endpoint partition marker | `CS#<clusterset>` | `EPX#<cluster>` | none | none | no |
 | EndpointSet | `EP#<clusterset>#<cluster>` | `<namespace>#<name>` | `ClusterEndpoints` (`endpoints` only) | `gen`, `updated_at` | no |
 
@@ -56,6 +57,17 @@ Notes:
 - The clusterset index is written once per gds-server process and
   clusterset, before the first record. `ListClusterSets` queries `pk = CSX`.
   The store never deletes it.
+- A pool agent registration item is one process instance's registration
+  of an agent role of a pool (`RegisterPoolAgent`), for example one per
+  Pylon pod. `<role>` is the store spelling of the role: `OPENAI`,
+  `KV_RELAY` or `PYLON`; `<agent_id>` is the process's id, escaped like
+  every key component. Each registration has its own lease, so the
+  instances of one role never fence each other. The body holds
+  `attributes`, `lease.ttl` and `registered_at`; `pool_name`, the join key
+  with labelled exports and pool records, is a top-level attribute. The
+  registrations of a pool share the prefix `PA#<cluster>#<pool_id>#`,
+  those of a cluster the prefix `PA#<cluster>#`. The server merges the
+  registrations of one role into the pool's `agents[]` entry.
 - The endpoint partition marker records that `EP#<clusterset>#<cluster>`
   exists, so that `LoadClusterSet` finds an endpoint set whose cluster has no
   registration, export or pool. A replica rewrites its marker at most every
@@ -78,13 +90,14 @@ Notes:
 | :---- | :---- | :---- |
 | `pk`, `sk` | S | Keys, see above |
 | `body` | B | Serialized protobuf record body |
-| `gen` | N | Record generation. Writer supplied for exports, endpoint sets and pools; incremented by the store on every cluster registration. Always present, also when 0 |
-| `lease_epoch` | N | Lease incarnation, minted by the store as `max(stored + 1, now in unix ms)`. Absent for a pool without a lease |
+| `gen` | N | Record generation. Writer supplied for exports, endpoint sets, pools and pool agents; incremented by the store on every cluster registration. Always present, also when 0 |
+| `lease_epoch` | N | Lease incarnation, minted by the store as `max(stored + 1, now in unix ms)`. Absent for a pool or pool agent without a lease |
 | `lease_renewed_at` | N | Last registration or heartbeat, Unix nanoseconds, server time |
 | `owner_id` | S | Pool writer identity |
 | `updated_at` | N | Record `UpdatedAt`, Unix nanoseconds, server time. Sort key of the `by_updated_at` index. Heartbeats do not change it |
 | `expires_at` | N | TTL attribute, Unix seconds: last write or heartbeat plus 7 days |
 | `pool_id` | S | Owner of a pool name reservation |
+| `pool_name` | S | Pool name of a pool agent registration |
 
 ## Writes
 
@@ -100,14 +113,20 @@ write and a lost race never overwrites newer data.
 | `DeleteEndpointSet` | `DeleteItem` | none | |
 | `PutPool` (register, update) | `GetItem` (consistent), `TransactWriteItems` | pool: `attribute_not_exists(pk)`, or `gen = :seen AND body = :seen AND lease_epoch = :seen` (plus `lease_renewed_at = :seen` when the lease is kept); reservation: free or held by this pool; old reservation (rename): delete when held by this pool | Pool changed: retry, `ErrStaleGeneration` when the stored generation is not lower; name held by a live pool: `ErrPoolNameTaken` |
 | `RenewPoolLease` | `UpdateItem`; with a patch that changes the body, `GetItem` first | `lease_epoch = :epoch`, plus `body = :seen` with a patch | As for clusters; a changed body is retried |
-| `DeletePool` | `GetItem` (consistent), `TransactWriteItems` | pool `gen = :seen AND body = :seen`; reservation free or held by this pool | Retry; a reservation held by another pool is left alone |
-| `DeleteCluster` | `Query` (consistent, keys only) of `CL#`, `EX#<cluster>#`, `PL#<cluster>#`, `PN#<cluster>#` and `EP#<clusterset>#<cluster>`, then `BatchWriteItem` | none | Chunks of 25; unprocessed items are retried with backoff |
+| `DeletePool` | `GetItem` (consistent), `TransactWriteItems`, then `Query` (consistent, keys only) of `PA#<cluster>#<pool_id>#` and `BatchWriteItem` | pool `gen = :seen AND body = :seen`; reservation free or held by this pool; agents: none | Retry; a reservation held by another pool is left alone. The agents are removed also when the pool item does not exist |
+| `PutPoolAgent` (register) | `GetItem` (consistent), `PutItem` | `attribute_not_exists(pk)`, or `gen = :seen AND lease_epoch = :seen` (plus `lease_renewed_at = :seen` when the lease is kept) | Retry from the returned item; `ErrStaleGeneration` when the stored generation is not lower |
+| `RenewPoolAgentLease` | `UpdateItem`; with attributes that change the body, `GetItem` first | `lease_epoch = :epoch`, plus `body = :seen` with attributes | As for clusters; a changed body is retried |
+| `DeletePoolAgent` | `DeleteItem` | none | |
+| `DeleteCluster` | `Query` (consistent, keys only) of `CL#`, `EX#<cluster>#`, `PL#<cluster>#`, `PN#<cluster>#`, `PA#<cluster>#` and `EP#<clusterset>#<cluster>`, then `BatchWriteItem` | none | Chunks of 25; unprocessed items are retried with backoff |
 
-`PutCluster` and `PutPool` derive fields from the stored item (the next
-epoch, `RegisteredAt`, the old name to release), so their condition also
-pins the generation (and, for pools, the body and lease) they read. That is
-stricter than the designed `lease_epoch < :new` and `gen < :gen` and implies
-them. A stale pool name reservation, whose pool no longer exists (for
+`PutCluster`, `PutPool` and `PutPoolAgent` derive fields from the stored
+item (the next epoch, `RegisteredAt`, the old name to release), so their
+condition also pins the generation (and, for pools and pool agents, the
+lease, and for pools the body) they read. That is stricter than the
+designed `lease_epoch < :new` and `gen < :gen` and implies them. A pool
+agent registration has no name reservation: agents join their pool by
+`(cluster, pool_name)` in the server's view, and the API checks an explicit
+`pool_id` against the view. A stale pool name reservation, whose pool no longer exists (for
 example after a TTL deletion) or now carries another name, is taken over
 inside the same transaction, with a condition check that the holder is
 still absent or unchanged.
@@ -276,9 +295,9 @@ records, then `--replica-updates '[{"Delete": {"RegionName": "us-west-2"}}]'`.
 evaluates leases from `lease_renewed_at` and the lease TTL at read time and
 never relies on DynamoDB TTL timing.
 
-- Cluster and pool items get `expires_at` = last registration, update or
-  heartbeat + 7 days (`Options.ExpiryAfter`; negative disables). A
-  heartbeat extends it.
+- Cluster, pool and pool agent items get `expires_at` = last
+  registration, update or heartbeat + 7 days (`Options.ExpiryAfter`;
+  negative disables). A heartbeat extends it.
 - Exports, endpoint sets, name reservations, markers and the clusterset
   index never expire. After a cluster item expires, its exports and endpoint
   sets remain until `DeregisterCluster` or server compaction removes them;
@@ -307,11 +326,12 @@ also costs one replicated write unit per KB in each other replica region:
 
 | Operation | Read units | Write units |
 | :---- | :---- | :---- |
-| Cluster or pool heartbeat (no patch) | 0 | 1 |
+| Cluster, pool or pool agent heartbeat (no patch) | 0 | 1 |
 | Cluster registration | 1 | 1 for the item, 2 for the index entry (`updated_at` changes) |
 | Export put | 0 | item KB rounded up, plus 2 for the index entry |
 | Endpoint set replace | 0 | item KB rounded up (about 10 to 20 KB per 100 endpoints), plus 2 for the index entry |
 | Pool register or update | 1 | twice the KB of each transaction item (pool, reservation, old reservation), plus the index entry |
+| Pool agent register | 1 | 1 for the item, 2 for the index entry |
 | `LoadClusterSet` | 0.5 per 4 KB read (eventually consistent) | 0 |
 
 The refresh dominates reads: every gds-server replica loads every
@@ -328,7 +348,7 @@ read units per second. Writes scale with heartbeats: 20 clusters at a
 | :---- | :---- | :---- |
 | Item size | 400 KB | An endpoint set holds at most 1000 endpoints; with many attributes per endpoint it can exceed 400 KB and is rejected with `ErrTooLarge` |
 | Item collection (one pk) with a local secondary index | 10 GB | Bounds one clusterset's metadata and one cluster's endpoint sets; far above expected sizes |
-| Throughput of one partition key with a local secondary index | about 1,000 write and 3,000 read units per second | Items of one pk stay on one partition and are not split for heat. Bounds the heartbeat rate of one clusterset (all clusters and leased pools) and the refresh rate of one partition |
+| Throughput of one partition key with a local secondary index | about 1,000 write and 3,000 read units per second | Items of one pk stay on one partition and are not split for heat. Bounds the heartbeat rate of one clusterset (all clusters, leased pools and pool agents) and the refresh rate of one partition |
 | Query page | 1 MB | `LoadClusterSet` paginates |
 | `BatchWriteItem` | 25 requests | `DeleteCluster` chunks |
 | `TransactWriteItems` | 100 items, 4 MB | `PutPool` uses at most 4 items |
@@ -340,7 +360,8 @@ or switch the refresh to the `by_updated_at` index or DynamoDB Streams.
 
 ## The writer generation contract
 
-- Exports, endpoint sets and pools carry a writer-supplied `generation`.
+- Exports, endpoint sets, pools and pool agents carry a writer-supplied
+  `generation`.
   The store accepts a put only when it is greater than the stored one and
   otherwise returns the stored value (`STALE_GENERATION` with
   `current_generation`).

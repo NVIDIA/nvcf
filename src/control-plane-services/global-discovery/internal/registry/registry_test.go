@@ -92,7 +92,7 @@ func TestNextGeneration(t *testing.T) {
 }
 
 func TestParseRole(t *testing.T) {
-	for _, v := range []string{"router", "pool-frontend", "kv-relay"} {
+	for _, v := range []string{"router", "pool-frontend", "kv-relay", "pylon"} {
 		r, ok := ParseRole(v)
 		assert.True(t, ok, v)
 		assert.Equal(t, Role(v), r)
@@ -104,15 +104,27 @@ func TestParseRole(t *testing.T) {
 	assert.False(t, RoleRouter.IsPoolRole())
 	assert.True(t, RolePoolFrontend.IsPoolRole())
 	assert.True(t, RoleKVRelay.IsPoolRole())
+	assert.True(t, RolePylon.IsPoolRole())
+}
+
+func TestAgentSourceOf(t *testing.T) {
+	assert.Equal(t, AgentSourceBoth, AgentSourceOf(true, true))
+	assert.Equal(t, AgentSourceLabel, AgentSourceOf(true, false))
+	assert.Equal(t, AgentSourceAPI, AgentSourceOf(false, true))
+	assert.Empty(t, AgentSourceOf(false, false))
 }
 
 func TestDerivePoolState(t *testing.T) {
 	// labelled: a pool derived from a labelled export, cluster healthy.
-	labelled := PoolStateInput{LabelledExport: true, ClusterLeaseActive: true, ReadyEndpoints: 2, Started: true}
+	labelled := PoolStateInput{LabelledExport: true, ClusterLeaseActive: true, ReadyIngressEndpoints: 2, Started: true}
 	// apiOnly: an API registration without services, heartbeating.
 	apiOnly := PoolStateInput{Overlay: true, PoolLeaseActive: true, Started: true}
 	// joined: an API registration with services[], no labelled export.
-	joined := PoolStateInput{Overlay: true, OverlayServices: true, ClusterLeaseActive: true, ReadyEndpoints: 1, Started: true}
+	joined := PoolStateInput{Overlay: true, OverlayServices: true, ClusterLeaseActive: true, ReadyIngressEndpoints: 1, Started: true}
+	// pylon: an ingress agent registration (PYLON) only, heartbeating.
+	pylon := PoolStateInput{Agents: true, AgentLeaseActive: true, IngressAgentLeaseActive: true}
+	// relay: a KV_RELAY agent registration only, heartbeating.
+	relay := PoolStateInput{Agents: true, AgentLeaseActive: true}
 
 	with := func(in PoolStateInput, f func(*PoolStateInput)) PoolStateInput {
 		f(&in)
@@ -125,23 +137,23 @@ func TestDerivePoolState(t *testing.T) {
 		want PoolState
 	}{
 		// GONE.
-		{"nothing left", PoolStateInput{ClusterLeaseActive: true, ReadyEndpoints: 1}, PoolStateGone},
+		{"nothing left", PoolStateInput{ClusterLeaseActive: true, ReadyIngressEndpoints: 1}, PoolStateGone},
 		{"deregistered API pool", with(apiOnly, func(in *PoolStateInput) { in.Deregistered = true }), PoolStateGone},
 		{"deregistered overlay on a labelled pool", with(labelled, func(in *PoolStateInput) { in.Overlay, in.Deregistered = true, true }), PoolStateGone},
 
 		// Label-derived pools.
 		{"labelled, ready", labelled, PoolStateActive},
 		{"labelled, ready, first sighting", with(labelled, func(in *PoolStateInput) { in.Started = false }), PoolStateActive},
-		{"labelled, no ready endpoint yet", with(labelled, func(in *PoolStateInput) { in.ReadyEndpoints, in.Started = 0, false }), PoolStateRegistered},
-		{"labelled, lost its ready endpoints", with(labelled, func(in *PoolStateInput) { in.ReadyEndpoints = 0 }), PoolStateUnhealthy},
+		{"labelled, no ready endpoint yet", with(labelled, func(in *PoolStateInput) { in.ReadyIngressEndpoints, in.Started = 0, false }), PoolStateRegistered},
+		{"labelled, lost its ready endpoints", with(labelled, func(in *PoolStateInput) { in.ReadyIngressEndpoints = 0 }), PoolStateUnhealthy},
 		{"labelled, cluster lease expired", with(labelled, func(in *PoolStateInput) { in.ClusterLeaseActive = false }), PoolStateUnhealthy},
 		{"labelled, cluster expired before first ready", with(labelled, func(in *PoolStateInput) {
-			in.ClusterLeaseActive, in.ReadyEndpoints, in.Started = false, 0, false
+			in.ClusterLeaseActive, in.ReadyIngressEndpoints, in.Started = false, 0, false
 		}), PoolStateUnhealthy},
 		{"labelled, overlay drains", with(labelled, func(in *PoolStateInput) { in.Overlay, in.Desired = true, PoolStateDraining }), PoolStateDraining},
 		{"labelled, overlay active", with(labelled, func(in *PoolStateInput) { in.Overlay, in.Desired = true, PoolStateActive }), PoolStateActive},
 		{"labelled, draining but unhealthy", with(labelled, func(in *PoolStateInput) {
-			in.Overlay, in.Desired, in.ReadyEndpoints = true, PoolStateDraining, 0
+			in.Overlay, in.Desired, in.ReadyIngressEndpoints = true, PoolStateDraining, 0
 		}), PoolStateUnhealthy},
 		{"labelled, pool lease ignored", with(labelled, func(in *PoolStateInput) { in.Overlay, in.PoolLeaseActive = true, false }), PoolStateActive},
 
@@ -161,11 +173,46 @@ func TestDerivePoolState(t *testing.T) {
 
 		// API pools joined to exports through services[].
 		{"joined, ready", joined, PoolStateActive},
-		{"joined, no ready endpoint yet", with(joined, func(in *PoolStateInput) { in.ReadyEndpoints, in.Started = 0, false }), PoolStateRegistered},
-		{"joined, lost its ready endpoints", with(joined, func(in *PoolStateInput) { in.ReadyEndpoints = 0 }), PoolStateUnhealthy},
+		{"joined, no ready endpoint yet", with(joined, func(in *PoolStateInput) { in.ReadyIngressEndpoints, in.Started = 0, false }), PoolStateRegistered},
+		{"joined, lost its ready endpoints", with(joined, func(in *PoolStateInput) { in.ReadyIngressEndpoints = 0 }), PoolStateUnhealthy},
 		{"joined, pool lease expired but endpoints ready", with(joined, func(in *PoolStateInput) { in.PoolLeaseActive = false }), PoolStateActive},
 		{"joined, cluster lease expired", with(joined, func(in *PoolStateInput) { in.ClusterLeaseActive = false }), PoolStateUnhealthy},
 		{"joined, draining", with(joined, func(in *PoolStateInput) { in.Desired = PoolStateDraining }), PoolStateDraining},
+		{"joined, cluster expired before first ready, pool lease active", with(joined, func(in *PoolStateInput) {
+			in.ClusterLeaseActive, in.ReadyIngressEndpoints, in.Started, in.PoolLeaseActive = false, 0, false, true
+		}), PoolStateRegistered},
+
+		// Pools with agent registrations.
+		{"ingress agent, first sighting", pylon, PoolStateActive},
+		{"ingress agent, started", with(pylon, func(in *PoolStateInput) { in.Started = true }), PoolStateActive},
+		{"ingress agent lease expired", with(pylon, func(in *PoolStateInput) {
+			in.Started, in.AgentLeaseActive, in.IngressAgentLeaseActive = true, false, false
+		}), PoolStateUnhealthy},
+		{"ingress agent expired before it was seen live", with(pylon, func(in *PoolStateInput) {
+			in.AgentLeaseActive, in.IngressAgentLeaseActive = false, false
+		}), PoolStateUnhealthy},
+		{"ingress agent, cluster lease ignored", with(pylon, func(in *PoolStateInput) { in.ClusterLeaseActive = false }), PoolStateActive},
+		{"ingress agent, draining", with(pylon, func(in *PoolStateInput) { in.Overlay, in.Desired = true, PoolStateDraining }), PoolStateDraining},
+		{"ingress agent, pool lease ignored", with(pylon, func(in *PoolStateInput) { in.Overlay, in.PoolLeaseActive = true, false }), PoolStateActive},
+		{"relay only stays registered", relay, PoolStateRegistered},
+		{"relay only, cluster ready endpoints elsewhere do not count", with(relay, func(in *PoolStateInput) { in.ClusterLeaseActive = true }), PoolStateRegistered},
+		{"relay only, lease expired", with(relay, func(in *PoolStateInput) { in.AgentLeaseActive = false }), PoolStateUnhealthy},
+		{"relay only after the ingress left", with(relay, func(in *PoolStateInput) { in.Started = true }), PoolStateUnhealthy},
+		{"relay only, API overlay heartbeating", with(relay, func(in *PoolStateInput) {
+			in.Overlay, in.PoolLeaseActive, in.AgentLeaseActive, in.Started = true, true, false, true
+		}), PoolStateUnhealthy},
+		{"relay with a registered API pool", with(relay, func(in *PoolStateInput) {
+			in.Overlay, in.PoolLeaseActive, in.AgentLeaseActive = true, true, false
+		}), PoolStateRegistered},
+		{"agent registrations without a live lease", PoolStateInput{Agents: true}, PoolStateUnhealthy},
+		{"labelled relay endpoints only", with(labelled, func(in *PoolStateInput) { in.ReadyIngressEndpoints, in.Started = 0, false }), PoolStateRegistered},
+		{"labelled, no ready endpoint, ingress agent lease", with(labelled, func(in *PoolStateInput) {
+			in.ReadyIngressEndpoints, in.Agents, in.AgentLeaseActive, in.IngressAgentLeaseActive = 0, true, true, true
+		}), PoolStateActive},
+		{"labelled, cluster lease expired, ingress agent lease", with(labelled, func(in *PoolStateInput) {
+			in.ClusterLeaseActive, in.Agents, in.AgentLeaseActive, in.IngressAgentLeaseActive = false, true, true, true
+		}), PoolStateActive},
+		{"deregistered pool with agents", with(pylon, func(in *PoolStateInput) { in.Deregistered = true }), PoolStateGone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,5 +226,15 @@ func TestPoolStateInputAPIOnly(t *testing.T) {
 	assert.False(t, PoolStateInput{Overlay: true, OverlayServices: true}.APIOnly())
 	assert.False(t, PoolStateInput{Overlay: true, LabelledExport: true}.APIOnly())
 	assert.False(t, PoolStateInput{LabelledExport: true}.APIOnly())
+	assert.False(t, PoolStateInput{Overlay: true, Agents: true}.APIOnly())
 	assert.False(t, PoolStateInput{}.APIOnly())
+}
+
+func TestPoolStateInputLive(t *testing.T) {
+	assert.True(t, PoolStateInput{Overlay: true, PoolLeaseActive: true}.Live(), "API-only")
+	assert.False(t, PoolStateInput{Overlay: true, PoolLeaseActive: true, Agents: true}.Live(), "agents replace the pool lease")
+	assert.True(t, PoolStateInput{LabelledExport: true, ClusterLeaseActive: true, ReadyIngressEndpoints: 1}.Live())
+	assert.False(t, PoolStateInput{LabelledExport: true, ReadyIngressEndpoints: 1}.Live(), "without the cluster lease")
+	assert.True(t, PoolStateInput{Agents: true, IngressAgentLeaseActive: true}.Live())
+	assert.False(t, PoolStateInput{Agents: true, AgentLeaseActive: true}.Live(), "a relay lease")
 }

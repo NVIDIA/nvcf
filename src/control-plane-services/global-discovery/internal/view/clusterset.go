@@ -34,11 +34,13 @@ type clusterSet struct {
 	exports   map[store.ExportKey]store.ExportRecord
 	endpoints map[store.ExportKey]store.EndpointSetRecord
 	pools     map[store.PoolKey]store.PoolRecord
+	agents    map[store.PoolAgentKey]store.PoolAgentRecord
 
 	local localWrites
 
 	clusterLease map[string]registry.LeaseState
 	poolLease    map[store.PoolKey]registry.LeaseState
+	agentLease   map[store.PoolAgentKey]registry.LeaseState
 
 	objects    [numKinds]map[string]*Object
 	importMemo map[string]memoEntry
@@ -64,9 +66,11 @@ func newClusterSet(name string, history int) *clusterSet {
 		exports:      map[store.ExportKey]store.ExportRecord{},
 		endpoints:    map[store.ExportKey]store.EndpointSetRecord{},
 		pools:        map[store.PoolKey]store.PoolRecord{},
+		agents:       map[store.PoolAgentKey]store.PoolAgentRecord{},
 		local:        newLocalWrites(),
 		clusterLease: map[string]registry.LeaseState{},
 		poolLease:    map[store.PoolKey]registry.LeaseState{},
+		agentLease:   map[store.PoolAgentKey]registry.LeaseState{},
 		importMemo:   map[string]memoEntry{},
 		epCache:      map[store.ExportKey]endpointCache{},
 		started:      map[poolIdent]startInfo{},
@@ -90,7 +94,7 @@ func (cs *clusterSet) setDiscovered(d bool) {
 // watcher and no local write within window.
 func (cs *clusterSet) idle(now time.Time, window time.Duration) bool {
 	return len(cs.clusters) == 0 && len(cs.exports) == 0 && len(cs.endpoints) == 0 && len(cs.pools) == 0 &&
-		len(cs.subs) == 0 && len(cs.tombstones) == 0 && !cs.local.recent(now.Add(-window))
+		len(cs.agents) == 0 && len(cs.subs) == 0 && len(cs.tombstones) == 0 && !cs.local.recent(now.Add(-window))
 }
 
 // mark records a local write or delete of one record.
@@ -107,6 +111,7 @@ type localWrites struct {
 	exports   map[store.ExportKey]mark[store.ExportRecord]
 	endpoints map[store.ExportKey]mark[store.EndpointSetRecord]
 	pools     map[store.PoolKey]mark[store.PoolRecord]
+	agents    map[store.PoolAgentKey]mark[store.PoolAgentRecord]
 	// clusterDeletes are cascading cluster deletions.
 	clusterDeletes map[string]time.Time
 }
@@ -117,6 +122,7 @@ func newLocalWrites() localWrites {
 		exports:        map[store.ExportKey]mark[store.ExportRecord]{},
 		endpoints:      map[store.ExportKey]mark[store.EndpointSetRecord]{},
 		pools:          map[store.PoolKey]mark[store.PoolRecord]{},
+		agents:         map[store.PoolAgentKey]mark[store.PoolAgentRecord]{},
 		clusterDeletes: map[string]time.Time{},
 	}
 }
@@ -138,6 +144,11 @@ func (l *localWrites) recent(cutoff time.Time) bool {
 		}
 	}
 	for _, m := range l.pools {
+		if m.at.After(cutoff) {
+			return true
+		}
+	}
+	for _, m := range l.agents {
 		if m.at.After(cutoff) {
 			return true
 		}
@@ -168,6 +179,19 @@ func newerExport(a, b store.ExportRecord) bool { return a.Generation > b.Generat
 func newerEndpointSet(a, b store.EndpointSetRecord) bool { return a.Generation > b.Generation }
 
 func newerPool(a, b store.PoolRecord) bool {
+	if a.Generation != b.Generation {
+		return a.Generation > b.Generation
+	}
+	if a.Lease.Epoch != b.Lease.Epoch {
+		return a.Lease.Epoch > b.Lease.Epoch
+	}
+	if !a.Lease.RenewedAt.Equal(b.Lease.RenewedAt) {
+		return a.Lease.RenewedAt.After(b.Lease.RenewedAt)
+	}
+	return a.UpdatedAt.After(b.UpdatedAt)
+}
+
+func newerPoolAgent(a, b store.PoolAgentRecord) bool {
 	if a.Generation != b.Generation {
 		return a.Generation > b.Generation
 	}
@@ -227,6 +251,10 @@ func (cs *clusterSet) replace(snap store.ClusterSetSnapshot, cutoff time.Time) {
 	for _, r := range snap.Pools {
 		pools[r.Key] = r
 	}
+	agents := make(map[store.PoolAgentKey]store.PoolAgentRecord, len(snap.PoolAgents))
+	for _, r := range snap.PoolAgents {
+		agents[r.Key] = r
+	}
 
 	// A recent cascading cluster delete hides the cluster's records from a
 	// snapshot that may predate it, except records written locally after
@@ -254,36 +282,57 @@ func (cs *clusterSet) replace(snap store.ClusterSetSnapshot, cutoff time.Time) {
 				delete(pools, k)
 			}
 		}
+		for k := range agents {
+			if m, ok := cs.local.agents[k]; k.Cluster == cluster && (!ok || !m.at.After(at) || m.deleted) {
+				delete(agents, k)
+			}
+		}
 	}
 
 	reconcile(clusters, cs.clusters, cs.local.clusters, cutoff, newerCluster)
 	reconcile(exports, cs.exports, cs.local.exports, cutoff, newerExport)
 	reconcile(endpoints, cs.endpoints, cs.local.endpoints, cutoff, newerEndpointSet)
 	reconcile(pools, cs.pools, cs.local.pools, cutoff, newerPool)
+	reconcile(agents, cs.agents, cs.local.agents, cutoff, newerPoolAgent)
 
-	cs.clusters, cs.exports, cs.endpoints, cs.pools = clusters, exports, endpoints, pools
+	cs.clusters, cs.exports, cs.endpoints, cs.pools, cs.agents = clusters, exports, endpoints, pools, agents
 }
 
-// leaseStates evaluates every cluster and pool lease at now.
-func (cs *clusterSet) leaseStates(now time.Time, skew time.Duration) (map[string]registry.LeaseState, map[store.PoolKey]registry.LeaseState) {
-	clusters := make(map[string]registry.LeaseState, len(cs.clusters))
-	for name, r := range cs.clusters {
-		clusters[name] = registry.EvaluateLease(r.Lease.RenewedAt, r.Lease.TTL, now, skew)
+// leaseSet is the state of every lease of a clusterset at one time.
+type leaseSet struct {
+	clusters map[string]registry.LeaseState
+	pools    map[store.PoolKey]registry.LeaseState
+	agents   map[store.PoolAgentKey]registry.LeaseState
+}
+
+// leaseStates evaluates every cluster, pool and pool agent lease at now.
+func (cs *clusterSet) leaseStates(now time.Time, skew time.Duration) leaseSet {
+	l := leaseSet{
+		clusters: make(map[string]registry.LeaseState, len(cs.clusters)),
+		pools:    make(map[store.PoolKey]registry.LeaseState, len(cs.pools)),
+		agents:   make(map[store.PoolAgentKey]registry.LeaseState, len(cs.agents)),
 	}
-	pools := make(map[store.PoolKey]registry.LeaseState, len(cs.pools))
+	for name, r := range cs.clusters {
+		l.clusters[name] = registry.EvaluateLease(r.Lease.RenewedAt, r.Lease.TTL, now, skew)
+	}
 	for k, r := range cs.pools {
 		if r.Lease.Epoch != 0 {
-			pools[k] = registry.EvaluateLease(r.Lease.RenewedAt, r.Lease.TTL, now, skew)
+			l.pools[k] = registry.EvaluateLease(r.Lease.RenewedAt, r.Lease.TTL, now, skew)
 		}
 	}
-	return clusters, pools
+	for k, r := range cs.agents {
+		if r.Lease.Epoch != 0 {
+			l.agents[k] = registry.EvaluateLease(r.Lease.RenewedAt, r.Lease.TTL, now, skew)
+		}
+	}
+	return l
 }
 
 // leasesChanged reports whether any lease state differs from the last
 // evaluation.
 func (cs *clusterSet) leasesChanged(now time.Time, skew time.Duration) bool {
-	clusters, pools := cs.leaseStates(now, skew)
-	return !mapsEqual(clusters, cs.clusterLease) || !mapsEqual(pools, cs.poolLease)
+	l := cs.leaseStates(now, skew)
+	return !mapsEqual(l.clusters, cs.clusterLease) || !mapsEqual(l.pools, cs.poolLease) || !mapsEqual(l.agents, cs.agentLease)
 }
 
 func (cs *clusterSet) tombstoneDue(now time.Time) bool {

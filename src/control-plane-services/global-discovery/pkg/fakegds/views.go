@@ -588,7 +588,7 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 			updated = t
 		}
 	}
-	var readyAll, readyOpenAI, readyIngress int32
+	var readyOpenAI, readyIngress int32
 	if clusterActive {
 		for _, ref := range p.Services {
 			ek := exportKey{a.key.cluster, ref.GetNamespace(), ref.GetName()}
@@ -602,7 +602,6 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 			for _, r := range labelRoles[ref.GetNamespace()+"/"+ref.GetName()] {
 				roles = append(roles, roleOf(r))
 			}
-			readyAll += ce.ReadyEndpointCount
 			if slices.Contains(roles, gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI) {
 				readyOpenAI += ce.ReadyEndpointCount
 			}
@@ -616,15 +615,12 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 	p.ReadyIngressCount = readyIngress
 	p.Agents = poolAgents(cs, a, clusterActive, now)
 
-	in := poolStateInput{
-		PoolStateInput: registry.PoolStateInput{
-			LabelledExport:     len(a.exports) > 0,
-			Overlay:            a.rec != nil,
-			OverlayServices:    a.rec != nil && len(a.rec.p.GetServices()) > 0,
-			ClusterLeaseActive: clusterActive,
-			PoolLeaseActive:    p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
-			ReadyEndpoints:     int(readyAll),
-		},
+	in := registry.PoolStateInput{
+		LabelledExport:        len(a.exports) > 0,
+		Overlay:               a.rec != nil,
+		OverlayServices:       a.rec != nil && len(a.rec.p.GetServices()) > 0,
+		ClusterLeaseActive:    clusterActive,
+		PoolLeaseActive:       p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
 		ReadyIngressEndpoints: int(readyIngress),
 		Agents:                len(a.agents) > 0,
 	}
@@ -653,13 +649,13 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 	}
 	// An API-only pool starts with its first heartbeat; any other pool
 	// when it is first live.
-	if in.apiOnly() {
+	if in.APIOnly() {
 		in.Started = a.rec.started
 	} else {
 		in.Started = cs.started[a.key]
 	}
-	in.Started = in.started()
+	in.Started = in.Started || (!in.APIOnly() && in.Live())
 	cs.started[a.key] = in.Started
-	p.State = registryPoolStates[derivePoolState(in)]
+	p.State = registryPoolStates[registry.DerivePoolState(in)]
 	return p
 }

@@ -55,6 +55,15 @@ func TestEnumsRoundTrip(t *testing.T) {
 	for k := range frontendRoles {
 		assert.Equal(t, k, FrontendRoleFromProto(FrontendRoleToProto(k)))
 	}
+	assert.Equal(t, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON, FrontendRoleToProto(store.FrontendRolePylon))
+	for k := range agentSources {
+		assert.Equal(t, k, AgentSourceFromProto(AgentSourceToProto(k)))
+	}
+	for k := range dialModes {
+		assert.Equal(t, k, DialModeFromProto(DialModeToProto(k)))
+	}
+	assert.Equal(t, gdsv1.AgentSource_AGENT_SOURCE_UNSPECIFIED, AgentSourceToProto(""))
+	assert.Equal(t, gdsv1.DialMode_DIAL_MODE_UNSPECIFIED, DialModeToProto(""))
 	for k := range desiredStates {
 		assert.Equal(t, k, DesiredStateFromProto(DesiredStateToProto(k)))
 	}
@@ -133,6 +142,34 @@ func TestCluster(t *testing.T) {
 	assert.Equal(t, t0.Add(30*time.Second), c.GetLease().GetExpiresAt().AsTime())
 	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_ACTIVE, c.GetLease().GetState())
 	assert.Nil(t, LeaseToProto(store.Lease{}, registry.LeaseStateActive))
+}
+
+func TestPoolAgents(t *testing.T) {
+	assert.Equal(t, registry.DialModeInbound, DialModeOf(store.FrontendRoleOpenAI))
+	assert.Equal(t, registry.DialModeOutbound, DialModeOf(store.FrontendRoleKVRelay))
+	assert.Equal(t, registry.DialModeOutbound, DialModeOf(store.FrontendRolePylon))
+	assert.Empty(t, DialModeOf("ROUTER"))
+	assert.True(t, IsIngressRole(store.FrontendRoleOpenAI))
+	assert.True(t, IsIngressRole(store.FrontendRolePylon))
+	assert.False(t, IsIngressRole(store.FrontendRoleKVRelay))
+
+	rec := store.PoolAgentRecord{
+		Key:          store.PoolAgentKey{ClusterSet: "cs", Cluster: "a", PoolID: "p", Role: store.FrontendRolePylon, AgentID: "pod-0"},
+		PoolName:     "pool",
+		Attributes:   map[string]string{"k": "v"},
+		Lease:        store.Lease{Epoch: 9, TTL: time.Minute, RenewedAt: t0},
+		Generation:   4,
+		RegisteredAt: t0,
+		UpdatedAt:    t0.Add(time.Second),
+	}
+	r := PoolAgentRegistrationToProto(rec, registry.LeaseStateExpired)
+	assert.Equal(t, "pod-0", r.GetAgentId())
+	assert.Equal(t, uint64(9), r.GetLease().GetEpoch())
+	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_EXPIRED, r.GetLease().GetState())
+	assert.Equal(t, uint64(4), r.GetGeneration())
+	assert.Equal(t, t0.Add(time.Second), r.GetUpdatedAt().AsTime())
+	r.Attributes["k"] = "mutated"
+	assert.Equal(t, "v", rec.Attributes["k"], "attributes are copied")
 }
 
 func TestPoolSpecRoundTrip(t *testing.T) {

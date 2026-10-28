@@ -21,6 +21,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -73,9 +74,9 @@ type startInfo struct {
 // recompute evaluates leases, derives every object of the clusterset and
 // publishes the differences to watchers. cs.mu must be held.
 func (v *View) recompute(cs *clusterSet, now time.Time) {
-	clusters, pools := cs.leaseStates(now, v.opts.LeaseSkew)
-	v.countExpirations(cs, clusters, pools)
-	cs.clusterLease, cs.poolLease = clusters, pools
+	leases := cs.leaseStates(now, v.opts.LeaseSkew)
+	v.countExpirations(cs, leases)
+	cs.clusterLease, cs.poolLease, cs.agentLease = leases.clusters, leases.pools, leases.agents
 
 	var next [numKinds]map[string]*Object
 	next[KindCluster] = cs.deriveClusters()
@@ -133,8 +134,8 @@ func (v *View) diff(cs *clusterSet, kind Kind, next map[string]*Object) bool {
 	return changed
 }
 
-func (v *View) countExpirations(cs *clusterSet, clusters map[string]registry.LeaseState, pools map[store.PoolKey]registry.LeaseState) {
-	for name, s := range clusters {
+func (v *View) countExpirations(cs *clusterSet, leases leaseSet) {
+	for name, s := range leases.clusters {
 		if s == registry.LeaseStateExpired && cs.clusterLease[name] == registry.LeaseStateActive {
 			v.log.Info("cluster lease expired", zap.String("clusterset", cs.name), zap.String("cluster", name))
 			if v.opts.Metrics != nil {
@@ -142,12 +143,21 @@ func (v *View) countExpirations(cs *clusterSet, clusters map[string]registry.Lea
 			}
 		}
 	}
-	for key, s := range pools {
+	for key, s := range leases.pools {
 		if s == registry.LeaseStateExpired && cs.poolLease[key] == registry.LeaseStateActive {
 			v.log.Info("pool lease expired", zap.String("clusterset", cs.name), zap.String("cluster", key.Cluster),
 				zap.String("pool_id", key.PoolID))
 			if v.opts.Metrics != nil {
 				v.opts.Metrics.LeaseExpirations.WithLabelValues(metrics.LeasePool).Inc()
+			}
+		}
+	}
+	for key, s := range leases.agents {
+		if s == registry.LeaseStateExpired && cs.agentLease[key] == registry.LeaseStateActive {
+			v.log.Info("pool agent lease expired", zap.String("clusterset", cs.name), zap.String("cluster", key.Cluster),
+				zap.String("pool_id", key.PoolID), zap.String("role", string(key.Role)), zap.String("agent_id", key.AgentID))
+			if v.opts.Metrics != nil {
+				v.opts.Metrics.LeaseExpirations.WithLabelValues(metrics.LeasePoolAgent).Inc()
 			}
 		}
 	}
@@ -473,6 +483,8 @@ func (cs *clusterSet) deriveRouters() map[string]*Object {
 			ClusterLeaseState: cs.leaseStateProto(r.Key.Cluster),
 			GrpcPort:          portByName(r.Spec.Ports, grpcName),
 			HttpPort:          portByName(r.Spec.Ports, httpName),
+			QuicPort:          portByName(r.Spec.Ports, api.QUICPortName(r.Spec.Annotations)),
+			Ports:             convert.ServicePortsToProto(r.Spec.Ports),
 			DialScheme:        DialScheme(r.Spec.Annotations),
 			Labels:            maps.Clone(r.Spec.Labels),
 			Annotations:       maps.Clone(r.Spec.Annotations),
@@ -503,16 +515,44 @@ type poolInput struct {
 	ident   poolIdent
 	overlay *store.PoolRecord
 	exports []store.ExportRecord
+	// agents are the pool's agent registrations, sorted by key.
+	agents []store.PoolAgentRecord
 }
 
-func poolRole(labels map[string]string) (store.FrontendRole, bool) {
-	switch labels[api.LabelRole] {
-	case api.RolePoolFrontend:
-		return store.FrontendRoleOpenAI, true
-	case api.RoleKVRelay:
-		return store.FrontendRoleKVRelay, true
+// labelRoles maps the pool role values of gds.nvidia.com/role and
+// gds.nvidia.com/roles to agent roles.
+var labelRoles = map[string]store.FrontendRole{
+	api.RolePoolFrontend: store.FrontendRoleOpenAI,
+	api.RoleKVRelay:      store.FrontendRoleKVRelay,
+	api.RolePylon:        store.FrontendRolePylon,
+}
+
+// poolRoles returns the agent roles an exported Service fills, from the
+// gds.nvidia.com/roles annotation or else the gds.nvidia.com/role label
+// (api.ParseRoles). It is empty for a Service that is not part of a pool.
+func poolRoles(labels, annotations map[string]string) []store.FrontendRole {
+	var out []store.FrontendRole
+	for _, r := range api.ParseRoles(labels, annotations) {
+		out = append(out, labelRoles[r])
 	}
-	return "", false
+	return out
+}
+
+// roleRank orders roles as the proto enum does: OPENAI, KV_RELAY, PYLON.
+func roleRank(r store.FrontendRole) int {
+	if p := convert.FrontendRoleToProto(r); p != gdsv1.FrontendRole_FRONTEND_ROLE_UNSPECIFIED {
+		return int(p)
+	}
+	return math.MaxInt
+}
+
+// minRoleRank returns the rank of the first role of an export.
+func minRoleRank(e store.ExportRecord) int {
+	rank := math.MaxInt
+	for _, r := range poolRoles(e.Spec.Labels, e.Spec.Annotations) {
+		rank = min(rank, roleRank(r))
+	}
+	return rank
 }
 
 func (cs *clusterSet) derivePools(now time.Time, tombstoneTTL time.Duration) map[string]*Object {
@@ -526,7 +566,7 @@ func (cs *clusterSet) derivePools(now time.Time, tombstoneTTL time.Duration) map
 		return in
 	}
 	for _, r := range cs.exports {
-		if _, ok := poolRole(r.Spec.Labels); !ok {
+		if len(poolRoles(r.Spec.Labels, r.Spec.Annotations)) == 0 {
 			continue
 		}
 		name := r.Spec.Labels[api.LabelPool]
@@ -543,6 +583,11 @@ func (cs *clusterSet) derivePools(now time.Time, tombstoneTTL time.Duration) map
 		if in.overlay == nil {
 			in.overlay = &r
 		}
+	}
+	for _, k := range slices.SortedFunc(maps.Keys(cs.agents), store.ComparePoolAgentKeys) {
+		r := cs.agents[k]
+		in := input(poolIdent{cluster: k.Cluster, name: r.PoolName})
+		in.agents = append(in.agents, r)
 	}
 
 	out := make(map[string]*Object, len(inputs))
@@ -582,6 +627,9 @@ func (cs *clusterSet) derivePools(now time.Time, tombstoneTTL time.Duration) map
 		gone.State = gdsv1.PoolState_POOL_STATE_GONE
 		gone.Endpoints = nil
 		gone.ReadyEndpointCount = 0
+		gone.Agents = nil
+		gone.KvRelayLive = false
+		gone.ReadyIngressCount = 0
 		cs.tombstones[id] = now.Add(tombstoneTTL)
 		out[id] = &Object{Key: id, Full: gone, Lite: gone}
 	}
@@ -589,6 +637,10 @@ func (cs *clusterSet) derivePools(now time.Time, tombstoneTTL time.Duration) map
 }
 
 func sameService(a, b store.ServiceRef) bool { return a.Namespace == b.Namespace && a.Name == b.Name }
+
+// sameRef reports whether two Service references name the same Service in
+// the same role; one Service may fill several roles.
+func sameRef(a, b store.ServiceRef) bool { return sameService(a, b) && a.Role == b.Role }
 
 func frontendKey(f store.FrontendEndpoint) string {
 	if f.Service != nil {
@@ -599,6 +651,8 @@ func frontendKey(f store.FrontendEndpoint) string {
 
 // labelSpec derives pool metadata from the pool's labelled exports. The
 // OPENAI frontend export comes first, so its labels and annotations win.
+// Every (export, role) pair yields one services[] and one frontends[]
+// entry, ordered by role (OPENAI first), then export.
 func (cs *clusterSet) labelSpec(in *poolInput) store.PoolSpec {
 	cl := cs.clusters[in.ident.cluster]
 	spec := store.PoolSpec{
@@ -606,10 +660,13 @@ func (cs *clusterSet) labelSpec(in *poolInput) store.PoolSpec {
 	}
 	exports := slices.Clone(in.exports)
 	slices.SortFunc(exports, func(a, b store.ExportRecord) int {
-		ra, _ := poolRole(a.Spec.Labels)
-		rb, _ := poolRole(b.Spec.Labels)
-		return cmp.Or(cmp.Compare(rb, ra), store.CompareExportKeys(a.Key, b.Key))
+		return cmp.Or(cmp.Compare(minRoleRank(a), minRoleRank(b)), store.CompareExportKeys(a.Key, b.Key))
 	})
+	type exportRole struct {
+		export store.ExportRecord
+		role   store.FrontendRole
+	}
+	var pairs []exportRole
 	labels := map[string]string{}
 	for _, e := range exports {
 		for k, val := range e.Spec.Labels {
@@ -629,10 +686,17 @@ func (cs *clusterSet) labelSpec(in *poolInput) store.PoolSpec {
 				spec.Models = append(spec.Models, store.ModelServed{ModelID: m})
 			}
 		}
-		role, _ := poolRole(e.Spec.Labels)
-		ref := store.ServiceRef{Namespace: e.Key.Namespace, Name: e.Key.Name, Role: role}
+		for _, role := range poolRoles(e.Spec.Labels, ann) {
+			pairs = append(pairs, exportRole{export: e, role: role})
+		}
+	}
+	slices.SortStableFunc(pairs, func(a, b exportRole) int { return cmp.Compare(roleRank(a.role), roleRank(b.role)) })
+	for _, p := range pairs {
+		ref := store.ServiceRef{Namespace: p.export.Key.Namespace, Name: p.export.Key.Name, Role: p.role}
 		spec.Services = append(spec.Services, ref)
-		spec.Frontends = append(spec.Frontends, store.FrontendEndpoint{Role: role, Service: &ref, PortName: portNameFor(role, ann)})
+		spec.Frontends = append(spec.Frontends, store.FrontendEndpoint{
+			Role: p.role, Service: &ref, PortName: portNameFor(p.role, p.export.Spec.Annotations),
+		})
 	}
 	if len(labels) > 0 {
 		spec.Labels = labels
@@ -640,12 +704,18 @@ func (cs *clusterSet) labelSpec(in *poolInput) store.PoolSpec {
 	return spec
 }
 
+// portNameFor returns the Service port a frontend entry of the role names:
+// the HTTP port for OPENAI, the gRPC port for KV_RELAY (for consumers that
+// pull from the relay) and none for PYLON, which routers never dial.
 func portNameFor(role store.FrontendRole, annotations map[string]string) string {
 	grpcName, httpName := api.PortNames(annotations)
-	if role == store.FrontendRoleKVRelay {
+	switch role {
+	case store.FrontendRoleOpenAI:
+		return httpName
+	case store.FrontendRoleKVRelay:
 		return grpcName
 	}
-	return httpName
+	return ""
 }
 
 // overlaySpec applies an API registration over label-derived metadata:
@@ -686,7 +756,7 @@ func overlaySpec(base, o store.PoolSpec) store.PoolSpec {
 
 	services := oc.Services
 	for _, s := range out.Services {
-		if !slices.ContainsFunc(services, func(x store.ServiceRef) bool { return sameService(x, s) }) {
+		if !slices.ContainsFunc(services, func(x store.ServiceRef) bool { return sameRef(x, s) }) {
 			services = append(services, s)
 		}
 	}
@@ -707,7 +777,7 @@ func overlaySpec(base, o store.PoolSpec) store.PoolSpec {
 func (cs *clusterSet) addServiceFrontends(spec *store.PoolSpec) {
 	for _, s := range spec.Services {
 		covered := slices.ContainsFunc(spec.Frontends, func(f store.FrontendEndpoint) bool {
-			return f.Service != nil && sameService(*f.Service, s)
+			return f.Service != nil && sameService(*f.Service, s) && f.Role == s.Role
 		})
 		if covered {
 			continue
@@ -719,6 +789,21 @@ func (cs *clusterSet) addServiceFrontends(spec *store.PoolSpec) {
 		}
 		spec.Frontends = append(spec.Frontends, store.FrontendEndpoint{Role: s.Role, Service: &ref, PortName: portNameFor(s.Role, ann)})
 	}
+}
+
+// serviceKey identifies a Service of the pool's cluster.
+type serviceKey struct {
+	namespace string
+	name      string
+}
+
+// poolService is the endpoint join of one Service of a pool.
+type poolService struct {
+	ce *gdsv1.ClusterEndpoints
+	// exported reports that the Service has an export record.
+	exported bool
+	// total counts the Service's endpoints whatever the cluster lease.
+	total int32
 }
 
 func (cs *clusterSet) buildPool(in *poolInput) *Object {
@@ -734,29 +819,44 @@ func (cs *clusterSet) buildPool(in *poolInput) *Object {
 	cs.addServiceFrontends(&spec)
 
 	var (
-		endpoints             []*gdsv1.ClusterEndpoints
-		readyAll, readyOpenAI int32
-		updated               time.Time
-		registeredAt          time.Time
+		endpoints                 []*gdsv1.ClusterEndpoints
+		readyOpenAI, readyIngress int32
+		updated                   time.Time
+		registeredAt              time.Time
 	)
+	// One endpoint join per Service, also when the Service fills several
+	// roles; each Service counts once towards the ready counts.
+	services := map[serviceKey]*poolService{}
+	openAI, ingress := map[serviceKey]bool{}, map[serviceKey]bool{}
 	for _, ref := range spec.Services {
-		key := store.ExportKey{ClusterSet: cs.name, Cluster: id.cluster, Namespace: ref.Namespace, Name: ref.Name}
-		ce := &gdsv1.ClusterEndpoints{Cluster: id.cluster, Region: cl.Region, Namespace: ref.Namespace, Name: ref.Name}
-		if exp, ok := cs.exports[key]; ok {
-			updated = maxTime(updated, exp.UpdatedAt)
-			if ep, ok := cs.endpointsOf(key); ok {
-				ce.Generation = ep.gen
-				updated = maxTime(updated, cs.endpoints[key].UpdatedAt)
-				if clusterActive {
-					ce.Endpoints, ce.EndpointCount, ce.ReadyEndpointCount = ep.eps, ep.total, ep.ready
+		sk := serviceKey{ref.Namespace, ref.Name}
+		svc, ok := services[sk]
+		if !ok {
+			key := store.ExportKey{ClusterSet: cs.name, Cluster: id.cluster, Namespace: ref.Namespace, Name: ref.Name}
+			svc = &poolService{ce: &gdsv1.ClusterEndpoints{Cluster: id.cluster, Region: cl.Region, Namespace: ref.Namespace, Name: ref.Name}}
+			if exp, ok := cs.exports[key]; ok {
+				svc.exported = true
+				updated = maxTime(updated, exp.UpdatedAt)
+				if ep, ok := cs.endpointsOf(key); ok {
+					svc.ce.Generation = ep.gen
+					svc.total = ep.total
+					updated = maxTime(updated, cs.endpoints[key].UpdatedAt)
+					if clusterActive {
+						svc.ce.Endpoints, svc.ce.EndpointCount, svc.ce.ReadyEndpointCount = ep.eps, ep.total, ep.ready
+					}
 				}
 			}
+			services[sk] = svc
+			endpoints = append(endpoints, svc.ce)
 		}
-		readyAll += ce.ReadyEndpointCount
-		if ref.Role == store.FrontendRoleOpenAI {
-			readyOpenAI += ce.ReadyEndpointCount
+		if ref.Role == store.FrontendRoleOpenAI && !openAI[sk] {
+			openAI[sk] = true
+			readyOpenAI += svc.ce.ReadyEndpointCount
 		}
-		endpoints = append(endpoints, ce)
+		if convert.IsIngressRole(ref.Role) && !ingress[sk] {
+			ingress[sk] = true
+			readyIngress += svc.ce.ReadyEndpointCount
+		}
 	}
 	for _, e := range in.exports {
 		if registeredAt.IsZero() || e.Spec.ExportCreationTimestamp.Before(registeredAt) {
@@ -764,7 +864,12 @@ func (cs *clusterSet) buildPool(in *poolInput) *Object {
 		}
 	}
 
+	agents, agentState := cs.buildAgents(spec, in.agents, services, clusterActive)
+
 	poolID := registry.PoolID(cs.name, id.cluster, id.name)
+	if len(in.agents) > 0 {
+		poolID = in.agents[0].Key.PoolID
+	}
 	var poolLeaseActive, overlayServices bool
 	if o := in.overlay; o != nil {
 		poolID = o.Key.PoolID
@@ -773,13 +878,16 @@ func (cs *clusterSet) buildPool(in *poolInput) *Object {
 	}
 
 	state := registry.PoolStateInput{
-		Desired:            registry.PoolStateActive,
-		LabelledExport:     len(in.exports) > 0,
-		Overlay:            in.overlay != nil,
-		OverlayServices:    overlayServices,
-		ClusterLeaseActive: clusterActive,
-		PoolLeaseActive:    poolLeaseActive,
-		ReadyEndpoints:     int(readyAll),
+		Desired:                 registry.PoolStateActive,
+		LabelledExport:          len(in.exports) > 0,
+		Overlay:                 in.overlay != nil,
+		OverlayServices:         overlayServices,
+		Agents:                  len(in.agents) > 0,
+		ClusterLeaseActive:      clusterActive,
+		PoolLeaseActive:         poolLeaseActive,
+		AgentLeaseActive:        agentState.leaseActive,
+		IngressAgentLeaseActive: agentState.ingressLeaseActive,
+		ReadyIngressEndpoints:   int(readyIngress),
 	}
 	if spec.DesiredState == store.DesiredStateDraining {
 		state.Desired = registry.PoolStateDraining
@@ -795,7 +903,7 @@ func (cs *clusterSet) buildPool(in *poolInput) *Object {
 		} else if !l.RenewedAt.Equal(info.renewedAt) {
 			info.started = true
 		}
-	} else if clusterActive && readyAll > 0 {
+	} else if state.Live() {
 		info.started = true
 	}
 	cs.started[id] = info
@@ -806,14 +914,145 @@ func (cs *clusterSet) buildPool(in *poolInput) *Object {
 	p.State = convert.PoolStateToProto(registry.DerivePoolState(state))
 	p.Endpoints = endpoints
 	p.ReadyEndpointCount = readyOpenAI
+	p.ReadyIngressCount = readyIngress
+	p.Agents = agents
+	p.KvRelayLive = agentState.kvRelayLive
 	if o := in.overlay; o != nil {
 		p.Lease = convert.LeaseToProto(o.Lease, cs.poolLease[o.Key])
 		p.Generation = o.Generation
 		p.OwnerId = o.OwnerID
 		registeredAt = o.RegisteredAt
 		updated = maxTime(updated, o.UpdatedAt)
+	} else {
+		for _, a := range in.agents {
+			if registeredAt.IsZero() || a.RegisteredAt.Before(registeredAt) {
+				registeredAt = a.RegisteredAt
+			}
+		}
+	}
+	for _, a := range in.agents {
+		updated = maxTime(updated, a.UpdatedAt)
 	}
 	p.RegisteredAt = convert.Timestamp(registeredAt)
 	p.UpdatedAt = convert.Timestamp(updated)
 	return &Object{Key: poolID, Full: p, Lite: litePool(p)}
+}
+
+// agentSummary is what pool state derivation needs from a pool's agents.
+type agentSummary struct {
+	// leaseActive: a registration of any role has an active lease.
+	leaseActive bool
+	// ingressLeaseActive: a registration of an ingress role has an active
+	// lease.
+	ingressLeaseActive bool
+	// kvRelayLive: the KV_RELAY agent is live.
+	kvRelayLive bool
+}
+
+// buildAgents merges a pool's Services and agent registrations into one
+// PoolAgent per role present, sorted by role. The label source of a role is
+// every exported Service of the pool in that role; the API source is every
+// registration of the role, one per agent id.
+func (cs *clusterSet) buildAgents(spec store.PoolSpec, regs []store.PoolAgentRecord,
+	services map[serviceKey]*poolService, clusterActive bool) ([]*gdsv1.PoolAgent, agentSummary) {
+	type roleInput struct {
+		refs []store.ServiceRef
+		regs []store.PoolAgentRecord
+	}
+	roles := map[store.FrontendRole]*roleInput{}
+	get := func(r store.FrontendRole) *roleInput {
+		in, ok := roles[r]
+		if !ok {
+			in = &roleInput{}
+			roles[r] = in
+		}
+		return in
+	}
+	for _, ref := range spec.Services {
+		if svc := services[serviceKey{ref.Namespace, ref.Name}]; svc != nil && svc.exported && roleRank(ref.Role) != math.MaxInt {
+			in := get(ref.Role)
+			if !slices.ContainsFunc(in.refs, func(x store.ServiceRef) bool { return sameService(x, ref) }) {
+				in.refs = append(in.refs, ref)
+			}
+		}
+	}
+	for _, r := range regs {
+		in := get(r.Key.Role)
+		// Registrations of one agent id under two pool ids (a race between
+		// replicas) count once: the newer wins.
+		if i := slices.IndexFunc(in.regs, func(x store.PoolAgentRecord) bool { return x.Key.AgentID == r.Key.AgentID }); i >= 0 {
+			if newerPoolAgent(r, in.regs[i]) {
+				in.regs[i] = r
+			}
+			continue
+		}
+		in.regs = append(in.regs, r)
+	}
+
+	var sum agentSummary
+	out := make([]*gdsv1.PoolAgent, 0, len(roles))
+	for _, role := range slices.SortedFunc(maps.Keys(roles), func(a, b store.FrontendRole) int { return cmp.Compare(roleRank(a), roleRank(b)) }) {
+		in := roles[role]
+		mode := convert.DialModeOf(role)
+		a := &gdsv1.PoolAgent{
+			Role:     convert.FrontendRoleToProto(role),
+			Source:   convert.AgentSourceToProto(registry.AgentSourceOf(len(in.refs) > 0, len(in.regs) > 0)),
+			DialMode: convert.DialModeToProto(mode),
+		}
+		for i, ref := range in.refs {
+			svc := services[serviceKey{ref.Namespace, ref.Name}]
+			a.EndpointCount += svc.total
+			a.ReadyEndpointCount += svc.ce.GetReadyEndpointCount()
+			if i == 0 {
+				a.Service = convert.ServiceRefToProto(ref)
+				if mode == registry.DialModeInbound {
+					a.PortName = frontendPortName(spec.Frontends, ref)
+				}
+			}
+		}
+		slices.SortFunc(in.regs, func(x, y store.PoolAgentRecord) int { return cmp.Compare(x.Key.AgentID, y.Key.AgentID) })
+		var freshest *store.PoolAgentRecord
+		for i, r := range in.regs {
+			st := cs.agentLease[r.Key]
+			a.Registrations = append(a.Registrations, convert.PoolAgentRegistrationToProto(r, st))
+			if r.Lease.Epoch != 0 && st == registry.LeaseStateActive {
+				a.ActiveRegistrationCount++
+			}
+			if freshest == nil || r.Lease.ExpiresAt().After(freshest.Lease.ExpiresAt()) {
+				freshest = &in.regs[i]
+			}
+		}
+		if freshest != nil {
+			// The agent mirrors the registration whose lease expires last.
+			m := a.Registrations[slices.IndexFunc(in.regs, func(x store.PoolAgentRecord) bool { return x.Key == freshest.Key })]
+			a.Lease, a.AgentId, a.Attributes, a.Generation = m.Lease, m.AgentId, m.Attributes, m.Generation
+			a.RegisteredAt, a.UpdatedAt = m.RegisteredAt, m.UpdatedAt
+		}
+		a.Live = (clusterActive && a.ReadyEndpointCount > 0) || a.ActiveRegistrationCount > 0
+		if a.ActiveRegistrationCount > 0 {
+			sum.leaseActive = true
+			if convert.IsIngressRole(role) {
+				sum.ingressLeaseActive = true
+			}
+		}
+		if role == store.FrontendRoleKVRelay && a.Live {
+			sum.kvRelayLive = true
+		}
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return nil, sum
+	}
+	return out, sum
+}
+
+// frontendPortName returns the port name of the frontend entry of a Service
+// in a role.
+func frontendPortName(frontends []store.FrontendEndpoint, ref store.ServiceRef) string {
+	for _, f := range frontends {
+		if f.Service != nil && sameService(*f.Service, ref) && f.Role == ref.Role {
+			return f.PortName
+		}
+	}
+	return ""
 }

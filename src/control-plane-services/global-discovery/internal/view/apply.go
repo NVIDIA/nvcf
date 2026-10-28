@@ -30,8 +30,9 @@ import (
 // call derives the affected objects and publishes the changes to watchers.
 
 // ApplyLocal applies records that a handler stored through this replica, in
-// order: store.ClusterRecord, store.ExportRecord, store.EndpointSetRecord or
-// store.PoolRecord. It returns an error for any other type. Deletions use
+// order: store.ClusterRecord, store.ExportRecord, store.EndpointSetRecord,
+// store.PoolRecord or store.PoolAgentRecord. It returns an error for any
+// other type. Deletions use
 // the typed Apply*Delete methods.
 func (v *View) ApplyLocal(records ...any) error {
 	for _, r := range records {
@@ -44,6 +45,8 @@ func (v *View) ApplyLocal(records ...any) error {
 			v.ApplyEndpointSet(rec)
 		case store.PoolRecord:
 			v.ApplyPool(rec)
+		case store.PoolAgentRecord:
+			v.ApplyPoolAgent(rec)
 		default:
 			return fmt.Errorf("view: cannot apply %T", r)
 		}
@@ -70,7 +73,7 @@ func (v *View) ApplyCluster(rec store.ClusterRecord) {
 }
 
 // ApplyClusterDelete applies a cluster deletion and its cascade to the
-// cluster's exports, endpoint sets and pools.
+// cluster's exports, endpoint sets, pools and pool agent registrations.
 func (v *View) ApplyClusterDelete(key store.ClusterKey) {
 	v.apply(key.ClusterSet, func(cs *clusterSet) {
 		now := v.clock.Now()
@@ -96,6 +99,12 @@ func (v *View) ApplyClusterDelete(key store.ClusterKey) {
 			if k.Cluster == key.Cluster {
 				delete(cs.pools, k)
 				delete(cs.local.pools, k)
+			}
+		}
+		for k := range cs.agents {
+			if k.Cluster == key.Cluster {
+				delete(cs.agents, k)
+				delete(cs.local.agents, k)
 			}
 		}
 		cs.local.clusterDeletes[key.Cluster] = now
@@ -145,11 +154,35 @@ func (v *View) ApplyPool(rec store.PoolRecord) {
 	})
 }
 
-// ApplyPoolDelete applies a pool deletion.
+// ApplyPoolDelete applies a pool deletion and its cascade to the pool's
+// agent registrations (same cluster and pool id), as store.DeletePool does.
 func (v *View) ApplyPoolDelete(key store.PoolKey) {
 	v.apply(key.ClusterSet, func(cs *clusterSet) {
-		cs.local.pools[key] = deleteMark(cs.pools, key, v.clock.Now())
+		now := v.clock.Now()
+		cs.local.pools[key] = deleteMark(cs.pools, key, now)
 		delete(cs.pools, key)
+		for k := range cs.agents {
+			if k.PoolKey() == key {
+				cs.local.agents[k] = deleteMark(cs.agents, k, now)
+				delete(cs.agents, k)
+			}
+		}
+	})
+}
+
+// ApplyPoolAgent applies a stored or renewed pool agent registration.
+func (v *View) ApplyPoolAgent(rec store.PoolAgentRecord) {
+	v.apply(rec.Key.ClusterSet, func(cs *clusterSet) {
+		cs.agents[rec.Key] = rec.Clone()
+		cs.local.agents[rec.Key] = mark[store.PoolAgentRecord]{at: v.clock.Now()}
+	})
+}
+
+// ApplyPoolAgentDelete applies the deletion of one pool agent registration.
+func (v *View) ApplyPoolAgentDelete(key store.PoolAgentKey) {
+	v.apply(key.ClusterSet, func(cs *clusterSet) {
+		cs.local.agents[key] = deleteMark(cs.agents, key, v.clock.Now())
+		delete(cs.agents, key)
 	})
 }
 

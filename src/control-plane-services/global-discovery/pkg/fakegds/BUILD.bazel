@@ -24,7 +24,6 @@ go_library(
         "errors.go",
         "mcs.go",
         "pool.go",
-        "poolstate.go",
         "seed.go",
         "server.go",
         "state.go",
@@ -60,13 +59,11 @@ go_test(
     srcs = [
         "agents_test.go",
         "fakegds_test.go",
-        "poolstate_test.go",
     ],
-    embed = [":fakegds"],
     deps = [
+        ":fakegds",
         "//src/control-plane-services/global-discovery/api",
         "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
-        "//src/control-plane-services/global-discovery/internal/registry",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",

@@ -221,11 +221,41 @@ func (v *validator) endpoint(field string, e *gdsv1.Endpoint) {
 	v.maxLen(field+".zone", e.GetZone(), maxNameBytes)
 }
 
+// poolRole checks a pool Service, frontend or agent role.
+func (v *validator) poolRole(field string, r gdsv1.FrontendRole) {
+	switch r {
+	case gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI, gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON:
+	default:
+		v.add(field, "must be FRONTEND_ROLE_OPENAI, FRONTEND_ROLE_KV_RELAY or FRONTEND_ROLE_PYLON")
+	}
+}
+
 func (v *validator) serviceRef(field string, r *gdsv1.ServiceRef) {
 	v.dnsLabel(field+".namespace", r.GetNamespace())
 	v.dnsLabel(field+".name", r.GetName())
-	if r.GetRole() != gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI && r.GetRole() != gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY {
-		v.add(field+".role", "must be FRONTEND_ROLE_OPENAI or FRONTEND_ROLE_KV_RELAY")
+	v.poolRole(field+".role", r.GetRole())
+}
+
+// agentID checks the id of a registering process: 1 to MaxAgentIDBytes
+// bytes.
+func (v *validator) agentID(field, id string) {
+	if id == "" || len(id) > gds.MaxAgentIDBytes {
+		v.add(field, "must have 1 to %d bytes", gds.MaxAgentIDBytes)
+	}
+}
+
+// agentAttributes checks the writer-owned attributes of an agent.
+func (v *validator) agentAttributes(field string, attrs map[string]string) {
+	if len(attrs) > gds.MaxAgentAttributes {
+		v.add(field, "has %d entries; at most %d are allowed", len(attrs), gds.MaxAgentAttributes)
+	}
+	for k, val := range attrs {
+		if k == "" || len(k) > maxLabelKeyBytes {
+			v.add(field, "key %q must have 1 to %d bytes", k, maxLabelKeyBytes)
+		}
+		if len(val) > maxLabelValBytes {
+			v.add(field+"["+k+"]", "is longer than %d bytes", maxLabelValBytes)
+		}
 	}
 }
 
@@ -273,9 +303,7 @@ func (v *validator) poolSpec(field string, p *gdsv1.Pool) {
 	}
 	for i, fe := range p.GetFrontends() {
 		f := fmt.Sprintf("%s.frontends[%d]", field, i)
-		if fe.GetRole() != gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI && fe.GetRole() != gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY {
-			v.add(f+".role", "must be FRONTEND_ROLE_OPENAI or FRONTEND_ROLE_KV_RELAY")
-		}
+		v.poolRole(f+".role", fe.GetRole())
 		switch {
 		case (fe.GetUrl() == "") == (fe.GetService() == nil):
 			v.add(f, "exactly one of url and service must be set")

@@ -46,6 +46,7 @@ const (
 	attrUpdatedAt      = "updated_at"
 	attrExpiresAt      = "expires_at"
 	attrPoolID         = "pool_id"
+	attrPoolName       = "pool_name"
 )
 
 // item is the attribute layout shared by every item kind. Times are Unix
@@ -63,6 +64,7 @@ type item struct {
 	UpdatedAt      *int64  `dynamodbav:"updated_at,omitempty"`
 	ExpiresAt      int64   `dynamodbav:"expires_at,omitempty"`
 	PoolID         string  `dynamodbav:"pool_id,omitempty"`
+	PoolName       string  `dynamodbav:"pool_name,omitempty"`
 }
 
 func (it item) attributes() (map[string]ddbtypes.AttributeValue, error) {
@@ -377,6 +379,70 @@ func decodePool(it item) (store.PoolRecord, error) {
 	return rec, nil
 }
 
+// Pool agents.
+
+// encodePoolAgentBody returns the body of an agent registration: the
+// attributes, the lease TTL and RegisteredAt. The key (with the role and
+// the agent id), the pool name, the generation, UpdatedAt and the lease
+// epoch and renewal time are top level.
+func encodePoolAgentBody(rec store.PoolAgentRecord) ([]byte, error) {
+	return marshalBody(&gdsv1.PoolAgentRegistration{
+		Attributes:   rec.Attributes,
+		Lease:        leaseTTL(rec.Lease.TTL),
+		RegisteredAt: timestamp(rec.RegisteredAt),
+	})
+}
+
+func encodePoolAgent(rec store.PoolAgentRecord, expiresAt int64) (item, error) {
+	if _, ok := frontendRoles.toProto[rec.Key.Role]; !ok {
+		return item{}, fmt.Errorf("dynamodb: pool agent %s/%s: unknown frontend role %q", rec.Key.Cluster, rec.Key.PoolID, rec.Key.Role)
+	}
+	body, err := encodePoolAgentBody(rec)
+	if err != nil {
+		return item{}, err
+	}
+	k := poolAgentKey(rec.Key)
+	return item{
+		PK:             k.pk,
+		SK:             k.sk,
+		Body:           body,
+		Gen:            ptr(rec.Generation),
+		LeaseEpoch:     rec.Lease.Epoch,
+		LeaseRenewedAt: unixNanos(rec.Lease.RenewedAt),
+		UpdatedAt:      unixNanos(rec.UpdatedAt),
+		ExpiresAt:      expiresAt,
+		PoolName:       rec.PoolName,
+	}, nil
+}
+
+func decodePoolAgent(it item) (store.PoolAgentRecord, error) {
+	cs, ok := parseClusterSetPK(it.PK)
+	if !ok {
+		return store.PoolAgentRecord{}, fmt.Errorf("dynamodb: %q is not a clusterset partition", it.PK)
+	}
+	key, ok := parsePoolAgentSK(cs, it.SK)
+	if !ok {
+		return store.PoolAgentRecord{}, fmt.Errorf("dynamodb: %q is not a pool agent key", it.SK)
+	}
+	var body gdsv1.PoolAgentRegistration
+	if err := unmarshalBody(it, &body); err != nil {
+		return store.PoolAgentRecord{}, err
+	}
+	return store.PoolAgentRecord{
+		Key:        key,
+		PoolName:   it.PoolName,
+		Attributes: body.Attributes,
+		Lease: store.Lease{
+			Epoch:     it.LeaseEpoch,
+			TTL:       fromLeaseTTL(body.Lease),
+			RenewedAt: fromUnixNanos(it.LeaseRenewedAt),
+		},
+		Generation:   it.gen(),
+		RegisteredAt: fromTimestamp(body.RegisteredAt),
+		UpdatedAt:    fromUnixNanos(it.UpdatedAt),
+	}, nil
+}
+
 func decodeServiceRef(r *gdsv1.ServiceRef) store.ServiceRef {
 	return store.ServiceRef{Namespace: r.Namespace, Name: r.Name, Role: frontendRoles.decode(r.Role)}
 }
@@ -445,6 +511,7 @@ var (
 	frontendRoles = newEnumMap("frontend role", map[store.FrontendRole]gdsv1.FrontendRole{
 		store.FrontendRoleOpenAI:  gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI,
 		store.FrontendRoleKVRelay: gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY,
+		store.FrontendRolePylon:   gdsv1.FrontendRole_FRONTEND_ROLE_PYLON,
 	})
 	desiredStates = newEnumMap("desired state", map[store.DesiredState]gdsv1.PoolState{
 		store.DesiredStateActive:   gdsv1.PoolState_POOL_STATE_ACTIVE,

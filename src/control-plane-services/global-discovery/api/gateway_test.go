@@ -157,6 +157,21 @@ func (r *recorder) DeregisterPool(_ context.Context, req *gdsv1.DeregisterPoolRe
 	return &gdsv1.DeregisterPoolResponse{}, nil
 }
 
+func (r *recorder) RegisterPoolAgent(_ context.Context, req *gdsv1.RegisterPoolAgentRequest) (*gdsv1.RegisterPoolAgentResponse, error) {
+	r.record("RegisterPoolAgent", req)
+	return &gdsv1.RegisterPoolAgentResponse{}, nil
+}
+
+func (r *recorder) HeartbeatPoolAgent(_ context.Context, req *gdsv1.HeartbeatPoolAgentRequest) (*gdsv1.HeartbeatPoolAgentResponse, error) {
+	r.record("HeartbeatPoolAgent", req)
+	return &gdsv1.HeartbeatPoolAgentResponse{}, nil
+}
+
+func (r *recorder) DeregisterPoolAgent(_ context.Context, req *gdsv1.DeregisterPoolAgentRequest) (*gdsv1.DeregisterPoolAgentResponse, error) {
+	r.record("DeregisterPoolAgent", req)
+	return &gdsv1.DeregisterPoolAgentResponse{}, nil
+}
+
 func (r *recorder) GetPool(_ context.Context, req *gdsv1.GetPoolRequest) (*gdsv1.GetPoolResponse, error) {
 	r.record("GetPool", req)
 	return &gdsv1.GetPoolResponse{Pool: &gdsv1.Pool{
@@ -279,6 +294,17 @@ func TestRESTMapping(t *testing.T) {
 			&gdsv1.HeartbeatPoolRequest{Clusterset: "cs1", PoolId: "p1", Epoch: 9, WorkerCount: proto.Int32(4)}},
 		{"DELETE", base + "/pools/p1", "", "DeregisterPool",
 			&gdsv1.DeregisterPoolRequest{Clusterset: "cs1", PoolId: "p1"}},
+		{"POST", base + "/pool-agents",
+			`{"cluster":"c1","poolName":"pool-a","agent":{"role":"FRONTEND_ROLE_PYLON","agentId":"pod-0","attributes":{"models":"llama"}},"leaseTtl":"30s","generation":"3"}`,
+			"RegisterPoolAgent",
+			&gdsv1.RegisterPoolAgentRequest{Clusterset: "cs1", Cluster: "c1", PoolName: "pool-a", LeaseTtl: durationpbSeconds(30), Generation: 3,
+				Agent: &gdsv1.PoolAgent{Role: gdsv1.FrontendRole_FRONTEND_ROLE_PYLON, AgentId: "pod-0", Attributes: map[string]string{"models": "llama"}}}},
+		{"POST", base + "/pools/p1/agents/FRONTEND_ROLE_PYLON:heartbeat", `{"agentId":"pod-0","epoch":"9","attributes":{"models":"mistral"}}`,
+			"HeartbeatPoolAgent",
+			&gdsv1.HeartbeatPoolAgentRequest{Clusterset: "cs1", PoolId: "p1", Role: gdsv1.FrontendRole_FRONTEND_ROLE_PYLON, AgentId: "pod-0", Epoch: 9,
+				Attributes: map[string]string{"models": "mistral"}}},
+		{"DELETE", base + "/pools/p1/agents/FRONTEND_ROLE_KV_RELAY?agentId=relay-0", "", "DeregisterPoolAgent",
+			&gdsv1.DeregisterPoolAgentRequest{Clusterset: "cs1", PoolId: "p1", Role: gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY, AgentId: "relay-0"}},
 		{"GET", base + "/pools/p1", "", "GetPool",
 			&gdsv1.GetPoolRequest{Clusterset: "cs1", PoolId: "p1"}},
 		{"GET", base + "/pools?model=llama&hardwareClass=b200-ib&states=POOL_STATE_ACTIVE&states=POOL_STATE_DRAINING", "", "ListPools",

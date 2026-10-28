@@ -359,6 +359,42 @@ func (v *View) PoolRecord(clusterSet, poolID string) (store.PoolRecord, bool) {
 	return store.PoolRecord{}, false
 }
 
+// PoolAgentRecord returns one pool agent registration by pool id, role and
+// agent id.
+func (v *View) PoolAgentRecord(clusterSet, poolID string, role store.FrontendRole, agentID string) (store.PoolAgentRecord, bool) {
+	cs := v.get(clusterSet)
+	if cs == nil {
+		return store.PoolAgentRecord{}, false
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	for k, r := range cs.agents {
+		if k.PoolID == poolID && k.Role == role && k.AgentID == agentID {
+			return r.Clone(), true
+		}
+	}
+	return store.PoolAgentRecord{}, false
+}
+
+// PoolAgentRecords returns every agent registration with the pool id,
+// sorted by key.
+func (v *View) PoolAgentRecords(clusterSet, poolID string) []store.PoolAgentRecord {
+	cs := v.get(clusterSet)
+	if cs == nil {
+		return nil
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	var out []store.PoolAgentRecord
+	for k, r := range cs.agents {
+		if k.PoolID == poolID {
+			out = append(out, r.Clone())
+		}
+	}
+	slices.SortFunc(out, func(a, b store.PoolAgentRecord) int { return store.ComparePoolAgentKeys(a.Key, b.Key) })
+	return out
+}
+
 // ExportStatus is a stored export with the counts of its endpoint set.
 type ExportStatus struct {
 	Record              store.ExportRecord

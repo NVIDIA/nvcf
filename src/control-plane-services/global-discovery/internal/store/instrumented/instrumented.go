@@ -188,6 +188,31 @@ func (s *Store) DeletePool(ctx context.Context, key store.PoolKey) (err error) {
 	return s.next.DeletePool(ctx, key)
 }
 
+func poolAgentAttrs(k store.PoolAgentKey) []attribute.KeyValue {
+	return append(poolAttrs(k.PoolKey()), attribute.String("gds.pool_agent.role", string(k.Role)), attribute.String("gds.pool_agent.id", k.AgentID))
+}
+
+// PutPoolAgent implements store.Store.
+func (s *Store) PutPoolAgent(ctx context.Context, rec store.PoolAgentRecord, opts store.PutPoolAgentOptions) (out store.PoolAgentRecord, err error) {
+	ctx, done := s.start(ctx, "put_pool_agent", poolAgentAttrs(rec.Key)...)
+	defer func() { done(err) }()
+	return s.next.PutPoolAgent(ctx, rec, opts)
+}
+
+// RenewPoolAgentLease implements store.Store.
+func (s *Store) RenewPoolAgentLease(ctx context.Context, key store.PoolAgentKey, epoch uint64, now time.Time, patch store.PoolAgentHeartbeatPatch) (out store.PoolAgentRecord, err error) {
+	ctx, done := s.start(ctx, "renew_pool_agent_lease", poolAgentAttrs(key)...)
+	defer func() { done(err) }()
+	return s.next.RenewPoolAgentLease(ctx, key, epoch, now, patch)
+}
+
+// DeletePoolAgent implements store.Store.
+func (s *Store) DeletePoolAgent(ctx context.Context, key store.PoolAgentKey) (err error) {
+	ctx, done := s.start(ctx, "delete_pool_agent", poolAgentAttrs(key)...)
+	defer func() { done(err) }()
+	return s.next.DeletePoolAgent(ctx, key)
+}
+
 // ListClusterSets implements store.Store.
 func (s *Store) ListClusterSets(ctx context.Context) (out []string, err error) {
 	ctx, done := s.start(ctx, "list_cluster_sets")

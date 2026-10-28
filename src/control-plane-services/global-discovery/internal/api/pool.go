@@ -327,16 +327,31 @@ func (s *Server) DeregisterPool(ctx context.Context, req *gdsv1.DeregisterPoolRe
 	if err := v.err(); err != nil {
 		return nil, err
 	}
-	rec, ok := s.poolRecord(ctx, req.GetClusterset(), req.GetPoolId())
-	if !ok {
-		return &gdsv1.DeregisterPoolResponse{}, nil
+	cs, id := req.GetClusterset(), req.GetPoolId()
+	// The pool is addressed through its API record or, for a pool known
+	// from agent registrations alone, through those; the store cascades
+	// to the pool's agents either way.
+	var keys []store.PoolKey
+	name := ""
+	if rec, ok := s.poolRecord(ctx, cs, id); ok {
+		keys, name = append(keys, rec.Key), rec.Name
 	}
-	if err := s.store.DeletePool(ctx, rec.Key); err != nil {
-		return nil, storeError(err, "deregister pool")
+	for _, a := range s.view.PoolAgentRecords(cs, id) {
+		if k := a.Key.PoolKey(); !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+		if name == "" {
+			name = a.PoolName
+		}
 	}
-	s.view.ApplyPoolDelete(rec.Key)
-	s.log.Info("pool deregistered", zap.String("clusterset", rec.Key.ClusterSet), zap.String("cluster", rec.Key.Cluster),
-		zap.String("pool_id", rec.Key.PoolID), zap.String("pool", rec.Name))
+	for _, key := range keys {
+		if err := s.store.DeletePool(ctx, key); err != nil {
+			return nil, storeError(err, "deregister pool")
+		}
+		s.view.ApplyPoolDelete(key)
+		s.log.Info("pool deregistered", zap.String("clusterset", key.ClusterSet), zap.String("cluster", key.Cluster),
+			zap.String("pool_id", key.PoolID), zap.String("pool", name))
+	}
 	return &gdsv1.DeregisterPoolResponse{}, nil
 }
 

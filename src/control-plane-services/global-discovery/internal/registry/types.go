@@ -32,6 +32,8 @@ const (
 	DefaultClusterLeaseTTL = 30 * time.Second
 	// DefaultPoolLeaseTTL applies when RegisterPool names no TTL.
 	DefaultPoolLeaseTTL = 60 * time.Second
+	// DefaultPoolAgentLeaseTTL applies when RegisterPoolAgent names no TTL.
+	DefaultPoolAgentLeaseTTL = 60 * time.Second
 	// MinLeaseTTL and MaxLeaseTTL bound every requested TTL.
 	MinLeaseTTL = 10 * time.Second
 	MaxLeaseTTL = 5 * time.Minute
@@ -63,6 +65,42 @@ const (
 	// PoolStateGone: deregistered, or both the labelled export and the API
 	// registration are gone. Kept briefly as a tombstone.
 	PoolStateGone PoolState = "GONE"
+)
+
+// AgentSource says where a pool agent is known from.
+type AgentSource string
+
+const (
+	// AgentSourceLabel: an exported Service with the agent's role.
+	AgentSourceLabel AgentSource = "LABEL"
+	// AgentSourceAPI: a RegisterPoolAgent registration.
+	AgentSourceAPI AgentSource = "API"
+	// AgentSourceBoth: both.
+	AgentSourceBoth AgentSource = "BOTH"
+)
+
+// AgentSourceOf returns the source of an agent known from an exported
+// Service (label), a registration (api), or both. It is empty for neither.
+func AgentSourceOf(label, api bool) AgentSource {
+	switch {
+	case label && api:
+		return AgentSourceBoth
+	case label:
+		return AgentSourceLabel
+	case api:
+		return AgentSourceAPI
+	}
+	return ""
+}
+
+// DialMode says how routers and a pool agent connect.
+type DialMode string
+
+const (
+	// DialModeInbound: routers dial the agent (the OPENAI frontend).
+	DialModeInbound DialMode = "INBOUND"
+	// DialModeOutbound: the agent dials the routers (PYLON, KV_RELAY).
+	DialModeOutbound DialMode = "OUTBOUND"
 )
 
 // Role is the role of an exported Service, from the gds.nvidia.com/role

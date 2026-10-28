@@ -19,6 +19,7 @@ package store
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"time"
 )
@@ -40,6 +41,7 @@ func (s *ClusterSetSnapshot) Sort() {
 	slices.SortFunc(s.Exports, func(a, b ExportRecord) int { return CompareExportKeys(a.Key, b.Key) })
 	slices.SortFunc(s.EndpointSets, func(a, b EndpointSetRecord) int { return CompareExportKeys(a.Key, b.Key) })
 	slices.SortFunc(s.Pools, func(a, b PoolRecord) int { return ComparePoolKeys(a.Key, b.Key) })
+	slices.SortFunc(s.PoolAgents, func(a, b PoolAgentRecord) int { return ComparePoolAgentKeys(a.Key, b.Key) })
 }
 
 // CompareClusterKeys orders cluster keys by clusterset, then cluster.
@@ -65,6 +67,22 @@ func ComparePoolKeys(a, b PoolKey) int {
 		cmp.Compare(a.Cluster, b.Cluster),
 		cmp.Compare(a.PoolID, b.PoolID),
 	)
+}
+
+// ComparePoolAgentKeys orders pool agent keys by clusterset, cluster, pool
+// id, role, then agent id.
+func ComparePoolAgentKeys(a, b PoolAgentKey) int {
+	return cmp.Or(ComparePoolKeys(a.PoolKey(), b.PoolKey()), cmp.Compare(a.Role, b.Role), cmp.Compare(a.AgentID, b.AgentID))
+}
+
+// Apply applies the patch to an agent registration and reports whether it
+// changed it. Empty attributes leave the stored ones unchanged.
+func (p PoolAgentHeartbeatPatch) Apply(rec *PoolAgentRecord) bool {
+	if len(p.Attributes) == 0 || maps.Equal(p.Attributes, rec.Attributes) {
+		return false
+	}
+	rec.Attributes = maps.Clone(p.Attributes)
+	return true
 }
 
 // Apply applies the patch to a pool spec and reports whether it changed it.

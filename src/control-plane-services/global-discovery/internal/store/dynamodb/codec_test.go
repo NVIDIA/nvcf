@@ -122,6 +122,18 @@ func fullPool() store.PoolRecord {
 	}
 }
 
+func fullPoolAgent() store.PoolAgentRecord {
+	return store.PoolAgentRecord{
+		Key:          store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "p1", Role: store.FrontendRolePylon, AgentID: "pylon-7f9c"},
+		PoolName:     "pool-a",
+		Attributes:   map[string]string{"models": "llama-3"},
+		Lease:        store.Lease{Epoch: 43, TTL: time.Minute, RenewedAt: t0.Add(time.Minute)},
+		Generation:   6,
+		RegisteredAt: t0,
+		UpdatedAt:    t0.Add(time.Second),
+	}
+}
+
 // roundTrip marshals an item to attributes and back, as a write and a read
 // do.
 func roundTrip(t *testing.T, it item) item {
@@ -166,6 +178,36 @@ func TestCodecRoundTrip(t *testing.T) {
 		got, err := decodePool(roundTrip(t, it))
 		require.NoError(t, err)
 		assert.Equal(t, rec, got)
+	})
+	t.Run("pool agent", func(t *testing.T) {
+		rec := fullPoolAgent()
+		it, err := encodePoolAgent(rec, 98)
+		require.NoError(t, err)
+		assert.Equal(t, int64(98), it.ExpiresAt)
+		got, err := decodePoolAgent(roundTrip(t, it))
+		require.NoError(t, err)
+		assert.Equal(t, rec, got)
+
+		// The top-level attributes are not also in the body.
+		var body gdsv1.PoolAgentRegistration
+		require.NoError(t, proto.Unmarshal(it.Body, &body))
+		assert.Empty(t, body.AgentId)
+		assert.Zero(t, body.Generation)
+		assert.Nil(t, body.UpdatedAt)
+		assert.Zero(t, body.Lease.Epoch)
+		assert.Nil(t, body.Lease.RenewedAt)
+		assert.Equal(t, "pool-a", it.PoolName)
+
+		zero := store.PoolAgentRecord{Key: rec.Key}
+		it, err = encodePoolAgent(zero, 0)
+		require.NoError(t, err)
+		av, err := it.attributes()
+		require.NoError(t, err)
+		assert.NotContains(t, av, attrLeaseEpoch)
+		assert.NotContains(t, av, attrPoolName)
+		got, err = decodePoolAgent(roundTrip(t, it))
+		require.NoError(t, err)
+		assert.Equal(t, zero, got)
 	})
 }
 
@@ -280,6 +322,13 @@ func TestCodecRejectsUnknownEnums(t *testing.T) {
 	pool.Spec.Services[0].Role = "ROUTER"
 	_, err = encodePool(pool, 0)
 	assert.ErrorContains(t, err, `unknown frontend role "ROUTER"`)
+
+	for _, role := range []store.FrontendRole{"", "ROUTER"} {
+		agent := fullPoolAgent()
+		agent.Key.Role = role
+		_, err = encodePoolAgent(agent, 0)
+		assert.ErrorContains(t, err, "unknown frontend role")
+	}
 }
 
 // TestCodecDecodesUnknownProtoEnums checks that values from a newer
@@ -304,6 +353,8 @@ func TestCodecDecodeErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = decodeEndpointSet(bad)
 	assert.Error(t, err)
+	_, err = decodePoolAgent(bad)
+	assert.Error(t, err)
 
 	wrongSK := item{PK: "CS#cs", SK: "XX#c1"}
 	_, err = decodeCluster(wrongSK)
@@ -311,6 +362,8 @@ func TestCodecDecodeErrors(t *testing.T) {
 	_, err = decodeExport(wrongSK)
 	assert.Error(t, err)
 	_, err = decodePool(wrongSK)
+	assert.Error(t, err)
+	_, err = decodePoolAgent(wrongSK)
 	assert.Error(t, err)
 	_, err = decodeEndpointSet(item{PK: "EP#cs#c1", SK: "only-one-part"})
 	assert.Error(t, err)
@@ -321,6 +374,8 @@ func TestCodecDecodeErrors(t *testing.T) {
 	_, err = decodeExport(item{PK: "CS#cs", SK: "EX#c1#n#s", Body: garbage})
 	assert.Error(t, err)
 	_, err = decodePool(item{PK: "CS#cs", SK: "PL#c1#p", Body: garbage})
+	assert.Error(t, err)
+	_, err = decodePoolAgent(item{PK: "CS#cs", SK: "PA#c1#p#PYLON#pod-0", Body: garbage})
 	assert.Error(t, err)
 	_, err = decodeEndpointSet(item{PK: "EP#cs#c1", SK: "n#s", Body: garbage})
 	assert.Error(t, err)

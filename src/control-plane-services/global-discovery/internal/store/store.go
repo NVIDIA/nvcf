@@ -16,20 +16,24 @@ limitations under the License.
 */
 
 // Package store defines the persistence contract of the GDS server: one
-// interface per aggregate (clusters, exports, endpoint sets, pools) composed
+// interface per aggregate (clusters, exports, endpoint sets, pools, pool
+// agents) composed
 // into Store, the record types they persist, and typed errors.
 //
 // Every record belongs to a clusterset. Records are written by exactly one
 // logical writer (the controller of a cluster, the operator of a pool), and
 // every write is conditional:
 //
-//   - PutCluster mints a new lease epoch max(stored+1, now in unix ms).
-//   - RenewClusterLease and RenewPoolLease require the current epoch.
-//   - PutExport, PutEndpointSet and PutPool require a generation greater than
-//     the stored one and report the stored one in ErrStaleGeneration.
+//   - PutCluster mints a new lease epoch max(stored+1, now in unix ms), and
+//     so do PutPool and PutPoolAgent when asked to.
+//   - RenewClusterLease, RenewPoolLease and RenewPoolAgentLease require the
+//     current epoch.
+//   - PutExport, PutEndpointSet, PutPool and PutPoolAgent require a
+//     generation greater than the stored one and report the stored one in
+//     ErrStaleGeneration.
 //   - PutPool keeps pool names unique per (clusterset, cluster).
-//   - Deletes are idempotent; DeleteCluster cascades to everything the
-//     cluster owns.
+//   - Deletes are idempotent; DeletePool cascades to the pool's agent
+//     registrations and DeleteCluster to everything the cluster owns.
 //
 // Leases are never expired by the store. The server evaluates them at read
 // time from Lease.RenewedAt and Lease.TTL. Timestamps passed in as now are
@@ -53,6 +57,7 @@ type Store interface {
 	ExportStore
 	EndpointStore
 	PoolStore
+	PoolAgentStore
 
 	// ListClusterSets returns the names of every clusterset that has had a
 	// record written, sorted. A clusterset stays listed after its records
@@ -83,10 +88,11 @@ type ClusterStore interface {
 	RenewClusterLease(ctx context.Context, key ClusterKey, epoch uint64, now time.Time) (ClusterRecord, error)
 	// GetCluster returns ErrNotFound for an unknown cluster.
 	GetCluster(ctx context.Context, key ClusterKey) (ClusterRecord, error)
-	// DeleteCluster removes the cluster and every export, endpoint set and
-	// pool of the cluster, including the pools' name reservations. It is
-	// idempotent: deleting an unknown cluster succeeds, and records of the
-	// cluster written without a registration are removed as well.
+	// DeleteCluster removes the cluster and every export, endpoint set, pool
+	// and pool agent registration of the cluster, including the pools' name
+	// reservations. It is idempotent: deleting an unknown cluster succeeds,
+	// and records of the cluster written without a registration are removed
+	// as well.
 	DeleteCluster(ctx context.Context, key ClusterKey) error
 }
 
@@ -135,8 +141,44 @@ type PoolStore interface {
 	// returns ErrNotFound for an unknown pool and ErrLeaseEpochMismatch for
 	// another epoch or a pool without a lease. Generation is unchanged.
 	RenewPoolLease(ctx context.Context, key PoolKey, epoch uint64, now time.Time, patch PoolHeartbeatPatch) (PoolRecord, error)
-	// DeletePool removes the pool and releases its name. It is idempotent.
+	// DeletePool removes the pool, releases its name and removes every
+	// agent registration of the pool (same cluster and pool id), also when
+	// no pool record exists. It is idempotent.
 	DeletePool(ctx context.Context, key PoolKey) error
+}
+
+// PoolAgentStore persists the API registrations of pool agents: one per
+// process instance, keyed by (cluster, pool id, role, agent id), each with
+// its own lease, so that the instances of one role never fence each other.
+// Label-derived agents are computed from exports and never stored.
+type PoolAgentStore interface {
+	// PutPoolAgent creates or replaces an agent registration when
+	// rec.Generation is greater than the stored generation
+	// (ErrStaleGeneration otherwise).
+	//
+	// With opts.MintLease the store mints a new lease epoch
+	// max(stored epoch + 1, opts.Now.UnixMilli()) with TTL rec.Lease.TTL
+	// and RenewedAt opts.Now; otherwise it keeps the stored lease (none for
+	// a new registration). RegisteredAt is kept from an existing
+	// registration and set to opts.Now for a new one; UpdatedAt is set to
+	// opts.Now. It returns the stored record.
+	PutPoolAgent(ctx context.Context, rec PoolAgentRecord, opts PutPoolAgentOptions) (PoolAgentRecord, error)
+	// RenewPoolAgentLease sets Lease.RenewedAt to now and applies the patch
+	// when epoch equals the stored, non-zero lease epoch; UpdatedAt is set
+	// to now when the patch changes the attributes. It returns ErrNotFound
+	// for an unknown registration and ErrLeaseEpochMismatch for another
+	// epoch or a registration without a lease. Generation is unchanged.
+	RenewPoolAgentLease(ctx context.Context, key PoolAgentKey, epoch uint64, now time.Time, patch PoolAgentHeartbeatPatch) (PoolAgentRecord, error)
+	// DeletePoolAgent removes the registration. It is idempotent.
+	DeletePoolAgent(ctx context.Context, key PoolAgentKey) error
+}
+
+// PutPoolAgentOptions controls PutPoolAgent.
+type PutPoolAgentOptions struct {
+	// Now is the server time of the write.
+	Now time.Time
+	// MintLease starts a new lease incarnation, as RegisterPoolAgent does.
+	MintLease bool
 }
 
 // PutPoolOptions controls PutPool.
@@ -194,6 +236,29 @@ func (k PoolKey) ClusterKey() ClusterKey {
 	return ClusterKey{ClusterSet: k.ClusterSet, Cluster: k.Cluster}
 }
 
+// PoolAgentKey identifies a pool agent registration: one per process
+// instance (AgentID) of a role of a pool. The cluster is part of the key, as
+// for pools.
+type PoolAgentKey struct {
+	ClusterSet string
+	Cluster    string
+	PoolID     string
+	Role       FrontendRole
+	// AgentID identifies the registering process, for example a Pylon
+	// inference_server_id or a relay pod name.
+	AgentID string
+}
+
+// PoolKey returns the key of the agent's pool.
+func (k PoolAgentKey) PoolKey() PoolKey {
+	return PoolKey{ClusterSet: k.ClusterSet, Cluster: k.Cluster, PoolID: k.PoolID}
+}
+
+// ClusterKey returns the key of the agent's cluster.
+func (k PoolAgentKey) ClusterKey() ClusterKey {
+	return ClusterKey{ClusterSet: k.ClusterSet, Cluster: k.Cluster}
+}
+
 // ClusterSetSnapshot is every record of one clusterset. Each slice is sorted
 // by key.
 type ClusterSetSnapshot struct {
@@ -202,6 +267,7 @@ type ClusterSetSnapshot struct {
 	Exports      []ExportRecord
 	EndpointSets []EndpointSetRecord
 	Pools        []PoolRecord
+	PoolAgents   []PoolAgentRecord
 }
 
 // Lease is a server-minted liveness lease. It is evaluated at read time; see
@@ -262,6 +328,27 @@ type PoolRecord struct {
 	OwnerID      string
 	RegisteredAt time.Time
 	UpdatedAt    time.Time
+}
+
+// PoolAgentRecord is the API registration of one pool agent.
+type PoolAgentRecord struct {
+	Key PoolAgentKey
+	// PoolName is the name of the agent's pool, the join key with labelled
+	// exports and pool records.
+	PoolName string
+	// Attributes are writer-owned.
+	Attributes map[string]string
+	// Lease has Epoch 0 when the registration has none.
+	Lease        Lease
+	Generation   uint64
+	RegisteredAt time.Time
+	UpdatedAt    time.Time
+}
+
+// PoolAgentHeartbeatPatch is the optional state an agent heartbeat reports.
+type PoolAgentHeartbeatPatch struct {
+	// Attributes replace the stored attributes when non-empty.
+	Attributes map[string]string
 }
 
 // PoolHeartbeatPatch is the optional state a pool heartbeat reports. Nil
