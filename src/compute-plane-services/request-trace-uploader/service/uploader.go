@@ -234,9 +234,9 @@ var errNotReady = errors.New("request trace uploader cannot start safely")
 
 // Run serves health at once, runs the startup steps, reports ready, and then
 // runs scan passes on the scan interval and poll rounds on the status
-// interval until ctx ends. Then it drains: it stops taking
-// new segments, lets work in progress finish, submits what is already
-// prepared and polls once more, all within the drain timeout, and releases
+// interval until ctx ends. Then it drains: it lets work in progress
+// finish, scans the spool one last time, submits what is prepared and polls
+// once more, all within the drain timeout, and releases
 // the spool. A backend or spool fault never stops the process; a journal it
 // cannot read keeps it live and not ready.
 func (u *Uploader) Run(ctx context.Context) error {

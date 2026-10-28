@@ -89,7 +89,7 @@ func (u *Uploader) pass(ctx context.Context, poll bool) error {
 	}
 	var errs []error
 	if !u.draining.Load() {
-		errs = append(errs, u.locked(&u.intakeMu, func() error { return u.intake(ctx) }))
+		errs = append(errs, u.locked(&u.intakeMu, func() error { return u.intake(ctx, false) }))
 	}
 	errs = append(errs, u.locked(&u.submitMu, func() error { return errors.Join(u.submitPrepared(ctx), u.resend(ctx)) }))
 	if poll {
@@ -119,10 +119,13 @@ func (u *Uploader) Poll(ctx context.Context) error {
 	)
 }
 
-// drain submits what is already prepared, polls once more and cleans up,
-// without reading any new segment.
+// drain scans the spool one last time, so a segment that closed after the
+// last scan is not left behind, submits what is prepared, polls once more
+// and cleans up. ctx carries the drain timeout; what it cuts short stays in
+// the journal and on the spool for the next start.
 func (u *Uploader) drain(ctx context.Context) error {
 	return errors.Join(
+		u.locked(&u.intakeMu, func() error { return u.intake(ctx, true) }),
 		u.locked(&u.submitMu, func() error { return u.submitPrepared(ctx) }),
 		u.locked(&u.pollMu, func() error { return u.pollRound(ctx) }),
 		u.locked(&u.cleanupMu, func() error { return u.cleanupRound(ctx) }),
@@ -130,8 +133,10 @@ func (u *Uploader) drain(ctx context.Context) error {
 }
 
 // intake reads every closed segment the journal does not know yet. Only one
-// intake runs at a time; it shares nothing with polling but the journal.
-func (u *Uploader) intake(ctx context.Context) error {
+// intake runs at a time; it shares nothing with polling but the journal. A
+// scan stops early once draining starts, except the final one, which the
+// drain itself runs.
+func (u *Uploader) intake(ctx context.Context, final bool) error {
 	scan, err := segment.ScanDir(u.cfg.SourceDir, u.cfg.Prefixes())
 	if err != nil {
 		return fmt.Errorf("scan the spool: %w", err)
@@ -142,7 +147,7 @@ func (u *Uploader) intake(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if u.draining.Load() {
+		if !final && u.draining.Load() {
 			break
 		}
 		// Checked per segment, so a large bad backlog stops at the trip

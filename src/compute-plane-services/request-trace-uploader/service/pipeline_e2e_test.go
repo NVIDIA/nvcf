@@ -459,3 +459,55 @@ func TestStartupDoesNotWarnWhenDefaultBatchLimitsExceedTheBackend(t *testing.T) 
 		})
 	}
 }
+
+func TestDrainTakesASegmentThatClosedAfterTheLastScan(t *testing.T) {
+	cases := []struct {
+		name string
+		// slow holds the second create past the drain timeout.
+		slow bool
+	}{
+		{name: "exported within the drain"},
+		{name: "kept and journaled when the drain runs out", slow: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spool, _ := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+			lastActive := filepath.Join(spool.Dir, config.DefaultSegmentPrefix+".000001.jsonl.gz")
+			fake := backendtest.NewFake()
+			if tc.slow {
+				fake.Script(backendtest.SubmitStep{}, backendtest.SubmitStep{Delay: time.Minute})
+			}
+			listener, _ := listen(t)
+			uploader := newUploader(t, spool, fake, service.Options{Listener: listener}, map[string]string{
+				config.EnvScanInterval:   "3600",
+				config.EnvStatusInterval: "3600",
+				config.EnvDrainTimeout:   "1",
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- uploader.Run(ctx) }()
+			waitFor(t, "the first submit", func() bool { return len(fake.Jobs()) == 1 })
+
+			// The writer rolls: the segment the last scan saw as active
+			// is closed now, and SIGTERM comes before the next scan.
+			spool.Roll(uploadertest.NewSegment().Member(uploadertest.RequestEnd("next-active", 3)).Bytes())
+			cancel()
+			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if tc.slow {
+				if gone(lastActive) {
+					t.Fatal("source deleted though its export did not finish, want it kept")
+				}
+				if _, ok := journalStates(t, spool)[filepath.Base(lastActive)]; !ok {
+					t.Fatal("the segment that closed after the last scan is not in the journal")
+				}
+				return
+			}
+			if !gone(lastActive) {
+				t.Fatalf("the segment that closed after the last scan was left on the spool; jobs = %d", len(fake.Jobs()))
+			}
+		})
+	}
+}

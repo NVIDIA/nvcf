@@ -43,9 +43,10 @@ volume, so every step survives a restart.
    if its size or modification time changed, and only then deleted. A
    backend that does not export, such as `debug` or a dry run, never deletes
    a source.
-7. Shutdown: on SIGTERM the uploader stops reading new segments, lets work
-   in progress finish, submits what is prepared, polls once more, and
-   releases the spool, all within the drain timeout. What is left stays in
+7. Shutdown: on SIGTERM the uploader lets work in progress finish, scans
+   the spool one last time so a segment that closed after the last scan is
+   not left behind, submits what is prepared, polls once more, and releases
+   the spool, all within the drain timeout. What is left stays in
    the journal for the next start.
 
 Faults follow `internal/retry`: auth failures and outages hold every submit
