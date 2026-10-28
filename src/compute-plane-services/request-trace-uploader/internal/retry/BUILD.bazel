@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "retry",
+    srcs = [
+        "backoff.go",
+        "breaker.go",
+        "config.go",
+        "correlator.go",
+        "gate.go",
+        "limiter.go",
+        "policy.go",
+        "state.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/retry",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/backend"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":retry",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+go_test(
+    name = "retry_test",
+    srcs = [
+        "backoff_test.go",
+        "breaker_test.go",
+        "config_test.go",
+        "correlator_test.go",
+        "gate_test.go",
+        "limiter_test.go",
+        "policy_test.go",
+    ],
+    embed = [":retry"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/backend"],
+)
