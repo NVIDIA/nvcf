@@ -378,7 +378,7 @@ sequenceDiagram
     participant P as Pylon (B), gds-client
     participant K as stargate-k8s-router pods (A), the seeds
     participant X as Stargate pods (A)
-    R->>G: exported by controller A (ports grpc, quic; annotations dial-scheme)
+    R->>G: exported by controller A (ports grpc and quic, annotations dial-scheme and router-mode)
     P->>G: WatchRouters (RouterCache)
     G-->>P: Router{cluster A, namespace, name, grpc_port, replicas[]}
     P->>P: seeds = <dial scheme>://<replica address>:50071 per ready replica of A
@@ -389,6 +389,7 @@ sequenceDiagram
     K->>X: k8s-router forwards by authority to the named pod
     P->>K: QUIC tunnel per replica, SNI = routing target
     K->>X: k8s-router forwards by SNI
+    Note over P,X: direct mode (4.5) has no K: the replicas are Stargate pods, dialled by pod IP with the pod identity as authority and SNI
 ```
 
 Pool path (a Global Router learning pools):
@@ -405,10 +406,10 @@ sequenceDiagram
     CC->>G: PutServiceExport + ReplaceEndpoints (one export per Service)
     O->>G: RegisterPool / UpdatePool / HeartbeatPool (worker counts, DRAINING)
     A->>G: RegisterPoolAgent(role KV_RELAY | PYLON, agent_id) + HeartbeatPoolAgent
-    G->>G: derive Pool: exports + overlay + agents; live = cluster lease and a live ingress agent
+    G->>G: derive Pool from exports, overlay and agents (live = cluster lease and a live ingress agent)
     GR->>G: ListPools(filter) then WatchPools, full re-list every TTL
     G-->>GR: Pool{..., agents[], kv_relay_live, endpoints grouped by cluster}
-    GR->>GR: dial frontend via derived VIP or per-replica endpoints; use KV facts when kv_relay_live
+    GR->>GR: dial frontend via derived VIP or per-replica endpoints, use KV facts when kv_relay_live
 ```
 
 Cross-region request path (a Global Router in cluster A dispatching to a Pool Frontend in
@@ -425,7 +426,7 @@ sequenceDiagram
     participant PF as Pool Frontend pods (B)
     GR->>G: WatchPools (include_endpoints)
     G-->>GR: Pool{frontends[], services[], ready_endpoint_count, state}
-    GR->>GR: choose pool; address = derived-<hash>.<ns>.svc.cluster.local:<port> or frontends[].url
+    GR->>GR: choose pool, address = derived-<hash>.<ns>.svc.cluster.local:<port> or frontends[].url
     GR->>V: HTTP request
     V->>PF: kube-proxy DNAT to a ready remote pod IP over VPC peering
     PF-->>GR: streamed response
