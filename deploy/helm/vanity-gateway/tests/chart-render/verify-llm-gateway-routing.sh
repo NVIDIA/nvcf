@@ -76,10 +76,20 @@ assert_renders "a model without functionType renders with an empty endpoint"
 write_values "${ENDPOINT}" chatCompletions "            functionType: llmGateway"
 assert_rejected "value must be 'LLM'" "an unrecognized functionType is rejected"
 
-for section in responses embeddings; do
+for section in responses embeddings decisions; do
   write_values "${ENDPOINT}" "${section}" "${LLM}"
   assert_renders "an LLM model renders in ${section}"
 done
+
+write_values "" decisions "${LLM}"
+assert_rejected "/vanityGateway/config/llmGatewayEndpoint" "an LLM decisions model requires an endpoint"
+
+write_values "${ENDPOINT}" decisions "${LLM}
+            usePexec: true"
+assert_rejected "a_model/usePexec" "usePexec is rejected on an LLM decisions model"
+
+write_values "" decisions ""
+assert_renders "a decisions model without functionType renders with an empty endpoint"
 
 for section in completions imageGenerations imageEdits imageVariations; do
   write_values "${ENDPOINT}" "${section}" "${LLM}"
@@ -155,6 +165,46 @@ assert_rejected "anthropicMessages/a_model/customHeaders" "an X-Priority custom 
 write_messages_values "${ENDPOINT}" "${MESSAGES_LLM}
           sessionTimeout: 900"
 assert_rejected "anthropicMessages/a_model/sessionTimeout" "sessionTimeout is rejected on an LLM Messages model"
+
+# typesafeSystemOne is a top-level sibling of anthropicMessages.
+write_system_one_values() {
+  local endpoint="$1" extra="$2"
+  cat > "${VALUES}" <<EOF
+vanityGateway:
+  image:
+    registry: example.com
+    repository: foo/bar
+  config:
+    llmGatewayEndpoint: "${endpoint}"
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+      typesafeSystemOne:
+        a_model:
+          modelName: acme/a-model
+          functionID: 00000000-0000-0000-0000-000000000001
+${extra}
+EOF
+}
+
+write_system_one_values "" "${MESSAGES_LLM}"
+assert_rejected "/vanityGateway/config/llmGatewayEndpoint" "an LLM System One model requires an endpoint"
+
+write_system_one_values "${ENDPOINT}" "${MESSAGES_LLM}"
+assert_renders "an LLM System One model with an endpoint renders"
+
+write_system_one_values "" ""
+assert_renders "a System One model without functionType renders with an empty endpoint"
+
+write_system_one_values "${ENDPOINT}" "${MESSAGES_LLM}
+          usePexec: true"
+assert_rejected "typesafeSystemOne/a_model/usePexec" "usePexec is rejected on an LLM System One model"
+
+write_system_one_values "${ENDPOINT}" "${MESSAGES_LLM}
+          customHeaders:
+            X-Priority: \"5\""
+assert_rejected "typesafeSystemOne/a_model/customHeaders" "an X-Priority custom header is rejected on an LLM System One model"
 
 # The proxy preserves the caller path and the transport only speaks http(s).
 for bad in "ftp://llm-gateway:8080" "http://llm-gateway:8080/v1"; do
