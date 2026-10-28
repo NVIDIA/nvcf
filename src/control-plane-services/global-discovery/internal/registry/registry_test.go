@@ -241,7 +241,8 @@ func TestPoolStateInputAPIOnly(t *testing.T) {
 
 func TestPoolStateInputLive(t *testing.T) {
 	assert.True(t, PoolStateInput{Overlay: true, PoolLeaseActive: true}.Live(), "API-only")
-	assert.False(t, PoolStateInput{Overlay: true, PoolLeaseActive: true, Agents: true}.Live(), "agents replace the pool lease")
+	assert.True(t, PoolStateInput{Overlay: true, PoolLeaseActive: true, Agents: true}.Live(), "a static ingress keeps the pool lease")
+	assert.False(t, PoolStateInput{Overlay: true, OverlayServices: true, PoolLeaseActive: true, Agents: true}.Live(), "joined pools need ready endpoints")
 	assert.True(t, PoolStateInput{LabelledExport: true, ClusterLeaseActive: true, ReadyIngressEndpoints: 1}.Live())
 	assert.False(t, PoolStateInput{LabelledExport: true, ReadyIngressEndpoints: 1}.Live(), "without the cluster lease")
 	assert.True(t, PoolStateInput{Agents: true, IngressAgentLeaseActive: true}.Live())
