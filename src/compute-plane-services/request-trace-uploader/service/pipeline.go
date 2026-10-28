@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -476,7 +477,7 @@ func (u *Uploader) submitFailed(b batch.Batch, err error) error {
 	// The journal counted this attempt when the batch was recorded or
 	// resumed, so it is not added again.
 	attempts := max(stored.Attempts, u.countFailure(stored.Members))
-	decision := u.policy.Failed(now, u.caps, retry.Failure{Key: b.ID, Stage: retry.StageSubmit, Fault: fault, Attempts: attempts})
+	decision := u.policy.Failed(now, u.caps, retry.Failure{Key: failureKey(stored.Members), Stage: retry.StageSubmit, Fault: fault, Attempts: attempts})
 	class := errorClass(fault)
 	slog.Warn("submit failed", "batch", shortID(b.ID), "segments", len(b.Members), "fault", faultText(fault), "action", decision.Action)
 	switch decision.Action {
@@ -613,7 +614,7 @@ func (u *Uploader) applyStatus(b journal.Batch, status backend.Status, err error
 		fault := backend.Classify(u.client, err)
 		u.countAuth(fault)
 		attempts := max(b.Attempts, u.countFailure(b.Members))
-		decision := u.policy.Failed(now, u.caps, retry.Failure{Key: b.ID, Stage: retry.StageJob, Fault: fault, JobID: true, Attempts: attempts})
+		decision := u.policy.Failed(now, u.caps, retry.Failure{Key: failureKey(b.Members), Stage: retry.StageJob, Fault: fault, JobID: true, Attempts: attempts})
 		slog.Warn("job failed", "batch", shortID(b.ID), "fault", faultText(fault), "action", decision.Action)
 		if decision.Action == retry.ActionQuarantine {
 			return u.split(b, errorClass(fault))
@@ -639,7 +640,7 @@ func (u *Uploader) confirmed(b journal.Batch, now time.Time) {
 	delete(u.lastPolled, b.ID)
 	u.stateMu.Unlock()
 	u.policy.Breaker().Succeeded()
-	u.policy.Succeeded(now, b.ID)
+	u.policy.Succeeded(now, failureKey(b.Members))
 	u.metrics.Add(telemetry.Uploads, 1, telemetry.Labels{"status": "success"})
 	u.metrics.Add(telemetry.TransportBytes, float64(bytes), nil)
 	u.metrics.Set(telemetry.LastSuccessTimestamp, float64(now.Unix()), nil)
@@ -797,6 +798,23 @@ func (u *Uploader) polledAt(batchID string) time.Time {
 	u.stateMu.Lock()
 	defer u.stateMu.Unlock()
 	return u.lastPolled[batchID]
+}
+
+// failureKey names a batch's work for fault correlation. A batch sent again
+// gets a new id, so the key is the member set instead: one segment failing
+// under a run of replacement batches counts as one item, never as many
+// items failing, which would hold the whole backend.
+func failureKey(members []journal.Member) string {
+	if len(members) == 1 {
+		return members[0].SegmentID
+	}
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.SegmentID)
+	}
+	slices.Sort(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
+	return "batch-" + hex.EncodeToString(sum[:])
 }
 
 // countFailure records one more failure for every member and returns the

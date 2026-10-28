@@ -333,3 +333,30 @@ func TestAConfirmationWhoseMembersWereNotRecordedIsFinishedWithoutARestart(t *te
 		t.Errorf("uploads{success} = %v, want 1", got)
 	}
 }
+
+func TestOneSegmentWhoseJobsKeepFailingIsQuarantinedWithoutHoldingTheBackend(t *testing.T) {
+	logs := captureLogs(t)
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)}, []string{uploadertest.RequestEnd("b", 2)})
+	fake := backendtest.NewFake()
+	// A failed job with no reason is an unknown-scope fault.
+	failing := backendtest.SubmitStep{Statuses: []backendtest.StatusStep{{Status: backend.StatusFailure}}}
+	fake.Script(failing, backendtest.SubmitStep{})
+	for range 20 {
+		fake.Script(failing)
+	}
+	uploader := newUploader(t, spool, fake, service.Options{}, nil)
+	passUntil(t, uploader, func() bool { return gone(closed[0]) && gone(closed[1]) })
+	if err := uploader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	states := journalStates(t, spool)
+	if state := states[filepath.Base(closed[0])]; state != journal.StateQuarantined {
+		t.Fatalf("failing segment state = %q after %d submits, want quarantined", state, fake.SubmitCalls())
+	}
+	if state := states[filepath.Base(closed[1])]; state != journal.StateDone {
+		t.Fatalf("healthy segment state = %q, want done", state)
+	}
+	if strings.Contains(logs.String(), `"action":"hold"`) {
+		t.Fatalf("one failing segment held the whole backend:\n%s", logs)
+	}
+}
