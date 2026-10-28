@@ -472,3 +472,30 @@ func TestDecisionRoutesSetEndpointTypeSpanAttribute(t *testing.T) {
 		})
 	}
 }
+
+func TestDecisionRoutesRelayBackend429BodiesUnchangedWithCustomMessage(t *testing.T) {
+	bodies := map[string]string{
+		decisionsPath: `{"error":{"message":"slow down","type":"rate_limit","param":null,"code":"rate_limited"}}`,
+		systemOnePath: `{"error":{"code":"rate_limit_exceeded","message":"slow down","request_id":"r1"},"request_id":"r1"}`,
+	}
+	for path, native := range bodies {
+		for name, body := range map[string]string{"native": native, "fastapi": fastAPIValidationErr} {
+			t.Run(path+" "+name, func(t *testing.T) {
+				backend := captureServer(t, make(chan capturedRequest, 1), func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Retry-After", "7")
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(body))
+				})
+				mux := openAIMux(t, decisionMappings(true, true, func(e *config.ModelFunctionDetails) {
+					e.TooManyRequestsMessage = "Upgrade your plan."
+				}), backend.URL, "http://llm.invalid")
+
+				rec := postDecision(t, mux, path, `{"model":"`+decisionModel+`"}`, nil)
+
+				assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+				assert.Equal(t, body, rec.Body.String())
+				assert.Equal(t, "7", rec.Header().Get("Retry-After"))
+			})
+		}
+	}
+}
