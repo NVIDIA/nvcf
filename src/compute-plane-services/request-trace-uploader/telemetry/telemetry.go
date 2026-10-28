@@ -94,6 +94,9 @@ const (
 	// UnknownStatus counts job status reads that returned a status the core
 	// does not know. The job is treated as still running.
 	UnknownStatus = "unknown_status"
+	// SegmentsQuarantined counts segments moved to quarantine, by reason. A
+	// reason outside QuarantineReasons is counted as "unknown".
+	SegmentsQuarantined = "segments_quarantined"
 )
 
 // Labels are the attributes of one observation, without BackendLabel.
@@ -149,6 +152,14 @@ var payloadRecords = map[string][]string{"record_type": {"request_payload"}}
 // SuppressionActions are the action label values of RecordsSuppressed.
 var SuppressionActions = []string{"strip_payload", "drop_record"}
 
+// QuarantineReasons are the reason label values of SegmentsQuarantined: the
+// reasons prepare, batching and the fault policy record, and the backend
+// fault reasons. "unknown" also counts any reason not listed here.
+var QuarantineReasons = []string{
+	"bad_records", "unreadable", "unsupported_version", "too_large", "rejected", "retained",
+	"auth", "rate_limit", "timeout", "canceled", "unavailable", "unknown",
+}
+
 var catalog = []Instrument{
 	{Name: Uploads, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
 	{Name: UploadDuration, Kind: Histogram, Unit: "s", Buckets: secondsBuckets},
@@ -183,6 +194,8 @@ var catalog = []Instrument{
 	{Name: SuppressionHeaderPresent, Kind: Counter, Unit: "1", Labels: []string{"rule"}},
 	{Name: RecordsIncomplete, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 	{Name: UnknownStatus, Kind: Counter, Unit: "1"},
+	{Name: SegmentsQuarantined, Kind: Counter, Unit: "1", Labels: []string{"reason"},
+		Values: map[string][]string{"reason": QuarantineReasons}},
 }
 
 var byName = func() map[string]Instrument {

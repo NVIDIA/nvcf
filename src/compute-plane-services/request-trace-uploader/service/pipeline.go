@@ -361,16 +361,29 @@ func (u *Uploader) holdsStale(b journal.Batch) bool {
 }
 
 // quarantineSegment records a quarantine and then moves the files, so a crash
-// in between is finished by the next pass.
+// in between is finished by the next pass. The count is taken once, when the
+// quarantine is recorded.
 func (u *Uploader) quarantineSegment(id string, index int, reason string, paths ...string) error {
 	if err := u.store.Quarantine(id, reason); err != nil {
 		return err
 	}
+	u.metrics.Add(telemetry.SegmentsQuarantined, 1, quarantineLabels(reason))
 	if u.policy.Breaker().Quarantined() {
 		u.metrics.Add(telemetry.QuarantineTripped, 1, nil)
 	}
 	slog.Warn("quarantined request trace segment", "segment", index, "reason", reason)
 	return u.quarantine.Admit(id, paths...)
+}
+
+// quarantineLabels labels a quarantine by its reason. A backend may name
+// reasons of its own; any reason outside the known set is counted as unknown,
+// so the label stays bounded. The journal and the log keep the reason as
+// recorded.
+func quarantineLabels(reason string) telemetry.Labels {
+	if !slices.Contains(telemetry.QuarantineReasons, reason) {
+		reason = "unknown"
+	}
+	return telemetry.Labels{"reason": reason}
 }
 
 // submitPrepared batches every prepared destination that is in no batch and

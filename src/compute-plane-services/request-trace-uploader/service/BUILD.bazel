@@ -39,6 +39,7 @@ go_test(
         "objectstore_e2e_test.go",
         "objectstore_keys_e2e_test.go",
         "pipeline_e2e_test.go",
+        "quarantine_e2e_test.go",
         "service_test.go",
         "settings_e2e_test.go",
         "suppression_e2e_test.go",
