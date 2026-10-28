@@ -51,6 +51,7 @@ func registerHTTPSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the HTTP response body should end with "([^"]*)"$`, sc.theHTTPBodyShouldEndWith)
 	ctx.Step(`^the HTTP status should be (\d+)$`, sc.theHTTPStatusShouldBe)
 	ctx.Step(`^the HTTP status should be (\d+) or (\d+)$`, sc.theHTTPStatusShouldBeOneOf)
+	ctx.Step(`^the HTTP response header "([^"]*)" should equal "([^"]*)"$`, sc.theHTTPHeaderShouldEqual)
 	ctx.Step(`^the HTTP response body should contain "([^"]*)"$`, sc.theHTTPBodyShouldContain)
 	ctx.Step(`^the HTTP response body should not contain "([^"]*)"$`, sc.theHTTPBodyShouldNotContain)
 	ctx.Step(`^the HTTP response JSON field "([^"]*)" should equal "([^"]*)"$`, sc.theHTTPJSONFieldShouldEqual)
@@ -177,6 +178,25 @@ func (sc *ScenarioContext) theHTTPStatusShouldBeOneOf(first, second int) error {
 	}
 	if resp.Status != first && resp.Status != second {
 		return fmt.Errorf("http status = %d, want %d or %d: %s", resp.Status, first, second, truncateBody(resp.Body))
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) theHTTPHeaderShouldEqual(name, value string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("http response header name must be non-empty")
+	}
+	resp, err := sc.requireHTTP()
+	if err != nil {
+		return err
+	}
+	want := dsl.Interpolate(value)
+	got := resp.Header.Values(name)
+	if len(got) == 0 {
+		return fmt.Errorf("http response header %q is absent", name)
+	}
+	if got[0] != want {
+		return fmt.Errorf("http response header %q = %q, want %q", name, dsl.RedactSecrets(got[0]), dsl.RedactSecrets(want))
 	}
 	return nil
 }
