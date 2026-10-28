@@ -55,10 +55,22 @@ type decisionRequest struct {
 	Echo      *bool           `json:"x_load_tester_echo"`
 }
 
-type decisionUsage struct {
+type decisionsUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	InputTokensDetails struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokens        int `json:"output_tokens"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+	TotalTokens int `json:"total_tokens"`
+}
+
+type systemOneUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
 }
 
 type decisionEcho map[string]any
@@ -66,7 +78,7 @@ type decisionEcho map[string]any
 type decisionsResponse struct {
 	Model       string          `json:"model"`
 	Answers     []any           `json:"answers"`
-	Usage       decisionUsage   `json:"usage"`
+	Usage       decisionsUsage  `json:"usage"`
 	Echo        decisionEcho    `json:"echo"`
 	RequestBody json.RawMessage `json:"request_body,omitempty"`
 }
@@ -74,7 +86,7 @@ type decisionsResponse struct {
 type systemOneResponse struct {
 	Model       string          `json:"model"`
 	Answers     map[string]any  `json:"answers"`
-	Usage       decisionUsage   `json:"usage"`
+	Usage       systemOneUsage  `json:"usage"`
 	Echo        decisionEcho    `json:"echo"`
 	RequestBody json.RawMessage `json:"request_body,omitempty"`
 }
@@ -146,16 +158,16 @@ func handleDecisionRoute(w http.ResponseWriter, r *http.Request, systemOne bool)
 	if model == "" {
 		model = defaultModel
 	}
-	usage := decisionUsage{InputTokens: estimateDecisionInputTokens(r, raw), OutputTokens: 1}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	inputTokens := estimateDecisionInputTokens(r, raw)
 
 	if systemOne {
 		writeJSON(w, http.StatusOK, systemOneResponse{
 			Model: model, Answers: systemOneAnswers(request.Questions),
-			Usage: usage, Echo: echo, RequestBody: echoedBody,
+			Usage: systemOneUsage{InputTokens: inputTokens, OutputTokens: 1}, Echo: echo, RequestBody: echoedBody,
 		})
 		return
 	}
+	usage := decisionsUsage{InputTokens: inputTokens, OutputTokens: 1, TotalTokens: inputTokens + 1}
 	writeJSON(w, http.StatusOK, decisionsResponse{
 		Model: model, Answers: decisionAnswers(request.Questions),
 		Usage: usage, Echo: echo, RequestBody: echoedBody,
@@ -222,73 +234,176 @@ func withName(answer map[string]any, name string) map[string]any {
 	return answer
 }
 
-// firstOption returns the first entry of a list whose items are strings or
-// objects holding the label under key, or the first key of an object.
-func firstOption(raw json.RawMessage, key string) (string, bool) {
+// distribution puts 0.7 on the first of n options and spreads the rest evenly.
+func distribution(n int) []float64 {
+	probabilities := make([]float64, n)
+	for i := range probabilities {
+		switch {
+		case n == 1:
+			probabilities[i] = 1
+		case i == 0:
+			probabilities[i] = 0.7
+		default:
+			probabilities[i] = 0.3 / float64(n-1)
+		}
+	}
+	return probabilities
+}
+
+// listItems returns the elements of a JSON array, or nil.
+func listItems(raw json.RawMessage) []json.RawMessage {
 	var list []json.RawMessage
-	if json.Unmarshal(raw, &list) == nil && len(list) > 0 {
-		var text string
-		if json.Unmarshal(list[0], &text) == nil {
-			return text, true
-		}
-		var object map[string]json.RawMessage
-		if json.Unmarshal(list[0], &object) == nil && json.Unmarshal(object[key], &text) == nil {
-			return text, true
-		}
-		return "", false
+	if json.Unmarshal(raw, &list) != nil {
+		return nil
 	}
+	return list
+}
+
+// field returns the member of a JSON object item, or the item itself when it
+// is not an object, so plain values and objects are both accepted.
+func field(item json.RawMessage, key string) json.RawMessage {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(item, &object) == nil {
+		if value, ok := object[key]; ok {
+			return value
+		}
+	}
+	return item
+}
+
+// objectKeys returns the keys of a JSON object in document order.
+func objectKeys(raw json.RawMessage) []string {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if token, err := decoder.Token(); err == nil && token == json.Delim('{') {
-		if first, err := decoder.Token(); err == nil {
-			if name, ok := first.(string); ok {
-				return name, true
-			}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil
+	}
+	var keys []string
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, ok := token.(string)
+		if err != nil || !ok {
+			return keys
+		}
+		keys = append(keys, name)
+		var skip json.RawMessage
+		if decoder.Decode(&skip) != nil {
+			return keys
 		}
 	}
-	return "", false
+	return keys
+}
+
+func labelOf(item json.RawMessage, key string) string {
+	var label string
+	if json.Unmarshal(field(item, key), &label) == nil {
+		return label
+	}
+	return strings.Trim(string(field(item, key)), `"`)
+}
+
+func weightedIndex(probabilities []float64) float64 {
+	var score float64
+	for i, probability := range probabilities {
+		score += float64(i) * probability
+	}
+	return score
 }
 
 func cannedAnswer(question decisionQuestion, systemOne bool) map[string]any {
-	probabilities := map[string]any{"first": 0.9, "second": 0.1}
 	switch question.Type {
 	case "choice":
-		options, key := question.Choices, "value"
 		if systemOne {
-			options = question.Criteria
+			return systemOneChoice(question)
 		}
-		choice, ok := firstOption(options, key)
-		if !ok {
-			choice, ok = firstOption(question.Choices, key)
-		}
-		if !ok {
-			choice = "A"
-		}
-		return withName(map[string]any{"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": 0.9}, question.Name)
+		return decisionsChoice(question)
 	case "score":
-		var score any = 0
-		if !systemOne {
-			if label, ok := firstOption(question.Levels, "label"); ok {
-				score = label
-			}
-		}
-		answer := map[string]any{"type": "score", "score": score, "probabilities": probabilities, "confidence": 0.9}
 		if systemOne {
-			var legend []json.RawMessage
-			if json.Unmarshal(question.Criteria, &legend) != nil || legend == nil {
-				legend = []json.RawMessage{}
-			}
-			answer["legend"] = legend
+			return systemOneScore(question)
+		}
+		return decisionsScore(question)
+	case "box":
+		answer := map[string]any{
+			"type": "box", "box": map[string]any{"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9}, "confidence": 0.9,
+		}
+		if systemOne {
+			return answer
 		}
 		return withName(answer, question.Name)
-	case "box":
-		return withName(map[string]any{
-			"type": "box", "box": map[string]any{"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9}, "confidence": 0.9,
-		}, question.Name)
 	}
 	if systemOne {
 		return map[string]any{"type": "noul", "noul": 0.99}
 	}
 	return predicateAnswer(question.Name)
+}
+
+func decisionsChoice(question decisionQuestion) map[string]any {
+	values := []json.RawMessage{}
+	for _, item := range listItems(question.Choices) {
+		values = append(values, field(item, "value"))
+	}
+	if len(values) == 0 {
+		values = []json.RawMessage{json.RawMessage(`"A"`)}
+	}
+	weights := distribution(len(values))
+	probabilities := make([]map[string]any, len(values))
+	for i, value := range values {
+		probabilities[i] = map[string]any{"value": value, "probability": weights[i]}
+	}
+	return withName(map[string]any{"type": "choice", "choice": values[0], "probabilities": probabilities, "confidence": 0.9}, question.Name)
+}
+
+func decisionsScore(question decisionQuestion) map[string]any {
+	levels := listItems(question.Levels)
+	labels := []string{"0", "1"}
+	if len(levels) > 0 {
+		labels = labels[:0]
+		for _, level := range levels {
+			labels = append(labels, labelOf(level, "label"))
+		}
+	}
+	weights := distribution(len(labels))
+	probabilities := make([]map[string]any, len(labels))
+	for i, label := range labels {
+		probabilities[i] = map[string]any{"value": i, "label": label, "probability": weights[i]}
+	}
+	return withName(map[string]any{"type": "score", "score": weightedIndex(weights), "probabilities": probabilities, "confidence": 0.9}, question.Name)
+}
+
+func systemOneChoice(question decisionQuestion) map[string]any {
+	labels := objectKeys(question.Criteria)
+	if len(labels) == 0 {
+		for _, item := range listItems(question.Choices) {
+			labels = append(labels, labelOf(item, "value"))
+		}
+	}
+	if len(labels) == 0 {
+		labels = []string{"A"}
+	}
+	weights := distribution(len(labels))
+	probabilities := make(map[string]float64, len(labels))
+	for i, label := range labels {
+		probabilities[label] = weights[i]
+	}
+	return map[string]any{"type": "choice", "choice": labels[0], "confidence": 0.9, "probabilities": probabilities}
+}
+
+func systemOneScore(question decisionQuestion) map[string]any {
+	descriptions := listItems(question.Criteria)
+	legend := map[string]string{}
+	for i, description := range descriptions {
+		legend[strconv.Itoa(i)] = labelOf(description, "")
+	}
+	count := len(descriptions)
+	if count == 0 {
+		count = 2
+		legend = map[string]string{"0": "0", "1": "1"}
+	}
+	weights := distribution(count)
+	probabilities := make(map[string]float64, count)
+	for i, weight := range weights {
+		probabilities[strconv.Itoa(i)] = weight
+	}
+	return map[string]any{"type": "score", "score": weightedIndex(weights), "confidence": 0.9, "legend": legend, "probabilities": probabilities}
 }
 
 // writeDecisionError writes the error shape of the route: FastAPI style for
