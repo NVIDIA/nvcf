@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pool registration through the Pool API overlay.
+//! Pool and pool agent registration through the Pool API.
 //!
 //! [`PoolRegistration`] registers a pool, renews its lease with heartbeats
 //! every `ttl / 3` (jittered), re-registers when GDS lost the registration
@@ -21,8 +21,13 @@
 //! shuts down gracefully: DRAINING first, then `DeregisterPool`. This is the
 //! integration surface for the Dynamo PoolRelay and for pools that are not
 //! Kubernetes Services.
+//!
+//! [`AgentRegistration`] registers one process kind of a pool (Pylon, the
+//! Dynamo PoolRelay or the OpenAI frontend) as a typed pool agent with its
+//! own lease. It heartbeats and re-registers the same way and deregisters on
+//! shutdown, without a drain phase.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,8 +39,10 @@ use tracing::{info, warn};
 use crate::client::GdsClient;
 use crate::error::{Error, reason};
 use crate::proto::v1::{
-    DeregisterPoolRequest, FrontendEndpoint, HeartbeatPoolRequest, Location, ModelServed, Pool,
-    PoolState as PoolPhase, RegisterPoolRequest, ServiceRef, UpdatePoolRequest,
+    DeregisterPoolAgentRequest, DeregisterPoolRequest, FrontendEndpoint, FrontendRole,
+    HeartbeatPoolAgentRequest, HeartbeatPoolRequest, Lease as ProtoLease, Location, ModelServed,
+    Pool, PoolAgent, PoolState as PoolPhase, RegisterPoolAgentRequest, RegisterPoolRequest,
+    ServiceRef, UpdatePoolRequest,
 };
 use crate::task::OwnedTask;
 
@@ -461,7 +468,7 @@ impl Shared {
                     self.publish_registered(lease, pool.state);
                     return Ok(pool);
                 }
-                Err(error) if stale_retry && raise_generation(lease, &error) => {
+                Err(error) if stale_retry && raise_generation(&mut lease.generation, &error) => {
                     stale_retry = false;
                 }
                 Err(error) => {
@@ -499,7 +506,7 @@ impl Shared {
                     );
                     return self.register_locked(lease).await;
                 }
-                Err(error) if stale_retry && raise_generation(lease, &error) => {
+                Err(error) if stale_retry && raise_generation(&mut lease.generation, &error) => {
                     stale_retry = false;
                 }
                 Err(error) => return Err(error),
@@ -550,7 +557,7 @@ impl Shared {
 
 /// On STALE_GENERATION, moves the writer generation past the stored one
 /// and reports whether the write should be retried.
-fn raise_generation(lease: &mut Lease, error: &Error) -> bool {
+fn raise_generation(generation: &mut u64, error: &Error) -> bool {
     let Some(details) = error.details() else {
         return false;
     };
@@ -558,25 +565,27 @@ fn raise_generation(lease: &mut Lease, error: &Error) -> bool {
         return false;
     }
     if let Some(current) = details.current_generation() {
-        lease.generation = lease.generation.max(current);
+        *generation = (*generation).max(current);
     }
     true
+}
+
+/// The wait before the next heartbeat: the interval jittered down by up to
+/// [`HEARTBEAT_JITTER`], or after `failures` consecutive failures the
+/// client's backoff, never longer than the interval.
+fn heartbeat_delay(client: &GdsClient, interval: Duration, failures: u32) -> Duration {
+    if failures == 0 {
+        interval.mul_f64(1.0 - HEARTBEAT_JITTER * rand::random::<f64>())
+    } else {
+        client.policy().backoff.delay(failures - 1).min(interval)
+    }
 }
 
 async fn heartbeat_loop(shared: Arc<Shared>, stop: CancellationToken) {
     let mut failures: u32 = 0;
     loop {
         let interval = shared.lock_spec().heartbeat_interval();
-        let delay = if failures == 0 {
-            interval.mul_f64(1.0 - HEARTBEAT_JITTER * rand::random::<f64>())
-        } else {
-            shared
-                .client
-                .policy()
-                .backoff
-                .delay(failures - 1)
-                .min(interval)
-        };
+        let delay = heartbeat_delay(&shared.client, interval, failures);
         if stop
             .run_until_cancelled(tokio::time::sleep(delay))
             .await
@@ -607,6 +616,412 @@ async fn heartbeat_loop(shared: Arc<Shared>, stop: CancellationToken) {
             return false;
         }
         *state = RegistrationState::Stopped { pool_id };
+        true
+    });
+}
+
+/// Default agent lease; GDS clamps leases to [10 s, 5 m].
+pub const DEFAULT_AGENT_LEASE_TTL: Duration = Duration::from_secs(60);
+
+/// The writer-owned fields of a pool agent registration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentSpec {
+    pub clusterset: String,
+    /// Cluster id of the pool.
+    pub cluster: String,
+    /// Pool name, a DNS label unique within (clusterset, cluster). GDS
+    /// creates the pool when it does not exist yet.
+    pub pool_name: String,
+    /// The process kind: OPENAI, KV_RELAY or PYLON.
+    pub role: FrontendRole,
+    /// Identity of this process, for example a Pylon inference server id or
+    /// the PoolRelay pod name.
+    pub agent_id: String,
+    /// Writer-owned attributes, at most 16 entries, for example the served
+    /// models.
+    pub attributes: BTreeMap<String, String>,
+    /// Requested lease; GDS uses 60 s when unset and clamps it to [10 s, 5 m].
+    pub lease_ttl: Option<Duration>,
+}
+
+impl AgentSpec {
+    /// A spec with the required fields set and no attributes.
+    pub fn new(
+        clusterset: impl Into<String>,
+        cluster: impl Into<String>,
+        pool_name: impl Into<String>,
+        role: FrontendRole,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            clusterset: clusterset.into(),
+            cluster: cluster.into(),
+            pool_name: pool_name.into(),
+            role,
+            agent_id: agent_id.into(),
+            ..Self::default()
+        }
+    }
+
+    /// The requested lease, [`DEFAULT_AGENT_LEASE_TTL`] when unset or zero.
+    fn lease_ttl(&self) -> Duration {
+        self.lease_ttl
+            .filter(|ttl| !ttl.is_zero())
+            .unwrap_or(DEFAULT_AGENT_LEASE_TTL)
+    }
+
+    fn to_agent(&self) -> PoolAgent {
+        PoolAgent {
+            role: self.role as i32,
+            agent_id: self.agent_id.clone(),
+            attributes: self.attributes.clone().into_iter().collect(),
+            ..PoolAgent::default()
+        }
+    }
+}
+
+/// Where an [`AgentRegistration`] stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentPhase {
+    /// The last register or heartbeat succeeded.
+    Registered,
+    /// Heartbeats or re-registration fail; the task keeps retrying with
+    /// backoff. The lease expires if this lasts longer than the lease TTL.
+    Retrying,
+    /// The heartbeat stopped without a deregistration: the stop token fired
+    /// or the deregistration failed. The lease expires.
+    Stopped,
+    /// [`AgentRegistration::shutdown`] deregistered the agent.
+    Deregistered,
+}
+
+/// A snapshot of an [`AgentRegistration`], published by
+/// [`AgentRegistration::subscribe`] on every change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRegistrationState {
+    pub phase: AgentPhase,
+    /// The id of the agent's pool, as GDS reported it.
+    pub pool_id: String,
+    /// The current agent lease epoch.
+    pub epoch: u64,
+    /// The derived pool state GDS reported with the last successful
+    /// register or heartbeat.
+    pub pool_state: PoolPhase,
+    /// Consecutive failed heartbeats; zero while registered.
+    pub failures: u32,
+    /// The last heartbeat, re-registration or deregistration failure, kept
+    /// after recovery.
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct AgentLease {
+    pool_id: String,
+    epoch: u64,
+    generation: u64,
+    /// The lease GDS granted; heartbeats come every third of it.
+    ttl: Duration,
+    /// The attributes GDS holds as of the last register or heartbeat.
+    attributes: BTreeMap<String, String>,
+}
+
+struct AgentShared {
+    client: GdsClient,
+    spec: Mutex<AgentSpec>,
+    /// Serializes register, heartbeat and deregister so a re-registration
+    /// never races a heartbeat with a stale epoch.
+    lease: tokio::sync::Mutex<AgentLease>,
+    state_tx: watch::Sender<AgentRegistrationState>,
+}
+
+/// A registered pool agent with a background heartbeat. Dropping it stops
+/// the heartbeat without deregistering; the agent lease then expires. Call
+/// [`AgentRegistration::shutdown`] to leave cleanly.
+pub struct AgentRegistration {
+    shared: Arc<AgentShared>,
+    task: Option<OwnedTask>,
+}
+
+impl std::fmt::Debug for AgentRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRegistration")
+            .field("state", &*self.shared.state_tx.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentRegistration {
+    /// Registers the agent with `RegisterPoolAgent` and starts the heartbeat
+    /// task. Fails when the first registration fails after the client's
+    /// retries. Cancelling `stop` stops the heartbeat without deregistering.
+    pub async fn register(
+        client: GdsClient,
+        spec: AgentSpec,
+        stop: CancellationToken,
+    ) -> Result<Self, Error> {
+        let (state_tx, _) = watch::channel(AgentRegistrationState {
+            phase: AgentPhase::Retrying,
+            pool_id: String::new(),
+            epoch: 0,
+            pool_state: PoolPhase::Unspecified,
+            failures: 0,
+            last_error: None,
+        });
+        let shared = Arc::new(AgentShared {
+            client,
+            spec: Mutex::new(spec),
+            lease: tokio::sync::Mutex::new(AgentLease::default()),
+            state_tx,
+        });
+        {
+            let mut lease = shared.lease.lock().await;
+            shared.register_locked(&mut lease).await?;
+        }
+        let task = OwnedTask::spawn(&stop, {
+            let shared = shared.clone();
+            move |stop| agent_heartbeat_loop(shared, stop)
+        });
+        Ok(Self {
+            shared,
+            task: Some(task),
+        })
+    }
+
+    /// The id of the agent's pool, as GDS reported it.
+    pub fn pool_id(&self) -> String {
+        self.shared.state_tx.borrow().pool_id.clone()
+    }
+
+    /// The current registration state.
+    pub fn state(&self) -> AgentRegistrationState {
+        self.shared.state_tx.borrow().clone()
+    }
+
+    /// Registration state changes.
+    pub fn subscribe(&self) -> watch::Receiver<AgentRegistrationState> {
+        self.shared.state_tx.subscribe()
+    }
+
+    /// Replaces the agent's attributes. The next heartbeat sends them, and
+    /// heartbeats repeat them until GDS acknowledged them. A heartbeat cannot
+    /// clear attributes, so an empty map is sent with a new registration
+    /// instead. Cheap enough to call on every change.
+    pub fn set_attributes(&self, attributes: BTreeMap<String, String>) {
+        self.shared.lock_spec().attributes = attributes;
+    }
+
+    /// Leaves the pool: stops the heartbeat and calls `DeregisterPoolAgent`.
+    /// There is no drain phase, so stop serving first. A failed
+    /// deregistration is returned without being logged; the agent lease then
+    /// expires.
+    pub async fn shutdown(mut self) -> Result<(), Error> {
+        if let Some(task) = self.task.take() {
+            task.shutdown().await;
+        }
+        let lease = self.shared.lease.lock().await;
+        let spec = self.shared.lock_spec().clone();
+        let result = self
+            .shared
+            .client
+            .deregister_pool_agent(DeregisterPoolAgentRequest {
+                clusterset: spec.clusterset.clone(),
+                pool_id: lease.pool_id.clone(),
+                role: spec.role as i32,
+            })
+            .await;
+        match &result {
+            Ok(_) => {
+                info!(
+                    pool_id = %lease.pool_id,
+                    pool = %spec.pool_name,
+                    cluster = %spec.cluster,
+                    role = ?spec.role,
+                    agent_id = %spec.agent_id,
+                    "GDS pool agent deregistered"
+                );
+                self.shared
+                    .state_tx
+                    .send_modify(|state| state.phase = AgentPhase::Deregistered);
+            }
+            Err(error) => self.shared.state_tx.send_modify(|state| {
+                state.phase = AgentPhase::Stopped;
+                state.last_error = Some(error.to_string());
+            }),
+        }
+        result.map(|_| ())
+    }
+}
+
+impl AgentShared {
+    fn lock_spec(&self) -> MutexGuard<'_, AgentSpec> {
+        self.spec
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn publish_registered(&self, lease: &AgentLease, pool_state: i32) {
+        self.state_tx.send_modify(|state| {
+            state.phase = AgentPhase::Registered;
+            state.pool_id.clone_from(&lease.pool_id);
+            state.epoch = lease.epoch;
+            state.pool_state = PoolPhase::try_from(pool_state).unwrap_or(PoolPhase::Unspecified);
+            state.failures = 0;
+        });
+    }
+
+    fn publish_failure(&self, failures: u32, error: &Error) {
+        self.state_tx.send_modify(|state| {
+            state.phase = AgentPhase::Retrying;
+            state.failures = failures;
+            state.last_error = Some(error.to_string());
+        });
+    }
+
+    /// `RegisterPoolAgent` with the current spec and a new generation. Mints
+    /// a new agent lease epoch. The request names no pool id: GDS finds or
+    /// creates the pool by (cluster, pool name).
+    async fn register_locked(&self, lease: &mut AgentLease) -> Result<(), Error> {
+        let mut stale_retry = true;
+        loop {
+            let spec = self.lock_spec().clone();
+            lease.generation = next_generation(lease.generation);
+            let request = RegisterPoolAgentRequest {
+                clusterset: spec.clusterset.clone(),
+                cluster: spec.cluster.clone(),
+                pool_name: spec.pool_name.clone(),
+                pool_id: String::new(),
+                agent: Some(spec.to_agent()),
+                lease_ttl: spec
+                    .lease_ttl
+                    .filter(|ttl| !ttl.is_zero())
+                    .and_then(|ttl| prost_types::Duration::try_from(ttl).ok()),
+                generation: lease.generation,
+            };
+            match self.client.register_pool_agent(request).await {
+                Ok(response) => {
+                    let agent = response.agent.unwrap_or_default();
+                    if !response.pool_id.is_empty() {
+                        lease.pool_id = response.pool_id;
+                    }
+                    lease.epoch = agent.lease.as_ref().map_or(0, |granted| granted.epoch);
+                    lease.ttl =
+                        granted_ttl(agent.lease.as_ref()).unwrap_or_else(|| spec.lease_ttl());
+                    lease.generation = lease.generation.max(agent.generation);
+                    info!(
+                        pool_id = %lease.pool_id,
+                        pool = %spec.pool_name,
+                        cluster = %spec.cluster,
+                        role = ?spec.role,
+                        agent_id = %spec.agent_id,
+                        epoch = lease.epoch,
+                        "GDS pool agent registered"
+                    );
+                    lease.attributes = spec.attributes;
+                    self.publish_registered(lease, response.pool_state);
+                    return Ok(());
+                }
+                Err(error) if stale_retry && raise_generation(&mut lease.generation, &error) => {
+                    stale_retry = false;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// One heartbeat, carrying the attributes when they changed since GDS
+    /// last acknowledged them. Re-registers when the lease is gone or
+    /// superseded, or when the attributes were cleared.
+    async fn heartbeat(&self) -> Result<(), Error> {
+        let mut lease = self.lease.lock().await;
+        let spec = self.lock_spec().clone();
+        let changed = spec.attributes != lease.attributes;
+        if changed && spec.attributes.is_empty() {
+            info!(
+                pool_id = %lease.pool_id,
+                role = ?spec.role,
+                "GDS pool agent attributes cleared; registering again"
+            );
+            return self.register_locked(&mut lease).await;
+        }
+        let request = HeartbeatPoolAgentRequest {
+            clusterset: spec.clusterset.clone(),
+            pool_id: lease.pool_id.clone(),
+            role: spec.role as i32,
+            epoch: lease.epoch,
+            attributes: if changed {
+                spec.attributes.clone().into_iter().collect()
+            } else {
+                HashMap::new()
+            },
+        };
+        match self.client.heartbeat_pool_agent(request).await {
+            Ok(response) => {
+                if let Some(granted) = response.lease.as_ref() {
+                    if granted.epoch != 0 {
+                        lease.epoch = granted.epoch;
+                    }
+                    if let Some(ttl) = granted_ttl(Some(granted)) {
+                        lease.ttl = ttl;
+                    }
+                }
+                lease.attributes = spec.attributes;
+                self.publish_registered(&lease, response.pool_state);
+                Ok(())
+            }
+            Err(error) if matches!(error.code(), Some(Code::NotFound | Code::Aborted)) => {
+                info!(
+                    pool_id = %lease.pool_id,
+                    role = ?spec.role,
+                    epoch = lease.epoch,
+                    reason = error.reason().as_deref().unwrap_or(""),
+                    "GDS pool agent lease lost; registering again"
+                );
+                self.register_locked(&mut lease).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// The non-zero lease duration GDS granted.
+fn granted_ttl(lease: Option<&ProtoLease>) -> Option<Duration> {
+    lease?
+        .ttl
+        .and_then(|ttl| Duration::try_from(ttl).ok())
+        .filter(|ttl| !ttl.is_zero())
+}
+
+async fn agent_heartbeat_loop(shared: Arc<AgentShared>, stop: CancellationToken) {
+    let mut failures: u32 = 0;
+    loop {
+        let interval = shared.lease.lock().await.ttl / 3;
+        let delay = heartbeat_delay(&shared.client, interval, failures);
+        if stop
+            .run_until_cancelled(tokio::time::sleep(delay))
+            .await
+            .is_none()
+        {
+            break;
+        }
+        let Some(result) = stop.run_until_cancelled(shared.heartbeat()).await else {
+            break;
+        };
+        match result {
+            Ok(()) => failures = 0,
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                let pool_id = shared.lease.lock().await.pool_id.clone();
+                let role = shared.lock_spec().role;
+                warn!(%pool_id, ?role, failures, %error, "GDS pool agent heartbeat failed");
+                shared.publish_failure(failures, &error);
+            }
+        }
+    }
+    shared.state_tx.send_if_modified(|state| {
+        if state.phase == AgentPhase::Deregistered {
+            return false;
+        }
+        state.phase = AgentPhase::Stopped;
         true
     });
 }
@@ -647,6 +1062,47 @@ mod tests {
         assert_eq!(spec.heartbeat_interval(), Duration::from_secs(10));
         spec.heartbeat_interval = Some(Duration::from_secs(3));
         assert_eq!(spec.heartbeat_interval(), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn agent_lease_defaults_to_a_minute() {
+        let mut spec = AgentSpec::new("cs", "c1", "p", FrontendRole::Pylon, "pylon-0");
+        assert_eq!(spec.lease_ttl(), DEFAULT_AGENT_LEASE_TTL);
+        spec.lease_ttl = Some(Duration::ZERO);
+        assert_eq!(spec.lease_ttl(), DEFAULT_AGENT_LEASE_TTL);
+        spec.lease_ttl = Some(Duration::from_secs(30));
+        assert_eq!(spec.lease_ttl(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn agent_spec_to_agent_carries_writer_fields() {
+        let mut spec = AgentSpec::new("cs", "c1", "p", FrontendRole::KvRelay, "relay-0");
+        spec.attributes = BTreeMap::from([("models".to_string(), "a,b".to_string())]);
+        let agent = spec.to_agent();
+        assert_eq!(agent.role(), FrontendRole::KvRelay);
+        assert_eq!(agent.agent_id, "relay-0");
+        assert_eq!(
+            agent.attributes.get("models").map(String::as_str),
+            Some("a,b")
+        );
+        assert!(agent.lease.is_none(), "server-owned fields stay unset");
+    }
+
+    #[test]
+    fn granted_ttl_ignores_missing_and_zero_leases() {
+        assert_eq!(granted_ttl(None), None);
+        let mut lease = ProtoLease::default();
+        assert_eq!(granted_ttl(Some(&lease)), None);
+        lease.ttl = Some(prost_types::Duration {
+            seconds: 0,
+            nanos: 0,
+        });
+        assert_eq!(granted_ttl(Some(&lease)), None);
+        lease.ttl = Some(prost_types::Duration {
+            seconds: 10,
+            nanos: 0,
+        });
+        assert_eq!(granted_ttl(Some(&lease)), Some(Duration::from_secs(10)));
     }
 
     #[test]

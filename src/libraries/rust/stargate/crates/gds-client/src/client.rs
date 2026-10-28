@@ -33,11 +33,13 @@ use crate::proto::v1::pool_service_client::PoolServiceClient;
 use crate::proto::v1::server_info_service_client::ServerInfoServiceClient;
 use crate::proto::v1::service_import_service_client::ServiceImportServiceClient;
 use crate::proto::v1::{
-    DeregisterPoolRequest, DeregisterPoolResponse, GetClusterRequest, GetClusterResponse,
-    GetPoolRequest, GetPoolResponse, GetServerInfoRequest, GetServerInfoResponse,
-    GetServiceImportRequest, GetServiceImportResponse, HeartbeatPoolRequest, HeartbeatPoolResponse,
-    ListClustersRequest, ListClustersResponse, ListPoolsRequest, ListPoolsResponse,
-    ListRoutersRequest, ListRoutersResponse, ListServiceImportsRequest, ListServiceImportsResponse,
+    DeregisterPoolAgentRequest, DeregisterPoolAgentResponse, DeregisterPoolRequest,
+    DeregisterPoolResponse, GetClusterRequest, GetClusterResponse, GetPoolRequest, GetPoolResponse,
+    GetServerInfoRequest, GetServerInfoResponse, GetServiceImportRequest, GetServiceImportResponse,
+    HeartbeatPoolAgentRequest, HeartbeatPoolAgentResponse, HeartbeatPoolRequest,
+    HeartbeatPoolResponse, ListClustersRequest, ListClustersResponse, ListPoolsRequest,
+    ListPoolsResponse, ListRoutersRequest, ListRoutersResponse, ListServiceImportsRequest,
+    ListServiceImportsResponse, RegisterPoolAgentRequest, RegisterPoolAgentResponse,
     RegisterPoolRequest, RegisterPoolResponse, UpdatePoolRequest, UpdatePoolResponse,
     WatchPoolsRequest, WatchPoolsResponse, WatchRoutersRequest, WatchRoutersResponse,
     WatchServiceImportsRequest, WatchServiceImportsResponse,
@@ -165,6 +167,44 @@ impl GdsClient {
         self.unary("DeregisterPool", request, |channel, request| async move {
             pool_client(channel).deregister_pool(request).await
         })
+        .await
+    }
+
+    pub async fn register_pool_agent(
+        &self,
+        request: RegisterPoolAgentRequest,
+    ) -> Result<RegisterPoolAgentResponse, Error> {
+        self.unary("RegisterPoolAgent", request, |channel, request| async move {
+            pool_client(channel).register_pool_agent(request).await
+        })
+        .await
+    }
+
+    pub async fn heartbeat_pool_agent(
+        &self,
+        request: HeartbeatPoolAgentRequest,
+    ) -> Result<HeartbeatPoolAgentResponse, Error> {
+        self.unary(
+            "HeartbeatPoolAgent",
+            request,
+            |channel, request| async move {
+                pool_client(channel).heartbeat_pool_agent(request).await
+            },
+        )
+        .await
+    }
+
+    pub async fn deregister_pool_agent(
+        &self,
+        request: DeregisterPoolAgentRequest,
+    ) -> Result<DeregisterPoolAgentResponse, Error> {
+        self.unary(
+            "DeregisterPoolAgent",
+            request,
+            |channel, request| async move {
+                pool_client(channel).deregister_pool_agent(request).await
+            },
+        )
         .await
     }
 

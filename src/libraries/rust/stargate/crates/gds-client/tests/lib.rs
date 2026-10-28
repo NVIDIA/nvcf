@@ -15,6 +15,7 @@
 
 //! Integration tests for gds-client against an in-process fake GDS.
 
+mod agent;
 mod cache;
 mod client;
 mod derived;

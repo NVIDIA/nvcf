@@ -22,7 +22,7 @@ use std::time::Duration;
 use gds_client::v1::{LeaseState, Router, RouterReplica};
 use gds_client::{
     GdsClient, RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls,
-    remote_watch_urls, router_seed_urls,
+    quic_port, relay_seed_urls, remote_watch_urls, router_relay_urls, router_seed_urls,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -179,6 +179,79 @@ fn remote_and_pylon_seeds() {
     assert_eq!(remote_watch_urls(&state, "z"), set(&[a, b[0], b[1], c]));
     assert_eq!(pylon_seed_urls(&state), set(&[a, b[0], b[1], c]));
     assert_eq!(state.clusters().len(), 6);
+}
+
+#[test]
+fn quic_port_is_set_only_for_a_valid_port() {
+    let mut r = router("a", "llm", "router", "http", 50071);
+    assert_eq!(quic_port(&r), None, "absent");
+    r.quic_port = 8443;
+    assert_eq!(quic_port(&r), Some(8443));
+    for port in [-1, 70000] {
+        r.quic_port = port;
+        assert_eq!(quic_port(&r), None, "QUIC port {port}");
+    }
+}
+
+#[test]
+fn relay_urls_are_the_ready_grpc_replicas() {
+    let mut r = with_replicas(
+        router("a", "llm", "router-a", "http", 50071),
+        &["10.0.0.2", "10.0.0.1", "fd00::1", "10.0.0.1"],
+    );
+    r.replicas.push(replica("10.0.0.3", false));
+    r.quic_port = 8443;
+    assert_eq!(
+        router_relay_urls(&r),
+        set(&[
+            "http://10.0.0.1:50071",
+            "http://10.0.0.2:50071",
+            "http://[fd00::1]:50071",
+        ]),
+        "the gRPC port of every ready replica, never the QUIC port"
+    );
+    assert_eq!(
+        router_relay_urls(&r),
+        router_seed_urls(&r).into_iter().collect::<BTreeSet<_>>(),
+        "relays and pylons dial the same listener today"
+    );
+    r.dial_scheme = "grpc".to_string();
+    assert!(router_relay_urls(&r).is_empty(), "unknown dial scheme");
+    r.dial_scheme = "http".to_string();
+    r.grpc_port = 0;
+    assert!(router_relay_urls(&r).is_empty(), "no gRPC port");
+}
+
+#[test]
+fn relay_seeds_cover_every_cluster_with_a_live_lease() {
+    let mut expired = with_replicas(
+        router("c", "llm", "router-c", "https", 50071),
+        &["10.2.0.1"],
+    );
+    expired.cluster_lease_state = LeaseState::Expired as i32;
+    let state = state(vec![
+        with_replicas(
+            router("a", "llm", "router-a", "https", 50071),
+            &["10.0.0.1"],
+        ),
+        with_replicas(
+            router("b", "llm", "router-b", "http", 50072),
+            &["10.1.0.1", "10.1.0.2"],
+        ),
+        expired,
+    ]);
+    let relay = relay_seed_urls(&state);
+    assert_eq!(
+        relay,
+        set(&[
+            "https://10.0.0.1:50071",
+            "http://10.1.0.1:50072",
+            "http://10.1.0.2:50072",
+        ]),
+        "the relay's own cluster included, expired leases skipped"
+    );
+    assert_eq!(relay, pylon_seed_urls(&state));
+    assert!(relay_seed_urls(&RouterState::default()).is_empty());
 }
 
 #[test]

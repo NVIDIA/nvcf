@@ -28,6 +28,10 @@
 //! their exports merge into one import, and its VIP spreads over the
 //! k8s-router pods of all router clusters: a pylon dialing it could reach
 //! another cluster's k8s-router than the Stargate it registers with.
+//!
+//! Pylon and the Dynamo PoolRelay both dial routers from the same records:
+//! Pylon through [`pylon_seed_urls`], the PoolRelay through
+//! [`relay_seed_urls`]. Both are the gRPC replica URLs today.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -114,6 +118,16 @@ fn grpc_port(router: &Router) -> Option<u16> {
         .filter(|port| *port != 0)
 }
 
+/// The UDP port of `router`'s reverse tunnel listener, named by the
+/// `gds.nvidia.com/quic-port-name` annotation (default `quic`). `None` when
+/// unset or out of range. Informational for Pylon, whose tunnel address comes
+/// from the Stargate registration ack.
+pub fn quic_port(router: &Router) -> Option<u16> {
+    u16::try_from(router.quic_port)
+        .ok()
+        .filter(|port| *port != 0)
+}
+
 /// The host of a seed URL for a replica address: an IPv4 address or a host
 /// name as is, an IPv6 address in brackets. `None` for an empty address, an
 /// IPv6 address with a zone, or another address that contains a colon.
@@ -140,8 +154,25 @@ fn seed_host(address: &str) -> Option<String> {
 /// same number for the port and its target port, as the llm-request-router
 /// chart does.
 pub fn router_seed_urls(router: &Router) -> Vec<String> {
+    grpc_replica_urls(router).into_iter().collect()
+}
+
+/// The URLs a Dynamo PoolRelay dials to publish its state streams to
+/// `router`, one per ready replica: today the same
+/// `<scheme>://<replica address>:<grpc_port>` URLs as [`router_seed_urls`],
+/// since the relay uses the routers' gRPC listener. It is a separate
+/// function so that a relay-specific listener or scheme can be introduced
+/// without changing the Pylon seeds. The cluster lease is not checked;
+/// [`relay_seed_urls`] checks it.
+pub fn router_relay_urls(router: &Router) -> BTreeSet<String> {
+    grpc_replica_urls(router)
+}
+
+/// `<scheme>://<replica address>:<grpc_port>` for every ready replica of
+/// `router`, as documented on [`router_seed_urls`].
+fn grpc_replica_urls(router: &Router) -> BTreeSet<String> {
     let (Some(scheme), Some(port)) = (dial_scheme(router), grpc_port(router)) else {
-        return Vec::new();
+        return BTreeSet::new();
     };
     router
         .replicas
@@ -149,8 +180,6 @@ pub fn router_seed_urls(router: &Router) -> Vec<String> {
         .filter(|replica| replica.ready)
         .filter_map(|replica| seed_host(&replica.address))
         .map(|host| format!("{scheme}://{host}:{port}"))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
         .collect()
 }
 
@@ -201,6 +230,19 @@ pub fn pylon_seed_urls(state: &RouterState) -> BTreeSet<String> {
         .iter()
         .filter(|router| lease_live(router))
         .flat_map(|router| router_seed_urls(router))
+        .collect()
+}
+
+/// The URLs a Dynamo PoolRelay subscribes to: the [`router_relay_urls`] of
+/// every router whose cluster lease has not expired, its own cluster
+/// included. The relay opens its state streams over gRPC on each and uses no
+/// QUIC. Today the result equals [`pylon_seed_urls`]; use this function in
+/// the relay so a relay-specific listener can diverge later.
+pub fn relay_seed_urls(state: &RouterState) -> BTreeSet<String> {
+    state
+        .iter()
+        .filter(|router| lease_live(router))
+        .flat_map(|router| router_relay_urls(router))
         .collect()
 }
 

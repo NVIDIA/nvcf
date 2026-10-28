@@ -13,9 +13,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! An in-process fake GDS: the pool, router, cluster, service import and
-//! server info services over a shared in-memory state, with watches fed by a
-//! broadcast channel, a replay history for resume, and injectable failures.
+//! An in-process fake GDS: the pool, pool agent, router, cluster, service
+//! import and server info services over a shared in-memory state, with
+//! watches fed by a broadcast channel, a replay history for resume, and
+//! injectable failures. Pool agents are kept apart from pools and do not
+//! feed the pool watch.
 //!
 //! Serve it on a TCP port ([`FakeGds::serve_tcp`]) for failover tests or
 //! over an in-memory duplex transport ([`FakeGds::in_memory_channel`]) for
@@ -36,14 +38,17 @@ use gds_client::v1::service_import_service_server::{
     ServiceImportService, ServiceImportServiceServer,
 };
 use gds_client::v1::{
-    Cluster, DeregisterPoolRequest, DeregisterPoolResponse, EventType, GetPoolRequest,
-    GetPoolResponse, GetServerInfoRequest, GetServerInfoResponse, HeartbeatPoolRequest,
-    HeartbeatPoolResponse, Lease, LeaseState, ListClustersRequest, ListClustersResponse,
-    ListPoolsRequest, ListPoolsResponse, ListRoutersRequest, ListRoutersResponse,
-    ListServiceImportsRequest, ListServiceImportsResponse, Pool, PoolState, RegisterPoolRequest,
-    RegisterPoolResponse, Router, ServerEndpoint, ServiceImport, UpdatePoolRequest,
-    UpdatePoolResponse, WatchPoolsRequest, WatchPoolsResponse, WatchRoutersRequest,
-    WatchRoutersResponse, WatchServiceImportsRequest, WatchServiceImportsResponse,
+    Cluster, DeregisterPoolAgentRequest, DeregisterPoolAgentResponse, DeregisterPoolRequest,
+    DeregisterPoolResponse, EventType, FrontendRole, GetPoolRequest, GetPoolResponse,
+    GetServerInfoRequest, GetServerInfoResponse, HeartbeatPoolAgentRequest,
+    HeartbeatPoolAgentResponse, HeartbeatPoolRequest, HeartbeatPoolResponse, Lease, LeaseState,
+    ListClustersRequest, ListClustersResponse, ListPoolsRequest, ListPoolsResponse,
+    ListRoutersRequest, ListRoutersResponse, ListServiceImportsRequest, ListServiceImportsResponse,
+    Pool, PoolAgent, PoolState, RegisterPoolAgentRequest, RegisterPoolAgentResponse,
+    RegisterPoolRequest, RegisterPoolResponse, Router, ServerEndpoint, ServiceImport,
+    UpdatePoolRequest, UpdatePoolResponse, WatchPoolsRequest, WatchPoolsResponse,
+    WatchRoutersRequest, WatchRoutersResponse, WatchServiceImportsRequest,
+    WatchServiceImportsResponse,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
@@ -70,6 +75,15 @@ struct Recorded {
     change: Change,
 }
 
+/// A pool agent registration, keyed by (cluster, pool name, role).
+type AgentKey = (String, String, i32);
+
+#[derive(Debug, Clone)]
+struct StoredAgent {
+    pool_id: String,
+    agent: PoolAgent,
+}
+
 #[derive(Default)]
 struct FakeState {
     view_epoch: u64,
@@ -90,6 +104,9 @@ struct FakeState {
     next_pool: u64,
     next_epoch: u64,
     server_endpoints: Vec<ServerEndpoint>,
+    agents: BTreeMap<AgentKey, StoredAgent>,
+    agent_registrations: Vec<RegisterPoolAgentRequest>,
+    agent_heartbeats: Vec<HeartbeatPoolAgentRequest>,
 }
 
 impl FakeState {
@@ -106,6 +123,51 @@ impl FakeState {
         self.history.push(recorded.clone());
         let _ = events.send(recorded);
         self.revision()
+    }
+
+    /// The id of the pool named `pool_name` in `cluster`: the registered
+    /// pool's, another agent's, or a deterministic one for a new pool.
+    fn agent_pool_id(&self, cluster: &str, pool_name: &str) -> String {
+        let registered = self.pools.values().find(|pool| {
+            pool.name == pool_name
+                && pool
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| location.cluster == cluster)
+        });
+        if let Some(pool) = registered {
+            return pool.pool_id.clone();
+        }
+        self.agents
+            .iter()
+            .find(|((agent_cluster, agent_pool, _), _)| {
+                agent_cluster == cluster && agent_pool == pool_name
+            })
+            .map_or_else(
+                || format!("agent-pool-{cluster}-{pool_name}"),
+                |(_, stored)| stored.pool_id.clone(),
+            )
+    }
+
+    fn agent_key_by_pool_id(&self, pool_id: &str, role: i32) -> Option<AgentKey> {
+        self.agents
+            .iter()
+            .find(|((_, _, agent_role), stored)| stored.pool_id == pool_id && *agent_role == role)
+            .map(|(key, _)| key.clone())
+    }
+
+    /// ACTIVE while an ingress agent (OPENAI or PYLON) is registered,
+    /// REGISTERED otherwise, as GDS derives it for live agent leases.
+    fn agent_pool_state(&self, pool_id: &str) -> i32 {
+        let ingress = self.agents.iter().any(|((_, _, role), stored)| {
+            stored.pool_id == pool_id
+                && (*role == FrontendRole::Openai as i32 || *role == FrontendRole::Pylon as i32)
+        });
+        if ingress {
+            PoolState::Active as i32
+        } else {
+            PoolState::Registered as i32
+        }
     }
 
     /// The deltas after `revision` when it is resumable on this view.
@@ -257,6 +319,61 @@ impl FakeGds {
         }
     }
 
+    pub fn agent_registrations(&self) -> Vec<RegisterPoolAgentRequest> {
+        self.state().agent_registrations.clone()
+    }
+
+    pub fn agent_heartbeats(&self) -> Vec<HeartbeatPoolAgentRequest> {
+        self.state().agent_heartbeats.clone()
+    }
+
+    /// The stored agent of `role` in the pool named `pool_name` in `cluster`.
+    pub fn agent(&self, cluster: &str, pool_name: &str, role: FrontendRole) -> Option<PoolAgent> {
+        self.state()
+            .agents
+            .get(&agent_key(cluster, pool_name, role))
+            .map(|stored| stored.agent.clone())
+    }
+
+    /// Mints a new lease epoch for an agent, as a competing registration
+    /// would.
+    pub fn bump_agent_epoch(&self, cluster: &str, pool_name: &str, role: FrontendRole) {
+        let mut state = self.state();
+        state.next_epoch += 1;
+        let epoch = state.next_epoch;
+        if let Some(lease) = state
+            .agents
+            .get_mut(&agent_key(cluster, pool_name, role))
+            .and_then(|stored| stored.agent.lease.as_mut())
+        {
+            lease.epoch = epoch;
+        }
+    }
+
+    /// Forgets an agent, as an expired lease would.
+    pub fn remove_agent_silently(&self, cluster: &str, pool_name: &str, role: FrontendRole) {
+        self.state()
+            .agents
+            .remove(&agent_key(cluster, pool_name, role));
+    }
+
+    /// Sets the stored generation of an agent, for STALE_GENERATION tests.
+    pub fn set_agent_generation(
+        &self,
+        cluster: &str,
+        pool_name: &str,
+        role: FrontendRole,
+        generation: u64,
+    ) {
+        if let Some(stored) = self
+            .state()
+            .agents
+            .get_mut(&agent_key(cluster, pool_name, role))
+        {
+            stored.agent.generation = generation;
+        }
+    }
+
     pub fn upsert_router(&self, router: Router) {
         let mut state = self.state();
         state.routers.insert(router_key(&router), router.clone());
@@ -399,6 +516,10 @@ impl FakeGds {
             None => Ok(()),
         }
     }
+}
+
+fn agent_key(cluster: &str, pool_name: &str, role: FrontendRole) -> AgentKey {
+    (cluster.to_string(), pool_name.to_string(), role as i32)
 }
 
 fn router_key(router: &Router) -> String {
@@ -742,6 +863,125 @@ impl PoolService for FakeService {
         let request = request.into_inner();
         self.fake.remove_pool(&request.pool_id);
         Ok(Response::new(DeregisterPoolResponse {}))
+    }
+
+    async fn register_pool_agent(
+        &self,
+        request: Request<RegisterPoolAgentRequest>,
+    ) -> Result<Response<RegisterPoolAgentResponse>, Status> {
+        self.fake.begin("RegisterPoolAgent")?;
+        let request = request.into_inner();
+        let mut state = self.fake.state();
+        state.agent_registrations.push(request.clone());
+        let mut agent = request.agent.unwrap_or_default();
+        if request.cluster.is_empty() || request.pool_name.is_empty() {
+            return Err(Status::invalid_argument(
+                "cluster and pool_name are required",
+            ));
+        }
+        if agent.role == FrontendRole::Unspecified as i32 {
+            return Err(Status::invalid_argument("agent.role is required"));
+        }
+        let pool_id = state.agent_pool_id(&request.cluster, &request.pool_name);
+        if !request.pool_id.is_empty() && request.pool_id != pool_id {
+            return Err(status_with_reason(
+                Code::AlreadyExists,
+                "pool name taken",
+                reason::POOL_NAME_TAKEN,
+                HashMap::new(),
+            ));
+        }
+        let key = (
+            request.cluster.clone(),
+            request.pool_name.clone(),
+            agent.role,
+        );
+        if let Some(stored) = state.agents.get(&key)
+            && request.generation <= stored.agent.generation
+        {
+            return Err(status_with_reason(
+                Code::FailedPrecondition,
+                "stale generation",
+                reason::STALE_GENERATION,
+                HashMap::from([(
+                    reason::METADATA_CURRENT_GENERATION.to_string(),
+                    stored.agent.generation.to_string(),
+                )]),
+            ));
+        }
+        state.next_epoch += 1;
+        let ttl_seconds = request
+            .lease_ttl
+            .map_or(60, |ttl| ttl.seconds)
+            .clamp(10, 300);
+        agent.lease = Some(Lease {
+            epoch: state.next_epoch,
+            ttl: Some(prost_types_duration(ttl_seconds)),
+            state: LeaseState::Active as i32,
+            ..Lease::default()
+        });
+        agent.generation = request.generation;
+        agent.live = true;
+        state.agents.insert(
+            key,
+            StoredAgent {
+                pool_id: pool_id.clone(),
+                agent: agent.clone(),
+            },
+        );
+        let pool_state = state.agent_pool_state(&pool_id);
+        Ok(Response::new(RegisterPoolAgentResponse {
+            pool_id,
+            agent: Some(agent),
+            pool_state,
+            server_time: None,
+        }))
+    }
+
+    async fn heartbeat_pool_agent(
+        &self,
+        request: Request<HeartbeatPoolAgentRequest>,
+    ) -> Result<Response<HeartbeatPoolAgentResponse>, Status> {
+        self.fake.begin("HeartbeatPoolAgent")?;
+        let request = request.into_inner();
+        let mut state = self.fake.state();
+        state.agent_heartbeats.push(request.clone());
+        let Some(key) = state.agent_key_by_pool_id(&request.pool_id, request.role) else {
+            return Err(not_found("pool agent"));
+        };
+        let stored = state.agents.get_mut(&key).expect("agent key just found");
+        let epoch = stored.agent.lease.as_ref().map_or(0, |lease| lease.epoch);
+        if epoch != request.epoch {
+            return Err(status_with_reason(
+                Code::Aborted,
+                "lease epoch mismatch",
+                reason::LEASE_EPOCH_MISMATCH,
+                HashMap::new(),
+            ));
+        }
+        if !request.attributes.is_empty() {
+            stored.agent.attributes = request.attributes;
+        }
+        let lease = stored.agent.lease;
+        let pool_state = state.agent_pool_state(&request.pool_id);
+        Ok(Response::new(HeartbeatPoolAgentResponse {
+            lease,
+            pool_state,
+            server_time: None,
+        }))
+    }
+
+    async fn deregister_pool_agent(
+        &self,
+        request: Request<DeregisterPoolAgentRequest>,
+    ) -> Result<Response<DeregisterPoolAgentResponse>, Status> {
+        self.fake.begin("DeregisterPoolAgent")?;
+        let request = request.into_inner();
+        let mut state = self.fake.state();
+        if let Some(key) = state.agent_key_by_pool_id(&request.pool_id, request.role) {
+            state.agents.remove(&key);
+        }
+        Ok(Response::new(DeregisterPoolAgentResponse {}))
     }
 
     async fn get_pool(
