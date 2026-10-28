@@ -26,6 +26,8 @@ design is section 4.8 of `docs-gds/global-discovery-service-design.md`.
 
 - Writes are conditional in the store: generations must increase, heartbeats
   must carry the current lease epoch, pool names are unique per cluster.
+  Pool agent registrations are keyed by (cluster, pool id, role, agent id),
+  so each process instance has its own generation and lease epoch.
 - After a successful store write the handler applies the stored record to
   its replica's view before it responds (write-through). The writer, and
   every client of that replica, read the write at once.
@@ -37,8 +39,8 @@ design is section 4.8 of `docs-gds/global-discovery-service-design.md`.
 - New clustersets are found every `--clusterset-discovery-interval` (30 s),
   or at once when a request names one.
 
-Every item has one logical writer: the controller of its cluster or the
-operator of its pool. Writers use `generation = max(previous + 1, unix
+Every item has one logical writer: the controller of its cluster, the
+operator of its pool, or the process instance of a pool agent registration. Writers use `generation = max(previous + 1, unix
 milliseconds)`, which stays monotonic across restarts and region failover,
 so Global Table last-writer-wins agrees with generation order. A write with
 generation 0 asks the handling replica to assign that value from the stored
@@ -50,9 +52,11 @@ that fail over between regions mid-write.
 A refresh that started before a local write could undo it on this replica.
 To avoid that flap, a record written or deleted through the replica wins
 over a snapshot for one refresh interval after the write, unless the
-snapshot holds a newer version (higher generation; for clusters and pools
-also a newer lease epoch or renewal). A cluster deletion also hides the
-cluster's exports, endpoint sets and pools from a snapshot that predates it.
+snapshot holds a newer version (higher generation; for clusters, pools and
+pool agent registrations also a newer lease epoch or renewal). A cluster
+deletion also hides the cluster's exports, endpoint sets, pools and agent
+registrations from a snapshot that predates it, and a pool deletion hides
+the pool's agent registrations.
 After the window the store is the truth again.
 
 ## Leases
@@ -60,8 +64,15 @@ After the window the store is the truth again.
 - Leases are evaluated at read time from server timestamps: a lease is
   expired once `renewed_at + ttl + --lease-skew` is in the past. Nothing
   writes expiry to the store.
+- This holds for cluster leases, pool leases and the lease of every pool
+  agent registration alike: an agent registration whose process stops
+  heartbeating turns its `registrations[]` entry `LEASE_STATE_EXPIRED`
+  and, when it was the agent's last active registration, the agent's
+  `live` false, without any write.
 - Each replica re-evaluates every lease every `--lease-eval-interval` (1 s)
-  without a store read, and publishes the resulting changes.
+  without a store read, and publishes the resulting changes. An expiry is
+  counted once per replica in `nvcf_gds_lease_expirations_total` with kind
+  `cluster`, `pool` or `pool_agent`.
 - Replicas may disagree on a lease by the skew allowance (2 s), since their
   clocks and refresh times differ. KEP-1645 tolerates that: an endpoint set
   appears or disappears a moment later on one replica than on another.
@@ -73,14 +84,21 @@ When a cluster's lease expires:
 - its exports stop taking part in conflict resolution, so a dead cluster
   cannot pin the winner; its per-cluster status reads
   `Ready=False/ClusterLeaseExpired` and `Conflict=Unknown/ClusterLeaseExpired`;
-- pools that depend on it turn `UNHEALTHY`;
+- pools that depend on it turn `UNHEALTHY`, unless an ingress agent
+  registration (OPENAI or PYLON) of the pool still holds an active lease;
 - an import whose exporting clusters all expired keeps its type and ports,
   with no endpoints and no participants, so derived Services keep their
   virtual IPs while a controller restarts;
 - the records stay for `--retention` (24 h), so a returning controller keeps
   its export creation timestamps, then compaction removes them.
 
-`DeregisterCluster` removes everything of the cluster at once.
+`DeregisterCluster` removes everything of the cluster at once, agent
+registrations included.
+
+When the last active lease of a pool's ingress agents expires and no
+ingress Service has a ready endpoint under an active cluster lease, the
+pool turns `UNHEALTHY`. A KV_RELAY registration alone never makes a pool
+live.
 
 ## Revisions and watches
 
@@ -116,16 +134,19 @@ store:
 - Condition `last_transition_at` is the time this replica saw the change.
 - Pool state history: a pool is `REGISTERED` until it has been live once,
   then `ACTIVE`, `DRAINING` or `UNHEALTHY`. A replica remembers that a pool
-  was live. A replica that starts while a label-derived pool has no ready
-  endpoint reports `REGISTERED` where its siblings report `UNHEALTHY`; both
-  mean "do not route". For API-only pools a heartbeat is recognised from
+  was live. A replica that starts while a pool has no ready ingress
+  endpoint and no active ingress agent lease reports `REGISTERED` where its
+  siblings report `UNHEALTHY`; both mean "do not route". For API-only pools a heartbeat is recognised from
   the lease itself (a renewal later than the minted epoch), so replicas
   agree.
 
 ## Compaction
 
 Every replica runs compaction every `--compaction-interval`. Deletes are
-idempotent, so concurrent passes agree. The store has no conditional
+idempotent, so concurrent passes agree. Pool agent registrations whose
+lease expired more than `--retention` ago are removed; a pool record is kept
+while any agent registration of the pool remains, since deleting the pool
+would remove them. The store has no conditional
 delete: before deleting an expired cluster the compactor reads it again and
 keeps it when it was renewed. A controller that returns between that read
 and the delete gets `NOT_FOUND` on its next heartbeat, registers again and
