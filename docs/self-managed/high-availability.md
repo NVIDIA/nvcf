@@ -344,6 +344,32 @@ The control-plane services default to `LOCAL_QUORUM` consistency, and some
   [Zone spread for the quorum services](#zone-spread-for-the-quorum-services))
   and does not hold above three pods.
 
+#### Cassandra range-read timeout
+
+Under HA (`preferred` or `enforced`) the stack sets Cassandra's
+`range_request_timeout` to `2000ms` (Cassandra's default is `10000ms`). Index
+lookups such as the ones `nvcf-api` uses to find the versions of a function are
+range reads, and Cassandra never retries a range read on another replica. If a
+replica crashes, it stays in the failure detector's alive set for several
+seconds, so a read that picks it is held for the full timeout and then fails.
+A shorter timeout makes those requests fail faster and lets the coordinator
+learn sooner to rank the unresponsive replica last, which in local testing cut
+failed requests during a single-node crash by roughly two thirds. It does not
+remove them.
+
+The timeout is cluster-wide, so every range read in the stack gets it. Size
+Cassandra so that normal lookups stay well under 2 seconds (the default
+`resourcesPreset` is `xlarge`) and check list and lookup latency before
+upgrading an existing HA install. To change or remove the value, set
+`cassandra.config` in the Helmfile environment values; it is deep-merged onto
+the stack default and your values win:
+
+```yaml
+cassandra:
+  config:
+    range_request_timeout: 5000ms
+```
+
 ## Tuning scheduling policy (`global.affinity` / `global.topologySpreadConstraints`)
 
 Affinity and zone topology spread are shared scheduling policy, so you can

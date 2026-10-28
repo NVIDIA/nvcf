@@ -95,6 +95,10 @@ render_chart_values cassandra "$work_dir/cassandra-off.yaml" "$deps" || fail "re
 if grep -q "podAntiAffinity:" "$work_dir/cassandra-off.yaml"; then
   fail "cassandra: Tier-2 anti-affinity leaked while highAvailability.mode=none"
 fi
+# The HA range-read timeout must not leak into the Cassandra config when HA is off.
+if grep -q "range_request_timeout:" "$work_dir/cassandra-off.yaml"; then
+  fail "cassandra: range_request_timeout leaked while highAvailability.mode=none"
+fi
 
 # JetStream RF must not leak into the stream creators when off.
 if awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml" | grep -q "NVCF_NATS_REPLICAS:"; then
@@ -167,6 +171,9 @@ grep -q "podAntiAffinity:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 grep -q "preferredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected preferred Tier-2 anti-affinity when highAvailability.mode=preferred"
+# A range read is never retried on another replica, so HA bounds it at 2s (default 10s).
+grep -q "range_request_timeout: 2000ms" "$work_dir/cassandra-on.yaml" ||
+  fail "cassandra: expected range_request_timeout 2000ms when highAvailability.mode=preferred"
 # Zone topology spread is part of the same mode convention as hostname
 # anti-affinity (soft under preferred) — it is no longer a separate opt-in
 # toggle. NOTE: the write-values file holds every release's values, so scope
@@ -609,6 +616,8 @@ grep -q "whenUnsatisfiable: DoNotSchedule" "$work_dir/api-enforced.yaml" ||
   fail "api: expected DoNotSchedule topology spread when highAvailability.mode=enforced"
 
 render_chart_values cassandra "$work_dir/cassandra-enforced.yaml" "$deps" || fail "render cassandra (enforced)"
+grep -q "range_request_timeout: 2000ms" "$work_dir/cassandra-enforced.yaml" ||
+  fail "cassandra: expected range_request_timeout 2000ms when highAvailability.mode=enforced"
 grep -q "requiredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-enforced.yaml" ||
   fail "cassandra: expected required Tier-2 anti-affinity when highAvailability.mode=enforced"
 awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-enforced.yaml" | grep -q "whenUnsatisfiable: DoNotSchedule" ||

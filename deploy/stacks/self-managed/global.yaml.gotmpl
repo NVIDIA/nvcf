@@ -299,6 +299,22 @@ cassandra:
   replicaCount: {{ if $haEnabled }}{{ max 3 (dig "cassandra" "replicaCount" 3 .Values | int) }}{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- /* cassandra.yaml overrides, deep-merged onto the image's cassandra.yaml by the chart.
+         Under HA (preferred or enforced), range reads time out after 2s instead of the
+         10s default. A range read is never retried on another replica, so a crashed
+         replica that is not yet marked down otherwise holds each read for the full 10s.
+         An operator can override or extend this through cassandra.config; operator values
+         win. With HA off (none) nothing is set unless the operator sets cassandra.config. */}}
+  {{- $cassandraConfig := dict }}
+  {{- if $haEnabled }}
+  {{- $_ := set $cassandraConfig "range_request_timeout" "2000ms" }}
+  {{- end }}
+  {{- $cassandraConfig = mergeOverwrite $cassandraConfig (deepCopy (dig "cassandra" "config" dict .Values)) }}
+  {{- with $cassandraConfig }}
+  config:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- if $haEnabled }}
   {{- with include "nvcf.ha.quorumPodDisruptionBudget" .Values }}
   podDisruptionBudget:
