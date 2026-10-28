@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Publishes the Fern documentation site on push to main or manual dispatch.
+#
+# Validate the exact checkout before publishing the canonical site. Release
+# registration remains a reviewed change on main.
+#
+# Required configuration:
+# - Organization secret: DOCS_FERN_TOKEN (from `fern token` for the nvidia Fern org)
+
+name: Publish Fern Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'fern/**'
+      - 'tools/ci/run-fern'
+      - 'tools/ci/check-docs'
+      - 'tools/ci/check-doc-version-sync'
+      - 'tools/ci/check-doc-editions'
+      - 'tools/ci/preview-docs'
+      - 'tools/ci/publish-docs'
+      - 'tools/docs-version-sync/**'
+      - 'tools/scripts/test/test-run-fern'
+      - 'tools/scripts/test/test-preview-docs'
+      - '.github/workflows/publish-fern-docs.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fern-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: fern/.node-version
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Publish docs
+        env:
+          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          DOCS_BUILD_RECEIPT: ${{ runner.temp }}/docs-build-receipt.json
+        run: |
+          set -o pipefail
+          ./tools/ci/publish-docs --publish 2>&1 | tee /tmp/fern-output.log
+          URL=$(grep -oP 'Published docs to \K.*(?= \()' /tmp/fern-output.log || true)
+          if [ -n "$URL" ]; then
+            echo "### Published: [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain approved docs build receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docs-build-receipt
+          path: ${{ runner.temp }}/docs-build-receipt.json
+          if-no-files-found: ignore

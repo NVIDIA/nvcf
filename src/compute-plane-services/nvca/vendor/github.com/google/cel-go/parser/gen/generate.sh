@@ -1,7 +1,4 @@
 #!/bin/bash -eu
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 #
 # Copyright 2018 Google LLC
 #

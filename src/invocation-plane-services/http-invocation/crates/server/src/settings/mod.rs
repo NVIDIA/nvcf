@@ -24,6 +24,7 @@ use crate::nvcf_api::NVCFApiProperties;
 use crate::s3::S3Properties;
 use crate::telemetry::settings::ServerSettings;
 use crate::worker_streams::WorkerStreamProperties;
+use crate::worker_tls::WorkerTlsSettings;
 use anyhow::Context;
 use http::Uri;
 use std::time::Duration;
@@ -115,7 +116,15 @@ pub struct AppConfig {
     pub oauth2_base_url: String,
     pub tcp_nodelay: bool,
     pub worker_stream_properties: WorkerStreamProperties,
+    /// Second listener for worker callbacks over https. Off by default.
+    #[serde(default)]
+    pub worker_tls: WorkerTlsSettings,
     pub pod_ip: Option<String>,
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+    /// Enable only after every region has written ownership metadata for over an hour.
+    #[serde(default)]
+    pub enforce_polling_owner: bool,
 }
 
 impl Default for AppConfig {
@@ -132,6 +141,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Construct defaults for ownership preparation with browser access disabled.
     pub fn new(
         grpc_addr: &str,
         nats_properties: NatsProperties,
@@ -156,7 +166,10 @@ impl AppConfig {
             oauth2_base_url: "".into(),
             tcp_nodelay: true,
             worker_stream_properties,
+            worker_tls: WorkerTlsSettings::default(),
             pod_ip: None,
+            cors_allowed_origins: Vec::new(),
+            enforce_polling_owner: false,
         }
     }
 }
@@ -206,13 +219,19 @@ pub fn load_app_config(config_file: Option<&str>) -> Result<AppConfig, config::C
             config::FileFormat::Json,
         ))
         .add_source(config::File::with_name(&path).required(required))
-        .add_source(
-            config::Environment::default()
-                .separator("__")
-                .try_parsing(true),
-        )
+        .add_source(environment_source())
         .build()
         .and_then(|c| c.try_deserialize::<AppConfig>())
+}
+
+/// Parse known comma-separated allowlists while leaving other values scalar.
+fn environment_source() -> config::Environment {
+    config::Environment::default()
+        .separator("__")
+        .try_parsing(true)
+        .list_separator(",")
+        .with_list_parse_key("server.tracing.baggage_attribute_allowlist")
+        .with_list_parse_key("cors_allowed_origins")
 }
 
 /// Load application config from a YAML file and environment variable overrides.
@@ -289,6 +308,8 @@ mod tests {
             expected.secrets_watcher_interval_seconds
         );
         assert_eq!(config.tcp_nodelay, expected.tcp_nodelay);
+        assert!(!config.enforce_polling_owner);
+        assert!(config.cors_allowed_origins.is_empty());
     }
 
     // Verify that a config file overrides defaults. If APP_CONFIG were still being
@@ -339,5 +360,94 @@ mod tests {
         // Verify that AppConfig includes the grpc_client field with proper defaults
         assert_eq!(config.grpc_client.connect_timeout, Duration::from_secs(4));
         assert_eq!(config.grpc_client.request_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn environment_source_parses_baggage_attribute_allowlist() {
+        #[derive(Deserialize)]
+        struct EnvironmentSettings {
+            server: ServerSettings,
+        }
+
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST".to_string(),
+            "allowed.one,allowed.two".to_string(),
+        );
+
+        let settings = config::Config::builder()
+            .add_source(environment_source().source(Some(env)))
+            .build()
+            .unwrap()
+            .try_deserialize::<EnvironmentSettings>()
+            .unwrap();
+
+        assert_eq!(
+            settings.server.tracing.baggage_attribute_allowlist,
+            vec!["allowed.one", "allowed.two"]
+        );
+    }
+
+    #[test]
+    fn environment_source_parses_cors_and_polling_policy() {
+        for (origins, expected, enforce) in [
+            (
+                "https://console.example",
+                vec!["https://console.example"],
+                false,
+            ),
+            (
+                "https://console.example,https://other.example",
+                vec!["https://console.example", "https://other.example"],
+                true,
+            ),
+        ] {
+            let env = std::collections::HashMap::from([
+                ("CORS_ALLOWED_ORIGINS".into(), origins.into()),
+                ("ENFORCE_POLLING_OWNER".into(), enforce.to_string()),
+                ("NVCF_API_ADDRESS".into(), "http://api.example:9090".into()),
+            ]);
+            let settings = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &serde_json::to_string(&AppConfig::default()).unwrap(),
+                    config::FileFormat::Json,
+                ))
+                .add_source(environment_source().source(Some(env)))
+                .build()
+                .unwrap()
+                .try_deserialize::<AppConfig>()
+                .unwrap();
+            assert_eq!(settings.cors_allowed_origins, expected);
+            assert_eq!(settings.enforce_polling_owner, enforce);
+            assert_eq!(settings.nvcf_api_address, "http://api.example:9090");
+        }
+    }
+
+    #[test]
+    fn environment_source_parses_worker_tls() {
+        let env = std::collections::HashMap::from([
+            ("WORKER_TLS__ENABLED".into(), "true".into()),
+            ("WORKER_TLS__PORT".into(), "9443".into()),
+            ("WORKER_TLS__CERT_PATH".into(), "/tls/tls.crt".into()),
+        ]);
+        let settings = config::Config::builder()
+            .add_source(config::File::from_str(
+                &serde_json::to_string(&AppConfig::default()).unwrap(),
+                config::FileFormat::Json,
+            ))
+            .add_source(environment_source().source(Some(env)))
+            .build()
+            .unwrap()
+            .try_deserialize::<AppConfig>()
+            .unwrap();
+        assert!(settings.worker_tls.enabled);
+        assert_eq!(settings.worker_tls.port, 9443);
+        assert_eq!(settings.worker_tls.cert_path, PathBuf::from("/tls/tls.crt"));
+        assert_eq!(
+            settings.worker_tls.key_path,
+            WorkerTlsSettings::default().key_path,
+            "unset fields keep their defaults"
+        );
+        assert!(!AppConfig::default().worker_tls.enabled);
     }
 }

@@ -14,11 +14,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-nginx Consul Template Example
+# nginx Consul Template Example
+
 -----------------------------
+
 nginx is popular open source web server, reverse proxy, and load balancer. You can read more about nginx's configuration file syntax in the [nginx documentation](https://nginx.org/en/docs/).
 
 ## Global Load Balancer
+
 Here is an example template for rendering an nginx configuration file with Consul Template:
 
 ```liquid
@@ -50,7 +53,6 @@ server {
 ```
 
 Save this file to disk at a place reachable by the Consul Template process like `/tmp/nginx.conf.ctmpl` and run Consul Template:
-
 
 ```shell
 $ consul-template \

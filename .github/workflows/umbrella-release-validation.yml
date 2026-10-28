@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Umbrella Release Validation
+
+on:
+  pull_request:
+    paths:
+      - 'tools/docs-version-sync/**'
+      - 'tools/ci/assemble-umbrella-candidate'
+      - 'tools/scripts/test/test-umbrella-candidate'
+      - '.github/workflows/umbrella-candidate.yml'
+      - '.github/workflows/umbrella-release-validation.yml'
+      - '.github/workflows/publish-umbrella-release.yml'
+      - '.github/workflows/release-tags.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bundle-e2e:
+    name: Umbrella bundle E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HELM_VERSION: '3.21.4'
+      HELM_SHA256: '61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14'
+      HELMFILE_VERSION: '1.1.9'
+      HELMFILE_SHA256: 'ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905'
+      NVCF_UMBRELLA_RENDER_E2E: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: tools/docs-version-sync/go.mod
+      - name: Install verified render tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/umbrella-render-bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o umbrella-helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  umbrella-helm.tar.gz" | sha256sum -c -
+          tar -xzf umbrella-helm.tar.gz -C "$bin" --strip-components=1 linux-amd64/helm
+          curl -fsSL --retry 3 -o umbrella-helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  umbrella-helmfile.tar.gz" | sha256sum -c -
+          tar -xzf umbrella-helmfile.tar.gz -C "$bin" helmfile
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Assemble, verify, extract, and render fixture releases
+        run: go test -C tools/docs-version-sync -run TestUmbrella -count=1 -v
+      - name: Validate candidate CI with released-source fixtures
+        run: tools/scripts/test/test-umbrella-candidate

@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
-Copyright The Kubernetes Authors.
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,5 +20,7 @@ limitations under the License.
 package v2beta1
 
 type ICMSRequestExpansion interface{}
+
+type ModelCacheBindingExpansion interface{}
 
 type StorageRequestExpansion interface{}

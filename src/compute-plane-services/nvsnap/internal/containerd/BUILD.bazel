@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "containerd",
+    srcs = ["client.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/runtime",
+        "@com_github_containerd_containerd//:containerd",
+        "@com_github_containerd_containerd//namespaces",
+        "@com_github_sirupsen_logrus//:logrus",
+    ],
+)

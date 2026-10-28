@@ -32,11 +32,15 @@ import (
 
 const (
 	UtilsHealthPort int32 = 8080
+	// UtilsMetricsPort is the TCP port exposed by worker-utils for Prometheus metrics.
+	UtilsMetricsPort int32 = 8010
 
 	UtilsContainerName = "utils"
-	UtilsPodName       = "utils"
-	InitContainerName  = "init"
-	ESSContainerName   = "ess"
+	// WorkerMetricsPortName is the shared named port used by worker PodMonitor targets.
+	WorkerMetricsPortName = "worker-metrics"
+	UtilsPodName          = "utils"
+	InitContainerName     = "init"
+	ESSContainerName      = "ess"
 
 	TermLogPath = "/dev/termination-log"
 	DevShmPath  = "/dev/shm"
@@ -233,6 +237,39 @@ func NewWorkloadContainerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
+// WorkerInitUID is the numeric identity used by the worker-init image.
+const WorkerInitUID int64 = 1000
+
+// NewWorkerInitContainerSecurityContext matches the worker-init OCI user.
+func NewWorkerInitContainerSecurityContext() *corev1.SecurityContext {
+	uid := WorkerInitUID
+	nonRoot := true
+	allowPrivilegeEscalation := false
+	return &corev1.SecurityContext{
+		RunAsUser:                &uid,
+		RunAsGroup:               &uid,
+		RunAsNonRoot:             &nonRoot,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// EnsureWorkerInitFSGroup makes pod volumes writable by worker-init while
+// preserving an explicitly configured fsGroup.
+func EnsureWorkerInitFSGroup(spec *corev1.PodSpec) {
+	if spec.SecurityContext == nil {
+		spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	if spec.SecurityContext.FSGroup == nil {
+		group := WorkerInitUID
+		spec.SecurityContext.FSGroup = &group
+		if spec.SecurityContext.FSGroupChangePolicy == nil {
+			policy := corev1.FSGroupChangeOnRootMismatch
+			spec.SecurityContext.FSGroupChangePolicy = &policy
+		}
+	}
+}
+
 func NewInfraContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		Capabilities: &corev1.Capabilities{
@@ -328,6 +365,16 @@ func AddNVIDIAGPUNoScheduleToleration(podSpec *corev1.PodSpec) (added bool) {
 		Operator: corev1.TolerationOpExists,
 		Effect:   corev1.TaintEffectNoSchedule,
 	})
+}
+
+// MutateUtilsContainer declares the worker metrics port and configures the health probes.
+func MutateUtilsContainer(containerSpec *corev1.Container) {
+	containerSpec.Ports = append(containerSpec.Ports, corev1.ContainerPort{
+		Name:          WorkerMetricsPortName,
+		ContainerPort: UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	})
+	MutateUtilsProbes(containerSpec)
 }
 
 func MutateUtilsProbes(containerSpec *corev1.Container) {

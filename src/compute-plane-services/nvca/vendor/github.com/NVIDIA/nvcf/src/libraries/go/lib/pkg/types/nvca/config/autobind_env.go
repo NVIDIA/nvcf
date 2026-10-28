@@ -150,9 +150,16 @@ func recursiveAutobind(
 		fieldName = strings.ToLower(fieldName)
 		envName = strings.ToUpper(envName)
 
-		// Recurse into nested structs
+		// Recurse into nested structs.
 		if field.Type.Kind() == reflect.Struct {
 			if err := recursiveAutobind(fieldVal.Addr().Interface(), upperEnvPrefix, fieldName, fieldNameCamelCase, envName, bind); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct {
+			nested := reflect.New(field.Type.Elem()).Interface()
+			if err := recursiveAutobind(nested, upperEnvPrefix, fieldName, fieldNameCamelCase, envName, bind); err != nil {
 				return err
 			}
 			continue

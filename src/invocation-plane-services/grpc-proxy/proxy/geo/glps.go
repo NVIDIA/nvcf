@@ -26,8 +26,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/clients"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/goccy/go-json"
 	"go.uber.org/zap"
 )
@@ -64,10 +64,10 @@ type ipGeoData struct {
 	ISPName     string `json:"isp"`
 }
 
-func newGlpsClient(geoSsaAddr, geoGlpsAddr, secretsPath string) (*glpsClient, error) {
+func newGlpsClient(geoOAuth2Addr, geoGlpsAddr, secretsPath string) (*glpsClient, error) {
 	authnConfig := &auth.AuthnConfig{
 		OIDCConfig: &auth.ProviderConfig{
-			Host:            geoSsaAddr,
+			Host:            geoOAuth2Addr,
 			CredentialsFile: secretsPath,
 			Scopes:          []string{"geolocation-resolve"},
 		},

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2012-2025 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -218,6 +215,9 @@ var (
 
 	// ErrMinimumVersionRequired is returned when a connection is not at the minimum version required.
 	ErrMinimumVersionRequired = errors.New("minimum version required")
+	// ErrLeafNodeMinVersionRejected is the leafnode protocol error prefix used
+	// when rejecting a remote due to leafnodes.min_version.
+	ErrLeafNodeMinVersionRejected = errors.New("connection rejected since minimum version required is")
 
 	// ErrInvalidMappingDestination is used for all subject mapping destination errors
 	ErrInvalidMappingDestination = errors.New("invalid mapping destination")
@@ -254,6 +254,9 @@ type mappingDestinationErr struct {
 }
 
 func (e *mappingDestinationErr) Error() string {
+	if e.token == _EMPTY_ {
+		return e.err.Error()
+	}
 	return fmt.Sprintf("%s in %s", e.err, e.token)
 }
 

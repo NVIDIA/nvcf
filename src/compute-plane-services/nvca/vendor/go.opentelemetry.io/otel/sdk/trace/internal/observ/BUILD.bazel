@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "observ",
+    srcs = [
+        "batch_span_processor.go",
+        "doc.go",
+        "simple_span_processor.go",
+        "tracer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace/internal/observ",
+    importpath = "go.opentelemetry.io/otel/sdk/trace/internal/observ",
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/internal/x",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.41.0:v1_41_0",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.41.0/otelconv",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":observ",
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
+)

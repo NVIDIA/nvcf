@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Hand-written: examples/ is excluded from Gazelle. The module uses only the
+# standard library, so it needs no go.work.bazel entry or go_deps repositories.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "http-server_lib",
+    srcs = [
+        "main.go",
+        "messages.go",
+    ],
+    importpath = "nvcf-openai-compatible-sample",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "openai-compatible-sample",
+    embed = [":http-server_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "http-server_test",
+    srcs = [
+        "echo_test.go",
+        "main_test.go",
+        "messages_test.go",
+    ],
+    embed = [":http-server_lib"],
+)
+
+# Multi-arch release image. Release automation builds :image_index from a
+# release tag and publishes it; registry destinations are not kept here.
+# binary_path keeps the path the Dockerfile uses, so a function definition that
+# names the binary keeps working with either image.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":openai-compatible-sample",
+    binary_path = "/app/openai-compatible-sample",
+    tags = ["nvcf-openai-compatible-sample"],
+    visibility = ["//visibility:public"],
+)

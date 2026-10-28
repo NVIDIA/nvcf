@@ -118,6 +118,118 @@ func TestRateLimiterService(t *testing.T) {
 		testPerNcaIdWithExclusions(ctx, t, nvcfServer, client, rateLimiter)
 	})
 
+	t.Run("testPerUserRateOnly", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserRateOnly(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testPerUserResetClearsUserCounter", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserResetClearsUserCounter(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdSeparatesGlobalTierCounters", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdSeparatesGlobalTierCounters(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdSelectsPerNcaIdRate", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdSelectsPerNcaIdRate(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdIsolatedFromAccountOwnKeys", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdIsolatedFromAccountOwnKeys(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdEmptyAndEqualShareCounter", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdEmptyAndEqualShareCounter(ctx, t, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdExclusionsFollowOwner", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdExclusionsFollowOwner(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testOwnerNcaIdScopesPerUserCounter", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testOwnerNcaIdScopesPerUserCounter(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testPerUserAndGlobalRate", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserAndGlobalRate(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testPerUserRateBackwardCompat", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserRateBackwardCompat(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testPerUserAndPerNcaIdRate", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserAndPerNcaIdRate(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testPerUserBlockedDoesNotConsumeNcaBudget", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testPerUserBlockedDoesNotConsumeNcaBudget(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testAllThreeTiersPerNcaIdWinsOverGlobal", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testAllThreeTiersPerNcaIdWinsOverGlobal(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
+	t.Run("testExcludedNcaStillEnforcesPerUserTier", func(t *testing.T) {
+		rateLimiter.ClearAllCaches()
+		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
+		defer cancel()
+		defer conn.Close()
+		testExcludedNcaStillEnforcesPerUserTier(ctx, t, nvcfServer, client, rateLimiter)
+	})
+
 	t.Run("testRateLimitWithExemption", func(t *testing.T) {
 		rateLimiter.ClearAllCaches()
 		conn, client, cancel := startGrpcClient(ctx, goodCreds, address, t)
@@ -449,6 +561,7 @@ func startGrpcServer(t *testing.T, address string, bindPort int, memberlistPort 
 
 	rateLimiterConfig := ratelimiter.Config{
 		OAuth2Issuer:       "http://localhost:8081",
+		OAuth2JwksURL:      "http://localhost:8081/.well-known/jwks.json",
 		Audience:           "test-oauth2-client-id",
 		OAuth2ProviderHost: "localhost",
 		NvcfApiUrl:         "http://localhost:9091",
@@ -677,6 +790,629 @@ func testPerNcaIdWithExclusions(ctx context.Context, t *testing.T, nvcfServer *M
 	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId3, functionVersionId)
 
 	nvcfServer.perNcaIdWithExclusions = false
+}
+
+// testPerUserRateOnly verifies that when only perUserRate is configured (no
+// global, no per-NCA), each unique clientAuthSubject gets an independent budget.
+func testPerUserRateOnly(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserRate = true
+	defer func() { nvcfServer.withPerUserRate = false }()
+
+	ncaId := "test_nca_id_user_only"
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+
+	userA := "user_a"
+	userB := "user_b"
+
+	// User A burns through 2-M budget.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: userA,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "user A should be allowed within 2-M budget")
+	}
+
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: userA,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user A should be blocked once user budget exhausted")
+
+	// User B in the same NCA still has full budget — counters are independent.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: userB,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "user B should have its own independent budget")
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(userA, ncaId, functionVersionId), ncaId, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(userB, ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// testPerUserResetClearsUserCounter is a regression test for a bug where
+// ResetLimiter built an NCA-tier Olric key ("nca:fv:rate") for per-user
+// entries instead of the user-tier key ("user:subject:nca:fv:rate"). Resetting
+// a per-user CacheKey therefore cleared the wrong counter, leaving the caller's
+// window exhausted. Earlier per-user tests called ResetLimiter only as
+// fire-and-forget cleanup with the error discarded and never asserted the
+// post-reset behavior, so the mismatch went unnoticed. This test asserts that
+// after resetting a per-user key the same caller is allowed again.
+func testPerUserResetClearsUserCounter(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserRate = true
+	defer func() { nvcfServer.withPerUserRate = false }()
+
+	ncaId := "test_nca_id_user_reset"
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+	user := "user_reset"
+
+	// Exhaust the per-user budget (perUserRate = 2-M): 2 allowed, 3rd blocked.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "req %d within user budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: user,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user blocked once budget exhausted")
+
+	// Reset the per-user counter via its per-user CacheKey.
+	err = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaId, functionVersionId), ncaId, functionVersionId)
+	assert.NoError(t, err)
+
+	// A correct reset clears the caller's window → the caller is allowed again.
+	// With the bug (wrong Olric key) the user counter stays exhausted and this
+	// request is DISALLOWed.
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: user,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "caller should be allowed again after per-user counter reset")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// Two key owners are granted access to the same account (ncaId), each with
+// its own ownerNcaId. Global rate is 4-S: each member gets a full budget.
+func testOwnerNcaIdSeparatesGlobalTierCounters(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_shared_org"
+	memberA := "test_nca_id_owner_a"
+	memberB := "test_nca_id_owner_b"
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+
+	for i := 0; i < 4; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        memberA,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "member A req %d within budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		OwnerNcaId:        memberA,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "member A blocked once its budget is exhausted")
+
+	for i := 0; i < 4; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        memberB,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "member B req %d must not share member A's counter", i)
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), memberA, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), memberB, functionVersionId)
+}
+
+// Per-NCA-ID rate 4-S is configured for test_nca_id_1 only, with no global
+// rate. The entry is matched against the key owner's NCA ID, so it applies to a
+// key owned by test_nca_id_1 wherever it is authorized, and is not inherited by
+// other owners authorized against test_nca_id_1.
+func testOwnerNcaIdSelectsPerNcaIdRate(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.perNcaIdRateOnly = true
+	defer func() { nvcfServer.perNcaIdRateOnly = false }()
+
+	configuredNcaId := "test_nca_id_1"
+	otherNcaId := "test_nca_id_shared_org_3"
+	otherOwner := "test_nca_id_owner_b"
+	functionVersionId := "test_function_version_id"
+
+	results := sendRateLimit(ctx, t, client, otherNcaId, configuredNcaId, 5)
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_DISALLOW}, results,
+		"owner's per-NCA-ID rate applies even when authorized against another account")
+
+	for i, result := range sendRateLimit(ctx, t, client, configuredNcaId, otherOwner, 6) {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, result, "request %d: another owner does not inherit the authorized account's rate", i)
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(configuredNcaId, functionVersionId), configuredNcaId, functionVersionId)
+}
+
+// sendRateLimit issues n requests for the test function and returns the results in order.
+func sendRateLimit(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, ncaId, ownerNcaId string, n int) []pb.RateLimitResult {
+	results := make([]pb.RateLimitResult, 0, n)
+	for i := 0; i < n; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        ownerNcaId,
+			FunctionId:        "test_function_id",
+			FunctionVersionId: "test_function_version_id",
+		})
+		assert.NoError(t, err)
+		results = append(results, resp.Result)
+	}
+	return results
+}
+
+// The account's own keys (ownerNcaId == ncaId) and a key owned by another
+// account but authorized against it (global rate 4-S) never share a counter, in
+// either direction.
+func testOwnerNcaIdIsolatedFromAccountOwnKeys(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_shared_org_2"
+	owner := "test_nca_id_owner_c"
+	functionVersionId := "test_function_version_id"
+	allow4 := []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW}
+
+	assert.Equal(t, allow4, sendRateLimit(ctx, t, client, ncaId, ncaId, 4), "account's own keys within budget")
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_DISALLOW}, sendRateLimit(ctx, t, client, ncaId, ncaId, 1), "account's own keys blocked once exhausted")
+	assert.Equal(t, allow4, sendRateLimit(ctx, t, client, ncaId, owner, 4), "other owner unaffected by the account's own usage")
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_DISALLOW}, sendRateLimit(ctx, t, client, ncaId, owner, 1), "other owner blocked once its own budget is exhausted")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), owner, functionVersionId)
+}
+
+// During a rolling upgrade some callers omit ownerNcaId and others send it equal
+// to ncaId for the same key. Both must hit one counter (global rate 4-S), not
+// two, or the account would briefly get double its budget.
+func testOwnerNcaIdEmptyAndEqualShareCounter(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	ncaId := "test_nca_id_rolling_upgrade"
+	functionVersionId := "test_function_version_id"
+
+	for i := 0; i < 2; i++ {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, sendRateLimit(ctx, t, client, ncaId, "", 1)[0], "legacy request %d", i)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, sendRateLimit(ctx, t, client, ncaId, ncaId, 1)[0], "owner-aware request %d", i)
+	}
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, sendRateLimit(ctx, t, client, ncaId, "", 1)[0], "shared budget exhausted for legacy request")
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, sendRateLimit(ctx, t, client, ncaId, ncaId, 1)[0], "shared budget exhausted for owner-aware request")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
+}
+
+// Exclusions are matched against the key owner's NCA ID. Global rate 4-S;
+// test_nca_id_exclude2 is excluded.
+func testOwnerNcaIdExclusionsFollowOwner(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.perNcaIdWithExclusions = true
+	defer func() { nvcfServer.perNcaIdWithExclusions = false }()
+
+	excludedNcaId := "test_nca_id_exclude2"
+	notExcludedNcaId := "test_nca_id_not_excluded"
+	owner := "test_nca_id_owner_d"
+	functionVersionId := "test_function_version_id"
+
+	for i, result := range sendRateLimit(ctx, t, client, notExcludedNcaId, excludedNcaId, 6) {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, result, "request %d: an excluded owner stays exempt when authorized against another account", i)
+	}
+
+	results := sendRateLimit(ctx, t, client, excludedNcaId, owner, 5)
+	assert.Equal(t, []pb.RateLimitResult{pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_ALLOW, pb.RateLimitResult_DISALLOW}, results,
+		"another owner does not inherit the authorized account's exclusion")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), owner, functionVersionId)
+}
+
+// Per-user rate 2-M, no NCA-tier rate. The user-tier counter is scoped by the
+// key owner's NCA ID, so the same caller and owner share one budget across the
+// accounts the key is authorized against.
+func testOwnerNcaIdScopesPerUserCounter(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserRate = true
+	defer func() { nvcfServer.withPerUserRate = false }()
+
+	owner := "test_nca_id_owner_e"
+	user := "user_owner_e"
+	functionVersionId := "test_function_version_id"
+	send := func(ncaId string) pb.RateLimitResult {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			OwnerNcaId:        owner,
+			FunctionId:        "test_function_id",
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		return resp.Result
+	}
+
+	assert.Equal(t, pb.RateLimitResult_ALLOW, send("test_nca_id_shared_org_4"))
+	assert.Equal(t, pb.RateLimitResult_ALLOW, send("test_nca_id_shared_org_5"))
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, send("test_nca_id_shared_org_4"), "user budget is shared across authorized accounts for one owner")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, owner, functionVersionId), owner, functionVersionId)
+}
+
+// testPerUserAndGlobalRate verifies AND-check semantics: a request must pass
+// both the per-user tier AND the NCA tier. Both tiers increment counters on
+// every evaluation (consistent with ulule's always-increment model), so this
+// test exercises the two distinct block paths separately.
+func testPerUserAndGlobalRate(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserAndGlobalRate = true
+	defer func() { nvcfServer.withPerUserAndGlobalRate = false }()
+
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+
+	// Sub-case 1: user-tier blocks before NCA-tier.
+	// Policy: perUserRate=2-M, global=5-M. One user in NCA. After 2 allowed
+	// requests, user tier is at limit. 3rd request blocked by user tier even
+	// though NCA tier (count 3) is well under the 5-M cap.
+	ncaIdA := "test_nca_id_user_blocks"
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaIdA,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: "lone_user",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "req %d within user budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaIdA,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "lone_user",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user tier blocks even though NCA budget remains")
+
+	// Sub-case 2: NCA-tier blocks even though current user has budget.
+	// Use a fresh NCA so counters are isolated from sub-case 1. Three users
+	// each make exactly one allowed request (3 NCA-level calls). Two more
+	// distinct users make calls 4 and 5 — still within global 5-M. The 6th
+	// call from yet another distinct user is blocked by the NCA tier despite
+	// that user having full user budget.
+	ncaIdB := "test_nca_id_nca_blocks"
+	for i, user := range []string{"u1", "u2", "u3", "u4", "u5"} {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaIdB,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "user %s call %d within global 5-M", user, i)
+	}
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaIdB,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "u6",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "NCA tier blocks fresh user when global rate exhausted")
+
+	for _, user := range []string{"lone_user"} {
+		_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaIdA, functionVersionId), ncaIdA, functionVersionId)
+	}
+	for _, user := range []string{"u1", "u2", "u3", "u4", "u5", "u6"} {
+		_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaIdB, functionVersionId), ncaIdB, functionVersionId)
+	}
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaIdA, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaIdB, functionVersionId)
+}
+
+// testPerUserRateBackwardCompat verifies that requests without ClientAuthSubject
+// (no caller identity) skip the user tier entirely and only honor the NCA tier.
+func testPerUserRateBackwardCompat(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserAndGlobalRate = true
+	defer func() { nvcfServer.withPerUserAndGlobalRate = false }()
+
+	ncaId := "test_nca_id_legacy"
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+
+	// Global is 5-M. With no ClientAuthSubject, only global tier checked.
+	for i := 0; i < 5; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			// ClientAuthSubject intentionally empty
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "legacy req %d should be allowed within global 5-M", i)
+	}
+
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "legacy 6th request blocked by global rate")
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
+}
+
+// testPerUserAndPerNcaIdRate verifies AND-check between the user tier and the
+// per-NCA-ID tier (without a global rate). Confirms the user tier is enforced
+// alongside the NCA-tier limit even when the NCA tier is the per-NCA-ID variant.
+func testPerUserAndPerNcaIdRate(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserAndPerNcaIdRate = true
+	defer func() { nvcfServer.withPerUserAndPerNcaIdRate = false }()
+
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+	ncaId := "nca_with_pernca"
+
+	// Sub-case 1: user tier blocks before per-NCA tier.
+	// per-user budget for "alpha" is 2-M; per-NCA budget is 5-M.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: "alpha",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "alpha req %d within user budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "alpha",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user tier blocks alpha despite per-NCA budget remaining")
+
+	// Sub-case 2: per-NCA tier blocks even when the user has fresh budget.
+	// alpha consumed 2 of NCA's 5 (its user-blocked 3rd does not count); beta,
+	// gamma, delta each consume one more, reaching 5. A further request is then
+	// blocked by the per-NCA tier despite that user's per-user budget remaining.
+	for _, user := range []string{"beta", "gamma", "delta"} {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "user %s within both budgets", user)
+	}
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "beta",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "per-NCA tier blocks despite remaining user budget")
+
+	for _, user := range []string{"alpha", "beta", "gamma", "delta"} {
+		_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(user, ncaId, functionVersionId), ncaId, functionVersionId)
+	}
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// testPerUserBlockedDoesNotConsumeNcaBudget verifies a request rejected by the
+// per-user tier does not increment the shared per-NCA counter, so one noisy
+// caller can't starve the NCA by retrying past their personal limit.
+func testPerUserBlockedDoesNotConsumeNcaBudget(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserAndPerNcaIdRate = true // per-user 2-M, per-NCA 5-M
+	defer func() { nvcfServer.withPerUserAndPerNcaIdRate = false }()
+
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id" // ids the mock serves a policy for
+	ncaId := "nca_with_pernca"                      // must match the mock's per-NCA config
+
+	// start clean: clear any per-NCA count left by earlier subtests on this key.
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(ncaId, functionVersionId), ncaId, functionVersionId)
+
+	req := func(user string) pb.RateLimitResult {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: user,
+		})
+		assert.NoError(t, err)
+		return resp.Result
+	}
+
+	// noisy user: 2 allowed (user budget), then 3 blocked by the user tier.
+	assert.Equal(t, pb.RateLimitResult_ALLOW, req("noisy"))
+	assert.Equal(t, pb.RateLimitResult_ALLOW, req("noisy"))
+	for i := 0; i < 3; i++ {
+		assert.Equal(t, pb.RateLimitResult_DISALLOW, req("noisy"), "noisy blocked by user tier")
+	}
+
+	// blocked retries didn't touch the NCA: only 2 of 5 used, so 3 fresh users fit.
+	for _, u := range []string{"u1", "u2", "u3"} {
+		assert.Equal(t, pb.RateLimitResult_ALLOW, req(u), "fresh user %s within NCA budget", u)
+	}
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, req("u4"), "per-NCA budget (5) exhausted")
+
+	for _, u := range []string{"noisy", "u1", "u2", "u3", "u4"} {
+		_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(u, ncaId, functionVersionId), ncaId, functionVersionId)
+	}
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// testAllThreeTiersPerNcaIdWinsOverGlobal verifies that when global +
+// per-NCA-ID + per-user are all configured for an NCA that has a per-NCA-ID
+// override, the per-NCA-ID rate replaces the global rate at the NCA tier
+// while the user tier is still enforced alongside.
+func testAllThreeTiersPerNcaIdWinsOverGlobal(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withAllThreeTiers = true
+	defer func() { nvcfServer.withAllThreeTiers = false }()
+
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+	ncaId := "nca_pernca"
+
+	// Policy: global=100-M (deliberately generous), per-NCA-ID=3-M for nca_pernca,
+	// per-user=2-M for user_three_tier. The per-NCA tier (3-M) is the binding
+	// NCA-tier limit for this NCA — the global 100-M is shadowed. The user tier
+	// (2-M) is enforced in addition.
+
+	// First two requests pass both user tier (2-M) and NCA tier (3-M).
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: "user_three_tier",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "req %d within all tiers", i)
+	}
+	// Third request hits the user-tier limit (2-M). The user tier is evaluated
+	// first and denies, so the NCA tier is not consulted and its counter stays
+	// at 2 (the two allowed requests).
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "user_three_tier",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user tier blocks the 3rd request")
+
+	// per-NCA (3-M), not global (100-M), is the binding NCA tier. NCA has 1 unit
+	// left (2 used): a fresh user takes it, and a second fresh user is then
+	// blocked by the per-NCA tier despite having full per-user budget.
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "fresh_user_a",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "fresh user takes the last NCA unit")
+
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "fresh_user_b",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "fresh user blocked by per-NCA tier (3-M), not global (100-M)")
+
+	for _, u := range []string{"user_three_tier", "fresh_user_a", "fresh_user_b"} {
+		_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey(u, ncaId, functionVersionId), ncaId, functionVersionId)
+	}
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerNcaIdCacheKey(ncaId, functionVersionId), ncaId, functionVersionId)
+}
+
+// testExcludedNcaStillEnforcesPerUserTier verifies that an NCA in
+// excludedNcaIds bypasses the global rate but the per-user tier is still
+// enforced — every distinct caller gets its own independent user-tier budget.
+func testExcludedNcaStillEnforcesPerUserTier(ctx context.Context, t *testing.T, nvcfServer *MockNVCFAPIServer, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {
+	nvcfServer.withPerUserAndExcludedNcaId = true
+	defer func() { nvcfServer.withPerUserAndExcludedNcaId = false }()
+
+	functionId := "test_function_id"
+	functionVersionId := "test_function_version_id"
+	ncaId := "nca_excluded_user_tier"
+
+	// Policy: global=5-M, perUserRate=2-M, excludedNcaIds=[ncaId]. The NCA is
+	// excluded from the global rate; the user tier still applies to every
+	// caller. Burn user1 through its 2-M user budget.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: "user1",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "req %d within user budget", i)
+	}
+	resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "user1",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user tier still enforced even though NCA is in excludedNcaIds")
+
+	// A different caller in the same excluded NCA gets its own 2-M user budget
+	// — independent counter from user1. Two allowed reqs, third blocked.
+	for i := 0; i < 2; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+			ClientAuthSubject: "user2",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "user2 req %d within own user budget", i)
+	}
+	resp, err = client.RateLimit(ctx, &pb.RateLimitRequest{
+		NcaId:             ncaId,
+		FunctionId:        functionId,
+		FunctionVersionId: functionVersionId,
+		ClientAuthSubject: "user2",
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, pb.RateLimitResult_DISALLOW, resp.Result, "user2 also subject to per-user 2-M cap")
+
+	// Empty ClientAuthSubject — no caller identity. User
+	// tier is skipped, and the NCA is excluded from the global rate, so these
+	// requests are fully bypassed.
+	for i := 0; i < 10; i++ {
+		resp, err := client.RateLimit(ctx, &pb.RateLimitRequest{
+			NcaId:             ncaId,
+			FunctionId:        functionId,
+			FunctionVersionId: functionVersionId,
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, pb.RateLimitResult_ALLOW, resp.Result, "legacy req %d in excluded NCA always allowed", i)
+	}
+
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey("user1", ncaId, functionVersionId), ncaId, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewPerUserCacheKey("user2", ncaId, functionVersionId), ncaId, functionVersionId)
+	_ = rateLimiter.ResetLimiter(ctx, ratelimiter.NewGlobalCacheKey(functionVersionId), ncaId, functionVersionId)
 }
 
 func testRateLimitForSameKey(ctx context.Context, t *testing.T, client pb.RateLimitServiceClient, rateLimiter *ratelimiter.RateLimiter) {

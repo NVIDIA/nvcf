@@ -1,0 +1,902 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package openairesponses
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/mcp"
+)
+
+// Exported constants for tool types, statuses, and choices
+const (
+	// Tool types
+	ToolTypeFunction        = "function"
+	ToolTypeBrowserSearch   = "browser_search"
+	ToolTypeCodeInterpreter = "code_interpreter"
+	ToolTypeMCP             = "mcp"
+	ToolTypeNamespace       = "namespace"
+	ToolTypeCustom          = "custom"
+	ToolTypeToolSearch      = "tool_search"
+
+	// Tool choice options
+	ToolChoiceNone     = "none"
+	ToolChoiceAuto     = "auto"
+	ToolChoiceRequired = "required"
+
+	// Require approval options
+	RequireApprovalAlways = "always"
+	RequireApprovalNever  = "never"
+
+	// Tool call statuses
+	ToolCallStatusInProgress   = "in_progress"
+	ToolCallStatusCompleted    = "completed"
+	ToolCallStatusIncomplete   = "incomplete"
+	ToolCallStatusFailed       = "failed"
+	ToolCallStatusSearching    = "searching"
+	ToolCallStatusInterpreting = "interpreting"
+)
+
+// Cached pointers for common approval strings to avoid repeated allocations
+var (
+	requireApprovalAlwaysPtr = ptr.To(RequireApprovalAlways)
+)
+
+// Interface assertions
+var (
+	_ Tool = (*FunctionTool)(nil)
+	_ Tool = (*BrowserSearchTool)(nil)
+	_ Tool = (*CodeInterpreterTool)(nil)
+	_ Tool = (*MCPTool)(nil)
+	_ Tool = (*NamespaceTool)(nil)
+	_ Tool = (*CustomTool)(nil)
+	_ Tool = (*ToolSearchTool)(nil)
+)
+
+// isBrowserSearchType checks if a tool type is a browser search variant:
+// browser_search, web_search, and the web_search_preview and dated web_search_*
+// variants.
+func isBrowserSearchType(toolType string) bool {
+	return toolType == ToolTypeBrowserSearch || strings.HasPrefix(toolType, "web_search")
+}
+
+// Tool interface represents different types of tools
+type Tool interface {
+	GetType() string
+	Validate() error
+}
+
+// ToolBase is embedded in all tool types
+type ToolBase struct {
+	Type string `json:"type"`
+}
+
+func (t ToolBase) GetType() string {
+	return t.Type
+}
+
+// ValidateType checks if the Type field is set
+func (t ToolBase) ValidateType() error {
+	if t.Type == "" {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "is required",
+		}
+	}
+	return nil
+}
+
+// FunctionTool represents a function tool
+type FunctionTool struct {
+	ToolBase
+
+	Name        string         `json:"name"`
+	Description *string        `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      *bool          `json:"strict"`
+}
+
+func (t *FunctionTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeFunction {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'function' for FunctionTool",
+		}
+	}
+	if t.Name == "" {
+		return &UnmarshalError{
+			Field: "name",
+			Msg:   "is required for function tools",
+		}
+	}
+	return nil
+}
+
+// CustomTool represents a custom tool, whose calls carry free-form text input
+// instead of JSON arguments. Format is the optional text or grammar constraint.
+type CustomTool struct {
+	ToolBase
+
+	Name        string          `json:"name"`
+	Description *string         `json:"description,omitempty"`
+	Format      json.RawMessage `json:"format,omitempty"`
+}
+
+func (t *CustomTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeCustom {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'custom' for CustomTool",
+		}
+	}
+	if t.Name == "" {
+		return &UnmarshalError{
+			Field: "name",
+			Msg:   "is required for custom tools",
+		}
+	}
+	return nil
+}
+
+// ToolSearchTool lets the model search for tools to load. Execution says whether
+// the client or the server runs the search.
+type ToolSearchTool struct {
+	ToolBase
+
+	Execution   string         `json:"execution,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+func (t *ToolSearchTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeToolSearch {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'tool_search' for ToolSearchTool",
+		}
+	}
+	return nil
+}
+
+// NamespaceTool groups function and custom tools under a namespace. Calls to its tools
+// carry the namespace so same-named tools in different namespaces stay distinct.
+type NamespaceTool struct {
+	ToolBase
+
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Tools       []Tool `json:"tools"`
+}
+
+func (t *NamespaceTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeNamespace {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'namespace' for NamespaceTool",
+		}
+	}
+	if t.Name == "" {
+		return &UnmarshalError{
+			Field: "name",
+			Msg:   "is required for namespace tools",
+		}
+	}
+	if t.Description == "" {
+		return &UnmarshalError{
+			Field: "description",
+			Msg:   "is required for namespace tools",
+		}
+	}
+	if len(t.Tools) == 0 {
+		return &UnmarshalError{
+			Field: "tools",
+			Msg:   "must contain at least one tool for namespace tools",
+		}
+	}
+	for i, tool := range t.Tools {
+		if err := tool.Validate(); err != nil {
+			return &UnmarshalError{
+				Field: fmt.Sprintf("tools[%d]", i),
+				Msg:   err.Error(),
+			}
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON decodes nested function and custom tools. Other nested tools
+// are kept raw.
+func (t *NamespaceTool) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ToolBase
+
+		Name        string            `json:"name"`
+		Description string            `json:"description"`
+		Tools       []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	tools := make([]Tool, 0, len(raw.Tools))
+	for _, rawTool := range raw.Tools {
+		var base ToolBase
+		_ = json.Unmarshal(rawTool, &base) // a tool without a string type stays raw
+		var tool Tool
+		switch base.Type {
+		case ToolTypeFunction:
+			tool = &FunctionTool{}
+		case ToolTypeCustom:
+			tool = &CustomTool{}
+		}
+		if tool == nil || json.Unmarshal(rawTool, tool) != nil {
+			tool = newRawTool(rawTool)
+		}
+		tools = append(tools, tool)
+	}
+
+	*t = NamespaceTool{
+		ToolBase:    raw.ToolBase,
+		Name:        raw.Name,
+		Description: raw.Description,
+		Tools:       tools,
+	}
+	return nil
+}
+
+// BrowserSearchTool represents a browser or web search tool
+type BrowserSearchTool struct {
+	ToolBase
+
+	UserLocation      *UserLocation `json:"user_location"`
+	SearchContextSize *string       `json:"search_context_size"`
+}
+
+func (t *BrowserSearchTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if !isBrowserSearchType(t.Type) {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'browser_search' or 'web_search*' for BrowserSearchTool",
+		}
+	}
+	return nil
+}
+
+// CodeInterpreterTool represents a code interpreter tool
+type CodeInterpreterTool struct {
+	ToolBase
+
+	Container any `json:"container"` // Can be string (container ID) or CodeInterpreterContainer
+}
+
+func (t *CodeInterpreterTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeCodeInterpreter {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'code_interpreter' for CodeInterpreterTool",
+		}
+	}
+	// Container field is optional for code interpreter tools
+	return nil
+}
+
+// MCPTool represents an MCP tool
+type MCPTool struct {
+	ToolBase
+
+	ServerLabel       string              `json:"server_label"`
+	ServerURL         string              `json:"server_url"`
+	ConnectorID       string              `json:"connector_id,omitempty"`
+	Headers           *map[string]string  `json:"headers"`
+	Authorization     *string             `json:"authorization,omitempty"`
+	AllowedTools      any                 `json:"allowed_tools,omitempty"`
+	RequireApproval   *MCPRequireApproval `json:"require_approval,omitempty"`
+	ServerDescription *string             `json:"server_description,omitempty"`
+}
+
+func (t *MCPTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeMCP {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'mcp' for MCPTool",
+		}
+	}
+	if t.ServerLabel == "" {
+		return &UnmarshalError{
+			Field: "server_label",
+			Msg:   "is required for MCP tools",
+		}
+	}
+	if t.ServerURL == "" && t.ConnectorID == "" {
+		return &UnmarshalError{
+			Field: "connector_id",
+			Msg:   "server_url or connector_id is required for MCP tools",
+		}
+	}
+	// require_approval validation is handled by MCPRequireApproval.UnmarshalJSON
+	return nil
+}
+
+// GetRequireApproval returns the require_approval configuration for this tool
+func (t *MCPTool) GetRequireApproval() *mcp.RequireApproval {
+	if t.RequireApproval == nil {
+		return nil
+	}
+
+	// Convert openairesponses types to mcp types
+	mcpApproval := &mcp.RequireApproval{
+		String: t.RequireApproval.String,
+	}
+
+	if t.RequireApproval.Object != nil {
+		mcpObj := &mcp.RequireApprovalObject{
+			Always: t.RequireApproval.Object.Always,
+		}
+		if t.RequireApproval.Object.Never != nil {
+			mcpObj.Never = &mcp.RequireApprovalNever{
+				ToolNames: t.RequireApproval.Object.Never.ToolNames,
+			}
+		}
+		mcpApproval.Object = mcpObj
+	}
+
+	return mcpApproval
+}
+
+// RequiresApprovalForTool checks if the given tool name requires approval
+func (t *MCPTool) RequiresApprovalForTool(toolName string) bool {
+	if t.RequireApproval == nil {
+		return false
+	}
+
+	// String form: "always" or "never"
+	if t.RequireApproval.String != nil {
+		return ptr.Deref(t.RequireApproval.String) == RequireApprovalAlways
+	}
+
+	// Object form
+	if obj := t.RequireApproval.Object; obj != nil {
+		if obj.Never != nil {
+			for _, n := range obj.Never.ToolNames {
+				if n == toolName {
+					return false
+				}
+			}
+		}
+		// If always key present, require approval for anything not explicitly in never
+		if obj.HasAlways() {
+			return true
+		}
+		// If only never is present but does not include this tool, require approval
+		if obj.Never != nil {
+			return true
+		}
+	}
+
+	// Default to no approval required
+	return false
+}
+
+// GetApprovalStringValue returns the approval value as a string for backward compatibility
+func (t *MCPTool) GetApprovalStringValue() *string {
+	if t.RequireApproval == nil {
+		return nil
+	}
+
+	if t.RequireApproval.String != nil {
+		return t.RequireApproval.String
+	}
+	// For object format, return "always" since it's more complex approval logic
+	return requireApprovalAlwaysPtr
+}
+
+// MCPRequireApproval represents the polymorphic require_approval field
+// It can be either a string ("always"|"never") or an object like
+// {"never": {"tool_names": ["tool1", ...]}} or {"always": {...}}
+type MCPRequireApproval struct {
+	String *string                   `json:"-"`
+	Object *MCPRequireApprovalObject `json:"-"`
+}
+
+// MCPRequireApprovalObject represents the object form of require_approval
+type MCPRequireApprovalObject struct {
+	Never *MCPRequireApprovalNever `json:"never,omitempty"`
+	// Presence of the key indicates approval is always required; value is ignored
+	Always json.RawMessage `json:"always,omitempty"`
+}
+
+// HasAlways returns true if the object had an "always" key
+func (o *MCPRequireApprovalObject) HasAlways() bool {
+	return o != nil && o.Always != nil && len(o.Always) > 0
+}
+
+// MCPRequireApprovalNever lists tool names that never require approval
+type MCPRequireApprovalNever struct {
+	ToolNames []string `json:"tool_names,omitempty"`
+}
+
+// UnmarshalJSON attempts to decode as a string first, then as an object.
+// Failed deserialization is used as control flow per review guidance.
+func (ra *MCPRequireApproval) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		switch s {
+		case RequireApprovalAlways, RequireApprovalNever:
+			ra.String = &s
+			ra.Object = nil
+			return nil
+		default:
+			return &UnmarshalError{
+				Field: "require_approval",
+				Msg:   "must be 'always' or 'never'",
+			}
+		}
+	}
+
+	var obj MCPRequireApprovalObject
+	if err := json.Unmarshal(data, &obj); err == nil {
+		ra.Object = &obj
+		ra.String = nil
+		return nil
+	}
+
+	return &UnmarshalError{
+		Field: "require_approval",
+		Msg:   "must be string or object",
+	}
+}
+
+// buildRequireApprovalForJSON converts the RequireApproval field to appropriate JSON representation
+func (t *MCPTool) buildRequireApprovalForJSON() any {
+	if t.RequireApproval == nil {
+		return nil
+	}
+
+	switch {
+	case t.RequireApproval.String != nil:
+		return ptr.Deref(t.RequireApproval.String)
+	case t.RequireApproval.Object != nil:
+		// Preserve object form to better match OpenAI echo behavior
+		obj := map[string]any{}
+		if t.RequireApproval.Object.HasAlways() {
+			// OpenAI often includes read_only and tool_names (possibly empty)
+			obj["always"] = map[string]any{
+				"read_only":  nil,
+				"tool_names": []string{},
+			}
+		}
+		if t.RequireApproval.Object.Never != nil {
+			obj["never"] = map[string]any{
+				"read_only":  nil,
+				"tool_names": t.RequireApproval.Object.Never.ToolNames,
+			}
+		}
+		if len(obj) > 0 {
+			return obj
+		}
+		// Fallback to string form if object carried no usable keys
+		return RequireApprovalAlways
+	default:
+		return nil
+	}
+}
+
+// sanitizeHeadersForJSON creates a copy of headers with Authorization values redacted
+func (t *MCPTool) sanitizeHeadersForJSON() *map[string]string {
+	if t.Headers == nil {
+		return nil
+	}
+
+	sanitized := make(map[string]string, len(*t.Headers))
+	for k, v := range *t.Headers {
+		if strings.EqualFold(k, "authorization") {
+			sanitized[k] = "<redacted>"
+		} else {
+			sanitized[k] = v
+		}
+	}
+	return &sanitized
+}
+
+func (t *MCPTool) sanitizeAuthorizationForJSON() string {
+	if t.Authorization == nil || ptr.Deref(t.Authorization) == "" {
+		return ""
+	}
+	return "<redacted>"
+}
+
+// MarshalJSON implements custom JSON marshaling to redact server URLs for security
+func (t *MCPTool) MarshalJSON() ([]byte, error) {
+	var (
+		serverURL         *string
+		headers           *map[string]string
+		serverDescription *string
+	)
+
+	isConnector := t.ConnectorID != ""
+
+	switch {
+	case isConnector:
+		serverURL = nil
+		headers = nil
+		serverDescription = nil
+	case mcp.IsInternalConnector(t.ServerURL):
+		serverURL = nil
+		headers = nil
+		serverDescription = nil
+	default:
+		redactedURL := mcp.RedactServerURL(t.ServerURL)
+		serverURL = &redactedURL
+		headers = t.sanitizeHeadersForJSON()
+		serverDescription = t.ServerDescription
+	}
+
+	out := struct {
+		ToolBase
+
+		ServerLabel       string             `json:"server_label"`
+		ServerURL         *string            `json:"server_url"`
+		ConnectorID       string             `json:"connector_id,omitempty"`
+		Headers           *map[string]string `json:"headers"`
+		Authorization     string             `json:"authorization,omitempty"`
+		AllowedTools      any                `json:"allowed_tools"`
+		RequireApproval   any                `json:"require_approval,omitempty"`
+		ServerDescription *string            `json:"server_description"`
+	}{
+		ToolBase:          t.ToolBase,
+		ServerLabel:       t.ServerLabel,
+		ServerURL:         serverURL,
+		ConnectorID:       t.ConnectorID,
+		Headers:           headers,
+		Authorization:     t.sanitizeAuthorizationForJSON(),
+		AllowedTools:      t.AllowedTools,
+		RequireApproval:   t.buildRequireApprovalForJSON(),
+		ServerDescription: serverDescription,
+	}
+
+	return json.Marshal(out)
+}
+
+// UnmarshalTool unmarshals JSON data into the appropriate Tool type
+func UnmarshalTool(data []byte) (Tool, error) {
+	// First, unmarshal to get the type field
+	var typeOnly ToolBase
+	if err := json.Unmarshal(data, &typeOnly); err != nil {
+		return nil, err
+	}
+
+	// Based on type, unmarshal to the appropriate concrete type
+	switch {
+	case typeOnly.Type == ToolTypeFunction:
+		var tool FunctionTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case isBrowserSearchType(typeOnly.Type):
+		var tool BrowserSearchTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeCodeInterpreter:
+		var tool CodeInterpreterTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeMCP:
+		var tool MCPTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeToolSearch:
+		var tool ToolSearchTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeCustom:
+		var tool CustomTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeNamespace:
+		var tool NamespaceTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	default:
+		return nil, &UnmarshalError{
+			Field: "type",
+			Msg:   fmt.Sprintf("unknown tool type: %s", typeOnly.Type),
+		}
+	}
+}
+
+// RawTool is a tool that the gateway does not model or that fails to decode.
+// It is forwarded as is, and the backend validates it.
+type RawTool struct {
+	ToolBase
+
+	Raw json.RawMessage
+}
+
+func newRawTool(data []byte) *RawTool {
+	var base ToolBase
+	_ = json.Unmarshal(data, &base) // a type that is not a string stays empty
+	return &RawTool{ToolBase: base, Raw: append(json.RawMessage(nil), data...)}
+}
+
+func (t *RawTool) Validate() error {
+	return nil
+}
+
+func (t *RawTool) MarshalJSON() ([]byte, error) {
+	return t.Raw, nil
+}
+
+// ToolSlice is a slice of Tools with custom JSON unmarshaling
+type ToolSlice []Tool
+
+// UnmarshalJSON implements custom unmarshaling for a slice of tools
+func (ts *ToolSlice) UnmarshalJSON(data []byte) error {
+	// First unmarshal as raw JSON array
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	tools := make([]Tool, 0, len(raw))
+	for _, rawTool := range raw {
+		tool, err := UnmarshalTool(rawTool)
+		if err != nil {
+			tool = newRawTool(rawTool)
+		}
+		tools = append(tools, tool)
+	}
+
+	*ts = tools
+	return nil
+}
+
+// FindFunctionTool searches for a function tool by name and returns its parameters schema
+func (ts *ToolSlice) FindFunctionTool(name string) (map[string]any, bool) {
+	for _, tool := range *ts {
+		if ft, ok := tool.(*FunctionTool); ok && ft.Name == name {
+			return ft.Parameters, true
+		}
+	}
+	return nil, false
+}
+
+// ToolChoice represents tool choice options
+type ToolChoice struct {
+	Type string `json:"type,omitempty"`
+	Name string `json:"name,omitempty"`
+}
+
+func (tc *ToolChoice) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == ToolChoiceNone || str == ToolChoiceAuto || str == ToolChoiceRequired {
+			tc.Type = str
+			tc.Name = ""
+			return nil
+		}
+		return &UnmarshalError{
+			Field: "tool_choice",
+			Msg:   fmt.Sprintf("invalid tool choice string: %s", str),
+		}
+	}
+
+	var obj struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil {
+		tc.Type = obj.Type
+		tc.Name = obj.Name
+		return nil
+	}
+
+	return &UnmarshalError{
+		Field: "tool_choice",
+		Msg:   "must be string or object",
+	}
+}
+
+func (tc ToolChoice) MarshalJSON() ([]byte, error) {
+	if tc.Name == "" &&
+		(tc.Type == ToolChoiceNone || tc.Type == ToolChoiceAuto || tc.Type == ToolChoiceRequired) {
+		return json.Marshal(tc.Type)
+	}
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}{
+		Type: tc.Type,
+		Name: tc.Name,
+	})
+}
+
+// Tool call structs
+
+// FunctionToolCall represents a function tool call
+type FunctionToolCall struct {
+	ID        *string `json:"id,omitempty"`
+	Type      string  `json:"type"`
+	CallID    string  `json:"call_id"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Arguments string  `json:"arguments"`
+	Status    *string `json:"status,omitempty"`
+}
+
+// FunctionCallOutput represents function call output
+type FunctionCallOutput struct {
+	ID     *string    `json:"id,omitempty"`
+	CallID string     `json:"call_id"`
+	Type   string     `json:"type"`
+	Output ToolOutput `json:"output"`
+	Status *string    `json:"status,omitempty"`
+}
+
+// ToolOutput is a function call output: a string or an array of input_text,
+// input_image, and input_file content parts.
+type ToolOutput struct {
+	Text    string
+	Content []InputContent
+	// IsContent records that the wire form was an array, so an empty array
+	// round-trips as an array.
+	IsContent bool
+}
+
+// NewTextToolOutput returns a string tool output.
+func NewTextToolOutput(text string) ToolOutput {
+	return ToolOutput{Text: text}
+}
+
+func (o *ToolOutput) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*o = ToolOutput{Text: text}
+		return nil
+	}
+
+	var content []InputContent
+	if err := json.Unmarshal(data, &content); err != nil {
+		var unmarshalErr *UnmarshalError
+		if errors.As(err, &unmarshalErr) {
+			return err
+		}
+		return &UnmarshalError{
+			Field: "output",
+			Msg:   "must be string or array of input_text, input_image, or input_file",
+		}
+	}
+	for i, part := range content {
+		switch part.Discriminator() {
+		case ContentTypeInputText, ContentTypeInputImage, ContentTypeInputFile:
+		default:
+			return &UnmarshalError{
+				Field: fmt.Sprintf("output[%d]", i),
+				Msg:   fmt.Sprintf("unsupported content type: %s", part.Discriminator()),
+			}
+		}
+	}
+	*o = ToolOutput{Content: content, IsContent: true}
+	return nil
+}
+
+func (o ToolOutput) MarshalJSON() ([]byte, error) {
+	if o.IsContent || o.Content != nil {
+		if o.Content == nil {
+			return []byte("[]"), nil
+		}
+		return json.Marshal(o.Content)
+	}
+	return json.Marshal(o.Text)
+}
+
+// WebSearchToolCall represents a web search tool call
+type WebSearchToolCall struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+// CodeInterpreterToolCall represents a code interpreter tool call
+type CodeInterpreterToolCall struct {
+	ID          string                  `json:"id"`
+	Type        string                  `json:"type"`
+	Status      string                  `json:"status"`
+	ContainerID string                  `json:"container_id"`
+	Code        *string                 `json:"code"`
+	Outputs     []CodeInterpreterOutput `json:"outputs"`
+}
+
+// CodeInterpreterOutput represents code interpreter output as an interface
+type CodeInterpreterOutput any
+
+// CodeInterpreterOutputLogs represents logs output from the code interpreter
+type CodeInterpreterOutputLogs struct {
+	Type string `json:"type"` // Always "logs"
+	Logs string `json:"logs"`
+}
+
+// CodeInterpreterOutputImage represents image output from the code interpreter
+type CodeInterpreterOutputImage struct {
+	Type string `json:"type"` // Always "image"
+	URL  string `json:"url"`
+}
+
+// CodeInterpreterOutputFiles represents file output from the code interpreter
+type CodeInterpreterOutputFiles struct {
+	Type  string                      `json:"type"` // Always "files"
+	Files []CodeInterpreterFileOutput `json:"files"`
+}
+
+// CodeInterpreterFileOutput represents a single file output
+type CodeInterpreterFileOutput struct {
+	MimeType string `json:"mime_type"`
+	FileID   string `json:"file_id"`
+}
+
+// CodeInterpreterContainer represents the container configuration for code interpreter
+type CodeInterpreterContainer struct {
+	Type    string   `json:"type"` // Always "auto"
+	FileIDs []string `json:"file_ids,omitempty"`
+}
+
+// UserLocation represents user location for web search
+type UserLocation struct {
+	Type     string  `json:"type"`
+	Country  *string `json:"country,omitempty"`
+	Region   *string `json:"region,omitempty"`
+	City     *string `json:"city,omitempty"`
+	Timezone *string `json:"timezone,omitempty"`
+}

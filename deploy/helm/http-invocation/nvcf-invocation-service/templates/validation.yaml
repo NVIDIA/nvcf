@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if not (kindIs "bool" .Values.invocation.polling.enforceOwnership) }}
+{{- fail "invocation.polling.enforceOwnership must be a boolean" }}
+{{- end }}
+{{- if not (kindIs "slice" .Values.invocation.cors.allowedOrigins) }}
+{{- fail "invocation.cors.allowedOrigins must be a list" }}
+{{- end }}
+{{- range .Values.invocation.cors.allowedOrigins }}
+{{- if not (kindIs "string" .) }}
+{{- fail "invocation.cors.allowedOrigins entries must be strings" }}
+{{- end }}
+{{- if or (empty .) (contains "," .) }}
+{{- fail "invocation.cors.allowedOrigins entries must be nonempty origins without commas" }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.invocation.metrics.serviceMonitor.enabled (not .Values.invocation.metrics.enabled) }}
+{{- fail "invocation.metrics.enabled must be true when invocation.metrics.serviceMonitor.enabled is true" }}
+{{- end }}
+{{- if .Values.invocation.metrics.enabled }}
+{{- if not .Values.invocation.metrics.bindAddress }}
+{{- fail "invocation.metrics.bindAddress is required when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- $metricsPortText := toString .Values.invocation.metrics.port }}
+{{- if or (not (regexMatch `^[0-9]+$` $metricsPortText)) (lt (int $metricsPortText) 1) (gt (int $metricsPortText) 65535) }}
+{{- fail "invocation.metrics.port must be an integer between 1 and 65535 when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- if hasKey .Values.invocation.env "APP_CONFIG" }}
+{{- fail "invocation.env.APP_CONFIG is reserved when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- if hasKey .Values.invocation.env "APP_CONFIG_YAML" }}
+{{- fail "invocation.env.APP_CONFIG_YAML is reserved when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- end }}
+{{- $workerTls := .Values.invocation.workerTls }}
+{{- if not (kindIs "bool" $workerTls.enabled) }}
+{{- fail "invocation.workerTls.enabled must be a boolean" }}
+{{- end }}
+{{- if not (kindIs "bool" $workerTls.advertise) }}
+{{- fail "invocation.workerTls.advertise must be a boolean" }}
+{{- end }}
+{{- if $workerTls.enabled }}
+{{- $workerTlsPortText := toString $workerTls.port }}
+{{- if or (not (regexMatch `^[0-9]+$` $workerTlsPortText)) (lt (int $workerTlsPortText) 1) (gt (int $workerTlsPortText) 65535) }}
+{{- fail "invocation.workerTls.port must be an integer between 1 and 65535" }}
+{{- end }}
+{{- range .Values.invocation.ports }}
+{{- if eq (int .containerPort) (int $workerTlsPortText) }}
+{{- fail (printf "invocation.workerTls.port %s is already used by container port %s" $workerTlsPortText .name) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.invocation.metrics.enabled (eq (int .Values.invocation.metrics.port) (int $workerTlsPortText)) }}
+{{- fail (printf "invocation.workerTls.port %s is already used by invocation.metrics.port" $workerTlsPortText) }}
+{{- end }}
+{{- range $key, $_ := .Values.invocation.env }}
+{{- if hasPrefix "WORKER_TLS__" $key }}
+{{- fail (printf "invocation.env.%s is set by invocation.workerTls; remove it from invocation.env" $key) }}
+{{- end }}
+{{- end }}
+{{- $_ := include "nvcf-invocation-service.workerTlsSecretName" . }}
+{{- end }}

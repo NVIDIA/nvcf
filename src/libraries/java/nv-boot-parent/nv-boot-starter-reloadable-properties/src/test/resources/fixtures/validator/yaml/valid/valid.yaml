@@ -1,0 +1,6 @@
+kv:
+  exampleSecret:
+    current:
+      value:
+        username: myUser
+        password: myPass

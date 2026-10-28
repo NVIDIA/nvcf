@@ -17,14 +17,31 @@
 
 use crate::cassandra::cassandra_service::CassandraServiceManager;
 use anyhow::Result;
+use scylla::routing::partitioner::{Murmur3Partitioner, Partitioner};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 pub const BUCKET_COUNT: usize = 128;
 // We don't expect topology to change often, so we can cache them for a while
 const CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(180);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FunctionVersionKey {
+    pub function_id: Uuid,
+    pub version_id: Uuid,
+}
+
+impl FunctionVersionKey {
+    pub fn new(function_id: Uuid, version_id: Uuid) -> Self {
+        Self {
+            function_id,
+            version_id,
+        }
+    }
+}
 
 /// Cached bucket assignments for the current node
 #[derive(Debug, Clone)]
@@ -79,6 +96,14 @@ impl NodeBucketManager {
         }
     }
 
+    pub fn owns_bucket(&self, bucket: usize) -> bool {
+        self.cached_assignment
+            .read()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|assignment| assignment.bucket_ranges.contains_key(&bucket))
+    }
+
     pub fn get_range_for_bucket(&self, bucket_index: usize) -> Option<(i64, i64)> {
         if let Some(cached) = self.cached_assignment.read().unwrap().as_ref() {
             cached.bucket_ranges.get(&bucket_index).copied()
@@ -93,6 +118,33 @@ impl NodeBucketManager {
         } else {
             HashMap::new()
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(buckets: Vec<usize>) -> Arc<Self> {
+        let bucket_ranges = buckets
+            .iter()
+            .map(|&bucket| (bucket, get_token_range_for_bucket(bucket)))
+            .collect();
+        Arc::new(Self {
+            cached_assignment: Arc::new(RwLock::new(Some(CachedBucketAssignment {
+                buckets,
+                bucket_ranges,
+            }))),
+            background_handle: tokio::spawn(std::future::pending()),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assign_for_test(&self, buckets: Vec<usize>) {
+        let bucket_ranges = buckets
+            .iter()
+            .map(|&bucket| (bucket, get_token_range_for_bucket(bucket)))
+            .collect();
+        *self.cached_assignment.write().unwrap() = Some(CachedBucketAssignment {
+            buckets,
+            bucket_ranges,
+        });
     }
 }
 
@@ -193,7 +245,7 @@ impl NodeBucketManager {
 }
 
 /// Get the token range (start, end) for a specific bucket index
-fn get_token_range_for_bucket(bucket_index: usize) -> (i64, i64) {
+pub fn get_token_range_for_bucket(bucket_index: usize) -> (i64, i64) {
     let [min_token, max_token] = crate::cassandra::CASSANDRA_TOKEN_RANGE;
 
     // Use i128 to avoid overflow when calculating range size
@@ -209,6 +261,21 @@ fn get_token_range_for_bucket(bucket_index: usize) -> (i64, i64) {
     };
 
     (start_token as i64, end_token as i64)
+}
+
+/// Match the composite UUID partition key of recently_invoked_functions.
+pub fn bucket_for_function(key: FunctionVersionKey) -> usize {
+    let mut bytes = [0u8; 38];
+    bytes[0..2].copy_from_slice(&16u16.to_be_bytes());
+    bytes[2..18].copy_from_slice(key.function_id.as_bytes());
+    bytes[18] = 0;
+    bytes[19..21].copy_from_slice(&16u16.to_be_bytes());
+    bytes[21..37].copy_from_slice(key.version_id.as_bytes());
+    bytes[37] = 0;
+    let token = Murmur3Partitioner.hash_one(&bytes).value();
+    let min = i64::MIN as i128;
+    let size = (i64::MAX as i128 - min) / BUCKET_COUNT as i128;
+    ((token as i128 - min) / size).min(BUCKET_COUNT as i128 - 1) as usize
 }
 
 #[cfg(test)]
@@ -340,6 +407,26 @@ mod tests {
 
         println!("token={token}  bucket={bucket}");
         assert!(bucket < BUCKET_COUNT);
+        assert_eq!(
+            bucket_for_function(FunctionVersionKey::new(
+                Uuid::from_bytes(fid),
+                Uuid::from_bytes(fvid)
+            )),
+            bucket
+        );
+    }
+
+    #[test]
+    fn local_buckets_match_cassandra_token_ranges_for_many_version_pairs() {
+        for value in 0..1024u32 {
+            let function_id = Uuid::from_u128(value as u128 * 89 + 17);
+            let version_id = Uuid::from_u128(value as u128 * 251 + 31);
+            let key = composite_key(&[function_id.as_bytes(), version_id.as_bytes()]);
+            let token = cassandra_murmur3_token(&key);
+            let bucket = bucket_for_function(FunctionVersionKey::new(function_id, version_id));
+            let (start, end) = get_token_range_for_bucket(bucket);
+            assert!((start..=end).contains(&token));
+        }
     }
 
     #[test]

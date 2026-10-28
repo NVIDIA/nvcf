@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -40,6 +41,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
 )
 
 func TestHelmMiniServiceValWebhookHandler_Handle(t *testing.T) {
@@ -139,6 +141,105 @@ func TestHelmMiniServiceValWebhookHandler_Handle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHelmMiniServiceValWebhookHandler_ServiceAccountGate verifies that resource-limit
+// validation runs for the ServiceAccount that actually applies mini-service workloads
+// (miniservice-instance-permissions) and is skipped for anyone else, including the legacy
+// helm-instance-permissions SA. This guards the re-point of the SA gate: matching the wrong
+// SA name silently disables enforcement for every mini-service workload.
+func TestHelmMiniServiceValWebhookHandler_ServiceAccountGate(t *testing.T) {
+	// Kata isolation makes shouldEnforceResourceLimits true for pods in an sr-* namespace.
+	fff := &featureflagmock.Fetcher{
+		EnabledAttrs: []*featureflag.Attribute{featureflag.AttrKataRuntimeIsolation},
+	}
+	handler := newHelmMiniServiceValWebhookHandler(fff)
+
+	invalidPod := encodeObject(t, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sr-test"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c"}}}, // no limits
+	})
+	validPod := encodeObject(t, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sr-test"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "c",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			}},
+		}}},
+	})
+
+	tests := []struct {
+		name        string
+		username    string
+		obj         []byte
+		wantAllowed bool
+	}{
+		{
+			name:        "miniservice instance SA validates invalid pod -> denied",
+			username:    "system:serviceaccount:sr-test:" + miniservice.InstanceServiceAccountName,
+			obj:         invalidPod,
+			wantAllowed: false,
+		},
+		{
+			name:        "miniservice instance SA validates compliant pod -> allowed",
+			username:    "system:serviceaccount:sr-test:" + miniservice.InstanceServiceAccountName,
+			obj:         validPod,
+			wantAllowed: true,
+		},
+		{
+			name:        "legacy helm-instance SA no longer triggers validation -> skipped",
+			username:    "system:serviceaccount:sr-test:" + miniservice.HelmChartInstanceServiceAccountName,
+			obj:         invalidPod,
+			wantAllowed: true,
+		},
+		{
+			name:        "unrelated user -> skipped",
+			username:    "system:serviceaccount:kube-system:replicaset-controller",
+			obj:         invalidPod,
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := handler.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
+					Kind:      metav1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+					UserInfo:  authenticationv1.UserInfo{Username: tt.username},
+					Object:    runtime.RawExtension{Raw: tt.obj},
+				},
+			})
+			assert.Equal(t, tt.wantAllowed, resp.Allowed)
+		})
+	}
+}
+
+func TestHelmMiniServiceValWebhookHandler_ImpersonatedServiceAccount(t *testing.T) {
+	fff := &featureflagmock.Fetcher{
+		EnabledAttrs: []*featureflag.Attribute{featureflag.AttrKataRuntimeIsolation},
+	}
+	handler := newHelmMiniServiceValWebhookHandler(fff)
+
+	invalidPod := encodeObject(t, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sr-test"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c"}}},
+	})
+
+	resp := handler.Handle(context.Background(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			Operation: admissionv1.Create,
+			Kind:      metav1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+			UserInfo: authenticationv1.UserInfo{
+				Username: miniservice.InstanceServiceAccountUsername("sr-test"),
+			},
+			Object: runtime.RawExtension{Raw: invalidPod},
+		},
+	})
+
+	assert.False(t, resp.Allowed, "the controller's impersonated ServiceAccount must be validated")
 }
 
 func TestHelmMiniServiceValWebhookHandler_Validate(t *testing.T) {

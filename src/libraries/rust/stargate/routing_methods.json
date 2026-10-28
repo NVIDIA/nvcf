@@ -1,0 +1,70 @@
+{
+  "common_parameters": [
+    "require_cache_affinity_key",
+    "require_input_tokens",
+    "max_input_work_seconds"
+  ],
+  "methods": [
+    {
+      "name": "power-of-n",
+      "aliases": ["power-of-two", "powerOf2", "powerOfN", "powerof2", "powerofn"],
+      "parameters": ["sample_count", "comparator"]
+    },
+    {
+      "name": "wait-and-widen",
+      "aliases": ["groq-multiregion"],
+      "parameters": [
+        "comparator",
+        "seed",
+        "n",
+        "max_queued",
+        "max_queue_time_floor_ms",
+        "max_queue_time_ceil_ms",
+        "ttft_bucket_size_ms",
+        "next_bucket_unlock_factor",
+        "ignore_queue_time",
+        "ignore_input_processing_time",
+        "cache_affinity_virtual_nodes",
+        "cache_affinity_backend_selection_count",
+        "cache_affinity_input_tokens_scale",
+        "cache_affinity_wait_ms"
+      ]
+    },
+    {
+      "name": "round-robin",
+      "aliases": [],
+      "parameters": []
+    },
+    {
+      "name": "random",
+      "aliases": [],
+      "parameters": []
+    },
+    {
+      "name": "pulsar",
+      "aliases": [],
+      "parameters": ["seed", "consider_kv_free_tokens"]
+    },
+    {
+      "name": "pulsar-wait-and-widen",
+      "aliases": ["pulsar-multiregion"],
+      "parameters": [
+        "seed",
+        "consider_kv_free_tokens",
+        "n",
+        "max_queued",
+        "max_queue_time_floor_ms",
+        "max_queue_time_ceil_ms",
+        "ttft_bucket_size_ms",
+        "next_bucket_unlock_factor",
+        "ignore_queue_time",
+        "ignore_input_processing_time",
+        "cache_affinity_backend_selection_count",
+        "cache_affinity_input_tokens_scale",
+        "cache_affinity_wait_ms",
+        "band_widen_interval_ms",
+        "fallback_max_queued"
+      ]
+    }
+  ]
+}

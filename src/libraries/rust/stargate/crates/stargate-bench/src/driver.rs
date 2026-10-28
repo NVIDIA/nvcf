@@ -1,0 +1,586 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, ensure};
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sse_core::{SseDecoder, SseEvent};
+use tokio::sync::Semaphore;
+
+use crate::manifest::{Manifest, ManifestRequest};
+
+const MAX_SSE_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct DriveConfig {
+    pub endpoint: String,
+    pub output_path: std::path::PathBuf,
+    pub concurrency_limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestResult {
+    pub request_index: usize,
+    pub request_id: String,
+    pub routing_key: Option<String>,
+    pub cache_affinity_key: Option<String>,
+    pub input_tokens: u64,
+    /// Requested output tokens from the workload manifest.
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub observed_output_tokens: Option<u64>,
+    pub scheduled_offset_ms: u64,
+    pub status_code: u16,
+    pub selected_backend_id: Option<String>,
+    pub dispatch_offset_ms: u64,
+    pub response_headers_ms: Option<u64>,
+    pub first_output_ms: Option<u64>,
+    pub completion_ms: u64,
+    pub kv_cache_hit: Option<bool>,
+    #[serde(default)]
+    pub kv_cache_reused_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub kv_cache_uncached_input_tokens: Option<u64>,
+    pub kv_cache_evicted_entries: Option<u64>,
+    pub kv_cache_evicted_tokens: Option<u64>,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+impl RequestResult {
+    fn pending(request: ManifestRequest) -> Self {
+        Self {
+            request_index: request.request_index,
+            request_id: request.request_id,
+            routing_key: request.routing_key,
+            cache_affinity_key: request.cache_affinity_key,
+            input_tokens: request.input_tokens,
+            output_tokens: request.output_tokens,
+            observed_output_tokens: None,
+            scheduled_offset_ms: request.scheduled_offset_ms,
+            status_code: 0,
+            selected_backend_id: None,
+            dispatch_offset_ms: 0,
+            response_headers_ms: None,
+            first_output_ms: None,
+            completion_ms: 0,
+            kv_cache_hit: None,
+            kv_cache_reused_input_tokens: None,
+            kv_cache_uncached_input_tokens: None,
+            kv_cache_evicted_entries: None,
+            kv_cache_evicted_tokens: None,
+            ok: false,
+            error: None,
+        }
+    }
+
+    fn finish(mut self, dispatch_time: Instant, error: Option<String>) -> Self {
+        self.completion_ms = duration_ms(dispatch_time.elapsed());
+        self.error = error;
+        self
+    }
+}
+
+pub fn load_manifest(path: &Path) -> anyhow::Result<Manifest> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read manifest {}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse manifest {}", path.display()))
+}
+
+pub async fn drive_manifest(
+    config: DriveConfig,
+    manifest: Manifest,
+) -> anyhow::Result<Vec<RequestResult>> {
+    ensure!(
+        config.concurrency_limit > 0,
+        "concurrency_limit must be > 0"
+    );
+    let client = reqwest::Client::new();
+    let start = Instant::now();
+    let semaphore = Arc::new(Semaphore::new(config.concurrency_limit));
+    let endpoint: Arc<str> = config.endpoint.into();
+    let model: Arc<str> = manifest.model.into();
+    let mut tasks = Vec::with_capacity(manifest.requests.len());
+
+    for request in manifest.requests {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        let endpoint = endpoint.clone();
+        let model = model.clone();
+        tasks.push(tokio::spawn(async move {
+            let target = start + Duration::from_millis(request.scheduled_offset_ms);
+            tokio::time::sleep_until(target.into()).await;
+
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .expect("semaphore should remain open");
+
+            execute_request(&client, &endpoint, &model, request, start).await
+        }));
+    }
+
+    let mut results = futures::future::try_join_all(tasks)
+        .await
+        .context("request task failed to join")?;
+    results.sort_by_key(|result| result.request_index);
+    write_results_jsonl(&config.output_path, &results)?;
+    Ok(results)
+}
+
+async fn execute_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    model: &str,
+    request: ManifestRequest,
+    start: Instant,
+) -> RequestResult {
+    let mut result = RequestResult::pending(request);
+    let Ok(input_tokens) = usize::try_from(result.input_tokens) else {
+        result.error = Some("input token count does not fit usize".to_string());
+        return result;
+    };
+    let dispatch_time = Instant::now();
+    let mut builder = client
+        .post(endpoint)
+        .header("x-request-id", &result.request_id)
+        .header("x-model", model)
+        .header("x-input-tokens", result.input_tokens.to_string())
+        .header("x-output-tokens", result.output_tokens.to_string())
+        .header("content-type", "application/json");
+    if let Some(routing_key) = &result.routing_key {
+        builder = builder.header("x-routing-key", routing_key);
+    }
+    if let Some(cache_affinity_key) = &result.cache_affinity_key {
+        builder = builder.header("x-cache-affinity-key", cache_affinity_key);
+    }
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "x".repeat(input_tokens)}],
+        "max_tokens": result.output_tokens,
+        "stream": true,
+        "stream_options": {"include_usage": true},
+    });
+
+    // Dispatch timestamps are taken from the same monotonic clock; clamp only to keep malformed
+    // test harness inputs from producing negative report offsets.
+    let response = builder.json(&body).send().await;
+    result.dispatch_offset_ms = duration_ms(dispatch_time.saturating_duration_since(start));
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
+    };
+
+    result.status_code = response.status().as_u16();
+    result.selected_backend_id = header(response.headers(), "x-inference-server-id");
+    result.kv_cache_hit = header(response.headers(), "x-kv-cache-hit");
+    result.kv_cache_reused_input_tokens =
+        header(response.headers(), "x-kv-cache-reused-input-tokens");
+    result.kv_cache_uncached_input_tokens =
+        header(response.headers(), "x-kv-cache-uncached-input-tokens");
+    result.kv_cache_evicted_entries = header(response.headers(), "x-kv-cache-evicted-entries");
+    result.kv_cache_evicted_tokens = header(response.headers(), "x-kv-cache-evicted-tokens");
+    result.response_headers_ms = Some(duration_ms(dispatch_time.elapsed()));
+
+    if !response.status().is_success() {
+        return result.finish(
+            dispatch_time,
+            Some(format!("upstream returned HTTP {}", response.status())),
+        );
+    }
+    let is_sse = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+    if !is_sse {
+        return result.finish(
+            dispatch_time,
+            Some("upstream response is not text/event-stream".into()),
+        );
+    }
+    let mut stream = response.bytes_stream();
+    let mut decoder = SseDecoder::with_limit(NonZeroUsize::new(MAX_SSE_PAYLOAD_BYTES).unwrap());
+    while let Some(chunk) = stream.next().await {
+        let mut bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
+        };
+        while let Some(event) = decoder.next(&mut bytes) {
+            let event = match event {
+                Ok(SseEvent::Message(event)) => event,
+                Ok(SseEvent::Retry(_)) => continue,
+                Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
+            };
+            match record_completion_event(&mut result, &event.data, dispatch_time) {
+                Ok(true) => {
+                    result.ok = true;
+                    return result.finish(dispatch_time, None);
+                }
+                Ok(false) => {}
+                Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
+            }
+        }
+    }
+    result.finish(
+        dispatch_time,
+        Some("upstream SSE response ended before [DONE]".into()),
+    )
+}
+
+fn record_completion_event(
+    result: &mut RequestResult,
+    data: &str,
+    dispatch_time: Instant,
+) -> anyhow::Result<bool> {
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+    if data.is_empty() {
+        return Ok(false);
+    }
+    let value: Value = serde_json::from_str(data).context("invalid upstream SSE JSON")?;
+    ensure!(
+        value.get("error").is_none_or(Value::is_null),
+        "upstream returned an SSE error event"
+    );
+    let generated_output = value["choices"].as_array().is_some_and(|choices| {
+        choices.iter().any(|choice| {
+            let delta = &choice["delta"];
+            ["content", "reasoning_content", "reasoning", "refusal"]
+                .iter()
+                .any(|field| delta[*field].as_str().is_some_and(|text| !text.is_empty()))
+        })
+    });
+    if generated_output && result.first_output_ms.is_none() {
+        result.first_output_ms = Some(duration_ms(dispatch_time.elapsed()));
+    }
+    if let Some(tokens) = value
+        .pointer("/usage/completion_tokens")
+        .filter(|tokens| !tokens.is_null())
+        .or_else(|| value.get("output_tokens_so_far"))
+        .filter(|tokens| !tokens.is_null())
+    {
+        result.observed_output_tokens = Some(
+            tokens
+                .as_u64()
+                .context("upstream output token usage is not an unsigned integer")?,
+        );
+    } else if generated_output {
+        // A prior cumulative counter does not cover later uncounted output.
+        result.observed_output_tokens = None;
+    }
+    Ok(false)
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn header<T: FromStr>(headers: &reqwest::header::HeaderMap, name: &str) -> Option<T> {
+    headers.get(name)?.to_str().ok()?.parse().ok()
+}
+
+pub fn write_results_jsonl(path: &Path, results: &[RequestResult]) -> anyhow::Result<()> {
+    let mut out = String::new();
+    for result in results {
+        let line =
+            serde_json::to_string(result).context("failed to serialize request result line")?;
+        out.push_str(&line);
+        out.push('\n');
+    }
+    std::fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::Manifest;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn request(index: usize, scheduled_offset_ms: u64) -> ManifestRequest {
+        ManifestRequest {
+            request_index: index,
+            request_id: format!("req-{index}"),
+            scheduled_offset_ms,
+            routing_key: None,
+            cache_affinity_key: None,
+            input_tokens: 1,
+            output_tokens: 1,
+            backend_behavior_class: "default".to_string(),
+        }
+    }
+
+    fn manifest(requests: Vec<ManifestRequest>) -> Manifest {
+        Manifest {
+            manifest_version: 1,
+            benchmark_name: "driver-test".to_string(),
+            metadata: Default::default(),
+            model: "dummy-model".to_string(),
+            seed: 1,
+            request_count: requests.len(),
+            max_concurrency: 2,
+            stargate_count: 1,
+            backend_count: 1,
+            cluster_count: 1,
+            pylons_per_cluster: 1,
+            requests,
+        }
+    }
+
+    async fn read_test_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        loop {
+            assert_ne!(socket.read_buf(&mut bytes).await.unwrap(), 0);
+            let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = std::str::from_utf8(&bytes[..header_end]).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + length {
+                return bytes;
+            }
+        }
+    }
+
+    async fn drive_test_response(body: &str) -> (RequestResult, serde_json::Value) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let body = body.to_owned();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_test_request(&mut socket).await;
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let sent: serde_json::Value = serde_json::from_slice(&request[header_end..]).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            sent
+        });
+        let mut input = request(0, 0);
+        input.output_tokens = 100;
+        let result = execute_request(
+            &reqwest::Client::new(),
+            &endpoint,
+            "model",
+            input,
+            Instant::now(),
+        )
+        .await;
+        (result, server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn complete_response_records_actual_usage_and_requests_usage_reporting() {
+        let (result, request) = drive_test_response("\u{feff}data: {\"choices\":[{\"delta\":{\"content\":\"\u{03bb}\"}}]}\r\n\r\ndata: {\"usage\":{\"completion_tokens\":2}}\r\n\r\ndata: [DONE]\r\n\r\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.output_tokens, 100);
+        assert_eq!(result.observed_output_tokens, Some(2));
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(request["max_tokens"], 100);
+        assert_eq!(request["stream_options"]["include_usage"], true);
+    }
+
+    #[tokio::test]
+    async fn empty_and_truncated_success_responses_are_failures() {
+        for body in [
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        ] {
+            let (result, _) = drive_test_response(body).await;
+            assert_eq!(result.status_code, 200);
+            assert!(!result.ok);
+            assert!(result.error.unwrap().contains("before [DONE]"));
+        }
+    }
+
+    #[tokio::test]
+    async fn role_only_completion_keeps_output_timing_and_usage_unknown() {
+        let (result, _) = drive_test_response(": keepalive\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.first_output_ms, None);
+        assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn refusal_completion_records_output_timing_and_usage() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"refusal\":\"I cannot answer.\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"completion_tokens\":3}}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(result.observed_output_tokens, Some(3));
+    }
+
+    #[tokio::test]
+    async fn cumulative_usage_must_cover_the_last_generated_output() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}],\"output_tokens_so_far\":1}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" two\"}}]}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn null_usage_allows_cumulative_output_fallback() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}],\"usage\":{\"completion_tokens\":null},\"output_tokens_so_far\":1}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.observed_output_tokens, Some(1));
+    }
+
+    #[tokio::test]
+    async fn invalid_or_oversized_events_fail_the_request() {
+        for data in [
+            "{bad}".to_owned(),
+            r#"{"error":{"message":"failed"}}"#.to_owned(),
+            r#"{"usage":{"completion_tokens":-1}}"#.to_owned(),
+            serde_json::json!({"choices": [{"delta": {"content": "x".repeat(MAX_SSE_PAYLOAD_BYTES)}}]}).to_string(),
+        ] {
+            let (result, _) =
+                drive_test_response(&format!("data: {data}\n\ndata: [DONE]\n\n")).await;
+            assert!(!result.ok);
+            assert!(result.error.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduled_sleep_does_not_hold_concurrency_permit() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().expect("local addr should exist")
+        );
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.expect("request should connect");
+                tokio::spawn(async move {
+                    let bytes = read_test_request(&mut socket).await;
+
+                    let request = String::from_utf8_lossy(&bytes);
+                    let request_id = request
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("x-request-id")
+                                .then(|| value.trim().to_string())
+                        })
+                        .expect("request id header should be present");
+                    if request_id == "req-0" {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+
+                    let body = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\nx-inference-server-id: backend-0\r\nx-kv-cache-hit: true\r\nx-kv-cache-reused-input-tokens: 1\r\nx-kv-cache-uncached-input-tokens: 0\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("response should write");
+                });
+            }
+        });
+
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+        let output_path = tempdir.path().join("requests.jsonl");
+        let manifest = manifest(vec![request(0, 0), request(1, 300), request(2, 50)]);
+
+        let results = drive_manifest(
+            DriveConfig {
+                endpoint,
+                output_path,
+                concurrency_limit: 2,
+            },
+            manifest,
+        )
+        .await
+        .expect("drive should complete");
+        server.await.expect("server should complete");
+
+        let request_two = results
+            .iter()
+            .find(|result| result.request_id == "req-2")
+            .expect("req-2 result should exist");
+        assert!(
+            request_two.dispatch_offset_ms < 180,
+            "req-2 dispatched at {}ms, indicating a future sleeping request held the permit",
+            request_two.dispatch_offset_ms
+        );
+        assert!(matches!(
+            request_two,
+            RequestResult {
+                status_code: 200,
+                selected_backend_id: Some(id),
+                response_headers_ms: Some(_),
+                kv_cache_hit: Some(true),
+                kv_cache_reused_input_tokens: Some(1),
+                kv_cache_uncached_input_tokens: Some(0),
+                ok: true,
+                error: None,
+                ..
+            } if id == "backend-0"
+        ));
+    }
+
+    #[tokio::test]
+    async fn zero_concurrency_limit_is_rejected() {
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+
+        let err = drive_manifest(
+            DriveConfig {
+                endpoint: "http://127.0.0.1:9/v1/chat/completions".to_string(),
+                output_path: tempdir.path().join("requests.jsonl"),
+                concurrency_limit: 0,
+            },
+            manifest(Vec::new()),
+        )
+        .await
+        .expect_err("zero concurrency limit should fail validation");
+
+        assert!(
+            err.to_string().contains("concurrency_limit must be > 0"),
+            "unexpected error: {err:#}"
+        );
+    }
+}

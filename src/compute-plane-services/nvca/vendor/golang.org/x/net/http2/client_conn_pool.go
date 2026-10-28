@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+//go:build !(go1.27 && !http2legacy)
 
 // Transport code's client connection pooling.
 
@@ -16,18 +15,6 @@ import (
 	"net/http"
 	"sync"
 )
-
-// ClientConnPool manages a pool of HTTP/2 client connections.
-type ClientConnPool interface {
-	// GetClientConn returns a specific HTTP/2 connection (usually
-	// a TLS-TCP connection) to an HTTP/2 server. On success, the
-	// returned ClientConn accounts for the upcoming RoundTrip
-	// call, so the caller should not omit it. If the caller needs
-	// to, ClientConn.RoundTrip can be called with a bogus
-	// new(http.Request) to release the stream reservation.
-	GetClientConn(req *http.Request, addr string) (*ClientConn, error)
-	MarkDead(*ClientConn)
-}
 
 // clientConnPoolIdleCloser is the interface implemented by ClientConnPool
 // implementations which can close their idle connections.

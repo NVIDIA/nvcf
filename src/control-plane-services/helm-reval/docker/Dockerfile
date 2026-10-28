@@ -23,11 +23,12 @@
 #     --secret id=github_token,src=<(echo $GITHUB_TOKEN) \
 #     -f docker/Dockerfile -t reval-server:local .
 
-FROM golang:1.25.7-bookworm AS builder
+FROM golang:1.26.10-bookworm AS builder
 
 ARG REVAL_VERSION=dev
 ARG REVAL_GIT_COMMIT=dev
-ARG TARGETARCH=amd64
+ARG TARGETARCH
+ARG TARGETOS
 
 ENV CGO_ENABLED=0
 ENV GOPRIVATE="github.com/NVIDIA"
@@ -35,7 +36,7 @@ ENV GOPROXY=https://proxy.golang.org,direct
 WORKDIR /app
 
 COPY go.mod go.sum ./
-# TODO: remove secret mount and git credential rewrite once this repo is open-sourced —
+# TODO: remove secret mount and git credential rewrite once this repo is open-sourced.
 # at that point this becomes a plain `RUN go mod download`.
 RUN --mount=type=secret,id=github_token \
     GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
@@ -46,7 +47,7 @@ COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
 COPY reval/ ./reval/
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 	go build \
 	-ldflags "-X main.Version=${REVAL_VERSION} -X main.GitCommit=${REVAL_GIT_COMMIT} -extldflags '-static' -w -s" \
 	-o /reval ./cmd/reval-service
@@ -60,5 +61,5 @@ COPY --from=builder /reval /usr/bin/reval
 ENV REVAL_TELEMETRY_SERVICE_VERSION=${REVAL_VERSION}
 ENV REVAL_CONFIG="/config.yaml"
 
-USER nonroot:nonroot
+USER 65532:65532
 ENTRYPOINT ["/usr/bin/reval"]
