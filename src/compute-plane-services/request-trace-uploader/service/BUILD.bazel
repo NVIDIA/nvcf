@@ -44,6 +44,7 @@ go_test(
         "settings_e2e_test.go",
         "suppression_e2e_test.go",
         "version_e2e_test.go",
+        "writer_version_e2e_test.go",
     ],
     embed = [":service"],
     deps = [
@@ -51,6 +52,7 @@ go_test(
         "//src/compute-plane-services/request-trace-uploader/backend/backendtest",
         "//src/compute-plane-services/request-trace-uploader/backend/objectstore",
         "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/format",
         "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
         "//src/compute-plane-services/request-trace-uploader/internal/retry",
         "//src/compute-plane-services/request-trace-uploader/journal",

@@ -158,7 +158,7 @@ func NewUploader(cfg config.Config, client backend.Client, opts Options) (*Uploa
 	if err != nil {
 		return nil, err
 	}
-	prepPolicy, err := recordPolicy(prepareConfig, factory.Format())
+	prepPolicy, err := recordPolicy(prepareConfig, factory)
 	if err != nil {
 		return nil, err
 	}

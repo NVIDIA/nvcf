@@ -289,14 +289,35 @@ func (u *Uploader) prepare(ctx context.Context, item segment.Segment, seg journa
 	return nil
 }
 
+// recordSchemaVersion is the version of what the core hands a format writer
+// for the same settings. Bump it when a release changes that, such as how
+// records are redacted, so unsent transports an older release prepared are
+// prepared again.
+const recordSchemaVersion = 1
+
+// formatVersioner is implemented by a format factory whose writers can
+// change what they write between releases, such as a table writer whose
+// schema changes. A new version makes unsent transports an older writer
+// wrote be prepared again.
+type formatVersioner interface {
+	FormatVersion() string
+}
+
 // recordPolicy fingerprints everything that decides what a transport holds:
-// the read bounds, suppression rules and headerless policy, redaction, and
-// the format. Only the hash is kept or logged, never the configured values.
-func recordPolicy(cfg transform.Config, f backend.Format) (string, error) {
+// the read bounds, suppression rules and headerless policy, redaction, the
+// record schema, and the format with its writer version. Only the hash is
+// kept or logged, never the configured values.
+func recordPolicy(cfg transform.Config, factory format.Factory) (string, error) {
+	writerVersion := ""
+	if versioned, ok := factory.(formatVersioner); ok {
+		writerVersion = versioned.FormatVersion()
+	}
 	raw, err := json.Marshal(struct {
-		Transform transform.Config
-		Format    backend.Format
-	}{cfg, f})
+		Transform     transform.Config
+		RecordSchema  int
+		Format        backend.Format
+		WriterVersion string
+	}{cfg, recordSchemaVersion, factory.Format(), writerVersion})
 	if err != nil {
 		return "", fmt.Errorf("fingerprint the record policy: %w", err)
 	}
