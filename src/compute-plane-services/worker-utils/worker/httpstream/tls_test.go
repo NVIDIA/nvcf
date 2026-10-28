@@ -18,6 +18,7 @@ limitations under the License.
 package httpstream
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -25,11 +26,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -182,9 +185,11 @@ func tlsStatelessConfig(target, proxy string) *pb.WorkerInvokeFunctionRequest_St
 	}
 }
 
-func readClientBody(t *testing.T, target, proxy string) (string, error) {
+func readClientBody(t *testing.T, target, proxy string, options ...ClientOption) (string, error) {
 	t.Helper()
-	handler, err := NewRequestStreamHandler(t.Context(), NewProxiedClient(), tlsStatelessConfig(target, proxy),
+	client := NewProxiedClient(options...)
+	t.Cleanup((*http.Client)(client).CloseIdleConnections)
+	handler, err := NewRequestStreamHandler(t.Context(), client, tlsStatelessConfig(target, proxy),
 		&pb.WorkerInvokeFunctionRequest{RequestId: "tls-test", RequestMethod: http.MethodPost, RequestPath: "/"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = handler.Close() })
@@ -221,14 +226,51 @@ func TestProxiedClient_TLSProxyAndTLSTarget(t *testing.T) {
 	}
 }
 
+func TestCallbackPreconnect_TLSProxyAndTLSTargetWithConfiguredCA(t *testing.T) {
+	target := newTLSServer(t, trustedCA, attachMux("synthetic body"))
+	proxy := &connectProxy{}
+	proxyServer := newTLSServer(t, trustedCA, proxy)
+	client := (*http.Client)(NewProxiedClient(WithCallbackPreconnect(true)))
+	t.Cleanup(client.CloseIdleConnections)
+	config := tlsStatelessConfig(target.URL, proxyServer.URL)
+	config.ConnectionConfigs[0].GetHttp1Config().RequestAuthorizationToken = nil
+	handler, err := NewRequestStreamHandler(t.Context(), ProxyClient(client), config,
+		&pb.WorkerInvokeFunctionRequest{RequestId: "synthetic-tls-preconnect", RequestMethod: http.MethodPost})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = handler.Close() })
+
+	proxyURL, err := url.Parse(proxyServer.URL)
+	require.NoError(t, err)
+	ctx := context.WithValue(t.Context(), proxyURLKey, proxyURL)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, nil)
+	require.NoError(t, err)
+	transport := client.Transport.(*callbackTransport)
+	route, ok := transport.route(request)
+	require.True(t, ok)
+	entry := entryFor(t, transport.pool, route.key)
+	require.NoError(t, entry.err)
+	require.Empty(t, proxy.tunnelled(), "preparation must not issue CONNECT before the callback")
+
+	require.NoError(t, handler.SendResponse(t.Context(), bufferedResponse(), nil))
+	transport.pool.mu.Lock()
+	claimed := entry.claimed
+	transport.pool.mu.Unlock()
+	require.True(t, claimed, "callback did not claim the prepared TLS proxy connection")
+	require.Equal(t, []string{strings.TrimPrefix(target.URL, "https://")}, proxy.tunnelled())
+}
+
 func TestProxiedClient_RejectsUntrustedTarget(t *testing.T) {
 	target := newTLSServer(t, untrustedCA, attachMux("unreachable"))
 	proxyServer := newTLSServer(t, trustedCA, &connectProxy{})
 
-	_, err := readClientBody(t, target.URL, proxyServer.URL)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to verify certificate")
-	assert.NotContains(t, err.Error(), "proxyconnect", "the proxy is trusted; the target must be the one rejected")
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("preconnect=%t", enabled), func(t *testing.T) {
+			_, err := readClientBody(t, target.URL, proxyServer.URL, WithCallbackPreconnect(enabled))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to verify certificate")
+			assert.NotContains(t, err.Error(), "proxyconnect", "the proxy is trusted; the target must be the one rejected")
+		})
+	}
 }
 
 func TestProxiedClient_RejectsUntrustedProxy(t *testing.T) {
@@ -236,9 +278,13 @@ func TestProxiedClient_RejectsUntrustedProxy(t *testing.T) {
 	proxy := &connectProxy{}
 	proxyServer := newTLSServer(t, untrustedCA, proxy)
 
-	_, err := readClientBody(t, target.URL, proxyServer.URL)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "proxyconnect")
-	assert.Contains(t, err.Error(), "failed to verify certificate")
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("preconnect=%t", enabled), func(t *testing.T) {
+			_, err := readClientBody(t, target.URL, proxyServer.URL, WithCallbackPreconnect(enabled))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "proxyconnect")
+			assert.Contains(t, err.Error(), "failed to verify certificate")
+		})
+	}
 	assert.Empty(t, proxy.tunnelled(), "no tunnel may open through an untrusted proxy")
 }

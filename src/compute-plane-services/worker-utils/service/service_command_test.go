@@ -139,6 +139,18 @@ func TestNVCFNatsAccountAbsentStaysEmpty(t *testing.T) {
 	assert.Empty(t, loadWorkerConfig(t).NVCFNatsAccount)
 }
 
+func TestCallbackPreconnectEnvironment(t *testing.T) {
+	for _, value := range []string{"", "false", "true"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NVCF_CALLBACK_PRECONNECT_ENABLED", value)
+			if value == "" {
+				require.NoError(t, os.Unsetenv("NVCF_CALLBACK_PRECONNECT_ENABLED"))
+			}
+			assert.Equal(t, value == "true", loadWorkerConfig(t).CallbackPreconnectEnabled)
+		})
+	}
+}
+
 // loadWorkerConfig follows PersistentPreRunE's steps up to worker construction.
 func loadWorkerConfig(t *testing.T) worker.Config {
 	t.Helper()
