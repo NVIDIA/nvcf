@@ -104,16 +104,19 @@ by all replicas through Cassandra.
 | | Option A: Per-key lock | Option B: Maintenance window |
 |--|--|--|
 | Key management during a run | Available; 429 only for the key being copied | 503 for legacy-account updates and deletes |
-| Races removed | Narrowed by the lock | Removed: no writer touches legacy rows during a run |
+| Races removed | Narrowed by the lock | Removed in normal operation; a stall past the grace period can still race |
 | Cost per migrated key | Two lightweight transactions | None |
 | `KeysV2Service` changes | Lock and reload in three methods | One maintenance check |
 | Residual risk | Holder stalls past key lock TTL | Lease lost mid-batch |
 
 ## Proposal
 
-Option B, with Option A as the fallback.
+Option B. Option A is the alternative if the trade-off below is not
+acceptable.
 
-- It is simpler and removes the races instead of narrowing them.
+- It is simpler. It removes the races in normal operation. What remains
+  needs a request to stall past the grace period or the lease to be lost
+  mid-batch.
 - Its cost is short. A run takes minutes for about 100,000 keys, and only
   legacy-account updates and deletes are blocked.
 - Choose Option A instead if revoking a legacy-account key must stay available
