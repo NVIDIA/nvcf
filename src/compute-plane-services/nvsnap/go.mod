@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	cloud.google.com/go/storage v1.62.3
 	github.com/balajinvda/go-criu/v8 v8.1.1
-	github.com/containerd/containerd v1.7.27
+	github.com/containerd/containerd/v2 v2.4.2
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/opencontainers/runtime-spec v1.1.0
