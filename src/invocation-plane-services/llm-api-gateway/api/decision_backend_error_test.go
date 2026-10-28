@@ -191,10 +191,11 @@ func TestBackendErrorPeekDoesNotBufferBody(t *testing.T) {
 
 	payload := strings.Repeat("x", 4<<20)
 	counter := &peekCountingReader{r: strings.NewReader(payload)}
-	resp := &provider.ProxyResponse{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: io.NopCloser(counter)}
+	// 502 is one of the bare router statuses, so the empty-body peek runs.
+	resp := &provider.ProxyResponse{StatusCode: http.StatusBadGateway, Header: http.Header{}, Body: io.NopCloser(counter)}
 
 	require.True(t, isBackendErrorOnDecisionRoute(resp))
-	require.LessOrEqual(t, counter.read, 1, "the peek must read at most one byte")
+	require.Equal(t, 1, counter.read, "the peek must read exactly one byte")
 	rest, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, payload, string(rest), "the peeked byte must not be lost")
