@@ -60,6 +60,14 @@ pub const ANNOTATION_HTTP_PORT_NAME: &str = "gds.nvidia.com/http-port-name";
 /// Service annotation: name of the UDP port that carries the QUIC reverse
 /// tunnel.
 pub const ANNOTATION_QUIC_PORT_NAME: &str = "gds.nvidia.com/quic-port-name";
+/// Router Service annotation: template of a router replica's identity (gRPC
+/// authority, QUIC SNI, TLS name) with one [`POD_NAME_PLACEHOLDER`], for
+/// example `{pod_name}.stargate.example.com`. See [`replica_authority`].
+pub const ANNOTATION_HOSTNAME_TEMPLATE: &str = "gds.nvidia.com/hostname-template";
+/// Router Service annotation: what the router replicas are,
+/// [`ROUTER_MODE_BACKEND_ROUTER`] or [`ROUTER_MODE_DIRECT`]. Absent means
+/// [`ROUTER_MODE_BACKEND_ROUTER`].
+pub const ANNOTATION_ROUTER_MODE: &str = "gds.nvidia.com/router-mode";
 
 /// [`ANNOTATION_DIAL_SCHEME`] value for plain HTTP.
 pub const DIAL_SCHEME_HTTP: &str = "http";
@@ -71,6 +79,21 @@ pub const DEFAULT_GRPC_PORT_NAME: &str = "grpc";
 pub const DEFAULT_HTTP_PORT_NAME: &str = "http";
 /// Port name used when [`ANNOTATION_QUIC_PORT_NAME`] is absent.
 pub const DEFAULT_QUIC_PORT_NAME: &str = "quic";
+
+/// [`ANNOTATION_ROUTER_MODE`] value: the router replicas are
+/// stargate-k8s-router pods that forward registration by authority and the
+/// QUIC tunnel by SNI to the Stargate pods of their cluster.
+pub const ROUTER_MODE_BACKEND_ROUTER: &str = "backend-router";
+/// [`ANNOTATION_ROUTER_MODE`] value: the router replicas are the Stargate
+/// pods themselves, dialled directly with the authority from
+/// [`replica_authority`].
+pub const ROUTER_MODE_DIRECT: &str = "direct";
+/// Placeholder of [`ANNOTATION_HOSTNAME_TEMPLATE`] replaced by a replica's
+/// identity.
+pub const POD_NAME_PLACEHOLDER: &str = "{pod_name}";
+/// Endpoint attribute holding the name of the endpoint's target reference
+/// (the pod name), set by the MCS controller.
+pub const ENDPOINT_ATTR_TARGET_NAME: &str = "targetRef.name";
 
 /// Label on objects the controller creates; the value is
 /// [`MANAGED_BY_CONTROLLER`].
@@ -136,6 +159,44 @@ pub fn parse_pool_models(value: &str) -> Vec<String> {
     models
 }
 
+/// The router mode of a router export from its annotations:
+/// [`ROUTER_MODE_BACKEND_ROUTER`] or [`ROUTER_MODE_DIRECT`], matched after
+/// trimming spaces and ignoring case. `None` when [`ANNOTATION_ROUTER_MODE`]
+/// is absent or holds another value; callers treat `None` as
+/// [`ROUTER_MODE_BACKEND_ROUTER`]. Mirrors `api.RouterModeOf`.
+pub fn router_mode_of<'a>(
+    mut annotations: impl Iterator<Item = (&'a String, &'a String)>,
+) -> Option<&'static str> {
+    let (_, value) = annotations.find(|(key, _)| key.as_str() == ANNOTATION_ROUTER_MODE)?;
+    let value = value.trim();
+    [ROUTER_MODE_BACKEND_ROUTER, ROUTER_MODE_DIRECT]
+        .into_iter()
+        .find(|mode| value.eq_ignore_ascii_case(mode))
+}
+
+/// The authority of a router replica,
+/// `<template with {pod_name} replaced by identity>:<port>`, for example
+/// `stargate-0.stargate.example.com:50071`. It is the replica's gRPC
+/// authority; the host part is its QUIC SNI and TLS name. `None` when
+/// `template` or `identity` is empty after trimming spaces, when `template`
+/// does not contain [`POD_NAME_PLACEHOLDER`] exactly once, or when `port` is
+/// not in 1..=65535. The host is a DNS name, never bracketed. Mirrors
+/// `api.ReplicaAuthority`.
+pub fn replica_authority(template: &str, identity: &str, port: i32) -> Option<String> {
+    let (template, identity) = (template.trim(), identity.trim());
+    let port = u16::try_from(port).ok().filter(|port| *port != 0)?;
+    if template.is_empty()
+        || identity.is_empty()
+        || template.matches(POD_NAME_PLACEHOLDER).count() != 1
+    {
+        return None;
+    }
+    Some(format!(
+        "{}:{port}",
+        template.replacen(POD_NAME_PLACEHOLDER, identity, 1)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -156,6 +217,8 @@ mod tests {
             ANNOTATION_HTTP_PORT_NAME,
             ANNOTATION_QUIC_PORT_NAME,
             ANNOTATION_ROLES,
+            ANNOTATION_HOSTNAME_TEMPLATE,
+            ANNOTATION_ROUTER_MODE,
             LABEL_MANAGED_BY,
             LABEL_CLUSTERSET,
             LABEL_POOL_ID,
@@ -192,5 +255,91 @@ mod tests {
             ["llama-3", "mixtral"]
         );
         assert!(parse_pool_models("").is_empty());
+    }
+
+    #[test]
+    fn router_mode_values_match_go() {
+        assert_eq!(
+            ANNOTATION_HOSTNAME_TEMPLATE,
+            "gds.nvidia.com/hostname-template"
+        );
+        assert_eq!(ANNOTATION_ROUTER_MODE, "gds.nvidia.com/router-mode");
+        assert_eq!(ROUTER_MODE_BACKEND_ROUTER, "backend-router");
+        assert_eq!(ROUTER_MODE_DIRECT, "direct");
+        assert_eq!(POD_NAME_PLACEHOLDER, "{pod_name}");
+        assert_eq!(ENDPOINT_ATTR_TARGET_NAME, "targetRef.name");
+    }
+
+    #[test]
+    fn router_mode_is_normalised() {
+        let mode = |value: Option<&str>| {
+            let annotations: HashMap<String, String> = value
+                .map(|v| (ANNOTATION_ROUTER_MODE.to_string(), v.to_string()))
+                .into_iter()
+                .chain([("other".to_string(), "direct".to_string())])
+                .collect();
+            router_mode_of(annotations.iter())
+        };
+        assert_eq!(mode(None), None);
+        assert_eq!(mode(Some("")), None);
+        assert_eq!(mode(Some("direct")), Some(ROUTER_MODE_DIRECT));
+        assert_eq!(mode(Some(" Direct ")), Some(ROUTER_MODE_DIRECT));
+        assert_eq!(
+            mode(Some("backend-router")),
+            Some(ROUTER_MODE_BACKEND_ROUTER)
+        );
+        assert_eq!(
+            mode(Some("BACKEND-ROUTER")),
+            Some(ROUTER_MODE_BACKEND_ROUTER)
+        );
+        assert_eq!(mode(Some("backend_router")), None);
+        assert_eq!(mode(Some("k8s-router")), None);
+    }
+
+    #[test]
+    fn replica_authority_replaces_the_placeholder() {
+        let cases: [(&str, &str, i32, Option<&str>); 14] = [
+            (
+                "{pod_name}.stargate.example.com",
+                "stargate-0",
+                50071,
+                Some("stargate-0.stargate.example.com:50071"),
+            ),
+            (
+                " {pod_name}.llm.svc.cluster.local ",
+                " stargate-1 ",
+                443,
+                Some("stargate-1.llm.svc.cluster.local:443"),
+            ),
+            (
+                "sg-{pod_name}-eu.example.com",
+                "abc",
+                1,
+                Some("sg-abc-eu.example.com:1"),
+            ),
+            ("{pod_name}", "stargate-0", 65535, Some("stargate-0:65535")),
+            ("", "stargate-0", 50071, None),
+            ("  ", "stargate-0", 50071, None),
+            ("{pod_name}.example.com", "", 50071, None),
+            ("{pod_name}.example.com", " ", 50071, None),
+            ("stargate.example.com", "stargate-0", 50071, None),
+            (
+                "{pod_name}.{pod_name}.example.com",
+                "stargate-0",
+                50071,
+                None,
+            ),
+            ("{POD_NAME}.example.com", "stargate-0", 50071, None),
+            ("{pod_name}.example.com", "stargate-0", 0, None),
+            ("{pod_name}.example.com", "stargate-0", -1, None),
+            ("{pod_name}.example.com", "stargate-0", 65536, None),
+        ];
+        for (template, identity, port, want) in cases {
+            assert_eq!(
+                replica_authority(template, identity, port).as_deref(),
+                want,
+                "{template:?} {identity:?} {port}"
+            );
+        }
     }
 }

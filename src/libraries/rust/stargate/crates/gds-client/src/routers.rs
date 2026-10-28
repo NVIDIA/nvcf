@@ -32,6 +32,12 @@
 //! Pylon and the Dynamo PoolRelay both dial routers from the same records:
 //! Pylon through [`pylon_seed_urls`], the PoolRelay through
 //! [`relay_seed_urls`]. Both are the gRPC replica URLs today.
+//!
+//! A router is in one of two modes ([`is_direct`]). In backend-router mode
+//! (also when the mode is unspecified) its replicas are stargate-k8s-router
+//! pods and the per-pod authorities come from `WatchStargates`. In direct
+//! mode its replicas are the Stargate pods themselves: a pylon dials each
+//! replica's seed URL with the authority from [`replica_authority`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -46,9 +52,10 @@ use crate::cache::DEFAULT_CACHE_TTL;
 use crate::client::{GdsClient, WatchStream};
 use crate::derived::derived_service_host;
 use crate::error::Error;
-use crate::labels::{DIAL_SCHEME_HTTP, DIAL_SCHEME_HTTPS};
+use crate::labels::{self, DIAL_SCHEME_HTTP, DIAL_SCHEME_HTTPS};
 use crate::proto::v1::{
-    EventType, LeaseState, ListRoutersRequest, Router, WatchRoutersRequest, WatchRoutersResponse,
+    EventType, LeaseState, ListRoutersRequest, Router, RouterMode, RouterReplica,
+    WatchRoutersRequest, WatchRoutersResponse,
 };
 use crate::watch::{CacheHandle, CacheKind, EngineConfig, StateMeta, WatchEvent};
 
@@ -126,6 +133,39 @@ pub fn quic_port(router: &Router) -> Option<u16> {
     u16::try_from(router.quic_port)
         .ok()
         .filter(|port| *port != 0)
+}
+
+/// Whether `router`'s replicas are the Stargate pods themselves
+/// ([`RouterMode::Direct`], annotation `gds.nvidia.com/router-mode: direct`),
+/// so a pylon dials each replica with the authority from
+/// [`replica_authority`]. [`RouterMode::Unspecified`] and
+/// [`RouterMode::BackendRouter`] are false: the replicas are
+/// stargate-k8s-router pods and the per-pod authorities come from
+/// `WatchStargates`.
+pub fn is_direct(router: &Router) -> bool {
+    router.router_mode() == RouterMode::Direct
+}
+
+/// The authority of `replica` of a direct-mode `router`: the router's
+/// `hostname_template` with `{pod_name}` replaced by the replica's
+/// `identity`, plus `:` and the router's `grpc_port`
+/// ([`labels::replica_authority`]), for example
+/// `stargate-0.stargate.example.com:50071`. Its host is also the replica's
+/// QUIC SNI and TLS name. `None` when the router is not in direct mode
+/// ([`is_direct`]), since backend-router replicas are k8s-router pods whose
+/// names are not authorities, and when the template, the identity or the
+/// gRPC port is missing or the template does not contain `{pod_name}`
+/// exactly once. The replica's readiness and the cluster lease are not
+/// checked.
+pub fn replica_authority(router: &Router, replica: &RouterReplica) -> Option<String> {
+    if !is_direct(router) {
+        return None;
+    }
+    labels::replica_authority(
+        &router.hostname_template,
+        &replica.identity,
+        router.grpc_port,
+    )
 }
 
 /// The host of a seed URL for a replica address: an IPv4 address or a host
