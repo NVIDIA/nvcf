@@ -120,6 +120,8 @@ type Config struct {
 	// MaxJobAge is how long a submitted job may stay unfinished before it
 	// is reported stranded.
 	MaxJobAge time.Duration
+	// StatusInterval is how often every open job is polled.
+	StatusInterval time.Duration
 }
 
 // ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
@@ -261,6 +263,10 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	if err != nil {
 		return Config{}, nil, err
 	}
+	pollInterval, err := strictSeconds(lookup, EnvStatusInterval, DefaultPollInterval, time.Second, time.Hour)
+	if err != nil {
+		return Config{}, nil, err
+	}
 
 	return Config{
 		SourceDir:     sourceDir,
@@ -290,6 +296,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		SkipRedaction:  !redactMultimodal,
 		DrainTimeout:   drainTimeout,
 		MaxJobAge:      maxJobAge,
+		StatusInterval: pollInterval,
 	}, warnings, nil
 }
 

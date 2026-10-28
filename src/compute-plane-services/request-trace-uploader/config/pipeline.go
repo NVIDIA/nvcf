@@ -25,6 +25,11 @@ const (
 	// EnvMaxJobAge is how long, in whole seconds, a submitted job may stay
 	// unfinished before it is reported stranded.
 	EnvMaxJobAge = "REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS"
+	// EnvStatusInterval is how often, in whole seconds, the uploader polls
+	// the status of every open job.
+	EnvStatusInterval = "REQUEST_TRACE_UPLOADER_STATUS_INTERVAL_SECONDS"
+	// DefaultPollInterval is the default for EnvStatusInterval.
+	DefaultPollInterval = 30 * time.Second
 
 	DefaultDrainTimeout = 60 * time.Second
 	DefaultMaxJobAge    = 24 * time.Hour

@@ -22,6 +22,7 @@ go_test(
         "aliases_test.go",
         "config_test.go",
         "settings_test.go",
+        "status_test.go",
         "suppression_test.go",
     ],
     embed = [":config"],
