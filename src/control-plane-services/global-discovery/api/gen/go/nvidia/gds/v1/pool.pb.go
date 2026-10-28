@@ -277,6 +277,68 @@ func (DialMode) EnumDescriptor() ([]byte, []int) {
 	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{3}
 }
 
+// RouterMode says what the replicas of a Router are, from the export
+// annotation gds.nvidia.com/router-mode.
+type RouterMode int32
+
+const (
+	// The annotation is absent or has an unknown value. Clients treat it as
+	// ROUTER_MODE_BACKEND_ROUTER, the mode of exports made before router
+	// modes existed.
+	RouterMode_ROUTER_MODE_UNSPECIFIED RouterMode = 0
+	// Annotation value backend-router: the replicas are stargate-k8s-router
+	// pods that forward registration by authority and the QUIC tunnel by SNI
+	// to the Stargate pods of their cluster. A pylon learns the per-pod
+	// authorities from WatchStargates; replica identities are k8s-router pod
+	// names and are not authorities.
+	RouterMode_ROUTER_MODE_BACKEND_ROUTER RouterMode = 1
+	// Annotation value direct: the replicas are the Stargate pods themselves
+	// and a pylon dials each one. A replica's authority, QUIC SNI and TLS
+	// name are hostname_template with {pod_name} replaced by its identity.
+	RouterMode_ROUTER_MODE_DIRECT RouterMode = 2
+)
+
+// Enum value maps for RouterMode.
+var (
+	RouterMode_name = map[int32]string{
+		0: "ROUTER_MODE_UNSPECIFIED",
+		1: "ROUTER_MODE_BACKEND_ROUTER",
+		2: "ROUTER_MODE_DIRECT",
+	}
+	RouterMode_value = map[string]int32{
+		"ROUTER_MODE_UNSPECIFIED":    0,
+		"ROUTER_MODE_BACKEND_ROUTER": 1,
+		"ROUTER_MODE_DIRECT":         2,
+	}
+)
+
+func (x RouterMode) Enum() *RouterMode {
+	p := new(RouterMode)
+	*p = x
+	return p
+}
+
+func (x RouterMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RouterMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_nvidia_gds_v1_pool_proto_enumTypes[4].Descriptor()
+}
+
+func (RouterMode) Type() protoreflect.EnumType {
+	return &file_nvidia_gds_v1_pool_proto_enumTypes[4]
+}
+
+func (x RouterMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RouterMode.Descriptor instead.
+func (RouterMode) EnumDescriptor() ([]byte, []int) {
+	return file_nvidia_gds_v1_pool_proto_rawDescGZIP(), []int{4}
+}
+
 // PoolAgentRegistration is one process instance's registration of an agent
 // role, with its own lease.
 type PoolAgentRegistration struct {
@@ -1059,12 +1121,20 @@ func (x *Pool) GetReadyIngressCount() int32 {
 
 // RouterReplica is one endpoint of a router Service.
 type RouterReplica struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Address       string                 `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
-	AddressType   AddressType            `protobuf:"varint,2,opt,name=address_type,json=addressType,proto3,enum=nvidia.gds.v1.AddressType" json:"address_type,omitempty"`
-	Ready         bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`
-	Hostname      string                 `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Zone          string                 `protobuf:"bytes,5,opt,name=zone,proto3" json:"zone,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Address     string                 `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	AddressType AddressType            `protobuf:"varint,2,opt,name=address_type,json=addressType,proto3,enum=nvidia.gds.v1.AddressType" json:"address_type,omitempty"`
+	Ready       bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`
+	Hostname    string                 `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Zone        string                 `protobuf:"bytes,5,opt,name=zone,proto3" json:"zone,omitempty"`
+	// Pod identity of the replica: the EndpointSlice endpoint hostname when
+	// set, else the pod name the MCS controller exports as the endpoint
+	// attribute targetRef.name, else empty. In direct mode a client forms the
+	// replica's authority as Router.hostname_template with {pod_name} replaced
+	// by the identity, plus ":" and Router.grpc_port (no authority when the
+	// template or the identity is empty). In backend-router mode the identity
+	// is a k8s-router pod name and not an authority.
+	Identity      string `protobuf:"bytes,6,opt,name=identity,proto3" json:"identity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1134,6 +1204,13 @@ func (x *RouterReplica) GetZone() string {
 	return ""
 }
 
+func (x *RouterReplica) GetIdentity() string {
+	if x != nil {
+		return x.Identity
+	}
+	return ""
+}
+
 // Router is derived from one export labelled gds.nvidia.com/role=router, one
 // per (cluster, namespace, name). Pylons use its ready replicas as seeds,
 // <dial_scheme>://<replica address>:<grpc_port>, so that a seed reaches the
@@ -1162,9 +1239,21 @@ type Router struct {
 	QuicPort int32 `protobuf:"varint,13,opt,name=quic_port,json=quicPort,proto3" json:"quic_port,omitempty"`
 	// Every port of the exported Service, for consumers whose protocol GDS
 	// does not name.
-	Ports         []*ServicePort `protobuf:"bytes,14,rep,name=ports,proto3" json:"ports,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Ports []*ServicePort `protobuf:"bytes,14,rep,name=ports,proto3" json:"ports,omitempty"`
+	// From the annotation gds.nvidia.com/router-mode (backend-router or
+	// direct, case-insensitive); ROUTER_MODE_UNSPECIFIED when the annotation
+	// is absent or unknown. Clients treat ROUTER_MODE_UNSPECIFIED as
+	// ROUTER_MODE_BACKEND_ROUTER for compatibility.
+	RouterMode RouterMode `protobuf:"varint,15,opt,name=router_mode,json=routerMode,proto3,enum=nvidia.gds.v1.RouterMode" json:"router_mode,omitempty"`
+	// The annotation gds.nvidia.com/hostname-template verbatim, for example
+	// {pod_name}.stargate.example.com; empty when absent. In direct mode a
+	// replica's authority is this template with its single {pod_name}
+	// replaced by RouterReplica.identity, plus ":" and grpc_port, for example
+	// stargate-0.stargate.example.com:50071. The same host is the QUIC SNI and
+	// the TLS name of the replica.
+	HostnameTemplate string `protobuf:"bytes,16,opt,name=hostname_template,json=hostnameTemplate,proto3" json:"hostname_template,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Router) Reset() {
@@ -1293,6 +1382,20 @@ func (x *Router) GetPorts() []*ServicePort {
 		return x.Ports
 	}
 	return nil
+}
+
+func (x *Router) GetRouterMode() RouterMode {
+	if x != nil {
+		return x.RouterMode
+	}
+	return RouterMode_ROUTER_MODE_UNSPECIFIED
+}
+
+func (x *Router) GetHostnameTemplate() string {
+	if x != nil {
+		return x.HostnameTemplate
+	}
+	return ""
 }
 
 type RegisterPoolRequest struct {
@@ -3012,13 +3115,14 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\x13ready_ingress_count\x18\x17 \x01(\x05R\x11readyIngressCount\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xca\x01\n" +
 	"\rRouterReplica\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12=\n" +
 	"\faddress_type\x18\x02 \x01(\x0e2\x1a.nvidia.gds.v1.AddressTypeR\vaddressType\x12\x14\n" +
 	"\x05ready\x18\x03 \x01(\bR\x05ready\x12\x1a\n" +
 	"\bhostname\x18\x04 \x01(\tR\bhostname\x12\x12\n" +
-	"\x04zone\x18\x05 \x01(\tR\x04zone\"\xcb\x05\n" +
+	"\x04zone\x18\x05 \x01(\tR\x04zone\x12\x1a\n" +
+	"\bidentity\x18\x06 \x01(\tR\bidentity\"\xb4\x06\n" +
 	"\x06Router\x12\x18\n" +
 	"\acluster\x18\x01 \x01(\tR\acluster\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x1c\n" +
@@ -3035,7 +3139,10 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\x06labels\x18\v \x03(\v2!.nvidia.gds.v1.Router.LabelsEntryR\x06labels\x12H\n" +
 	"\vannotations\x18\f \x03(\v2&.nvidia.gds.v1.Router.AnnotationsEntryR\vannotations\x12\x1b\n" +
 	"\tquic_port\x18\r \x01(\x05R\bquicPort\x120\n" +
-	"\x05ports\x18\x0e \x03(\v2\x1a.nvidia.gds.v1.ServicePortR\x05ports\x1a9\n" +
+	"\x05ports\x18\x0e \x03(\v2\x1a.nvidia.gds.v1.ServicePortR\x05ports\x12:\n" +
+	"\vrouter_mode\x18\x0f \x01(\x0e2\x19.nvidia.gds.v1.RouterModeR\n" +
+	"routerMode\x12+\n" +
+	"\x11hostname_template\x18\x10 \x01(\tR\x10hostnameTemplate\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
@@ -3219,7 +3326,12 @@ const file_nvidia_gds_v1_pool_proto_rawDesc = "" +
 	"\bDialMode\x12\x19\n" +
 	"\x15DIAL_MODE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DIAL_MODE_INBOUND\x10\x01\x12\x16\n" +
-	"\x12DIAL_MODE_OUTBOUND\x10\x022\x80\x0e\n" +
+	"\x12DIAL_MODE_OUTBOUND\x10\x02*a\n" +
+	"\n" +
+	"RouterMode\x12\x1b\n" +
+	"\x17ROUTER_MODE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aROUTER_MODE_BACKEND_ROUTER\x10\x01\x12\x16\n" +
+	"\x12ROUTER_MODE_DIRECT\x10\x022\x80\x0e\n" +
 	"\vPoolService\x12\x86\x01\n" +
 	"\fRegisterPool\x12\".nvidia.gds.v1.RegisterPoolRequest\x1a#.nvidia.gds.v1.RegisterPoolResponse\"-\x82\xd3\xe4\x93\x02':\x01*\"\"/v1/clustersets/{clusterset}/pools\x12\x8a\x01\n" +
 	"\n" +
@@ -3248,165 +3360,167 @@ func file_nvidia_gds_v1_pool_proto_rawDescGZIP() []byte {
 	return file_nvidia_gds_v1_pool_proto_rawDescData
 }
 
-var file_nvidia_gds_v1_pool_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_nvidia_gds_v1_pool_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_nvidia_gds_v1_pool_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_nvidia_gds_v1_pool_proto_goTypes = []any{
 	(PoolState)(0),                      // 0: nvidia.gds.v1.PoolState
 	(FrontendRole)(0),                   // 1: nvidia.gds.v1.FrontendRole
 	(AgentSource)(0),                    // 2: nvidia.gds.v1.AgentSource
 	(DialMode)(0),                       // 3: nvidia.gds.v1.DialMode
-	(*PoolAgentRegistration)(nil),       // 4: nvidia.gds.v1.PoolAgentRegistration
-	(*PoolAgent)(nil),                   // 5: nvidia.gds.v1.PoolAgent
-	(*Location)(nil),                    // 6: nvidia.gds.v1.Location
-	(*ModelServed)(nil),                 // 7: nvidia.gds.v1.ModelServed
-	(*ServiceRef)(nil),                  // 8: nvidia.gds.v1.ServiceRef
-	(*FrontendEndpoint)(nil),            // 9: nvidia.gds.v1.FrontendEndpoint
-	(*Pool)(nil),                        // 10: nvidia.gds.v1.Pool
-	(*RouterReplica)(nil),               // 11: nvidia.gds.v1.RouterReplica
-	(*Router)(nil),                      // 12: nvidia.gds.v1.Router
-	(*RegisterPoolRequest)(nil),         // 13: nvidia.gds.v1.RegisterPoolRequest
-	(*RegisterPoolResponse)(nil),        // 14: nvidia.gds.v1.RegisterPoolResponse
-	(*UpdatePoolRequest)(nil),           // 15: nvidia.gds.v1.UpdatePoolRequest
-	(*UpdatePoolResponse)(nil),          // 16: nvidia.gds.v1.UpdatePoolResponse
-	(*HeartbeatPoolRequest)(nil),        // 17: nvidia.gds.v1.HeartbeatPoolRequest
-	(*HeartbeatPoolResponse)(nil),       // 18: nvidia.gds.v1.HeartbeatPoolResponse
-	(*DeregisterPoolRequest)(nil),       // 19: nvidia.gds.v1.DeregisterPoolRequest
-	(*DeregisterPoolResponse)(nil),      // 20: nvidia.gds.v1.DeregisterPoolResponse
-	(*RegisterPoolAgentRequest)(nil),    // 21: nvidia.gds.v1.RegisterPoolAgentRequest
-	(*RegisterPoolAgentResponse)(nil),   // 22: nvidia.gds.v1.RegisterPoolAgentResponse
-	(*HeartbeatPoolAgentRequest)(nil),   // 23: nvidia.gds.v1.HeartbeatPoolAgentRequest
-	(*HeartbeatPoolAgentResponse)(nil),  // 24: nvidia.gds.v1.HeartbeatPoolAgentResponse
-	(*DeregisterPoolAgentRequest)(nil),  // 25: nvidia.gds.v1.DeregisterPoolAgentRequest
-	(*DeregisterPoolAgentResponse)(nil), // 26: nvidia.gds.v1.DeregisterPoolAgentResponse
-	(*GetPoolRequest)(nil),              // 27: nvidia.gds.v1.GetPoolRequest
-	(*GetPoolResponse)(nil),             // 28: nvidia.gds.v1.GetPoolResponse
-	(*ListPoolsRequest)(nil),            // 29: nvidia.gds.v1.ListPoolsRequest
-	(*ListPoolsResponse)(nil),           // 30: nvidia.gds.v1.ListPoolsResponse
-	(*WatchPoolsRequest)(nil),           // 31: nvidia.gds.v1.WatchPoolsRequest
-	(*WatchPoolsResponse)(nil),          // 32: nvidia.gds.v1.WatchPoolsResponse
-	(*ListRoutersRequest)(nil),          // 33: nvidia.gds.v1.ListRoutersRequest
-	(*ListRoutersResponse)(nil),         // 34: nvidia.gds.v1.ListRoutersResponse
-	(*WatchRoutersRequest)(nil),         // 35: nvidia.gds.v1.WatchRoutersRequest
-	(*WatchRoutersResponse)(nil),        // 36: nvidia.gds.v1.WatchRoutersResponse
-	nil,                                 // 37: nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
-	nil,                                 // 38: nvidia.gds.v1.PoolAgent.AttributesEntry
-	nil,                                 // 39: nvidia.gds.v1.ModelServed.AttributesEntry
-	nil,                                 // 40: nvidia.gds.v1.Pool.LabelsEntry
-	nil,                                 // 41: nvidia.gds.v1.Router.LabelsEntry
-	nil,                                 // 42: nvidia.gds.v1.Router.AnnotationsEntry
-	nil,                                 // 43: nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
-	(*Lease)(nil),                       // 44: nvidia.gds.v1.Lease
-	(*timestamppb.Timestamp)(nil),       // 45: google.protobuf.Timestamp
-	(*ClusterEndpoints)(nil),            // 46: nvidia.gds.v1.ClusterEndpoints
-	(AddressType)(0),                    // 47: nvidia.gds.v1.AddressType
-	(ServiceType)(0),                    // 48: nvidia.gds.v1.ServiceType
-	(LeaseState)(0),                     // 49: nvidia.gds.v1.LeaseState
-	(*ServicePort)(nil),                 // 50: nvidia.gds.v1.ServicePort
-	(*durationpb.Duration)(nil),         // 51: google.protobuf.Duration
-	(*fieldmaskpb.FieldMask)(nil),       // 52: google.protobuf.FieldMask
-	(*LabelSelector)(nil),               // 53: nvidia.gds.v1.LabelSelector
-	(EventType)(0),                      // 54: nvidia.gds.v1.EventType
+	(RouterMode)(0),                     // 4: nvidia.gds.v1.RouterMode
+	(*PoolAgentRegistration)(nil),       // 5: nvidia.gds.v1.PoolAgentRegistration
+	(*PoolAgent)(nil),                   // 6: nvidia.gds.v1.PoolAgent
+	(*Location)(nil),                    // 7: nvidia.gds.v1.Location
+	(*ModelServed)(nil),                 // 8: nvidia.gds.v1.ModelServed
+	(*ServiceRef)(nil),                  // 9: nvidia.gds.v1.ServiceRef
+	(*FrontendEndpoint)(nil),            // 10: nvidia.gds.v1.FrontendEndpoint
+	(*Pool)(nil),                        // 11: nvidia.gds.v1.Pool
+	(*RouterReplica)(nil),               // 12: nvidia.gds.v1.RouterReplica
+	(*Router)(nil),                      // 13: nvidia.gds.v1.Router
+	(*RegisterPoolRequest)(nil),         // 14: nvidia.gds.v1.RegisterPoolRequest
+	(*RegisterPoolResponse)(nil),        // 15: nvidia.gds.v1.RegisterPoolResponse
+	(*UpdatePoolRequest)(nil),           // 16: nvidia.gds.v1.UpdatePoolRequest
+	(*UpdatePoolResponse)(nil),          // 17: nvidia.gds.v1.UpdatePoolResponse
+	(*HeartbeatPoolRequest)(nil),        // 18: nvidia.gds.v1.HeartbeatPoolRequest
+	(*HeartbeatPoolResponse)(nil),       // 19: nvidia.gds.v1.HeartbeatPoolResponse
+	(*DeregisterPoolRequest)(nil),       // 20: nvidia.gds.v1.DeregisterPoolRequest
+	(*DeregisterPoolResponse)(nil),      // 21: nvidia.gds.v1.DeregisterPoolResponse
+	(*RegisterPoolAgentRequest)(nil),    // 22: nvidia.gds.v1.RegisterPoolAgentRequest
+	(*RegisterPoolAgentResponse)(nil),   // 23: nvidia.gds.v1.RegisterPoolAgentResponse
+	(*HeartbeatPoolAgentRequest)(nil),   // 24: nvidia.gds.v1.HeartbeatPoolAgentRequest
+	(*HeartbeatPoolAgentResponse)(nil),  // 25: nvidia.gds.v1.HeartbeatPoolAgentResponse
+	(*DeregisterPoolAgentRequest)(nil),  // 26: nvidia.gds.v1.DeregisterPoolAgentRequest
+	(*DeregisterPoolAgentResponse)(nil), // 27: nvidia.gds.v1.DeregisterPoolAgentResponse
+	(*GetPoolRequest)(nil),              // 28: nvidia.gds.v1.GetPoolRequest
+	(*GetPoolResponse)(nil),             // 29: nvidia.gds.v1.GetPoolResponse
+	(*ListPoolsRequest)(nil),            // 30: nvidia.gds.v1.ListPoolsRequest
+	(*ListPoolsResponse)(nil),           // 31: nvidia.gds.v1.ListPoolsResponse
+	(*WatchPoolsRequest)(nil),           // 32: nvidia.gds.v1.WatchPoolsRequest
+	(*WatchPoolsResponse)(nil),          // 33: nvidia.gds.v1.WatchPoolsResponse
+	(*ListRoutersRequest)(nil),          // 34: nvidia.gds.v1.ListRoutersRequest
+	(*ListRoutersResponse)(nil),         // 35: nvidia.gds.v1.ListRoutersResponse
+	(*WatchRoutersRequest)(nil),         // 36: nvidia.gds.v1.WatchRoutersRequest
+	(*WatchRoutersResponse)(nil),        // 37: nvidia.gds.v1.WatchRoutersResponse
+	nil,                                 // 38: nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
+	nil,                                 // 39: nvidia.gds.v1.PoolAgent.AttributesEntry
+	nil,                                 // 40: nvidia.gds.v1.ModelServed.AttributesEntry
+	nil,                                 // 41: nvidia.gds.v1.Pool.LabelsEntry
+	nil,                                 // 42: nvidia.gds.v1.Router.LabelsEntry
+	nil,                                 // 43: nvidia.gds.v1.Router.AnnotationsEntry
+	nil,                                 // 44: nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
+	(*Lease)(nil),                       // 45: nvidia.gds.v1.Lease
+	(*timestamppb.Timestamp)(nil),       // 46: google.protobuf.Timestamp
+	(*ClusterEndpoints)(nil),            // 47: nvidia.gds.v1.ClusterEndpoints
+	(AddressType)(0),                    // 48: nvidia.gds.v1.AddressType
+	(ServiceType)(0),                    // 49: nvidia.gds.v1.ServiceType
+	(LeaseState)(0),                     // 50: nvidia.gds.v1.LeaseState
+	(*ServicePort)(nil),                 // 51: nvidia.gds.v1.ServicePort
+	(*durationpb.Duration)(nil),         // 52: google.protobuf.Duration
+	(*fieldmaskpb.FieldMask)(nil),       // 53: google.protobuf.FieldMask
+	(*LabelSelector)(nil),               // 54: nvidia.gds.v1.LabelSelector
+	(EventType)(0),                      // 55: nvidia.gds.v1.EventType
 }
 var file_nvidia_gds_v1_pool_proto_depIdxs = []int32{
-	44, // 0: nvidia.gds.v1.PoolAgentRegistration.lease:type_name -> nvidia.gds.v1.Lease
-	37, // 1: nvidia.gds.v1.PoolAgentRegistration.attributes:type_name -> nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
-	45, // 2: nvidia.gds.v1.PoolAgentRegistration.registered_at:type_name -> google.protobuf.Timestamp
-	45, // 3: nvidia.gds.v1.PoolAgentRegistration.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 0: nvidia.gds.v1.PoolAgentRegistration.lease:type_name -> nvidia.gds.v1.Lease
+	38, // 1: nvidia.gds.v1.PoolAgentRegistration.attributes:type_name -> nvidia.gds.v1.PoolAgentRegistration.AttributesEntry
+	46, // 2: nvidia.gds.v1.PoolAgentRegistration.registered_at:type_name -> google.protobuf.Timestamp
+	46, // 3: nvidia.gds.v1.PoolAgentRegistration.updated_at:type_name -> google.protobuf.Timestamp
 	1,  // 4: nvidia.gds.v1.PoolAgent.role:type_name -> nvidia.gds.v1.FrontendRole
 	2,  // 5: nvidia.gds.v1.PoolAgent.source:type_name -> nvidia.gds.v1.AgentSource
-	8,  // 6: nvidia.gds.v1.PoolAgent.service:type_name -> nvidia.gds.v1.ServiceRef
-	44, // 7: nvidia.gds.v1.PoolAgent.lease:type_name -> nvidia.gds.v1.Lease
+	9,  // 6: nvidia.gds.v1.PoolAgent.service:type_name -> nvidia.gds.v1.ServiceRef
+	45, // 7: nvidia.gds.v1.PoolAgent.lease:type_name -> nvidia.gds.v1.Lease
 	3,  // 8: nvidia.gds.v1.PoolAgent.dial_mode:type_name -> nvidia.gds.v1.DialMode
-	38, // 9: nvidia.gds.v1.PoolAgent.attributes:type_name -> nvidia.gds.v1.PoolAgent.AttributesEntry
-	45, // 10: nvidia.gds.v1.PoolAgent.registered_at:type_name -> google.protobuf.Timestamp
-	45, // 11: nvidia.gds.v1.PoolAgent.updated_at:type_name -> google.protobuf.Timestamp
-	4,  // 12: nvidia.gds.v1.PoolAgent.registrations:type_name -> nvidia.gds.v1.PoolAgentRegistration
-	39, // 13: nvidia.gds.v1.ModelServed.attributes:type_name -> nvidia.gds.v1.ModelServed.AttributesEntry
+	39, // 9: nvidia.gds.v1.PoolAgent.attributes:type_name -> nvidia.gds.v1.PoolAgent.AttributesEntry
+	46, // 10: nvidia.gds.v1.PoolAgent.registered_at:type_name -> google.protobuf.Timestamp
+	46, // 11: nvidia.gds.v1.PoolAgent.updated_at:type_name -> google.protobuf.Timestamp
+	5,  // 12: nvidia.gds.v1.PoolAgent.registrations:type_name -> nvidia.gds.v1.PoolAgentRegistration
+	40, // 13: nvidia.gds.v1.ModelServed.attributes:type_name -> nvidia.gds.v1.ModelServed.AttributesEntry
 	1,  // 14: nvidia.gds.v1.ServiceRef.role:type_name -> nvidia.gds.v1.FrontendRole
 	1,  // 15: nvidia.gds.v1.FrontendEndpoint.role:type_name -> nvidia.gds.v1.FrontendRole
-	8,  // 16: nvidia.gds.v1.FrontendEndpoint.service:type_name -> nvidia.gds.v1.ServiceRef
-	6,  // 17: nvidia.gds.v1.Pool.location:type_name -> nvidia.gds.v1.Location
-	7,  // 18: nvidia.gds.v1.Pool.models:type_name -> nvidia.gds.v1.ModelServed
-	9,  // 19: nvidia.gds.v1.Pool.frontends:type_name -> nvidia.gds.v1.FrontendEndpoint
-	8,  // 20: nvidia.gds.v1.Pool.services:type_name -> nvidia.gds.v1.ServiceRef
-	40, // 21: nvidia.gds.v1.Pool.labels:type_name -> nvidia.gds.v1.Pool.LabelsEntry
+	9,  // 16: nvidia.gds.v1.FrontendEndpoint.service:type_name -> nvidia.gds.v1.ServiceRef
+	7,  // 17: nvidia.gds.v1.Pool.location:type_name -> nvidia.gds.v1.Location
+	8,  // 18: nvidia.gds.v1.Pool.models:type_name -> nvidia.gds.v1.ModelServed
+	10, // 19: nvidia.gds.v1.Pool.frontends:type_name -> nvidia.gds.v1.FrontendEndpoint
+	9,  // 20: nvidia.gds.v1.Pool.services:type_name -> nvidia.gds.v1.ServiceRef
+	41, // 21: nvidia.gds.v1.Pool.labels:type_name -> nvidia.gds.v1.Pool.LabelsEntry
 	0,  // 22: nvidia.gds.v1.Pool.desired_state:type_name -> nvidia.gds.v1.PoolState
 	0,  // 23: nvidia.gds.v1.Pool.state:type_name -> nvidia.gds.v1.PoolState
-	44, // 24: nvidia.gds.v1.Pool.lease:type_name -> nvidia.gds.v1.Lease
-	45, // 25: nvidia.gds.v1.Pool.registered_at:type_name -> google.protobuf.Timestamp
-	45, // 26: nvidia.gds.v1.Pool.updated_at:type_name -> google.protobuf.Timestamp
-	46, // 27: nvidia.gds.v1.Pool.endpoints:type_name -> nvidia.gds.v1.ClusterEndpoints
-	5,  // 28: nvidia.gds.v1.Pool.agents:type_name -> nvidia.gds.v1.PoolAgent
-	47, // 29: nvidia.gds.v1.RouterReplica.address_type:type_name -> nvidia.gds.v1.AddressType
-	48, // 30: nvidia.gds.v1.Router.type:type_name -> nvidia.gds.v1.ServiceType
-	49, // 31: nvidia.gds.v1.Router.cluster_lease_state:type_name -> nvidia.gds.v1.LeaseState
-	11, // 32: nvidia.gds.v1.Router.replicas:type_name -> nvidia.gds.v1.RouterReplica
-	41, // 33: nvidia.gds.v1.Router.labels:type_name -> nvidia.gds.v1.Router.LabelsEntry
-	42, // 34: nvidia.gds.v1.Router.annotations:type_name -> nvidia.gds.v1.Router.AnnotationsEntry
-	50, // 35: nvidia.gds.v1.Router.ports:type_name -> nvidia.gds.v1.ServicePort
-	10, // 36: nvidia.gds.v1.RegisterPoolRequest.pool:type_name -> nvidia.gds.v1.Pool
-	51, // 37: nvidia.gds.v1.RegisterPoolRequest.lease_ttl:type_name -> google.protobuf.Duration
-	10, // 38: nvidia.gds.v1.RegisterPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	45, // 39: nvidia.gds.v1.RegisterPoolResponse.server_time:type_name -> google.protobuf.Timestamp
-	10, // 40: nvidia.gds.v1.UpdatePoolRequest.pool:type_name -> nvidia.gds.v1.Pool
-	52, // 41: nvidia.gds.v1.UpdatePoolRequest.update_mask:type_name -> google.protobuf.FieldMask
-	10, // 42: nvidia.gds.v1.UpdatePoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	0,  // 43: nvidia.gds.v1.HeartbeatPoolRequest.desired_state:type_name -> nvidia.gds.v1.PoolState
-	44, // 44: nvidia.gds.v1.HeartbeatPoolResponse.lease:type_name -> nvidia.gds.v1.Lease
-	0,  // 45: nvidia.gds.v1.HeartbeatPoolResponse.state:type_name -> nvidia.gds.v1.PoolState
-	45, // 46: nvidia.gds.v1.HeartbeatPoolResponse.server_time:type_name -> google.protobuf.Timestamp
-	5,  // 47: nvidia.gds.v1.RegisterPoolAgentRequest.agent:type_name -> nvidia.gds.v1.PoolAgent
-	51, // 48: nvidia.gds.v1.RegisterPoolAgentRequest.lease_ttl:type_name -> google.protobuf.Duration
-	5,  // 49: nvidia.gds.v1.RegisterPoolAgentResponse.agent:type_name -> nvidia.gds.v1.PoolAgent
-	4,  // 50: nvidia.gds.v1.RegisterPoolAgentResponse.registration:type_name -> nvidia.gds.v1.PoolAgentRegistration
-	0,  // 51: nvidia.gds.v1.RegisterPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
-	45, // 52: nvidia.gds.v1.RegisterPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
-	1,  // 53: nvidia.gds.v1.HeartbeatPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
-	43, // 54: nvidia.gds.v1.HeartbeatPoolAgentRequest.attributes:type_name -> nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
-	44, // 55: nvidia.gds.v1.HeartbeatPoolAgentResponse.lease:type_name -> nvidia.gds.v1.Lease
-	0,  // 56: nvidia.gds.v1.HeartbeatPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
-	45, // 57: nvidia.gds.v1.HeartbeatPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
-	1,  // 58: nvidia.gds.v1.DeregisterPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
-	10, // 59: nvidia.gds.v1.GetPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
-	0,  // 60: nvidia.gds.v1.ListPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
-	53, // 61: nvidia.gds.v1.ListPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
-	10, // 62: nvidia.gds.v1.ListPoolsResponse.pools:type_name -> nvidia.gds.v1.Pool
-	0,  // 63: nvidia.gds.v1.WatchPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
-	53, // 64: nvidia.gds.v1.WatchPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
-	54, // 65: nvidia.gds.v1.WatchPoolsResponse.type:type_name -> nvidia.gds.v1.EventType
-	10, // 66: nvidia.gds.v1.WatchPoolsResponse.pool:type_name -> nvidia.gds.v1.Pool
-	12, // 67: nvidia.gds.v1.ListRoutersResponse.routers:type_name -> nvidia.gds.v1.Router
-	54, // 68: nvidia.gds.v1.WatchRoutersResponse.type:type_name -> nvidia.gds.v1.EventType
-	12, // 69: nvidia.gds.v1.WatchRoutersResponse.router:type_name -> nvidia.gds.v1.Router
-	13, // 70: nvidia.gds.v1.PoolService.RegisterPool:input_type -> nvidia.gds.v1.RegisterPoolRequest
-	15, // 71: nvidia.gds.v1.PoolService.UpdatePool:input_type -> nvidia.gds.v1.UpdatePoolRequest
-	17, // 72: nvidia.gds.v1.PoolService.HeartbeatPool:input_type -> nvidia.gds.v1.HeartbeatPoolRequest
-	19, // 73: nvidia.gds.v1.PoolService.DeregisterPool:input_type -> nvidia.gds.v1.DeregisterPoolRequest
-	21, // 74: nvidia.gds.v1.PoolService.RegisterPoolAgent:input_type -> nvidia.gds.v1.RegisterPoolAgentRequest
-	23, // 75: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:input_type -> nvidia.gds.v1.HeartbeatPoolAgentRequest
-	25, // 76: nvidia.gds.v1.PoolService.DeregisterPoolAgent:input_type -> nvidia.gds.v1.DeregisterPoolAgentRequest
-	27, // 77: nvidia.gds.v1.PoolService.GetPool:input_type -> nvidia.gds.v1.GetPoolRequest
-	29, // 78: nvidia.gds.v1.PoolService.ListPools:input_type -> nvidia.gds.v1.ListPoolsRequest
-	31, // 79: nvidia.gds.v1.PoolService.WatchPools:input_type -> nvidia.gds.v1.WatchPoolsRequest
-	33, // 80: nvidia.gds.v1.PoolService.ListRouters:input_type -> nvidia.gds.v1.ListRoutersRequest
-	35, // 81: nvidia.gds.v1.PoolService.WatchRouters:input_type -> nvidia.gds.v1.WatchRoutersRequest
-	14, // 82: nvidia.gds.v1.PoolService.RegisterPool:output_type -> nvidia.gds.v1.RegisterPoolResponse
-	16, // 83: nvidia.gds.v1.PoolService.UpdatePool:output_type -> nvidia.gds.v1.UpdatePoolResponse
-	18, // 84: nvidia.gds.v1.PoolService.HeartbeatPool:output_type -> nvidia.gds.v1.HeartbeatPoolResponse
-	20, // 85: nvidia.gds.v1.PoolService.DeregisterPool:output_type -> nvidia.gds.v1.DeregisterPoolResponse
-	22, // 86: nvidia.gds.v1.PoolService.RegisterPoolAgent:output_type -> nvidia.gds.v1.RegisterPoolAgentResponse
-	24, // 87: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:output_type -> nvidia.gds.v1.HeartbeatPoolAgentResponse
-	26, // 88: nvidia.gds.v1.PoolService.DeregisterPoolAgent:output_type -> nvidia.gds.v1.DeregisterPoolAgentResponse
-	28, // 89: nvidia.gds.v1.PoolService.GetPool:output_type -> nvidia.gds.v1.GetPoolResponse
-	30, // 90: nvidia.gds.v1.PoolService.ListPools:output_type -> nvidia.gds.v1.ListPoolsResponse
-	32, // 91: nvidia.gds.v1.PoolService.WatchPools:output_type -> nvidia.gds.v1.WatchPoolsResponse
-	34, // 92: nvidia.gds.v1.PoolService.ListRouters:output_type -> nvidia.gds.v1.ListRoutersResponse
-	36, // 93: nvidia.gds.v1.PoolService.WatchRouters:output_type -> nvidia.gds.v1.WatchRoutersResponse
-	82, // [82:94] is the sub-list for method output_type
-	70, // [70:82] is the sub-list for method input_type
-	70, // [70:70] is the sub-list for extension type_name
-	70, // [70:70] is the sub-list for extension extendee
-	0,  // [0:70] is the sub-list for field type_name
+	45, // 24: nvidia.gds.v1.Pool.lease:type_name -> nvidia.gds.v1.Lease
+	46, // 25: nvidia.gds.v1.Pool.registered_at:type_name -> google.protobuf.Timestamp
+	46, // 26: nvidia.gds.v1.Pool.updated_at:type_name -> google.protobuf.Timestamp
+	47, // 27: nvidia.gds.v1.Pool.endpoints:type_name -> nvidia.gds.v1.ClusterEndpoints
+	6,  // 28: nvidia.gds.v1.Pool.agents:type_name -> nvidia.gds.v1.PoolAgent
+	48, // 29: nvidia.gds.v1.RouterReplica.address_type:type_name -> nvidia.gds.v1.AddressType
+	49, // 30: nvidia.gds.v1.Router.type:type_name -> nvidia.gds.v1.ServiceType
+	50, // 31: nvidia.gds.v1.Router.cluster_lease_state:type_name -> nvidia.gds.v1.LeaseState
+	12, // 32: nvidia.gds.v1.Router.replicas:type_name -> nvidia.gds.v1.RouterReplica
+	42, // 33: nvidia.gds.v1.Router.labels:type_name -> nvidia.gds.v1.Router.LabelsEntry
+	43, // 34: nvidia.gds.v1.Router.annotations:type_name -> nvidia.gds.v1.Router.AnnotationsEntry
+	51, // 35: nvidia.gds.v1.Router.ports:type_name -> nvidia.gds.v1.ServicePort
+	4,  // 36: nvidia.gds.v1.Router.router_mode:type_name -> nvidia.gds.v1.RouterMode
+	11, // 37: nvidia.gds.v1.RegisterPoolRequest.pool:type_name -> nvidia.gds.v1.Pool
+	52, // 38: nvidia.gds.v1.RegisterPoolRequest.lease_ttl:type_name -> google.protobuf.Duration
+	11, // 39: nvidia.gds.v1.RegisterPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	46, // 40: nvidia.gds.v1.RegisterPoolResponse.server_time:type_name -> google.protobuf.Timestamp
+	11, // 41: nvidia.gds.v1.UpdatePoolRequest.pool:type_name -> nvidia.gds.v1.Pool
+	53, // 42: nvidia.gds.v1.UpdatePoolRequest.update_mask:type_name -> google.protobuf.FieldMask
+	11, // 43: nvidia.gds.v1.UpdatePoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	0,  // 44: nvidia.gds.v1.HeartbeatPoolRequest.desired_state:type_name -> nvidia.gds.v1.PoolState
+	45, // 45: nvidia.gds.v1.HeartbeatPoolResponse.lease:type_name -> nvidia.gds.v1.Lease
+	0,  // 46: nvidia.gds.v1.HeartbeatPoolResponse.state:type_name -> nvidia.gds.v1.PoolState
+	46, // 47: nvidia.gds.v1.HeartbeatPoolResponse.server_time:type_name -> google.protobuf.Timestamp
+	6,  // 48: nvidia.gds.v1.RegisterPoolAgentRequest.agent:type_name -> nvidia.gds.v1.PoolAgent
+	52, // 49: nvidia.gds.v1.RegisterPoolAgentRequest.lease_ttl:type_name -> google.protobuf.Duration
+	6,  // 50: nvidia.gds.v1.RegisterPoolAgentResponse.agent:type_name -> nvidia.gds.v1.PoolAgent
+	5,  // 51: nvidia.gds.v1.RegisterPoolAgentResponse.registration:type_name -> nvidia.gds.v1.PoolAgentRegistration
+	0,  // 52: nvidia.gds.v1.RegisterPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
+	46, // 53: nvidia.gds.v1.RegisterPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
+	1,  // 54: nvidia.gds.v1.HeartbeatPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
+	44, // 55: nvidia.gds.v1.HeartbeatPoolAgentRequest.attributes:type_name -> nvidia.gds.v1.HeartbeatPoolAgentRequest.AttributesEntry
+	45, // 56: nvidia.gds.v1.HeartbeatPoolAgentResponse.lease:type_name -> nvidia.gds.v1.Lease
+	0,  // 57: nvidia.gds.v1.HeartbeatPoolAgentResponse.pool_state:type_name -> nvidia.gds.v1.PoolState
+	46, // 58: nvidia.gds.v1.HeartbeatPoolAgentResponse.server_time:type_name -> google.protobuf.Timestamp
+	1,  // 59: nvidia.gds.v1.DeregisterPoolAgentRequest.role:type_name -> nvidia.gds.v1.FrontendRole
+	11, // 60: nvidia.gds.v1.GetPoolResponse.pool:type_name -> nvidia.gds.v1.Pool
+	0,  // 61: nvidia.gds.v1.ListPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
+	54, // 62: nvidia.gds.v1.ListPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
+	11, // 63: nvidia.gds.v1.ListPoolsResponse.pools:type_name -> nvidia.gds.v1.Pool
+	0,  // 64: nvidia.gds.v1.WatchPoolsRequest.states:type_name -> nvidia.gds.v1.PoolState
+	54, // 65: nvidia.gds.v1.WatchPoolsRequest.selector:type_name -> nvidia.gds.v1.LabelSelector
+	55, // 66: nvidia.gds.v1.WatchPoolsResponse.type:type_name -> nvidia.gds.v1.EventType
+	11, // 67: nvidia.gds.v1.WatchPoolsResponse.pool:type_name -> nvidia.gds.v1.Pool
+	13, // 68: nvidia.gds.v1.ListRoutersResponse.routers:type_name -> nvidia.gds.v1.Router
+	55, // 69: nvidia.gds.v1.WatchRoutersResponse.type:type_name -> nvidia.gds.v1.EventType
+	13, // 70: nvidia.gds.v1.WatchRoutersResponse.router:type_name -> nvidia.gds.v1.Router
+	14, // 71: nvidia.gds.v1.PoolService.RegisterPool:input_type -> nvidia.gds.v1.RegisterPoolRequest
+	16, // 72: nvidia.gds.v1.PoolService.UpdatePool:input_type -> nvidia.gds.v1.UpdatePoolRequest
+	18, // 73: nvidia.gds.v1.PoolService.HeartbeatPool:input_type -> nvidia.gds.v1.HeartbeatPoolRequest
+	20, // 74: nvidia.gds.v1.PoolService.DeregisterPool:input_type -> nvidia.gds.v1.DeregisterPoolRequest
+	22, // 75: nvidia.gds.v1.PoolService.RegisterPoolAgent:input_type -> nvidia.gds.v1.RegisterPoolAgentRequest
+	24, // 76: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:input_type -> nvidia.gds.v1.HeartbeatPoolAgentRequest
+	26, // 77: nvidia.gds.v1.PoolService.DeregisterPoolAgent:input_type -> nvidia.gds.v1.DeregisterPoolAgentRequest
+	28, // 78: nvidia.gds.v1.PoolService.GetPool:input_type -> nvidia.gds.v1.GetPoolRequest
+	30, // 79: nvidia.gds.v1.PoolService.ListPools:input_type -> nvidia.gds.v1.ListPoolsRequest
+	32, // 80: nvidia.gds.v1.PoolService.WatchPools:input_type -> nvidia.gds.v1.WatchPoolsRequest
+	34, // 81: nvidia.gds.v1.PoolService.ListRouters:input_type -> nvidia.gds.v1.ListRoutersRequest
+	36, // 82: nvidia.gds.v1.PoolService.WatchRouters:input_type -> nvidia.gds.v1.WatchRoutersRequest
+	15, // 83: nvidia.gds.v1.PoolService.RegisterPool:output_type -> nvidia.gds.v1.RegisterPoolResponse
+	17, // 84: nvidia.gds.v1.PoolService.UpdatePool:output_type -> nvidia.gds.v1.UpdatePoolResponse
+	19, // 85: nvidia.gds.v1.PoolService.HeartbeatPool:output_type -> nvidia.gds.v1.HeartbeatPoolResponse
+	21, // 86: nvidia.gds.v1.PoolService.DeregisterPool:output_type -> nvidia.gds.v1.DeregisterPoolResponse
+	23, // 87: nvidia.gds.v1.PoolService.RegisterPoolAgent:output_type -> nvidia.gds.v1.RegisterPoolAgentResponse
+	25, // 88: nvidia.gds.v1.PoolService.HeartbeatPoolAgent:output_type -> nvidia.gds.v1.HeartbeatPoolAgentResponse
+	27, // 89: nvidia.gds.v1.PoolService.DeregisterPoolAgent:output_type -> nvidia.gds.v1.DeregisterPoolAgentResponse
+	29, // 90: nvidia.gds.v1.PoolService.GetPool:output_type -> nvidia.gds.v1.GetPoolResponse
+	31, // 91: nvidia.gds.v1.PoolService.ListPools:output_type -> nvidia.gds.v1.ListPoolsResponse
+	33, // 92: nvidia.gds.v1.PoolService.WatchPools:output_type -> nvidia.gds.v1.WatchPoolsResponse
+	35, // 93: nvidia.gds.v1.PoolService.ListRouters:output_type -> nvidia.gds.v1.ListRoutersResponse
+	37, // 94: nvidia.gds.v1.PoolService.WatchRouters:output_type -> nvidia.gds.v1.WatchRoutersResponse
+	83, // [83:95] is the sub-list for method output_type
+	71, // [71:83] is the sub-list for method input_type
+	71, // [71:71] is the sub-list for extension type_name
+	71, // [71:71] is the sub-list for extension extendee
+	0,  // [0:71] is the sub-list for field type_name
 }
 
 func init() { file_nvidia_gds_v1_pool_proto_init() }
@@ -3422,7 +3536,7 @@ func file_nvidia_gds_v1_pool_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nvidia_gds_v1_pool_proto_rawDesc), len(file_nvidia_gds_v1_pool_proto_rawDesc)),
-			NumEnums:      4,
+			NumEnums:      5,
 			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,

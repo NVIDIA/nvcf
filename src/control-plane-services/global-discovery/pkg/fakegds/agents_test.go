@@ -124,6 +124,55 @@ func TestRoutersQUICPortAndPorts(t *testing.T) {
 	assert.Equal(t, api.DefaultGRPCPortName, c3.GetPorts()[0].GetName())
 }
 
+func TestRoutersDirectMode(t *testing.T) {
+	srv, c := start(t)
+	srv.EnsureCluster(cs, "a", "us-east-1")
+	// A StatefulSet keeps hostnames; a Deployment's pods have only their
+	// names as targetRef.name; the third endpoint has neither.
+	eps := fakegds.WithPodNames(
+		fakegds.WithHostnames(fakegds.ReadyEndpoints("10.0.0.1", "10.0.0.2", "10.0.0.3"), "stargate-0"),
+		"stargate-0-pod", "stargate-7f9c-abcde")
+	srv.PutExport(cs, "a", "llm", "stargate", fakegds.RouterSpecDirect(50071, 50072, "http", "{pod_name}.stargate.example.com"), eps)
+	srv.PutExport(cs, "a", "llm", "backend", fakegds.WithRouterMode(fakegds.RouterSpec(50071, 0, ""), " Backend-Router ", ""), nil)
+	srv.PutExport(cs, "a", "llm", "legacy", fakegds.RouterSpec(50071, 0, ""), nil)
+	srv.PutExport(cs, "a", "llm", "unknown", fakegds.WithRouterMode(fakegds.RouterSpec(50071, 0, ""), "k8s-router", " raw "), nil)
+
+	routers, err := c.pools.ListRouters(ctx(t), &gdsv1.ListRoutersRequest{Clusterset: cs})
+	require.NoError(t, err)
+	require.Len(t, routers.GetRouters(), 4)
+	byName := map[string]*gdsv1.Router{}
+	for _, r := range routers.GetRouters() {
+		byName[r.GetName()] = r
+	}
+
+	d := byName["stargate"]
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_DIRECT, d.GetRouterMode())
+	assert.Equal(t, "{pod_name}.stargate.example.com", d.GetHostnameTemplate())
+	assert.Equal(t, api.RouterModeDirect, d.GetAnnotations()[api.AnnotationRouterMode])
+	assert.Equal(t, gdsv1.SessionAffinity_SESSION_AFFINITY_NONE, fakegds.RouterSpecDirect(1, 0, "", "").GetSessionAffinity())
+	assert.Equal(t, int32(50071), d.GetGrpcPort())
+	assert.Equal(t, int32(50072), d.GetQuicPort())
+	assert.Zero(t, d.GetHttpPort())
+	require.Len(t, d.GetReplicas(), 3)
+	assert.Equal(t, "stargate-0", d.GetReplicas()[0].GetIdentity(), "the hostname wins over targetRef.name")
+	assert.Equal(t, "stargate-7f9c-abcde", d.GetReplicas()[1].GetIdentity())
+	assert.Empty(t, d.GetReplicas()[1].GetHostname())
+	assert.Empty(t, d.GetReplicas()[2].GetIdentity())
+	assert.Equal(t, "stargate-0.stargate.example.com:50071",
+		api.ReplicaAuthority(d.GetHostnameTemplate(), d.GetReplicas()[0].GetIdentity(), d.GetGrpcPort()))
+
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER, byName["backend"].GetRouterMode())
+	assert.Empty(t, byName["backend"].GetHostnameTemplate())
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, byName["legacy"].GetRouterMode())
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, byName["unknown"].GetRouterMode())
+	assert.Equal(t, " raw ", byName["unknown"].GetHostnameTemplate(), "the template is passed through verbatim")
+
+	// Clearing the mode removes the annotations.
+	spec := fakegds.WithRouterMode(fakegds.RouterSpecDirect(50071, 0, "", "{pod_name}.x"), "", "")
+	assert.Empty(t, spec.GetAnnotations())
+	assert.Len(t, fakegds.WithHostnames(fakegds.ReadyEndpoints("10.0.0.1"), "a", "b"), 1, "extra names are ignored")
+}
+
 func TestPylonExportPool(t *testing.T) {
 	srv, c := start(t, fakegds.WithRefreshInterval(0))
 	srv.EnsureCluster(cs, "a", "us-east-1")

@@ -355,3 +355,56 @@ func TestRouterStateRelayURLsAndQUICAddrs(t *testing.T) {
 	assert.Equal(t, st.SeedURLs(), st.RelayURLs())
 	assert.Empty(t, (&RouterState{}).RelayURLs())
 }
+
+func TestRouterReplicaAuthority(t *testing.T) {
+	r := &gdsv1.Router{
+		GrpcPort: 50071, RouterMode: gdsv1.RouterMode_ROUTER_MODE_DIRECT, HostnameTemplate: "{pod_name}.stargate.example.com",
+	}
+	rep := &gdsv1.RouterReplica{Address: "10.0.0.1", Ready: true, Identity: "stargate-0"}
+	assert.True(t, RouterIsDirect(r))
+	assert.Equal(t, "stargate-0.stargate.example.com:50071", RouterReplicaAuthority(r, rep))
+	assert.Equal(t, "stargate-0.stargate.example.com:50071", RouterReplicaAuthority(r, &gdsv1.RouterReplica{Identity: "stargate-0"}),
+		"readiness is not checked")
+	assert.Empty(t, RouterReplicaAuthority(r, &gdsv1.RouterReplica{Address: "10.0.0.2"}), "no identity")
+	assert.Empty(t, RouterReplicaAuthority(r, nil), "no replica")
+	assert.Empty(t, RouterReplicaAuthority(&gdsv1.Router{RouterMode: r.RouterMode, HostnameTemplate: r.HostnameTemplate}, rep), "no gRPC port")
+	assert.Empty(t, RouterReplicaAuthority(&gdsv1.Router{RouterMode: r.RouterMode, GrpcPort: 1}, rep), "no template")
+	assert.Empty(t, RouterReplicaAuthority(&gdsv1.Router{RouterMode: r.RouterMode, GrpcPort: 1, HostnameTemplate: "stargate.example.com"}, rep),
+		"no placeholder")
+
+	for _, mode := range []gdsv1.RouterMode{gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER} {
+		other := &gdsv1.Router{GrpcPort: 50071, RouterMode: mode, HostnameTemplate: r.HostnameTemplate}
+		assert.False(t, RouterIsDirect(other), mode.String())
+		assert.Empty(t, RouterReplicaAuthority(other, rep), "%s replicas are k8s-router pods, not authorities", mode)
+	}
+	assert.False(t, RouterIsDirect(nil))
+	assert.Empty(t, RouterReplicaAuthority(nil, rep))
+}
+
+func TestRouterCacheDirectMode(t *testing.T) {
+	f := startFake(t, "r")
+	eps := fakegds.WithPodNames(fakegds.WithHostnames(fakegds.ReadyEndpoints("10.0.0.1", "10.0.0.2"), "stargate-0"), "", "stargate-7f9c-abcde")
+	f.srv.PutExport(testClusterset, "a", "llm", "stargate", fakegds.RouterSpecDirect(50071, 50072, "http", "{pod_name}.a.example.com"), eps)
+	f.srv.PutExport(testClusterset, "b", "llm", "backend-router", fakegds.RouterSpec(50071, 0, "http"), fakegds.ReadyEndpoints("10.1.0.1"))
+	c := newTestClient(t, Config{URLs: []string{f.url("127.0.0.1")}})
+	rc, err := NewRouterCache(c, RouterCacheConfig{Filter: &gdsv1.ListRoutersRequest{Clusterset: testClusterset}, TTL: time.Hour})
+	require.NoError(t, err)
+	runCache(t, rc.Run)
+	require.NoError(t, rc.WaitSynced(testCtx(t)))
+	st := rc.Snapshot()
+	require.Len(t, st.Routers, 2)
+
+	direct := st.ByCluster("a")[0]
+	require.True(t, RouterIsDirect(direct))
+	var authorities []string
+	for _, rep := range direct.GetReplicas() {
+		authorities = append(authorities, RouterReplicaAuthority(direct, rep))
+	}
+	assert.Equal(t, []string{"stargate-0.a.example.com:50071", "stargate-7f9c-abcde.a.example.com:50071"}, authorities)
+	assert.Equal(t, []string{"http://10.0.0.1:50071", "http://10.0.0.2:50071"}, st.RouterSeedURLs(direct),
+		"seeds stay replica addresses in direct mode")
+
+	backend := st.ByCluster("b")[0]
+	assert.False(t, RouterIsDirect(backend))
+	assert.Empty(t, RouterReplicaAuthority(backend, backend.GetReplicas()[0]))
+}

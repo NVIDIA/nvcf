@@ -40,6 +40,8 @@ func TestWellKnownKeys(t *testing.T) {
 		AnnotationHTTPPortName:      "gds.nvidia.com/http-port-name",
 		AnnotationQUICPortName:      "gds.nvidia.com/quic-port-name",
 		AnnotationRoles:             "gds.nvidia.com/roles",
+		AnnotationHostnameTemplate:  "gds.nvidia.com/hostname-template",
+		AnnotationRouterMode:        "gds.nvidia.com/router-mode",
 		LabelManagedBy:              "gds.nvidia.com/managed-by",
 		LabelClusterSet:             "gds.nvidia.com/clusterset",
 		LabelPoolID:                 "gds.nvidia.com/pool-id",
@@ -60,6 +62,10 @@ func TestWellKnownKeys(t *testing.T) {
 	assert.Equal(t, "kv-relay", RoleKVRelay)
 	assert.Equal(t, "pylon", RolePylon)
 	assert.Equal(t, "quic", DefaultQUICPortName)
+	assert.Equal(t, "backend-router", RouterModeBackendRouter)
+	assert.Equal(t, "direct", RouterModeDirect)
+	assert.Equal(t, "{pod_name}", PodNamePlaceholder)
+	assert.Equal(t, "targetRef.name", EndpointAttrTargetName)
 	assert.Equal(t, "gds-mcs-controller", ManagedByController)
 	assert.Equal(t, "gds-mcs-controller.gds.nvidia.com", EndpointSliceManagedBy)
 	assert.Equal(t, "clusterset.k8s.io", ClusterPropertyClusterSet)
@@ -74,6 +80,7 @@ func TestKeysAreQualifiedNames(t *testing.T) {
 	keys := []string{
 		LabelExport, LabelRole, LabelPool, AnnotationPoolModels, AnnotationHardwareClass,
 		AnnotationDC, AnnotationDialScheme, AnnotationGRPCPortName, AnnotationHTTPPortName,
+		AnnotationQUICPortName, AnnotationRoles, AnnotationHostnameTemplate, AnnotationRouterMode,
 		LabelManagedBy, LabelClusterSet, LabelPoolID, FinalizerServiceExport,
 		LabelEndpointSliceManagedBy, LabelKubernetesServiceName, LabelMCSServiceName,
 		LabelMCSSourceCluster, AnnotationMCSDerivedService,
@@ -88,7 +95,8 @@ func TestKeysAreQualifiedNames(t *testing.T) {
 		}
 	}
 	// Label values must be at most 63 characters as well.
-	for _, v := range []string{ManagedByController, EndpointSliceManagedBy, RoleRouter, RolePoolFrontend, RoleKVRelay} {
+	for _, v := range []string{ManagedByController, EndpointSliceManagedBy, RoleRouter, RolePoolFrontend, RoleKVRelay,
+		RolePylon, RouterModeBackendRouter, RouterModeDirect} {
 		assert.Regexp(t, name, v)
 		assert.LessOrEqual(t, len(v), 63, v)
 	}
@@ -178,4 +186,62 @@ func TestPortNames(t *testing.T) {
 
 	assert.Equal(t, "quic", QUICPortName(nil))
 	assert.Equal(t, "tunnel", QUICPortName(map[string]string{AnnotationQUICPortName: " tunnel "}))
+}
+
+func TestRouterModeOf(t *testing.T) {
+	tests := []struct {
+		in   map[string]string
+		want string
+	}{
+		{nil, ""},
+		{map[string]string{}, ""},
+		{map[string]string{AnnotationRouterMode: ""}, ""},
+		{map[string]string{AnnotationRouterMode: "direct"}, RouterModeDirect},
+		{map[string]string{AnnotationRouterMode: " Direct "}, RouterModeDirect},
+		{map[string]string{AnnotationRouterMode: "backend-router"}, RouterModeBackendRouter},
+		{map[string]string{AnnotationRouterMode: "BACKEND-ROUTER"}, RouterModeBackendRouter},
+		{map[string]string{AnnotationRouterMode: "backend_router"}, ""},
+		{map[string]string{AnnotationRouterMode: "k8s-router"}, ""},
+		{map[string]string{"router-mode": "direct"}, ""},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, RouterModeOf(tt.in), "%v", tt.in)
+	}
+}
+
+func TestReplicaIdentity(t *testing.T) {
+	attrs := map[string]string{EndpointAttrTargetName: "stargate-7f9c-abcde", "targetRef.kind": "Pod"}
+	assert.Equal(t, "stargate-0", ReplicaIdentity("stargate-0", attrs), "the hostname wins")
+	assert.Equal(t, "stargate-7f9c-abcde", ReplicaIdentity("", attrs))
+	assert.Equal(t, "stargate-7f9c-abcde", ReplicaIdentity("  ", attrs))
+	assert.Equal(t, "stargate-1", ReplicaIdentity(" stargate-1 ", nil))
+	assert.Empty(t, ReplicaIdentity("", map[string]string{"targetRef.kind": "Pod"}))
+	assert.Empty(t, ReplicaIdentity("", map[string]string{EndpointAttrTargetName: " "}))
+	assert.Empty(t, ReplicaIdentity("", nil))
+}
+
+func TestReplicaAuthority(t *testing.T) {
+	tests := []struct {
+		template, identity string
+		port               int32
+		want               string
+	}{
+		{"{pod_name}.stargate.example.com", "stargate-0", 50071, "stargate-0.stargate.example.com:50071"},
+		{" {pod_name}.llm.svc.cluster.local ", " stargate-1 ", 443, "stargate-1.llm.svc.cluster.local:443"},
+		{"sg-{pod_name}-eu.example.com", "abc", 1, "sg-abc-eu.example.com:1"},
+		{"{pod_name}", "stargate-0", 65535, "stargate-0:65535"},
+		{"", "stargate-0", 50071, ""},
+		{"  ", "stargate-0", 50071, ""},
+		{"{pod_name}.example.com", "", 50071, ""},
+		{"{pod_name}.example.com", " ", 50071, ""},
+		{"stargate.example.com", "stargate-0", 50071, ""},
+		{"{pod_name}.{pod_name}.example.com", "stargate-0", 50071, ""},
+		{"{POD_NAME}.example.com", "stargate-0", 50071, ""},
+		{"{pod_name}.example.com", "stargate-0", 0, ""},
+		{"{pod_name}.example.com", "stargate-0", -1, ""},
+		{"{pod_name}.example.com", "stargate-0", 65536, ""},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, ReplicaAuthority(tt.template, tt.identity, tt.port), "%q %q %d", tt.template, tt.identity, tt.port)
+	}
 }

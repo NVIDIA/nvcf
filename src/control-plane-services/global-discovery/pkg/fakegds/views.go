@@ -216,6 +216,18 @@ func portByName(ports []*gdsv1.ServicePort, name string) int32 {
 	return 0
 }
 
+// routerMode maps the gds.nvidia.com/router-mode annotation as the server
+// does; absent and unknown values are ROUTER_MODE_UNSPECIFIED.
+func routerMode(annotations map[string]string) gdsv1.RouterMode {
+	switch api.RouterModeOf(annotations) {
+	case api.RouterModeBackendRouter:
+		return gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER
+	case api.RouterModeDirect:
+		return gdsv1.RouterMode_ROUTER_MODE_DIRECT
+	}
+	return gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED
+}
+
 func routersView(cs *clusterSet, active map[string]bool, region map[string]string) map[string]*gdsv1.Router {
 	out := map[string]*gdsv1.Router{}
 	for key, e := range cs.exports {
@@ -241,6 +253,8 @@ func routersView(cs *clusterSet, active map[string]bool, region map[string]strin
 			DialScheme:        spec.GetAnnotations()[api.AnnotationDialScheme],
 			Labels:            maps.Clone(spec.GetLabels()),
 			Annotations:       maps.Clone(spec.GetAnnotations()),
+			RouterMode:        routerMode(spec.GetAnnotations()),
+			HostnameTemplate:  spec.GetAnnotations()[api.AnnotationHostnameTemplate],
 		}
 		for _, port := range spec.GetPorts() {
 			r.Ports = append(r.Ports, proto.CloneOf(port))
@@ -254,6 +268,7 @@ func routersView(cs *clusterSet, active map[string]bool, region map[string]strin
 						Ready:       ep.GetConditions().GetReady(),
 						Hostname:    ep.GetHostname(),
 						Zone:        ep.GetZone(),
+						Identity:    api.ReplicaIdentity(ep.GetHostname(), ep.GetAttributes()),
 					})
 				}
 			}

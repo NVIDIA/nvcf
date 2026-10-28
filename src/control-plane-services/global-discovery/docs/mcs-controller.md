@@ -174,6 +174,10 @@ like any other: their `gds.nvidia.com/*` labels and annotations are
 forwarded as they are (step 3 of the ServiceExport reconciler), and GDS
 derives the pool agents, `kv_relay_live`, `ready_ingress_count` and the
 router ports from them. New role values need no controller change.
+The direct router mode annotations `gds.nvidia.com/router-mode` and
+`gds.nvidia.com/hostname-template` are forwarded the same way, and GDS takes
+each router replica's identity from the endpoint hostname or the
+`targetRef.name` attribute the controller already exports.
 
 ### Pool exports
 
@@ -256,7 +260,7 @@ the controller never deletes namespaces.
 | Key | On | Value |
 | :---- | :---- | :---- |
 | `gds.nvidia.com/export` | Service | `"true"` enables label-driven export |
-| `gds.nvidia.com/role` (`router`, `pool-frontend`, `kv-relay`, `pylon`), `gds.nvidia.com/pool` and the `gds.nvidia.com/*` annotations (`gds.nvidia.com/roles` and `gds.nvidia.com/quic-port-name` included) | Service | Forwarded to GDS as exported labels and annotations |
+| `gds.nvidia.com/role` (`router`, `pool-frontend`, `kv-relay`, `pylon`), `gds.nvidia.com/pool` and the `gds.nvidia.com/*` annotations (`gds.nvidia.com/roles`, `gds.nvidia.com/quic-port-name`, `gds.nvidia.com/router-mode` and `gds.nvidia.com/hostname-template` included) | Service | Forwarded to GDS as exported labels and annotations |
 | `gds.nvidia.com/managed-by` | ServiceExports, ServiceImports, derived Services, slices, namespaces the controller creates | `gds-mcs-controller` |
 | `gds.nvidia.com/clusterset` | same | the clusterset |
 | `gds.nvidia.com/pool-id` | pool ServiceExports | the pool id |

@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -83,6 +84,15 @@ const (
 	// non-empty it replaces LabelRole for pool derivation. RoleRouter is not
 	// allowed in it.
 	AnnotationRoles = Prefix + "roles"
+	// AnnotationHostnameTemplate on a router export is the template of a
+	// router replica's identity (gRPC authority, QUIC SNI, TLS name) with
+	// one PodNamePlaceholder, for example {pod_name}.stargate.example.com
+	// (the router chart's advertisedHostnameTemplate). See ReplicaAuthority.
+	AnnotationHostnameTemplate = Prefix + "hostname-template"
+	// AnnotationRouterMode on a router export says what its replicas are:
+	// RouterModeBackendRouter or RouterModeDirect. Absent means
+	// RouterModeBackendRouter.
+	AnnotationRouterMode = Prefix + "router-mode"
 )
 
 // Values and defaults of the annotations above.
@@ -96,7 +106,26 @@ const (
 	DefaultHTTPPortName = "http"
 	// DefaultQUICPortName is used when AnnotationQUICPortName is absent.
 	DefaultQUICPortName = "quic"
+
+	// RouterModeBackendRouter: the router replicas are stargate-k8s-router
+	// pods that forward registration by authority and the QUIC tunnel by SNI
+	// to the Stargate pods of their cluster. The mode of router exports
+	// without AnnotationRouterMode.
+	RouterModeBackendRouter = "backend-router"
+	// RouterModeDirect: the router replicas are the Stargate pods
+	// themselves; a pylon dials each one at its address with the authority
+	// from ReplicaAuthority.
+	RouterModeDirect = "direct"
+
+	// PodNamePlaceholder is replaced by a replica's identity in
+	// AnnotationHostnameTemplate.
+	PodNamePlaceholder = "{pod_name}"
 )
+
+// EndpointAttrTargetName is the endpoint attribute holding the name of the
+// endpoint's target reference (the pod name). The gds-mcs-controller sets it
+// from the EndpointSlice endpoint's targetRef.
+const EndpointAttrTargetName = "targetRef.name"
 
 // Labels and finalizers on objects the gds-mcs-controller creates.
 const (
@@ -234,4 +263,43 @@ func QUICPortName(annotations map[string]string) string {
 		return v
 	}
 	return DefaultQUICPortName
+}
+
+// RouterModeOf returns the router mode of a router export from its
+// annotations: RouterModeBackendRouter or RouterModeDirect, matched after
+// trimming spaces and ignoring case, or "" when AnnotationRouterMode is
+// absent or holds another value. Callers treat "" as
+// RouterModeBackendRouter.
+func RouterModeOf(annotations map[string]string) string {
+	switch m := strings.ToLower(strings.TrimSpace(annotations[AnnotationRouterMode])); m {
+	case RouterModeBackendRouter, RouterModeDirect:
+		return m
+	}
+	return ""
+}
+
+// ReplicaIdentity returns the pod identity of a router replica from its
+// endpoint: the endpoint hostname when set, else the EndpointAttrTargetName
+// attribute, else "". Spaces are trimmed.
+func ReplicaIdentity(hostname string, attributes map[string]string) string {
+	if h := strings.TrimSpace(hostname); h != "" {
+		return h
+	}
+	return strings.TrimSpace(attributes[EndpointAttrTargetName])
+}
+
+// ReplicaAuthority returns the authority of a router replica,
+// <template with {pod_name} replaced by identity>:<port>, for example
+// stargate-0.stargate.example.com:50071. It is the replica's gRPC
+// authority; the host part is its QUIC SNI and TLS name. It returns ""
+// when template or identity is empty after trimming spaces, when template
+// does not contain PodNamePlaceholder exactly once, or when port is not in
+// 1..65535. The host is a DNS name, never bracketed.
+func ReplicaAuthority(template, identity string, port int32) string {
+	template, identity = strings.TrimSpace(template), strings.TrimSpace(identity)
+	if template == "" || identity == "" || port <= 0 || port > 65535 ||
+		strings.Count(template, PodNamePlaceholder) != 1 {
+		return ""
+	}
+	return strings.Replace(template, PodNamePlaceholder, identity, 1) + ":" + strconv.Itoa(int(port))
 }

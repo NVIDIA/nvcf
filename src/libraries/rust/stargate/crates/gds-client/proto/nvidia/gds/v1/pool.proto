@@ -337,6 +337,25 @@ message Pool {
   int32 ready_ingress_count = 23;
 }
 
+// RouterMode says what the replicas of a Router are, from the export
+// annotation gds.nvidia.com/router-mode.
+enum RouterMode {
+  // The annotation is absent or has an unknown value. Clients treat it as
+  // ROUTER_MODE_BACKEND_ROUTER, the mode of exports made before router
+  // modes existed.
+  ROUTER_MODE_UNSPECIFIED = 0;
+  // Annotation value backend-router: the replicas are stargate-k8s-router
+  // pods that forward registration by authority and the QUIC tunnel by SNI
+  // to the Stargate pods of their cluster. A pylon learns the per-pod
+  // authorities from WatchStargates; replica identities are k8s-router pod
+  // names and are not authorities.
+  ROUTER_MODE_BACKEND_ROUTER = 1;
+  // Annotation value direct: the replicas are the Stargate pods themselves
+  // and a pylon dials each one. A replica's authority, QUIC SNI and TLS
+  // name are hostname_template with {pod_name} replaced by its identity.
+  ROUTER_MODE_DIRECT = 2;
+}
+
 // RouterReplica is one endpoint of a router Service.
 message RouterReplica {
   string address = 1;
@@ -344,6 +363,14 @@ message RouterReplica {
   bool ready = 3;
   string hostname = 4;
   string zone = 5;
+  // Pod identity of the replica: the EndpointSlice endpoint hostname when
+  // set, else the pod name the MCS controller exports as the endpoint
+  // attribute targetRef.name, else empty. In direct mode a client forms the
+  // replica's authority as Router.hostname_template with {pod_name} replaced
+  // by the identity, plus ":" and Router.grpc_port (no authority when the
+  // template or the identity is empty). In backend-router mode the identity
+  // is a k8s-router pod name and not an authority.
+  string identity = 6;
 }
 
 // Router is derived from one export labelled gds.nvidia.com/role=router, one
@@ -374,6 +401,18 @@ message Router {
   // Every port of the exported Service, for consumers whose protocol GDS
   // does not name.
   repeated ServicePort ports = 14;
+  // From the annotation gds.nvidia.com/router-mode (backend-router or
+  // direct, case-insensitive); ROUTER_MODE_UNSPECIFIED when the annotation
+  // is absent or unknown. Clients treat ROUTER_MODE_UNSPECIFIED as
+  // ROUTER_MODE_BACKEND_ROUTER for compatibility.
+  RouterMode router_mode = 15;
+  // The annotation gds.nvidia.com/hostname-template verbatim, for example
+  // {pod_name}.stargate.example.com; empty when absent. In direct mode a
+  // replica's authority is this template with its single {pod_name}
+  // replaced by RouterReplica.identity, plus ":" and grpc_port, for example
+  // stargate-0.stargate.example.com:50071. The same host is the QUIC SNI and
+  // the TLS name of the replica.
+  string hostname_template = 16;
 }
 
 message RegisterPoolRequest {

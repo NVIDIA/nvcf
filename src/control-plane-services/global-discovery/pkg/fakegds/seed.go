@@ -144,6 +144,36 @@ func RouterSpecWithQUIC(grpcPort, httpPort int32, dialScheme string, quicPort in
 	return spec
 }
 
+// RouterSpecDirect returns the export spec of a direct-mode router Service,
+// one that selects the Stargate pods themselves: RouterSpecWithQUIC without
+// an http port and without session affinity, annotated
+// gds.nvidia.com/router-mode=direct and gds.nvidia.com/hostname-template
+// (omitted when hostnameTemplate is empty). Give its endpoints identities
+// with WithHostnames or WithPodNames.
+func RouterSpecDirect(grpcPort, quicPort int32, dialScheme, hostnameTemplate string) *gdsv1.ServiceExportSpec {
+	spec := RouterSpecWithQUIC(grpcPort, 0, dialScheme, quicPort)
+	spec.SessionAffinity = gdsv1.SessionAffinity_SESSION_AFFINITY_NONE
+	return WithRouterMode(spec, api.RouterModeDirect, hostnameTemplate)
+}
+
+// WithRouterMode sets the gds.nvidia.com/router-mode annotation of spec to
+// mode and the gds.nvidia.com/hostname-template annotation to
+// hostnameTemplate; an empty value removes its annotation. It modifies and
+// returns spec.
+func WithRouterMode(spec *gdsv1.ServiceExportSpec, mode, hostnameTemplate string) *gdsv1.ServiceExportSpec {
+	for key, value := range map[string]string{api.AnnotationRouterMode: mode, api.AnnotationHostnameTemplate: hostnameTemplate} {
+		if value == "" {
+			delete(spec.Annotations, key)
+			continue
+		}
+		if spec.Annotations == nil {
+			spec.Annotations = map[string]string{}
+		}
+		spec.Annotations[key] = value
+	}
+	return spec
+}
+
 // PoolFrontendSpec returns the export spec of a pool frontend Service: role
 // pool-frontend, the pool label, an http port and the pool-models
 // annotation.
@@ -224,6 +254,37 @@ func ReadyEndpoints(addresses ...string) []*gdsv1.Endpoint {
 			AddressType: addressType(a),
 			Conditions:  &gdsv1.EndpointConditions{Ready: true, Serving: true},
 		})
+	}
+	return eps
+}
+
+// WithHostnames sets the EndpointSlice hostname of eps[i] to hostnames[i],
+// as a StatefulSet behind a headless Service has them. A router replica's
+// identity is its hostname when set. Extra names are ignored. It modifies
+// and returns eps.
+func WithHostnames(eps []*gdsv1.Endpoint, hostnames ...string) []*gdsv1.Endpoint {
+	for i := 0; i < len(eps) && i < len(hostnames); i++ {
+		eps[i].Hostname = hostnames[i]
+	}
+	return eps
+}
+
+// WithPodNames gives eps[i] the target reference attributes the
+// gds-mcs-controller exports for a pod named podNames[i]: targetRef.kind Pod
+// and targetRef.name (api.EndpointAttrTargetName). A router replica without
+// a hostname takes the pod name as its identity. An empty name leaves its
+// endpoint unchanged and extra names are ignored. It modifies and returns
+// eps.
+func WithPodNames(eps []*gdsv1.Endpoint, podNames ...string) []*gdsv1.Endpoint {
+	for i := 0; i < len(eps) && i < len(podNames); i++ {
+		if podNames[i] == "" {
+			continue
+		}
+		if eps[i].Attributes == nil {
+			eps[i].Attributes = map[string]string{}
+		}
+		eps[i].Attributes["targetRef.kind"] = "Pod"
+		eps[i].Attributes[api.EndpointAttrTargetName] = podNames[i]
 	}
 	return eps
 }

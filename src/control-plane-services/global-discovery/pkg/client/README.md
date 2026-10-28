@@ -342,6 +342,36 @@ streams over gRPC and uses `RelayURLs`:
 - `Router.Ports` lists every port of the exported Service with its name,
   protocol and number, for consumers whose protocol GDS does not name.
 
+### Router modes and replica authorities
+
+A Router record says what its replicas are (design 4.5), from the export
+annotation `gds.nvidia.com/router-mode`:
+
+- `ROUTER_MODE_BACKEND_ROUTER` (`backend-router`) and
+  `ROUTER_MODE_UNSPECIFIED` (annotation absent; treat it as backend-router):
+  the replicas are stargate-k8s-router pods. A pylon learns the per-pod
+  authorities from `WatchStargates`.
+- `ROUTER_MODE_DIRECT` (`direct`): the replicas are the Stargate pods. A
+  pylon dials each replica at its seed URL with the replica's own
+  authority.
+
+`RouterIsDirect(router)` is true for `ROUTER_MODE_DIRECT` only.
+`RouterReplicaAuthority(router, replica)` returns the authority of one
+replica of a direct-mode router:
+
+```text
+<hostname_template with {pod_name} replaced by replica.identity>:<grpc_port>
+```
+
+for example `stargate-0.stargate.example.com:50071`; its host is also the
+replica's QUIC SNI and TLS name. `hostname_template` is the annotation
+`gds.nvidia.com/hostname-template` and `identity` is the endpoint hostname,
+else the pod name (`targetRef.name`). The result is empty for a router that
+is not in direct mode, and when the template, the identity or the gRPC port
+is missing or the template does not contain `{pod_name}` exactly once.
+`api.ReplicaAuthority(template, identity, port)` is the same rule without
+the mode check.
+
 ## Pool agents
 
 A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
@@ -440,6 +470,11 @@ defer run.Stop()
 srv.PutExport("prod", "a", "llm", "backend-router", fakegds.RouterSpec(50071, 0, "https"), fakegds.ReadyEndpoints("10.0.0.1"))
 c, _ := client.New(ctx, client.Config{URLs: []string{run.URL()}, AllowInsecureHTTP: true})
 ```
+
+A direct-mode router is seeded with `fakegds.RouterSpecDirect(grpcPort,
+quicPort, scheme, hostnameTemplate)` (or `fakegds.WithRouterMode` on any
+router spec) and replica identities with `fakegds.WithHostnames` or
+`fakegds.WithPodNames` on the endpoints.
 
 `FailNext(method, code)` injects failures, `CloseWatches` ends open watches,
 `Running.Stop` drops a listener and `ServeAddr` restarts it on the same

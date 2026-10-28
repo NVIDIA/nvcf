@@ -140,6 +140,21 @@ Pylon dials the gRPC seeds only. Its QUIC tunnel goes to the address in the
 Stargate registration ack, so the router's `quic_port(router)` (annotation
 `gds.nvidia.com/quic-port-name`, default `quic`) is informational for it.
 
+A router's `router_mode` (annotation `gds.nvidia.com/router-mode`) says what
+its replicas are. In backend-router mode, and when the mode is unspecified,
+they are stargate-k8s-router pods and the per-pod authorities come from
+`WatchStargates`. In direct mode (`is_direct(router)`) they are the Stargate
+pods themselves, and `replica_authority(router, replica)` returns the
+authority to dial a replica's seed with: the router's `hostname_template`
+(annotation `gds.nvidia.com/hostname-template`) with `{pod_name}` replaced by
+the replica's `identity` (its EndpointSlice hostname, else its pod name),
+plus `:` and the gRPC port, for example
+`stargate-0.stargate.example.com:50071`. The host is also the replica's QUIC
+SNI and TLS name. It is `None` outside direct mode and when the template, the
+identity or the gRPC port is missing. `labels::replica_authority(template,
+identity, port)` is the same rule without the mode check, and
+`labels::router_mode_of(annotations)` normalises the annotation value.
+
 ### Pylon: pool agent registration
 
 With `--gds-pool-name` a pylon also registers itself as the PYLON agent of

@@ -488,6 +488,8 @@ func (cs *clusterSet) deriveRouters() map[string]*Object {
 			DialScheme:        DialScheme(r.Spec.Annotations),
 			Labels:            maps.Clone(r.Spec.Labels),
 			Annotations:       maps.Clone(r.Spec.Annotations),
+			RouterMode:        convert.RouterModeToProto(api.RouterModeOf(r.Spec.Annotations)),
+			HostnameTemplate:  r.Spec.Annotations[api.AnnotationHostnameTemplate],
 		}
 		if cs.leaseActive(r.Key.Cluster) {
 			if set, ok := cs.endpoints[r.Key]; ok {
@@ -497,6 +499,7 @@ func (cs *clusterSet) deriveRouters() map[string]*Object {
 						Ready:       e.Conditions.Ready,
 						Hostname:    e.Hostname,
 						Zone:        e.Zone,
+						Identity:    api.ReplicaIdentity(e.Hostname, e.Attributes),
 					}
 					if len(e.Addresses) > 0 {
 						replica.Address = e.Addresses[0]

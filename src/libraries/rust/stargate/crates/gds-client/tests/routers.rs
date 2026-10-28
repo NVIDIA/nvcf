@@ -19,10 +19,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gds_client::v1::{LeaseState, Router, RouterReplica};
+use gds_client::v1::{LeaseState, Router, RouterMode, RouterReplica};
 use gds_client::{
-    GdsClient, RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls,
-    quic_port, relay_seed_urls, remote_watch_urls, router_relay_urls, router_seed_urls,
+    GdsClient, RouterCache, RouterCacheConfig, RouterState, derived_service_url, is_direct,
+    pylon_seed_urls, quic_port, relay_seed_urls, remote_watch_urls, replica_authority,
+    router_relay_urls, router_seed_urls,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -286,6 +287,105 @@ fn routers_sharing_a_name_keep_their_own_seeds() {
         !pylon_seed_urls(&state).contains(&vip),
         "the derived VIP is not a seed"
     );
+}
+
+/// A direct-mode router: its replicas are Stargate pods with identities.
+fn direct(cluster: &str, template: &str, replicas: &[(&str, &str)]) -> Router {
+    let mut r = router(cluster, "llm", "stargate", "http", 50071);
+    r.router_mode = RouterMode::Direct as i32;
+    r.hostname_template = template.to_string();
+    r.replicas = replicas
+        .iter()
+        .map(|(address, identity)| RouterReplica {
+            identity: identity.to_string(),
+            ..replica(address, true)
+        })
+        .collect();
+    r
+}
+
+#[test]
+fn replica_authority_of_a_direct_router() {
+    let r = direct(
+        "a",
+        "{pod_name}.stargate.example.com",
+        &[
+            ("10.0.0.1", "stargate-0"),
+            ("10.0.0.2", "stargate-7f9c-abcde"),
+            ("10.0.0.3", ""),
+        ],
+    );
+    assert!(is_direct(&r));
+    let authorities: Vec<Option<String>> = r
+        .replicas
+        .iter()
+        .map(|replica| replica_authority(&r, replica))
+        .collect();
+    assert_eq!(
+        authorities,
+        vec![
+            Some("stargate-0.stargate.example.com:50071".to_string()),
+            Some("stargate-7f9c-abcde.stargate.example.com:50071".to_string()),
+            None,
+        ],
+        "a replica without identity has no authority"
+    );
+    assert_eq!(
+        router_seed_urls(&r),
+        vec![
+            "http://10.0.0.1:50071",
+            "http://10.0.0.2:50071",
+            "http://10.0.0.3:50071"
+        ],
+        "the seeds stay the replica addresses"
+    );
+
+    let mut not_ready = r.replicas[0].clone();
+    not_ready.ready = false;
+    assert_eq!(
+        replica_authority(&r, &not_ready).as_deref(),
+        Some("stargate-0.stargate.example.com:50071"),
+        "readiness is not checked"
+    );
+
+    let mut no_port = r.clone();
+    no_port.grpc_port = 0;
+    assert_eq!(
+        replica_authority(&no_port, &r.replicas[0]),
+        None,
+        "no gRPC port"
+    );
+    let mut no_template = r.clone();
+    no_template.hostname_template = String::new();
+    assert_eq!(
+        replica_authority(&no_template, &r.replicas[0]),
+        None,
+        "no template"
+    );
+    let mut no_placeholder = r.clone();
+    no_placeholder.hostname_template = "stargate.example.com".to_string();
+    assert_eq!(
+        replica_authority(&no_placeholder, &r.replicas[0]),
+        None,
+        "no placeholder"
+    );
+}
+
+#[test]
+fn backend_router_replicas_have_no_authority() {
+    for mode in [RouterMode::Unspecified, RouterMode::BackendRouter] {
+        let mut r = direct(
+            "a",
+            "{pod_name}.stargate.example.com",
+            &[("10.0.0.1", "router-0")],
+        );
+        r.router_mode = mode as i32;
+        assert!(!is_direct(&r), "{mode:?}");
+        assert_eq!(replica_authority(&r, &r.replicas[0]), None, "{mode:?}");
+    }
+    let mut unknown = direct("a", "{pod_name}.x", &[("10.0.0.1", "router-0")]);
+    unknown.router_mode = 42;
+    assert!(!is_direct(&unknown), "an unknown mode is not direct");
 }
 
 #[tokio::test(start_paused = true)]
