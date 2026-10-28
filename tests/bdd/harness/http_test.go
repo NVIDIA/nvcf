@@ -51,6 +51,22 @@ func TestNetHTTPClientSendsHeadersAndBody(t *testing.T) {
 	}
 }
 
+func TestNetHTTPClientRecordsResponseHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	resp, err := NewHTTPClient().Do(context.Background(), "POST", server.URL, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("retry-after"); got != "7" {
+		t.Fatalf("Retry-After = %q, want 7", got)
+	}
+}
+
 func TestNetHTTPClientDoesNotFollowRedirects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/elsewhere", http.StatusMovedPermanently)
