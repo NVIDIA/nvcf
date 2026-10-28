@@ -13,24 +13,53 @@ supported.
 This service discovers only closed segments. The highest indexed segment
 remains owned by the Dynamo writer.
 
-## Initial scaffold
+## How it works
 
-This initial implementation validates the sidecar configuration, verifies its
-secret-file mount, creates state and quarantine directories, exposes health,
-and verifies local segment discovery. It intentionally does not export logs,
-traces, or metrics, parse or transform records, submit uploads, poll remote
-status, delete source files, or publish a release image.
+`service.Uploader` runs the pipeline against a journal kept on the spool
+volume, so every step survives a restart.
+
+1. Startup: health answers at once and reports not ready. The uploader
+   takes the spool lock, waiting up to the drain timeout plus 10 seconds for
+   an earlier uploader. It loads the journal, removes what another uploader
+   left on the spool (patterns that linked modules register with
+   `foreign.Register`), repairs what a crash left, and reports ready. A
+   journal entry whose source it cannot identify keeps the process live and
+   not ready until an operator acts.
+2. Intake: each closed segment is fingerprinted (SHA-256) and recorded
+   before it is read. The highest indexed segment is never read or deleted.
+3. Record handling: suppression, then redaction, then the backend's format
+   writer. A backend chooses its transport format by implementing
+   `format.Factory` on its client; a backend that takes gzip JSON lines on
+   one destination gets the default writer.
+4. Batching: prepared segments are grouped per destination within the
+   backend's file and byte limits, and lanes are flushed every pass. A batch
+   is recorded before the backend is called, and a returned job id is saved
+   before the error is looked at.
+5. Polling: one loop polls every open job on the status interval. A job with
+   a saved id is polled, never submitted again. A job unfinished past the max
+   job age is kept as stranded. A status the core does not know is counted
+   in `unknown_status` and polled again.
+6. Cleanup: after success, transports are deleted, the source is re-hashed
+   if its size or modification time changed, and only then deleted. A
+   backend that does not export, such as `debug` or a dry run, never deletes
+   a source.
+7. Shutdown: on SIGTERM the uploader stops reading new segments, lets work
+   in progress finish, submits what is prepared, polls once more, and
+   releases the spool, all within the drain timeout. What is left stays in
+   the journal for the next start.
+
+Faults follow `internal/retry`: auth failures and outages hold every submit
+without moving a segment; a segment fault quarantines that segment after a
+batch is split to find it. A backend that records its own metrics implements
+`telemetry.Receiver` and gets the shared recorder.
 
 The `backend` package defines the export destination contract and a registry.
 Submit and status are separate operations so a slow confirmation cannot block
 other segments. Backends register themselves from an init function, so a build
-links only the backends it imports.
-
-This binary links no backend, so it reports the configured backend as not
-compiled in. That is what the `-oss` image ships. A distribution that needs a
-backend imports it in its own `main` and reuses the `config`, `segment`,
-`backend`, and `service` packages from this module. The real adapters and
-durable journal are separate follow-up work.
+links only the backends it imports. This binary links `debug` and
+`objectstore`. A distribution that needs another backend imports it in its own
+`main` and reuses the `config`, `backend`, `format`, `telemetry`, `foreign`,
+and `service` packages from this module.
 
 ## Configuration
 
@@ -60,6 +89,8 @@ Optional, with defaults:
   SIGTERM; default `60`. Set it to fit the pod's grace period.
 - `REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS`: how long a submitted job may
   stay unfinished before it is reported stranded; default `86400`
+- `REQUEST_TRACE_UPLOADER_STATUS_INTERVAL_SECONDS`: how often every open job
+  is polled; default `30`
 
 Kratos Bulk Upload is an asynchronous job API, so it polls for terminal status.
 These settings apply only to that backend:
