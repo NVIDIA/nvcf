@@ -32,13 +32,17 @@ Single-replica Deployments use only their local identity because Kubernetes
 may publish both pod-name and dashed-IP SRV records for Deployment endpoints.
 StatefulSets retain stable DNS identities. Multi-replica Deployments need the
 EndpointSlice backend router so reverse-tunnel clients connect back to the
-router instance that issued the tunnel target.
+router instance that issued the tunnel target, unless they run in direct mode
+with the Global Discovery Service: each pod then advertises its pod IP, keeps
+headless DNS discovery for its peers, and Stargate fills the peer dial
+addresses from this cluster's router record in GDS.
 */}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int }}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
+{{- $directDeploymentWithGlobalDiscovery := eq (include "llm-request-router.directDeploymentWithGlobalDiscovery" .) "true" }}
 {{- $configuredDisableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
-{{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) }}
-{{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $directDeployment }}
+{{- $selfOnlyDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) (not $directDeploymentWithGlobalDiscovery) }}
+{{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $selfOnlyDeployment }}
 {{- $watchHeartbeatMs := .Values.llmRequestRouter.discovery.watchHeartbeatMs | int }}
 {{- if le $watchHeartbeatMs 0 }}
 {{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
@@ -47,7 +51,7 @@ router instance that issued the tunnel target.
 {{- if and $readinessWarmupMs (not (regexMatch "^[0-9]+$" $readinessWarmupMs)) }}
 {{- fail "llmRequestRouter.readiness.warmupMs must be a non-negative integer" }}
 {{- end }}
-{{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
+{{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) (not $directDeploymentWithGlobalDiscovery) }}
 {{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
 {{- end }}
 {{- if and $configuredDisableDnsDiscovery (gt $replicaCount 1) (not $backendRouterEnabled) }}

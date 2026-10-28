@@ -158,6 +158,10 @@ pylons dial as this cluster's router. Rendered on the backend-router Service
 when the backend router is enabled, else on the ClusterIP Service. Both name
 their QUIC reverse tunnel port (UDP) quic, and have it whenever
 transport.reverseTunnelListenAddr is set, which the backend router requires.
+gds.nvidia.com/router-mode tells clients what the replicas are: backend-router
+pods, or the Stargate pods themselves (direct). gds.nvidia.com/hostname-template
+is the advertised hostname template with {namespace} resolved, so a client can
+form a replica's authority and SNI from its pod name.
 */}}
 {{- define "llm-request-router.gdsExportLabels" -}}
 {{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
@@ -169,9 +173,40 @@ gds.nvidia.com/role: router
 {{- define "llm-request-router.gdsExportAnnotations" -}}
 {{- if dig "export" "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict) -}}
 gds.nvidia.com/dial-scheme: {{ include "llm-request-router.gdsDialScheme" . | quote }}
+gds.nvidia.com/hostname-template: {{ replace "{namespace}" (include "llm-request-router.namespace" .) (include "llm-request-router.advertisedHostnameTemplate" .) | quote }}
 {{- if dig "transport" "reverseTunnelListenAddr" "" .Values.llmRequestRouter }}
 gds.nvidia.com/quic-port-name: quic
 {{- end }}
+gds.nvidia.com/router-mode: {{ include "llm-request-router.routerMode" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+backend-router when the stargate-k8s-router fronts the Stargate pods, else
+direct: pylons dial the Stargate pods themselves.
+*/}}
+{{- define "llm-request-router.routerMode" -}}
+{{- if eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
+backend-router
+{{- else -}}
+direct
+{{- end -}}
+{{- end -}}
+
+{{/*
+Direct mode for a multi-replica Deployment: no backend router, and per-pod
+addresses come from the Global Discovery Service instead of DNS. Each Stargate
+advertises its pod IP for gRPC and the reverse tunnel and keeps its templated
+hostname as its identity. Without globalDiscovery.enabled the chart rejects a
+multi-replica Deployment without the backend router.
+*/}}
+{{- define "llm-request-router.directDeploymentWithGlobalDiscovery" -}}
+{{- if and
+      (eq (include "llm-request-router.workloadKind" .) "Deployment")
+      (gt (.Values.llmRequestRouter.replicaCount | int) 1)
+      (ne (include "llm-request-router.backendRouterEnabled" .) "true")
+      (dig "enabled" false (.Values.llmRequestRouter.globalDiscovery | default dict)) -}}
+true
 {{- end -}}
 {{- end -}}
 
@@ -179,7 +214,8 @@ gds.nvidia.com/quic-port-name: quic
 An unset backendRouter.enabled follows the workload contract: a multi-replica
 Deployment needs the EndpointSlice router, while StatefulSet and single-replica
 direct modes retain their previous behavior. An explicit boolean always wins;
-deployment.yaml rejects the unsafe explicit-false combination.
+deployment.yaml rejects the unsafe explicit-false combination unless
+globalDiscovery.enabled selects direct mode.
 */}}
 {{- define "llm-request-router.backendRouterEnabled" -}}
 {{- $backendRouter := .Values.llmRequestRouter.backendRouter | default dict -}}
@@ -216,13 +252,16 @@ false
 
 {{/*
 The Certificate that gets issued is the configured dnsNames plus, when backend
-routing is on, the wildcard form of the advertised pod hostname. Validation and
-rendering must agree on that list, so both read it from here.
+routing or direct mode for a multi-replica Deployment is on, the wildcard form
+of the advertised pod hostname. Validation and rendering must agree on that
+list, so both read it from here.
 */}}
 {{- define "llm-request-router.effectiveCertificateDnsNames" -}}
 {{- $certificate := .Values.llmRequestRouter.certificate | default dict -}}
 {{- $dnsNames := dig "dnsNames" (list) $certificate -}}
-{{- if eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
+{{- if or
+      (eq (include "llm-request-router.backendRouterEnabled" .) "true")
+      (eq (include "llm-request-router.directDeploymentWithGlobalDiscovery" .) "true") -}}
 {{- $wildcard := replace "{pod_name}" "*" (include "llm-request-router.advertisedHostnameTemplate" .) -}}
 {{- if not (has $wildcard $dnsNames) -}}
 {{- $dnsNames = append $dnsNames $wildcard -}}
@@ -370,8 +409,12 @@ Coverage, matching the role flags:
 {{- define "llm-request-router.advertisedHostnameTemplate" -}}
 {{- $configured := .Values.llmRequestRouter.kubernetes.advertisedHostnameTemplate -}}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
-{{- if and $backendRouterEnabled $configured (ne (len (splitList "{pod_name}" $configured)) 2) -}}
+{{- $onePodName := or (not $configured) (eq (len (splitList "{pod_name}" $configured)) 2) -}}
+{{- if and $backendRouterEnabled (not $onePodName) -}}
 {{- fail "llmRequestRouter.kubernetes.advertisedHostnameTemplate must contain exactly one {pod_name} when backendRouter.enabled is true" -}}
+{{- end -}}
+{{- if and (eq (include "llm-request-router.directDeploymentWithGlobalDiscovery" .) "true") (not $onePodName) -}}
+{{- fail "llmRequestRouter.kubernetes.advertisedHostnameTemplate must contain exactly one {pod_name} in direct mode, a multi-replica Deployment with globalDiscovery.enabled and without the backend router" -}}
 {{- end -}}
 {{- if $configured -}}
 {{- $configured -}}

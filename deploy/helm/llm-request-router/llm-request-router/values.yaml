@@ -92,7 +92,9 @@ llmRequestRouter:
   backendRouter:
     # null enables the backend router automatically for a multi-replica
     # Deployment and disables it otherwise. Set a boolean to override this;
-    # false is rejected for a multi-replica Deployment.
+    # false is rejected for a multi-replica Deployment unless
+    # globalDiscovery.enabled is true, which selects direct mode: pylons dial
+    # the Stargate pod IPs from GDS. See "Router Modes" in the chart README.
     enabled: null
     # The router is the single front door for worker registration and reverse
     # tunnels in its region, so one replica makes it a single point of failure
@@ -247,7 +249,10 @@ llmRequestRouter:
   globalDiscovery:
     # Render the Stargate GDS flags: Stargate adds the router replica seeds of
     # the other clusters of the clusterset to its WatchStargates remote URLs,
-    # next to discovery.remoteWatchUrls. Local peers still come from DNS.
+    # next to discovery.remoteWatchUrls. Local peers still come from DNS. A
+    # multi-replica Deployment may then set backendRouter.enabled=false
+    # (direct mode), and Stargate gives each local peer its pod IP dial
+    # address from this cluster's router record in GDS.
     enabled: false
     # GDS gRPC URLs in failover order, the global name first. Each must be an
     # explicit https:// URI; http:// needs
@@ -267,18 +272,24 @@ llmRequestRouter:
       # Label the Service pylons dial (the backend-router Service when the
       # backend router is enabled, else the ClusterIP Service) with
       # gds.nvidia.com/export=true and gds.nvidia.com/role=router, and annotate
-      # it with gds.nvidia.com/dial-scheme. The GDS MCS controller of this
-      # cluster then exports it, and GDS lists this cluster's router replicas
-      # as seeds for pylons and remote Stargates. Independent of enabled.
+      # it with gds.nvidia.com/dial-scheme, gds.nvidia.com/router-mode
+      # (backend-router or direct) and gds.nvidia.com/hostname-template. The
+      # GDS MCS controller of this cluster then exports it, and GDS lists this
+      # cluster's router replicas as seeds for pylons and remote Stargates.
+      # Independent of enabled.
       #
       # Pylons in other clusters dial the router replica pod IPs on the gRPC
-      # port, so pod IPs must be routable between the clusters. They then
-      # register through backendRouter.pylonGrpcDialAddress and
-      # pylonReverseTunnelDialAddress (with the backend router) or the
-      # advertised hostname (without it). The in-cluster defaults resolve in
-      # every cluster to that cluster's own router, so for cross-cluster pylons
-      # set them to addresses of this cluster's router that the peer clusters
-      # can reach, for example an internal load balancer.
+      # port, so pod IPs must be routable between the clusters. With the
+      # backend router they then register through
+      # backendRouter.pylonGrpcDialAddress and pylonReverseTunnelDialAddress.
+      # Their in-cluster defaults resolve in every cluster to that cluster's
+      # own router, so for cross-cluster pylons set them to addresses of this
+      # cluster's router that the peer clusters can reach, for example an
+      # internal load balancer. In direct mode (no backend router, with
+      # enabled) Stargate advertises each pod's IP instead, so the gRPC port
+      # (TCP, default 50071) and the reverse tunnel port (UDP, default 50072)
+      # of the router pod IPs must be reachable; without enabled pylons dial
+      # the advertised hostname.
       enabled: false
     # Scheme of this cluster's router seeds, the gds.nvidia.com/dial-scheme
     # annotation: http or https. The Stargate and backend router gRPC

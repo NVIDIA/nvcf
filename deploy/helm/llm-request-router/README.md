@@ -38,9 +38,11 @@ llmRequestRouter:
 
 Single-replica Deployments automatically use self-only discovery so their
 headless Service cannot introduce dashed-IP SRV aliases. A multi-replica
-Deployment requires the backend router. The default `null` value for
-`llmRequestRouter.backendRouter.enabled` enables it automatically in that
-topology; explicitly setting `false` is rejected. The backend router builds
+Deployment requires the backend router unless it runs in direct mode with the
+Global Discovery Service (see [Router Modes](#router-modes)). The default `null`
+value for `llmRequestRouter.backendRouter.enabled` enables it automatically in
+that topology; explicitly setting `false` is rejected without
+`globalDiscovery.enabled=true`. The backend router builds
 Watch responses and forwarding routes from the same
 EndpointSlice snapshot. Each ready endpoint is keyed by its Pod
 `targetRef.name`, so one pod produces one canonical identity even when DNS also
@@ -137,6 +139,73 @@ Important settings to review before deployment:
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
+## Router Modes
+
+The chart runs the router in one of two modes. With
+`globalDiscovery.export.enabled=true` the exported Service records the mode in
+the `gds.nvidia.com/router-mode` annotation, so Global Discovery Service (GDS)
+clients can tell what the router replicas are.
+
+- `backend-router`: the default for a multi-replica Deployment, unchanged.
+  Pylons dial the backend-router Service, or a gateway in front of it, and the
+  stargate-k8s-router forwards each registration by gRPC authority and each
+  QUIC tunnel by SNI to the Stargate pod. It stays the compatibility path for
+  pylons with a static `--stargate-address` and for pylons outside the peered
+  network. See [Backend Worker Routing](#backend-worker-routing).
+- `direct`: pylons dial the Stargate pods themselves. Every workload without
+  the backend router is in this mode: a single replica, a StatefulSet, and,
+  for GDS deployments, a multi-replica Deployment with
+  `backendRouter.enabled=false` and `globalDiscovery.enabled=true`. Without
+  `globalDiscovery.enabled` such a Deployment is rejected, because its pods
+  have no stable per-pod DNS names and the per-pod addresses come from GDS.
+
+In direct mode on a multi-replica Deployment:
+
+- Each Stargate pod advertises `$(POD_IP):<service.grpcPort>` for gRPC and
+  `$(POD_IP):<service.reverseTunnelPort>` for the reverse tunnel, and sets no
+  `--grpc-pylon-dial-addr`.
+- It keeps headless DNS discovery for its peers and the hostname from
+  `kubernetes.advertisedHostnameTemplate` as its identity, the gRPC authority
+  and the QUIC SNI. The template must contain exactly one `{pod_name}`, and
+  the issued certificate adds its wildcard form, as with the backend router.
+- Stargate finds this cluster's router record in GDS, the one whose replicas
+  include its own pod IP. When that record is in direct mode, Stargate sets
+  the dial address of each Stargate in its `WatchStargates` responses that it
+  matches to a replica to `<dialScheme>://<pod IP>:<gRPC port>`. Each
+  registration and its tunnel then land on the same pod, with no second TLS
+  termination and no relay. The Stargate README describes the matching.
+- The record comes from this chart's export, so also set
+  `globalDiscovery.export.enabled=true`:
+
+```yaml
+llmRequestRouter:
+  replicaCount: 3
+  backendRouter:
+    enabled: false
+  globalDiscovery:
+    enabled: true
+    urls:
+      - https://gds.example.internal
+    clustersetId: prod
+    clusterId: cluster-a
+    export:
+      enabled: true
+```
+
+Network prerequisites of direct mode:
+
+- Pod IPs of the router cluster are routable from every pool cluster, for
+  example over VPC peering with non-overlapping pod CIDRs.
+- Network policies and security groups admit TCP 50071 (gRPC registration and
+  `WatchStargates`) and UDP 50072 (reverse QUIC tunnel) to the router pod IPs
+  from every pool cluster, or the configured `service.grpcPort` and
+  `service.reverseTunnelPort`.
+- Path MTU discovery works across the peering for the QUIC tunnel.
+
+ClientIP session affinity is not needed, since each pylon pins itself to each
+pod. Pylons that cannot reach pod IPs, for example from a non-peered network,
+stay on backend-router mode behind a gateway.
+
 ## Backend Worker Routing
 
 The backend router is enabled automatically for a multi-replica Deployment.
@@ -205,7 +274,10 @@ independent parts of the chart take part.
 Export makes this cluster's router visible in GDS. With
 `globalDiscovery.export.enabled=true` the chart labels the Service pylons dial
 with `gds.nvidia.com/export: "true"` and `gds.nvidia.com/role: router` and
-annotates it with `gds.nvidia.com/dial-scheme` and, while
+annotates it with `gds.nvidia.com/dial-scheme`,
+`gds.nvidia.com/router-mode` (`backend-router` or `direct`, see
+[Router Modes](#router-modes)), `gds.nvidia.com/hostname-template` (the
+advertised hostname template with `{namespace}` resolved) and, while
 `transport.reverseTunnelListenAddr` is set,
 `gds.nvidia.com/quic-port-name: quic`, the name of its QUIC reverse tunnel
 port (UDP). That Service is the backend-router Service when the backend
@@ -244,7 +316,10 @@ Cross-cluster pylons need these prerequisites:
   cannot forward to another cluster's Stargate pods. Set them to addresses of
   this cluster's router that the peer clusters can reach, such as the
   gateway listener described in [Backend Worker Routing](#backend-worker-routing).
-  Pylons in this cluster keep working with the defaults.
+  Pylons in this cluster keep working with the defaults. In direct mode with
+  `globalDiscovery.enabled` the dial addresses are the Stargate pod IPs
+  instead, which need the network prerequisites of
+  [Router Modes](#router-modes).
 - The router QUIC certificate covers the advertised hostname, as for any
   worker.
 - The worker auth file accepts the credentials of every cluster whose pylons
@@ -256,7 +331,8 @@ Cross-cluster pylons need these prerequisites:
 `/etc/stargate/gds-tls`). Stargate then adds the seeds of every router in the
 other clusters to the `watch_stargate_urls` of its `WatchStargates` responses,
 next to `discovery.remoteWatchUrls`, on every poll tick. Its own cluster's
-Stargates still come from DNS discovery. `http://` GDS URLs need
+Stargates still come from DNS discovery; in direct mode Stargate gives them the
+pod IP dial addresses of this cluster's router record. `http://` GDS URLs need
 `discovery.allowInsecureRemoteWatchHttp=true` and are for development only.
 
 The backend router answers `WatchStargates` itself and publishes only

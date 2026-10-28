@@ -13,7 +13,9 @@ wildcard_certificate="$(mktemp)"
 zero_config="$(mktemp)"
 unaligned_shutdown="$(mktemp)"
 service_monitor_namespace_file="$(mktemp)"
-trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$unaligned_shutdown" "$service_monitor_namespace_file"' EXIT
+exported="$(mktemp)"
+exported_custom_template="$(mktemp)"
+trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$unaligned_shutdown" "$service_monitor_namespace_file" "$exported" "$exported_custom_template"' EXIT
 
 helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
@@ -422,6 +424,37 @@ assert_render_fails "llmRequestRouter.tls.mountPath must match the directory con
   --set llmRequestRouter.tls.mountPath=/var/run/stargate \
   --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
   --set llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key
+
+# A GDS export of the backend-router Service names its mode and the hostname
+# template of the Stargate pods behind it.
+helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.registry=registry.example.invalid \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.globalDiscovery.export.enabled=true \
+  >"$exported"
+assert_occurrences "gds.nvidia.com/router-mode: backend-router" "1" \
+  "the exported backend-router Service must carry router mode backend-router" \
+  "$exported"
+assert_occurrences 'gds.nvidia.com/hostname-template: "{pod_name}.llm-request-router-headless.nvcf.svc.cluster.local"' "1" \
+  "the exported backend-router Service must carry the advertised hostname template" \
+  "$exported"
+assert_occurrences "gds.nvidia.com/router-mode: direct" "0" \
+  "with the backend router no Service may claim direct mode" \
+  "$exported"
+
+helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.registry=registry.example.invalid \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.globalDiscovery.export.enabled=true \
+  --set-string 'llmRequestRouter.kubernetes.advertisedHostnameTemplate=\{pod_name\}.\{namespace\}.router.example.invalid' \
+  >"$exported_custom_template"
+assert_occurrences 'gds.nvidia.com/hostname-template: "{pod_name}.nvcf.router.example.invalid"' "1" \
+  "the hostname template annotation must resolve {namespace} and keep {pod_name}" \
+  "$exported_custom_template"
 
 single_replica="$(helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
