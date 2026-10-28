@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "telemetry",
     srcs = [
+        "errors.go",
         "memory.go",
         "otlp.go",
         "safe.go",
@@ -11,6 +12,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry",
     visibility = ["//visibility:public"],
     deps = [
+        "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc//:otlpmetricgrpc",
         "@io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetrichttp//:otlpmetrichttp",
@@ -30,6 +32,7 @@ alias(
 go_test(
     name = "telemetry_test",
     srcs = [
+        "errors_test.go",
         "otlp_test.go",
         "receiver_test.go",
         "safe_test.go",

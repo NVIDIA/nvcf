@@ -159,3 +159,27 @@ func TestMainStaysReadyAndStopsWithADeadCollector(t *testing.T) {
 		t.Fatalf("a dead collector was treated as a configuration error\n%s", stderr.String())
 	}
 }
+
+func TestMainLogsNoCollectorDetailsWhenExportFails(t *testing.T) {
+	const pathMarker, bodyMarker = "/v1/metrics-path-marker", "body-marker-7f3a"
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, bodyMarker, http.StatusBadRequest)
+	}))
+	defer collector.Close()
+
+	cmd, stderr := startMain(t,
+		telemetry.EnvOTLPMetricsEndpoint+"="+collector.URL+pathMarker,
+		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+	)
+	stopMain(t, cmd, stderr, 15*time.Second)
+
+	out := stderr.String()
+	if !strings.Contains(out, "final metrics export failed") {
+		t.Fatalf("stderr = %s, want the failed final export reported", out)
+	}
+	for _, leak := range []string{strings.TrimPrefix(collector.URL, "http://"), pathMarker, bodyMarker, "Bad Request"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("stderr contains %q\n%s", leak, out)
+		}
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -117,6 +118,10 @@ type OTLP struct {
 // NewOTLP builds the exporter and presets every known counter to zero. Every
 // exporter setting is passed explicitly, so no other OTEL_EXPORTER_OTLP_*
 // variable changes where or how metrics are sent.
+//
+// It also replaces the process-wide OpenTelemetry error handler. The SDK's
+// default one logs each failed background export with the collector URL and
+// its response body; this one logs a bounded reason, rate limited.
 func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -124,6 +129,7 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 	if err := ValidLabelValue(backend); err != nil {
 		return nil, err
 	}
+	otel.SetErrorHandler(newErrorHandler(errorLogInterval, time.Now))
 	exporter, err := newExporter(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metrics exporter: %w", err)
@@ -241,11 +247,13 @@ func (o *OTLP) admit(kind Kind, name string, value float64, labels Labels) ([]at
 	return attrs, true
 }
 
-// Flush exports everything recorded so far.
-func (o *OTLP) Flush(ctx context.Context) error { return o.provider.ForceFlush(ctx) }
+// Flush exports everything recorded so far. An error names only a bounded
+// reason, so it is safe to log.
+func (o *OTLP) Flush(ctx context.Context) error { return exportError(o.provider.ForceFlush(ctx)) }
 
-// Shutdown exports what is left and stops the exporter. ctx bounds it.
-func (o *OTLP) Shutdown(ctx context.Context) error { return o.provider.Shutdown(ctx) }
+// Shutdown exports what is left and stops the exporter. ctx bounds it. An
+// error names only a bounded reason, so it is safe to log.
+func (o *OTLP) Shutdown(ctx context.Context) error { return exportError(o.provider.Shutdown(ctx)) }
 
 // Dropped counts observations rejected by Validate or the series cap.
 func (o *OTLP) Dropped() int {

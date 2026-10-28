@@ -398,3 +398,38 @@ func TestNewOTLPRejectsInvalidConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestOTLPExportFailureLogsNoCollectorDetails(t *testing.T) {
+	logs := captureDefaultLog(t)
+	const pathMarker, bodyMarker = "/v1/metrics-path-marker", "body-marker-7f3a"
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, bodyMarker, http.StatusBadRequest)
+	}))
+	defer collector.Close()
+	exporter, err := NewOTLP(context.Background(), OTLPConfig{Endpoint: collector.URL + pathMarker, Protocol: ProtocolHTTP, Interval: 20 * time.Millisecond}, "fake")
+	if err != nil {
+		t.Fatalf("NewOTLP() error = %v", err)
+	}
+	defer func() { _ = exporter.Shutdown(context.Background()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), `"reason":"error"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no export failure logged within 5 s\n%s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	flushErr := exporter.Flush(context.Background())
+	if flushErr == nil {
+		t.Fatal("Flush() error = nil against a collector that answers 400")
+	}
+
+	host := strings.TrimPrefix(collector.URL, "http://")
+	for name, text := range map[string]string{"log": logs.String(), "Flush error": flushErr.Error()} {
+		for _, leak := range []string{host, pathMarker, bodyMarker, "Bad Request"} {
+			if strings.Contains(text, leak) {
+				t.Errorf("%s = %s, contains %q", name, text, leak)
+			}
+		}
+	}
+}
