@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package telemetry
+package otlp
 
 import (
 	"errors"
@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 )
 
 const reviewMarker = "review-marker"
@@ -108,7 +110,7 @@ func (s *recordingSink) String() string {
 	return s.out.String()
 }
 
-func TestNewOTLPKeepsSDKDiagnosticsFromPrintingEnvironmentValues(t *testing.T) {
+func TestNewKeepsSDKDiagnosticsFromPrintingEnvironmentValues(t *testing.T) {
 	logs := captureDefaultLog(t)
 	inherited := &recordingSink{}
 	otel.SetLogger(logr.New(inherited))
@@ -118,7 +120,7 @@ func TestNewOTLPKeepsSDKDiagnosticsFromPrintingEnvironmentValues(t *testing.T) {
 
 	r, endpoint := httpReceiver(t)
 	exporter := newOTLP(t, endpoint, ProtocolHTTP)
-	exporter.Add(SubmitsAmbiguous, 1, nil)
+	exporter.Add(telemetry.SubmitsAmbiguous, 1, nil)
 	flush(t, exporter)
 
 	for name, out := range map[string]string{"inherited SDK logger": inherited.String(), "log": logs.String()} {
@@ -129,7 +131,7 @@ func TestNewOTLPKeepsSDKDiagnosticsFromPrintingEnvironmentValues(t *testing.T) {
 	if !strings.Contains(logs.String(), "telemetry SDK diagnostic") {
 		t.Errorf("log = %s, want the SDK's parse failures reported without values", logs.String())
 	}
-	if r.metric(MetricPrefix+SubmitsAmbiguous) == nil {
+	if r.metric(MetricPrefix+telemetry.SubmitsAmbiguous) == nil {
 		t.Fatal("no metrics delivered")
 	}
 }

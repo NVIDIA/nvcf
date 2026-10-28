@@ -24,6 +24,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry/otlp"
 )
 
 // metricNames collects the metric names an OTLP/HTTP receiver got.
@@ -136,21 +137,21 @@ func TestMainExportsMetricsWhenTheEndpointIsSet(t *testing.T) {
 	defer collector.Close()
 
 	cmd, stderr := startMain(t,
-		telemetry.EnvOTLPMetricsEndpoint+"="+collector.URL+"/v1/metrics",
-		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+		otlp.EnvMetricsEndpoint+"="+collector.URL+"/v1/metrics",
+		otlp.EnvMetricsProtocol+"=http/protobuf",
 	)
 	stopMain(t, cmd, stderr, 15*time.Second)
 
-	if !received.has(telemetry.MetricPrefix + telemetry.SubmitsAmbiguous) {
-		t.Fatalf("the collector got no %s%s on shutdown\n%s", telemetry.MetricPrefix, telemetry.SubmitsAmbiguous, stderr.String())
+	if !received.has(otlp.MetricPrefix + telemetry.SubmitsAmbiguous) {
+		t.Fatalf("the collector got no %s%s on shutdown\n%s", otlp.MetricPrefix, telemetry.SubmitsAmbiguous, stderr.String())
 	}
 }
 
 func TestMainStaysReadyAndStopsWithADeadCollector(t *testing.T) {
 	dead := "http://" + freeAddr(t) + "/v1/metrics"
 	cmd, stderr := startMain(t,
-		telemetry.EnvOTLPMetricsEndpoint+"="+dead,
-		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+		otlp.EnvMetricsEndpoint+"="+dead,
+		otlp.EnvMetricsProtocol+"=http/protobuf",
 	)
 	// Drain is 1 s and the metrics flush is bounded, so the exit is prompt
 	// even though no export can succeed.
@@ -168,8 +169,8 @@ func TestMainLogsNoCollectorDetailsWhenExportFails(t *testing.T) {
 	defer collector.Close()
 
 	cmd, stderr := startMain(t,
-		telemetry.EnvOTLPMetricsEndpoint+"="+collector.URL+pathMarker,
-		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+		otlp.EnvMetricsEndpoint+"="+collector.URL+pathMarker,
+		otlp.EnvMetricsProtocol+"=http/protobuf",
 	)
 	stopMain(t, cmd, stderr, 15*time.Second)
 
@@ -191,8 +192,8 @@ func TestMainPrintsNoValuesFromMalformedExporterVariables(t *testing.T) {
 	defer collector.Close()
 
 	cmd, stderr := startMain(t,
-		telemetry.EnvOTLPMetricsEndpoint+"="+collector.URL+"/v1/metrics",
-		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+		otlp.EnvMetricsEndpoint+"="+collector.URL+"/v1/metrics",
+		otlp.EnvMetricsProtocol+"=http/protobuf",
 		"OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer "+marker+"%ZZ",
 		"OTEL_EXPORTER_OTLP_ENDPOINT=http://user:"+marker+"@[::1",
 	)
@@ -201,7 +202,7 @@ func TestMainPrintsNoValuesFromMalformedExporterVariables(t *testing.T) {
 	if strings.Contains(stderr.String(), marker) {
 		t.Fatalf("stderr contains %q\n%s", marker, stderr.String())
 	}
-	if !received.has(telemetry.MetricPrefix + telemetry.SubmitsAmbiguous) {
+	if !received.has(otlp.MetricPrefix + telemetry.SubmitsAmbiguous) {
 		t.Fatalf("the collector got no metrics\n%s", stderr.String())
 	}
 }

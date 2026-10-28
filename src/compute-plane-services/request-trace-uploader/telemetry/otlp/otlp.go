@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package telemetry
+// Package otlp pushes the telemetry instruments to an OpenTelemetry
+// collector over OTLP. It is the only package that links the OpenTelemetry
+// SDK and gRPC, so a consumer that records through telemetry.Metrics does
+// not.
+package otlp
 
 import (
 	"context"
@@ -23,15 +27,17 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 )
 
 const (
-	// EnvOTLPMetricsEndpoint and EnvOTLPMetricsProtocol are the only settings
+	// EnvMetricsEndpoint and EnvMetricsProtocol are the only settings
 	// the exporter reads. The generic OTEL_EXPORTER_OTLP_ENDPOINT is never a
 	// fallback: it can describe the collector's own outbound path rather than
 	// the path from this workload to the collector.
-	EnvOTLPMetricsEndpoint = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
-	EnvOTLPMetricsProtocol = "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"
+	EnvMetricsEndpoint = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+	EnvMetricsProtocol = "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"
 	// MetricPrefix is prepended to every catalog name on export.
 	MetricPrefix = "dynamo.request_trace."
 	// ServiceName is the exported service.name resource attribute.
@@ -52,8 +58,8 @@ const (
 	ProtocolHTTP Protocol = "http/protobuf"
 )
 
-// OTLPConfig says where and how often metrics are pushed.
-type OTLPConfig struct {
+// Config says where and how often metrics are pushed.
+type Config struct {
 	// Endpoint is used as given: an http or https URL with a host. For
 	// http/protobuf its path is the request path, "/" when it has none.
 	Endpoint string
@@ -61,16 +67,16 @@ type OTLPConfig struct {
 	Interval time.Duration
 }
 
-// OTLPConfigFromEnv reads the metrics endpoint and protocol. It reports
+// ConfigFromEnv reads the metrics endpoint and protocol. It reports
 // enabled false, with no error, when the endpoint is unset or blank. With an
 // endpoint, the protocol is required: grpc, http or http/protobuf.
-func OTLPConfigFromEnv(lookup func(string) (string, bool)) (OTLPConfig, bool, error) {
-	endpoint, _ := lookup(EnvOTLPMetricsEndpoint)
+func ConfigFromEnv(lookup func(string) (string, bool)) (Config, bool, error) {
+	endpoint, _ := lookup(EnvMetricsEndpoint)
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
-		return OTLPConfig{}, false, nil
+		return Config{}, false, nil
 	}
-	raw, _ := lookup(EnvOTLPMetricsProtocol)
+	raw, _ := lookup(EnvMetricsProtocol)
 	var protocol Protocol
 	switch strings.TrimSpace(raw) {
 	case "grpc":
@@ -78,23 +84,23 @@ func OTLPConfigFromEnv(lookup func(string) (string, bool)) (OTLPConfig, bool, er
 	case "http", "http/protobuf":
 		protocol = ProtocolHTTP
 	default:
-		return OTLPConfig{}, false, fmt.Errorf("%s must be grpc, http or http/protobuf when %s is set", EnvOTLPMetricsProtocol, EnvOTLPMetricsEndpoint)
+		return Config{}, false, fmt.Errorf("%s must be grpc, http or http/protobuf when %s is set", EnvMetricsProtocol, EnvMetricsEndpoint)
 	}
-	cfg := OTLPConfig{Endpoint: endpoint, Protocol: protocol, Interval: DefaultExportInterval}
+	cfg := Config{Endpoint: endpoint, Protocol: protocol, Interval: DefaultExportInterval}
 	if err := cfg.Validate(); err != nil {
-		return OTLPConfig{}, false, err
+		return Config{}, false, err
 	}
 	return cfg, true, nil
 }
 
 // Validate reports the first invalid setting.
-func (c OTLPConfig) Validate() error {
+func (c Config) Validate() error {
 	u, err := url.Parse(c.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("%s must be an http or https URL with a host", EnvOTLPMetricsEndpoint)
+		return fmt.Errorf("%s must be an http or https URL with a host", EnvMetricsEndpoint)
 	}
 	if c.Protocol != ProtocolGRPC && c.Protocol != ProtocolHTTP {
-		return fmt.Errorf("%s must be grpc, http or http/protobuf", EnvOTLPMetricsProtocol)
+		return fmt.Errorf("%s must be grpc, http or http/protobuf", EnvMetricsProtocol)
 	}
 	if c.Interval <= 0 {
 		return errors.New("metrics export interval must be positive")
@@ -102,10 +108,10 @@ func (c OTLPConfig) Validate() error {
 	return nil
 }
 
-// OTLP records observations and pushes them over OTLP. Recording never
+// Exporter records observations and pushes them over OTLP. Recording never
 // blocks on the network: a periodic reader exports in the background, and a
 // failed export costs that export only.
-type OTLP struct {
+type Exporter struct {
 	backend    attribute.KeyValue
 	provider   *sdkmetric.MeterProvider
 	counters   map[string]metric.Float64Counter
@@ -113,11 +119,11 @@ type OTLP struct {
 	histograms map[string]metric.Float64Histogram
 
 	mu      sync.Mutex
-	series  map[string]map[string]bool
+	series  map[string]map[attribute.Distinct]bool
 	dropped int
 }
 
-// NewOTLP builds the exporter and presets every known counter to zero. Every
+// New builds the exporter and presets every known counter to zero. Every
 // exporter setting is passed explicitly, so no other OTEL_EXPORTER_OTLP_*
 // variable changes where or how metrics are sent.
 //
@@ -125,11 +131,11 @@ type OTLP struct {
 // logger, before the exporter reads its environment. The SDK's defaults print
 // the collector URL, its response body, and the values of variables it
 // failed to parse; these log a bounded reason, rate limited.
-func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error) {
+func New(ctx context.Context, cfg Config, backend string) (*Exporter, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if err := ValidLabelValue(backend); err != nil {
+	if err := telemetry.ValidLabelValue(backend); err != nil {
 		return nil, err
 	}
 	otel.SetErrorHandler(newErrorHandler(errorLogInterval, time.Now))
@@ -143,33 +149,33 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 		return nil, fmt.Errorf("build metrics resource: %w", err)
 	}
 	reader := sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(cfg.Interval), sdkmetric.WithTimeout(readTimeout))
-	o := &OTLP{
-		backend:    attribute.String(BackendLabel, backend),
+	e := &Exporter{
+		backend:    attribute.String(telemetry.BackendLabel, backend),
 		provider:   sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithResource(res)),
 		counters:   map[string]metric.Float64Counter{},
 		gauges:     map[string]metric.Float64Gauge{},
 		histograms: map[string]metric.Float64Histogram{},
-		series:     map[string]map[string]bool{},
+		series:     map[string]map[attribute.Distinct]bool{},
 	}
-	meter := o.provider.Meter(meterName)
-	for _, instrument := range catalog {
+	meter := e.provider.Meter(meterName)
+	for _, instrument := range telemetry.Instruments() {
 		name, unit := MetricPrefix+instrument.Name, metric.WithUnit(instrument.Unit)
 		var err error
 		switch instrument.Kind {
-		case Counter:
-			o.counters[instrument.Name], err = meter.Float64Counter(name, unit)
-		case Gauge:
-			o.gauges[instrument.Name], err = meter.Float64Gauge(name, unit)
-		case Histogram:
-			o.histograms[instrument.Name], err = meter.Float64Histogram(name, unit, metric.WithExplicitBucketBoundaries(instrument.Buckets...))
+		case telemetry.Counter:
+			e.counters[instrument.Name], err = meter.Float64Counter(name, unit)
+		case telemetry.Gauge:
+			e.gauges[instrument.Name], err = meter.Float64Gauge(name, unit)
+		case telemetry.Histogram:
+			e.histograms[instrument.Name], err = meter.Float64Histogram(name, unit, metric.WithExplicitBucketBoundaries(instrument.Buckets...))
 		}
 		if err != nil {
-			_ = o.provider.Shutdown(ctx)
+			_ = e.provider.Shutdown(ctx)
 			return nil, fmt.Errorf("create instrument %s: %w", name, err)
 		}
 	}
-	Preset(o)
-	return o, nil
+	telemetry.Preset(e)
+	return e, nil
 }
 
 // newExporter passes every setting the exporters would otherwise read from
@@ -177,7 +183,7 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 // the export. TLS is set for both schemes: an http endpoint gets none, which
 // also clears a certificate the environment named, and an https endpoint
 // gets the system roots with no client certificate.
-func newExporter(ctx context.Context, cfg OTLPConfig) (sdkmetric.Exporter, error) {
+func newExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
 	var tlsConfig *tls.Config
 	if strings.HasPrefix(cfg.Endpoint, "https://") {
 		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -208,65 +214,67 @@ func newExporter(ctx context.Context, cfg OTLPConfig) (sdkmetric.Exporter, error
 	)
 }
 
-func (o *OTLP) Add(name string, delta float64, labels Labels) {
-	if attrs, ok := o.admit(Counter, name, delta, labels); ok {
-		o.counters[name].Add(context.Background(), delta, metric.WithAttributes(attrs...))
+func (e *Exporter) Add(name string, delta float64, labels telemetry.Labels) {
+	if attrs, ok := e.admit(telemetry.Counter, name, delta, labels); ok {
+		e.counters[name].Add(context.Background(), delta, metric.WithAttributeSet(attrs))
 	}
 }
 
-func (o *OTLP) Set(name string, value float64, labels Labels) {
-	if attrs, ok := o.admit(Gauge, name, value, labels); ok {
-		o.gauges[name].Record(context.Background(), value, metric.WithAttributes(attrs...))
+func (e *Exporter) Set(name string, value float64, labels telemetry.Labels) {
+	if attrs, ok := e.admit(telemetry.Gauge, name, value, labels); ok {
+		e.gauges[name].Record(context.Background(), value, metric.WithAttributeSet(attrs))
 	}
 }
 
-func (o *OTLP) Observe(name string, value float64, labels Labels) {
-	if attrs, ok := o.admit(Histogram, name, value, labels); ok {
-		o.histograms[name].Record(context.Background(), value, metric.WithAttributes(attrs...))
+func (e *Exporter) Observe(name string, value float64, labels telemetry.Labels) {
+	if attrs, ok := e.admit(telemetry.Histogram, name, value, labels); ok {
+		e.histograms[name].Record(context.Background(), value, metric.WithAttributeSet(attrs))
 	}
 }
 
-// admit applies the catalog rules and the series cap, as Memory does, and
-// returns the attributes to record with.
-func (o *OTLP) admit(kind Kind, name string, value float64, labels Labels) ([]attribute.KeyValue, bool) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if err := Validate(kind, name, value, labels); err != nil {
-		o.dropped++
-		return nil, false
-	}
-	key := seriesKey(labels)
-	known := o.series[name]
-	if !known[key] {
-		if len(known) >= MaxSeriesPerInstrument {
-			o.dropped++
-			return nil, false
-		}
-		if known == nil {
-			known = map[string]bool{}
-			o.series[name] = known
-		}
-		known[key] = true
+// admit applies the catalog rules and the series cap, as telemetry.Memory
+// does, and returns the attributes to record with.
+func (e *Exporter) admit(kind telemetry.Kind, name string, value float64, labels telemetry.Labels) (attribute.Set, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := telemetry.Validate(kind, name, value, labels); err != nil {
+		e.dropped++
+		return attribute.Set{}, false
 	}
 	attrs := make([]attribute.KeyValue, 0, len(labels)+1)
-	attrs = append(attrs, o.backend)
+	attrs = append(attrs, e.backend)
 	for k, v := range labels {
 		attrs = append(attrs, attribute.String(k, v))
 	}
-	return attrs, true
+	set := attribute.NewSet(attrs...)
+	key := set.Equivalent()
+	known := e.series[name]
+	if !known[key] {
+		if len(known) >= telemetry.MaxSeriesPerInstrument {
+			e.dropped++
+			return attribute.Set{}, false
+		}
+		if known == nil {
+			known = map[attribute.Distinct]bool{}
+			e.series[name] = known
+		}
+		known[key] = true
+	}
+	return set, true
 }
 
 // Flush exports everything recorded so far. An error names only a bounded
 // reason, so it is safe to log.
-func (o *OTLP) Flush(ctx context.Context) error { return exportError(o.provider.ForceFlush(ctx)) }
+func (e *Exporter) Flush(ctx context.Context) error { return exportError(e.provider.ForceFlush(ctx)) }
 
 // Shutdown exports what is left and stops the exporter. ctx bounds it. An
 // error names only a bounded reason, so it is safe to log.
-func (o *OTLP) Shutdown(ctx context.Context) error { return exportError(o.provider.Shutdown(ctx)) }
+func (e *Exporter) Shutdown(ctx context.Context) error { return exportError(e.provider.Shutdown(ctx)) }
 
-// Dropped counts observations rejected by Validate or the series cap.
-func (o *OTLP) Dropped() int {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.dropped
+// Dropped counts observations rejected by telemetry.Validate or the series
+// cap.
+func (e *Exporter) Dropped() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.dropped
 }

@@ -13,6 +13,7 @@ go_library(
         "//src/compute-plane-services/request-trace-uploader/config",
         "//src/compute-plane-services/request-trace-uploader/service",
         "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/telemetry/otlp",
     ],
 )
 
@@ -42,6 +43,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/request-trace-uploader/config",
         "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/telemetry/otlp",
         "@io_opentelemetry_go_proto_otlp//collector/metrics/v1:metrics",
         "@org_golang_google_protobuf//proto",
     ],

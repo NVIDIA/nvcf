@@ -3,10 +3,7 @@
 
 package telemetry
 
-import (
-	"slices"
-	"testing"
-)
+import "testing"
 
 // bucketRange is the span each histogram unit must cover: seconds from
 // sub-second calls to day-long confirmations, bytes from KiB to GiB, counts
@@ -55,26 +52,5 @@ func TestOnlyHistogramsHaveBoundaries(t *testing.T) {
 		if instrument.Kind != Histogram && instrument.Buckets != nil {
 			t.Errorf("%s is a %v with boundaries", instrument.Name, instrument.Kind)
 		}
-	}
-}
-
-func TestOTLPExportsEachHistogramWithItsBoundaries(t *testing.T) {
-	r, endpoint := httpReceiver(t)
-	exporter := newOTLP(t, endpoint, ProtocolHTTP)
-	for _, instrument := range histograms() {
-		exporter.Observe(instrument.Name, 1, nil)
-	}
-	flush(t, exporter)
-
-	for _, instrument := range histograms() {
-		t.Run(instrument.Name, func(t *testing.T) {
-			points := r.metric(MetricPrefix + instrument.Name).GetHistogram().GetDataPoints()
-			if len(points) != 1 {
-				t.Fatalf("points = %v, want one", points)
-			}
-			if got := points[0].GetExplicitBounds(); !slices.Equal(got, instrument.Buckets) {
-				t.Fatalf("exported boundaries = %v, want %v", got, instrument.Buckets)
-			}
-		})
 	}
 }

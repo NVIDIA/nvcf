@@ -28,6 +28,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry/otlp"
 
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/debug"
 	_ "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/objectstore"
@@ -48,7 +49,7 @@ func run() int {
 		slog.Error("invalid request trace uploader configuration", "error", err)
 		return 1
 	}
-	metricsCfg, exportMetrics, err := telemetry.OTLPConfigFromEnv(os.LookupEnv)
+	metricsCfg, exportMetrics, err := otlp.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
 		slog.Error("invalid request trace uploader configuration", "error", err)
 		return 1
@@ -63,7 +64,7 @@ func run() int {
 	}
 	options := service.Options{}
 	if exportMetrics {
-		exporter, err := telemetry.NewOTLP(context.Background(), metricsCfg, string(cfg.Backend))
+		exporter, err := otlp.New(context.Background(), metricsCfg, string(cfg.Backend))
 		if err != nil {
 			slog.Error("create request trace uploader metrics exporter", "error", err)
 			return 1
@@ -88,7 +89,7 @@ func run() int {
 
 // flushMetrics sends what is left after the drain. A failed export is
 // logged and never changes the exit code.
-func flushMetrics(exporter *telemetry.OTLP) {
+func flushMetrics(exporter *otlp.Exporter) {
 	ctx, cancel := context.WithTimeout(context.Background(), metricsFlushTimeout)
 	defer cancel()
 	if err := exporter.Shutdown(ctx); err != nil {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package telemetry
+package otlp
 
 import (
 	"context"
@@ -19,6 +19,8 @@ import (
 	"time"
 
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 )
 
 // writeTLSFiles writes a self-signed certificate and its key, usable both
@@ -95,25 +97,25 @@ func TestOTLPIgnoresEveryOtherExporterVariable(t *testing.T) {
 					t.Setenv(k, v)
 				}
 				r, endpoint := start(t)
-				exporter, err := NewOTLP(context.Background(), OTLPConfig{Endpoint: endpoint, Protocol: protocol, Interval: time.Hour}, "fake")
+				exporter, err := New(context.Background(), Config{Endpoint: endpoint, Protocol: protocol, Interval: time.Hour}, "fake")
 				if err != nil {
-					t.Fatalf("NewOTLP() error = %v", err)
+					t.Fatalf("New() error = %v", err)
 				}
 				defer func() { _ = exporter.Shutdown(context.Background()) }()
 
-				exporter.Add(SubmitsAmbiguous, 1, nil)
-				exporter.Observe(UploadDuration, 1, nil)
+				exporter.Add(telemetry.SubmitsAmbiguous, 1, nil)
+				exporter.Observe(telemetry.UploadDuration, 1, nil)
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				if err := exporter.Flush(ctx); err != nil {
 					t.Fatalf("Flush() error = %v", err)
 				}
 
-				sum := r.metric(MetricPrefix + SubmitsAmbiguous).GetSum()
+				sum := r.metric(MetricPrefix + telemetry.SubmitsAmbiguous).GetSum()
 				if sum.GetAggregationTemporality() != metricpb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE || len(sum.GetDataPoints()) != 1 || sum.GetDataPoints()[0].GetAsDouble() != 1 {
 					t.Fatalf("submits_ambiguous = %v, want a cumulative 1", sum)
 				}
-				if r.metric(MetricPrefix+UploadDuration).GetHistogram() == nil {
+				if r.metric(MetricPrefix+telemetry.UploadDuration).GetHistogram() == nil {
 					t.Fatal("upload.duration is not an explicit-bucket histogram")
 				}
 				r.mu.Lock()
