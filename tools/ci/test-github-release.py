@@ -586,7 +586,12 @@ class GithubReleaseTest(unittest.TestCase):
         ),
     )
     RUST_SERVICE = ("http-invocation", "src/invocation-plane-services/http-invocation", "0.6.1", "distroless_cc")
-    BASE_DIGESTS = {"distroless_cc": "c" * 64, "distroless_go": "a" * 64, "distroless_static": "b" * 64}
+    BASE_DIGESTS = {
+        "distroless_cc": "c" * 64,
+        "distroless_go": "a" * 64,
+        "distroless_static": "b" * 64,
+        "ubuntu_noble": "f" * 64,
+    }
     GO_SDK_BUMP = "fix(security): build Go services with Go 1.26.10"
 
     def go_service_metadata(self, service_id, path):
@@ -616,6 +621,7 @@ class GithubReleaseTest(unittest.TestCase):
         )
 
     def write_image_service(self, root, path, binary_rule, image_rule, base):
+        """A service with one binary and one image. A `base` of None leaves it to the macro default."""
         service_dir = root / path
         service_dir.mkdir(parents=True, exist_ok=True)
         (service_dir / "BUILD.bazel").write_text(
@@ -626,13 +632,13 @@ class GithubReleaseTest(unittest.TestCase):
             "\n"
             f"{image_rule}(\n"
             '    name = "image",\n'
-            f'    base = "@{base}",\n'
-            '    binary = ":server",\n'
+            + (f'    base = "@{base}",\n' if base else "")
+            + '    binary = ":server",\n'
             ")\n"
         )
 
     def init_go_repo(self, root):
-        """Repo with the Go SDK, three pinned bases, two Go services and a Rust one, each tagged."""
+        """Repo with the Go SDK, the pinned bases, two Go services and a Rust one, each tagged."""
         self.init_repo(root)
         self.write_go_sdk(root, "go1.26.9")
         self.write_module_bazel(root, self.BASE_DIGESTS)
@@ -747,6 +753,29 @@ class GithubReleaseTest(unittest.TestCase):
             created, text = self.go_fanout_dry_run(root, self.go_service_metadata(static_id, static_path))
             self.assertFalse(created)
             self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+    def test_an_image_without_a_base_is_released_for_the_sdk_but_not_the_default_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            path, version = "src/clis/nvcf-cli", "1.25.1"
+            service = self.go_service_metadata("nvcf-cli", path)
+            # nvcf-cli ships binaries; its image sets no base and is not shipped.
+            self.write_image_service(root, path, "go_binary", "go_oci_image", None)
+            self.commit_all(root, "seed a go service whose image sets no base")
+            git(root, "tag", f"{path}/v{version}")
+            self.commit_base_repin(root, "ubuntu_noble", "e" * 64, "fix(security): repin ubuntu noble")
+
+            created, text = self.go_fanout_dry_run(root, service)
+            self.assertFalse(created)
+            self.assertIn("no release-worthy Go SDK or base image commits since", text)
+
+            # The Go SDK still reaches its binaries.
+            self.commit_go_sdk_bump(root)
+            created, text = self.go_fanout_dry_run(root, service)
+            self.assertTrue(created)
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertNotIn("ubuntu_noble", text)
 
     def test_an_unparseable_build_file_stops_the_go_fanout(self):
         with tempfile.TemporaryDirectory() as tmp:

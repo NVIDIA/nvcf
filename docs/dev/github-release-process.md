@@ -220,6 +220,11 @@ list to keep in sync:
 - Its base images are the `oci.pull` repositories its image targets
   take as `base`. A repository named only in a comment or in another
   attribute does not count.
+- An image target that sets no `base` is tied to no base image, even
+  though its image macro supplies a default. Not every image target is
+  shipped, and a repin of the default must not release a service that
+  only builds such an image for development. Set `base` on a published
+  image so that a repin of its base releases the service.
 - A `BUILD.bazel` file that does not parse stops the run with an error
   naming the file.
 
