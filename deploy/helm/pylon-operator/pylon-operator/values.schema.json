@@ -115,6 +115,17 @@
                             "default": ""
                         }
                     }
+                },
+                "poolExport": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Export every transport to GDS as the Pylon agent of its pool, through a Service over the transport pods, and pass --gds-pool-name to Pylon. Requires router.source=gds",
+                            "default": false
+                        }
+                    }
                 }
             }
         },

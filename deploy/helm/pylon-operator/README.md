@@ -175,6 +175,7 @@ types, the `clusterId` and namespace formats and the durations.
 | `globalDiscovery.urls` | `[]` | GDS gRPC URLs in failover order, all `http://` or all `https://`. Required with `router.source=gds`. One `--gds-url` each. |
 | `globalDiscovery.clustersetId` | `""` | GDS clusterset id, a DNS label. Required with `router.source=gds`. `--gds-clusterset-id`. |
 | `globalDiscovery.trustBundle.configMap` | `""` | Existing ConfigMap in the release namespace whose `ca.crt` key holds the GDS CA bundle. Empty trusts the system roots. Must equal `trustBundle.configMap` when both are set. `--gds-tls-ca-configmap`. |
+| `globalDiscovery.poolExport.enabled` | `false` | Export each transport to GDS as the Pylon agent of its pool, through a Service over the transport pods, and pass `--gds-pool-name` to Pylon. Requires `router.source=gds`. `--gds-pool-export`. See [Pools in the Global Discovery Service](#pools-in-the-global-discovery-service). |
 | `pylon.image.repository` | `""` | Pylon transport image repository. Required. |
 | `pylon.image.tag` | `""` | Pylon transport image tag or `sha256:` digest. Required. With the repository, `--pylon-image`. |
 | `pylon.image.pullPolicy` | `IfNotPresent` | Transport container pull policy. `--pylon-image-pull-policy`. |
@@ -341,6 +342,41 @@ trustBundle:
 
 See `docs/dev/global-discovery-quickstart.md` for the whole setup.
 
+### Pools in the Global Discovery Service
+
+With `globalDiscovery.poolExport.enabled=true` (only with `router.source=gds`)
+each InferenceEndpoint's transport also appears in GDS as the Pylon agent of a
+pool. The pool name is `spec.globalDiscovery.poolName`, a DNS label, or by
+default the InferenceEndpoint name, shortened with a hash suffix when it is
+not a DNS label:
+
+```yaml
+spec:
+  globalDiscovery:
+    poolName: llama-3-1-8b
+```
+
+The operator passes `--gds-pool-name` to the transport pods and keeps a
+ClusterIP Service named like the transport Deployment over them, owned by the
+InferenceEndpoint. It has one port, `metrics`, the labels
+`gds.nvidia.com/export: "true"`, `gds.nvidia.com/role: pylon` and
+`gds.nvidia.com/pool: <pool name>`, and the annotations
+`gds.nvidia.com/pool-models` (`spec.modelName`) and
+`gds.nvidia.com/hardware-class` (the GPU product in `status.gpu`, when known).
+The GDS MCS controller of this cluster exports it, and GDS counts its ready
+endpoints as the pool's ready Pylons. Routers do not dial it: the tunnel is
+outbound.
+
+- The operator restores the Service when its labels, those annotations,
+  selector or ports drift, and leaves other labels and annotations alone.
+- A Service of that name that the InferenceEndpoint does not own is left
+  alone; the operator emits a Warning Event with reason
+  `TransportObjectConflict`.
+- Turning pool export on, or changing the pool name, rolls the transport
+  pods once. A GPU type change updates only the Service annotation.
+- Turning pool export off leaves existing Services in place; delete them, or
+  the InferenceEndpoints, to remove the pools from GDS.
+
 ## CRD and RBAC
 
 `templates/crds/pylon.nvidia.com_inferenceendpoints.yaml` and
@@ -361,8 +397,10 @@ The ClusterRole is bound cluster-wide even when `watchNamespaces` is set,
 because Nodes are cluster-scoped and the generated role has no namespace
 split. It includes create and update on Secrets, ConfigMaps and Deployments,
 which the operator needs to replicate the credential and trust bundle and to
-run transport Deployments. The operator caches only the Secrets and ConfigMaps
-with the configured names and the Deployments it labels.
+run transport Deployments, and create, update and patch on Services for the
+pool export Services; the operator never deletes a Service. The operator
+caches only the Secrets and ConfigMaps with the configured names and the
+Deployments it labels.
 
 ## Upgrade notes
 

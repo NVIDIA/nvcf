@@ -96,6 +96,12 @@ They trust the GDS CA bundle in key ca.crt of ConfigMap {{ . }} in namespace
 {{- end }}
 The operator logs an error at startup when GDS lists no router, and reports
 the routers it sees in status.registration.routers of each InferenceEndpoint.
+{{- if include "pylon-operator.poolExport" . }}
+Each InferenceEndpoint's transport is exported to GDS as the Pylon agent of its
+pool, spec.globalDiscovery.poolName or the endpoint name, through a Service
+named like the transport Deployment. The GDS MCS controller of this cluster
+exports it.
+{{- end }}
 {{- end }}
 {{- if not .Values.installCRDs }}
 

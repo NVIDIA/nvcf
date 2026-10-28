@@ -139,6 +139,15 @@ assert_render_fails "globalDiscovery.urls must all use one scheme" \
   --set router.source=gds \
   --set 'globalDiscovery.urls={https://gds.example.test,http://gds-b.example.test}' \
   --set globalDiscovery.clustersetId=prod
+assert_render_fails "globalDiscovery.poolExport.enabled requires router.source=gds" \
+  --values "${ci_values}" \
+  --set globalDiscovery.poolExport.enabled=true
+assert_render_fails "'/globalDiscovery/poolExport/enabled': got string, want boolean" \
+  --values "${ci_values}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod \
+  --set-string globalDiscovery.poolExport.enabled=yes
 assert_render_fails 'globalDiscovery.trustBundle.configMap "gds-ca" and trustBundle.configMap "router-ca" must name the same ConfigMap' \
   --values "${ci_values}" \
   --set router.source=gds \
@@ -235,6 +244,9 @@ render "${no_crd_manifest}" --set installCRDs=false
 # RBAC: ClusterRole from config/rbac/role.yaml, bound cluster-wide; leader
 # election Role in the release namespace.
 [ "$(count_kind "${default_manifest}" ClusterRole "${release}")" = "1" ] || fail "missing ClusterRole"
+service_verbs="$(yq -o=json -I=0 'select(.kind == "ClusterRole") | .rules[] | select(.apiGroups[0] == "" and .resources[] == "services") | .verbs' "${default_manifest}")"
+[ "${service_verbs}" = '["create","get","list","patch","update","watch"]' ] ||
+  fail "ClusterRole must let the operator write pool export Services without deleting Services, got ${service_verbs}"
 [ "$(yq -r "select(.kind == \"ClusterRoleBinding\") | .subjects[0].namespace" "${default_manifest}")" = "${namespace}" ] ||
   fail "ClusterRoleBinding must bind the release namespace ServiceAccount"
 lease_verbs="$(yq -o=json -I=0 "select(.kind == \"Role\") | .rules[] | select(.apiGroups[0] == \"coordination.k8s.io\") | .verbs" "${default_manifest}")"
@@ -269,6 +281,19 @@ has_arg "${gds_args}" "--gds-tls-ca-configmap=platform-ca" ||
   fail "globalDiscovery.trustBundle.configMap must reach --gds-tls-ca-configmap"
 has_arg "${gds_args}" "--trust-bundle-configmap=platform-ca" || fail "the shared CA ConfigMap must stay the trust bundle"
 ! has_arg_prefix "${gds_args}" "--router-grpc-address" || fail "an empty router address must not render with router.source=gds"
+! has_arg "${gds_args}" "--gds-pool-export" || fail "pool export must be off by default with router.source=gds"
+
+# globalDiscovery.poolExport.enabled adds --gds-pool-export with
+# router.source=gds.
+pool_export_manifest="${tmp_dir}/pool-export.yaml"
+render "${pool_export_manifest}" \
+  --set router.source=gds \
+  --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod \
+  --set globalDiscovery.poolExport.enabled=true
+pool_export_args="$(args_of "${pool_export_manifest}")"
+has_arg "${pool_export_args}" "--gds-pool-export" || fail "globalDiscovery.poolExport.enabled must reach --gds-pool-export"
+[ "$(printf '%s\n' "${pool_export_args}" | grep -c -- '^--gds-pool-export$')" = "1" ] || fail "one --gds-pool-export"
 
 gds_router_manifest="${tmp_dir}/gds-router.yaml"
 render "${gds_router_manifest}" \
@@ -288,6 +313,7 @@ static_gds_values_args="$(args_of "${static_gds_values_manifest}")"
 ! has_arg_prefix "${static_gds_values_args}" "--router-source" || fail "the static source must not render --router-source"
 ! has_arg_prefix "${static_gds_values_args}" "--gds-" || fail "the static source must not render GDS flags"
 ! has_arg_prefix "${default_args}" "--gds-" || fail "default must not render GDS flags"
+! has_arg "${default_args}" "--gds-pool-export" || fail "default must not export pools"
 
 # watchNamespaces renders one comma-separated flag.
 watch_manifest="${tmp_dir}/watch.yaml"
@@ -391,5 +417,11 @@ gds_notes="$(helm template "${release}" "${notes_chart}" --namespace "${namespac
 printf '%s\n' "${gds_notes}" | grep -qF 'Router source:        Global Discovery Service https://gds.example.test, clusterset prod' ||
   fail "GDS NOTES must name the GDS URLs and clusterset"
 printf '%s\n' "${gds_notes}" | grep -qF 'ConfigMap gds-ca' || fail "GDS NOTES must name the GDS CA ConfigMap"
+! printf '%s\n' "${gds_notes}" | grep -qF 'Pylon agent' || fail "GDS NOTES must not describe pool export unless enabled"
+pool_export_notes="$(helm template "${release}" "${notes_chart}" --namespace "${namespace}" --values "${ci_values}" \
+  --set router.source=gds --set 'globalDiscovery.urls={https://gds.example.test}' \
+  --set globalDiscovery.clustersetId=prod --set globalDiscovery.poolExport.enabled=true \
+  --show-only templates/zz-notes.yaml | yq -r '.notes')"
+printf '%s\n' "${pool_export_notes}" | grep -qF 'exported to GDS as the Pylon agent of its' || fail "pool export NOTES must describe the export"
 
 echo "pylon-operator render checks passed"

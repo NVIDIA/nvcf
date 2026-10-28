@@ -52,6 +52,9 @@ spec:
             {{- with .Values.globalDiscovery.trustBundle.configMap }}
             - {{ printf "--gds-tls-ca-configmap=%s" . | quote }}
             {{- end }}
+            {{- if include "pylon-operator.poolExport" . }}
+            - "--gds-pool-export"
+            {{- end }}
             {{- with .Values.router.grpcAddress }}
             - {{ printf "--router-grpc-address=%s" . | quote }}
             {{- end }}
