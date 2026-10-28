@@ -1116,6 +1116,53 @@ agent-only pools resolve `pool_id` through the deterministic UUIDv5 without a na
 ### Status (v0.5)
 
 - ws-d: design doc and this section written.
+- ws0 (`257912152`, `980ab0a60`): the API contract: `FRONTEND_ROLE_PYLON`, `AgentSource`,
+  `DialMode`, `PoolAgent` and `PoolAgentRegistration`, `Pool.agents`, `kv_relay_live`,
+  `ready_ingress_count`, `Router.quic_port` and `ports`, the three agent RPCs with REST bindings,
+  the `pylon` role and the `roles` and `quic-port-name` annotations in Go and Rust, agent limits,
+  and registrations keyed by `agent_id`.
+- ws1 (merged at `38ae4e86e`): agent registrations in the memory and DynamoDB stores with
+  conformance cases, agent derivation and the ingress-based pool state rules in the view, the
+  agent RPC handlers, and `docs/api.md`, `docs/storage.md` and `docs/consistency.md`.
+- ws2 (merged at `4fb46c395`): fakegds serves the agent RPCs keyed by agent id and derives agents,
+  `kv_relay_live`, `ready_ingress_count` and the router QUIC port and ports;
+  `docs/mcs-controller.md`.
+- ws3 (merged at `37290745b`): the Go client's `RelayURLs`, `RouterQUICAddrs`, ingress, agent and
+  registration helpers and `AgentRegistration` keyed by agent id, and its README.
+- ws4 (merged at `0fb537a49`): the Rust gds-client (`relay_seed_urls`, `quic_port`, the agent RPCs,
+  `AgentRegistration`) and Pylon `--gds-pool-name` (`GDS_POOL_NAME`), which registers each Pylon
+  as the PYLON agent of its pool.
+- ws5 (merged at `8608b53cb`): the Pylon Operator's `--gds-pool-export` (chart
+  `globalDiscovery.poolExport.enabled`, CRD `spec.globalDiscovery.poolName`) with the transport
+  Service and `--gds-pool-name`, and `gds.nvidia.com/quic-port-name: quic` on the router Service of
+  the llm-request-router chart.
+- ws6 (branch `feat/gds-r2-ws6`): k3d e2e checks of agent registrations over REST (phase 1),
+  label-derived PYLON and combined-role agents (phase 2), and the Pylon pool with source BOTH and
+  the router QUIC port and ports (phase 3, before the data path checks); the e2e README, the
+  module README, the quickstart and this status; `gds-admin describe` lists pool agent
+  registrations per pool and role with their active leases, and `delete-cluster` counts them.
+  Executed on colima with k3d 5.9.0, k3s v1.35.5 and `/bin/bash` 3.2, with the Bazel builds and
+  `E2E_CLEANUP=1` (`make test-cleanup`): `E2E_PHASES=1`, 61 passed; phases 1 to 3 from scratch,
+  125 passed (phase 1: 61, phase 2: 51, phase 3: 13, setup checks included; 100 before), then the
+  clusters and the network were removed. A first full run had one FAIL (cluster `a` lease not
+  ACTIVE) because the host went to sleep for 40 minutes during phase 2 and the controller's lease
+  expired; the rerun under `caffeinate -i` passed. Also `make check` (shellcheck 0.10.0),
+  `make dry-run`, `GOWORK=off go test -race ./cmd/gds-admin/...`, `make vet` and
+  `bazel test //src/control-plane-services/global-discovery/cmd/gds-admin:gds-admin_test`.
+  golangci-lint is not installed here; `make lint` was not run.
+
+Known follow-ups:
+
+- The Go client agent tests run against a stub server, not `pkg/fakegds`.
+- Direct router mode (ws7 to ws9, Status (v0.6)) was not started at the v0.5 merge.
+- Subagent commits carry Co-Authored-By Claude Opus 5.5 trailers (their harness), left as is.
+- A KV_RELAY registration on an API-registered pool without ingress Services or ingress
+  registrations turns a started pool UNHEALTHY: with any agent registration the pool is no longer
+  API-only, so its pool lease no longer makes it live (`registry.PoolStateInput.Live`), and a
+  static frontend `url` counts as no ingress. This follows design 4.6 and `docs/api.md`, and phase
+  1 asserts it, but it affects a pool fronted by a static URL with a PoolRelay. Decide whether the
+  pool lease should keep the pool live while it has no ingress Service and no ingress
+  registration.
 
 ## Revision v0.6: direct router mode (k8s-router optional)
 

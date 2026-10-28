@@ -246,13 +246,18 @@ Runs on macOS with colima (Docker with the containerd image store), k3d 5.9.0
 and k3s v1.35.5, with `/bin/bash` 3.2:
 
 - Phases 1, 2 and 3 from scratch with the Bazel builds and `E2E_CLEANUP=1`:
-  100 checks passed, then the three clusters and the network were deleted.
-- The same with reused clusters and `E2E_SKIP_BUILD=1`: 101 passed (the extra
-  check is the restart of the reused gds-server).
-- `E2E_DEPLOY_ONLY=1`: 28 passed. `E2E_CLEANUP_ONLY=1` removed created
-  clusters, and in clusters treated as reused it deleted the workload
-  namespaces (ServiceExport finalizers resolved by the running controller),
-  the releases and the routes.
+  125 checks passed (phase 1: 61, phase 2: 51, phase 3: 13, setup checks
+  included), then the three clusters and the network were deleted.
+  `E2E_PHASES=1`: 61 passed. Keep the host awake during a run (for example
+  `caffeinate -i make test-cleanup` on macOS): when it sleeps, the VM stops
+  and the controllers' GDS leases expire, which fails the lease checks.
+- Before the pool agent checks, with reused clusters and
+  `E2E_SKIP_BUILD=1`: 101 passed (the extra check is the restart of the
+  reused gds-server).
+- Before the pool agent checks, `E2E_DEPLOY_ONLY=1`: 28 passed.
+  `E2E_CLEANUP_ONLY=1` removed created clusters, and in clusters treated as
+  reused it deleted the workload namespaces (ServiceExport finalizers
+  resolved by the running controller), the releases and the routes.
 - `make check` (shellcheck 0.10.0) and `make dry-run`.
 
 Not covered: TLS between the clients and GDS, between Pylon and Stargate,

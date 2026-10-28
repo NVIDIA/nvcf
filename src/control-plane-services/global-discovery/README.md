@@ -39,13 +39,17 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   cross-region behaviour.
 - Lease math, writer generations and pool state derivation.
 - The Go client `pkg/client` (failover, typed calls, watch loop, pool and
-  router caches, metrics) and the in-memory test server `pkg/fakegds`.
+  router caches, relay seeds and pool agent helpers, `AgentRegistration`,
+  metrics) and the in-memory test server `pkg/fakegds`.
 
 - `gds-server` serves every service over gRPC and REST with the memory or
   DynamoDB store: cluster leases, ServiceExports and endpoint sets, merged
   ServiceImports with conflict resolution, pools derived from labelled
-  exports with the API overlay, routers, and watches with resume.
-- `gds-admin` inspects a store and deletes clusters.
+  exports with the API overlay, typed pool agents (see
+  [Pools and pool agents](#pools-and-pool-agents)), routers with their
+  gRPC, HTTP and QUIC ports, and watches with resume.
+- `gds-admin` inspects a store, including the pool agent registrations,
+  and deletes clusters.
 - `gds-mcs-controller` implements the Multi-Cluster Services API in every
   member cluster on top of GDS: label-driven and explicit ServiceExports,
   pool exports, ServiceImports with derived Services and EndpointSlices,
@@ -166,6 +170,45 @@ curl -s localhost:9091/readyz
 
 A generation of 0 (or none) in a write asks the server to assign one, which
 is convenient with curl; controllers and clients send their own.
+
+## Pools and pool agents
+
+A pool is one `(cluster, name)` of a clusterset. The processes that serve
+it are its agents, one per role (`docs/api.md`, Pools):
+
+| Role | Label value | Process | Ingress |
+| :---- | :---- | :---- | :---- |
+| `FRONTEND_ROLE_OPENAI` | `pool-frontend` | OpenAI-compatible frontend; routers dial it | yes |
+| `FRONTEND_ROLE_KV_RELAY` | `kv-relay` | Dynamo PoolRelay; dials routers over gRPC | no |
+| `FRONTEND_ROLE_PYLON` | `pylon` | Pylon transport; dials routers and carries requests over its reverse tunnel | yes |
+
+- Label source: an exported Service with `gds.nvidia.com/pool` and the role
+  in `gds.nvidia.com/role`, or, for one process in several roles, in the
+  annotation `gds.nvidia.com/roles` (for example `pool-frontend,pylon`).
+- API source: each process registers itself, one registration per
+  `agent_id` with its own lease, so N Pylon pods of a pool never fence each
+  other. Pylon does it with `--gds-pool-name`, a PoolRelay with
+  `AgentRegistration` of the Go or Rust client.
+- `Pool.agents[]` merges both per role: `source` (`AGENT_SOURCE_LABEL`,
+  `AGENT_SOURCE_API` or `AGENT_SOURCE_BOTH`), ready endpoints,
+  `registrations[]`, `active_registration_count` and `live`. The pool adds
+  `kv_relay_live` and `ready_ingress_count` (ready OPENAI and PYLON
+  endpoints; `ready_endpoint_count` counts OPENAI only).
+- A pool is live while its cluster lease is active and an ingress agent has
+  a ready endpoint, or while an ingress agent registration has an active
+  lease. A pool whose only live agent is a KV_RELAY stays REGISTERED.
+
+The agent RPCs of `PoolService`:
+
+- `RegisterPoolAgent` (`POST /v1/clustersets/{cs}/pool-agents`) registers
+  one process of an agent, creates the pool when none exists and mints the
+  registration's lease epoch.
+- `HeartbeatPoolAgent` (`POST .../pools/{pool_id}/agents/{role}:heartbeat`)
+  renews one registration with its `agent_id` and epoch and may replace its
+  attributes.
+- `DeregisterPoolAgent` (`DELETE .../pools/{pool_id}/agents/{role}?agent_id=`)
+  removes one registration; the agent stays while other registrations or
+  its Service remain.
 
 ## gds-server flags
 
