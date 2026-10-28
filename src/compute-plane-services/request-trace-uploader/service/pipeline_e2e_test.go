@@ -412,6 +412,55 @@ func TestRunPollsOnTheStatusIntervalNotOnEveryScan(t *testing.T) {
 	}
 }
 
+// blockingSubmits holds every submit until release is closed.
+type blockingSubmits struct {
+	*backendtest.Fake
+	release chan struct{}
+}
+
+func (b blockingSubmits) Submit(ctx context.Context, request backend.SubmitRequest) (string, error) {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return b.Fake.Submit(ctx, request)
+}
+
+func TestAJobFromBeforeARestartIsConfirmedWhileTheFirstScanIsStillSubmitting(t *testing.T) {
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	fake := backendtest.NewFake()
+	fake.Script(backendtest.SubmitStep{Statuses: []backendtest.StatusStep{{Status: backend.StatusPending}, {Status: backend.StatusSuccess}}})
+	first := newUploader(t, spool, fake, service.Options{}, nil)
+	if err := first.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass() error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A new segment closes, so the first scan after the restart submits.
+	spool.Roll(uploadertest.NewSegment().Member(uploadertest.RequestEnd("b", 2)).Bytes())
+
+	blocked := blockingSubmits{Fake: fake, release: make(chan struct{})}
+	listener, _ := listen(t)
+	uploader := newUploader(t, spool, blocked, service.Options{Listener: listener}, map[string]string{
+		config.EnvScanInterval:   "1",
+		config.EnvStatusInterval: "1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- uploader.Run(ctx) }()
+	defer func() {
+		close(blocked.release)
+		cancel()
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v", err)
+		}
+	}()
+
+	waitFor(t, "the earlier job to be confirmed and its source deleted", func() bool { return gone(closed[0]) })
+}
+
 func TestAReceiptFromADryRunNeverDeletesTheSourceAfterARestart(t *testing.T) {
 	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
 	fake := backendtest.NewFake()

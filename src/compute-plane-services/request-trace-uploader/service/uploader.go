@@ -286,25 +286,19 @@ func (u *Uploader) Run(ctx context.Context) error {
 	work, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
 	stop := make(chan struct{})
-	// Polling starts once the first scan has submitted what it found, and
-	// then runs only on the status interval.
+	// Polling runs on the status interval, apart from scans, so a slow
+	// submit never holds back the confirmation of jobs already created.
+	// It also runs once when the first scan has submitted what it found.
 	scanned := make(chan struct{})
 	var loops sync.WaitGroup
 	loops.Add(2)
 	go func() {
 		defer loops.Done()
-		u.loop(work, stop, u.cfg.ScanInterval, u.scan, func() { close(scanned) })
+		u.loop(work, stop, u.cfg.ScanInterval, u.scan, nil, func() { close(scanned) })
 	}()
 	go func() {
 		defer loops.Done()
-		select {
-		case <-scanned:
-		case <-stop:
-			return
-		case <-work.Done():
-			return
-		}
-		u.loop(work, stop, u.pollInterval(), u.Poll, nil)
+		u.loop(work, stop, u.pollInterval(), u.Poll, scanned, nil)
 	}()
 
 	select {
@@ -329,9 +323,10 @@ func (u *Uploader) Run(ctx context.Context) error {
 	return nil
 }
 
-// loop runs run now and then on every tick until stop or ctx ends. afterFirst,
-// when set, is called once the first run returns.
-func (u *Uploader) loop(ctx context.Context, stop <-chan struct{}, every time.Duration, run func(context.Context) error, afterFirst func()) {
+// loop runs run now and then on every tick until stop or ctx ends. It also
+// runs once more as soon as early closes. afterFirst, when set, is called
+// once the first run returns.
+func (u *Uploader) loop(ctx context.Context, stop <-chan struct{}, every time.Duration, run func(context.Context) error, early <-chan struct{}, afterFirst func()) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -347,6 +342,8 @@ func (u *Uploader) loop(ctx context.Context, stop <-chan struct{}, every time.Du
 			return
 		case <-ctx.Done():
 			return
+		case <-early:
+			early = nil
 		case <-ticker.C:
 		}
 	}
