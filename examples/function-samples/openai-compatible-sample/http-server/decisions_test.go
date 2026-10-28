@@ -310,3 +310,100 @@ func getPath(t *testing.T, path string) *httptest.ResponseRecorder {
 	newRouter().ServeHTTP(recorder, request)
 	return recorder
 }
+
+const realDecisionsBody = `{"model":"m","input":[{"role":"user","content":[` +
+	`{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}],"questions":[` +
+	`{"type":"predicate","name":"p","instructions":"is it red?"},` +
+	`{"type":"choice","name":"c","instructions":"which?","choices":[{"value":"cat","description":"a cat"},{"value":"dog","description":"a dog"}]},` +
+	`{"type":"choice","name":"c2","instructions":"which?","choices":["bird","fish"]},` +
+	`{"type":"score","name":"s","instructions":"rate","levels":[{"label":"bad","description":"d"},{"label":"good","description":"d"}]},` +
+	`{"type":"score","name":"s2","instructions":"rate","levels":["low","high"]},` +
+	`{"type":"box","name":"b","instructions":"find it"},` +
+	`{"type":"future","name":"f","extra":{"x":1}}]}`
+
+func TestDecisionsAcceptsRealQuestionShapes(t *testing.T) {
+	recorder := postJSON(t, "/v1/decisions", realDecisionsBody)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Answers []map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Answers) != 7 {
+		t.Fatalf("answers = %s, want 7", recorder.Body.String())
+	}
+	names := []string{"p", "c", "c2", "s", "s2", "b", "f"}
+	for i, name := range names {
+		if response.Answers[i]["name"] != name {
+			t.Fatalf("answer %d name = %v, want %s", i, response.Answers[i]["name"], name)
+		}
+	}
+	a := response.Answers
+	if a[0]["type"] != "predicate" || a[0]["probability"] == nil {
+		t.Fatalf("predicate = %v", a[0])
+	}
+	if a[1]["choice"] != "cat" || a[2]["choice"] != "bird" {
+		t.Fatalf("choices = %v %v", a[1], a[2])
+	}
+	for _, i := range []int{1, 2, 3, 4} {
+		if a[i]["probabilities"] == nil || a[i]["confidence"] == nil {
+			t.Fatalf("answer %d lacks probabilities/confidence: %v", i, a[i])
+		}
+	}
+	if a[3]["score"] != "bad" || a[4]["score"] != "low" {
+		t.Fatalf("scores = %v %v", a[3], a[4])
+	}
+	box, ok := a[5]["box"].(map[string]any)
+	if a[5]["type"] != "box" || !ok || box["top"] == nil || box["bottom"] == nil || box["left"] == nil || box["right"] == nil || a[5]["confidence"] == nil {
+		t.Fatalf("box = %v", a[5])
+	}
+	if a[6]["type"] == "choice" || a[6]["name"] != "f" {
+		t.Fatalf("unknown type answer = %v", a[6])
+	}
+}
+
+const realSystemOneBody = `{"model":"m","state":[{"k":"v"}],"images":["AAAA"],"assets":{"a":{"x":1}},"questions":{` +
+	`"n":{"type":"noul","criteria":{"true":"yes","false":"no"}},` +
+	`"c":{"type":"choice","criteria":{"opt_a":"first","opt_b":"second"}},` +
+	`"s":{"type":"score","criteria":["worst","mid","best"]},` +
+	`"b":{"type":"box"},` +
+	`"u":{"type":"mystery","extra":[1,2]}}}`
+
+func TestSystemOneAcceptsRealQuestionShapes(t *testing.T) {
+	for _, state := range []string{`"text"`, `{"a":1}`, `[1,2]`} {
+		body := strings.Replace(realSystemOneBody, `[{"k":"v"}]`, state, 1)
+		recorder := postJSON(t, "/v1/systemone", body)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("state %s status = %d: %s", state, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder := postJSON(t, "/v1/systemone", realSystemOneBody)
+	var response struct {
+		Answers map[string]map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	a := response.Answers
+	if len(a) != 5 {
+		t.Fatalf("answers = %s, want 5", recorder.Body.String())
+	}
+	if a["n"]["type"] != "noul" || a["n"]["noul"] != 0.99 {
+		t.Fatalf("noul = %v", a["n"])
+	}
+	if a["c"]["choice"] != "opt_a" || a["c"]["probabilities"] == nil || a["c"]["confidence"] == nil {
+		t.Fatalf("choice = %v", a["c"])
+	}
+	if a["s"]["score"] != float64(0) || a["s"]["probabilities"] == nil || a["s"]["confidence"] == nil || a["s"]["legend"] == nil {
+		t.Fatalf("score = %v", a["s"])
+	}
+	if a["b"]["box"] == nil {
+		t.Fatalf("box = %v", a["b"])
+	}
+	if a["u"]["type"] == nil {
+		t.Fatalf("unknown = %v", a["u"])
+	}
+}
