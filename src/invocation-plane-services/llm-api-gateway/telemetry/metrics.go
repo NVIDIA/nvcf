@@ -79,6 +79,7 @@ func InitializeMetrics() {
 	_ = ModelURIAllowlistRejections()
 	_ = LLMTokens()
 	_ = MessagesUsage()
+	_ = DecisionUsage()
 	_ = ProviderTime()
 	_ = StreamFirstToken()
 	_ = StreamDuration()
@@ -98,6 +99,7 @@ func InitializeMetrics() {
 	_ = authRequestsTotal()
 	_ = authRequestDuration()
 	preInitAuthMetrics()
+	preInitDecisionMetrics()
 	_ = lastClusterLookupDuration()
 	preInitLastClusterMetrics()
 }
@@ -200,6 +202,16 @@ func LLMTokens() otelmetric.Int64Counter {
 
 func MessagesUsage() otelmetric.Int64Counter {
 	return must.Get(Meter().Int64Counter(metricPrefix+"messages_usage_observations_total", otelmetric.WithDescription("Messages usage accounting outcomes; estimates are not reported as actual tokens.")))
+}
+
+// DecisionUsage counts response usage observations on the decision routes.
+// status is "observed" when the response reported usage.input_tokens and
+// "absent" when it did not.
+func DecisionUsage() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"decision_usage_observations_total",
+		otelmetric.WithDescription("Decision route responses by whether they reported input token usage."),
+	))
 }
 
 func ProviderTime() otelmetric.Float64Histogram {
@@ -558,4 +570,49 @@ func DropReasonRemoteApplyDisabled() attribute.KeyValue {
 
 func SynchronizerDropReasonOldMessage() attribute.KeyValue {
 	return attribute.String("reason", synchronizerDropOldMessage)
+}
+
+// decisionRoutes are the routes whose series are seeded before traffic. The
+// route label comes from the router pattern, so without a seed the series for
+// a route that has not been called yet does not exist and absent() and rate()
+// have nothing to read.
+var decisionRoutes = []string{"/v1/decisions", "/v1/systemone"}
+
+// DecisionRoutes returns the decision routes seeded by InitializeMetrics.
+func DecisionRoutes() []string { return append([]string(nil), decisionRoutes...) }
+
+// decisionSeedStatuses bounds the status label of the seeded request series
+// to the statuses the decision routes commonly return.
+var decisionSeedStatuses = []string{"200", "400", "401", "404", "429", "500", "502", "504"}
+
+// preInitDecisionMetrics emits zero samples for the decision routes on the
+// usage counter and the HTTP request instruments, using the missing function
+// label so cardinality stays bounded.
+func preInitDecisionMetrics() {
+	ctx := context.Background()
+	usage := DecisionUsage()
+	requests := HTTPRequestsTotal()
+	active := HTTPActiveRequests()
+	for _, route := range decisionRoutes {
+		for _, status := range []string{"observed", "absent"} {
+			usage.Add(ctx, 0, otelmetric.WithAttributes(
+				attribute.String("endpoint", route),
+				attribute.String("status", status),
+				FunctionIDAttribute(""),
+			))
+		}
+		active.Add(ctx, 0, otelmetric.WithAttributes(
+			attribute.String("method", "POST"),
+			attribute.String("route", route),
+			FunctionIDAttribute(""),
+		))
+		for _, status := range decisionSeedStatuses {
+			requests.Add(ctx, 0, otelmetric.WithAttributes(
+				attribute.String("method", "POST"),
+				attribute.String("route", route),
+				FunctionIDAttribute(""),
+				attribute.String("status", status),
+			))
+		}
+	}
 }

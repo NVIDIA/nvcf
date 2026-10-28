@@ -80,7 +80,19 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
 
-	return writeProxyResponse(c, resp)
+	var tee io.Writer
+	var observer *decisionUsageObserver
+	if observesDecisionUsage(c.Request(), resp) {
+		observer = &decisionUsageObserver{}
+		tee = observer
+	}
+	if err := writeProxyResponseObserved(c, resp, tee); err != nil {
+		return err
+	}
+	if observer != nil {
+		h.recordDecisionUsage(c, observer)
+	}
+	return nil
 }
 
 func (h *Handlers) requireFunctionRequestContext(
@@ -155,6 +167,12 @@ func (h *Handlers) dispatchEstimatedProxyRequest(
 }
 
 func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
+	return writeProxyResponseObserved(c, resp, nil)
+}
+
+// writeProxyResponseObserved writes resp to the client. When tee is not nil,
+// every body byte written to the client is also written to it.
+func writeProxyResponseObserved(c *GatewayContext, resp *provider.ProxyResponse, tee io.Writer) error {
 	if resp == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
@@ -173,7 +191,11 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	if resp.Body == nil {
 		return nil
 	}
-	_, err := io.Copy(c.Response().Writer, resp.Body)
+	var body io.Reader = resp.Body
+	if tee != nil {
+		body = io.TeeReader(body, tee)
+	}
+	_, err := io.Copy(c.Response().Writer, body)
 	return err
 }
 
