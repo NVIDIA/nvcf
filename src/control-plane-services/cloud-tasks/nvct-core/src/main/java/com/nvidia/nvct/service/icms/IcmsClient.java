@@ -332,6 +332,11 @@ public class IcmsClient {
         }
     }
 
+    public IcmsStubService.WorkerTokenIntrospectResult introspectWorkerToken(
+            IcmsStubService.WorkerTokenIntrospectRequest request) {
+        return icmsStubService.introspectWorkerToken(request);
+    }
+
     public Instance getInstanceById(String instanceId) {
         var response = icmsStubService.describeInstances(Set.of(instanceId));
         return Optional.ofNullable(response)
