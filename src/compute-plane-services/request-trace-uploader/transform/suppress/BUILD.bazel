@@ -17,6 +17,7 @@ alias(
 go_test(
     name = "suppress_test",
     srcs = [
+        "matching_test.go",
         "rules_test.go",
         "suppress_test.go",
     ],
