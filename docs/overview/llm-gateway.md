@@ -1,6 +1,6 @@
 # LLM Gateway
 
-The LLM Gateway handles OpenAI-compatible and native Anthropic Messages invocation for NVCF LLM functions in
+The LLM Gateway handles OpenAI-compatible, native Anthropic Messages, and beta decision model invocation for NVCF LLM functions in
 self-managed deployments. Use LLM functions when requests should enter through
 the LLM invocation route and NVCF should route them by function and model.
 
@@ -91,6 +91,8 @@ gateway does not wrap it in a second NVCF envelope.
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 | `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
+| `/v1/decisions` | Beta. Passes OpenAI Decisions requests and responses through unchanged. Not streamed. |
+| `/v1/systemone` | Beta. Passes TypeSafe System One requests and responses through unchanged. Not streamed. |
 
 `llmConfig.routingMethod` is a routing algorithm name, optionally followed by
 tuning parameters, such as `pulsar;seed=stable-a;consider_kv_free_tokens=true`.
@@ -240,6 +242,7 @@ body.
 | `/v1/chat/completions` | `model` with the `<function-id>/` prefix, `stream`, `max_tokens`, `max_completion_tokens`, `prompt_cache_key`, `stream_options`, and a non-empty `messages` array |
 | `/v1/responses` | `model` with the `<function-id>/` prefix, `stream`, `max_output_tokens`, `prompt_cache_key`, `conversation.id`, and a non-empty `input` unless `prompt`, `previous_response_id`, or `conversation` is present |
 | `/v1/embeddings` | `model` with the `<function-id>/` prefix, and a non-empty `input` with at most 2048 entries |
+| `/v1/decisions`, `/v1/systemone` | `model` with the `<function-id>/` prefix. No other field. |
 
 The body must be a JSON object. A checked field that appears twice in
 different letter cases returns `400`.
@@ -249,9 +252,73 @@ The gateway forwards the body unchanged except for these fields:
 - Chat: sets `model` and `stream`, merges `stream_options`, and removes `debug`.
 - Responses: sets `model` and `stream`.
 - Embeddings: sets `model`.
+- Decisions and System One: sets `model`.
 
 The gateway does not add `service_tier`. The backend receives it only when the
 client sends it.
+
+### Decision models (beta)
+
+Decision models answer typed questions about an input and return probabilities
+instead of generated text. Two beta routes pass these requests through:
+
+- `POST /v1/decisions` for the OpenAI Decisions format.
+- `POST /v1/systemone` for the TypeSafe System One format.
+
+The gateway reads only `model`, rewrites it to the backend model name, and
+forwards the rest of the body unchanged. It does not translate between the two
+formats, so the backend must implement each route that it declares. Responses
+are not streamed: `stream` is ignored. Client headers, including
+`TypeSafe-Danger-Zone-Images`, reach the backend.
+
+```bash
+curl -sS -X POST "http://${GATEWAY_ADDR}/v1/decisions" \
+  -H "Host: llm.invocation.${GATEWAY_ADDR}" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "<function-id>/decision-model",
+    "input": "The sky is clear.",
+    "questions": [{"type": "predicate", "text": "Is it raining?"}]
+  }'
+```
+
+A model is enabled for a route only when its `llmConfig.uris` lists that path.
+A model with no `uris`, or without the route in them, returns `404` in the
+error shape of the route. These routes have no default-allow, and
+`MODEL_URI_ALLOWLIST_ENABLED` does not change this.
+
+`llmConfig.uris` is fixed when the function is created, so declare the decision
+routes at creation. A function that serves both routes should use
+`usePexec: false` in the Vanity Gateway mapping, because a `usePexec: true`
+function reaches only its default path.
+
+Token admission counts one request and an estimate of the input tokens. The
+estimate counts every string in the body as text. Each image counts a flat
+number, `1024` by default, set with `NVCF_DECISION_IMAGE_TOKENS` on the gateway.
+Base64 image data is never counted. An image is an object with `type` set to
+`input_image`, an element of `images`, a value of `assets`, or any string that
+is a base64 data URL. The estimate is sent as `X-Input-Tokens` and
+`X-Token-Estimate`.
+
+Errors that the gateway or the request router generates use the shape of the
+route:
+
+- `/v1/decisions` uses the OpenAI error shape.
+- `/v1/systemone` uses `{"error":{"code","message","request_id"},"request_id"}`.
+  `request_id` equals the `X-Request-ID` response header. Codes are
+  `invalid_json`, `invalid_request`, `invalid_api_key`, `not_found`,
+  `request_too_large`, `rate_limit_exceeded`, `internal_error`,
+  `provider_unavailable`, and `provider_timeout`.
+
+An error from the backend is relayed unchanged, whatever its shape, size, or
+encoding.
+
+When a successful response reports `usage.input_tokens`, the gateway records it
+on `llm_api_gateway_llm_tokens_total` and counts the response in
+`llm_api_gateway_decision_usage_observations_total` with `status="observed"`. A
+response without it counts as `absent`. The estimate remains the admission
+value.
 
 ### Anthropic Messages
 
