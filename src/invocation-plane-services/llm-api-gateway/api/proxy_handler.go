@@ -210,7 +210,37 @@ func isBackendErrorOnDecisionRoute(r *http.Request, resp *provider.ProxyResponse
 	default:
 		return false
 	}
-	return resp.StatusCode >= http.StatusBadRequest && !provider.IsRouterRejection(resp.Header)
+	if resp.StatusCode < http.StatusBadRequest || provider.IsRouterRejection(resp.Header) {
+		return false
+	}
+	return !emptyBody(resp)
+}
+
+// emptyBody reports whether resp has no body, reading at most one byte. A
+// byte that is read is put back in front of the stream. Stargate answers some
+// router failures, such as a replay buffer overflow or a failed tunnel, with a
+// bare status and no body or error code header; those are router errors, not
+// backend errors.
+func emptyBody(resp *provider.ProxyResponse) bool {
+	if resp.Body == nil {
+		return true
+	}
+	var first [1]byte
+	for {
+		n, err := resp.Body.Read(first[:])
+		if n == 1 {
+			resp.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(first[:]), resp.Body), Closer: resp.Body}
+			return false
+		}
+		if err != nil {
+			return err == io.EOF
+		}
+	}
+}
+
+type prefixedBody struct {
+	io.Reader
+	io.Closer
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {
