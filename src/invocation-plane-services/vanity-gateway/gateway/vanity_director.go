@@ -51,6 +51,11 @@ const statusClientClosedRequest = 499
 func writeFunctionStatusError(writer http.ResponseWriter, request *http.Request, offlineMessage string, eol time.Time, name string) bool {
 	if offlineMessage != "" {
 		markGatewayRejected(writer, request)
+		if requestProtocol(request) != nativeProtocolNone {
+			writer.Header().Set("Retry-After", "10800")
+			writeNativeError(writer, request, http.StatusServiceUnavailable, errKindProviderUnavailable, offlineMessage)
+			return true
+		}
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.Header().Set("Retry-After", "10800")
 		writer.WriteHeader(http.StatusServiceUnavailable)
@@ -63,6 +68,11 @@ func writeFunctionStatusError(writer http.ResponseWriter, request *http.Request,
 		return true
 	}
 	if isModelExpired(eol) {
+		if requestProtocol(request) != nativeProtocolNone {
+			markGatewayRejected(writer, request)
+			writeNativeError(writer, request, http.StatusGone, errKindNotFound, "model has reached end of life")
+			return true
+		}
 		var detail string
 		if name != "" {
 			detail = fmt.Sprintf("The model '%s' has reached its end of life on %s and is no longer available.", name, eol.Format(time.RFC3339))
@@ -146,8 +156,7 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
 		)
-		if request.URL.Path == "/v1/messages" {
-			writeAnthropicError(writer, statusClientClosedRequest, "client closed the request")
+		if writeNativeError(writer, request, statusClientClosedRequest, errKindInternal, "client closed the request") {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/problem+json")
@@ -170,8 +179,7 @@ func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, e
 		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
 	)
-	if request.URL.Path == "/v1/messages" {
-		writeAnthropicError(writer, http.StatusBadGateway, "upstream request failed")
+	if writeNativeError(writer, request, http.StatusBadGateway, errKindProviderUnavailable, "upstream request failed") {
 		return
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")

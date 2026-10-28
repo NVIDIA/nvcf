@@ -184,6 +184,8 @@ func registerModelAPIs(hostRouter *middleware.HostRouter, mappings *config.Gatew
 	r.Method(http.MethodPost, "/v1/completions", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeCompletions)))
 	r.Method(http.MethodPost, "/v1/embeddings", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeEmbeddings)))
 	r.Method(http.MethodPost, "/v1/messages", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeMessages)))
+	r.Method(http.MethodPost, decisionsPath, chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeDecisions)))
+	r.Method(http.MethodPost, systemOnePath, chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeSystemOne)))
 	r.Method(http.MethodPost, "/v1/responses", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeResponses)))
 	r.Method(http.MethodPost, "/v1/images/generations", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeImageGenerations)))
 	r.Method(http.MethodPost, "/v1/images/edits", chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(modelDirector.ServeImageEdits)))
