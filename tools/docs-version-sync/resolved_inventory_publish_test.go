@@ -157,6 +157,139 @@ func TestMaterializeResolvedInventorySourceChartsAllowsUnavailableHistoricalPath
 	}
 }
 
+// TestMaterializeResolvedInventorySourceChartsFollowsReleaseSnapshot covers a
+// stack release branch rooted at a snapshot: a commit that copies a
+// default-branch tree onto a merge-free parent. Chart tags released from the
+// default branch are ancestors of the copied commit, not of the snapshot.
+func TestMaterializeResolvedInventorySourceChartsFollowsReleaseSnapshot(t *testing.T) {
+	repo := initTestGitRepo(t)
+	git := func(args ...string) string {
+		t.Helper()
+		output, err := gitOutput(repo, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return trimOutput(output)
+	}
+	commitFiles := func(message string, files map[string]string) string {
+		t.Helper()
+		for name, body := range files {
+			writeFile(t, filepath.Join(repo, filepath.FromSlash(name)), body)
+		}
+		git("add", "--all")
+		git("commit", "-m", message)
+		return git("rev-parse", "HEAD")
+	}
+
+	const statePath = "deploy/stacks/self-managed/helmfile.d/state.yaml.gotmpl"
+	const chartMetadata = "apiVersion: v2\nname: helm-example\nversion: 0.0.0\n"
+	stateBody := "releases:\n  - name: example\n    chart: nvcf/helm-example\n    version: 1.0.0\n"
+	sourceCharts := map[string]resolvedInventorySourceChart{
+		"helm-example": {TagPrefix: "deploy/helm/example/v", Path: "deploy/helm/example"},
+	}
+
+	linearParent := commitFiles("chore: seed", map[string]string{"README.md": "seed\n"})
+	commitFiles("feat: example chart", map[string]string{"deploy/helm/example/Chart.yaml": chartMetadata})
+	git("tag", "deploy/helm/example/v1.0.0")
+	base := commitFiles("feat: pin example chart", map[string]string{statePath: stateBody})
+	baseTree := git("rev-parse", base+"^{tree}")
+
+	// A chart released from a commit the stack never contained.
+	sideChart := git("commit-tree", git("rev-parse", "deploy/helm/example/v1.0.0^{tree}"), "-p", linearParent, "-m", "feat: unmerged chart")
+	git("tag", "deploy/helm/example/v2.0.0", sideChart)
+
+	snapshot := func(parent string, paragraphs ...string) string {
+		args := []string{"commit-tree", baseTree, "-p", parent}
+		for _, paragraph := range paragraphs {
+			args = append(args, "-m", paragraph)
+		}
+		return git(args...)
+	}
+	recorded := snapshot(linearParent, releaseSnapshotSubject, releaseSnapshotTrailer+": "+base)
+	legacy := snapshot(linearParent, releaseSnapshotSubject)
+	mismatched := snapshot(linearParent, releaseSnapshotSubject, releaseSnapshotTrailer+": "+linearParent)
+	patch := snapshot(recorded, "fix(stack): backport a change")
+
+	materialize := func(t *testing.T, stackCommit, chartVersion string) ([]string, error) {
+		t.Helper()
+		stateFile := filepath.Join(t.TempDir(), "state.yaml.gotmpl")
+		writeFile(t, stateFile, stateBody)
+		fullRaw := mustJSON(t, []helmfileRelease{{Name: "example", Chart: "nvcf/helm-example", Version: chartVersion}})
+		return materializeResolvedInventorySourceCharts(
+			repo,
+			stateFile,
+			t.TempDir(),
+			stackSourceRelease{Version: "1.1.0", Tag: "deploy/stacks/self-managed/v1.1.0", Commit: stackCommit},
+			fullRaw,
+			sourceCharts,
+			false,
+		)
+	}
+
+	accepted := []struct {
+		name        string
+		stackCommit string
+	}{
+		{name: "default branch commit", stackCommit: base},
+		{name: "snapshot with Snapshot-Of trailer", stackCommit: recorded},
+		{name: "patch on a snapshot branch", stackCommit: patch},
+		{name: "snapshot without trailer matched by tree", stackCommit: legacy},
+	}
+	for _, test := range accepted {
+		t.Run(test.name, func(t *testing.T) {
+			used, err := materialize(t, test.stackCommit, "1.0.0")
+			if err != nil {
+				t.Fatalf("materialize source charts: %v", err)
+			}
+			if !reflect.DeepEqual(used, []string{"helm-example"}) {
+				t.Fatalf("used source charts = %v, want [helm-example]", used)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name         string
+		stackCommit  string
+		chartVersion string
+		wantErr      []string
+	}{
+		{
+			name:         "chart tag outside a default branch stack",
+			stackCommit:  base,
+			chartVersion: "2.0.0",
+			wantErr:      []string{"tag deploy/helm/example/v2.0.0 is not an ancestor of stack commit " + base},
+		},
+		{
+			name:         "chart tag outside a snapshot's source",
+			stackCommit:  recorded,
+			chartVersion: "2.0.0",
+			wantErr: []string{
+				"tag deploy/helm/example/v2.0.0 is not an ancestor of stack commit " + recorded,
+				"or of its release snapshot source " + base,
+			},
+		},
+		{
+			name:         "Snapshot-Of commit with another tree",
+			stackCommit:  mismatched,
+			chartVersion: "1.0.0",
+			wantErr:      []string{"does not hold the tree of its Snapshot-Of commit " + linearParent},
+		},
+	}
+	for _, test := range rejected {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := materialize(t, test.stackCommit, test.chartVersion)
+			if err == nil {
+				t.Fatal("materialize source charts succeeded, want an ancestry error")
+			}
+			for _, want := range test.wantErr {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
