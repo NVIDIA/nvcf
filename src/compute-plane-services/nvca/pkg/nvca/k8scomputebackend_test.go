@@ -1891,6 +1891,125 @@ func TestGetICMSRequestUpdatesForCreatePodRequest_CreateContainerError_EventLogI
 	assert.Contains(t, update.Payload.HealthInfo.ErrorLog, eventMessage)
 }
 
+// A streaming app that quits when its session ends is restarted in place by the kubelet. Its restart count grows
+// with every session, but a clean exit after the Pod was ready must not purge the instance.
+func TestGetICMSRequestUpdatesForCreatePodRequest_ContainerRestarts(t *testing.T) {
+	now := time.Now()
+	lastExit := now.Add(-20 * time.Second)
+
+	tests := []struct {
+		name          string
+		lastExitCode  int32
+		lastReason    string
+		wantPurge     bool
+		wantInstState types.ICMSInstanceState
+	}{
+		{
+			name:          "clean exit after serving keeps the instance",
+			lastExitCode:  0,
+			lastReason:    "Completed",
+			wantInstState: types.ICMSInstanceStarted,
+		},
+		{
+			name:          "failed exit purges the instance",
+			lastExitCode:  1,
+			lastReason:    "Error",
+			wantPurge:     true,
+			wantInstState: types.ICMSInstanceTerminated,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClients()
+			ns := RequestsNamespace
+
+			bc := &BackendK8sCache{
+				podInstanceNamespace: ns,
+				systemNamespace:      SystemNamespace,
+				featureFlagFetcher:   &featureflagmock.Fetcher{},
+				clients:              clients,
+				k8sTimeConfig:        (&k8sutil.TimeConfig{}).Complete(),
+			}
+			kb := K8sComputeBackend{
+				clients: clients,
+				bk8s:    bc,
+			}
+
+			podName := "0-sr-restarting"
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns},
+				Status: v1.PodStatus{
+					Phase:     v1.PodRunning,
+					StartTime: &metav1.Time{Time: now.Add(-72 * time.Hour)},
+					Conditions: []v1.PodCondition{
+						{Type: v1.PodScheduled, Status: v1.ConditionTrue},
+						{Type: v1.PodInitialized, Status: v1.ConditionTrue},
+						{Type: v1.ContainersReady, Status: v1.ConditionFalse, LastTransitionTime: metav1.NewTime(lastExit)},
+						{Type: v1.PodReady, Status: v1.ConditionFalse, LastTransitionTime: metav1.NewTime(lastExit.Add(-5 * time.Second))},
+					},
+					ContainerStatuses: []v1.ContainerStatus{
+						{
+							Name:         "inference",
+							Ready:        true,
+							RestartCount: k8sutil.RestartCountToFailInstance,
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{StartedAt: metav1.NewTime(lastExit)},
+							},
+							LastTerminationState: v1.ContainerState{
+								Terminated: &v1.ContainerStateTerminated{
+									ExitCode:   tt.lastExitCode,
+									Reason:     tt.lastReason,
+									StartedAt:  metav1.NewTime(now.Add(-17 * time.Hour)),
+									FinishedAt: metav1.NewTime(lastExit),
+								},
+							},
+						},
+						{
+							Name:  common.UtilsContainerName,
+							State: v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-72 * time.Hour))}},
+						},
+					},
+				},
+			}
+			_, err := clients.K8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			req := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "sr-restarting", Namespace: ns},
+				Spec: nvcav2beta1.ICMSRequestSpec{
+					RequestID: "req-restarting",
+					Action:    common.FunctionCreationAction,
+				},
+				Status: nvcav2beta1.ICMSRequestStatus{
+					Instances: map[string]nvcav2beta1.InstanceStatus{
+						podName: {
+							ID:                 podName,
+							Type:               nvcav2beta1.InstanceTypePod,
+							Status:             string(types.ICMSInstanceRunning),
+							LastReportedStatus: string(types.ICMSInstanceRunning),
+						},
+					},
+				},
+			}
+
+			update, err := kb.GetICMSRequestUpdatesForCreatePodRequest(ctx, req.Status.Instances[podName], req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantInstState, update.Payload.InstanceState)
+
+			_, err = clients.K8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+			if tt.wantPurge {
+				assert.True(t, errors.IsNotFound(err), "pod should be deleted, got err %v", err)
+				assert.Equal(t, types.ICMSInstanceFailedContainerRestartLoop, update.Payload.TerminationCause)
+			} else {
+				require.NoError(t, err, "pod should be kept")
+				assert.Empty(t, update.Payload.TerminationCause)
+			}
+		})
+	}
+}
+
 func TestImageCredentialUpdater(t *testing.T) {
 	ctx := newTestContext()
 
