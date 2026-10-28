@@ -79,8 +79,8 @@ Submit and status are separate operations so a slow confirmation cannot block
 other segments. Backends register themselves from an init function, so a build
 links only the backends it imports. This binary links `debug` and
 `objectstore`. A distribution that needs another backend imports it in its own
-`main` and reuses the `config`, `backend`, `format`, `telemetry`, and `service`
-packages from this module.
+`main`, starts through `runner`, and reuses the `config`, `backend`, `format`,
+`telemetry`, `telemetry/otlp`, and `service` packages from this module.
 
 ## Configuration
 

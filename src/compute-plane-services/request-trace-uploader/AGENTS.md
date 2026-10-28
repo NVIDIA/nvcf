@@ -7,7 +7,8 @@ backend and deletes each source only after the backend confirmed it. See
 ## Layout
 
 - `cmd/`: process entrypoint and OCI image target
-- `config/`: settings, env aliases, and strict loading (`LoadStrict`)
+- `runner/`: shared startup, drain and final export for every binary
+- `config/`: settings and strict loading (`LoadStrict`); no env aliases
 - `service/`: startup, the pipeline (`Uploader`), and the HTTP server
 - `segment/`: closed segment discovery
 - `record/`, `transform/`: reading records, suppression, redaction
@@ -15,6 +16,8 @@ backend and deletes each source only after the backend confirmed it. See
 - `batch/`, `journal/`: batching and the durable state machine
 - `backend/`: export destination contract and the backend registry
 - `telemetry/`, `credentials/`: hooks other modules use
+- `telemetry/otlp/`: the OTLP metrics exporter, kept out of `telemetry` so the
+  interface package does not pull in the OpenTelemetry SDK
 - `internal/`: journal store, cleanup, disk guard, fault policy, health
 - `uploadertest/`, `backend/backendtest/`: fixtures, crash helper, fake backend
 
@@ -43,8 +46,8 @@ after changing Go imports or Bazel metadata.
 - Do not log request payloads, credentials, paths, or remote upload IDs. Log
   backend faults by class, scope and reason, not by their error text.
 - New settings fail startup on a bad value; never add a silent fallback.
-- `config`, `segment`, `backend`, `format`, `telemetry`, and `service` are
-  consumed by other modules that link their own backends.
+- `config`, `segment`, `backend`, `format`, `telemetry`, `telemetry/otlp`,
+  `runner`, and `service` are consumed by other modules that link their own backends.
   Treat their exported surface as a contract and keep implementation detail
   under `internal/`.
 - Backends register themselves from an init function, so a build links only
