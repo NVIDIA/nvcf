@@ -125,16 +125,18 @@ func (u *Uploader) intake(ctx context.Context) error {
 		return fmt.Errorf("scan the spool: %w", err)
 	}
 	u.forgetGone(scan)
-	if u.policy.Breaker().Tripped() {
-		slog.Warn("too many segments quarantined in a row; not reading new segments until restart")
-		return nil
-	}
 	var errs []error
 	for _, item := range scan.Closed {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if u.draining.Load() {
+			break
+		}
+		// Checked per segment, so a large bad backlog stops at the trip
+		// instead of being quarantined wholesale.
+		if u.policy.Breaker().Tripped() {
+			slog.Warn("too many segments quarantined in a row; not reading new segments until restart")
 			break
 		}
 		if err := u.take(ctx, item); err != nil {

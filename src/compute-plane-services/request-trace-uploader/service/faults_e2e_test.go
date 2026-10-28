@@ -278,3 +278,28 @@ func TestASegmentIsRetriedUntilItReachesTheFailureThreshold(t *testing.T) {
 		t.Fatalf("state = %q after %d refused submits under a threshold of %d, want done", state, faults.SegmentScopeFailures-1, faults.SegmentScopeFailures)
 	}
 }
+
+func TestIntakeStopsAsSoonAsTheQuarantineBreakerTrips(t *testing.T) {
+	bad := make([][]string, 5)
+	for i := range bad {
+		bad[i] = []string{"not json " + strings.Repeat("x", i)}
+	}
+	spool, closed := spoolWith(t, bad...)
+	faults := fastFaults()
+	faults.QuarantineTrip = 2
+	uploader := newUploader(t, spool, backendtest.NewFake(), service.Options{Faults: faults}, nil)
+	_ = uploader.Pass(context.Background())
+	if err := uploader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	quarantined := 0
+	states := journalStates(t, spool)
+	for _, path := range closed {
+		if states[filepath.Base(path)] == journal.StateQuarantined {
+			quarantined++
+		}
+	}
+	if quarantined != faults.QuarantineTrip {
+		t.Fatalf("quarantined %d segments with a breaker that trips at %d, want intake to stop at the trip", quarantined, faults.QuarantineTrip)
+	}
+}
