@@ -34,8 +34,8 @@ For documentation changes, check whitespace and link targets.
 ## gds-client
 
 `crates/gds-client` is the Global Discovery Service (GDS) client: endpoint
-failover, typed calls, pool and router caches, pylon and Stargate seed URLs,
-and pool registration. See `crates/gds-client/README.md`.
+failover, typed calls, pool and router caches, pylon, relay and Stargate seed
+URLs, and pool and pool agent registration. See `crates/gds-client/README.md`.
 
 - Keep it dependency-light so Dynamo can adopt it: no reqwest,
   hickory-resolver, moka or serde, and no dependency on other workspace
@@ -80,6 +80,9 @@ Stargate and Pylon read routers from GDS through `crates/gds-client`. See
   only a closed, empty source is a configuration error. Use
   `pylon_lib::static_seeds` for a fixed set. `crates/pylon/src/gds.rs` feeds
   `pylon_seed_urls` from a `RouterCache`, unioned with `--stargate-address`.
+  `crates/pylon/src/gds_agent.rs` registers the PYLON pool agent with
+  `--gds-pool-name` on the same client and deregisters it after the tunnel
+  drain.
 - Bazel: `stargate` links `gds-client-stargate`, `pylon` links `gds-client`.
   Keep `gds-client` out of `pylon-lib`: `stargate_test` links
   `pylon-lib-test-support` next to `gds-client-stargate`, and two crates

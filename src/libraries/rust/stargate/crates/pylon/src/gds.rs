@@ -37,12 +37,13 @@ pub(crate) struct GdsSeedConfig {
 /// The seed set handed to the registration loop, and what keeps it current.
 pub(crate) struct RouterSeeds {
     seeds: watch::Receiver<BTreeSet<String>>,
-    _feed: Option<GdsSeedFeed>,
+    feed: Option<GdsSeedFeed>,
 }
 
 /// The router cache and the task that turns its view into seeds. Dropping
 /// it stops both.
 struct GdsSeedFeed {
+    client: GdsClient,
     _cache: RouterCache,
     _task: OwnedTask,
 }
@@ -62,13 +63,13 @@ impl RouterSeeds {
         let Some(gds) = gds else {
             return Ok(Self {
                 seeds: pylon_lib::static_seeds(static_seeds),
-                _feed: None,
+                feed: None,
             });
         };
         let client =
             GdsClient::new(gds.client.clone()).context("invalid GDS client configuration")?;
         let cache = RouterCache::spawn(
-            client,
+            client.clone(),
             RouterCacheConfig::new(gds.clusterset.clone()),
             CancellationToken::new(),
         );
@@ -84,7 +85,8 @@ impl RouterSeeds {
         );
         Ok(Self {
             seeds,
-            _feed: Some(GdsSeedFeed {
+            feed: Some(GdsSeedFeed {
+                client,
                 _cache: cache,
                 _task: task,
             }),
@@ -93,6 +95,12 @@ impl RouterSeeds {
 
     pub(crate) fn receiver(&self) -> watch::Receiver<BTreeSet<String>> {
         self.seeds.clone()
+    }
+
+    /// The GDS client of the router cache, `None` without GDS. Clones share
+    /// its connection.
+    pub(crate) fn gds_client(&self) -> Option<&GdsClient> {
+        self.feed.as_ref().map(|feed| &feed.client)
     }
 }
 
@@ -256,6 +264,7 @@ mod tests {
             receiver.has_changed().is_err(),
             "a static seed set has no live sender"
         );
+        assert!(seeds.gds_client().is_none());
     }
 
     #[tokio::test]
