@@ -158,6 +158,24 @@ type Result struct {
 	Resyncs int
 	// Quarantine is the reason the segment must be quarantined, or empty.
 	Quarantine string
+	// Rules counts, per named suppression rule, what the rule saw.
+	Rules map[string]RuleCount
+	// Incomplete counts request_payload records whose source says
+	// payload_complete is false.
+	Incomplete int
+	// HeaderlessDropped counts, by record type, records removed by the
+	// headerless suppression policy. A type outside Dynamo v1.4.0's set is
+	// counted as "unknown".
+	HeaderlessDropped map[string]int
+}
+
+// RuleCount is what one named suppression rule saw in a segment.
+type RuleCount struct {
+	// HeaderPresent counts evaluated records on which the rule's header
+	// group had a value, whether or not it matched.
+	HeaderPresent int
+	// Matched counts records the rule acted on.
+	Matched int
 }
 
 // Bad counts lines that could not be exported.
@@ -303,6 +321,9 @@ func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (
 		CarriesPayload: suppress.CarriesPayload(event),
 		Payload:        line,
 	}
+	if out.CarriesPayload && payloadIncomplete(event) {
+		result.Incomplete++
+	}
 	kept, outcome := p.engine.Apply(value)
 	out.Suppression = outcome
 	if outcome.Evaluated {
@@ -311,8 +332,25 @@ func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (
 	if outcome.HeaderPresent {
 		result.HeaderPresent++
 	}
+	for _, name := range outcome.Present {
+		count := result.Rules[name]
+		count.HeaderPresent++
+		result.countRule(name, count)
+	}
+	if outcome.Rule != "" {
+		count := result.Rules[outcome.Rule]
+		count.Matched++
+		result.countRule(outcome.Rule, count)
+	}
 	switch outcome.Action {
 	case suppress.DropRecord:
+		if outcome.Headerless {
+			if result.HeaderlessDropped == nil {
+				result.HeaderlessDropped = map[string]int{}
+			}
+			result.HeaderlessDropped[recordType(event)]++
+			return Record{}, false
+		}
 		result.Dropped++
 		return Record{}, false
 	case suppress.StripPayload:
@@ -331,6 +369,36 @@ func (p *Preparer) transform(value *compat.Value, line []byte, result *Result) (
 		}
 	}
 	return out, true
+}
+
+func (r *Result) countRule(name string, count RuleCount) {
+	if r.Rules == nil {
+		r.Rules = map[string]RuleCount{}
+	}
+	r.Rules[name] = count
+}
+
+// payloadIncomplete reports a payload whose payload_complete is JSON false.
+// A missing or non-boolean flag is not counted: the flag is parsed, never
+// assumed.
+func payloadIncomplete(event *compat.Value) bool {
+	payload := event.Get("payload")
+	if payload == nil || payload.Kind() != compat.Object {
+		return false
+	}
+	complete, ok := payload.Get("payload_complete").Bool()
+	return ok && !complete
+}
+
+// recordType returns event's type when Dynamo v1.4.0 defines it, and
+// "unknown" otherwise, so it is safe as a metric label.
+func recordType(event *compat.Value) string {
+	if event != nil && event.Kind() == compat.Object {
+		if text, ok := event.Get("event_type").String(); ok && record.EventType(text).Known() {
+			return text
+		}
+	}
+	return "unknown"
 }
 
 func (p *Preparer) quarantineReason(result Result) string {

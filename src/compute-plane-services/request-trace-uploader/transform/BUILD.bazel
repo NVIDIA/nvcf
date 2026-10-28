@@ -27,6 +27,7 @@ go_test(
     srcs = [
         "files_test.go",
         "pipeline_test.go",
+        "suppression_test.go",
         "transform_test.go",
     ],
     embed = [":transform"],

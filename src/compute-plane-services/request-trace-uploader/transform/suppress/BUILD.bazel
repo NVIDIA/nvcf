@@ -16,7 +16,10 @@ alias(
 
 go_test(
     name = "suppress_test",
-    srcs = ["suppress_test.go"],
+    srcs = [
+        "rules_test.go",
+        "suppress_test.go",
+    ],
     data = glob(["testdata/**"]),
     embed = [":suppress"],
     deps = ["//src/compute-plane-services/request-trace-uploader/transform/compat"],
