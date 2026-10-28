@@ -337,7 +337,9 @@ recover a failed release-note step without moving the immutable source tag.
 Automatic chart and stack pin updates skip releases with a lower major, minor,
 or patch than the selected pin. A patch for an older minor must not downgrade
 the default branch. Update maintenance stack pins through their own reviewed
-Pull Requests after the component artifacts are verified.
+Pull Requests after the component artifacts are verified. A stack inventory
+renders a source chart from its release tag, so keep a chart maintenance
+branch after tagging from it; the inventory looks for the tag there.
 
 Run the affected stack checks before merging its maintenance branch. These
 merges can create stable GitHub source releases and inventories independently
@@ -403,6 +405,13 @@ ruleset requires a linear commit graph. The consequence is that a
 release branch is a parallel history: its tags are not ancestors of
 `main`, which is why `release_baseline_version` filters on
 reachability.
+
+A patch on the train can also pin a chart version released after the
+cut. The inventory accepts a chart tag outside the stack's history when
+`origin/main` or the chart's maintenance branch for that minor,
+`origin/release-<tag prefix>X.Y`, contains it. The tag workflow's
+full-history checkout fetches every branch. Any other chart tag is
+rejected, so the inventory still renders only reviewed chart source.
 
 Re-running `branch-cut` is safe. An existing release branch whose tree
 matches the selected base is reused, one whose tree differs is an
