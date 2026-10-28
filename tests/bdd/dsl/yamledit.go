@@ -556,3 +556,34 @@ func displayPath(path string) string {
 	}
 	return path
 }
+
+// SetYAMLKey replaces the subtree at the dotted path with the parsed YAML
+// document, keeping its types. Missing parents are created as in
+// UpdateYAMLKeys. The document runs through Interpolate before parsing.
+func SetYAMLKey(path, dottedKey, document string) error {
+	if strings.TrimSpace(dottedKey) == "" {
+		return fmt.Errorf("set yaml %s: key must be non-empty", path)
+	}
+	segments, err := parsePath(dottedKey)
+	if err != nil {
+		return fmt.Errorf("set yaml %s: %w", path, err)
+	}
+	var value any
+	if err := yaml.Unmarshal([]byte(Interpolate(document)), &value); err != nil {
+		return fmt.Errorf("set yaml %s key %s: parse document: %w", path, dottedKey, err)
+	}
+	root, err := readYAMLAny(path)
+	if err != nil {
+		return err
+	}
+	rootMap, ok := root.(map[string]any)
+	if root == nil {
+		rootMap = map[string]any{}
+	} else if !ok {
+		return fmt.Errorf("set yaml %s: top-level value is not a map", path)
+	}
+	if err := setNested(rootMap, segments, value); err != nil {
+		return fmt.Errorf("set yaml %s: %w", path, err)
+	}
+	return writeYAML(path, rootMap)
+}

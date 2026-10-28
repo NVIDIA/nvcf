@@ -41,8 +41,13 @@ global.affinity / global.topologySpreadConstraints override placement per class
 for that class. Component values remain the final escape hatch.
 
 Replica-safe Deployments get 2 replicas, anti-affinity, zone spread, and a PDB
-with minAvailable 1. invocation-service and grpc-proxy stay single-replica for
-now (placement still applied, no-op at 1 replica, no PDB).
+with minAvailable 1. invocation-service and grpc-proxy follow the same
+convention: each pod advertises its own callback address, so workers reach the
+pod that holds the request. A fixed worker callback URL
+(global.workerEndpoints.invocationServiceURL, grpcProxyWorkerConnectURL, or
+grpcproxy.workerConnectBaseURL) is shared by every replica, so the affected
+service stays single-replica (placement still applied, no-op at 1 replica, no
+PDB).
 
 Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
 spread, and a PDB tolerating one disruption at any replica count.
@@ -74,6 +79,24 @@ minAvailable: {{ .minAvailable }}
 {{- end -}}
 
 {{/* PDB for a replica-safe Deployment: minAvailable 1. */}}
+{{/* The secrets file overlays chart values after this file renders, so a key
+     set there replaces the HA sizing computed here. Fail when it would differ.
+     Takes secrets (map), component, path (dotted, under component), want, reason. */}}
+{{- define "nvcf.ha.checkSecretsSizing" -}}
+{{- $node := dig .component dict .secrets -}}
+{{- $found := true -}}
+{{- range splitList "." .path -}}
+{{- if and $found (kindIs "map" $node) (hasKey $node .) -}}
+{{- $node = index $node . -}}
+{{- else -}}
+{{- $found = false -}}
+{{- end -}}
+{{- end -}}
+{{- if and $found (ne (toString $node) (toString .want)) -}}
+{{- fail (printf "%s.%s: %v in secrets/%s-secrets.yaml overrides the highAvailability sizing (%v): %s" .component .path $node (env "HELMFILE_ENV") .want .reason) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "nvcf.ha.replicaSafePodDisruptionBudget" -}}
 {{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 1) -}}
 {{- end -}}
@@ -756,6 +779,35 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- /* The service releases layer secrets/<env>-secrets.yaml after this file
+       without templating it, so its keys override what this file renders.
+       Replica decisions below must see the callback addresses it sets. */}}
+{{- $secretsOverlay := dict }}
+{{- $secretsFile := printf "secrets/%s-secrets.yaml" (env "HELMFILE_ENV") }}
+{{- if and (env "HELMFILE_ENV") (isFile $secretsFile) }}
+{{- range $component, $secretValues := readFile $secretsFile | fromYaml }}
+{{- if and (has $component (list "invocation" "grpcproxy")) (kindIs "map" $secretValues) }}
+{{- $_ := set $secretsOverlay $component $secretValues }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $secretsInvocationEnv := dig "invocation" "env" dict $secretsOverlay }}
+{{- if not (kindIs "map" $secretsInvocationEnv) }}
+{{- $secretsInvocationEnv = dict }}
+{{- end }}
+{{- $grpcProxyWorkerConnectBaseURL = dig "grpcproxy" "workerConnectBaseURL" "" $secretsOverlay | default $grpcProxyWorkerConnectBaseURL }}
+{{- $sizingValues := dict }}
+{{- range $component := list "invocation" "grpcproxy" }}
+{{- $merged := dict }}
+{{- range $layer := list $.Values $secretsOverlay }}
+{{- with dig $component dict $layer }}
+{{- if kindIs "map" . }}
+{{- $merged = mergeOverwrite $merged (deepCopy .) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $_ := set $sizingValues $component $merged }}
+{{- end }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $backendRouterGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
@@ -1055,6 +1107,7 @@ invocation:
   {{- end }}
   {{- $invocationEnv := dict }}
   {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "info,otel::tracing=debug" }}
   {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
   {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
   {{- else }}
@@ -1071,10 +1124,32 @@ invocation:
   {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
+  {{- $invocationSelfAddress := index $secretsInvocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" | default (index $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS") }}
+  {{- $invocationScaled := and $haEnabled (not $invocationSelfAddress) }}
   fullnameOverride: invocation-service
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- $invocationSizing := $sizingValues.invocation }}
+  {{- if $invocationScaled }}
+  {{- $invocationReplicas := max 2 (dig "replicaCount" 1 $invocationSizing | int) }}
+  {{- /* With the HPA on, the HPA owns the replica count, so it needs the same floor. */}}
+  {{- $invocationMinReplicas := max 2 (dig "autoscaling" "minReplicas" 1 $invocationSizing | int) }}
+  {{- $invocationMaxReplicas := max $invocationMinReplicas (dig "autoscaling" "maxReplicas" 10 $invocationSizing | int) }}
+  {{- $reason := "highAvailability needs at least 2 pods" }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "invocation" "path" "replicaCount" "want" $invocationReplicas "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "invocation" "path" "autoscaling.minReplicas" "want" $invocationMinReplicas "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "invocation" "path" "autoscaling.maxReplicas" "want" $invocationMaxReplicas "reason" "maxReplicas must not be below minReplicas") }}
+  replicaCount: {{ $invocationReplicas }}
+  autoscaling:
+    minReplicas: {{ $invocationMinReplicas }}
+    maxReplicas: {{ $invocationMaxReplicas }}
+  {{- else if $haEnabled }}
+  {{- /* Every replica would advertise the same SELF_ADDRESS, so a worker
+         callback could land on a pod that does not hold the request. */}}
+  {{- $reason := "every pod would advertise the same fixed SELF_ADDRESS, so this service runs one pod" }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "invocation" "path" "replicaCount" "want" 1 "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "invocation" "path" "autoscaling.enabled" "want" false "reason" $reason) }}
   replicaCount: 1
+  autoscaling:
+    enabled: false
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -1109,10 +1184,17 @@ invocation:
     baggageAttributeAllowlist:
     {{- toYaml . | nindent 6 }}
   {{- end }}
+  {{- if $invocationScaled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 {{- $configuredNvctApiRemoteConfigData := dig "nvctApi" "remoteConfig" "configData" dict .Values }}
@@ -1198,10 +1280,29 @@ eventLedger:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}
 
+{{- $grpcProxyScaled := and $haEnabled (not $grpcProxyWorkerConnectBaseURL) }}
 grpcproxy:
   fullnameOverride: grpc-proxy
-  {{- if $haEnabled }}
-  {{- /* Single replica until Envoy; placement below is a no-op at 1 replica. */}}
+  {{- $grpcProxySizing := $sizingValues.grpcproxy }}
+  {{- $grpcProxyAutoscaling := dict }}
+  {{- if $grpcProxyScaled }}
+  {{- $grpcProxyReplicas := max 2 (dig "replicaCount" 1 $grpcProxySizing | int) }}
+  {{- /* With the HPA on, the Deployment omits replicas, so the HPA needs the same floor. */}}
+  {{- $grpcProxyMinReplicas := max 2 (dig "deployment" "autoscaling" "minReplicas" 1 $grpcProxySizing | int) }}
+  {{- $grpcProxyMaxReplicas := max $grpcProxyMinReplicas (dig "deployment" "autoscaling" "maxReplicas" 10 $grpcProxySizing | int) }}
+  {{- $reason := "highAvailability needs at least 2 pods" }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "grpcproxy" "path" "replicaCount" "want" $grpcProxyReplicas "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "grpcproxy" "path" "deployment.autoscaling.minReplicas" "want" $grpcProxyMinReplicas "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "grpcproxy" "path" "deployment.autoscaling.maxReplicas" "want" $grpcProxyMaxReplicas "reason" "maxReplicas must not be below minReplicas") }}
+  {{- $grpcProxyAutoscaling = dict "minReplicas" $grpcProxyMinReplicas "maxReplicas" $grpcProxyMaxReplicas }}
+  replicaCount: {{ $grpcProxyReplicas }}
+  {{- else if $haEnabled }}
+  {{- /* Every replica would advertise the same workerConnectBaseURL, so a
+         worker callback could land on a pod that does not hold the request. */}}
+  {{- $reason := "every pod would advertise the same fixed workerConnectBaseURL, so this service runs one pod" }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "grpcproxy" "path" "replicaCount" "want" 1 "reason" $reason) }}
+  {{- include "nvcf.ha.checkSecretsSizing" (dict "secrets" $secretsOverlay "component" "grpcproxy" "path" "deployment.autoscaling.enabled" "want" false "reason" $reason) }}
+  {{- $grpcProxyAutoscaling = dict "enabled" false }}
   replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
@@ -1220,7 +1321,6 @@ grpcproxy:
   {{- if $haEnabled }}
   {{- $grpcAffinity := include "nvcf.ha.affinity" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
   {{- $grpcTopologySpread := include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
-  {{- if or $grpcAffinity $grpcTopologySpread }}
   deployment:
     {{- with $grpcAffinity }}
     {{- . | nindent 4 }}
@@ -1228,7 +1328,8 @@ grpcproxy:
     {{- with $grpcTopologySpread }}
     {{- . | nindent 4 }}
     {{- end }}
-  {{- end }}
+    autoscaling:
+      {{- toYaml $grpcProxyAutoscaling | nindent 6 }}
   {{- end }}
   {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
@@ -1254,10 +1355,17 @@ grpcproxy:
     {{- if dig "addons" "eventLedger" "enabled" false .Values }}
     EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
     {{- end }}
+  {{- if $grpcProxyScaled }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 rateLimiter:
@@ -1966,28 +2074,32 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
-  {{- /* This hook rewrites the same OpenBao role as the stack migration, so
-       it must keep the worker callback proxy domains too. */ -}}
   {{- if eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" }}
   {{- $allowedDomains = include "nvcf.servicePki.allowedDomains" .Values }}
   {{- end }}
-  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
-       PKI tag, then the OpenBao migrations tag, and finally the compatible
-       stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
+  {{- /* The chart only runs this check with its hook enabled, so run it here
+       against the domains the stack migration writes. Same coverage rule as
+       llm-request-router.validatePkiAllowedDomains: the role allows
+       subdomains and wildcards but refuses bare domains. */ -}}
+  {{- range $dnsName := $dnsNames }}
+  {{- $name := $dnsName | toString | lower | trim }}
+  {{- $base := trimPrefix "*." $name }}
+  {{- $covered := false }}
+  {{- range $allowed := splitList "," ($allowedDomains | toString) }}
+  {{- $allowed = trim $allowed | lower }}
+  {{- if and $allowed (or (hasSuffix (printf ".%s" $allowed) $base) (and (hasPrefix "*." $name) (eq $base $allowed))) }}
+  {{- $covered = true }}
+  {{- end }}
+  {{- end }}
+  {{- if not $covered }}
+  {{- fail (printf "addons.llm.pki.dnsNames entry %q is not covered by addons.llm.pki.allowedDomains %q. The OpenBao signing role allows subdomains but not bare domains, so cert-manager issuance would be rejected." $dnsName $allowedDomains) }}
+  {{- end }}
+  {{- end }}
+  {{- /* The openbao-server migration owns the nvcf-service-server role and the
+       cert-manager policy. The chart's hook runs the same addon from its own
+       values, so the two writers would overwrite each other's role. */}}
   pki:
-    enabled: true
-    namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
-    allowedDomains: {{ $allowedDomains | quote }}
-    image:
-      registry: {{ dig "addons" "llm" "pki" "image" "registry" .Values.global.image.registry .Values | quote }}
-      repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
-      tag: {{ $pkiImageTag | quote }}
-      pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
-    {{- if .Values.global.imagePullSecrets }}
-    imagePullSecrets:
-      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
-    {{- end }}
+    enabled: false
   {{- end }}
   {{- end }}
   {{- end }}

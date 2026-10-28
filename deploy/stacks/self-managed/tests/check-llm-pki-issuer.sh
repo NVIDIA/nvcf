@@ -349,7 +349,6 @@ expect_managed_router() {
   local certificate_file="$work_dir/$case_name.certificate.yaml"
   local router_overrides=(
     --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local
-    --state-values-set-string addons.llm.pki.image.tag=test
   )
 
   if test "$manage_mode" = "explicit"; then
@@ -369,8 +368,10 @@ expect_managed_router() {
     fail "$case_name did not render the managed ClusterIssuer kind"
   grep -Fq "name: \"$issuer_name\"" "$certificate_file" ||
     fail "$case_name did not render ClusterIssuer name $issuer_name"
-  grep -Fq 'name: addons-llm-migrations' "$manifests_file" ||
-    fail "$case_name did not render the managed OpenBao provisioning hook"
+  # The openbao-server migration is the only writer of the signing role.
+  if grep -Fq 'name: addons-llm-migrations' "$manifests_file"; then
+    fail "$case_name rendered the router's OpenBao provisioning hook"
+  fi
   grep -Fq -- '--tls-cert-path=/etc/stargate/tls/tls.crt' "$manifests_file" ||
     fail "$case_name did not enable the request-router TLS certificate"
   if grep -Fq -- '--quic-insecure' "$manifests_file"; then
@@ -418,8 +419,9 @@ test "$secure_defaults_dns_names" = "$(printf '%s\n%s' \
   'llm-request-router.nvcf.svc.cluster.local' \
   '*.llm-request-router-headless.nvcf.svc.cluster.local')" ||
   fail "secure defaults did not render the stable and per-pod request-router DNS names"
-grep -Fq 'name: addons-llm-migrations' "$secure_defaults_manifests" ||
-  fail "secure defaults did not render the managed OpenBao provisioning hook"
+if grep -Fq 'name: addons-llm-migrations' "$secure_defaults_manifests"; then
+  fail "secure defaults rendered the router's OpenBao provisioning hook"
+fi
 if grep -Fq -- '--quic-insecure' "$secure_defaults_manifests"; then
   fail "secure defaults enabled insecure request-router transport"
 fi
@@ -657,7 +659,6 @@ render_list cluster-issuer-bool-true \
 expect_enabled cluster-issuer-bool-true true
 render_router cluster-issuer-bool-true \
   --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
-  --state-values-set-string addons.llm.pki.image.tag=test \
   --state-values-file "$explicit_true_file"
 expect_no_dangling_issuer cluster-issuer-bool-true false
 
@@ -679,8 +680,7 @@ expect_no_dangling_issuer cluster-issuer-bool-false true
 render_list omitted-cluster-issuer "${managed_defaults[@]}"
 expect_enabled omitted-cluster-issuer true
 render_router omitted-cluster-issuer \
-  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
-  --state-values-set-string addons.llm.pki.image.tag=test
+  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local
 expect_no_dangling_issuer omitted-cluster-issuer false
 
 # A valid custom external issuer must remain supported end to end.
@@ -710,7 +710,6 @@ expect_enabled managed-external-cert-manager true
 render_router managed-external-cert-manager \
   --state-values-set certManager.enabled=false \
   --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
-  --state-values-set-string addons.llm.pki.image.tag=test \
   --state-values-file "$explicit_true_file"
 expect_no_dangling_issuer managed-external-cert-manager false
 
@@ -731,7 +730,6 @@ render_list_all managed-defaults-all \
   --state-values-set addons.llm.enabled=true \
   --state-values-set addons.llm.pki.enabled=true \
   --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
-  --state-values-set-string addons.llm.pki.image.tag=test \
   "${router_dns_names[@]}"
 expect_declared_all managed-defaults-all 1
 
@@ -841,5 +839,26 @@ expect_failure existing-secret-unknown-mode \
   --state-values-set addons.llm.enabled=true \
   --state-values-set addons.llm.pki.enabled=true \
   --state-values-set-string addons.llm.pki.mode=existingsecret
+
+# With the router hook off, the stack must reject certificate names the
+# signing role would refuse: names outside the allowed domains, and bare
+# allowed domains.
+expect_uncovered_dns_name() {
+  local case_name="$1"
+  local allowed_domains="$2"
+  local dns_name="$3"
+
+  if render_router "$case_name" \
+    --state-values-set-string "addons.llm.pki.allowedDomains=$allowed_domains" \
+    2>"$work_dir/$case_name.err"; then
+    fail "$case_name rendered successfully"
+  fi
+  grep -Fq "addons.llm.pki.dnsNames entry \"$dns_name\" is not covered by addons.llm.pki.allowedDomains \"$allowed_domains\"" "$work_dir/$case_name.err" ||
+    fail "$case_name did not reject $dns_name: $(tail -3 "$work_dir/$case_name.err")"
+}
+expect_uncovered_dns_name uncovered-dns-name example.com \
+  llm-request-router.nvcf.svc.cluster.local
+expect_uncovered_dns_name bare-dns-name llm-request-router.nvcf.svc.cluster.local \
+  llm-request-router.nvcf.svc.cluster.local
 
 echo "check-llm-pki-issuer: all checks passed"

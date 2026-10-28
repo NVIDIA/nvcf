@@ -131,6 +131,38 @@ invocation:
       containerPort: 8080
       protocol: TCP
 
+  # Second listener for worker callbacks over TLS. Workers then call
+  # https://<dashed-pod-ip>.invocation.<namespace>.svc.cluster.local:<port>
+  # and verify the pod with the CA they trust (NVCF_PROXY_CA_PEM). Needs an
+  # invocation-service image with worker_tls support and workers that trust
+  # the issuing CA.
+  workerTls:
+    enabled: false
+    port: 8443
+    # Advertise the https address to workers. Set false to serve the listener
+    # before workers are told to use it. An explicit
+    # env.WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS still wins.
+    advertise: true
+    tls:
+      # kubernetes.io/tls Secret holding tls.crt and tls.key. Required unless
+      # certificate.enabled; with it, names the issued Secret
+      # (default <fullname>-worker-tls).
+      secretName: ""
+      # Issue the Secret with cert-manager. The service re-reads the files
+      # when cert-manager renews them, without a restart.
+      certificate:
+        enabled: false
+        issuerRef:
+          kind: ClusterIssuer
+          # Required when certificate.enabled.
+          name: ""
+          group: cert-manager.io
+        # Must cover the per-pod callback names. Defaults to
+        # *.invocation.<namespace>.svc.cluster.local.
+        dnsNames: []
+        duration: 2160h
+        renewBefore: 720h
+
   env:
     NVCF_API_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
     NATS_PROPERTIES__NATS_ADDRESS: "nats://nats.nats-system.svc.cluster.local:4222"

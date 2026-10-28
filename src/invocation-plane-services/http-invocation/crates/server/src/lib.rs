@@ -79,3 +79,4 @@ pub mod secrets;
 pub mod settings;
 pub mod telemetry;
 pub mod worker_streams;
+pub mod worker_tls;

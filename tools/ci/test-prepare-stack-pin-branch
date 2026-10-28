@@ -13,7 +13,10 @@ trap 'rm -rf -- "${work_dir}"' EXIT
 fail() { echo "test-prepare-stack-pin-branch: $*" >&2; exit 1; }
 
 # Both workflows hand the helper the tool that regenerates their bump commits,
-# and record the release tag in the line the helper reads it back from.
+# with --base so a regenerated bump skips a tag the default branch does not
+# contain, and record the release tag in the line the helper reads it back
+# from. They also name the compute-plane golden fixtures as derived; the
+# refresh tool's own test checks that path.
 workflow_has() {
   local workflow=$1 line=$2
   grep -Fq -- "${line}" "${repo_root}/.github/workflows/${workflow}" \
@@ -23,9 +26,17 @@ workflow_has() {
 # shellcheck disable=SC2016
 {
   workflow_has chart-version-bump.yml \
-    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper'
+    "tools/ci/prepare-stack-pin-branch --derived deploy/stacks/nvcf-compute-plane/testdata/golden \\"
+  workflow_has chart-version-bump.yml \
+    '  "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}"'
+  workflow_has chart-version-bump.yml \
+    'tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}" \'
   workflow_has stack-pin-bump.yml \
-    'tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver'
+    "tools/ci/prepare-stack-pin-branch --derived deploy/stacks/nvcf-compute-plane/testdata/golden \\"
+  workflow_has stack-pin-bump.yml \
+    '  "${BRANCH}" "${BASE_BRANCH}" tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}"'
+  workflow_has stack-pin-bump.yml \
+    'tools/ci/stack-pin-resolver --base "origin/${BASE_BRANCH}" --tag "${TAG}" --write'
   workflow_has chart-version-bump.yml \
     '-m "Opened by the chart version bump workflow on release of ${TAG}."'
   workflow_has stack-pin-bump.yml \
@@ -288,6 +299,65 @@ runner_for "${t}"
     fail "the helper ran over uncommitted changes"
   fi
   test "$(cat metadata)" = "dirty" || fail "the helper discarded uncommitted changes"
+)
+
+# 4. A commit that changes only --derived files is dropped whether it applies
+# or conflicts, so the caller can render those files again for the pins the
+# branch ends up with. A commit that also changes anything else is replayed
+# as usual.
+t="${work_dir}/derived"
+new_remote "${t}" alpha=1.0.0 beta=2.0.0
+seed="${t}/seed"
+mkdir -p "${seed}/golden"
+printf 'alpha=1.0.0 beta=2.0.0\n' > "${seed}/golden/render"
+git -C "${seed}" add golden
+git -C "${seed}" commit --quiet -m "test: seed the rendered fixtures"
+git -C "${seed}" push --quiet origin main 2>/dev/null
+git -C "${seed}" switch --quiet -c chore/chart-version-bumps
+bot_bump "${seed}" fix alpha 1.0.1
+hand_edit "${seed}" golden/render "alpha=1.0.1 beta=2.0.0" "test(compute-plane): refresh goldens by hand"
+bot_bump "${seed}" feat beta 2.1.0
+printf 'alpha=1.0.1 beta=2.1.0\n' > "${seed}/golden/render"
+printf 'new fixture\n' > "${seed}/golden/added"
+git -C "${seed}" add golden
+git -C "${seed}" \
+  -c user.name="github-actions[bot]" \
+  -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+  commit --quiet -m "test(compute-plane): refresh goldens for the pins on this branch"
+printf 'metadata=mixed\n' > "${seed}/metadata"
+printf 'kept fixture\n' > "${seed}/golden/mixed"
+git -C "${seed}" add metadata golden
+git -C "${seed}" -c user.name="Human Dev" -c user.email="human@example.com" \
+  commit --quiet -m "ci: register a chart and its fixture"
+git -C "${seed}" push --quiet -u origin chore/chart-version-bumps 2>/dev/null
+git -C "${seed}" switch --quiet main
+hand_edit "${seed}" golden/render "main rendered again" "test(compute-plane): refresh goldens on main"
+git -C "${seed}" push --quiet origin main 2>/dev/null
+runner_for "${t}"
+(
+  cd "${t}/runner"
+  "${helper}" --derived golden --derived rendered chore/chart-version-bumps main "${fake_bump}" > "${t}/derived.log"
+
+  want="$(printf '%s\n' \
+    "fix(charts): bump for src/alpha/v1.0.1" \
+    "feat(charts): bump for src/beta/v2.1.0" \
+    "ci: register a chart and its fixture")"
+  got="$(git log --reverse --format=%s origin/main..HEAD)"
+  test "${got}" = "${want}" || fail "derived commits were not dropped: ${got}"
+  test "$(cat golden/render)" = "main rendered again" || fail "a derived commit was replayed over main"
+  test ! -e golden/added || fail "a derived-only commit left a file behind"
+  test "$(cat golden/mixed)" = "kept fixture" || fail "a mixed commit lost its derived file"
+  test "$(cat metadata)" = "metadata=mixed" || fail "a mixed commit was dropped"
+  grep -Fq "3 kept, 0 regenerated, 2 dropped" "${t}/derived.log" \
+    || fail "unexpected summary: $(tail -n 1 "${t}/derived.log")"
+  grep -Fq "only derived files" "${t}/derived.log" || fail "the log does not say why a commit was dropped"
+
+  # Without --derived the same branch stops on the conflicting fixture commit.
+  if "${helper}" chore/chart-version-bumps main "${fake_bump}" >/dev/null 2>"${t}/plain.err"; then
+    fail "a conflicting fixture commit was dropped without --derived"
+  fi
+  grep -Fq "refresh goldens by hand" "${t}/plain.err" || fail "the stop does not name the commit"
+  assert_clean_stop
 )
 
 echo "prepare-stack-pin-branch tests passed"

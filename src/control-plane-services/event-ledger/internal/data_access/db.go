@@ -96,7 +96,7 @@ type DBHandlerV2 interface {
 	// V3 Methods (events)
 	UpsertEventV3(traceCtx context.Context, namespace, eventContext, eventName, source string, details json.RawMessage, timestamp time.Time) error
 	UpsertStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error
-	UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time) error
+	UpsertFilteredStatsV3(traceCtx context.Context, namespace, eventContext, eventName string, timestamp time.Time, ncaID, functionID string) error
 	BulkUpsertEventsV3(traceCtx context.Context, events []EventV3UpsertRecord) error
 	BulkUpsertStatsV3(traceCtx context.Context, events []EventV3UpsertRecord) error
 	GetStatsV3(traceCtx context.Context, namespace string) ([]StatsV3Record, error)
@@ -133,6 +133,10 @@ type EventV3UpsertRecord struct {
 	Source    string
 	Details   json.RawMessage
 	Timestamp time.Time
+	// NcaID and FunctionID are optional. An empty value is not written, so a
+	// producer that does not send them cannot clear values already on the row.
+	NcaID      string
+	FunctionID string
 }
 
 // CloudEventsResilienceHandler defines the interface for CloudEvents fallback and retry operations

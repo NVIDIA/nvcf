@@ -2,11 +2,9 @@
 
 ## Build with Bazel
 
-CI runs `bazel test //...` and publishes the multi-arch image via
-`bazel run //nvidia-internal:image_push_nvcf_dev` (the legacy
-`nvcr.io/0544956542906249/nvcf-dev` path). The legacy
-`cds/cicd-pipelines/pipelines/nvcf/nvcf-rust-ci-pipeline.yml` template
-is retired.
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on
 PATH delegating to the version pinned in `.bazelversion`).
@@ -28,12 +26,6 @@ bazel build //crates/server:image_index
 
 # Load the host-arch image into the local docker daemon for smoke tests.
 bazel run //crates/server:image_load
-
-# Push to nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service.
-# Needs DOCKER_CONFIG pointed at credentials for that path (CI uses
-# the NGC_REGISTRY_TOKEN from vault path
-# kv/gitlab/ngc-registry-auth/nvcf-invocation-service).
-bazel run //nvidia-internal:image_push_nvcf_dev
 
 # Repin crate_universe after Cargo.lock changes.
 CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
@@ -97,6 +89,36 @@ Configure approved browser origins before deploying the preparation release.
 
 The transparent load-balancer routes continue to forward CORS requests to the
 workload, which owns their browser policy.
+
+## Worker callback TLS
+
+`worker_tls` adds a second listener that serves the same routes over TLS, so
+workers can verify this pod end to end through a CONNECT proxy. It is off by
+default.
+
+```yaml
+worker_tls:
+  enabled: true
+  port: 8443
+  cert_path: /etc/invocation-service/worker-tls/tls.crt
+  key_path: /etc/invocation-service/worker-tls/tls.key
+  reload_interval_seconds: 30
+```
+
+The environment equivalents are `WORKER_TLS__ENABLED`, `WORKER_TLS__PORT`,
+`WORKER_TLS__CERT_PATH`, `WORKER_TLS__KEY_PATH` and
+`WORKER_TLS__RELOAD_INTERVAL_SECONDS`.
+
+- The certificate must cover the per-pod callback names, for example
+  `*.invocation.<namespace>.svc.cluster.local`.
+- To advertise this listener, set `WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS`
+  to `https://invocation.<namespace>.svc.cluster.local:8443`. Workers then call
+  `https://<dashed-pod-ip>.invocation.<namespace>.svc.cluster.local:8443` and
+  trust the CA from `NVCF_PROXY_CA_PEM` or `NVCF_PROXY_CA_FILE`.
+- The files are re-read every `reload_interval_seconds`. A renewed pair is
+  served without a restart. If the new pair can't be read or the key doesn't
+  match, the current certificate stays in use and a warning is logged.
+- A missing or invalid certificate at startup stops the service.
 
 ## Cargo development (still supported)
 
@@ -177,7 +199,7 @@ end group
 is -> is: encode http request headers and up to 32k of body into protobuf
 note right
     the entire request including headers can optionally be omitted from
-    the protobuf. if omitted, the worker will fetch all request data 
+    the protobuf. if omitted, the worker will fetch all request data
     instead of just the request body with GET attach.
 end note
 group if more request data is available
@@ -231,14 +253,14 @@ group if http response is 202
         Preparation accepts headerless records until the enforcement release.
     end note
     loop
-        worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id} 
+        worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id}
         note right
             the current pexec polling api allows us to differentiate
             a polling request from a new request which lets us know when
             to write into the regular request subject vs this polling subject.
-            
+
             for future full passthrough apis, we could differentiate using a
-            request id or cookie in the http header.  
+            request id or cookie in the http header.
         end note
     end loop
 end group

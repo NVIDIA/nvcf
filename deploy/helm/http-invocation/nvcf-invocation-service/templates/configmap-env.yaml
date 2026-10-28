@@ -14,7 +14,9 @@
 # limitations under the License.
 
 {{- $env := .Values.invocation.env | default dict }}
-{{- if or $env .Values.invocation.metrics.enabled .Values.invocation.cors.allowedOrigins .Values.invocation.polling.enforceOwnership }}
+{{- $workerTls := .Values.invocation.workerTls }}
+{{- $workerTlsEnv := include "nvcf-invocation-service.workerTlsEnv" . | fromYaml }}
+{{- if include "nvcf-invocation-service.hasEnvConfig" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -46,7 +48,14 @@ data:
   {{- with .Values.invocation.tracing.baggageAttributeAllowlist }}
   SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST: {{ join "," . | quote }}
   {{- end }}
+  {{- range $key, $value := $workerTlsEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
   {{- if not (hasKey $env "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS") }}
-  WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://invocation.{{ include "nvcf-invocation-service.namespace" . }}.svc.cluster.local:{{ (index .Values.invocation.service.ports 0).port }}"
+  {{- if and $workerTls.enabled $workerTls.advertise }}
+  WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "https://{{ include "nvcf-invocation-service.serviceHost" . }}:{{ $workerTls.port }}"
+  {{- else }}
+  WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://{{ include "nvcf-invocation-service.serviceHost" . }}:{{ (index .Values.invocation.service.ports 0).port }}"
+  {{- end }}
   {{- end }}
 {{- end }}

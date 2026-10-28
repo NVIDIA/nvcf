@@ -41,15 +41,9 @@ bazel build //:image_index
 bazel run //:image_load
 ```
 
-The OCI image is published to three internal NGC registries from CI on
-the default branch. The macro emits one target per registry; run each
-to push:
-
-```shell
-bazel run //:image_push           # primary ESS registry
-bazel run //:image_push_devops    # nvcr.io/nv-ngc-devops/ess-agent
-bazel run //:image_push_ncp_dev   # nvcr.io/0651155215864979/ncp-dev/ess-agent
-```
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 ### Multi-module workspace
 
@@ -237,7 +231,7 @@ target_info{otel_scope_name="ess-agent",otel_scope_version="v0.1.0",ess_agent_id
 ...
 ```
 
-**NOTE:** with TLS enabled, you can use the below command
+NOTE: with TLS enabled, you can use the below command
 
 ```bash
 $ curl https://<ip>:<port>/metrics \
