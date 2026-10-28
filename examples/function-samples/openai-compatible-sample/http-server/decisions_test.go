@@ -49,7 +49,7 @@ func TestDecisionsReturnsCannedAnswersInQuestionOrder(t *testing.T) {
 	var response struct {
 		Model   string           `json:"model"`
 		Answers []map[string]any `json:"answers"`
-		Usage   map[string]int   `json:"usage"`
+		Usage   map[string]any   `json:"usage"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("unmarshal: %v: %s", err, recorder.Body.String())
@@ -73,7 +73,7 @@ func TestDecisionsReturnsCannedAnswersInQuestionOrder(t *testing.T) {
 			t.Fatalf("usage = %v, missing %q", response.Usage, key)
 		}
 	}
-	if response.Usage["total_tokens"] != response.Usage["input_tokens"]+response.Usage["output_tokens"] {
+	if response.Usage["total_tokens"].(float64) != response.Usage["input_tokens"].(float64)+response.Usage["output_tokens"].(float64) {
 		t.Fatalf("usage total mismatch: %v", response.Usage)
 	}
 }
@@ -103,8 +103,8 @@ func TestSystemOneReturnsCannedAnswersByName(t *testing.T) {
 	if response.Answers["c"]["type"] != "score" {
 		t.Fatalf("answer c = %v", response.Answers["c"])
 	}
-	if _, ok := response.Usage["total_tokens"]; !ok {
-		t.Fatalf("usage = %v", response.Usage)
+	if _, ok := response.Usage["input_tokens"]; !ok || len(response.Usage) != 2 {
+		t.Fatalf("usage = %v, want only input_tokens and output_tokens", response.Usage)
 	}
 }
 
@@ -349,12 +349,14 @@ func TestDecisionsAcceptsRealQuestionShapes(t *testing.T) {
 		t.Fatalf("choices = %v %v", a[1], a[2])
 	}
 	for _, i := range []int{1, 2, 3, 4} {
-		if a[i]["probabilities"] == nil || a[i]["confidence"] == nil {
-			t.Fatalf("answer %d lacks probabilities/confidence: %v", i, a[i])
+		if _, ok := a[i]["probabilities"].([]any); !ok || a[i]["confidence"] == nil {
+			t.Fatalf("answer %d lacks probabilities list/confidence: %v", i, a[i])
 		}
 	}
-	if a[3]["score"] != "bad" || a[4]["score"] != "low" {
-		t.Fatalf("scores = %v %v", a[3], a[4])
+	for _, i := range []int{3, 4} {
+		if _, ok := a[i]["score"].(float64); !ok {
+			t.Fatalf("score %d = %v, want a number", i, a[i]["score"])
+		}
 	}
 	box, ok := a[5]["box"].(map[string]any)
 	if a[5]["type"] != "box" || !ok || box["top"] == nil || box["bottom"] == nil || box["left"] == nil || box["right"] == nil || a[5]["confidence"] == nil {
@@ -397,13 +399,97 @@ func TestSystemOneAcceptsRealQuestionShapes(t *testing.T) {
 	if a["c"]["choice"] != "opt_a" || a["c"]["probabilities"] == nil || a["c"]["confidence"] == nil {
 		t.Fatalf("choice = %v", a["c"])
 	}
-	if a["s"]["score"] != float64(0) || a["s"]["probabilities"] == nil || a["s"]["confidence"] == nil || a["s"]["legend"] == nil {
-		t.Fatalf("score = %v", a["s"])
+	if _, ok := a["s"]["score"].(float64); !ok {
+		t.Fatalf("score = %v, want a number", a["s"])
+	}
+	if _, ok := a["s"]["legend"].(map[string]any); !ok {
+		t.Fatalf("legend = %v, want an object", a["s"]["legend"])
+	}
+	if _, ok := a["s"]["probabilities"].(map[string]any); !ok {
+		t.Fatalf("probabilities = %v, want an object", a["s"]["probabilities"])
+	}
+	if _, ok := a["c"]["probabilities"].(map[string]any); !ok {
+		t.Fatalf("choice probabilities = %v, want an object", a["c"]["probabilities"])
 	}
 	if a["b"]["box"] == nil {
 		t.Fatalf("box = %v", a["b"])
 	}
 	if a["u"]["type"] == nil {
 		t.Fatalf("unknown = %v", a["u"])
+	}
+}
+
+func TestDecisionsMatchDocumentedTypes(t *testing.T) {
+	body := `{"model":"m","input":"x","questions":[` +
+		`{"type":"choice","name":"flag","choices":[{"value":true,"description":"yes"},{"value":false,"description":"no"}]},` +
+		`{"type":"choice","name":"num","choices":[3,4]},` +
+		`{"type":"score","name":"s","levels":[{"label":"lo","description":"d"},{"label":"mid","description":"d"},{"label":"hi","description":"d"}]}]}`
+	recorder := postJSON(t, "/v1/decisions", body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Answers []map[string]any `json:"answers"`
+		Usage   map[string]any   `json:"usage"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	a := response.Answers
+	if a[0]["choice"] != true {
+		t.Fatalf("boolean choice = %#v, want true", a[0]["choice"])
+	}
+	probs := a[0]["probabilities"].([]any)
+	if len(probs) != 2 || probs[0].(map[string]any)["value"] != true || probs[1].(map[string]any)["value"] != false || probs[0].(map[string]any)["probability"] == nil {
+		t.Fatalf("boolean probabilities = %v", probs)
+	}
+	if a[1]["choice"] != float64(3) {
+		t.Fatalf("number choice = %#v, want 3", a[1]["choice"])
+	}
+	score, ok := a[2]["score"].(float64)
+	if !ok || score < 0 || score > 2 {
+		t.Fatalf("score = %#v, want number in [0,2]", a[2]["score"])
+	}
+	levels := a[2]["probabilities"].([]any)
+	if len(levels) != 3 {
+		t.Fatalf("score probabilities = %v", levels)
+	}
+	for i, label := range []string{"lo", "mid", "hi"} {
+		level := levels[i].(map[string]any)
+		if level["value"] != float64(i) || level["label"] != label || level["probability"] == nil {
+			t.Fatalf("level %d = %v", i, level)
+		}
+	}
+	details, _ := response.Usage["input_tokens_details"].(map[string]any)
+	out, _ := response.Usage["output_tokens_details"].(map[string]any)
+	if details["cached_tokens"] == nil || details["cache_write_tokens"] == nil || out["reasoning_tokens"] == nil {
+		t.Fatalf("usage = %v, want token detail objects", response.Usage)
+	}
+}
+
+func TestSystemOneMatchesDocumentedTypes(t *testing.T) {
+	body := `{"model":"m","state":"s","questions":{` +
+		`"c":{"type":"choice","criteria":{"alpha":"first","beta":"second"}},` +
+		`"s":{"type":"score","criteria":["worst","mid","best"]}}}`
+	recorder := postJSON(t, "/v1/systemone", body)
+	var response struct {
+		Answers map[string]map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	c := response.Answers["c"]
+	probs, ok := c["probabilities"].(map[string]any)
+	if c["choice"] != "alpha" || !ok || probs["alpha"] == nil || probs["beta"] == nil || c["confidence"] == nil {
+		t.Fatalf("choice = %v", c)
+	}
+	s := response.Answers["s"]
+	legend, _ := s["legend"].(map[string]any)
+	sp, _ := s["probabilities"].(map[string]any)
+	if legend["0"] != "worst" || legend["2"] != "best" || len(legend) != 3 || len(sp) != 3 || sp["1"] == nil {
+		t.Fatalf("score = %v", s)
+	}
+	if score, ok := s["score"].(float64); !ok || score < 0 || score > 2 {
+		t.Fatalf("score = %#v", s["score"])
 	}
 }
