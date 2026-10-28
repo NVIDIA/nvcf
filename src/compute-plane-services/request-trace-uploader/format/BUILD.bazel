@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "format",
+    srcs = [
+        "format.go",
+        "jsonl.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/format",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
+        "//src/compute-plane-services/request-trace-uploader/segment",
+        "//src/compute-plane-services/request-trace-uploader/transform",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":format",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "format_test",
+    srcs = [
+        "format_test.go",
+        "jsonl_test.go",
+    ],
+    deps = [
+        ":format",
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/backend/backendtest",
+        "//src/compute-plane-services/request-trace-uploader/internal/journalfs",
+        "//src/compute-plane-services/request-trace-uploader/journal",
+        "//src/compute-plane-services/request-trace-uploader/segment",
+        "//src/compute-plane-services/request-trace-uploader/transform",
+        "//src/compute-plane-services/request-trace-uploader/transform/suppress",
+        "//src/compute-plane-services/request-trace-uploader/uploadertest",
+    ],
+)
