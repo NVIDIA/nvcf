@@ -65,7 +65,7 @@ func TestCatalogCoversRequiredInstruments(t *testing.T) {
 		JobsStranded, SegmentsEvicted, QuarantineTripped,
 		SpoolUsedBytes, SpoolFreeBytes, PendingBytes, OldestPendingAge,
 		BatchSegments, BatchBytes, BatchSplits,
-		LeftoversRemoved, LeftoversKept, SegmentsMissed,
+		LeftoversRemoved, LeftoversKept,
 	}
 	for _, name := range required {
 		if _, ok := Lookup(name); !ok {

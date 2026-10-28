@@ -84,9 +84,6 @@ const (
 	// the spool, by registered kind.
 	LeftoversRemoved = "leftovers_removed"
 	LeftoversKept    = "leftovers_kept"
-	// SegmentsMissed counts segments that left the spool before this uploader
-	// read them, which only happens in shadow mode.
-	SegmentsMissed = "segments_missed"
 	// RecordsEvaluated counts records checked against suppression rules,
 	// RecordsSuppressed the records a rule acted on, and
 	// SuppressionHeaderPresent the evaluated records that carried a rule's
@@ -173,7 +170,6 @@ var catalog = []Instrument{
 	{Name: BatchSplits, Kind: Counter, Unit: "1"},
 	{Name: LeftoversRemoved, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
 	{Name: LeftoversKept, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
-	{Name: SegmentsMissed, Kind: Counter, Unit: "1"},
 	{Name: RecordsEvaluated, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 	{Name: RecordsSuppressed, Kind: Counter, Unit: "1", Labels: []string{"rule", "action"},
 		Values: map[string][]string{"action": SuppressionActions}},

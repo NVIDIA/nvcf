@@ -237,60 +237,18 @@ func TestRegisterPanicsOnWiringMistakes(t *testing.T) {
 	}
 }
 
-func TestShadowModeDeletesNothing(t *testing.T) {
+func TestZeroConfigRemovesLeftovers(t *testing.T) {
 	isolatePatterns(t)
 	registerGenericPatterns()
 	root := t.TempDir()
 	write(t, filepath.Join(root, "stray.tmp"))
-	write(t, filepath.Join(root, ".other-upload", "a.parquet"))
-	cfg := Config{Mode: ModeShadow, Destination: "shadow_table"}
 
-	report, err := cfg.Clean(root, protectSpool)
+	report, err := Config{}.Clean(root, protectSpool)
 	if err != nil {
 		t.Fatalf("Clean() error = %v", err)
 	}
-	if !exists(filepath.Join(root, "stray.tmp")) || !exists(filepath.Join(root, ".other-upload", "a.parquet")) {
-		t.Fatal("shadow mode removed a file")
-	}
-	if len(report.Removed) != 0 || len(report.Kept) != 0 {
-		t.Fatalf("report = %+v, want empty in shadow mode", report)
-	}
-	if cfg.DeletesSource() {
-		t.Fatal("DeletesSource() = true in shadow mode")
-	}
-	if !ownerConfig().DeletesSource() {
-		t.Fatal("DeletesSource() = false in owner mode")
-	}
-}
-
-func TestConfigValidate(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     Config
-		wantErr bool
-	}{
-		{"default owner", DefaultConfig(), false},
-		{"shadow with destination", Config{Mode: ModeShadow, Destination: "shadow_table"}, false},
-		{"shadow without destination", Config{Mode: ModeShadow}, true},
-		{"shadow with blank destination", Config{Mode: ModeShadow, Destination: "  "}, true},
-		{"owner with destination", Config{Mode: ModeOwner, Destination: "shadow_table"}, true},
-		{"empty mode", Config{}, true},
-		{"unknown mode", Config{Mode: "mirror"}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestCleanRejectsInvalidConfig(t *testing.T) {
-	isolatePatterns(t)
-	if _, err := (Config{Mode: ModeShadow}).Clean(t.TempDir(), protectSpool); err == nil {
-		t.Fatal("Clean() error = nil for an invalid config, want error")
+	if exists(filepath.Join(root, "stray.tmp")) || report.Removed["tmp"] != 1 {
+		t.Fatalf("report = %+v, want the stray file removed and counted", report)
 	}
 }
 

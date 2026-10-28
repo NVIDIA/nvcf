@@ -3,15 +3,11 @@
 
 // Package foreign handles a spool that another uploader has used.
 //
-// In owner mode this uploader owns the spool. At startup, before it loads its
-// journal, it removes the files a previous uploader left and counts them by
-// kind; it leaves the kinds marked Keep and counts those too. A module that
-// links this package registers the patterns from an init function, so the
-// names of the other uploader's files never appear here.
-//
-// In shadow mode this uploader runs beside the other one on the same spool. It
-// deletes nothing, neither leftovers nor uploaded sources, and uploads to a
-// separate destination, so the two outputs can be compared.
+// This uploader owns the spool. At startup, before it loads its journal, it
+// removes the files a previous uploader left and counts them by kind; it
+// leaves the kinds marked Keep and counts those too. A module that links this
+// package registers the patterns from an init function, so the names of the
+// other uploader's files never appear here.
 package foreign
 
 import (
@@ -90,64 +86,21 @@ type Report struct {
 	Kept    map[string]int
 }
 
-// Mode says whether this uploader owns the spool.
-type Mode string
+// Config sets up leftover cleanup. It has no settings; the zero value is valid.
+type Config struct{}
 
-const (
-	// ModeOwner removes leftovers at startup and deletes sources after upload.
-	ModeOwner Mode = "owner"
-	// ModeShadow is read-only on the spool and uploads to Destination.
-	ModeShadow Mode = "shadow"
-)
-
-// Config selects the mode.
-type Config struct {
-	Mode Mode
-	// Destination names the shadow destination in the backend's own terms,
-	// such as a table or a key prefix. It is required in shadow mode and
-	// rejected in owner mode, so shadow output cannot land on the real one.
-	Destination string
-}
-
-// DefaultConfig is owner mode.
-func DefaultConfig() Config { return Config{Mode: ModeOwner} }
-
-// Validate reports the first invalid setting.
-func (c Config) Validate() error {
-	switch c.Mode {
-	case ModeOwner:
-		if c.Destination != "" {
-			return errors.New("a shadow destination is set but the mode is owner")
-		}
-	case ModeShadow:
-		if strings.TrimSpace(c.Destination) == "" {
-			return errors.New("shadow mode needs its own destination")
-		}
-	default:
-		return fmt.Errorf("mode must be %q or %q", ModeOwner, ModeShadow)
-	}
-	return nil
-}
-
-// DeletesSource reports whether an uploaded source may be deleted.
-func (c Config) DeletesSource() bool { return c.Mode == ModeOwner }
+// DefaultConfig returns the leftover-cleanup configuration.
+func DefaultConfig() Config { return Config{} }
 
 // Clean applies the registered patterns to the entries in root. protected is
 // required and is checked first: it must report Dynamo segments and the
 // uploader's own directories, which are never removed even if a pattern
-// matches. Keep wins over Remove when both match. In shadow mode Clean touches
-// nothing. Removal failures do not stop the pass; they are joined and returned
-// with the counts of what did succeed.
+// matches. Keep wins over Remove when both match. Removal failures do not stop
+// the pass; they are joined and returned with the counts of what did succeed.
 func (c Config) Clean(root string, protected func(name string) bool) (Report, error) {
 	report := Report{Removed: map[string]int{}, Kept: map[string]int{}}
-	if err := c.Validate(); err != nil {
-		return report, err
-	}
 	if protected == nil {
 		return report, errors.New("clean leftovers: a protected-name check is required")
-	}
-	if c.Mode == ModeShadow {
-		return report, nil
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
