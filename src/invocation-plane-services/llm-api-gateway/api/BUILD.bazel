@@ -91,6 +91,7 @@ go_test(
     srcs = [
         "auth_middleware_test.go",
         "body_limit_test.go",
+        "decision_backend_error_test.go",
         "decision_error_test.go",
         "decision_handler_test.go",
         "decision_token_count_test.go",

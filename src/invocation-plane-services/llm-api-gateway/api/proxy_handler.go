@@ -163,7 +163,10 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	}
 
 	copyProxyHeaders(c.Response().Header(), resp.Header)
-	if err := proxyUpstreamError(resp); err != nil {
+	if isBackendErrorOnDecisionRoute(c.Request(), resp) {
+		// The model server's own error is part of its API: relay it as is.
+		c.Set(contextKeyBackendErrorRelayed, true)
+	} else if err := proxyUpstreamError(resp); err != nil {
 		return err
 	}
 	c.Response().WriteHeader(resp.StatusCode)
@@ -172,6 +175,20 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	}
 	_, err := io.Copy(c.Response().Writer, resp.Body)
 	return err
+}
+
+// isBackendErrorOnDecisionRoute reports whether resp is a model server error
+// on a decision route. Stargate marks every error it generates with
+// X-Stargate-Error-Code; a non-2xx response without it came from the backend.
+// Those routes relay backend errors untouched, because the backend defines
+// the error shapes of its own API (for example a FastAPI detail list).
+func isBackendErrorOnDecisionRoute(r *http.Request, resp *provider.ProxyResponse) bool {
+	switch r.URL.Path {
+	case decisionsEndpointPath, systemOneEndpointPath:
+	default:
+		return false
+	}
+	return resp.StatusCode >= http.StatusBadRequest && !provider.IsRouterRejection(resp.Header)
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {
