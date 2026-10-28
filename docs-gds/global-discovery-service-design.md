@@ -2,7 +2,7 @@
 
 Status: Draft v0.6, 2026-10-28 (v0.1 initial design; v0.2 adds the cross-region request path
 flow and its prerequisites, the explicit pool dispatch address, the draining order and the
-registration-direction neutrality, from `network-interaction-comparison.md`; v0.3 replaces the
+registration-direction neutrality, from the network interaction comparison note; v0.3 replaces the
 derived-VIP pylon seed with per-cluster router replica seeds, 4.5; v0.4 records the integration
 decisions on the advertised dial address and the seed scheme, 4.5 and 10; v0.5 models the
 PoolRelay and Pylon as distinct typed pool agents with their own Services and registrations,
@@ -15,8 +15,8 @@ of the Dynamo Global Router (Global Router HLD, Kiro edition, section 2.4 "Disco
 the Kiro Global Router Task Breakdown (the "Validate Karmada + MCS" item is out of scope). Code
 facts about the LLM stack refer to `nvcf/nvcf-2`, branch `feat/inference-in-a-box` at
 `eb29b23ea`; Dynamo facts refer to `ai-dynamo/dynamo` main at `95cadce97d`. The implementation
-plan derived from this document lives at
-`docs-gds/implementation-plan.md`.
+plan derived from this document and the comparison notes (network interactions, upstream
+Dynamo discovery, Karmada MCS) are kept outside this repository.
 
 Vocabulary: "router" means the LLM Request Router (Stargate) and the HLD's Global Router.
 "Pylon" means the LLM stack's Pylon transport, an ingress of a pool interchangeable with the
@@ -1199,7 +1199,7 @@ The approved step list with files and tests is in the implementation plan.
    cluster; routers must keep retry-next-best and per-pool tombstoning (4.3).
 1b. Registration direction for the PoolRelay (pull per DEP 11225 or push per the Pylon pattern)
    is left to the Global Router owners; both are supported. The Pylon evidence favours push
-   where pools may be unreachable inbound (see `network-interaction-comparison.md`).
+   where pools may be unreachable inbound (see the network interaction comparison note).
 2. Writers must keep `generation` monotonic across restarts and region failover; the clients
    enforce it, third-party REST writers could not.
 3. The clusterset metadata partition carries every heartbeat of a clusterset (1000 WCU/s per

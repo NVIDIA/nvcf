@@ -21,8 +21,7 @@ The Global Discovery Service (GDS) is the multi-region discovery backend of
 the Dynamo Global Router. It registers member clusters, implements the
 Multi-Cluster Services API (KEP-1645) server side, and keeps the pool and
 router registries that Global Router replicas and pylons read. The design is
-`docs-gds/global-discovery-service-design.md` at the repository root; the
-step list is `docs-gds/implementation-plan.md`.
+`docs-gds/global-discovery-service-design.md` at the repository root.
 
 Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
 
