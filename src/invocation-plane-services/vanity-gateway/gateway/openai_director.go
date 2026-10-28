@@ -385,6 +385,8 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		embeddings.modelNameToModelInfo,
 		responses.modelNameToModelInfo,
 		messages.modelNameToModelInfo,
+		decisions.modelNameToModelInfo,
+		systemOne.modelNameToModelInfo,
 		imageGenerations.modelNameToModelInfo,
 		imageEdits.modelNameToModelInfo,
 		imageVariations.modelNameToModelInfo,
@@ -393,9 +395,18 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 			seen[id] = info
 		}
 	}
-	// Annotate aliases that support Messages so shared discovery does not
-	// imply that a Messages-only model accepts OpenAI requests.
-	for id := range messages.modelNameToModelInfo {
+	// Annotate aliases that support a native protocol (Messages, decisions or
+	// System One) so shared discovery does not imply that such a model accepts
+	// OpenAI chat requests.
+	nativeIDs := make(map[string]struct{})
+	for _, models := range []map[string]ModelInfo{
+		messages.modelNameToModelInfo, decisions.modelNameToModelInfo, systemOne.modelNameToModelInfo,
+	} {
+		for id := range models {
+			nativeIDs[id] = struct{}{}
+		}
+	}
+	for id := range nativeIDs {
 		info := seen[id]
 		for _, endpoint := range []struct {
 			path   string
@@ -406,6 +417,8 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 			{"/v1/embeddings", embeddings.modelNameToModelInfo},
 			{"/v1/responses", responses.modelNameToModelInfo},
 			{"/v1/messages", messages.modelNameToModelInfo},
+			{decisionsPath, decisions.modelNameToModelInfo},
+			{systemOnePath, systemOne.modelNameToModelInfo},
 			{"/v1/images/generations", imageGenerations.modelNameToModelInfo},
 			{"/v1/images/edits", imageEdits.modelNameToModelInfo},
 			{"/v1/images/variations", imageVariations.modelNameToModelInfo},
@@ -415,7 +428,7 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 			}
 		}
 		seen[id] = info
-		for _, models := range []map[string]ModelInfo{chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo, embeddings.modelNameToModelInfo, responses.modelNameToModelInfo, messages.modelNameToModelInfo, imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo, imageVariations.modelNameToModelInfo} {
+		for _, models := range []map[string]ModelInfo{chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo, embeddings.modelNameToModelInfo, responses.modelNameToModelInfo, messages.modelNameToModelInfo, decisions.modelNameToModelInfo, systemOne.modelNameToModelInfo, imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo, imageVariations.modelNameToModelInfo} {
 			if _, ok := models[id]; ok {
 				models[id] = info
 			}
@@ -430,6 +443,7 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 			embeddings.modelNameToModelInfo, responses.modelNameToModelInfo,
 			imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo,
 			imageVariations.modelNameToModelInfo, messages.modelNameToModelInfo,
+			decisions.modelNameToModelInfo, systemOne.modelNameToModelInfo,
 		} {
 			if _, ok := models[id]; ok {
 				models[id] = info
@@ -510,6 +524,8 @@ func (d *ModelDirector) getFilteredModels() []ModelInfo {
 		d.embeddings.modelNameToNVCFUrl,
 		d.responses.modelNameToNVCFUrl,
 		d.messages.modelNameToNVCFUrl,
+		d.decisions.modelNameToNVCFUrl,
+		d.systemOne.modelNameToNVCFUrl,
 		d.imageGenerations.modelNameToNVCFUrl,
 		d.imageEdits.modelNameToNVCFUrl,
 		d.imageVariations.modelNameToNVCFUrl,
@@ -680,6 +696,8 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 		d.chatCompletions.modelNameToModelInfo,
 		d.responses.modelNameToModelInfo,
 		d.messages.modelNameToModelInfo,
+		d.decisions.modelNameToModelInfo,
+		d.systemOne.modelNameToModelInfo,
 		d.imageGenerations.modelNameToModelInfo,
 		d.imageEdits.modelNameToModelInfo,
 		d.imageVariations.modelNameToModelInfo,
@@ -698,6 +716,8 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 		d.chatCompletions.modelNameToNVCFUrl,
 		d.responses.modelNameToNVCFUrl,
 		d.messages.modelNameToNVCFUrl,
+		d.decisions.modelNameToNVCFUrl,
+		d.systemOne.modelNameToNVCFUrl,
 		d.imageGenerations.modelNameToNVCFUrl,
 		d.imageEdits.modelNameToNVCFUrl,
 		d.imageVariations.modelNameToNVCFUrl,

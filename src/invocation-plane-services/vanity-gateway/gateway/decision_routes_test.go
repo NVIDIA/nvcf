@@ -24,12 +24,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -419,6 +421,54 @@ func TestDecisionRoutesUsePexecRewritesPathAndKeepsHeaderAndBody(t *testing.T) {
 			assert.Equal(t, "/v2/nvcf/pexec/functions/"+decisionFunctionID, received.path)
 			assert.Equal(t, "true", received.headers.Get(imagesHeader))
 			assert.Equal(t, body, received.body)
+		})
+	}
+}
+
+func TestDecisionRoutesSetEndpointTypeSpanAttribute(t *testing.T) {
+	for _, tc := range []struct {
+		path, want string
+		llm        bool
+	}{
+		{decisionsPath, "decisions", false},
+		{systemOnePath, "systemone", false},
+		{decisionsPath, "decisions", true},
+		{systemOnePath, "systemone", true},
+	} {
+		name := tc.path
+		if tc.llm {
+			name += " llm"
+		}
+		t.Run(name, func(t *testing.T) {
+			tp, exp := newTestTracerProvider()
+			defer tp.Shutdown(context.Background())
+			backend := captureServer(t, make(chan capturedRequest, 1), nil)
+			var mutate func(*config.ModelFunctionDetails)
+			if tc.llm {
+				mutate = llmDecision
+			}
+			mappings := decisionMappings(true, true, mutate)
+			llm, err := NewLLMGatewayDirector(backend.URL, http.DefaultTransport)
+			require.NoError(t, err)
+			vanity, err := NewVanityDirector(backend.URL, http.DefaultTransport)
+			require.NoError(t, err)
+			director, err := NewModelDirector(mappings, regexp.MustCompile("^$"), vanity, llm, nil)
+			require.NoError(t, err)
+
+			req := openAIRequest(t, tc.path, `{"model":"`+decisionModel+`"}`)
+			ctx, span := tp.Tracer("test").Start(req.Context(), "decision-test")
+			rec := httptest.NewRecorder()
+			if tc.path == decisionsPath {
+				director.ServeDecisions(rec, req.WithContext(ctx))
+			} else {
+				director.ServeSystemOne(rec, req.WithContext(ctx))
+			}
+			span.End()
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			got, ok := spanAttr(exp.GetSpans()[0], attribute.Key("endpoint.type"))
+			require.True(t, ok)
+			require.Equal(t, tc.want, got.AsString())
 		})
 	}
 }
