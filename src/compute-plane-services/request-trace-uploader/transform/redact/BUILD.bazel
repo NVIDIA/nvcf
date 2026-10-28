@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "redact",
+    srcs = [
+        "redact.go",
+        "scan.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/redact",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/compat"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":redact",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "redact_test",
+    srcs = ["redact_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":redact"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/transform/compat"],
+)
