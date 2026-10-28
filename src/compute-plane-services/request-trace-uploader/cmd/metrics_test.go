@@ -183,3 +183,25 @@ func TestMainLogsNoCollectorDetailsWhenExportFails(t *testing.T) {
 		}
 	}
 }
+
+func TestMainPrintsNoValuesFromMalformedExporterVariables(t *testing.T) {
+	const marker = "review-marker"
+	received := &metricNames{names: map[string]bool{}}
+	collector := httptest.NewServer(received)
+	defer collector.Close()
+
+	cmd, stderr := startMain(t,
+		telemetry.EnvOTLPMetricsEndpoint+"="+collector.URL+"/v1/metrics",
+		telemetry.EnvOTLPMetricsProtocol+"=http/protobuf",
+		"OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer "+marker+"%ZZ",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=http://user:"+marker+"@[::1",
+	)
+	stopMain(t, cmd, stderr, 15*time.Second)
+
+	if strings.Contains(stderr.String(), marker) {
+		t.Fatalf("stderr contains %q\n%s", marker, stderr.String())
+	}
+	if !received.has(telemetry.MetricPrefix + telemetry.SubmitsAmbiguous) {
+		t.Fatalf("the collector got no metrics\n%s", stderr.String())
+	}
+}

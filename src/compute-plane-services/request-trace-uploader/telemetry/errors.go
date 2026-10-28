@@ -45,35 +45,51 @@ func failureReason(err error) string {
 	return "error"
 }
 
+// limiter lets one log line per key through each interval and counts the
+// events in between, so a repeating failure gives a periodic count instead of
+// a line per event.
+type limiter struct {
+	interval time.Duration
+	now      func() time.Time
+
+	mu     sync.Mutex
+	last   map[string]time.Time
+	counts map[string]int
+}
+
+func newLimiter(interval time.Duration, now func() time.Time) *limiter {
+	return &limiter{interval: interval, now: now, last: map[string]time.Time{}, counts: map[string]int{}}
+}
+
+// admit records one event for key. It reports whether to log now and, if
+// so, how many events happened since the last line for key.
+func (l *limiter) admit(key string) (int, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.counts[key]++
+	now := l.now()
+	if last, ok := l.last[key]; ok && now.Sub(last) < l.interval {
+		return 0, false
+	}
+	count := l.counts[key]
+	l.counts[key] = 0
+	l.last[key] = now
+	return count, true
+}
+
 // errorHandler receives the errors the OpenTelemetry SDK reports outside a
 // call, such as a failed periodic export. It logs the reason and how many
 // failures happened since its last line, never the error text, and at most
 // once per interval.
-type errorHandler struct {
-	interval time.Duration
-	now      func() time.Time
-
-	mu       sync.Mutex
-	last     time.Time
-	failures int
-}
+type errorHandler struct{ limit *limiter }
 
 func newErrorHandler(interval time.Duration, now func() time.Time) *errorHandler {
-	return &errorHandler{interval: interval, now: now}
+	return &errorHandler{limit: newLimiter(interval, now)}
 }
 
 // Handle implements otel.ErrorHandler.
 func (h *errorHandler) Handle(err error) {
-	h.mu.Lock()
-	h.failures++
-	now := h.now()
-	if !h.last.IsZero() && now.Sub(h.last) < h.interval {
-		h.mu.Unlock()
-		return
+	if failures, ok := h.limit.admit(""); ok {
+		slog.Warn("telemetry error, details withheld", "reason", failureReason(err), "failures", failures)
 	}
-	failures := h.failures
-	h.failures = 0
-	h.last = now
-	h.mu.Unlock()
-	slog.Warn("telemetry error, details withheld", "reason", failureReason(err), "failures", failures)
 }

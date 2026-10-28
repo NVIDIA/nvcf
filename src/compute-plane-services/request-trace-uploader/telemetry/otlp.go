@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -120,9 +121,10 @@ type OTLP struct {
 // exporter setting is passed explicitly, so no other OTEL_EXPORTER_OTLP_*
 // variable changes where or how metrics are sent.
 //
-// It also replaces the process-wide OpenTelemetry error handler. The SDK's
-// default one logs each failed background export with the collector URL and
-// its response body; this one logs a bounded reason, rate limited.
+// It also replaces the process-wide OpenTelemetry error handler and internal
+// logger, before the exporter reads its environment. The SDK's defaults print
+// the collector URL, its response body, and the values of variables it
+// failed to parse; these log a bounded reason, rate limited.
 func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -131,6 +133,7 @@ func NewOTLP(ctx context.Context, cfg OTLPConfig, backend string) (*OTLP, error)
 		return nil, err
 	}
 	otel.SetErrorHandler(newErrorHandler(errorLogInterval, time.Now))
+	otel.SetLogger(logr.New(newSDKSink(errorLogInterval, time.Now)))
 	exporter, err := newExporter(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metrics exporter: %w", err)
