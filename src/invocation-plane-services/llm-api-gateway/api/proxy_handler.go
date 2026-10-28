@@ -181,9 +181,19 @@ func writeProxyResponseObserved(c *GatewayContext, resp *provider.ProxyResponse,
 	}
 
 	copyProxyHeaders(c.Response().Header(), resp.Header)
-	if isBackendErrorOnDecisionRoute(c.Request(), resp) {
-		// The model server's own error is part of its API: relay it as is.
-		c.Set(contextKeyBackendErrorRelayed, true)
+	if isDecisionRoute(c.Request()) && resp.StatusCode >= http.StatusBadRequest {
+		if isBackendErrorOnDecisionRoute(resp) {
+			// The model server's own error is part of its API: relay it as is.
+			c.Set(contextKeyBackendErrorRelayed, true)
+		} else {
+			// Gateway-written errors carry no backend X-System-One-* headers.
+			for name := range c.Response().Header() {
+				if strings.HasPrefix(strings.ToLower(name), "x-system-one-") {
+					c.Response().Header().Del(name)
+				}
+			}
+			return proxyUpstreamError(resp)
+		}
 	} else if err := proxyUpstreamError(resp); err != nil {
 		return err
 	}
@@ -199,21 +209,37 @@ func writeProxyResponseObserved(c *GatewayContext, resp *provider.ProxyResponse,
 	return err
 }
 
-// isBackendErrorOnDecisionRoute reports whether resp is a model server error
-// on a decision route. Stargate marks every error it generates with
-// X-Stargate-Error-Code; a non-2xx response without it came from the backend.
-// Those routes relay backend errors untouched, because the backend defines
-// the error shapes of its own API (for example a FastAPI detail list).
-func isBackendErrorOnDecisionRoute(r *http.Request, resp *provider.ProxyResponse) bool {
-	switch r.URL.Path {
-	case decisionsEndpointPath, systemOneEndpointPath:
-	default:
+func isDecisionRoute(r *http.Request) bool {
+	return r.URL.Path == decisionsEndpointPath || r.URL.Path == systemOneEndpointPath
+}
+
+// bareRouterErrorStatuses are the statuses Stargate answers with no body and
+// no X-Stargate-Error-Code when the router itself fails (for example a replay
+// buffer overflow, a failed tunnel or a client that went away).
+var bareRouterErrorStatuses = map[int]bool{
+	http.StatusBadRequest:            true,
+	http.StatusRequestEntityTooLarge: true,
+	499:                              true,
+	http.StatusBadGateway:            true,
+	http.StatusServiceUnavailable:    true,
+	http.StatusGatewayTimeout:        true,
+}
+
+// isBackendErrorOnDecisionRoute reports whether the non-2xx resp on a decision
+// route is a model server error. Stargate marks the errors it generates with
+// X-Stargate-Error-Code, except a bare status with an empty body for the
+// statuses in bareRouterErrorStatuses. Anything else, including an empty 401,
+// 404 or 429, is the backend's answer. Those routes relay backend errors
+// untouched, because the backend defines the error shapes of its own API (for
+// example a FastAPI detail list).
+func isBackendErrorOnDecisionRoute(resp *provider.ProxyResponse) bool {
+	if provider.IsRouterRejection(resp.Header) {
 		return false
 	}
-	if resp.StatusCode < http.StatusBadRequest || provider.IsRouterRejection(resp.Header) {
+	if bareRouterErrorStatuses[resp.StatusCode] && emptyBody(resp) {
 		return false
 	}
-	return !emptyBody(resp)
+	return true
 }
 
 // emptyBody reports whether resp has no body, reading at most one byte. A
