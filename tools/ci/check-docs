@@ -13,6 +13,8 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
+python3 -m unittest discover -s docs/overview/samples/scripts -p 'test_*_upgrade_check.py'
+
 ./tools/ci/check-doc-version-sync
 docs_mode="$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")"
 case "$docs_mode" in
