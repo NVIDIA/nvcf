@@ -20,9 +20,9 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -59,14 +59,17 @@ type Attributes struct {
 
 var tracer *sdktrace.TracerProvider
 
-// SetupOTELTracer sets up opentracing compliant tracer per config
-// Currently, we only support lightstep tracer setup
+// SetupOTELTracer sets up an OTLP gRPC tracer provider per config.
+// It returns a no-op tracer provider when tracing is disabled or when no
+// endpoint is configured, so callers can start without a trace backend.
 func SetupOTELTracer(cfg *OTELConfig) (trace.TracerProvider, error) {
 	if !cfg.Enabled {
 		return noop.NewTracerProvider(), nil
 	}
-	if cfg.Endpoint == "" {
-		return nil, &nverrors.ConfigError{FieldName: "tracing.endpoint", Message: "not found"}
+	if strings.TrimSpace(cfg.Endpoint) == "" {
+		zap.L().Warn("Tracing is enabled but no endpoint is configured. Tracing is disabled.",
+			zap.String("service", cfg.Attributes.ServiceName))
+		return noop.NewTracerProvider(), nil
 	}
 
 	// If already initialized, return the existing tracer information

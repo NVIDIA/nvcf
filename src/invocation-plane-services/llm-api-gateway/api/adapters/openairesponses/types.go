@@ -17,6 +17,8 @@ limitations under the License.
 
 package openairesponses
 
+import "encoding/json"
+
 // Reasoning effort levels
 const (
 	ReasoningEffortLow    = "low"
@@ -113,4 +115,16 @@ type ResponseStreamOptions struct {
 // Can be either a conversation ID string or a ConversationParam object.
 type Conversation struct {
 	ID *string `json:"id"`
+}
+
+func (*Conversation) DecodesMembers() {}
+
+func (c *Conversation) UnmarshalJSON(data []byte) error {
+	var id string
+	if err := json.Unmarshal(data, &id); err == nil {
+		*c = Conversation{ID: &id}
+		return nil
+	}
+	type alias Conversation
+	return json.Unmarshal(data, (*alias)(c))
 }

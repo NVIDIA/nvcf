@@ -21,8 +21,22 @@ import (
 )
 
 func TestUmbrellaPublisherE2E(t *testing.T) {
+	testUmbrellaPublisherE2E(t, false)
+}
+
+func TestUmbrellaPublisherReleaseLocalE2E(t *testing.T) {
+	testUmbrellaPublisherE2E(t, true)
+}
+
+func testUmbrellaPublisherE2E(t *testing.T, releaseLocal bool) {
+	t.Helper()
 	fixture := umbrellaBundleFixture(t)
-	if err := runUmbrella(fixture.prepareArgs()[1:]); err != nil {
+	args := fixture.prepareArgs()
+	if releaseLocal {
+		divergeUmbrellaDevelopment(t, &fixture)
+		args = fixture.releaseLocalArgs()
+	}
+	if err := runUmbrella(args[1:]); err != nil {
 		t.Fatal(err)
 	}
 	manifest, data, err := loadUmbrellaManifest(fixture.manifestPath)

@@ -17,9 +17,10 @@
 
 load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("//rules/oci/private:capabilities.bzl", "capability_layer")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, env, extra_layers, registry, extra_registries, tags, user):
+def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, binary_capabilities, env, extra_layers, registry, extra_registries, tags, user):
     layer_name = name + "_layer"
 
     # Where the binary lands inside the layer tarball. Left to rules_pkg, it
@@ -28,7 +29,17 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
     # then fails at `docker run` with "exec /<name>: no such file or directory".
     # `bazel build :image` passes either way because no container is executed;
     # only the layer is assembled. So this is not something a build catches.
-    if binary_path:
+    if binary_capabilities:
+        executable_path = binary_path or "/" + native.package_relative_label(binary).name
+        capability_layer(
+            name = layer_name,
+            binary = binary,
+            binary_path = executable_path,
+            capabilities = binary_capabilities,
+            visibility = visibility,
+        )
+        default_entry = [executable_path]
+    elif binary_path:
         # Explicit absolute path, e.g. /usr/bin/app: split into directory and
         # filename, rename the binary, and place it under that directory. This
         # reproduces the `COPY ... /usr/bin/app` contract that services carried
@@ -121,6 +132,11 @@ go_oci_image = macro(
         "binary_path": attr.string(
             doc = "Absolute path for the binary inside the image, e.g. " +
                   "/usr/bin/app. Defaults to /{binary_name}.",
+            configurable = False,
+        ),
+        "binary_capabilities": attr.string_list(
+            doc = "Linux file capabilities retained by the executable. " +
+                  "Supported: CHOWN. The runtime must also permit each capability.",
             configurable = False,
         ),
         "env": attr.string_dict(

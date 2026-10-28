@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_go//go:def.bzl", "go_test")
 load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
 load("@nvcf_invocation_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
@@ -610,6 +611,17 @@ rust_oci_image(
     ],
     env = {"ULIMIT_FLAG": "1"},
     tags = ["nvcf-invocation-service"],
+    user = "1000:1000",
     visibility = ["//visibility:public"],
     extra_layers = [":config_layer"],
+)
+
+go_test(
+    name = "image_numeric_user_test",
+    srcs = ["//rules/oci/private:numeric_user_test.go"],
+    args = [
+        "-image_index=$(location :image_index)",
+        "-expected_user=1000:1000",
+    ],
+    data = [":image_index"],
 )

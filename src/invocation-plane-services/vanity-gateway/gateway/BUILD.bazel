@@ -61,11 +61,13 @@ alias(
 go_test(
     name = "gateway_test",
     srcs = [
+        "client_metrics_test.go",
         "error_origin_test.go",
         "gateway_test.go",
         "h2_test.go",
         "info_test.go",
         "llm_gateway_director_test.go",
+        "model_info_test.go",
         "models_protocol_test.go",
         "openai_director_test.go",
         "processing_test.go",
@@ -77,6 +79,7 @@ go_test(
         "vanity_director_test.go",
         "version_test.go",
     ],
+    data = ["//src/invocation-plane-services/vanity-gateway:model_info_testdata"],
     embed = [":gateway"],
     deps = [
         "//src/invocation-plane-services/vanity-gateway/gateway_config",

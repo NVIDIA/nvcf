@@ -471,6 +471,25 @@ Usage: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Valu
 {{- end -}}
 
 {{/*
+Return "true" when the operator would read OTEL_COLLECTOR_IMAGE_TAG: the
+collector is enabled at the top level, or the NVCFBackend this chart renders
+enables it without its own tag. The operator's built-in tag is not kept
+current, so the chart fails instead of leaving the tag unset in that case.
+*/}}
+{{- define "nvcaop.otelCollectorTagNeeded" -}}
+{{- $source := (.Values.ngcConfig).clusterSource | default "ngc-managed" -}}
+{{- $backend := dict -}}
+{{- if eq $source "self-managed" -}}
+{{- $backend = (.Values.selfManaged | default dict).otelCollector | default dict -}}
+{{- else if eq $source "helm-managed" -}}
+{{- $backend = (.Values.helmManaged | default dict).otelCollector | default dict -}}
+{{- end -}}
+{{- if or (.Values.otelCollector | default dict).enabled (and $backend.enabled (not $backend.imageTag)) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 Get the BYOO OTel collector repository based on image.repository and
 ngcConfig.clusterSource. If imageRepository is explicitly set, use it.
 Otherwise, staging resolves by image.repository prefix, and production
@@ -494,17 +513,28 @@ nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
 
 {{/*
-Get the BYOO OTel collector image when its tag is configured.
+Get the BYOO OTel collector image when its tag is configured. values.yaml
+holds the only default tag, which the release bump updates. An empty or null
+tag renders nothing, so the chart sets no BYOO_OTEL_COLLECTOR_CONTAINER.
 */}}
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.160.0-nv-0.2.5" -}}
-{{- if hasKey $byooOtelCollector "imageTag" -}}
-{{- $imageTag = $byooOtelCollector.imageTag -}}
+{{- with $byooOtelCollector.imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" $.Values.image.repository "clusterSource" (($.Values.ngcConfig).clusterSource | default "ngc-managed"))) . -}}
 {{- end -}}
-{{- if $imageTag -}}
-{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository "clusterSource" ((.Values.ngcConfig).clusterSource | default "ngc-managed"))) $imageTag -}}
+{{- end -}}
+
+{{/*
+Get the BYOO Fluent Bit image when agent.byooFluentBit.imageRepository is set.
+Otherwise return nothing so NVCA keeps its built-in upstream Fluent Bit image.
+Usage: {{ include "nvcaop.byooFluentBitImage" . }}
+*/}}
+{{- define "nvcaop.byooFluentBitImage" -}}
+{{- $agent := .Values.agent | default dict -}}
+{{- $byooFluentBit := $agent.byooFluentBit | default dict -}}
+{{- with $byooFluentBit.imageRepository -}}
+{{- printf "%s:%s" . (required "agent.byooFluentBit.imageTag is required when agent.byooFluentBit.imageRepository is set" $byooFluentBit.imageTag) -}}
 {{- end -}}
 {{- end -}}
 

@@ -310,7 +310,7 @@ service:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
                 headers:
                   - name: lightstep-access-token
                     value: ${env:OTEL_TRACING_ACCESS_TOKEN}

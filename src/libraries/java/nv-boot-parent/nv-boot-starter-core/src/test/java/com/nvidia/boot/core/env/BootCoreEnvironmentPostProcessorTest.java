@@ -49,30 +49,30 @@ class BootCoreEnvironmentPostProcessorTest {
     }
 
     @Test
-    void usesClosestTagNameAsVersionWhenPresent() {
+    void prefersBuildVersionOverClosestTag() {
         var env = processWithGitProperties("""
-                git.closest.tag.name=v2.5.0
-                git.build.version=2.5.0-SNAPSHOT
+                git.closest.tag.name=1.580.0
+                git.build.version=1.580.1
                 git.commit.id.abbrev=abc1234
                 git.commit.id.full=abc1234def5678901234567890abcdef12345678
                 """);
 
-        assertThat(env.getProperty("spring.application.version")).isEqualTo("v2.5.0");
-        assertThat(env.getProperty("app.git.tag")).isEqualTo("v2.5.0");
+        assertThat(env.getProperty("spring.application.version")).isEqualTo("1.580.1");
+        assertThat(env.getProperty("app.git.tag")).isEqualTo("1.580.0");
         assertThat(env.getProperty("app.git.commit")).isEqualTo("abc1234");
         assertThat(env.getProperty("app.git.commit.full")).isEqualTo("abc1234def5678901234567890abcdef12345678");
         assertThat(env.getProperty("app.git.branch")).isNull();
     }
 
     @Test
-    void fallsBackToBuildVersionWhenTagAbsent() {
+    void fallsBackToClosestTagWhenBuildVersionAbsent() {
         var env = processWithGitProperties("""
-                git.build.version=2.5.0-SNAPSHOT
+                git.closest.tag.name=v2.5.0
                 git.commit.id.abbrev=abc1234
                 """);
 
-        assertThat(env.getProperty("spring.application.version")).isEqualTo("2.5.0-SNAPSHOT");
-        assertThat(env.getProperty("app.git.tag")).isNull();
+        assertThat(env.getProperty("spring.application.version")).isEqualTo("v2.5.0");
+        assertThat(env.getProperty("app.git.tag")).isEqualTo("v2.5.0");
         assertThat(env.getProperty("app.git.commit")).isEqualTo("abc1234");
         assertThat(env.getProperty("app.git.branch")).isNull();
     }

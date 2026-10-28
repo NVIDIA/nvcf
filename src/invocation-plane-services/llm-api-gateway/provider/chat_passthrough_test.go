@@ -29,7 +29,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
@@ -112,7 +111,7 @@ func TestOutboundChatRequestBodyForwardsClientFieldsVerbatim(t *testing.T) {
 
 	require.JSONEq(t, `"upstream-model"`, string(outbound["model"]))
 	require.JSONEq(t, `true`, string(outbound["stream"]))
-	require.JSONEq(t, `"auto"`, string(outbound["service_tier"]))
+	require.NotContains(t, outbound, "service_tier")
 	require.JSONEq(t, `{"continuous_usage_stats":true,"include_usage":true}`, string(outbound["stream_options"]))
 	require.NotContains(t, outbound, "Model")
 	require.NotContains(t, outbound, "debug")
@@ -154,22 +153,35 @@ func TestOutboundChatRequestBodyKeepsStreamingClientStreamOptions(t *testing.T) 
 	}
 }
 
-func TestOutboundChatRequestBodyUsesResolvedServiceTier(t *testing.T) {
+func TestOutboundChatRequestBodyServiceTier(t *testing.T) {
 	t.Parallel()
 
-	// normalizeChatRequest fills an omitted tier from the configured default.
-	request := normalizedChatRequestFromBody(
-		t,
-		`{"model":"m","messages":[{"role":"user","content":"hi"}],"SERVICE_TIER":null}`,
-	)
-	request.ChatRequest.ServiceTier = servicetier.Flex
+	for _, tc := range []struct{ name, clientMember, want string }{
+		{"omitted stays omitted", ``, `{}`},
+		{"client value is forwarded unchanged", `,"service_tier":"priority"`, `{"service_tier":"priority"}`},
+		{"client null is forwarded unchanged", `,"service_tier":null`, `{"service_tier":null}`},
+		{"client spelling is forwarded unchanged", `,"SERVICE_TIER":"flex"`, `{"SERVICE_TIER":"flex"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := normalizedChatRequestFromBody(
+				t,
+				`{"model":"m","messages":[{"role":"user","content":"hi"}]`+tc.clientMember+`}`,
+			)
+			body, err := outboundChatRequestBody(request, true)
+			require.NoError(t, err)
 
-	body, err := outboundChatRequestBody(request, true)
-	require.NoError(t, err)
-
-	outbound := decodeJSONObject(t, body)
-	require.JSONEq(t, `"flex"`, string(outbound["service_tier"]))
-	require.NotContains(t, outbound, "SERVICE_TIER")
+			outbound := decodeJSONObject(t, body)
+			got := map[string]json.RawMessage{}
+			for key, value := range outbound {
+				if strings.EqualFold(key, "service_tier") {
+					got[key] = value
+				}
+			}
+			encoded, err := json.Marshal(got)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(encoded))
+		})
+	}
 }
 
 func TestOutboundChatRequestBodyFallsBackToTypedRequestWithoutRawBody(t *testing.T) {

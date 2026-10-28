@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -144,11 +145,27 @@ type ModelMapping struct {
 }
 
 type ModelInfo struct {
+	modelInfoFields    map[string]stdjson.RawMessage
 	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
 	Id                 string   `json:"id"`
 	Object             string   `json:"object"`
 	Created            int64    `json:"created"`
 	OwnedBy            string   `json:"owned_by"`
+}
+
+// MarshalJSON flattens static metadata into a fresh response buffer. Published
+// director snapshots and their cached model lists remain immutable.
+func (m ModelInfo) MarshalJSON() ([]byte, error) {
+	type coreModelInfo ModelInfo
+	core, err := json.Marshal(coreModelInfo(m))
+	if err != nil || len(m.modelInfoFields) == 0 {
+		return core, err
+	}
+	fields, err := stdjson.Marshal(m.modelInfoFields)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(core[:len(core)-1], ','), fields[1:]...), nil
 }
 
 type ModelListResponse struct {
@@ -387,6 +404,21 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		}
 		seen[id] = info
 		for _, models := range []map[string]ModelInfo{chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo, embeddings.modelNameToModelInfo, responses.modelNameToModelInfo, messages.modelNameToModelInfo, imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo, imageVariations.modelNameToModelInfo} {
+			if _, ok := models[id]; ok {
+				models[id] = info
+			}
+		}
+	}
+	metadata := mapping.ModelInfoFieldsByName()
+	for id, info := range seen {
+		info.modelInfoFields = metadata[id]
+		seen[id] = info
+		for _, models := range []map[string]ModelInfo{
+			chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo,
+			embeddings.modelNameToModelInfo, responses.modelNameToModelInfo,
+			imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo,
+			imageVariations.modelNameToModelInfo, messages.modelNameToModelInfo,
+		} {
 			if _, ok := models[id]; ok {
 				models[id] = info
 			}

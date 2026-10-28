@@ -630,8 +630,7 @@ func newSelfManagedValuesFromEndpoints(identitySource, region string, endpoints 
 
 // lookupExistingCluster finds an existing cluster by name via the ICMS
 // list-clusters endpoint and returns the cluster group ID and cluster ID.
-// This uses the same cluster-management auth as registration, avoiding the
-// NVCF API's ListClusterGroups which returns 403 for admin tokens.
+// This uses the same ICMS endpoint and cluster-management auth as registration.
 func lookupExistingCluster(ctx context.Context, c *client.Client, icmsURL, ncaID, clusterName string) (clusterGroupID, clusterID string, err error) {
 	clusters, err := c.ListClusters(ctx, icmsURL, ncaID)
 	if err != nil {

@@ -98,6 +98,133 @@ api:
       tag: "1.37.0"
 ```
 
+### Use upstream NATS images
+
+To use upstream images, merge these values into
+`deploy/stacks/self-managed/environments/<environment>.yaml`. Helmfile passes
+these settings to the selected NATS chart; no chart or release-definition
+changes are needed. This example uses NATS server 2.14.6, reloader 0.24.0, and
+NATS box 0.20.1. The box pin identifies the upstream multi-platform index for
+Linux AMD64 and ARM64.
+
+```yaml
+nats:
+  container:
+    image:
+      registry: docker.io
+      repository: synadia/nats-server
+      tag: "2.14.6-alpine3.22"
+  reloader:
+    image:
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: "0.24.0"
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+  natsBox:
+    container:
+      image:
+        registry: docker.io
+        repository: natsio/nats-box
+        tag: "0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44"
+    podTemplate:
+      merge:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+```
+
+The box image declares user/group `1000:1000`. `runAsNonRoot` adds Kubernetes
+enforcement; `runAsUser` and `runAsGroup` make the identity explicit. The server
+pod settings also cover its reloader; neither image declares a nonroot user.
+Server `fsGroup` assigns group 1000 to the JetStream and shared PID volumes.
+The box image provides writable directories for CLI state and `nsc` keys.
+Its default context links to read-only mounted Secrets;
+use a separate `XDG_CONFIG_HOME` to save additional contexts. The box needs no
+additional volume or `fsGroup` for this example.
+
+For a private mirror, set each image's `registry` and `repository` together and
+use the mirrored `tag` or `tag@sha256:...`. Preserve the multi-platform index
+when copying the box image and verify the destination digest. Unset or empty
+keys retain the stack's existing defaults; this example does not change them.
+Configure `global.imagePullSecrets` if the destination requires authentication.
+
+Render before installing, using your normal chart source and secrets file:
+
+```bash
+cd deploy/stacks/self-managed
+export HELMFILE_ENV=<environment>
+helmfile -f helmfile.d/01-dependencies.yaml.gotmpl --selector name=nats template
+```
+
+Check the StatefulSet's server and reloader images and the box Deployment's
+full `tag@digest` reference and security context. Install with the normal
+stack workflow, then verify in the intended Kubernetes context:
+
+```bash
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status statefulset/nats
+kubectl --context "$KUBE_CONTEXT" -n nats-system rollout status deployment/nats-box
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c nats -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec nats-0 -c reloader -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- id
+kubectl --context "$KUBE_CONTEXT" -n nats-system exec deployment/nats-box -- \
+  nats --context default rtt
+```
+
+The identities should report UID/GID 1000. The CLI check uses the mounted NKey
+and requires the stack's authentication service to be ready. Expect latency
+output; `failed` or an authorization error is a failure even if `rtt` exits
+successfully. Check the reloader logs after a configuration update to confirm
+it reloads successfully.
+
+### Use upstream cert-manager images
+
+Merge these overrides into the Helmfile environment file
+`deploy/stacks/self-managed/environments/<environment>.yaml` to use upstream
+cert-manager images.
+For a private mirror, replace each full `repository`, which takes precedence
+over `global.image`.
+
+```yaml
+certManager:
+  image:
+    repository: "quay.io/jetstack/cert-manager-controller"
+    tag: "v1.20.2"
+    digest: "sha256:fe0623d7d04a382c888f03343a3a2da716e0d96ad3d5d790c0ebcbcb2a4329a5"
+  webhook:
+    image:
+      repository: "quay.io/jetstack/cert-manager-webhook"
+      tag: "v1.20.2"
+      digest: "sha256:baf651128b9f05c426cbd5e60e2036bf382c99ca270f49d0757d6f7d2452f4e5"
+  cainjector:
+    image:
+      repository: "quay.io/jetstack/cert-manager-cainjector"
+      tag: "v1.20.2"
+      digest: "sha256:6f5a644135887b2aa7d5cc145072fa56421560e3586ff1f184358022d490f4e1"
+  startupapicheck:
+    image:
+      repository: "quay.io/jetstack/cert-manager-startupapicheck"
+      tag: "v1.20.2"
+      digest: "sha256:4e2a69b4a0cc9627905bbeecf720f95d5153ca39cacdab923d2748e73556792b"
+  acmesolver:
+    image:
+      repository: "quay.io/jetstack/cert-manager-acmesolver"
+      tag: "v1.20.2"
+      digest: "sha256:cfa55e9c3dcfc6a3cba97575748c1549b04a30fd14d88a2fcb9e2dddef415e2f"
+```
+
+For authenticated mirrors, set `global.imagePullSecrets` for chart pods and
+separate pull credentials in the ACME Issuer's HTTP-01 solver
+[pod template](https://cert-manager.io/docs/configuration/acme/http01/#podtemplate).
+
 ### Override the Cassandra images
 
 The Cassandra server and its dynamic seed discovery container take the same
@@ -133,6 +260,25 @@ Secrets without an nkey job. Their legacy `cassandra.initialization.image` and
 `nats.nkeyJob.image` values do not control rendered workloads. Using
 `alpine-k8s` for those operations requires chart support rather than a
 configuration-only override.
+
+### Use the upstream Vault injector image
+
+To use the upstream injector at the same version as the NVCF mirror, merge
+this opt-in example into
+`deploy/stacks/self-managed/environments/<environment>.yaml`:
+
+```yaml
+openbao:
+  injector:
+    image:
+      registry: docker.io
+      repository: hashicorp/vault-k8s
+      tag: "1.7.4@sha256:e2ef79b457f50d971851df836f78cf41be454644095d84a7411f93ccf3304c15"
+```
+
+This changes only the injector distribution source.
+The webhook image is separate from `openbao.injector.agentImage` and
+`openbao.server.image`; keep those matched NVCF OpenBao images unchanged.
 
 <Info>
 Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.
@@ -241,7 +387,9 @@ The following tables list the complete artifact inventory.
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
+| `byoo-otel-collector` | `0.160.0-nv-0.4.3` | `compute-plane` | Required | Exports telemetry from Bring Your Own Observability (BYOO) workloads to the endpoints configured for each function or task. NVCA injects it as a sidecar when the BYOObservability feature gate is enabled. | `nvcr.io/nvidia/nvcf/byoo-otel-collector:0.160.0-nv-0.4.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/byoo-otel-collector) |
 | `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
+| `fluent-bit` | `3.2` | `compute-plane` | Optional | Collects container logs for Bring Your Own Observability (BYOO) workloads when the BYOOFluentBit feature gate is enabled. NVCA injects it as a sidecar. | `docker.io/fluent/fluent-bit:3.2` | [Upstream](https://github.com/fluent/fluent-bit) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
 | `grove-install-crds` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Installs Grove custom resource definitions. | `ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
 | `grove-operator` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Reconciles Grove topology-aware scheduling resources. | `ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |

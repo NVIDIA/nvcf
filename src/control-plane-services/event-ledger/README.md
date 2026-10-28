@@ -58,8 +58,17 @@ curl -X POST http://localhost:8080/v3/ledger/cloudevents \
   }'
 ```
 
-`namespace` is required. The optional context fields are `instanceId`,
+`namespace` is required. Producers keyed by function version can send
+`functionVersionId` instead, and it is stored as the namespace. If both are
+set, they must match. The optional context fields are `instanceId`,
 `deploymentId`, `gpuSpecificationId`, `clusterId`, and `resourceId`.
+
+Events may also carry the owning account and function: `ncaId` (up to 128
+characters of `A-Za-z0-9_-`) and `functionId` (a UUID). They are stored as
+columns, not in the context or details, and are optional. An empty value never
+overwrites a stored one. This happens only when `v3.account-columns-enabled` is
+true, which needs the `04` migration. While it is false, the values stay in the
+event details and are not validated.
 
 ### Send OTLP log records
 
@@ -74,7 +83,9 @@ Each log record must include these string attributes:
 - `source`
 
 It may also include `instance_id`, `deployment_id`, `gpu_specification_id`,
-`cluster_id`, and `resource_id`.
+`cluster_id`, and `resource_id`. The optional `nca_id`, `function_id`, and
+`function_version_id` attributes follow the same rules as `ncaId`,
+`functionId`, and `functionVersionId` above.
 
 ### Read events
 

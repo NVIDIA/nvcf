@@ -141,15 +141,21 @@ func TestChatMediaContentRoundTrip(t *testing.T) {
 			if string(encoded) != body {
 				t.Fatalf("content = %s, want %s", encoded, body)
 			}
-			for _, member := range []string{"", `,"` + kind + `":null`, `,"` + kind + `":{}`, `,"` + kind + `":{"url":""}`} {
+			// Parts that fail the checks for their type stay raw.
+			for _, part := range []string{
+				`{"type":"` + kind + `"}`,
+				`{"type":"` + kind + `","` + kind + `":null}`,
+				`{"type":"` + kind + `","` + kind + `":{}}`,
+				`{"type":"` + kind + `","` + kind + `":{"url":""}}`,
+				`{"type":"text","text":"a","` + kind + `":{"url":"data:media;base64,AAAA"}}`,
+			} {
 				var invalid ChatMessageContent
-				if err := json.Unmarshal([]byte(`[{"type":"`+kind+`"`+member+`}]`), &invalid); err == nil {
-					t.Fatalf("accepted missing URL: %s", member)
+				if err := json.Unmarshal([]byte(`[`+part+`]`), &invalid); err != nil {
+					t.Fatalf("rejected %s: %v", part, err)
 				}
-			}
-			var invalid ChatMessageContent
-			if err := json.Unmarshal([]byte(`[{"type":"text","text":"a","`+kind+`":{"url":"data:media;base64,AAAA"}}]`), &invalid); err == nil {
-				t.Fatal("accepted media member in text part")
+				if raw, ok := invalid[0].(ContentPartRaw); !ok || string(raw) != part {
+					t.Fatalf("part = %#v, want raw %s", invalid[0], part)
+				}
 			}
 		})
 	}

@@ -44,7 +44,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci render-values-from-stack install-from-stack test-render-values test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-sibling-image-repositories test-pod-disruption-budget test-first-class-byoo-values test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema test-worker-timeouts-schema test-cluster-validator
+.PHONY: install uninstall status lint template validate clean package push-oci render-values-from-stack install-from-stack test-render-values test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-collector-image-tag test-image-pull-secret-defaults test-sibling-image-repositories test-pod-disruption-budget test-first-class-byoo-values test-byoo-fluent-bit-image test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema test-worker-timeouts-schema test-cluster-validator
 
 install:
 ifndef values
@@ -117,6 +117,9 @@ test-self-managed-nvca-image-reference:
 test-otel-collector-compatibility:
 	@bash ./tests/otel_collector_compatibility_test.sh
 
+test-collector-image-tag:
+	@bash ./tests/collector_image_tag_test.sh
+
 test-image-pull-secret-defaults:
 	@bash ./tests/image_pull_secret_defaults_test.sh
 
@@ -128,6 +131,9 @@ test-pod-disruption-budget:
 
 test-first-class-byoo-values:
 	@bash ./tests/first_class_byoo_values_test.sh
+
+test-byoo-fluent-bit-image:
+	@bash ./tests/byoo_fluent_bit_image_test.sh
 
 test-first-class-storage-worker-values:
 	@bash ./tests/first_class_storage_worker_values_test.sh

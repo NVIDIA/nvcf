@@ -11,14 +11,21 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 published_manifest="$work_dir/llm-request-router.yaml"
 published_release="$work_dir/llm-request-router-release.json"
-published_version=1.14.0
-expected_stargate_image="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate:0.18.0"
+published_values="$work_dir/llm-request-router-values.yaml"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
   echo "llm-router-published-chart: $*" >&2
   exit 1
 }
+
+# Read the default pin from the helmfile so chart bumps do not need a test edit.
+published_version="$(
+  sed -n '/if not \$llmRequestRouterChartPath/{n;s/^ *version: *//p;}' \
+    "$stack_dir/helmfile.d/02-core.yaml.gotmpl"
+)"
+test -n "$published_version" ||
+  fail "could not read the default request-router chart version from 02-core.yaml.gotmpl"
 
 source_args=(
   --state-values-set-string "global.helm.sources.registry=$NVCF_PUBLISHED_CHART_REGISTRY"
@@ -56,6 +63,17 @@ test "$(yq -r '.[0].chart' "$published_release")" = \
 test "$(yq -r '.[0].version' "$published_release")" = "$published_version" ||
   fail "default chart source did not select request-router $published_version"
 
+helm show values \
+  "oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-llm-request-router" \
+  --version "$published_version" >"$published_values"
+stargate_tag="$(yq -r '.llmRequestRouter.image.tag // ""' "$published_values")"
+test -n "$stargate_tag" ||
+  fail "published request-router $published_version does not set llmRequestRouter.image.tag"
+# The backend router follows the main Stargate tag when its own tag is empty.
+backend_router_tag="$(yq -r '.llmRequestRouter.backendRouter.image.tag // ""' "$published_values")"
+backend_router_tag="${backend_router_tag:-$stargate_tag}"
+image_prefix="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate"
+
 (cd "$stack_dir" && HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
   --file helmfile.d/02-core.yaml.gotmpl \
   --environment default \
@@ -79,13 +97,13 @@ assert_manifest_value \
   '1'
 assert_manifest_value \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[0].image' \
-  "$expected_stargate_image"
+  "$image_prefix:$stargate_tag"
 assert_manifest_value \
   '[select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router" and .metadata.namespace == "nvcf")] | length' \
   '1'
 assert_manifest_value \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[] | select(.name == "backend-router") | .image' \
-  "$expected_stargate_image"
+  "$image_prefix:$backend_router_tag"
 
 for expected_arg in \
   '--grpc-pylon-dial-addr=https://llm-grpc.example.com:50071' \

@@ -1,6 +1,6 @@
 # NVIDIA Cloud Functions Agent (NVCA)
 
-NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the **NVCA Operator**, which automates the deployment and lifecycle management of NVCA.
+NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the NVCA Operator, which automates the deployment and lifecycle management of NVCA.
 
 ## Overview
 
@@ -89,7 +89,7 @@ make dev-shell
 make test-e2e
 ```
 
-> **Note:** Ensure there are no overriding localhost DNS docker configurations as that would cause the e2e tests to fail.
+> Note: Ensure there are no overriding localhost DNS docker configurations as that would cause the e2e tests to fail.
 
 ### Force NVCA Rollout
 
@@ -103,7 +103,7 @@ kubectl annotate nvcfbackends --all -n nvca-operator --overwrite nvca.nvcf.nvidi
 
 Add custom network policies during installation using the `--set-file` flag. These policies are added to each function namespace.
 
-Example — create `allow-all-ingress.yaml`:
+Example ; create `allow-all-ingress.yaml`:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -135,15 +135,15 @@ helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values
 ## Building and Testing
 
 NVCA builds via Bazel. The legacy Dockerfile and `goreleaser` paths are
-retired; CI runs `bazel test //...` and publishes images via
-`bazel run //cmd/<bin>:image_push`.
+retired. Use the [release workflow](../../../docs/dev/github-release-process.md) for source versions
+and image publication.
 
 ### Bazel
 
 Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on PATH
 delegating to the version pinned in `.bazelversion`). MODULE.bazel pulls
 the Go toolchain (1.25.0), `rules_go`, Gazelle, `rules_oci`, and the
-distroless Go base image — no host toolchains are needed beyond a recent
+distroless Go base image ; no host toolchains are needed beyond a recent
 Linux (or macOS) and the `bazel` shim.
 
 OSS contributors building from the GitHub mirror: the default `oci.pull`
@@ -181,11 +181,9 @@ bazel mod tidy
 bazel run //cmd/nvca:image_load
 ```
 
-Push targets live under `//nvidia-internal:image_push*` (see
-`nvidia-internal/BUILD.bazel`); the registry coordinates are
-NVIDIA-internal and intentionally kept out of the public mirror.
-Credentials come from the Docker config that `DOCKER_CONFIG` points
-at — CI fills these from vault-fetched tokens.
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 ### Envtest
 

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Build stage
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.24-alpine AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.26.10-alpine AS builder
 
 # Build arguments for multi-arch (with defaults for regular docker build)
 ARG TARGETOS=linux

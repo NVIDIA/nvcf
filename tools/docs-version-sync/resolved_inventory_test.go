@@ -5,10 +5,178 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestResolvedInventoryFindsNVCACollectorImages(t *testing.T) {
+	byooImage := "mirror.example.com/team/byoo-otel-collector:fixture"
+	collectorImage := "mirror.example.com/team/nvcf-otel-collector:fixture"
+	overrides, err := json.Marshal(map[string]string{
+		"BYOO_OTEL_COLLECTOR_CONTAINER": byooImage,
+		"UNRELATED":                     "not-an-image",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(overrides)
+	for _, flag := range []string{"--function-env-overrides-b64", "--task-env-overrides-b64"} {
+		t.Run(flag, func(t *testing.T) {
+			inputs := resolvedInventoryTestInputs(t)
+			inputs[1].ManifestByRelease["resource-config"] = []byte(fmt.Sprintf(`
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: nvca-operator
+          image: registry.example.com/operator:fixture
+          env:
+            - name: OTEL_COLLECTOR_ENABLED
+              value: "false"
+            - name: OTEL_COLLECTOR_IMAGE_REPO
+              value: mirror.example.com/team/nvcf-otel-collector
+            - name: OTEL_COLLECTOR_IMAGE_TAG
+              value: fixture
+          args:
+            - %s
+            - %s
+            - %s
+            - %s
+`, flag, encoded, flag, encoded))
+			inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			byoo := findResolvedInventoryArtifact(t, inventory, "container-image", byooImage)
+			collector := findResolvedInventoryArtifact(t, inventory, "container-image", collectorImage)
+			if len(byoo.Sources) != 1 || byoo.Sources[0].Requirement != ManifestRequired {
+				t.Fatalf("BYOO workload image must be deduplicated and required: %+v", byoo)
+			}
+			if len(collector.Sources) != 1 || collector.Sources[0].Requirement != ManifestOptional {
+				t.Fatalf("ordinary collector must remain optional: %+v", collector)
+			}
+		})
+	}
+}
+
+func TestResolvedCollectorEnvironmentPreservesDirectImageRequirement(t *testing.T) {
+	for _, manifest := range []string{
+		"image: registry.example.com/collector:fixture\n" + collectorEnvironmentFixture(),
+		collectorEnvironmentFixture() + "image: registry.example.com/collector:fixture\n",
+	} {
+		images, err := extractResolvedImages([]byte(manifest))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(images) != 1 || images[0].Indirect {
+			t.Fatalf("direct image requirement was lost: %+v", images)
+		}
+	}
+}
+
+// TestResolvedBYOOOverridesPreserveRequiredImages covers both workload flags and traversal orders.
+func TestResolvedBYOOOverridesPreserveRequiredImages(t *testing.T) {
+	reference := "mirror.example.com/byoo-otel-collector:fixture"
+	encoded := base64.StdEncoding.EncodeToString(mustJSON(t, map[string]string{
+		"BYOO_OTEL_COLLECTOR_CONTAINER": reference,
+	}))
+	for _, flag := range []string{"--function-env-overrides-b64", "--task-env-overrides-b64"} {
+		for name, other := range map[string]string{
+			"direct":   "image: " + reference + "\n",
+			"indirect": "command: [--collector-image=" + reference + "]\n",
+		} {
+			byoo := fmt.Sprintf("args: [%s, %s]\n", flag, encoded)
+			for order, manifest := range []string{other + byoo, byoo + other} {
+				t.Run(fmt.Sprintf("%s/%s/order-%d", flag, name, order), func(t *testing.T) {
+					inputs := resolvedInventoryTestInputs(t)
+					inputs[1].ManifestByRelease["resource-config"] = []byte(manifest)
+					inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+					if err != nil {
+						t.Fatal(err)
+					}
+					image := findResolvedInventoryArtifact(t, inventory, "container-image", reference)
+					if len(image.Sources) != 1 || image.Sources[0].Requirement != ManifestRequired {
+						t.Fatalf("required image precedence was lost: %+v", image)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestResolvedCollectorEnvironmentAllowsDisabledPartialImages keeps enabled inputs strict.
+func TestResolvedCollectorEnvironmentAllowsDisabledPartialImages(t *testing.T) {
+	for _, enabled := range []string{"false", "true", "unspecified"} {
+		for field, value := range map[string]string{
+			"OTEL_COLLECTOR_IMAGE_REPO": "registry.example.com/collector",
+			"OTEL_COLLECTOR_IMAGE_TAG":  "fixture",
+		} {
+			t.Run(enabled+"/"+field, func(t *testing.T) {
+				manifest := fmt.Sprintf("env:\n  - name: %s\n    value: %s\n", field, value)
+				if enabled != "unspecified" {
+					manifest += fmt.Sprintf("  - name: OTEL_COLLECTOR_ENABLED\n    value: %q\n", enabled)
+				}
+				images, err := extractResolvedImages([]byte(manifest))
+				if enabled == "false" {
+					if err != nil || len(images) != 0 {
+						t.Fatalf("disabled partial image: images=%+v, error=%v", images, err)
+					}
+				} else if err == nil {
+					t.Fatal("expected an unresolved enabled or unspecified collector image to fail")
+				}
+			})
+		}
+	}
+}
+
+func collectorEnvironmentFixture() string {
+	return `env:
+  - name: OTEL_COLLECTOR_IMAGE_REPO
+    value: registry.example.com/collector
+  - name: OTEL_COLLECTOR_IMAGE_TAG
+    value: fixture
+`
+}
+
+func TestResolvedCollectorInputsRejectUnresolvedImages(t *testing.T) {
+	invalidImage := base64.StdEncoding.EncodeToString([]byte(`{"BYOO_OTEL_COLLECTOR_CONTAINER":"missing-tag"}`))
+	invalidJSON := base64.StdEncoding.EncodeToString([]byte(`not-json`))
+	for name, manifest := range map[string]string{
+		"missing argument":      "args: [--function-env-overrides-b64]",
+		"invalid base64":        "args: [--task-env-overrides-b64, invalid]",
+		"invalid JSON":          "args: [--task-env-overrides-b64, " + invalidJSON + "]",
+		"invalid BYOO image":    "args: [--function-env-overrides-b64, " + invalidImage + "]",
+		"missing repository":    "env: [{name: OTEL_COLLECTOR_IMAGE_TAG, value: fixture}]",
+		"missing tag":           "env: [{name: OTEL_COLLECTOR_IMAGE_REPO, value: registry.example.com/collector}]",
+		"unresolved repository": strings.ReplaceAll(collectorEnvironmentFixture(), "registry.example.com/collector", "${REGISTRY}/collector"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := extractResolvedImages([]byte(manifest)); err == nil {
+				t.Fatal("expected unresolved collector input to fail")
+			}
+		})
+	}
+}
+
+func TestResolvedCollectorInputsIgnoreUnrelatedConfiguration(t *testing.T) {
+	emptyOverrides := base64.StdEncoding.EncodeToString([]byte(`{"UNRELATED":"not-an-image"}`))
+	images, err := extractResolvedImages([]byte(fmt.Sprintf(`
+env:
+  - name: UNRELATED_IMAGE_TAG
+    value: fixture
+args: [--function-env-overrides-b64, %s]
+data:
+  example: --task-env-overrides-b64
+`, emptyOverrides)))
+	if err != nil || len(images) != 0 {
+		t.Fatalf("unrelated config produced images=%+v, error=%v", images, err)
+	}
+}
 
 func TestGenerateResolvedStackInventoryIncludesAllPlanesAndOptionalArtifacts(t *testing.T) {
 	inputs := resolvedInventoryTestInputs(t)
