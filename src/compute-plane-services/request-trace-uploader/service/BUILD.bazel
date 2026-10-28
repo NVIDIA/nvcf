@@ -35,6 +35,7 @@ go_test(
         "capture_test.go",
         "crash_test.go",
         "faults_e2e_test.go",
+        "health_e2e_test.go",
         "leftovers_e2e_test.go",
         "objectstore_e2e_test.go",
         "objectstore_keys_e2e_test.go",
