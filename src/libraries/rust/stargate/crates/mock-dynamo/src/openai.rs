@@ -573,7 +573,13 @@ async fn decision_response(
     let echo: serde_json::Map<String, serde_json::Value> = DECISION_ECHO_HEADERS
         .iter()
         .map(|name| ((*name).to_string(), optional_header(&headers, name).into()))
-        .chain([("body_len".to_string(), body.len().into())])
+        .chain([
+            ("body_len".to_string(), body.len().into()),
+            (
+                "body_sha256".to_string(),
+                crate::sha256::sha256_hex(&body).into(),
+            ),
+        ])
         .collect();
     let payload = match route {
         DecisionRoute::Decisions => {
