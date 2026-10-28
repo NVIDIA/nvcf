@@ -52,9 +52,28 @@ volume, so every step survives a restart.
 Faults follow `internal/retry`: auth failures and outages hold every submit
 without moving a segment; a segment fault quarantines that segment after a
 batch is split to find it. A backend that records its own metrics implements
-`telemetry.Receiver` and gets the shared recorder. This binary records metrics
-through the `telemetry` package but does not export them; a distribution
-passes its own recorder in `service.Options.Metrics`.
+`telemetry.Receiver` and gets the shared recorder. This binary exports
+metrics over OTLP when an endpoint is set (see Metrics below); a distribution
+can pass its own recorder in `service.Options.Metrics`.
+
+## Metrics
+
+Metrics are pushed over OTLP to the workload's collector. There is no scrape
+endpoint. Two settings configure the export, and no other `OTEL_*` variable
+changes it:
+
+- `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`: the collector URL, `http` or
+  `https`, used as given. For `http/protobuf` include the path, usually
+  `/v1/metrics`. Unset turns the export off.
+- `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`: `grpc`, `http`, or `http/protobuf`.
+  Required when the endpoint is set.
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` is never used as a fallback. Every instrument is
+named `dynamo.request_trace.<name>`, carries a `backend` attribute, and uses
+only bounded attributes; counters start at zero. Metrics are pushed every 60
+seconds and once more after the shutdown drain, for up to 5 seconds, so the
+pod's grace period must cover the drain timeout plus 5 seconds. A failed
+export never blocks an upload or changes readiness.
 
 The `backend` package defines the export destination contract and a registry.
 Submit and status are separate operations so a slow confirmation cannot block

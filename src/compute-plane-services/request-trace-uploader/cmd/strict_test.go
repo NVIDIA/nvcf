@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 )
 
 // TestMainExitsNonZeroOnAnyInvalidOrUnknownSetting checks that the process
@@ -28,6 +29,10 @@ func TestMainExitsNonZeroOnAnyInvalidOrUnknownSetting(t *testing.T) {
 		"value that used to fall back": {env: []string{config.EnvScanInterval + "=soon"}, named: config.EnvScanInterval},
 		"misspelled setting":           {env: []string{"REQUEST_TRACE_UPLOADER_SCAN_INTERVAL=30"}, named: "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL"},
 		"value out of range":           {env: []string{config.EnvDrainTimeout + "=-5"}, named: config.EnvDrainTimeout},
+		"metrics endpoint without protocol": {
+			env:   []string{telemetry.EnvOTLPMetricsEndpoint + "=http://127.0.0.1:4318/v1/metrics"},
+			named: telemetry.EnvOTLPMetricsProtocol,
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
