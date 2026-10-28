@@ -59,7 +59,10 @@ func (h *OpenAIProxyHandlers) serveDecisionRoute(ec echo.Context, endpointPath s
 		return err
 	}
 
-	inputTokens := estimatedTokenCountForDecisionBody(rawBody, h.decisionImageTokens())
+	inputTokens, err := estimatedTokenCountForDecisionBody(rawBody, h.decisionImageTokens())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
 	if err := h.admitProxyRequest(c, reqCtx, inputTokens, 0); err != nil {
 		return err
 	}

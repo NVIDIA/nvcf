@@ -144,7 +144,8 @@ func TestDecisionRoutesForwardBodyAndHeaders(t *testing.T) {
 			require.JSONEq(t, `"`+decisionTestModel+`"`, string(outbound["model"]))
 			require.JSONEq(t, `["QUJD","QUJD"]`, string(outbound["images"]))
 
-			wantTokens := estimatedTokenCountForDecisionBody([]byte(body), 1000)
+			wantTokens, err := estimatedTokenCountForDecisionBody([]byte(body), 1000)
+			require.NoError(t, err)
 			require.GreaterOrEqual(t, wantTokens, 2000, "two images must count")
 			require.Equal(t, strconv.Itoa(wantTokens), upstreamRequest.InputTokens)
 			require.Equal(t, upstreamRequest.InputTokens, upstreamRequest.TokenEstimate)
@@ -220,6 +221,7 @@ func TestDecisionRoutesRejectBadRequests(t *testing.T) {
 			{"model missing", `{"input":"hello"}`, "invalid_request"},
 			{"model not a string", `{"model":7}`, "invalid_request"},
 			{"model without function prefix", `{"model":"model"}`, "invalid_request"},
+			{"nesting deeper than 64 levels", `{"model":"fn-alpha/company-name/model-name","state":` + strings.Repeat(`{"a":`, 70) + `1` + strings.Repeat(`}`, 70) + `}`, "invalid_request"},
 			{"model duplicate member case", `{"model":"fn-alpha/company-name/model-name","MODEL":"fn-alpha/company-name/other"}`, "invalid_request"},
 		} {
 			t.Run(route.name+"/"+tc.name, func(t *testing.T) {

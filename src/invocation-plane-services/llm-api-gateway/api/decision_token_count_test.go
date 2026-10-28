@@ -4,6 +4,7 @@
 package api
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -32,6 +33,7 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 		{"input_image base64 length does not matter", `{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + smallBase64 + `"}]}`, imageTokens},
 		{"images array counts each element", `{"images":["` + bigBase64 + `","` + smallBase64 + `",{"mediaType":"image/png","base64":"` + smallBase64 + `"}],"state":"hello"}`, 3*imageTokens + hello},
 		{"assets map counts each value", `{"assets":{"a":{"mediaType":"image/png","base64":"` + bigBase64 + `"},"b":"data:image/jpeg;base64,` + smallBase64 + `"}}`, 2 * imageTokens},
+		{"assets with several object values", `{"assets":{"a":{"x":"1"},"b":{"y":[1,2]},"c":{"z":{}},"d":"hello"},"state":"hello"}`, 4*imageTokens + hello},
 		{"data url anywhere is one image", `{"state":{"screenshot":"data:image/png;base64,` + bigBase64 + `"},"input":"hello"}`, imageTokens + hello},
 		{"data url without base64 is text", `{"input":"data:text/plain,hi"}`, estimatedTokenCountForText("data:text/plain,hi")},
 		{"images key that is not an array is walked as text", `{"images":"hello"}`, hello},
@@ -41,7 +43,9 @@ func TestEstimatedTokenCountForDecisionBody(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tc.want, estimatedTokenCountForDecisionBody([]byte(tc.body), imageTokens))
+			got, err := estimatedTokenCountForDecisionBody([]byte(tc.body), imageTokens)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -50,13 +54,50 @@ func TestEstimatedTokenCountForDecisionBodyImageTokensIsConfigurable(t *testing.
 	t.Parallel()
 
 	body := []byte(`{"images":["a","b"]}`)
-	require.Equal(t, 0, estimatedTokenCountForDecisionBody(body, 0))
-	require.Equal(t, 2*7, estimatedTokenCountForDecisionBody(body, 7))
+	got, err := estimatedTokenCountForDecisionBody(body, 0)
+	require.NoError(t, err)
+	require.Equal(t, 0, got)
+	got, err = estimatedTokenCountForDecisionBody(body, 7)
+	require.NoError(t, err)
+	require.Equal(t, 2*7, got)
 }
 
 func TestEstimatedTokenCountForDecisionBodyInvalidJSONFallsBackToText(t *testing.T) {
 	t.Parallel()
 
 	raw := `{"input":"hello",`
-	require.Equal(t, estimatedTokenCountForText(raw), estimatedTokenCountForDecisionBody([]byte(raw), 1000))
+	got, err := estimatedTokenCountForDecisionBody([]byte(raw), 1000)
+	require.NoError(t, err)
+	require.Equal(t, estimatedTokenCountForText(raw), got)
+}
+
+func nestedDecisionBody(depth int, leaf string) string {
+	return strings.Repeat(`{"a":`, depth) + `"` + leaf + `"` + strings.Repeat(`}`, depth)
+}
+
+func TestEstimatedTokenCountForDecisionBodyRejectsDeepNesting(t *testing.T) {
+	t.Parallel()
+
+	_, err := estimatedTokenCountForDecisionBody([]byte(nestedDecisionBody(64, "x")), 1000)
+	require.NoError(t, err, "64 levels are allowed")
+	_, err = estimatedTokenCountForDecisionBody([]byte(nestedDecisionBody(65, "x")), 1000)
+	require.Error(t, err)
+	_, err = estimatedTokenCountForDecisionBody([]byte(`{"images":`+strings.Repeat("[", 70)+strings.Repeat("]", 70)+`}`), 1000)
+	require.Error(t, err, "nesting inside an image slot counts too")
+}
+
+// A big leaf nested deep must cost a few copies of the leaf, not one per level.
+func TestEstimatedTokenCountForDecisionBodyAllocationIsBounded(t *testing.T) {
+	body := []byte(nestedDecisionBody(60, strings.Repeat("a", 1<<20)))
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	got, err := estimatedTokenCountForDecisionBody(body, 1000)
+	runtime.ReadMemStats(&after)
+
+	require.NoError(t, err)
+	require.Equal(t, estimatedTokenCountForText(strings.Repeat("a", 1<<20)), got)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	require.Less(t, allocated, uint64(16<<20), "allocated %d bytes for a 1 MiB body", allocated)
 }
