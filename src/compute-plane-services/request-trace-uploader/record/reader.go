@@ -4,14 +4,9 @@
 package record
 
 import (
-	"bufio"
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 )
 
 // ErrLegacyAuditRecord reports a Dynamo v1.3.x AuditRecord. That type was
@@ -27,21 +22,23 @@ type Stats struct {
 	ByEventType map[EventType]int
 	Unknown     int
 	Bytes       int64
+	// LostBytes counts compressed bytes that could not be decompressed.
+	LostBytes int64
+
+	cut int
 }
 
 // Reader streams records out of a gzipped JSON-lines segment.
 //
 // It never holds more than one record in memory, so segment size does not
 // bound memory. A record that fails to parse, including one that exceeds the
-// size bound, is counted and skipped; it does not end the scan, because one
-// bad line must not discard the other records in a segment.
+// size bound or is cut short by a damaged gzip member, is counted and
+// skipped; it does not end the scan, because one bad line must not discard
+// the other records in a segment.
 type Reader struct {
-	file    *os.File
-	gz      *gzip.Reader
-	buf     *bufio.Reader
+	lines   *Lines
 	current *Record
 	err     error
-	line    int
 	stats   Stats
 }
 
@@ -51,97 +48,28 @@ const maxLineBytes = 64 << 20
 
 // Open starts reading the segment at path.
 func Open(path string) (*Reader, error) {
-	file, err := os.Open(path)
+	lines, err := OpenLines(path, LineOptions{MaxLineBytes: maxLineBytes})
 	if err != nil {
-		return nil, fmt.Errorf("open segment: %w", err)
+		return nil, err
 	}
-	gz, err := gzip.NewReader(file)
-	if err != nil {
-		file.Close()
-		return nil, fmt.Errorf("read segment gzip header: %w", err)
-	}
-	// Dynamo appends gzip members as it rolls, so a segment is a concatenated
-	// stream rather than a single member.
-	gz.Multistream(true)
-
 	return &Reader{
-		file:  file,
-		gz:    gz,
-		buf:   bufio.NewReaderSize(gz, 64<<10),
+		lines: lines,
 		stats: Stats{ByEventType: map[EventType]int{}},
 	}, nil
 }
 
-// readLine returns the next line with its terminator stripped.
-//
-// A line longer than maxLineBytes is drained to its newline and reported as
-// oversized, so the reader resumes at the following record instead of stopping
-// at the first one it cannot hold. bufio.Scanner cannot do this: it fails
-// permanently once a token exceeds its buffer.
-func (r *Reader) readLine() (line []byte, oversized bool, err error) {
-	var acc []byte
-	for {
-		chunk, chunkErr := r.buf.ReadSlice('\n')
-		if errors.Is(chunkErr, bufio.ErrBufferFull) {
-			if len(acc)+len(chunk) > maxLineBytes {
-				oversized = true
-				acc = nil
-				// Keep draining until the newline so the next read starts on a
-				// record boundary.
-				continue
-			}
-			acc = append(acc, chunk...)
-			continue
-		}
-		if chunkErr != nil {
-			if len(acc) == 0 && len(chunk) == 0 {
-				return nil, oversized, chunkErr
-			}
-			if !oversized {
-				acc = append(acc, chunk...)
-			}
-			return trimEOL(acc), oversized, nil
-		}
-		if oversized {
-			return nil, true, nil
-		}
-		if len(acc)+len(chunk) > maxLineBytes {
-			return nil, true, nil
-		}
-		acc = append(acc, chunk...)
-		return trimEOL(acc), false, nil
-	}
-}
-
-func trimEOL(line []byte) []byte {
-	line = bytes.TrimSuffix(line, []byte("\n"))
-	return bytes.TrimSuffix(line, []byte("\r"))
-}
-
 // Next advances to the next record, reporting whether one was read.
 func (r *Reader) Next() bool {
-	for {
-		line, oversized, err := r.readLine()
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				r.err = fmt.Errorf("read segment: %w", err)
-			}
-			return false
-		}
-		r.line++
-		if oversized {
-			r.stats.Unparseable++
-			r.stats.Oversized++
-			continue
-		}
-		if len(line) == 0 {
-			continue
-		}
-
+	defer r.syncLineStats()
+	if r.err != nil {
+		return false
+	}
+	for r.lines.Next() {
+		line := r.lines.Line()
 		rec, err := parseLine(line)
 		if err != nil {
 			if errors.Is(err, ErrLegacyAuditRecord) {
-				r.err = fmt.Errorf("line %d: %w", r.line, err)
+				r.err = fmt.Errorf("line %d: %w", r.lines.Number(), err)
 				return false
 			}
 			r.stats.Unparseable++
@@ -157,6 +85,17 @@ func (r *Reader) Next() bool {
 		r.current = rec
 		return true
 	}
+	r.err = r.lines.Err()
+	return false
+}
+
+// syncLineStats folds the line reader's losses into the record totals.
+func (r *Reader) syncLineStats() {
+	line := r.lines.Stats()
+	r.stats.Unparseable += line.Oversized - r.stats.Oversized + line.Cut - r.stats.cut
+	r.stats.Oversized = line.Oversized
+	r.stats.cut = line.Cut
+	r.stats.LostBytes = line.LostBytes
 }
 
 // Record returns the record read by the last successful Next.
@@ -171,17 +110,7 @@ func (r *Reader) Stats() Stats { return r.stats }
 func (r *Reader) Err() error { return r.err }
 
 // Close releases the segment.
-func (r *Reader) Close() error {
-	gzErr := r.gz.Close()
-	fileErr := r.file.Close()
-	if gzErr != nil {
-		return fmt.Errorf("close segment gzip: %w", gzErr)
-	}
-	if fileErr != nil {
-		return fmt.Errorf("close segment: %w", fileErr)
-	}
-	return nil
-}
+func (r *Reader) Close() error { return r.lines.Close() }
 
 // envelope is the timestamp-wrapped form some Dynamo sinks emit. The file sink
 // writes bare records, so both shapes have to parse.
