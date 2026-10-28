@@ -22,6 +22,7 @@ go_library(
         "errors.go",
         "mcs.go",
         "pool.go",
+        "poolagent.go",
         "server.go",
         "validate.go",
     ],
@@ -57,6 +58,7 @@ go_test(
         "api_test.go",
         "errors_test.go",
         "pool_test.go",
+        "poolagent_test.go",
     ],
     embed = [":api"],
     deps = [
