@@ -22,9 +22,10 @@
 //! integration surface for the Dynamo PoolRelay and for pools that are not
 //! Kubernetes Services.
 //!
-//! [`AgentRegistration`] registers one process kind of a pool (Pylon, the
-//! Dynamo PoolRelay or the OpenAI frontend) as a typed pool agent with its
-//! own lease. It heartbeats and re-registers the same way and deregisters on
+//! [`AgentRegistration`] registers one process instance of a pool agent
+//! (Pylon, the Dynamo PoolRelay or the OpenAI frontend) with its own lease,
+//! keyed by (pool, role, agent id), so the replicas of one role do not fence
+//! each other. It heartbeats and re-registers the same way and deregisters on
 //! shutdown, without a drain phase.
 
 use std::collections::{BTreeMap, HashMap};
@@ -634,8 +635,10 @@ pub struct AgentSpec {
     pub pool_name: String,
     /// The process kind: OPENAI, KV_RELAY or PYLON.
     pub role: FrontendRole,
-    /// Identity of this process, for example a Pylon inference server id or
-    /// the PoolRelay pod name.
+    /// Identity of this process, unique within the role of the pool, for
+    /// example a Pylon inference server id or the PoolRelay pod name. GDS
+    /// keeps one registration per agent id, so the replicas of one role
+    /// register side by side. Required.
     pub agent_id: String,
     /// Writer-owned attributes, at most 16 entries, for example the served
     /// models.
@@ -702,7 +705,7 @@ pub struct AgentRegistrationState {
     pub phase: AgentPhase,
     /// The id of the agent's pool, as GDS reported it.
     pub pool_id: String,
-    /// The current agent lease epoch.
+    /// The lease epoch of this process's registration.
     pub epoch: u64,
     /// The derived pool state GDS reported with the last successful
     /// register or heartbeat.
@@ -827,6 +830,7 @@ impl AgentRegistration {
                 clusterset: spec.clusterset.clone(),
                 pool_id: lease.pool_id.clone(),
                 role: spec.role as i32,
+                agent_id: spec.agent_id.clone(),
             })
             .await;
         match &result {
@@ -878,8 +882,8 @@ impl AgentShared {
     }
 
     /// `RegisterPoolAgent` with the current spec and a new generation. Mints
-    /// a new agent lease epoch. The request names no pool id: GDS finds or
-    /// creates the pool by (cluster, pool name).
+    /// a new lease epoch for this agent id. The request names no pool id: GDS
+    /// finds or creates the pool by (cluster, pool name).
     async fn register_locked(&self, lease: &mut AgentLease) -> Result<(), Error> {
         let mut stale_retry = true;
         loop {
@@ -899,14 +903,20 @@ impl AgentShared {
             };
             match self.client.register_pool_agent(request).await {
                 Ok(response) => {
-                    let agent = response.agent.unwrap_or_default();
+                    // The registration carries this process's lease; the
+                    // merged agent mirrors whichever registration of the
+                    // role expires last.
+                    let registration = response.registration.unwrap_or_default();
                     if !response.pool_id.is_empty() {
                         lease.pool_id = response.pool_id;
                     }
-                    lease.epoch = agent.lease.as_ref().map_or(0, |granted| granted.epoch);
-                    lease.ttl =
-                        granted_ttl(agent.lease.as_ref()).unwrap_or_else(|| spec.lease_ttl());
-                    lease.generation = lease.generation.max(agent.generation);
+                    lease.epoch = registration
+                        .lease
+                        .as_ref()
+                        .map_or(0, |granted| granted.epoch);
+                    lease.ttl = granted_ttl(registration.lease.as_ref())
+                        .unwrap_or_else(|| spec.lease_ttl());
+                    lease.generation = lease.generation.max(registration.generation);
                     info!(
                         pool_id = %lease.pool_id,
                         pool = %spec.pool_name,
@@ -939,6 +949,7 @@ impl AgentShared {
             info!(
                 pool_id = %lease.pool_id,
                 role = ?spec.role,
+                agent_id = %spec.agent_id,
                 "GDS pool agent attributes cleared; registering again"
             );
             return self.register_locked(&mut lease).await;
@@ -947,6 +958,7 @@ impl AgentShared {
             clusterset: spec.clusterset.clone(),
             pool_id: lease.pool_id.clone(),
             role: spec.role as i32,
+            agent_id: spec.agent_id.clone(),
             epoch: lease.epoch,
             attributes: if changed {
                 spec.attributes.clone().into_iter().collect()
@@ -972,6 +984,7 @@ impl AgentShared {
                 info!(
                     pool_id = %lease.pool_id,
                     role = ?spec.role,
+                    agent_id = %spec.agent_id,
                     epoch = lease.epoch,
                     reason = error.reason().as_deref().unwrap_or(""),
                     "GDS pool agent lease lost; registering again"
@@ -1011,8 +1024,18 @@ async fn agent_heartbeat_loop(shared: Arc<AgentShared>, stop: CancellationToken)
             Err(error) => {
                 failures = failures.saturating_add(1);
                 let pool_id = shared.lease.lock().await.pool_id.clone();
-                let role = shared.lock_spec().role;
-                warn!(%pool_id, ?role, failures, %error, "GDS pool agent heartbeat failed");
+                let (role, agent_id) = {
+                    let spec = shared.lock_spec();
+                    (spec.role, spec.agent_id.clone())
+                };
+                warn!(
+                    %pool_id,
+                    ?role,
+                    %agent_id,
+                    failures,
+                    %error,
+                    "GDS pool agent heartbeat failed"
+                );
                 shared.publish_failure(failures, &error);
             }
         }

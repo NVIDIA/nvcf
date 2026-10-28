@@ -147,8 +147,10 @@ its pool: the cluster is `--cluster-id`, the agent id
 `--inference-server-id`, and the `models` attribute lists the served model
 ids. The registration gives GDS the process identity and model list a
 Service cannot carry, and keeps the pool visible for the agent lease when no
-Service is exported yet. Pylon deregisters the agent after its tunnel drain
-on shutdown; the agent lease covers a failed deregistration.
+Service is exported yet. GDS keeps one registration per agent id, each with
+its own lease, so the N Pylon pods of a pool register side by side without
+fencing each other. Pylon deregisters after its tunnel drain on shutdown;
+the lease covers a failed deregistration.
 
 ```rust
 use std::collections::BTreeMap;
@@ -205,7 +207,8 @@ agent.shutdown().await?; // on SIGTERM
 A pool whose only live agent is the relay stays REGISTERED: routers learn
 its KV cache facts (`kv_relay_live`) but need a live ingress agent (OPENAI or
 PYLON) to send it requests. Both Pylon and the PoolRelay may register as
-agents of the same pool; they share its `pool_id`.
+agents of the same pool; they share its `pool_id`. Relay replicas register
+under their own pod names as agent ids.
 
 ### Dynamo PoolRelay: pool registration
 
@@ -315,7 +318,10 @@ dropping the cache or cancelling its token stops the task.
 
 - `AgentRegistration::register` calls `RegisterPoolAgent` without a pool id,
   so GDS finds the pool by (cluster, pool name) or creates it, and fails if
-  that call fails. The heartbeat task runs every third of the lease GDS
+  that call fails. Registrations are keyed by (pool, role, agent id): the
+  epoch comes from `RegisterPoolAgentResponse.registration`, and heartbeats
+  and `DeregisterPoolAgent` name the agent id, so replicas of one role do not
+  fence each other. The heartbeat task runs every third of the lease GDS
   granted (60 s unless `lease_ttl` asks otherwise; GDS clamps it to
   [10 s, 5 m]), with the jitter, backoff, generations and re-registration on
   NOT_FOUND or ABORTED described above.

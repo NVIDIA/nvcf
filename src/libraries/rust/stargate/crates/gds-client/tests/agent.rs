@@ -18,7 +18,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use gds_client::v1::{DeregisterPoolAgentRequest, FrontendRole, PoolState};
+use gds_client::v1::{
+    DeregisterPoolAgentRequest, FrontendRole, HeartbeatPoolAgentRequest, PoolState,
+};
 use gds_client::{AgentPhase, AgentRegistration, AgentSpec, GdsClient};
 use tokio_util::sync::CancellationToken;
 use tonic::{Code, Status};
@@ -30,13 +32,14 @@ const TTL: Duration = Duration::from_secs(30);
 const CLUSTER: &str = "c1";
 const POOL: &str = "pool-a";
 const ROLE: FrontendRole = FrontendRole::Pylon;
+const AGENT: &str = "pylon-0";
 
 fn models(list: &str) -> BTreeMap<String, String> {
     BTreeMap::from([("models".to_string(), list.to_string())])
 }
 
 fn spec() -> AgentSpec {
-    let mut spec = AgentSpec::new("cs", CLUSTER, POOL, ROLE, "pylon-0");
+    let mut spec = AgentSpec::new("cs", CLUSTER, POOL, ROLE, AGENT);
     spec.attributes = models("llama");
     spec.lease_ttl = Some(TTL);
     spec
@@ -62,8 +65,15 @@ fn epoch(registration: &AgentRegistration) -> u64 {
 }
 
 fn stored_models(fake: &FakeGds) -> Option<String> {
-    fake.agent(CLUSTER, POOL, ROLE)
-        .and_then(|agent| agent.attributes.get("models").cloned())
+    fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+        .and_then(|registration| registration.attributes.get("models").cloned())
+}
+
+fn heartbeats_of(fake: &FakeGds, agent_id: &str) -> Vec<HeartbeatPoolAgentRequest> {
+    fake.agent_heartbeats()
+        .into_iter()
+        .filter(|heartbeat| heartbeat.agent_id == agent_id)
+        .collect()
 }
 
 #[tokio::test(start_paused = true)]
@@ -93,8 +103,18 @@ async fn registers_and_heartbeats_every_third_of_the_lease() {
         "generation is unix ms based"
     );
     assert_eq!(request.lease_ttl.map(|ttl| ttl.seconds), Some(30));
-    let agent = fake.agent(CLUSTER, POOL, ROLE).expect("stored");
-    assert_eq!(agent.agent_id, "pylon-0");
+    assert_eq!(
+        request.agent.as_ref().map(|agent| agent.agent_id.as_str()),
+        Some(AGENT)
+    );
+    let stored = fake
+        .agent_registration(CLUSTER, POOL, ROLE, AGENT)
+        .expect("stored");
+    assert_eq!(
+        stored.lease.map(|lease| lease.epoch),
+        Some(state.epoch),
+        "the epoch of this process's registration"
+    );
     assert_eq!(stored_models(&fake).as_deref(), Some("llama"));
     assert_eq!(fake.calls("HeartbeatPoolAgent"), 0);
 
@@ -119,6 +139,7 @@ async fn registers_and_heartbeats_every_third_of_the_lease() {
         heartbeat.epoch == current_epoch
             && heartbeat.pool_id == state.pool_id
             && heartbeat.role == ROLE as i32
+            && heartbeat.agent_id == AGENT
             && heartbeat.clusterset == "cs"
     }));
     assert!(
@@ -142,7 +163,11 @@ async fn registers_and_heartbeats_every_third_of_the_lease() {
         count,
         "no heartbeat after stop"
     );
-    assert!(fake.agent(CLUSTER, POOL, ROLE).is_some(), "left to expire");
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+            .is_some(),
+        "left to expire"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -177,7 +202,7 @@ async fn epoch_mismatch_registers_again() {
     let registration = register(&fake, &stop).await;
     let first_epoch = epoch(&registration);
 
-    fake.bump_agent_epoch(CLUSTER, POOL, ROLE);
+    fake.bump_agent_epoch(CLUSTER, POOL, ROLE, AGENT);
     tokio::time::sleep(TTL / 3).await;
     assert!(
         wait_until(Duration::from_secs(1), || fake.calls("RegisterPoolAgent")
@@ -186,8 +211,8 @@ async fn epoch_mismatch_registers_again() {
         "re-registered after LEASE_EPOCH_MISMATCH"
     );
     let stored_epoch = fake
-        .agent(CLUSTER, POOL, ROLE)
-        .and_then(|agent| agent.lease)
+        .agent_registration(CLUSTER, POOL, ROLE, AGENT)
+        .and_then(|registration| registration.lease)
         .map(|lease| lease.epoch)
         .expect("stored lease");
     assert!(
@@ -219,7 +244,7 @@ async fn not_found_heartbeat_registers_again() {
     let registration = register(&fake, &stop).await;
     let pool_id = registration.pool_id();
 
-    fake.remove_agent_silently(CLUSTER, POOL, ROLE);
+    fake.remove_agent_silently(CLUSTER, POOL, ROLE, AGENT);
     tokio::time::sleep(TTL / 3).await;
     assert!(
         wait_until(Duration::from_secs(1), || fake.calls("RegisterPoolAgent")
@@ -313,8 +338,10 @@ async fn attributes_reach_gds_with_the_next_heartbeat() {
             == 2)
         .await
     );
-    let agent = fake.agent(CLUSTER, POOL, ROLE).expect("stored");
-    assert!(agent.attributes.is_empty());
+    let stored = fake
+        .agent_registration(CLUSTER, POOL, ROLE, AGENT)
+        .expect("stored");
+    assert!(stored.attributes.is_empty());
     assert_eq!(registration.state().phase, AgentPhase::Registered);
 }
 
@@ -324,8 +351,8 @@ async fn stale_generation_is_retried_above_the_stored_one() {
     let stop = CancellationToken::new();
     let registration = register(&fake, &stop).await;
     let far_future = u64::MAX / 2;
-    fake.set_agent_generation(CLUSTER, POOL, ROLE, far_future);
-    fake.bump_agent_epoch(CLUSTER, POOL, ROLE);
+    fake.set_agent_generation(CLUSTER, POOL, ROLE, AGENT, far_future);
+    fake.bump_agent_epoch(CLUSTER, POOL, ROLE, AGENT);
 
     tokio::time::sleep(TTL / 3).await;
     assert!(
@@ -354,7 +381,10 @@ async fn a_rejected_first_registration_fails() {
         .await
         .expect_err("rejected");
     assert_eq!(error.code(), Some(Code::InvalidArgument));
-    assert!(fake.agent(CLUSTER, POOL, ROLE).is_none());
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+            .is_none()
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -379,6 +409,59 @@ async fn agents_of_one_pool_share_its_id() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn replicas_of_one_role_do_not_fence_each_other() {
+    let fake = FakeGds::new("r");
+    let stop = CancellationToken::new();
+    let first = register(&fake, &stop).await;
+    let mut spec = spec();
+    spec.agent_id = "pylon-1".to_string();
+    let second = AgentRegistration::register(client(&fake), spec, stop.clone())
+        .await
+        .expect("second replica");
+    assert_eq!(first.pool_id(), second.pool_id());
+    let (first_epoch, second_epoch) = (epoch(&first), epoch(&second));
+    assert_ne!(first_epoch, second_epoch);
+
+    tokio::time::sleep(TTL).await;
+    for (agent_id, epoch) in [(AGENT, first_epoch), ("pylon-1", second_epoch)] {
+        let heartbeats = heartbeats_of(&fake, agent_id);
+        assert!(heartbeats.len() >= 3, "{agent_id}: {}", heartbeats.len());
+        assert!(
+            heartbeats.iter().all(|heartbeat| heartbeat.epoch == epoch),
+            "{agent_id} keeps its own epoch"
+        );
+    }
+    assert_eq!(
+        fake.calls("RegisterPoolAgent"),
+        2,
+        "neither registration superseded the other"
+    );
+    assert_eq!(first.state().phase, AgentPhase::Registered);
+    assert_eq!(second.state().phase, AgentPhase::Registered);
+
+    // Deregistering one replica leaves the other registered.
+    first.shutdown().await.expect("shutdown");
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+            .is_none()
+    );
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, "pylon-1")
+            .is_some()
+    );
+    let count = heartbeats_of(&fake, "pylon-1").len();
+    tokio::time::sleep(TTL / 3).await;
+    assert!(
+        wait_until(Duration::from_secs(1), || heartbeats_of(&fake, "pylon-1")
+            .len()
+            > count)
+        .await
+    );
+    assert_eq!(epoch(&second), second_epoch);
+    assert_eq!(fake.calls("RegisterPoolAgent"), 2);
+}
+
+#[tokio::test(start_paused = true)]
 async fn shutdown_deregisters_at_once() {
     let fake = FakeGds::new("r");
     let stop = CancellationToken::new();
@@ -388,7 +471,10 @@ async fn shutdown_deregisters_at_once() {
 
     registration.shutdown().await.expect("shutdown");
     assert_eq!(fake.calls("DeregisterPoolAgent"), 1);
-    assert!(fake.agent(CLUSTER, POOL, ROLE).is_none());
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+            .is_none()
+    );
     assert_eq!(states.borrow_and_update().phase, AgentPhase::Deregistered);
     let count = fake.calls("HeartbeatPoolAgent");
     tokio::time::sleep(TTL).await;
@@ -400,6 +486,7 @@ async fn shutdown_deregisters_at_once() {
             clusterset: "cs".to_string(),
             pool_id,
             role: ROLE as i32,
+            agent_id: AGENT.to_string(),
         })
         .await
         .expect("idempotent");
@@ -421,5 +508,8 @@ async fn a_failed_deregistration_leaves_the_lease_to_expire() {
     let state = states.borrow().clone();
     assert_eq!(state.phase, AgentPhase::Stopped);
     assert!(state.last_error.is_some());
-    assert!(fake.agent(CLUSTER, POOL, ROLE).is_some());
+    assert!(
+        fake.agent_registration(CLUSTER, POOL, ROLE, AGENT)
+            .is_some()
+    );
 }
