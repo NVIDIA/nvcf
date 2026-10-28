@@ -16,6 +16,7 @@
 mod engine_driver;
 mod kv_cache;
 mod openai;
+mod sha256;
 mod stats_stream;
 // mock-dynamo is an integration fixture, so its runtime image intentionally
 // exposes deterministic controls used by deployed behavior tests.

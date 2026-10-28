@@ -907,6 +907,25 @@ async fn systemone_answers_follow_each_question_type() {
 }
 
 #[tokio::test]
+async fn decision_echo_reports_the_sha256_of_the_received_body() {
+    let (addr, server) = spawn_decision_app(test_state()).await;
+    let mut digests = Vec::new();
+    for body in ["abc", ""] {
+        let response =
+            json_response(addr, "POST", "/v1/decisions", "connection: close", body).await;
+        digests.push(response_body_json(&response)["echo"]["body_sha256"].clone());
+    }
+    server.abort();
+    assert_eq!(
+        digests,
+        [
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn decision_endpoints_serve_rate_limit_and_validation_errors_on_request() {
     let (addr, server) = spawn_decision_app(test_state()).await;
     let request_body = r#"{"model":"decision-model","input":"x","questions":[]}"#;
