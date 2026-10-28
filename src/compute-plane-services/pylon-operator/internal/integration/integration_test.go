@@ -332,6 +332,7 @@ func TestControllerReconcilesThroughWatches(t *testing.T) {
 
 	cfg := config.Config{
 		ClusterID:               "spark-berlin",
+		RouterSource:            config.RouterSourceStatic,
 		RouterGRPCAddress:       "router:50071",
 		PylonImage:              "nvcr.io/nvidia/pylon:0.15.2",
 		OperatorNamespace:       operatorNS,
