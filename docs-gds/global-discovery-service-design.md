@@ -1,12 +1,14 @@
 # Global Discovery Service (GDS): Design
 
-Status: Draft v0.5, 2026-10-28 (v0.1 initial design; v0.2 adds the cross-region request path
+Status: Draft v0.6, 2026-10-28 (v0.1 initial design; v0.2 adds the cross-region request path
 flow and its prerequisites, the explicit pool dispatch address, the draining order and the
 registration-direction neutrality, from `network-interaction-comparison.md`; v0.3 replaces the
 derived-VIP pylon seed with per-cluster router replica seeds, 4.5; v0.4 records the integration
 decisions on the advertised dial address and the seed scheme, 4.5 and 10; v0.5 models the
 PoolRelay and Pylon as distinct typed pool agents with their own Services and registrations,
-3, 4.2, 4.3, 4.5, 4.6, 5.4, 9 and 10). Author:
+3, 4.2, 4.3, 4.5, 4.6, 5.4, 9 and 10; v0.6 adds the direct router mode, in which pylons and
+relays dial Stargate pods found through GDS and the stargate-k8s-router becomes an optional,
+backwards-compatible mode, 2.3, 3, 4.5, 10, 11 and 15). Author:
 E. Stroczynski. Design for the Global Discovery Service
 of the Dynamo Global Router (Global Router HLD, Kiro edition, section 2.4 "Discovery", and the
 "LLD: The Global View" GDS requirements), scoped by the "Global Discovery Service" workstreams of
@@ -184,6 +186,15 @@ hostname as the HTTP/2 authority, and does the same for QUIC with SNI. The per-p
 never resolved. Pylon then opens one `RegisterInferenceServer` stream and one reverse QUIC tunnel
 per replica, sends a full snapshot every second, and reconnects with backoff.
 
+The k8s-router exists because a multi-replica Deployment has no stable per-pod DNS
+(Kubernetes may publish dashed-IP SRV records), so a pylon could not dial a pod identity by
+name; the router gives every cluster one dialable address and keeps the pod identity in the
+authority and SNI. It terminates TLS on both legs, re-originates each QUIC connection, relays
+streams but not datagrams, and decodes and re-encodes registration messages. A multi-replica
+StatefulSet runs without it, advertising `$(POD_IP):50071` and `$(POD_IP):50072`; the chart
+refuses a multi-replica Deployment without it. Section 4.5 adds the direct mode that removes
+this constraint when GDS is in use.
+
 Pylon Operator renders a transport Deployment per `InferenceEndpoint` with `--transport-replicas`
 pods (default 1) and no Service. Each pod has its own `inference_server_id`
 (`<cluster>.<namespace>.<name>.<pod>`), and the router load-balances a model across its
@@ -243,6 +254,8 @@ Well-known labels and annotations (constants in `api/labels.go`, mirrored in the
 | `gds.nvidia.com/dc` | Service annotation | DC name | Pool location |
 | `gds.nvidia.com/dial-scheme` | Service annotation | `http`, `https` | Scheme clients use for router seeds and the derived VIP |
 | `gds.nvidia.com/grpc-port-name`, `gds.nvidia.com/http-port-name`, `gds.nvidia.com/quic-port-name` | Service annotation | port names, default `grpc`, `http`, `quic` | Which Service ports carry gRPC, HTTP and the QUIC tunnel |
+| `gds.nvidia.com/hostname-template` | Service annotation on router exports | template with one `{pod_name}` | How a router replica's identity (gRPC authority, QUIC SNI, TLS SAN) is formed from its pod name, 4.5 |
+| `gds.nvidia.com/router-mode` | Service annotation on router exports | `direct`, `backend-router` | Whether the replicas are Stargate pods dialled directly or k8s-router pods that forward by authority and SNI, 4.5 |
 | `gds.nvidia.com/managed-by` | label on objects the controller creates | `gds-mcs-controller` | Ownership marker |
 | `gds.nvidia.com/clusterset` | label on objects the controller creates | clusterset | Scoping |
 | `gds.nvidia.com/pool-id` | label on auto-created ServiceExports | pool id | Created from an API-registered pool |
@@ -530,6 +543,51 @@ chart exports dial scheme `http` by default and the seeds need no router certifi
 pod IPs; registration and tunnel traffic keep their own TLS on the dial addresses. `https`
 seeds would need TLS terminated on the pod port with a certificate covering the pod IPs.
 
+Router modes. A router export is in one of two modes, recorded in the annotation
+`gds.nvidia.com/router-mode` and reported on the Router record, so a client can tell what
+the replicas are:
+
+- `backend-router` (the existing path, kept for backwards compatibility): the exported Service
+  is the backend-router Service and the replicas are stargate-k8s-router pods. A pylon dials a
+  replica, learns per-pod authorities from its `WatchStargates`, and the k8s-router forwards
+  registration by authority and QUIC by SNI to the Stargate pod. Static-address pylons
+  (`--stargate-address`) and pylons outside the peered network (through a gateway in front of
+  the k8s-router) keep working unchanged. Nothing in this mode changes.
+- `direct` (new): the exported Service selects the Stargate pods themselves (the ClusterIP
+  Service, or the headless Service when not-ready replicas should be visible), and the
+  replicas are Stargate pods. Each Stargate advertises `$(POD_IP):50071` as its gRPC address
+  and `$(POD_IP):50072` as its tunnel dial address, keeps the templated hostname as its
+  identity (`reverse_tunnel_target`, the TLS SAN) and sets no `--grpc-pylon-dial-addr`. The
+  pylon dials the pod directly. The registration and the tunnel therefore land on the same
+  pod by construction, there is no second TLS termination and no re-encoding hop. Direct
+  mode is allowed for a multi-replica Deployment only when `globalDiscovery.enabled` is set,
+  because the per-pod addresses then come from GDS instead of DNS; StatefulSets may use it
+  without GDS as today.
+
+Direct mode needs two more facts on the Router record, both derived from the export. Each
+`RouterReplica` carries its identity: the EndpointSlice `hostname` when set, else the pod
+name the controller already exports as the endpoint attribute `targetRef.name`. The export
+carries the annotation `gds.nvidia.com/hostname-template` (the chart's
+`advertisedHostnameTemplate`), so a client can form a replica's authority and SNI as the
+template with `{pod_name}` replaced by the identity, plus the gRPC port, without resolving a
+name. The clients expose `replica_authority(router, replica)` for it. In backend-router mode
+the identities are k8s-router pod names and are not used as authorities; the per-pod
+authorities come from `WatchStargates` as before.
+
+Peers in `WatchStargates` under direct mode. Stargate's headless DNS discovery lists its peers
+by templated hostname with no dial address, which a pylon in another cluster cannot resolve.
+With `--gds-url` set, `GdsDiscovery` finds the Router record of its own cluster (the one whose
+replicas contain its own pod IP), and fills each peer's `grpc_pylon_dial_addr` with that
+peer's `<scheme>://<replica address>:<grpc_port>`, keeping the hostname as the authority. A
+pylon that follows `WatchStargates` from any one replica therefore gets a dialable address per
+peer, and Pylon itself needs no change: dial address and authority already differ today.
+
+Network prerequisites of direct mode are the ones already stated for routable pod IPs (1.6,
+4.4) plus UDP: TCP 50071 and UDP 50072 must be admitted to router pod IPs from every pool
+cluster, with path MTU discovery working across the peering. ClientIP session affinity is no
+longer needed, since each pylon pins itself to each pod. Pylons that cannot reach pod IPs,
+for example from a non-peered network, stay on backend-router mode behind a gateway.
+
 Why not the derived VIP. Every cluster deploys the same router Service (for example
 `nvcf/llm-request-router-backend`), and by MCS semantics exports of one namespace and name merge
 into one ServiceImport. Its derived Service in any cluster spreads across the k8s-router pods
@@ -774,8 +832,11 @@ message FrontendEndpoint { FrontendRole role; string url; ServiceRef service; st
 message ServiceRef { string namespace; string name; FrontendRole role; }
 message Router { string cluster; string region; string namespace; string name; ServiceType type; LeaseState cluster_lease_state;
   int32 grpc_port; int32 http_port; string dial_scheme; repeated RouterReplica replicas; map<string,string> labels;
-  map<string,string> annotations; int32 quic_port; repeated ServicePort ports; }
-message RouterReplica { string address; AddressType address_type; bool ready; string hostname; string zone; }
+  map<string,string> annotations; int32 quic_port; repeated ServicePort ports; RouterMode router_mode;
+  string hostname_template; }
+enum RouterMode { BACKEND_ROUTER; DIRECT; }
+message RouterReplica { string address; AddressType address_type; bool ready; string hostname; string zone;
+  string identity; }
 ```
 
 `frontends[]` always contains the dispatch entry (role OPENAI): for a label-derived pool GDS
@@ -985,10 +1046,18 @@ attributes, lease_ttl}, stop)` with its own heartbeat task, `state`, `subscribe`
   `globalDiscovery.{enabled, urls, clustersetId, clusterId, tlsCaConfigMap}` render the flags,
   and `globalDiscovery.export.enabled` and `dialScheme` (default `http`) add the export and role
   labels and the dial-scheme annotation to the Service pylons dial. No ServiceExport template is
-  needed. Stargate advertises its `--grpc-pylon-dial-addr` unchanged (4.5). The k8s-router has no
-  GDS client and answers `WatchStargates` with its static remote URLs, so the GDS remote URLs
-  reach pylons that watch a Stargate pod; pylons with `--gds-url` read every router cluster from
-  GDS directly.
+  needed. In backend-router mode Stargate advertises its `--grpc-pylon-dial-addr` unchanged
+  (4.5). The k8s-router has no GDS client and answers `WatchStargates` with its static remote
+  URLs, so the GDS remote URLs reach pylons that watch a Stargate pod; pylons with `--gds-url`
+  read every router cluster from GDS directly. In direct mode (chart `backendRouter.enabled:
+  false` with `globalDiscovery.enabled: true` on a multi-replica Deployment) the chart renders
+  `--advertise-addr=$(POD_IP):50071`, `--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072`, no
+  `--grpc-pylon-dial-addr`, the wildcard SAN for the hostname template, the annotations
+  `gds.nvidia.com/router-mode: direct`, `gds.nvidia.com/hostname-template` and
+  `gds.nvidia.com/quic-port-name` on the exported ClusterIP Service, and `GdsDiscovery` fills
+  peer dial addresses from the own-cluster Router record. The backend-router templates, RBAC
+  and render checks stay in the chart; `backendRouter.enabled` keeps its default (on for a
+  multi-replica Deployment) so existing values files render exactly as before.
 - Pylon. `InferenceServerRegistrationConfig.seeds` becomes a watch receiver of a URL set; the
   watch discovery loop reacts to changes (it already diffs desired watch URLs each iteration).
   `--stargate-address` becomes optional when `--gds-url` is set; both are unioned when present.
@@ -1031,6 +1100,11 @@ attributes, lease_ttl}, stop)` with its own heartbeat task, `state`, `subscribe`
   through Bazel, a codegen guard for generated Go and a `diff_test` for the vendored protos.
 - Infrastructure documents: DynamoDB table definition and regions, IAM policies, NLB and
   Route53 records, consistency notes, REST and streaming examples.
+- stargate-k8s-router: the crate, its image and the chart's backend-router templates remain
+  built and tested while any deployment uses backend-router mode. Direct mode is the
+  recommended path for GDS deployments; the k8s-router is documented as the compatibility
+  path for static-address pylons and non-peered networks. Its removal is a separate decision
+  once no deployment depends on it.
 
 ## 12. Observability
 
@@ -1101,6 +1175,10 @@ The approved step list with files and tests is in the implementation plan.
    and CRDs are imported.
 6. Lockfile regeneration for the Rust crate must go through Bazel on machines without cargo.
 7. Dynamic Pylon seeds change `InferenceServerRegistrationConfig` and its tests.
+7a. Direct router mode exposes Stargate pod ports (TCP 50071, UDP 50072) to every pool cluster
+   and loses the single gateway address the k8s-router offered; deployments that need either
+   stay on backend-router mode. Both modes are exported with the same role, so a mixed
+   clusterset works, and a client tells them apart by `router_mode`.
 8. Open: whether `ServiceImport.endpoints` should carry ports once per slice set rather than per
    endpoint (size versus client simplicity); whether to project the `by_updated_at` index with
    all attributes; the PoolRelay HA model (HLD question 7) determines whether relays export

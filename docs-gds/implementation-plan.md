@@ -1116,3 +1116,20 @@ agent-only pools resolve `pool_id` through the deterministic UUIDv5 without a na
 ### Status (v0.5)
 
 - ws-d: design doc and this section written.
+
+## Revision v0.6: direct router mode (k8s-router optional)
+
+Design v0.6 (sections 2.3, 3, 4.5, 5.4, 10, 11, 15) lets pylons and relays dial Stargate pods
+found through GDS and keeps the stargate-k8s-router as a backwards-compatible mode. Nothing
+changes for existing values files: `backendRouter.enabled` keeps its default and the
+backend-router templates, RBAC, image and crate stay.
+
+| Workstream | Scope | Depends on |
+|---|---|---|
+| ws7 | proto: `RouterMode`, `Router.router_mode`, `Router.hostname_template`, `RouterReplica.identity`; labels `gds.nvidia.com/router-mode`, `gds.nvidia.com/hostname-template`; server derivation (identity from slice hostname else the `targetRef.name` endpoint attribute); fakegds; Go and Rust `replica_authority` helpers | ws1, ws2 merged |
+| ws8 | Stargate: `GdsDiscovery` fills peer `grpc_pylon_dial_addr` from the own-cluster Router record in direct mode; chart: direct mode for a multi-replica Deployment when `globalDiscovery.enabled`, pod-IP advertise flags, annotations, wildcard SAN, render checks; docs | ws7 |
+| ws9 | e2e phase 3 with a two-replica direct-mode router and no backend router; quickstart and design status | ws8 |
+
+### Status (v0.6)
+
+- design written; implementation follows the v0.5 merge.
