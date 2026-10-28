@@ -333,7 +333,37 @@ port of the exported Service (name, protocol, app protocol, number) for
 consumers whose protocol GDS does not name, `dial_scheme` from
 `gds.nvidia.com/dial-scheme` (`http` when absent or invalid), the cluster's
 region and lease state, and one replica per endpoint (first address, ready
-flag, hostname, zone) while the cluster lease is active.
+flag, hostname, zone, identity) while the cluster lease is active.
+
+`router_mode` comes from the annotation `gds.nvidia.com/router-mode`
+(case-insensitive): `ROUTER_MODE_BACKEND_ROUTER` for `backend-router`,
+`ROUTER_MODE_DIRECT` for `direct`, `ROUTER_MODE_UNSPECIFIED` when the
+annotation is absent or holds another value. Clients treat
+`ROUTER_MODE_UNSPECIFIED` as `ROUTER_MODE_BACKEND_ROUTER`, the mode of
+exports made before router modes existed. In backend-router mode the
+replicas are stargate-k8s-router pods and a pylon learns the per-pod
+authorities from `WatchStargates`; in direct mode the replicas are the
+Stargate pods and a pylon dials each one.
+
+`hostname_template` is the annotation `gds.nvidia.com/hostname-template`
+verbatim (empty when absent), for example `{pod_name}.stargate.example.com`.
+A replica's `identity` is its EndpointSlice hostname when set, else the pod
+name the MCS controller exports as the endpoint attribute `targetRef.name`,
+else empty. In direct mode a client forms a replica's authority as the
+template with its single `{pod_name}` replaced by the identity, plus `:` and
+`grpc_port`:
+
+```text
+{pod_name}.stargate.example.com + stargate-0 + 50071 -> stargate-0.stargate.example.com:50071
+```
+
+The host part is also the replica's QUIC SNI and TLS name. There is no
+authority when the template or the identity is empty or the template does
+not contain `{pod_name}` exactly once. The client helpers are
+`client.RouterReplicaAuthority` and `client.RouterIsDirect` (Go) and
+`replica_authority` and `is_direct` (Rust); both return no authority for a
+router that is not in direct mode. The dial address stays the replica's
+seed URL, `<dial_scheme>://<address>:<grpc_port>`.
 
 ## Watches
 
@@ -444,8 +474,9 @@ Services opt in to GDS through labels and annotations with the
 `gds.nvidia.com/` prefix: `export`, `role` (`router`, `pool-frontend`,
 `kv-relay`, `pylon`), `pool`, and the annotations `roles` (several pool
 roles of one Service, comma-separated), `pool-models`, `hardware-class`,
-`dc`, `dial-scheme`, `grpc-port-name`, `http-port-name` and
-`quic-port-name`. The constants and
+`dc`, `dial-scheme`, `grpc-port-name`, `http-port-name`,
+`quic-port-name`, and on router exports `router-mode` (`backend-router`,
+`direct`) and `hostname-template`. The constants and
 their meaning are in `api/labels.go`; the Rust gds-client crate mirrors them.
 
 Clients dial an import through its derived Service,
