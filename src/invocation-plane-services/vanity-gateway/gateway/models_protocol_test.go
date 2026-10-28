@@ -253,3 +253,79 @@ func TestListModelsForAnthropicClientsUsesMessagesExpiry(t *testing.T) {
 	require.Equal(t, http.StatusOK, getModels(t, mux, "/v1/models/shared/openai-expired", true).Code)
 	require.Equal(t, http.StatusGone, getModels(t, mux, "/v1/models/shared/messages-expired", true).Code)
 }
+
+// decisionDiscoveryMux serves decision-only, shared and expired decision models.
+func decisionDiscoveryMux(t *testing.T) http.Handler {
+	t.Helper()
+	entry := func(name string) config.ModelFunctionDetails {
+		return config.ModelFunctionDetails{ModelName: name, FunctionID: "func-" + name}
+	}
+	expired := entry("decide/expired")
+	expired.EOL = time.Now().Add(-time.Hour)
+	offline := entry("decide/offline")
+	offline.OfflineMessage = "down"
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{"shared": entry("decide/shared")}
+	mappings.OpenAI.Decisions = map[string]config.ModelFunctionDetails{
+		"d":       entry("decide/d-only"),
+		"shared":  entry("decide/shared"),
+		"expired": expired,
+		"offline": offline,
+	}
+	mappings.TypeSafeSystemOne = map[string]config.ModelFunctionDetails{
+		"s":      entry("decide/s-only"),
+		"shared": entry("decide/shared"),
+	}
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              "http://nvcf.invalid",
+		LLMGatewayEndpoint:           "http://llm.invalid",
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+	return mux
+}
+
+func TestListModelsIncludesDecisionModelsWithSupportedEndpoints(t *testing.T) {
+	rec := getModels(t, decisionDiscoveryMux(t), "/v1/models", false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var models ModelListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &models))
+	got := map[string][]string{}
+	for _, m := range models.Data {
+		got[m.Id] = m.SupportedEndpoints
+	}
+	require.Equal(t, map[string][]string{
+		"decide/d-only":  {"/v1/decisions"},
+		"decide/s-only":  {"/v1/systemone"},
+		"decide/shared":  {"/v1/chat/completions", "/v1/decisions", "/v1/systemone"},
+		"decide/offline": {"/v1/decisions"},
+	}, got, "the expired model is filtered out")
+}
+
+func TestGetModelDescribesDecisionModels(t *testing.T) {
+	mux := decisionDiscoveryMux(t)
+	for model, want := range map[string][]string{
+		"decide/d-only": {"/v1/decisions"},
+		"decide/s-only": {"/v1/systemone"},
+		"decide/shared": {"/v1/chat/completions", "/v1/decisions", "/v1/systemone"},
+	} {
+		rec := getModels(t, mux, "/v1/models/"+model, false)
+		require.Equal(t, http.StatusOK, rec.Code, model)
+		var info ModelInfo
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &info))
+		require.Equal(t, model, info.Id)
+		require.Equal(t, want, info.SupportedEndpoints, model)
+	}
+	require.Equal(t, http.StatusGone, getModels(t, mux, "/v1/models/decide/expired", false).Code)
+	require.Equal(t, http.StatusServiceUnavailable, getModels(t, mux, "/v1/models/decide/offline", false).Code)
+	require.Equal(t, http.StatusNotFound, getModels(t, mux, "/v1/models/decide/missing", false).Code)
+}
+
+func TestAnthropicModelListExcludesDecisionModels(t *testing.T) {
+	rec := getModels(t, decisionDiscoveryMux(t), "/v1/models", true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var page anthropicModelPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Empty(t, page.Data)
+}
