@@ -45,6 +45,8 @@ const (
 	traceAttrValueEndpointAnthropic  = "anthropic"
 	traceAttrValueEndpointOpenAI     = "openai"
 	traceAttrValueEndpointLLMGateway = "llm_gateway"
+	traceAttrValueEndpointDecisions  = "decisions"
+	traceAttrValueEndpointSystemOne  = "systemone"
 
 	shadowDroppedReasonBodyReadError    = "body_read_error"
 	shadowDroppedReasonBodyRewriteError = "body_rewrite_error"
