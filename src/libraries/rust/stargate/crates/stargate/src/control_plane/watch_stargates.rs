@@ -128,9 +128,11 @@ pub(super) fn spawn_watch_stargates_publisher(
 }
 
 /// The `WatchStargates` snapshot. A configured `grpc_pylon_dial_addr`
-/// applies to every Stargate. Without it, a Stargate whose advertise host is
-/// in `peer_dial_addrs` (from [`Discovery::peer_dial_addrs`]) gets that dial
-/// URL, and the others keep dialing their advertise address.
+/// applies to every Stargate. Without it, a Stargate keeps the dial address
+/// discovery set on it (direct router mode lists peers with one), else one
+/// whose advertise host is in `peer_dial_addrs` (from
+/// [`Discovery::peer_dial_addrs`]) gets that dial URL, and the others keep
+/// dialing their advertise address.
 fn build_watch_stargates_response(
     stargates: Vec<StargateInfo>,
     remote_watch_stargate_urls: &[String],
@@ -454,12 +456,45 @@ mod tests {
         assert_eq!(advertised, expected);
     }
 
+    /// A peer `GdsDiscovery` lists under its replica identity in direct
+    /// mode, with its dial address already set.
+    fn identity_peer() -> StargateInfo {
+        StargateInfo {
+            grpc_pylon_dial_addr: "http://10.0.0.2:50071".to_string(),
+            ..stargate("stargate-1", "stargate-1.headless:50071", "")
+        }
+    }
+
+    #[test]
+    fn discovered_entries_keep_the_dial_addr_they_carry() {
+        let response = build_watch_stargates_response(
+            vec![
+                stargate("stargate-0", "stargate-0.headless:50071", ""),
+                identity_peer(),
+            ],
+            &[],
+            None,
+            &dial_addrs(&[
+                ("stargate-0.headless", "http://10.0.0.1:50071"),
+                ("stargate-1.headless", "http://10.9.9.9:50071"),
+            ]),
+        );
+
+        assert_eq!(
+            dial_addrs_by_id(&response),
+            BTreeMap::from([
+                ("stargate-0", "http://10.0.0.1:50071"),
+                ("stargate-1", "http://10.0.0.2:50071"),
+            ])
+        );
+    }
+
     #[test]
     fn configured_grpc_pylon_dial_addr_wins_over_discovered_dial_addrs() {
         let response = build_watch_stargates_response(
             vec![
                 stargate("stargate-0", "stargate-0.headless:50071", ""),
-                stargate("stargate-1", "stargate-1.headless:50071", ""),
+                identity_peer(),
             ],
             &[],
             Some("https://stargate-grpc-lb.region-a:443"),
