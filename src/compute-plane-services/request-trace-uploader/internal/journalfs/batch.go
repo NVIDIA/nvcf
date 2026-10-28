@@ -311,7 +311,7 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 		if dest == nil || dest.BatchID != b.ID {
 			continue
 		}
-		if b.State == journal.StateConfirmed && dest.State == journal.StateConfirmed && !inFlight(seg.State) {
+		if b.State == journal.StateConfirmed && dest.State == journal.StateConfirmed && inFlightTarget(seg) == seg.State {
 			continue
 		}
 		err := s.updateSegmentLocked(seg.ID, func(seg *journal.Segment) error {
@@ -338,22 +338,7 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 // in flight: Confirmed when every destination is, Submitting while any is in
 // a batch, and Prepared otherwise.
 func (s *Store) settleInFlight(seg *journal.Segment) error {
-	if seg.State != journal.StatePrepared && seg.State != journal.StateSubmitting {
-		return nil
-	}
-	target := journal.StatePrepared
-	confirmed := 0
-	for _, dest := range seg.Destinations {
-		switch dest.State {
-		case journal.StateSubmitting:
-			target = journal.StateSubmitting
-		case journal.StateConfirmed:
-			confirmed++
-		}
-	}
-	if confirmed > 0 && confirmed == len(seg.Destinations) {
-		target = journal.StateConfirmed
-	}
+	target := inFlightTarget(seg)
 	if target == seg.State {
 		return nil
 	}
@@ -398,4 +383,26 @@ func batchTransition(b *journal.Batch, to journal.State) error {
 		b.MayHaveLanded = true
 	}
 	return nil
+}
+
+// inFlightTarget returns the state an in-flight segment should hold given
+// its destinations. A segment that is not in flight keeps its state.
+func inFlightTarget(seg *journal.Segment) journal.State {
+	if !inFlight(seg.State) {
+		return seg.State
+	}
+	target := journal.StatePrepared
+	confirmed := 0
+	for _, dest := range seg.Destinations {
+		switch dest.State {
+		case journal.StateSubmitting:
+			target = journal.StateSubmitting
+		case journal.StateConfirmed:
+			confirmed++
+		}
+	}
+	if confirmed > 0 && confirmed == len(seg.Destinations) {
+		target = journal.StateConfirmed
+	}
+	return target
 }

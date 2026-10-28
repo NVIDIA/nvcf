@@ -301,6 +301,30 @@ func TestConfirmBatchConfirmsEveryMember(t *testing.T) {
 	}
 }
 
+func TestSettleBatchesDoesNotRewriteADestinationAlreadySettled(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary", "secondary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+	createBatch(t, store, batchFor("b2", "secondary", ids, transports))
+	if err := store.SetReceipt("b1", journal.Receipt{Backend: "fake", ID: "job-1"}); err != nil {
+		t.Fatalf("SetReceipt: %v", err)
+	}
+	if err := store.ConfirmBatch("b1"); err != nil {
+		t.Fatalf("ConfirmBatch: %v", err)
+	}
+	// The segment stays in flight while its other destination is pending.
+	before := mustState(t, store, ids[0], journal.StateSubmitting).UpdatedAt
+
+	h.clock.Advance(time.Minute)
+	if err := store.SettleBatches(); err != nil {
+		t.Fatalf("SettleBatches: %v", err)
+	}
+	if after := mustState(t, store, ids[0], journal.StateSubmitting).UpdatedAt; !after.Equal(before) {
+		t.Fatalf("segment rewritten at %s, want no write for a destination already settled", after)
+	}
+}
+
 func TestSegmentConfirmedOnlyWhenEveryDestinationIsConfirmed(t *testing.T) {
 	h := newHarness(t)
 	store := h.open()
