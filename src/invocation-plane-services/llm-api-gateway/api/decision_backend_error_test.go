@@ -135,15 +135,42 @@ func TestDecisionRoutesRenderBareRouterErrorsNatively(t *testing.T) {
 			openAIType    string
 			systemOneCode string
 		}{
+			{http.StatusBadRequest, "invalid_request_error", "invalid_request"},
 			{http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large"},
+			{499, "invalid_request_error", "invalid_request"},
+			{http.StatusServiceUnavailable, "server_error", "provider_unavailable"},
 			{http.StatusBadGateway, "server_error", "provider_unavailable"},
 			{http.StatusGatewayTimeout, "server_error", "provider_timeout"},
 		} {
 			t.Run(route.name+"/"+http.StatusText(tc.status), func(t *testing.T) {
 				t.Parallel()
-				rec := serveDecisionUpstream(t, route, config.Default(), nil, tc.status, http.Header{"Retry-After": {"3"}}, nil)
+				rec := serveDecisionUpstream(t, route, config.Default(), nil, tc.status,
+					http.Header{"Retry-After": {"3"}, "X-System-One-Error-Code": {"backend_code"}}, nil)
 				requireNativeError(t, route, rec, tc.status, tc.openAIType, tc.systemOneCode)
 				require.Equal(t, "3", rec.Header().Get("Retry-After"))
+				require.Empty(t, rec.Header().Values("X-System-One-Error-Code"), "gateway-written errors carry no X-System-One-* headers")
+			})
+		}
+	}
+}
+
+// An empty body on a status Stargate does not emit as a bare router error is
+// the backend's own answer and is relayed unchanged, headers included.
+func TestDecisionRoutesRelayEmptyBackendErrorsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	for _, route := range decisionRoutes {
+		for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusNotImplemented} {
+			t.Run(route.name+"/"+http.StatusText(status), func(t *testing.T) {
+				t.Parallel()
+				headers := http.Header{"Content-Type": {"application/json"}, "Retry-After": {"7"}, "X-System-One-Error-Code": {"backend_code"}, "X-Vendor": {"kept"}}
+				rec := serveDecisionUpstream(t, route, config.Default(), nil, status, headers, nil)
+
+				require.Equal(t, status, rec.Code)
+				require.Empty(t, rec.Body.String())
+				for key, values := range headers {
+					require.Equal(t, values, rec.Header().Values(key), key)
+				}
 			})
 		}
 	}
@@ -166,9 +193,8 @@ func TestBackendErrorPeekDoesNotBufferBody(t *testing.T) {
 	payload := strings.Repeat("x", 4<<20)
 	counter := &peekCountingReader{r: strings.NewReader(payload)}
 	resp := &provider.ProxyResponse{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: io.NopCloser(counter)}
-	req := httptest.NewRequest(http.MethodPost, decisionsEndpointPath, nil)
 
-	require.True(t, isBackendErrorOnDecisionRoute(req, resp))
+	require.True(t, isBackendErrorOnDecisionRoute(resp))
 	require.LessOrEqual(t, counter.read, 1, "the peek must read at most one byte")
 	rest, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
