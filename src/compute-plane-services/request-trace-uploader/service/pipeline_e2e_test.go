@@ -352,7 +352,7 @@ func TestSIGTERMStopsWithinTheDrainTimeoutAndKeepsTheBatchForTheNextStart(t *tes
 	// would.
 	fake.Script(backendtest.SubmitStep{Delay: time.Hour})
 	listener, base := listen(t)
-	uploader := newUploader(t, spool, fake, service.Options{Listener: listener}, map[string]string{"SHUTDOWN_DRAIN_SECONDS": "1"})
+	uploader := newUploader(t, spool, fake, service.Options{Listener: listener}, map[string]string{config.EnvDrainTimeout: "1"})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- uploader.Run(ctx) }()

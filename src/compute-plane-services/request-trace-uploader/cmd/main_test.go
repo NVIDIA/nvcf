@@ -37,7 +37,7 @@ func mapLookup(env map[string]string) config.LookupFunc {
 	}
 }
 
-func TestLoadConfigHonorsTheChartSuppressionAlias(t *testing.T) {
+func TestLoadConfigReadsTheSuppressedNCAIDs(t *testing.T) {
 	cfg, _, err := loadConfig(mapLookup(map[string]string{
 		config.EnvSourceDir:      "/records",
 		config.EnvBackend:        string(config.BackendDebug),
@@ -47,7 +47,7 @@ func TestLoadConfigHonorsTheChartSuppressionAlias(t *testing.T) {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
 	if len(cfg.Suppression.Rules) != 1 || cfg.Suppression.Rules[0].Values[0] != "acme" {
-		t.Fatalf("Suppression = %+v, want the chart's NCA id list as one rule", cfg.Suppression)
+		t.Fatalf("Suppression = %+v, want the NCA id list as one rule", cfg.Suppression)
 	}
 }
 

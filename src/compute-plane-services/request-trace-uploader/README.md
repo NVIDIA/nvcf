@@ -104,21 +104,13 @@ These settings apply only to that backend:
 Object-store submission is synchronous and has no status poll.
 
 The binary loads configuration strictly. An invalid or incompatible value,
-an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, or two aliases
-that disagree stops startup with a non-zero exit. Errors name the setting,
-never its value. `config.Load` on its own still falls back to defaults with
-a warning, for callers that want that.
+or an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, stops startup
+with a non-zero exit. Errors name the setting, never its value.
+`config.Load` on its own still falls back to defaults with a warning, for
+callers that want that.
 
-A deployment that already sets these sidecar names needs no change, because
-each is accepted as an alias. A setting's own name wins over its alias.
-
-- `TRACE_DIR` for `REQUEST_TRACE_UPLOADER_SOURCE_DIR`
-- `TRACE_FILE_PREFIX` for `REQUEST_TRACE_UPLOADER_SEGMENT_PREFIX`
-- `UPLOAD_INTERVAL_SECONDS` for `REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS`
-- `SHUTDOWN_DRAIN_SECONDS` for `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`
-
-A module that links its own backend can register more aliases with
-`config.RegisterEnvAlias` from an init function.
+The uploader reads only the names listed here. It has no aliases, so a
+deployment sets these names directly.
 
 Missing paths and unreadable secret files prevent readiness.
 

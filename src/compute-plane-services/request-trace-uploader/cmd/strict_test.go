@@ -27,7 +27,7 @@ func TestMainExitsNonZeroOnAnyInvalidOrUnknownSetting(t *testing.T) {
 	}{
 		"value that used to fall back": {env: []string{config.EnvScanInterval + "=soon"}, named: config.EnvScanInterval},
 		"misspelled setting":           {env: []string{"REQUEST_TRACE_UPLOADER_SCAN_INTERVAL=30"}, named: "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL"},
-		"alias value out of range":     {env: []string{"SHUTDOWN_DRAIN_SECONDS=-5"}, named: config.EnvDrainTimeout},
+		"value out of range":           {env: []string{config.EnvDrainTimeout + "=-5"}, named: config.EnvDrainTimeout},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

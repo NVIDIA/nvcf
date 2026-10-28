@@ -59,10 +59,9 @@ func main() {
 	}
 }
 
-// loadConfig reads configuration strictly, through lookup and the env
-// aliases the linked packages registered, so the names a deployment already
-// sets work and any invalid value or unknown setting in environ stops
-// startup. Strict loading leaves no warnings to return.
+// loadConfig reads configuration strictly from the uploader's own setting
+// names, so any invalid value or unknown setting in environ stops startup.
+// Strict loading leaves no warnings to return.
 func loadConfig(lookup config.LookupFunc, environ ...string) (config.Config, []string, error) {
 	cfg, err := config.LoadStrict(lookup, environ)
 	return cfg, nil, err
