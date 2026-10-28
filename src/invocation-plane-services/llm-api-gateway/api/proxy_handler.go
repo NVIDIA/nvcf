@@ -44,6 +44,8 @@ var hopByHopHeaders = map[string]struct{}{
 
 func (h *OpenAIProxyHandlers) RegisterRoutes(group *echo.Group) {
 	group.POST("/v1/embeddings", h.Embeddings)
+	group.POST(decisionsEndpointPath, h.Decisions)
+	group.POST(systemOneEndpointPath, h.SystemOne)
 }
 
 func (h *OpenAIProxyHandlers) forwardJSONRequest(
