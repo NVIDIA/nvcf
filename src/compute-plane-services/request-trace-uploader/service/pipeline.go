@@ -26,9 +26,10 @@ const (
 	// strandedPollInterval paces polls of a job past its max age.
 	strandedPollInterval = 30 * time.Minute
 	// Bounded reason codes recorded in the journal and on counters.
-	reasonTooLarge = "too_large"
-	reasonRejected = "rejected"
-	reasonRetained = "retained"
+	reasonTooLarge      = "too_large"
+	reasonRejected      = "rejected"
+	reasonRetained      = "retained"
+	reasonSourceMissing = "source_missing"
 )
 
 func laneOf(destination backend.Destination) string {

@@ -228,9 +228,11 @@ func recordPolicy(cfg transform.Config, factory format.Factory) (string, error) 
 // reprepareStale discards unsent transports written under a record policy
 // other than the one now configured, so newly enabled suppression or
 // redaction applies to them. Their segments are prepared again from the
-// source, which is still on the spool. A batch whose submits were only ever
-// refused is released first, since nothing in it was sent. Transports in a
-// batch that may have landed are left alone.
+// source. A batch whose submits were only ever refused is released first,
+// since nothing in it was sent. Transports in a batch that may have landed
+// are left alone. A segment whose source is gone keeps its transports in
+// quarantine: they are the only copy, and sending them would apply settings
+// they were not prepared for.
 func (u *Uploader) reprepareStale() error {
 	var errs []error
 	for _, b := range u.store.Batches() {
@@ -252,6 +254,18 @@ func (u *Uploader) reprepareStale() error {
 			batched = batched || dest.BatchID != ""
 		}
 		if !stale || batched {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(u.cfg.SourceDir, seg.Name)); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, fmt.Errorf("check the source of a stale transport: %w", err))
+				continue
+			}
+			var transports []string
+			for _, dest := range seg.Destinations {
+				transports = append(transports, dest.Transport.Path)
+			}
+			errs = append(errs, u.quarantineSegment(seg.ID, seg.Index, reasonSourceMissing, transports...))
 			continue
 		}
 		if err := u.store.Reprepare(seg.ID); err != nil {

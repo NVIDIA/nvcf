@@ -157,7 +157,7 @@ var SuppressionActions = []string{"strip_payload", "drop_record"}
 // fault reasons. "unknown" also counts any reason not listed here.
 var QuarantineReasons = []string{
 	"bad_records", "unreadable", "unsupported_version", "too_large", "rejected", "retained",
-	"auth", "rate_limit", "timeout", "canceled", "unavailable", "unknown",
+	"source_missing", "auth", "rate_limit", "timeout", "canceled", "unavailable", "unknown",
 }
 
 var catalog = []Instrument{
