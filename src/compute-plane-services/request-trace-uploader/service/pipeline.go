@@ -840,12 +840,22 @@ var unreadableReasons = []struct {
 	{"cut", func(r transform.Result) int { return r.Cut }},
 }
 
+// unsupportedVersionLabels labels records_dropped for records from a Dynamo
+// release older than v1.4.0. They carry no event type, so their record type
+// is unknown, as it is for any type outside v1.4.0's set.
+func unsupportedVersionLabels() telemetry.Labels {
+	return telemetry.Labels{"record_type": "unknown", "reason": "unsupported_version"}
+}
+
 func (u *Uploader) recordRead(item segment.Segment, result transform.Result) {
 	u.metrics.Add(telemetry.SourceBytes, float64(item.Size), nil)
 	for _, r := range unreadableReasons {
 		if n := r.count(result); n > 0 {
 			u.metrics.Add(telemetry.RecordsUnreadable, float64(n), telemetry.Labels{"reason": r.reason})
 		}
+	}
+	if result.UnsupportedVersion > 0 {
+		u.metrics.Add(telemetry.RecordsDropped, float64(result.UnsupportedVersion), unsupportedVersionLabels())
 	}
 }
 

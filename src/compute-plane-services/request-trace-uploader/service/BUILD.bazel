@@ -43,6 +43,7 @@ go_test(
         "service_test.go",
         "settings_e2e_test.go",
         "suppression_e2e_test.go",
+        "version_e2e_test.go",
     ],
     embed = [":service"],
     deps = [

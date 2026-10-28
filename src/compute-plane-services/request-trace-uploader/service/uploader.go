@@ -177,6 +177,7 @@ func NewUploader(cfg config.Config, client backend.Client, opts Options) (*Uploa
 	metrics = telemetry.Safe(metrics)
 	telemetry.Preset(metrics)
 	rules.preset(metrics)
+	metrics.Add(telemetry.RecordsDropped, 0, unsupportedVersionLabels())
 	if receiver, ok := client.(telemetry.Receiver); ok {
 		receiver.UseMetrics(metrics)
 	}
