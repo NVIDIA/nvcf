@@ -19,12 +19,11 @@ package com.nvidia.nvcf.configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.nvcf.configuration.exceptions.ExceptionTracingExceptionHandler;
-import com.nvidia.nvcf.configuration.exceptions.StorageExceptions;
 import io.grpc.Status;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
-import org.springframework.data.cassandra.CassandraDriverTimeoutException;
 import org.springframework.data.cassandra.CassandraReadTimeoutException;
 import org.springframework.grpc.server.advice.GrpcExceptionHandler;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -42,17 +41,16 @@ class GrpcConfigurationTest {
                 new CassandraReadTimeoutException(false, CQL, null));
 
         assertThat(status.getCode()).isEqualTo(Status.Code.UNAVAILABLE);
-        assertThat(status.getDescription()).isEqualTo(StorageExceptions.STORAGE_UNAVAILABLE);
+        assertThat(status.getDescription()).isEqualTo("Storage is temporarily unavailable");
     }
 
     @Test
-    void indexReadTimeoutIsUnavailable() {
+    void serviceUnavailableIsUnavailable() {
         var status = grpcConfiguration.handleErrorResponseException(
-                StorageExceptions.storageUnavailable(
-                        new CassandraDriverTimeoutException(CQL, null)));
+                new ServiceUnavailableException("Storage is temporarily unavailable"));
 
         assertThat(status.getCode()).isEqualTo(Status.Code.UNAVAILABLE);
-        assertThat(status.getDescription()).isEqualTo(StorageExceptions.STORAGE_UNAVAILABLE);
+        assertThat(status.getDescription()).isEqualTo("Storage is temporarily unavailable");
     }
 
     @Test

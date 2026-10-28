@@ -16,12 +16,13 @@
  */
 package com.nvidia.nvcf.configuration;
 
+import static com.nvidia.nvcf.configuration.exceptions.ExceptionTracingExceptionHandler.STORAGE_UNAVAILABLE;
 import static com.nvidia.nvcf.util.NvcfConstants.TAG_NCA_ID;
 
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.boot.exceptions.ServiceUnavailableException;
 import com.nvidia.boot.exceptions.UnauthorizedException;
 import com.nvidia.nvcf.configuration.exceptions.InvalidInvocationException;
-import com.nvidia.nvcf.configuration.exceptions.StorageExceptions;
 import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.Status.Code;
@@ -87,7 +88,7 @@ public class GrpcConfiguration {
         return status.asRuntimeException(metadata);
     }
 
-    // Keep in sync with ExceptionTracingExceptionHandler; StorageExceptions explains the choice.
+    // Keep in sync with ExceptionTracingExceptionHandler, which explains the choice.
     @GrpcExceptionHandler({
             CassandraReadTimeoutException.class,
             CassandraInsufficientReplicasAvailableException.class,
@@ -95,7 +96,7 @@ public class GrpcConfiguration {
             CassandraConnectionFailureException.class
     })
     public Status handleStorageUnavailable(DataAccessException e) {
-        return toGrpcStatus(StorageExceptions.storageUnavailable(e));
+        return toGrpcStatus(new ServiceUnavailableException(STORAGE_UNAVAILABLE, e));
     }
 
     @GrpcExceptionHandler
