@@ -52,6 +52,8 @@ func (b batchMetrics) Observe(name string, value float64) {
 type batchJournal struct {
 	store *journalfs.Store
 	point func(string)
+	// exports records on each receipt whether the submit was a real export.
+	exports bool
 }
 
 func (j batchJournal) OpenBatch(b batch.Batch, backendName string) error {
@@ -67,7 +69,7 @@ func (j batchJournal) OpenBatch(b batch.Batch, backendName string) error {
 }
 
 func (j batchJournal) SaveReceipt(batchID, backendName, receiptID string) error {
-	if err := j.store.SetReceipt(batchID, journal.Receipt{Backend: backendName, ID: receiptID, At: time.Now()}); err != nil {
+	if err := j.store.SetReceipt(batchID, journal.Receipt{Backend: backendName, ID: receiptID, At: time.Now(), Exported: j.exports}); err != nil {
 		return err
 	}
 	j.point(PointReceiptSaved)

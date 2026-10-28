@@ -407,7 +407,7 @@ func (u *Uploader) submit(ctx context.Context, b batch.Batch, resend bool) error
 	if err := u.policy.WaitSubmit(ctx); err != nil {
 		return err
 	}
-	j := batchJournal{store: u.store, point: u.point}
+	j := batchJournal{store: u.store, point: u.point, exports: u.caps.Exports}
 	if resend {
 		if err := u.store.ResumeBatch(b.ID); err != nil {
 			return err
@@ -688,12 +688,14 @@ func cleanupItem(sourceDir string, seg journal.Segment) cleanup.Item {
 	return item
 }
 
-// clean deletes a confirmed segment's files. A backend that does not export
-// (a diagnostic read, a dry run) never deletes the source: only the
-// transports go, and the entry is finished.
+// clean deletes a confirmed segment's files. A segment whose confirmed
+// submits did not all export (a diagnostic read, a dry run) never loses its
+// source: only the transports go, and the entry is finished. The journal
+// records this per submit, so a restart under a backend that exports does
+// not change it.
 func (u *Uploader) clean(ctx context.Context, seg journal.Segment) error {
 	item := cleanupItem(u.cfg.SourceDir, seg)
-	if u.caps.Exports {
+	if exportedEverywhere(seg) {
 		_, err := u.cleaner.Clean(ctx, item)
 		return err
 	}
@@ -706,6 +708,18 @@ func (u *Uploader) clean(ctx context.Context, seg journal.Segment) error {
 		}
 	}
 	return u.store.FinishCleaning(seg.ID)
+}
+
+func exportedEverywhere(seg journal.Segment) bool {
+	if len(seg.Destinations) == 0 {
+		return false
+	}
+	for _, dest := range seg.Destinations {
+		if !dest.Exported {
+			return false
+		}
+	}
+	return true
 }
 
 func (u *Uploader) cleanEmpty(ctx context.Context, seg journal.Segment) error {
@@ -841,7 +855,7 @@ func (u *Uploader) saveUnsavedReceipts(now time.Time) {
 	}
 	u.stateMu.Unlock()
 	for id, receipt := range pending {
-		if err := u.store.SetReceipt(id, journal.Receipt{Backend: u.name, ID: receipt, At: now}); err != nil {
+		if err := u.store.SetReceipt(id, journal.Receipt{Backend: u.name, ID: receipt, At: now, Exported: u.caps.Exports}); err != nil {
 			slog.Warn("save a job id", "batch", shortID(id), "error", safeError(err))
 			continue
 		}

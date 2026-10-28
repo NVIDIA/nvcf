@@ -320,6 +320,7 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 			case journal.StateConfirmed:
 				dest.State = journal.StateConfirmed
 				dest.ConfirmedAt = b.ConfirmedAt
+				dest.Exported = b.Receipt != nil && b.Receipt.Exported
 			case journal.StateReleased:
 				dest.BatchID = ""
 				if dest.State == journal.StateSubmitting {

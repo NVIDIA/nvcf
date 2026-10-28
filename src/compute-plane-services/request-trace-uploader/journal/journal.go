@@ -109,6 +109,9 @@ type Destination struct {
 	Transport   Transport `json:"transport"`
 	BatchID     string    `json:"batch_id,omitempty"`
 	ConfirmedAt time.Time `json:"confirmed_at,omitzero"`
+	// Exported is copied from the confirmed batch's receipt. The source is
+	// deleted only when every destination was exported.
+	Exported bool `json:"exported,omitempty"`
 }
 
 // Segment is the journal record for one source segment.
@@ -145,6 +148,11 @@ type Receipt struct {
 	Backend string    `json:"backend"`
 	ID      string    `json:"id"`
 	At      time.Time `json:"at,omitzero"`
+	// Exported reports whether the submit that produced the receipt was a
+	// real export. A dry run or a diagnostic read records false, so its
+	// receipt never authorizes deleting a source, also after a restart
+	// under a backend that exports.
+	Exported bool `json:"exported,omitempty"`
 }
 
 // Member is one segment's transport inside a batch.

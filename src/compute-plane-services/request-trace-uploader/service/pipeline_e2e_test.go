@@ -411,3 +411,35 @@ func TestRunPollsOnTheStatusIntervalNotOnEveryScan(t *testing.T) {
 		t.Fatalf("status calls = %d over several 1s scans with a 1h status interval, want at most 1", statusCalls)
 	}
 }
+
+func TestAReceiptFromADryRunNeverDeletesTheSourceAfterARestart(t *testing.T) {
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	fake := backendtest.NewFake()
+	dryRun := fake.Capabilities()
+	dryRun.Exports = false
+	fake.SetCapabilities(dryRun)
+	fake.Script(backendtest.SubmitStep{Statuses: []backendtest.StatusStep{{Status: backend.StatusPending}, {Status: backend.StatusSuccess}}})
+	first := newUploader(t, spool, fake, service.Options{}, nil)
+	if err := first.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass() error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	exporting := fake.Capabilities()
+	exporting.Exports = true
+	fake.SetCapabilities(exporting)
+	second := newUploader(t, spool, fake, service.Options{}, nil)
+	for range 2 {
+		if err := second.Pass(context.Background()); err != nil {
+			t.Fatalf("Pass() after restart error = %v", err)
+		}
+	}
+	if fake.Jobs()[0].StatusCalls < 2 {
+		t.Fatal("the dry-run job was not confirmed after the restart")
+	}
+	if gone(closed[0]) {
+		t.Fatal("source deleted on the strength of a dry-run receipt, want it kept")
+	}
+}
