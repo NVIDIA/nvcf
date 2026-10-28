@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "journal",
+    srcs = ["journal.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":journal",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "journal_test",
+    srcs = ["journal_test.go"],
+    deps = [":journal"],
+)
