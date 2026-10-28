@@ -155,7 +155,7 @@ func runService(cfg config.Config) error {
 	}
 	defer publisher.Stop()
 
-	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats)
+	server := service.NewServer(conns, logger, publisher, cfg.Telemetry.ServiceVersion, &cfg.HTTP, cfg.Pagination, cfg.Stats).WithAccountColumns(cfg.V3.AccountColumnsEnabled)
 	router := mux.NewRouter()
 	router.Use(middleware.EnableCORS)
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit

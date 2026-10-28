@@ -218,7 +218,7 @@ releases:
     # versions. The chart appVersion remains the operator image fallback when
     # no imageTag override is set.
     chart: nvcf/helm-nvca-operator
-    version: 1.36.4
+    version: 1.37.1
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -348,6 +348,45 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
+        {{- $callbackCaPem := dig "workerCallbackCaPem" "" $agent | toString | trim }}
+        {{- if $callbackCaPem }}
+        {{- $callbackCaValid := regexMatch "^(-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----\\s*)+$" $callbackCaPem }}
+        {{- /* Templates cannot parse X.509 without a key, so each block must at
+               least be valid base64 that decodes to exactly one DER SEQUENCE:
+               tag 0x30 and a length field matching the decoded size. The
+               worker parses the full certificate. */}}
+        {{- range regexFindAll "-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+?-----END CERTIFICATE-----" $callbackCaPem -1 }}
+        {{- $body := . | trimPrefix "-----BEGIN CERTIFICATE-----" | trimSuffix "-----END CERTIFICATE-----" | nospace }}
+        {{- $der := b64dec $body }}
+        {{- $derValid := false }}
+        {{- if and (eq (b64enc $der) $body) (gt (len $der) 4) }}
+        {{- if eq (index $der 0 | int) 48 }}
+        {{- $lengthByte := index $der 1 | int }}
+        {{- $headerLen := 2 }}
+        {{- $contentLen := $lengthByte }}
+        {{- if eq $lengthByte 129 }}
+        {{- $headerLen = 3 }}
+        {{- $contentLen = index $der 2 | int }}
+        {{- else if eq $lengthByte 130 }}
+        {{- $headerLen = 4 }}
+        {{- $contentLen = add (mul (index $der 2 | int) 256) (index $der 3 | int) }}
+        {{- else if eq $lengthByte 131 }}
+        {{- $headerLen = 5 }}
+        {{- $contentLen = add (mul (index $der 2 | int) 65536) (mul (index $der 3 | int) 256) (index $der 4 | int) }}
+        {{- else if gt $lengthByte 127 }}
+        {{- $contentLen = -1 }}
+        {{- end }}
+        {{- $derValid = eq (add $headerLen $contentLen | int) (len $der) }}
+        {{- end }}
+        {{- end }}
+        {{- if not $derValid }}
+        {{- $callbackCaValid = false }}
+        {{- end }}
+        {{- end }}
+        {{- if not $callbackCaValid }}
+        {{- fail "global.nvcaOperator.agent.workerCallbackCaPem must be a PEM certificate bundle" }}
+        {{- end }}
+        {{- end }}
         agent:
           byooOtelCollector:
             imageRepository: {{ $byooOtelCollectorImageRepository | quote }}
@@ -367,6 +406,12 @@ releases:
           workload:
             tolerations:
 {{ toYaml . | nindent 14 }}
+          {{- end }}
+          {{- if $callbackCaPem }}
+          {{- /* NVCA unquotes each launch env value, so a multi-line PEM must be
+                 passed as one quoted line or only its first line survives. */}}
+          functionEnvOverrides:
+            NVCF_PROXY_CA_PEM: {{ printf "%s\n" $callbackCaPem | toJson | quote }}
           {{- end }}
     labels:
       release-group: workers

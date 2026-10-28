@@ -63,6 +63,42 @@ For a standalone `nvca-operator` Helm release, list the gates in
 include every gate you need. For more information, refer to
 [Managing Feature Flags](../compute-plane/cluster-management/configuration.md#managing-feature-flags).
 
+### Turn telemetry off for a deployment
+
+The NVCF API accepts telemetry endpoints even where workload telemetry export is
+not available, so tenants can register endpoints that never receive anything. On
+such a deployment, turn telemetry off:
+
+```yaml
+api:
+  remoteConfig:
+    configData:
+      nvcf:
+        telemetry:
+          enabled: false
+
+nvctApi:
+  remoteConfig:
+    configData:
+      nvct:
+        telemetry:
+          enabled: false
+```
+
+Each API reads its own setting, so set both. The NVCF API setting is also
+available as an environment variable, `api.env.NVCF_TELEMETRY_ENABLED: "false"`.
+The stack builds the NVCT API environment itself, so remote config is the only
+route for the task side.
+
+With telemetry off, registering an endpoint or attaching one to a function
+returns 400 `telemetry is not supported on this deployment`, and so does
+creating a task that attaches one. Deleting an endpoint still works, so
+endpoints registered before the change can be cleared. Each API reads the
+setting once at startup, so changing it needs a restart.
+
+The setting defaults to on, so a deployment that does not set it is unchanged.
+It is temporary and is removed once telemetry export is available everywhere.
+
 ### Sidecar sizing and collector options
 
 The `nvca-operator` chart exposes BYOO sizing under the `byoo` key. Leave a key

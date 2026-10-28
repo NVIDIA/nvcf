@@ -137,9 +137,10 @@ release, described below, comments only on the pull requests of the
 dependency commits it lists. The rest of the range did not change what
 it ships.
 
-For `nvcf-compute-plane-stack`, GitHub-created
-`deploy/stacks/nvcf-compute-plane/v*` tags are mirrored. The scheduled
-release dispatcher then starts the stack image and package pipeline.
+For all three stacks, the tag workflow publishes the original resolved
+inventory. The scheduled dispatcher can start a separate resource packaging
+lane after the tag is mirrored. Resource packaging does not publish the images
+or charts referenced by the stack.
 
 For semantic-release services, the GitHub workflow uses these release
 rules:
@@ -308,9 +309,30 @@ branch.
   pins that chart, such as `helm-nvca-operator` in the compute-plane
   stack.
 
-A compute-plane bump also needs its golden render fixtures refreshed
-with `make -C deploy/stacks/nvcf-compute-plane generate-golden` before
-merge.
+When a bump changes anything under `deploy/stacks/nvcf-compute-plane`,
+the workflow renders that stack's golden fixtures again with
+`tools/ci/refresh-compute-plane-goldens` and commits them on top of the
+bumps. Each run drops the previous fixture commit and renders them again
+for what the branch then pins. If the render fails, the pull request says
+so and the run fails. Render them by hand with
+`make -C deploy/stacks/nvcf-compute-plane generate-golden`, or let the
+next bump run render them again. A chart reaches its registry after its
+GitHub release, so the first render after a chart release can fail this
+way.
+
+The `compute-plane goldens` workflow renders the stack and compares the
+result with the fixtures. It runs for:
+
+- Pull requests that target `main`, `release-**`, or `release/**`.
+- Pushes to `main`.
+- Manual runs through `workflow_dispatch`.
+
+Pull requests and pushes run it only when they change
+`deploy/stacks/nvcf-compute-plane/`,
+`.github/workflows/compute-plane-goldens.yml`, or
+`tools/ci/refresh-compute-plane-goldens`. A pull request from a fork gets
+a notice instead. The check fails when the fixtures do not match, or when
+the chart registry secrets are not set.
 
 ## Release branches
 
@@ -358,27 +380,31 @@ not create ordinary service or chart maintenance branches.
 A service or chart maintenance merge does not create a tag automatically. After
 review and validation, publish the unused tag rendered from the registration's
 `tag_format`, or `<component-path>/vX.Y.Z` when no override exists, from the
-reviewed maintenance commit. Tag publication creates the GitHub Release and
-starts the existing downstream artifact delivery. Confirm the tag and workflow
-behavior in historical source before creating a branch or publishing a tag.
+reviewed maintenance commit. Confirm that both the tag and its non-draft GitHub Release exist; the
+downstream dispatcher polls Releases. A historical branch can contain older
+tag-workflow behavior. Inspect that workflow before release creation and
+recover a failed release-note step without moving the immutable source tag.
 
 Automatic chart and stack pin updates skip releases with a lower major, minor,
 or patch than the selected pin. A patch for an older minor must not downgrade
 the default branch. Update maintenance stack pins through their own reviewed
 Pull Requests after the component artifacts are verified.
 
-Qualify the complete stack combination before merging its release branch.
-Stack merges can publish automatically. For an umbrella release, assemble and
-qualify the final bundle from those exact component stack releases as described
-in [the umbrella release workflow](umbrella-releases.md).
+Run the affected stack checks before merging its maintenance branch. These
+merges can create stable GitHub source releases and inventories independently
+of umbrella QA. Select the completed releases in the umbrella manifest, then
+qualify that combination. Customer stack-resource publication remains a
+separate gate; it is not required for candidate assembly. Follow
+[the umbrella release workflow](umbrella-releases.md).
 
 ## The version-file model
 
 `nvcf-compute-plane-stack`, `nvcf-self-managed-stack`, and
 `nvcf-observability-stack` declare `version_file` and
 `release_branch_only`. They do not use semantic-release. A stack is a
-pinned composition of charts, so its version states which set was
-qualified together, and semantic-release answers a different question:
+pinned composition of charts. Its version identifies those inputs; runtime
+qualification records which combinations work together. Semantic-release
+answers a different question:
 what the commits since the last tag imply.
 
 NVCA declared the same pair until the 3.3 line and now uses
@@ -463,8 +489,8 @@ For example, to ship self-managed stack `1.0.2` after `1.0.1`:
    `1.0.1`. The branch's `VERSION` can remain `1.0.0`; its patch field
    does not select the next patch once stable tags exist.
 3. The tag workflow prepares the GitHub Release and its inventory.
-   Image and chart publishing follows the bridge described above,
-   once the release is published and its tag reaches the mirror.
+   Resource packaging can follow once the tag reaches the mirror. Referenced
+   images and charts retain their own release and publication workflows.
 
 Re-running `auto` at an already-tagged commit creates no additional
 patch. Merging the default-branch `VERSION` bump pull request also
@@ -537,13 +563,13 @@ Documentation has one SemVer docs edition for the qualified combination of all
 three stacks. Stack artifacts keep their independent releases. A stack release
 does not qualify or publish a docs edition automatically.
 
-Use `edition prepare` with a reviewed source commit and all three exact versions.
-After qualification, protect and register the full-version `docs/releases/X.Y.Z`
-branch. Do not create docs tags or per-stack snapshot folders. Corrections use a
-new patch edition; existing docs release branches remain unchanged.
-
-See [the docs edition workflow](./docs-editions.md) for release and rollback
-commands.
+Legacy immutable editions use `edition prepare` and protected
+`docs/releases/X.Y.Z` branches. Their corrections allocate a new patch edition.
+Umbrella product releases use the separate maintained-docs model where the
+manifest schema is supported. Schema 2 docs activation is a separate follow-up;
+a successful product bundle does not enable it. See the
+[docs model selection](docs-editions.md#choose-the-docs-model) and
+[umbrella docs workflow](umbrella-releases.md) before selecting commands.
 
 ## NVCA's cutover onto semantic-release
 

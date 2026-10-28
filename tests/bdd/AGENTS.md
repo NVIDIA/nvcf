@@ -73,6 +73,11 @@ logic into `dsl/`.
   function sample from `SAMPLE_BYOO_FUNCTION_IMAGE`. Tag every BYOO
   scenario that installs, upgrades, or removes a release with `@stack-change`
   so `TestBYOOExistingInstall` never changes an existing install.
+- The Vanity Gateway shadow sampling scenario reads shadow decisions from the
+  gateway's metrics, because a client cannot see whether a request was
+  shadowed. Its session keys and first messages are chosen for fixed hash
+  buckets on either side of 50 percent; if the sampling hash or canonical
+  first-message form changes, pick new values and update the comment.
 - Gateway API route readiness tables expose each route's kind, name,
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but

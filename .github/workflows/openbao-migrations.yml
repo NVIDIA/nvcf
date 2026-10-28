@@ -87,5 +87,8 @@ jobs:
       - name: Test admin-issuer token scopes
         run: migrations/openbao/tests/admin-issuer-scopes-test.sh
 
+      - name: Test service PKI worker callback role ownership
+        run: migrations/openbao/tests/service-pki-worker-callback-role-test.sh
+
       - name: Run kv write retry test
         run: migrations/openbao/tests/kv-write-retry-test.sh

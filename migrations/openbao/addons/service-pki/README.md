@@ -8,7 +8,8 @@ This addon provisions the shared NVCF service-issuing PKI hierarchy that cert-ma
 - Generates the root CA at `services/all/pki/root` if no CA exists there.
 - Generates a service-issuing intermediate at `services/all/pki/nvcf-service-issuing` and signs it from the root if no CA exists there.
 - Creates signing role `nvcf-service-server` with `allow_bare_domains=false`, `allow_subdomains=true`, wildcards, RSA-2048, leaf max TTL 2160h (90 days).
-- Writes a narrow cert-manager policy (`services-all-pki-nvcf-service-sign`) that grants `create,update` on the signing endpoint and `read` on the CA bundles.
+- When `NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS` is set, creates a separate signing role `nvcf-worker-callback` with the same constraints for grpc-proxy HTTP/3 worker callback certificates. Only the self-managed stack sets it, so a standalone llm-request-router hook never changes this role.
+- Writes a narrow cert-manager policy (`services-all-pki-nvcf-service-sign`) that grants `create,update` on both signing endpoints and `read` on the CA bundles. Every run writes the same policy, so neither owner removes the other's grant.
 - Writes a root-CA read policy (`services-all-pki-root-ca-ro`) for SIS/Spot trust-anchor rendering through Vault Agent.
 - Binds the cert-manager Kubernetes ServiceAccount to its policy via JWT auth.
 - Read-modify-writes the `sis-api` JWT auth role so it gains the root-CA read policy in addition to whatever earlier migrations (e.g. `05_setup_sis.sh`) attached.
@@ -28,6 +29,7 @@ Fail-hard when enabled. If the script aborts (missing required env, OpenBao erro
 | `CERT_MANAGER_SERVICE_ACCOUNT_NAMESPACE` | no | `cert-manager` | Namespace for the cert-manager service account. |
 | `NVCF_SERVICE_PKI_PATH` | no | `services/all/pki/nvcf-service-issuing` | OpenBao mount path for the service-issuing intermediate. |
 | `NVCF_SERVICE_PKI_ROLE_NAME` | no | `nvcf-service-server` | OpenBao PKI role name. |
+| `NVCF_WORKER_CALLBACK_PKI_ALLOWED_DOMAINS` | no | — | Comma-separated DNS suffixes for the `nvcf-worker-callback` role, typically `grpc-headless.<namespace>.svc.cluster.local`. Unset skips the role. The role name is fixed so both owners write the same cert-manager policy. |
 | `NVCF_SERVICE_PKI_LEAF_MAX_TTL` | no | `2160h` | Leaf certificate max TTL (90 days). Must accept the consumer chart's Certificate `duration` (typically 2160h with `renewBefore: 720h`). |
 | `NVCF_SERVICE_PKI_INTERMEDIATE_MAX_TTL` | no | `43800h` | Service-issuing intermediate max-lease TTL (5 years). Must exceed any leaf max TTL. |
 | `NVCF_SERVICE_PKI_INTERMEDIATE_COMMON_NAME` | no | `NVCF Service Issuing Intermediate CA` | CN for the service-issuing intermediate. |
@@ -46,6 +48,6 @@ Re-running this addon against an already-provisioned OpenBao is safe: CA generat
 Two consumers invoke it:
 
 - The self-managed stack's OpenBao migrations Job sets `NVCF_SERVICE_PKI_ENABLED=true` and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS` when the LLM add-on or the worker callback proxy is enabled.
-- The llm-request-router chart, when installed with `pki.enabled`, runs a dedicated Helm hook Job (mirrors the SIS chart's `hook-lls-migrations.yaml`) with `CORE_MIGRATIONS_ENABLED=false`, `ADDONS_LLM_ENABLED=true`, and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS=<derived-from-chart-values>`.
+- The llm-request-router chart, when installed with `pki.enabled`, runs a dedicated Helm hook Job (mirrors the SIS chart's `hook-lls-migrations.yaml`) with `CORE_MIGRATIONS_ENABLED=false`, `ADDONS_LLM_ENABLED=true`, and `NVCF_SERVICE_PKI_ALLOWED_DOMAINS=<derived-from-chart-values>`. The self-managed stack renders `pki.enabled: false` for the chart, so in a stack install the OpenBao migrations Job is the only writer of the roles and the policy.
 
 Both run this image's entrypoint, which dispatches to `setup_service_pki.sh`. See the main [README](../../README.md) for the entrypoint contract.

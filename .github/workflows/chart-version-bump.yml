@@ -4,11 +4,9 @@
 # When a service release is published, open a pull request moving the charts
 # that deploy it to that version.
 #
-# This is the first hop of the service to chart to stack cascade. The second is
-# stack-pin-bump.yml: merging this pull request does not by itself move the
-# stack, because a chart version only reaches the stack once the chart is
-# released. Cutting that chart release stays a human decision, and publishing
-# it is what triggers the stack bump.
+# Registered charts release automatically from main. For the release cascade
+# and maintenance-train stack handoff, see:
+# docs/dev/github-release-process.md#automatic-pin-bumps
 #
 # Which charts deploy the released service is declared, not derived; see
 # tools/ci/chart-service-edge for why deriving it is wrong. A service whose
@@ -19,7 +17,15 @@
 # stack pins its NVCA and collector image tags that way. Those pins move here,
 # with the charts, so the paths this job checks and stages cover deploy/stacks
 # as well as deploy/helm. tools/chart-version-bumper tests that these paths
-# cover every declared target.
+# cover every declared target. Moving them changes what the compute-plane stack
+# renders, so the job then renders that stack's golden fixtures again; see
+# tools/ci/refresh-compute-plane-goldens.
+#
+# A pin on the default branch only moves up. The bumper skips a release whose
+# version is not above the pinned one, and, given --base, a release tagged on a
+# commit the default branch does not contain. A backport cut on a release
+# branch publishes a release too, and its version can sort below what the
+# default branch already pins.
 
 name: chart version bump
 
@@ -86,6 +92,11 @@ jobs:
         # It decides the semver step of the chart release this bump causes.
         run: bash tools/ci/test-release-bump-type
 
+      - name: Test the golden refresh helper
+        # It commits rendered fixtures on the bump branch, and the branch
+        # helper drops them again on the next run.
+        run: bash tools/ci/test-refresh-compute-plane-goldens
+
       - name: Select the tag
         id: tag
         env:
@@ -142,9 +153,14 @@ jobs:
           # helper regenerates a bump commit that no longer applies by running
           # the bumper again for the release it recorded. See the helper for
           # what it keeps, regenerates, drops, and refuses.
+          #
+          # The compute-plane golden fixtures are derived: a commit that
+          # carries only them is dropped, and "Refresh the compute-plane
+          # goldens" renders them again for whatever the branch then pins.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper
+          tools/ci/prepare-stack-pin-branch --derived deploy/stacks/nvcf-compute-plane/testdata/golden \
+            "${BRANCH}" "${BASE_BRANCH}" tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}"
 
       - name: Apply the bump
         id: bump
@@ -154,6 +170,7 @@ jobs:
           # whoever pushes it, and ${{ }} interpolation into a run: block is the
           # standard Actions injection shape.
           TAG: ${{ steps.tag.outputs.tag }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set +e
           set -uo pipefail
@@ -161,7 +178,10 @@ jobs:
           # exits 3 when a chart's appVersion and image tag disagree even though
           # it still applied every chart it could move safely. Aborting here
           # would throw those away and leave the refusal as the only outcome.
-          tools/ci/chart-version-bumper \
+          # --base skips a tag the default branch does not contain, such as a
+          # backport cut on a release branch. The checkout above fetched every
+          # tag and branch, and the branch helper refreshed origin/<default>.
+          tools/ci/chart-version-bumper --base "origin/${BASE_BRANCH}" \
             --tag "${TAG}" --write >/tmp/bump.out 2>/tmp/refusals
           status=$?
           cat /tmp/bump.out
@@ -205,13 +225,9 @@ jobs:
         run: |
           set -euo pipefail
           git add deploy/helm deploy/stacks
-          # The commit type carries the semver step of the service release
-          # into the chart release. tools/ci/github-release feeds RELEASE_RULES
-          # to semantic-release: fix cuts a patch, feat a minor, "!" a major,
-          # and chore cuts nothing (which would stop the cascade here, since a
-          # published chart release is what triggers stack-pin-bump.yml). A
-          # service that moved a minor therefore moves its chart a minor, and
-          # one step later the stack, instead of every bump reading as a patch.
+          # Carry the service bump level into chart commit labels. Chart source
+          # release rules are documented in:
+          # docs/dev/github-release-process.md#service-auto-tags
           type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
           case "${type}" in
             *!) subject="${type%!}(charts)!: bump for ${TAG}" ;;
@@ -235,6 +251,98 @@ jobs:
           # the largest step among every bump accumulated on the branch.
           pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
           echo "pr_type=${pr_type}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check the compute-plane render inputs
+        id: render
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        # The compute-plane stack keeps golden copies of what it renders, and
+        # its golden check fails when an image tag in its values moves without
+        # them. The render reads nothing outside the stack, so a branch that
+        # changes nothing there renders nothing and installs no tools.
+        run: |
+          set -euo pipefail
+          echo "needed=$(tools/ci/refresh-compute-plane-goldens needed "origin/${BASE_BRANCH}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Install helm and helmfile (pinned, checksum-verified)
+        if: steps.render.outputs.needed == 'true'
+        # Not fatal. Without the tools the render below fails, and that failure
+        # is reported on the pull request rather than holding back the bump.
+        continue-on-error: true
+        # The same pins as the helm charts job in build-test.yml. helmfile
+        # v1.2.0+ breaks the ordering the stacks rely on, and the stacks
+        # require helm v3.x.
+        env:
+          HELM_VERSION: "3.21.4"
+          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+          HELMFILE_VERSION: "1.1.9"
+          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Log in to the chart registry
+        id: registry
+        if: steps.render.outputs.needed == 'true'
+        # The render pulls the charts the stack pins from this registry. Same
+        # login as chart-push-manual.yml. Not fatal: a failed login fails the
+        # render below, which is reported like any other render failure.
+        continue-on-error: true
+        env:
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "::warning::secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY are not set, so the compute-plane goldens are not rendered"
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          REGISTRY="${REGISTRY%/}"
+          host="${REGISTRY%%/*}"
+          printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Refresh the compute-plane goldens
+        id: goldens
+        if: steps.render.outputs.needed == 'true' && steps.registry.outputs.ready != 'false'
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set +e
+          set -uo pipefail
+          # The fixtures go on top of the bump as a commit of their own, so a
+          # bump commit holds only what the bumper wrote and the branch helper
+          # can still regenerate it from its tag. The next run drops this
+          # commit (--derived above) and renders the fixtures again for what
+          # the branch then pins.
+          #
+          # +e, as in "Apply the bump": a failed render does not hold back the
+          # bump. It commits nothing, the pull request says the fixtures are
+          # stale, and the last step fails the run.
+          tools/ci/refresh-compute-plane-goldens commit "origin/${BASE_BRANCH}" 2>&1 | tee /tmp/goldens.out
+          status=${PIPESTATUS[0]}
+          if [ "${status}" -ne 0 ]; then
+            {
+              echo "failed<<GOLDEN_REFRESH_FAILED"
+              tail -n 15 /tmp/goldens.out
+              echo "GOLDEN_REFRESH_FAILED"
+            } >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Push the bump branch
         if: steps.bump.outputs.changed == 'true'
@@ -267,6 +375,8 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           PR_TYPE: ${{ steps.commit.outputs.pr_type }}
           REFUSED: ${{ steps.bump.outputs.refused }}
+          GOLDENS_FAILED: ${{ steps.goldens.outputs.failed }}
+          GOLDENS_SKIPPED: ${{ steps.registry.outputs.ready == 'false' }}
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
         run: |
@@ -292,13 +402,36 @@ jobs:
               "" \
               "A chart is refused when its \`appVersion\` and image tag disagree, or when the tag is floating. Reconciling those two fields is a decision, so it is left to a person rather than resolved during an automated bump.")"
           fi
+          if [ -n "${GOLDENS_FAILED}" ]; then
+            # Two leading blank lines: $(...) drops the trailing newline of
+            # the refusal note, and the paragraphs need one blank line between.
+            notes="${notes}$(printf '%s\n' \
+              "" \
+              "" \
+              "The compute-plane golden render fixtures could not be rendered again, so they are stale and the golden check is expected to fail:" \
+              "" \
+              '```' \
+              "${GOLDENS_FAILED}" \
+              '```' \
+              "" \
+              "Render them with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` and push the result, or let the next bump run render them again.")"
+          elif [ "${GOLDENS_SKIPPED}" = true ]; then
+            notes="${notes}$(printf '%s\n' \
+              "" \
+              "" \
+              "The compute-plane golden render fixtures were not rendered again because the \`NGC_NCP_DEV_KEY\` and \`NCP_DEV_REGISTRY\` secrets are not set. They may be stale; render them with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` and push the result.")"
+          fi
 
           body="$(printf '%s\n' \
             "Opened by \`.github/workflows/chart-version-bump.yml\` when \`${TAG}\` was published." \
             "" \
             "The released tag identifies the version and source tree, so this is a direct update rather than a lookup of the newest published image." \
             "" \
-            "Merging this does not move a stack's chart pins. A chart version reaches a stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`. Image tags that a stack repeats in its own values, such as the compute-plane NVCA tags, do move here. A change under \`deploy/stacks/nvcf-compute-plane\` also needs its golden render fixtures refreshed with \`make -C deploy/stacks/nvcf-compute-plane generate-golden\` before merge." \
+            "Review the [release flow](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#automatic-pin-bumps) and verify that the selected images are available from the intended registry routes before merge." \
+            "" \
+            "This PR targets main. Follow the [maintenance handoff](${SERVER_URL}/${REPO}/blob/main/docs/dev/github-release-process.md#patch-an-existing-component-minor) for supported release trains." \
+            "" \
+            "Image tags declared in a stack's own values are updated here. When one under \`deploy/stacks/nvcf-compute-plane\` moves, this workflow also renders that stack's golden fixtures again and commits them on top of the bumps." \
             "" \
             "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
             "${notes}" \
@@ -338,4 +471,17 @@ jobs:
         run: |
           echo "::error::charts refused the bump:"
           printf '%s\n' "${REFUSED}"
+          exit 1
+
+      - name: Surface a failed golden refresh
+        # Last for the same reason as the refusals, and !cancelled() so a
+        # refusal above does not hide it. Stale fixtures fail the golden check,
+        # so the run fails too rather than leaving that to be found on the
+        # pull request.
+        if: ${{ !cancelled() && steps.goldens.outputs.failed != '' }}
+        env:
+          FAILED: ${{ steps.goldens.outputs.failed }}
+        run: |
+          echo "::error::the compute-plane golden fixtures were not rendered again:"
+          printf '%s\n' "${FAILED}"
           exit 1

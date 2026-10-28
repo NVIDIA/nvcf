@@ -75,9 +75,13 @@ global:
     nvctServiceURL: ""
     # NVCT task worker env: NVCT_FQDN_GRPC
     nvctGrpcServiceURL: ""
-    # Invocation service worker stream address.
+    # Invocation service worker stream address. Empty advertises each pod's
+    # own address. Every replica advertises a set value, so invocation-service
+    # stays at one replica under HA when it is set.
     invocationServiceURL: ""
-    # gRPC proxy worker CONNECT endpoint advertised by the proxy.
+    # gRPC proxy worker CONNECT endpoint advertised by the proxy. Empty
+    # advertises each pod's IP. Every replica advertises a set value, so
+    # grpc-proxy stays at one replica under HA when it is set.
     grpcProxyWorkerConnectURL: ""
     # Pylon discovery endpoint. Empty uses
     # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
@@ -522,17 +526,9 @@ addons:
       # manage a custom ClusterIssuer. Leave it false for an external issuer.
       # clusterIssuer:
       #   enabled: true
-      # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
-      # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.5 if
-      # neither location is set.
-      # image:
-      #   registry: ""
-      #   repository: ""
-      #   tag: ""
 
   # Event Ledger addon: records deployment stage events from NVCA and SIS.
   # When enabled, deploys the event-ledger service backed by Cassandra.
@@ -775,7 +771,8 @@ ingress:
         # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
-  # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
+  # PDB: disabled by default. highAvailability.mode replaces it with the HA PDB
+  # when it scales grpc-proxy.
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
