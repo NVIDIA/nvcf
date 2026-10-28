@@ -112,6 +112,14 @@ impl OpenAiProxyEndpoint {
         path: "/v1/embeddings",
         name: "embeddings",
     };
+    const DECISIONS: Self = Self {
+        path: "/v1/decisions",
+        name: "decisions",
+    };
+    const SYSTEMONE: Self = Self {
+        path: "/v1/systemone",
+        name: "systemone",
+    };
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +195,14 @@ pub fn make_router(app: ProxyAppState) -> Router {
         .route(
             OpenAiProxyEndpoint::MESSAGES.path,
             post(|State(app), req| proxy_openai_request(app, req, OpenAiProxyEndpoint::MESSAGES)),
+        )
+        .route(
+            OpenAiProxyEndpoint::DECISIONS.path,
+            post(|State(app), req| proxy_openai_request(app, req, OpenAiProxyEndpoint::DECISIONS)),
+        )
+        .route(
+            OpenAiProxyEndpoint::SYSTEMONE.path,
+            post(|State(app), req| proxy_openai_request(app, req, OpenAiProxyEndpoint::SYSTEMONE)),
         )
         .with_state(app)
 }
