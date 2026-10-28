@@ -79,9 +79,14 @@ type systemOneResponse struct {
 	RequestBody json.RawMessage `json:"request_body,omitempty"`
 }
 
+// decisionQuestion reads only what the canned answers need. Everything else is
+// kept raw so an unexpected field never fails a request.
 type decisionQuestion struct {
-	Type    string   `json:"type"`
-	Choices []string `json:"choices"`
+	Type     string          `json:"type"`
+	Name     string          `json:"name"`
+	Choices  json.RawMessage `json:"choices"`
+	Levels   json.RawMessage `json:"levels"`
+	Criteria json.RawMessage `json:"criteria"`
 }
 
 func handleDecisions(w http.ResponseWriter, r *http.Request) {
@@ -179,48 +184,111 @@ func estimateDecisionInputTokens(r *http.Request, raw []byte) int {
 }
 
 func decisionAnswers(questions json.RawMessage) []any {
-	var list []decisionQuestion
+	var list []json.RawMessage
 	if err := json.Unmarshal(questions, &list); err != nil || len(list) == 0 {
-		return []any{predicateAnswer()}
+		return []any{predicateAnswer("")}
 	}
 	answers := make([]any, 0, len(list))
-	for _, question := range list {
+	for _, item := range list {
+		var question decisionQuestion
+		_ = json.Unmarshal(item, &question)
 		answers = append(answers, cannedAnswer(question, false))
 	}
 	return answers
 }
 
 func systemOneAnswers(questions json.RawMessage) map[string]any {
-	var byName map[string]decisionQuestion
+	var byName map[string]json.RawMessage
 	if err := json.Unmarshal(questions, &byName); err != nil || len(byName) == 0 {
 		return map[string]any{"question": cannedAnswer(decisionQuestion{Type: "noul"}, true)}
 	}
 	answers := make(map[string]any, len(byName))
-	for name, question := range byName {
+	for name, item := range byName {
+		var question decisionQuestion
+		_ = json.Unmarshal(item, &question)
 		answers[name] = cannedAnswer(question, true)
 	}
 	return answers
 }
 
-func predicateAnswer() map[string]any {
-	return map[string]any{"type": "predicate", "probability": 0.99}
+func predicateAnswer(name string) map[string]any {
+	return withName(map[string]any{"type": "predicate", "probability": 0.99}, name)
+}
+
+func withName(answer map[string]any, name string) map[string]any {
+	if name != "" {
+		answer["name"] = name
+	}
+	return answer
+}
+
+// firstOption returns the first entry of a list whose items are strings or
+// objects holding the label under key, or the first key of an object.
+func firstOption(raw json.RawMessage, key string) (string, bool) {
+	var list []json.RawMessage
+	if json.Unmarshal(raw, &list) == nil && len(list) > 0 {
+		var text string
+		if json.Unmarshal(list[0], &text) == nil {
+			return text, true
+		}
+		var object map[string]json.RawMessage
+		if json.Unmarshal(list[0], &object) == nil && json.Unmarshal(object[key], &text) == nil {
+			return text, true
+		}
+		return "", false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err == nil && token == json.Delim('{') {
+		if first, err := decoder.Token(); err == nil {
+			if name, ok := first.(string); ok {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 func cannedAnswer(question decisionQuestion, systemOne bool) map[string]any {
+	probabilities := map[string]any{"first": 0.9, "second": 0.1}
 	switch question.Type {
 	case "choice":
-		choice := "A"
-		if len(question.Choices) > 0 {
-			choice = question.Choices[0]
+		options, key := question.Choices, "value"
+		if systemOne {
+			options = question.Criteria
 		}
-		return map[string]any{"type": "choice", "choice": choice}
+		choice, ok := firstOption(options, key)
+		if !ok {
+			choice, ok = firstOption(question.Choices, key)
+		}
+		if !ok {
+			choice = "A"
+		}
+		return withName(map[string]any{"type": "choice", "choice": choice, "probabilities": probabilities, "confidence": 0.9}, question.Name)
 	case "score":
-		return map[string]any{"type": "score", "score": 0.5}
+		var score any = 0
+		if !systemOne {
+			if label, ok := firstOption(question.Levels, "label"); ok {
+				score = label
+			}
+		}
+		answer := map[string]any{"type": "score", "score": score, "probabilities": probabilities, "confidence": 0.9}
+		if systemOne {
+			var legend []json.RawMessage
+			if json.Unmarshal(question.Criteria, &legend) != nil || legend == nil {
+				legend = []json.RawMessage{}
+			}
+			answer["legend"] = legend
+		}
+		return withName(answer, question.Name)
+	case "box":
+		return withName(map[string]any{
+			"type": "box", "box": map[string]any{"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9}, "confidence": 0.9,
+		}, question.Name)
 	}
 	if systemOne {
 		return map[string]any{"type": "noul", "noul": 0.99}
 	}
-	return predicateAnswer()
+	return predicateAnswer(question.Name)
 }
 
 // writeDecisionError writes the error shape of the route: FastAPI style for
