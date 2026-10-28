@@ -22,26 +22,25 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/journalfs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform"
 )
 
-var segmentIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-// Target says where one segment's transports go.
+// Target says where one segment's transports go. The caller chooses the
+// directory and the segment id; every file a writer creates, finished or
+// not, is in Dir and its name starts with SegmentID and a dot, so the caller
+// can find and remove the files of an interrupted prepare.
 type Target struct {
 	// Segment is the source segment being prepared.
 	Segment segment.Segment
-	// SegmentID is the segment's journal key, from journal.SegmentID.
+	// SegmentID names the segment's files. It must be a plain file name.
 	SegmentID string
-	// Dir is the journal's transport directory. Every file a writer
-	// creates, finished or not, must be named by Path so recovery can find
-	// and remove the files of an interrupted prepare.
+	// Dir is the directory the files go in. Writers name every file there by
+	// Path, or by Path's name plus a suffix for an unfinished file.
 	Dir string
 	// Destinations lists the lanes to write, from
 	// backend.Capabilities.AllDestinations.
@@ -51,14 +50,15 @@ type Target struct {
 // Path returns where a writer puts the transport for one destination. ext
 // includes its dot, such as ".jsonl.gz".
 func (t Target) Path(destination backend.Destination, ext string) string {
-	return journalfs.TransportPath(t.Dir, t.SegmentID, string(destination), ext)
+	sum := sha256.Sum256([]byte(destination))
+	return filepath.Join(t.Dir, t.SegmentID+"."+hex.EncodeToString(sum[:8])+ext)
 }
 
 // Validate rejects a target no writer can name its files from.
 func (t Target) Validate() error {
 	var errs []error
-	if !segmentIDPattern.MatchString(t.SegmentID) {
-		errs = append(errs, errors.New("format target segment id must be a journal key"))
+	if t.SegmentID == "" || t.SegmentID == "." || t.SegmentID == ".." || strings.ContainsAny(t.SegmentID, "/\\\x00") {
+		errs = append(errs, errors.New("format target segment id must be a plain file name"))
 	}
 	if !filepath.IsAbs(t.Dir) {
 		errs = append(errs, errors.New("format target directory must be an absolute path"))

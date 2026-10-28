@@ -13,7 +13,6 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/backendtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/format"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/journalfs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 )
@@ -33,19 +32,23 @@ func newTarget(t *testing.T, destinations ...backend.Destination) format.Target 
 	}
 }
 
-func TestTargetPathIsRecoverableAndPerDestination(t *testing.T) {
+// The names are pinned: a journal written by an earlier release records these
+// paths, and recovery finds unfinished files by the segment id prefix.
+func TestTargetPathKeepsTransportNames(t *testing.T) {
 	target := newTarget(t, "primary", "legacy")
-	primary := target.Path("primary", ".parquet")
-	legacy := target.Path("legacy", ".parquet")
-
-	if primary == legacy {
-		t.Fatalf("Path() = %q for both destinations, want one file per destination", primary)
+	tests := []struct {
+		destination backend.Destination
+		ext         string
+		want        string
+	}{
+		{"primary", ".parquet", testSegmentID + ".986a1b7135f49861.parquet"},
+		{"legacy", ".parquet", testSegmentID + ".c49fea7425fa7f86.parquet"},
+		{"", ".jsonl.gz", testSegmentID + ".e3b0c44298fc1c14.jsonl.gz"},
 	}
-	if want := journalfs.TransportPath(target.Dir, target.SegmentID, "primary", ".parquet"); primary != want {
-		t.Fatalf("Path() = %q, want the journal transport name %q so recovery finds it", primary, want)
-	}
-	if filepath.Dir(primary) != target.Dir {
-		t.Fatalf("Path() = %q, want it inside %q", primary, target.Dir)
+	for _, tt := range tests {
+		if got, want := target.Path(tt.destination, tt.ext), filepath.Join(target.Dir, tt.want); got != want {
+			t.Errorf("Path(%q, %q) = %q, want %q", tt.destination, tt.ext, got, want)
+		}
 	}
 }
 
