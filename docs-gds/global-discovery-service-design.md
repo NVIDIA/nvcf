@@ -321,9 +321,10 @@ Pool layer:
   optional pool lease, generation, owner.
 - Pool agent (per pool and role): role (OPENAI, KV_RELAY or PYLON), source (LABEL, API or BOTH),
   the exported Service and port name when label-derived, endpoint and ready endpoint counts,
-  dial mode (INBOUND for OPENAI, OUTBOUND for PYLON and KV_RELAY), the agent's own lease, agent
-  id and attributes when API-registered, and a derived `live` flag. Stored as its own record
-  (`PA#`) when API-registered; computed from exports otherwise.
+  dial mode (INBOUND for OPENAI, OUTBOUND for PYLON and KV_RELAY), `registrations[]` (one per
+  process instance, keyed by agent id, each with its own lease, attributes and generation; the
+  freshest one is mirrored on the agent for convenience), `active_registration_count`, and a
+  derived `live` flag. Each registration is its own record (`PA#`); the agent is computed.
 - Router (computed): one per exported Service with role `router`: cluster, region, namespace,
   name, type, port numbers (gRPC, HTTP, QUIC) and the full Service port list, dial scheme,
   replicas (address, ready, hostname, zone), labels and annotations.
@@ -643,10 +644,13 @@ and drains on its own and GDS reports each one's readiness separately in `agents
 
 Each agent has two optional sources that GDS merges by (pool, role). The label source is the
 exported Service: endpoint counts and readiness, the Service reference and port name, and
-liveness through the cluster lease. The API source is a typed registration,
-`RegisterPoolAgent(cluster, pool name, role, agent_id, attributes)` with its own lease and
-`HeartbeatPoolAgent`, made by the process itself: Pylon with `--gds-pool-name`, the PoolRelay
-through the Rust `AgentRegistration` helper. The registration carries what the Service cannot
+liveness through the cluster lease. The API source is a set of typed registrations, one per
+process instance: `RegisterPoolAgent(cluster, pool name, role, agent_id, attributes)` with its
+own lease and `HeartbeatPoolAgent(pool_id, role, agent_id, epoch)`, made by the process itself:
+each Pylon pod with `--gds-pool-name` (agent id = its `inference_server_id`), each PoolRelay
+replica through the Rust `AgentRegistration` helper. Registrations of one role never fence each
+other: N Pylon pods are N registrations of the PYLON agent, and the agent is live while any of
+them is. The registration carries what the Service cannot
 (the process identity and writer-owned attributes such as the model list) and keeps the pool
 visible for the lease when no export exists yet or the pool is not a Kubernetes Service. A
 registration before any export creates the pool under the deterministic `pool_id`, so the
@@ -806,9 +810,9 @@ mcs-api constants (`NoConflicts`, `PortConflict`, `TypeConflict`, `SessionAffini
 | UpdatePool | PATCH `.../pools/{pool_id}` | FieldMask; generation must exceed stored |
 | HeartbeatPool | POST `.../pools/{pool_id}:heartbeat` | Epoch; optional worker counts and `desired_state` |
 | DeregisterPool | DELETE `.../pools/{pool_id}` | Tombstone visible to watchers; cascades to the pool's agents |
-| RegisterPoolAgent | POST `/v1/clustersets/{clusterset}/pool-agents` | Idempotent on (cluster, pool name, role); creates the pool if absent; mints the agent's lease epoch |
-| HeartbeatPoolAgent | POST `.../pools/{pool_id}/agents/{role}:heartbeat` | Agent epoch; optional attribute replacement |
-| DeregisterPoolAgent | DELETE `.../pools/{pool_id}/agents/{role}` | Idempotent |
+| RegisterPoolAgent | POST `/v1/clustersets/{clusterset}/pool-agents` | Idempotent on (cluster, pool name, role, agent_id); creates the pool if absent; mints that registration's lease epoch |
+| HeartbeatPoolAgent | POST `.../pools/{pool_id}/agents/{role}:heartbeat` | Body: agent_id, epoch, optional attribute replacement |
+| DeregisterPoolAgent | DELETE `.../pools/{pool_id}/agents/{role}?agent_id=` | Idempotent; the agent stays while other registrations or its export remain |
 | GetPool, ListPools, WatchPools | GET `.../pools[/{pool_id}]`, `...:watch` | Filters: region, dc, cluster, hardware_class, model, states, selector, include_endpoints |
 | ListRouters, WatchRouters | GET `.../routers`, `...:watch` | Filters: region, cluster |
 
@@ -820,12 +824,16 @@ message Pool { string clusterset; string pool_id; string name; Location location
   int32 ready_endpoint_count; repeated PoolAgent agents; bool kv_relay_live; int32 ready_ingress_count; }
 enum FrontendRole { OPENAI; KV_RELAY; PYLON; }
 enum AgentSource { LABEL; API; BOTH; }   enum DialMode { INBOUND; OUTBOUND; }
+message PoolAgentRegistration { string agent_id; Lease lease; map<string,string> attributes; uint64 generation;
+  Timestamp registered_at; Timestamp updated_at; }
 message PoolAgent { FrontendRole role; AgentSource source; ServiceRef service; string port_name; int32 endpoint_count;
   int32 ready_endpoint_count; Lease lease; string agent_id; DialMode dial_mode; map<string,string> attributes; bool live;
-  uint64 generation; Timestamp registered_at; Timestamp updated_at; }
+  uint64 generation; Timestamp registered_at; Timestamp updated_at; repeated PoolAgentRegistration registrations;
+  int32 active_registration_count; }
 message RegisterPoolAgentRequest { string clusterset; string cluster; string pool_name; string pool_id; PoolAgent agent;
   Duration lease_ttl; uint64 generation; }
-message HeartbeatPoolAgentRequest { string clusterset; string pool_id; FrontendRole role; uint64 epoch; map<string,string> attributes; }
+message HeartbeatPoolAgentRequest { string clusterset; string pool_id; FrontendRole role; uint64 epoch; map<string,string> attributes;
+  string agent_id; }
 message Location { string region; string dc; string cluster; repeated string zones; }
 message ModelServed { string model_id; repeated string aliases; map<string,string> attributes; }
 message FrontendEndpoint { FrontendRole role; string url; ServiceRef service; string port_name; }
