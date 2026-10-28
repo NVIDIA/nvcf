@@ -2637,9 +2637,27 @@
             "$ref": "#/definitions/v1ServicePort"
           },
           "description": "Every port of the exported Service, for consumers whose protocol GDS\ndoes not name."
+        },
+        "routerMode": {
+          "$ref": "#/definitions/v1RouterMode",
+          "description": "From the annotation gds.nvidia.com/router-mode (backend-router or\ndirect, case-insensitive); ROUTER_MODE_UNSPECIFIED when the annotation\nis absent or unknown. Clients treat ROUTER_MODE_UNSPECIFIED as\nROUTER_MODE_BACKEND_ROUTER for compatibility."
+        },
+        "hostnameTemplate": {
+          "type": "string",
+          "description": "The annotation gds.nvidia.com/hostname-template verbatim, for example\n{pod_name}.stargate.example.com; empty when absent. In direct mode a\nreplica's authority is this template with its single {pod_name}\nreplaced by RouterReplica.identity, plus \":\" and grpc_port, for example\nstargate-0.stargate.example.com:50071. The same host is the QUIC SNI and\nthe TLS name of the replica."
         }
       },
       "description": "Router is derived from one export labelled gds.nvidia.com/role=router, one\nper (cluster, namespace, name). Pylons use its ready replicas as seeds,\n\u003cdial_scheme\u003e://\u003creplica address\u003e:\u003cgrpc_port\u003e, so that a seed reaches the\nrouters of this cluster even when other clusters export the same namespace\nand name into one shared import."
+    },
+    "v1RouterMode": {
+      "type": "string",
+      "enum": [
+        "ROUTER_MODE_UNSPECIFIED",
+        "ROUTER_MODE_BACKEND_ROUTER",
+        "ROUTER_MODE_DIRECT"
+      ],
+      "default": "ROUTER_MODE_UNSPECIFIED",
+      "description": "RouterMode says what the replicas of a Router are, from the export\nannotation gds.nvidia.com/router-mode.\n\n - ROUTER_MODE_UNSPECIFIED: The annotation is absent or has an unknown value. Clients treat it as\nROUTER_MODE_BACKEND_ROUTER, the mode of exports made before router\nmodes existed.\n - ROUTER_MODE_BACKEND_ROUTER: Annotation value backend-router: the replicas are stargate-k8s-router\npods that forward registration by authority and the QUIC tunnel by SNI\nto the Stargate pods of their cluster. A pylon learns the per-pod\nauthorities from WatchStargates; replica identities are k8s-router pod\nnames and are not authorities.\n - ROUTER_MODE_DIRECT: Annotation value direct: the replicas are the Stargate pods themselves\nand a pylon dials each one. A replica's authority, QUIC SNI and TLS\nname are hostname_template with {pod_name} replaced by its identity."
     },
     "v1RouterReplica": {
       "type": "object",
@@ -2658,6 +2676,10 @@
         },
         "zone": {
           "type": "string"
+        },
+        "identity": {
+          "type": "string",
+          "description": "Pod identity of the replica: the EndpointSlice endpoint hostname when\nset, else the pod name the MCS controller exports as the endpoint\nattribute targetRef.name, else empty. In direct mode a client forms the\nreplica's authority as Router.hostname_template with {pod_name} replaced\nby the identity, plus \":\" and Router.grpc_port (no authority when the\ntemplate or the identity is empty). In backend-router mode the identity\nis a k8s-router pod name and not an authority."
         }
       },
       "description": "RouterReplica is one endpoint of a router Service."
