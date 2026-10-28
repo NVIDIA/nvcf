@@ -73,6 +73,7 @@ const (
 	RoleRouter       Role = api.RoleRouter
 	RolePoolFrontend Role = api.RolePoolFrontend
 	RoleKVRelay      Role = api.RoleKVRelay
+	RolePylon        Role = api.RolePylon
 )
 
 // ParseRole returns the Role of a gds.nvidia.com/role label value.
@@ -85,5 +86,5 @@ func ParseRole(value string) (Role, bool) {
 
 // IsPoolRole reports whether the role attaches an export to a pool.
 func (r Role) IsPoolRole() bool {
-	return r == RolePoolFrontend || r == RoleKVRelay
+	return api.IsPoolRole(string(r))
 }

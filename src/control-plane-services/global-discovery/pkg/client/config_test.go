@@ -145,7 +145,8 @@ func TestServiceConfig(t *testing.T) {
 	assert.True(t, methods["ListPools"])
 	assert.True(t, methods["GetServerInfo"])
 	assert.False(t, methods["WatchPools"], "streams are not retried by gRPC")
-	assert.Len(t, methods, 20)
+	assert.True(t, methods["RegisterPoolAgent"])
+	assert.Len(t, methods, 23)
 
 	sc.MethodConfig = nil
 	require.NoError(t, json.Unmarshal([]byte(serviceConfig(Config{MaxAttempts: 1})), &sc))

@@ -38,6 +38,8 @@ func TestWellKnownKeys(t *testing.T) {
 		AnnotationDialScheme:        "gds.nvidia.com/dial-scheme",
 		AnnotationGRPCPortName:      "gds.nvidia.com/grpc-port-name",
 		AnnotationHTTPPortName:      "gds.nvidia.com/http-port-name",
+		AnnotationQUICPortName:      "gds.nvidia.com/quic-port-name",
+		AnnotationRoles:             "gds.nvidia.com/roles",
 		LabelManagedBy:              "gds.nvidia.com/managed-by",
 		LabelClusterSet:             "gds.nvidia.com/clusterset",
 		LabelPoolID:                 "gds.nvidia.com/pool-id",
@@ -56,6 +58,8 @@ func TestWellKnownKeys(t *testing.T) {
 	assert.Equal(t, "router", RoleRouter)
 	assert.Equal(t, "pool-frontend", RolePoolFrontend)
 	assert.Equal(t, "kv-relay", RoleKVRelay)
+	assert.Equal(t, "pylon", RolePylon)
+	assert.Equal(t, "quic", DefaultQUICPortName)
 	assert.Equal(t, "gds-mcs-controller", ManagedByController)
 	assert.Equal(t, "gds-mcs-controller.gds.nvidia.com", EndpointSliceManagedBy)
 	assert.Equal(t, "clusterset.k8s.io", ClusterPropertyClusterSet)
@@ -107,12 +111,31 @@ func TestIsExported(t *testing.T) {
 }
 
 func TestIsRole(t *testing.T) {
-	for _, r := range []string{RoleRouter, RolePoolFrontend, RoleKVRelay} {
+	for _, r := range []string{RoleRouter, RolePoolFrontend, RoleKVRelay, RolePylon} {
 		assert.True(t, IsRole(r), r)
 	}
 	for _, r := range []string{"", "Router", "frontend", "kv_relay"} {
 		assert.False(t, IsRole(r), r)
 	}
+	for _, r := range []string{RolePoolFrontend, RoleKVRelay, RolePylon} {
+		assert.True(t, IsPoolRole(r), r)
+	}
+	assert.False(t, IsPoolRole(RoleRouter))
+	assert.False(t, IsPoolRole(""))
+}
+
+func TestParseRoles(t *testing.T) {
+	assert.Equal(t, []string{RolePylon}, ParseRoles(map[string]string{LabelRole: RolePylon}, nil))
+	assert.Empty(t, ParseRoles(map[string]string{LabelRole: RoleRouter}, nil))
+	assert.Empty(t, ParseRoles(nil, nil))
+	// The annotation replaces the label, drops router, unknowns and repeats.
+	assert.Equal(t, []string{RolePoolFrontend, RolePylon}, ParseRoles(
+		map[string]string{LabelRole: RoleKVRelay},
+		map[string]string{AnnotationRoles: " pool-frontend, pylon ,router,bogus,pylon"}))
+	// A blank annotation falls back to the label.
+	assert.Equal(t, []string{RoleKVRelay}, ParseRoles(
+		map[string]string{LabelRole: RoleKVRelay},
+		map[string]string{AnnotationRoles: "  "}))
 }
 
 func TestIsGDSKey(t *testing.T) {
@@ -152,4 +175,7 @@ func TestPortNames(t *testing.T) {
 	g, h = PortNames(map[string]string{AnnotationGRPCPortName: " "})
 	assert.Equal(t, "grpc", g)
 	assert.Equal(t, "http", h)
+
+	assert.Equal(t, "quic", QUICPortName(nil))
+	assert.Equal(t, "tunnel", QUICPortName(map[string]string{AnnotationQUICPortName: " tunnel "}))
 }

@@ -272,6 +272,207 @@ func local_request_PoolService_DeregisterPool_0(ctx context.Context, marshaler r
 	return msg, metadata, err
 }
 
+func request_PoolService_RegisterPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, client PoolServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq RegisterPoolAgentRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	msg, err := client.RegisterPoolAgent(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_PoolService_RegisterPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, server PoolServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq RegisterPoolAgentRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	msg, err := server.RegisterPoolAgent(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_PoolService_HeartbeatPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, client PoolServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq HeartbeatPoolAgentRequest
+		metadata runtime.ServerMetadata
+		e        int32
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	val, ok = pathParams["pool_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_id")
+	}
+	protoReq.PoolId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_id", err)
+	}
+	val, ok = pathParams["role"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "role")
+	}
+	e, err = runtime.Enum(val, FrontendRole_value)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
+	}
+	protoReq.Role = FrontendRole(e)
+	msg, err := client.HeartbeatPoolAgent(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_PoolService_HeartbeatPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, server PoolServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq HeartbeatPoolAgentRequest
+		metadata runtime.ServerMetadata
+		e        int32
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	val, ok = pathParams["pool_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_id")
+	}
+	protoReq.PoolId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_id", err)
+	}
+	val, ok = pathParams["role"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "role")
+	}
+	e, err = runtime.Enum(val, FrontendRole_value)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
+	}
+	protoReq.Role = FrontendRole(e)
+	msg, err := server.HeartbeatPoolAgent(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_PoolService_DeregisterPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, client PoolServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq DeregisterPoolAgentRequest
+		metadata runtime.ServerMetadata
+		e        int32
+		err      error
+	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	val, ok = pathParams["pool_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_id")
+	}
+	protoReq.PoolId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_id", err)
+	}
+	val, ok = pathParams["role"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "role")
+	}
+	e, err = runtime.Enum(val, FrontendRole_value)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
+	}
+	protoReq.Role = FrontendRole(e)
+	msg, err := client.DeregisterPoolAgent(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_PoolService_DeregisterPoolAgent_0(ctx context.Context, marshaler runtime.Marshaler, server PoolServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq DeregisterPoolAgentRequest
+		metadata runtime.ServerMetadata
+		e        int32
+		err      error
+	)
+	val, ok := pathParams["clusterset"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "clusterset")
+	}
+	protoReq.Clusterset, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "clusterset", err)
+	}
+	val, ok = pathParams["pool_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_id")
+	}
+	protoReq.PoolId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_id", err)
+	}
+	val, ok = pathParams["role"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "role")
+	}
+	e, err = runtime.Enum(val, FrontendRole_value)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "role", err)
+	}
+	protoReq.Role = FrontendRole(e)
+	msg, err := server.DeregisterPoolAgent(ctx, &protoReq)
+	return msg, metadata, err
+}
+
 var filter_PoolService_GetPool_0 = &utilities.DoubleArray{Encoding: map[string]int{"clusterset": 0, "pool_id": 1}, Base: []int{1, 1, 2, 0, 0}, Check: []int{0, 1, 1, 2, 3}}
 
 func request_PoolService_GetPool_0(ctx context.Context, marshaler runtime.Marshaler, client PoolServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
@@ -607,6 +808,66 @@ func RegisterPoolServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux
 		}
 		forward_PoolService_DeregisterPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_PoolService_RegisterPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/RegisterPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pool-agents"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_PoolService_RegisterPoolAgent_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_RegisterPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_PoolService_HeartbeatPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/HeartbeatPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}:heartbeat"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_PoolService_HeartbeatPoolAgent_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_HeartbeatPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodDelete, pattern_PoolService_DeregisterPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/DeregisterPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_PoolService_DeregisterPoolAgent_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_DeregisterPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodGet, pattern_PoolService_GetPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -789,6 +1050,57 @@ func RegisterPoolServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux
 		}
 		forward_PoolService_DeregisterPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_PoolService_RegisterPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/RegisterPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pool-agents"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_PoolService_RegisterPoolAgent_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_RegisterPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_PoolService_HeartbeatPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/HeartbeatPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}:heartbeat"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_PoolService_HeartbeatPoolAgent_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_HeartbeatPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodDelete, pattern_PoolService_DeregisterPoolAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/nvidia.gds.v1.PoolService/DeregisterPoolAgent", runtime.WithHTTPPathPattern("/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_PoolService_DeregisterPoolAgent_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PoolService_DeregisterPoolAgent_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodGet, pattern_PoolService_GetPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -878,25 +1190,31 @@ func RegisterPoolServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux
 }
 
 var (
-	pattern_PoolService_RegisterPool_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, ""))
-	pattern_PoolService_UpdatePool_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
-	pattern_PoolService_HeartbeatPool_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, "heartbeat"))
-	pattern_PoolService_DeregisterPool_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
-	pattern_PoolService_GetPool_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
-	pattern_PoolService_ListPools_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, ""))
-	pattern_PoolService_WatchPools_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, "watch"))
-	pattern_PoolService_ListRouters_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "routers"}, ""))
-	pattern_PoolService_WatchRouters_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "routers"}, "watch"))
+	pattern_PoolService_RegisterPool_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, ""))
+	pattern_PoolService_UpdatePool_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
+	pattern_PoolService_HeartbeatPool_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, "heartbeat"))
+	pattern_PoolService_DeregisterPool_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
+	pattern_PoolService_RegisterPoolAgent_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pool-agents"}, ""))
+	pattern_PoolService_HeartbeatPoolAgent_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4, 2, 5, 1, 0, 4, 1, 5, 6}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id", "agents", "role"}, "heartbeat"))
+	pattern_PoolService_DeregisterPoolAgent_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4, 2, 5, 1, 0, 4, 1, 5, 6}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id", "agents", "role"}, ""))
+	pattern_PoolService_GetPool_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"v1", "clustersets", "clusterset", "pools", "pool_id"}, ""))
+	pattern_PoolService_ListPools_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, ""))
+	pattern_PoolService_WatchPools_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "pools"}, "watch"))
+	pattern_PoolService_ListRouters_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "routers"}, ""))
+	pattern_PoolService_WatchRouters_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "clustersets", "clusterset", "routers"}, "watch"))
 )
 
 var (
-	forward_PoolService_RegisterPool_0   = runtime.ForwardResponseMessage
-	forward_PoolService_UpdatePool_0     = runtime.ForwardResponseMessage
-	forward_PoolService_HeartbeatPool_0  = runtime.ForwardResponseMessage
-	forward_PoolService_DeregisterPool_0 = runtime.ForwardResponseMessage
-	forward_PoolService_GetPool_0        = runtime.ForwardResponseMessage
-	forward_PoolService_ListPools_0      = runtime.ForwardResponseMessage
-	forward_PoolService_WatchPools_0     = runtime.ForwardResponseStream
-	forward_PoolService_ListRouters_0    = runtime.ForwardResponseMessage
-	forward_PoolService_WatchRouters_0   = runtime.ForwardResponseStream
+	forward_PoolService_RegisterPool_0        = runtime.ForwardResponseMessage
+	forward_PoolService_UpdatePool_0          = runtime.ForwardResponseMessage
+	forward_PoolService_HeartbeatPool_0       = runtime.ForwardResponseMessage
+	forward_PoolService_DeregisterPool_0      = runtime.ForwardResponseMessage
+	forward_PoolService_RegisterPoolAgent_0   = runtime.ForwardResponseMessage
+	forward_PoolService_HeartbeatPoolAgent_0  = runtime.ForwardResponseMessage
+	forward_PoolService_DeregisterPoolAgent_0 = runtime.ForwardResponseMessage
+	forward_PoolService_GetPool_0             = runtime.ForwardResponseMessage
+	forward_PoolService_ListPools_0           = runtime.ForwardResponseMessage
+	forward_PoolService_WatchPools_0          = runtime.ForwardResponseStream
+	forward_PoolService_ListRouters_0         = runtime.ForwardResponseMessage
+	forward_PoolService_WatchRouters_0        = runtime.ForwardResponseStream
 )

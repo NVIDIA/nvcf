@@ -36,7 +36,7 @@ const (
 	ExportEnabled = "true"
 
 	// LabelRole says what GDS derives from the export: RoleRouter,
-	// RolePoolFrontend or RoleKVRelay.
+	// RolePoolFrontend, RoleKVRelay or RolePylon.
 	LabelRole = Prefix + "role"
 	// LabelPool associates the export with a pool record by pool name.
 	LabelPool = Prefix + "pool"
@@ -52,6 +52,10 @@ const (
 	// RoleKVRelay makes the export the KV event relay of the pool named by
 	// LabelPool.
 	RoleKVRelay = "kv-relay"
+	// RolePylon makes the export the Pylon transport of the pool named by
+	// LabelPool: an ingress that dials routers and carries requests over its
+	// reverse tunnel.
+	RolePylon = "pylon"
 )
 
 // Service annotations carrying pool and router metadata.
@@ -71,6 +75,14 @@ const (
 	AnnotationGRPCPortName = Prefix + "grpc-port-name"
 	// AnnotationHTTPPortName names the Service port that carries HTTP.
 	AnnotationHTTPPortName = Prefix + "http-port-name"
+	// AnnotationQUICPortName names the Service port that carries the QUIC
+	// reverse tunnel (UDP).
+	AnnotationQUICPortName = Prefix + "quic-port-name"
+	// AnnotationRoles is a comma-separated list of pool roles for a process
+	// that fills several (a frontend embedding Pylon). When present and
+	// non-empty it replaces LabelRole for pool derivation. RoleRouter is not
+	// allowed in it.
+	AnnotationRoles = Prefix + "roles"
 )
 
 // Values and defaults of the annotations above.
@@ -82,6 +94,8 @@ const (
 	DefaultGRPCPortName = "grpc"
 	// DefaultHTTPPortName is used when AnnotationHTTPPortName is absent.
 	DefaultHTTPPortName = "http"
+	// DefaultQUICPortName is used when AnnotationQUICPortName is absent.
+	DefaultQUICPortName = "quic"
 )
 
 // Labels and finalizers on objects the gds-mcs-controller creates.
@@ -139,10 +153,44 @@ func IsExported(labels map[string]string) bool {
 // IsRole reports whether role is one of the values of LabelRole.
 func IsRole(role string) bool {
 	switch role {
-	case RoleRouter, RolePoolFrontend, RoleKVRelay:
+	case RoleRouter, RolePoolFrontend, RoleKVRelay, RolePylon:
 		return true
 	}
 	return false
+}
+
+// IsPoolRole reports whether role attaches an export to a pool.
+func IsPoolRole(role string) bool {
+	switch role {
+	case RolePoolFrontend, RoleKVRelay, RolePylon:
+		return true
+	}
+	return false
+}
+
+// ParseRoles returns the pool roles of an exported Service: the entries of
+// AnnotationRoles when it is present and non-empty, else the LabelRole value.
+// Unknown entries, RoleRouter and repeats are dropped; order is first seen.
+// The result is empty for a router export and for a Service without roles.
+func ParseRoles(labels, annotations map[string]string) []string {
+	var roles []string
+	seen := map[string]bool{}
+	add := func(r string) {
+		r = strings.TrimSpace(r)
+		if !IsPoolRole(r) || seen[r] {
+			return
+		}
+		seen[r] = true
+		roles = append(roles, r)
+	}
+	if v := strings.TrimSpace(annotations[AnnotationRoles]); v != "" {
+		for _, r := range strings.Split(v, ",") {
+			add(r)
+		}
+		return roles
+	}
+	add(labels[LabelRole])
+	return roles
 }
 
 // IsGDSKey reports whether a label or annotation key has the GDS prefix.
@@ -177,4 +225,13 @@ func PortNames(annotations map[string]string) (grpcPort, httpPort string) {
 		httpPort = v
 	}
 	return grpcPort, httpPort
+}
+
+// QUICPortName returns the QUIC port name from Service annotations, falling
+// back to DefaultQUICPortName.
+func QUICPortName(annotations map[string]string) string {
+	if v := strings.TrimSpace(annotations[AnnotationQUICPortName]); v != "" {
+		return v
+	}
+	return DefaultQUICPortName
 }

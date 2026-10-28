@@ -29,10 +29,18 @@ option go_package = "github.com/NVIDIA/nvcf/src/control-plane-services/global-di
 // PoolService is the pool and router registry.
 //
 // A Pool exists when a labelled export names it (Service labels
-// gds.nvidia.com/role=pool-frontend or kv-relay and gds.nvidia.com/pool=<name>),
-// when RegisterPool registered it, or both; the two are merged by
-// (cluster, pool name). Static metadata comes from the export's labels and
-// annotations, dynamic state (worker counts, DRAINING) from this API.
+// gds.nvidia.com/role=pool-frontend, kv-relay or pylon and
+// gds.nvidia.com/pool=<name>), when RegisterPool registered it, when a pool
+// agent registered through RegisterPoolAgent, or any combination; all are
+// merged by (cluster, pool name). Static metadata comes from the export's
+// labels and annotations, dynamic state (worker counts, DRAINING) from this
+// API, and per-process identity and liveness from the pool's agents.
+//
+// A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
+// the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
+// label source (its exported Service) and one API registration (its own
+// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
+// pool is live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -68,10 +76,41 @@ service PoolService {
     };
   }
 
-  // DeregisterPool removes the API registration. Watchers receive a DELETE
-  // event with state GONE. Deregistering an unknown pool succeeds.
+  // DeregisterPool removes the API registration and every agent
+  // registration of the pool. Watchers receive a DELETE event with state
+  // GONE. Deregistering an unknown pool succeeds.
   rpc DeregisterPool(DeregisterPoolRequest) returns (DeregisterPoolResponse) {
     option (google.api.http) = {delete: "/v1/clustersets/{clusterset}/pools/{pool_id}"};
+  }
+
+  // RegisterPoolAgent registers one process kind of a pool, or re-registers
+  // it. It is idempotent on (cluster, pool_name, agent.role): a new agent
+  // lease epoch is minted. The pool is created when it does not exist, under
+  // the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
+  // in the request that differs from the pool holding the name fails with
+  // ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
+  // stored one (STALE_GENERATION).
+  rpc RegisterPoolAgent(RegisterPoolAgentRequest) returns (RegisterPoolAgentResponse) {
+    option (google.api.http) = {
+      post: "/v1/clustersets/{clusterset}/pool-agents"
+      body: "*"
+    };
+  }
+
+  // HeartbeatPoolAgent renews one agent's lease and optionally replaces its
+  // attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+  rpc HeartbeatPoolAgent(HeartbeatPoolAgentRequest) returns (HeartbeatPoolAgentResponse) {
+    option (google.api.http) = {
+      post: "/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}:heartbeat"
+      body: "*"
+    };
+  }
+
+  // DeregisterPoolAgent removes one agent registration. The pool stays while
+  // an export, the pool registration or another agent remains. Deregistering
+  // an unknown agent succeeds.
+  rpc DeregisterPoolAgent(DeregisterPoolAgentRequest) returns (DeregisterPoolAgentResponse) {
+    option (google.api.http) = {delete: "/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}"};
   }
 
   // GetPool returns one pool.
@@ -105,14 +144,16 @@ service PoolService {
 
 // PoolState is the desired or derived state of a pool.
 //
-// Derivation: REGISTERED until the first heartbeat (API-only pools) or the
-// first ready endpoint (pools joined to exports); then desired_state (ACTIVE
-// or DRAINING) while the pool is live, UNHEALTHY otherwise. A pool joined to
-// exports is live while its cluster lease is active and at least one of its
-// endpoints is ready; an API-only pool (no services and no labelled export) is
-// live while its own lease is active. GONE after DeregisterPool or when both
-// the labelled export and the API registration are gone; a GONE pool is kept
-// as a tombstone for one bookmark interval.
+// Derivation: REGISTERED until an ingress agent (OPENAI or PYLON) is live,
+// or, for an API-only pool without agents, until its first heartbeat; then
+// desired_state (ACTIVE or DRAINING) while the pool is live, UNHEALTHY
+// otherwise. A pool is live while its cluster lease is active and an ingress
+// agent has a ready endpoint, or while an ingress agent's lease is active; an
+// API-only pool (no services, no labelled export, no agents) is live while
+// its own lease is active. A pool whose only live agent is a KV_RELAY stays
+// REGISTERED. GONE after DeregisterPool or when the labelled exports, the API
+// registration and every agent registration are gone; a GONE pool is kept as
+// a tombstone for one bookmark interval.
 enum PoolState {
   POOL_STATE_UNSPECIFIED = 0;
   POOL_STATE_REGISTERED = 1;
@@ -128,8 +169,62 @@ enum FrontendRole {
   // OpenAI-compatible HTTP frontend; the dispatch address for routers.
   // Label role pool-frontend.
   FRONTEND_ROLE_OPENAI = 1;
-  // KV event relay (Dynamo PoolRelay). Label role kv-relay.
+  // KV event relay (Dynamo PoolRelay). Label role kv-relay. Dials routers
+  // over gRPC; not an ingress.
   FRONTEND_ROLE_KV_RELAY = 2;
+  // Pylon transport: registers with routers and carries requests over its
+  // reverse tunnel. Label role pylon. An ingress with no inbound address.
+  FRONTEND_ROLE_PYLON = 3;
+}
+
+// AgentSource says where a pool agent is known from.
+enum AgentSource {
+  AGENT_SOURCE_UNSPECIFIED = 0;
+  // An exported Service with the agent's role label.
+  AGENT_SOURCE_LABEL = 1;
+  // A RegisterPoolAgent registration.
+  AGENT_SOURCE_API = 2;
+  // Both.
+  AGENT_SOURCE_BOTH = 3;
+}
+
+// DialMode says how routers and a pool agent connect.
+enum DialMode {
+  DIAL_MODE_UNSPECIFIED = 0;
+  // Routers dial the agent (OPENAI frontend).
+  DIAL_MODE_INBOUND = 1;
+  // The agent dials the routers (PYLON, KV_RELAY).
+  DIAL_MODE_OUTBOUND = 2;
+}
+
+// PoolAgent is one process kind of a pool, merged from its exported Service
+// and its API registration. There is at most one per (pool, role).
+message PoolAgent {
+  FrontendRole role = 1;
+  AgentSource source = 2;
+  // The exported Service, when source has LABEL.
+  ServiceRef service = 3;
+  // Port routers dial for INBOUND agents; empty for OUTBOUND.
+  string port_name = 4;
+  // Endpoints of the exported Service; 0 without a label source.
+  int32 endpoint_count = 5;
+  // Ready endpoints while the cluster lease is active.
+  int32 ready_endpoint_count = 6;
+  // Lease of the API registration; unset without one.
+  Lease lease = 7;
+  // Identity of the registering process (a Pylon inference_server_id, a
+  // relay pod name); writer-owned.
+  string agent_id = 8;
+  DialMode dial_mode = 9;
+  // Writer-owned, at most 16 entries.
+  map<string, string> attributes = 10;
+  // Derived: a ready endpoint while the cluster lease is active, or an
+  // active agent lease.
+  bool live = 11;
+  // Writer generation of the API registration.
+  uint64 generation = 12;
+  google.protobuf.Timestamp registered_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
 }
 
 // Location places a pool.
@@ -209,9 +304,16 @@ message Pool {
   // location.cluster, one entry per Service. Counts are always set; the
   // endpoint lists only when include_endpoints is requested.
   repeated ClusterEndpoints endpoints = 19;
-  // Ready endpoints across the pool's OPENAI frontend Services. Routers skip
-  // pools with none.
+  // Ready endpoints across the pool's OPENAI frontend Services. Routers that
+  // dispatch inbound skip pools with none.
   int32 ready_endpoint_count = 20;
+  // One entry per role present (OPENAI, KV_RELAY, PYLON), sorted by role.
+  repeated PoolAgent agents = 21;
+  // True while a KV_RELAY agent is live: KV cache facts are available for
+  // this pool.
+  bool kv_relay_live = 22;
+  // Ready endpoints across the ingress agents (OPENAI and PYLON).
+  int32 ready_ingress_count = 23;
 }
 
 // RouterReplica is one endpoint of a router Service.
@@ -244,6 +346,13 @@ message Router {
   repeated RouterReplica replicas = 10;
   map<string, string> labels = 11;
   map<string, string> annotations = 12;
+  // UDP port of the reverse tunnel, named by gds.nvidia.com/quic-port-name
+  // (default quic); 0 if absent. Informational for Pylon, whose tunnel
+  // address comes from the registration ack.
+  int32 quic_port = 13;
+  // Every port of the exported Service, for consumers whose protocol GDS
+  // does not name.
+  repeated ServicePort ports = 14;
 }
 
 message RegisterPoolRequest {
@@ -305,6 +414,57 @@ message DeregisterPoolRequest {
 }
 
 message DeregisterPoolResponse {}
+
+message RegisterPoolAgentRequest {
+  string clusterset = 1;
+  // Cluster id of the pool; required.
+  string cluster = 2;
+  // Pool name, a DNS label unique within (clusterset, cluster); required.
+  string pool_name = 3;
+  // Optional; must equal the pool's id when the pool exists.
+  string pool_id = 4;
+  // Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id and
+  // attributes. Other fields are ignored.
+  PoolAgent agent = 5;
+  // Agent lease duration; clamped to [10 s, 5 m]; 60 s when unset.
+  google.protobuf.Duration lease_ttl = 6;
+  // Writer generation, max(previous + 1, unix milliseconds).
+  uint64 generation = 7;
+}
+
+message RegisterPoolAgentResponse {
+  string pool_id = 1;
+  // The stored agent with its newly minted lease.
+  PoolAgent agent = 2;
+  // Derived pool state after the registration.
+  PoolState pool_state = 3;
+  google.protobuf.Timestamp server_time = 4;
+}
+
+message HeartbeatPoolAgentRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+  FrontendRole role = 3;
+  // The lease epoch returned by RegisterPoolAgent.
+  uint64 epoch = 4;
+  // Replaces the agent's attributes when non-empty.
+  map<string, string> attributes = 5;
+}
+
+message HeartbeatPoolAgentResponse {
+  Lease lease = 1;
+  // Derived pool state after the heartbeat.
+  PoolState pool_state = 2;
+  google.protobuf.Timestamp server_time = 3;
+}
+
+message DeregisterPoolAgentRequest {
+  string clusterset = 1;
+  string pool_id = 2;
+  FrontendRole role = 3;
+}
+
+message DeregisterPoolAgentResponse {}
 
 message GetPoolRequest {
   string clusterset = 1;

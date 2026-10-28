@@ -431,6 +431,9 @@ func litePool(p *gdsv1.Pool) *gdsv1.Pool {
 		UpdatedAt:          p.UpdatedAt,
 		Endpoints:          liteClusterEndpoints(p.Endpoints),
 		ReadyEndpointCount: p.ReadyEndpointCount,
+		Agents:             p.Agents,
+		KvRelayLive:        p.KvRelayLive,
+		ReadyIngressCount:  p.ReadyIngressCount,
 	}
 }
 

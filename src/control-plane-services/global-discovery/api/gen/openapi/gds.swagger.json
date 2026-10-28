@@ -665,6 +665,45 @@
         ]
       }
     },
+    "/v1/clustersets/{clusterset}/pool-agents": {
+      "post": {
+        "summary": "RegisterPoolAgent registers one process kind of a pool, or re-registers\nit. It is idempotent on (cluster, pool_name, agent.role): a new agent\nlease epoch is minted. The pool is created when it does not exist, under\nthe deterministic pool_id of (clusterset, cluster, pool_name); a pool_id\nin the request that differs from the pool holding the name fails with\nALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the\nstored one (STALE_GENERATION).",
+        "operationId": "PoolService_RegisterPoolAgent",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1RegisterPoolAgentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "clusterset",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PoolServiceRegisterPoolAgentBody"
+            }
+          }
+        ],
+        "tags": [
+          "PoolService"
+        ]
+      }
+    },
     "/v1/clustersets/{clusterset}/pools": {
       "get": {
         "summary": "ListPools returns the pools of a clusterset that match every filter set.",
@@ -838,7 +877,7 @@
         ]
       },
       "delete": {
-        "summary": "DeregisterPool removes the API registration. Watchers receive a DELETE\nevent with state GONE. Deregistering an unknown pool succeeds.",
+        "summary": "DeregisterPool removes the API registration and every agent\nregistration of the pool. Watchers receive a DELETE event with state\nGONE. Deregistering an unknown pool succeeds.",
         "operationId": "PoolService_DeregisterPool",
         "responses": {
           "200": {
@@ -908,6 +947,112 @@
             "required": true,
             "schema": {
               "$ref": "#/definitions/PoolServiceUpdatePoolBody"
+            }
+          }
+        ],
+        "tags": [
+          "PoolService"
+        ]
+      }
+    },
+    "/v1/clustersets/{clusterset}/pools/{poolId}/agents/{role}": {
+      "delete": {
+        "summary": "DeregisterPoolAgent removes one agent registration. The pool stays while\nan export, the pool registration or another agent remains. Deregistering\nan unknown agent succeeds.",
+        "operationId": "PoolService_DeregisterPoolAgent",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1DeregisterPoolAgentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "clusterset",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "FRONTEND_ROLE_UNSPECIFIED",
+              "FRONTEND_ROLE_OPENAI",
+              "FRONTEND_ROLE_KV_RELAY",
+              "FRONTEND_ROLE_PYLON"
+            ]
+          }
+        ],
+        "tags": [
+          "PoolService"
+        ]
+      }
+    },
+    "/v1/clustersets/{clusterset}/pools/{poolId}/agents/{role}:heartbeat": {
+      "post": {
+        "summary": "HeartbeatPoolAgent renews one agent's lease and optionally replaces its\nattributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).",
+        "operationId": "PoolService_HeartbeatPoolAgent",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1HeartbeatPoolAgentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "clusterset",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "FRONTEND_ROLE_UNSPECIFIED",
+              "FRONTEND_ROLE_OPENAI",
+              "FRONTEND_ROLE_KV_RELAY",
+              "FRONTEND_ROLE_PYLON"
+            ]
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PoolServiceHeartbeatPoolAgentBody"
             }
           }
         ],
@@ -1238,6 +1383,23 @@
         }
       }
     },
+    "PoolServiceHeartbeatPoolAgentBody": {
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": "string",
+          "format": "uint64",
+          "description": "The lease epoch returned by RegisterPoolAgent."
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replaces the agent's attributes when non-empty."
+        }
+      }
+    },
     "PoolServiceHeartbeatPoolBody": {
       "type": "object",
       "properties": {
@@ -1258,6 +1420,36 @@
         "desiredState": {
           "$ref": "#/definitions/v1PoolState",
           "description": "ACTIVE or DRAINING; unchanged when UNSPECIFIED."
+        }
+      }
+    },
+    "PoolServiceRegisterPoolAgentBody": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "description": "Cluster id of the pool; required."
+        },
+        "poolName": {
+          "type": "string",
+          "description": "Pool name, a DNS label unique within (clusterset, cluster); required."
+        },
+        "poolId": {
+          "type": "string",
+          "description": "Optional; must equal the pool's id when the pool exists."
+        },
+        "agent": {
+          "$ref": "#/definitions/v1PoolAgent",
+          "description": "Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id and\nattributes. Other fields are ignored."
+        },
+        "leaseTtl": {
+          "type": "string",
+          "description": "Agent lease duration; clamped to [10 s, 5 m]; 60 s when unset."
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64",
+          "description": "Writer generation, max(previous + 1, unix milliseconds)."
         }
       }
     },
@@ -1389,6 +1581,17 @@
       ],
       "default": "ADDRESS_TYPE_UNSPECIFIED",
       "description": "AddressType is the EndpointSlice address type."
+    },
+    "v1AgentSource": {
+      "type": "string",
+      "enum": [
+        "AGENT_SOURCE_UNSPECIFIED",
+        "AGENT_SOURCE_LABEL",
+        "AGENT_SOURCE_API",
+        "AGENT_SOURCE_BOTH"
+      ],
+      "default": "AGENT_SOURCE_UNSPECIFIED",
+      "description": "AgentSource says where a pool agent is known from.\n\n - AGENT_SOURCE_LABEL: An exported Service with the agent's role label.\n - AGENT_SOURCE_API: A RegisterPoolAgent registration.\n - AGENT_SOURCE_BOTH: Both."
     },
     "v1ClientIPConfig": {
       "type": "object",
@@ -1621,8 +1824,21 @@
     "v1DeregisterClusterResponse": {
       "type": "object"
     },
+    "v1DeregisterPoolAgentResponse": {
+      "type": "object"
+    },
     "v1DeregisterPoolResponse": {
       "type": "object"
+    },
+    "v1DialMode": {
+      "type": "string",
+      "enum": [
+        "DIAL_MODE_UNSPECIFIED",
+        "DIAL_MODE_INBOUND",
+        "DIAL_MODE_OUTBOUND"
+      ],
+      "default": "DIAL_MODE_UNSPECIFIED",
+      "description": "DialMode says how routers and a pool agent connect.\n\n - DIAL_MODE_INBOUND: Routers dial the agent (OPENAI frontend).\n - DIAL_MODE_OUTBOUND: The agent dials the routers (PYLON, KV_RELAY)."
     },
     "v1Endpoint": {
       "type": "object",
@@ -1738,10 +1954,11 @@
       "enum": [
         "FRONTEND_ROLE_UNSPECIFIED",
         "FRONTEND_ROLE_OPENAI",
-        "FRONTEND_ROLE_KV_RELAY"
+        "FRONTEND_ROLE_KV_RELAY",
+        "FRONTEND_ROLE_PYLON"
       ],
       "default": "FRONTEND_ROLE_UNSPECIFIED",
-      "description": "FrontendRole is what a pool endpoint or Service serves.\n\n - FRONTEND_ROLE_OPENAI: OpenAI-compatible HTTP frontend; the dispatch address for routers.\nLabel role pool-frontend.\n - FRONTEND_ROLE_KV_RELAY: KV event relay (Dynamo PoolRelay). Label role kv-relay."
+      "description": "FrontendRole is what a pool endpoint or Service serves.\n\n - FRONTEND_ROLE_OPENAI: OpenAI-compatible HTTP frontend; the dispatch address for routers.\nLabel role pool-frontend.\n - FRONTEND_ROLE_KV_RELAY: KV event relay (Dynamo PoolRelay). Label role kv-relay. Dials routers\nover gRPC; not an ingress.\n - FRONTEND_ROLE_PYLON: Pylon transport: registers with routers and carries requests over its\nreverse tunnel. Label role pylon. An ingress with no inbound address."
     },
     "v1GetClusterResponse": {
       "type": "object",
@@ -1798,6 +2015,22 @@
       "properties": {
         "lease": {
           "$ref": "#/definitions/v1Lease"
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "v1HeartbeatPoolAgentResponse": {
+      "type": "object",
+      "properties": {
+        "lease": {
+          "$ref": "#/definitions/v1Lease"
+        },
+        "poolState": {
+          "$ref": "#/definitions/v1PoolState",
+          "description": "Derived pool state after the heartbeat."
         },
         "serverTime": {
           "type": "string",
@@ -2099,10 +2332,92 @@
         "readyEndpointCount": {
           "type": "integer",
           "format": "int32",
-          "description": "Ready endpoints across the pool's OPENAI frontend Services. Routers skip\npools with none."
+          "description": "Ready endpoints across the pool's OPENAI frontend Services. Routers that\ndispatch inbound skip pools with none."
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1PoolAgent"
+          },
+          "description": "One entry per role present (OPENAI, KV_RELAY, PYLON), sorted by role."
+        },
+        "kvRelayLive": {
+          "type": "boolean",
+          "description": "True while a KV_RELAY agent is live: KV cache facts are available for\nthis pool."
+        },
+        "readyIngressCount": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Ready endpoints across the ingress agents (OPENAI and PYLON)."
         }
       },
       "description": "Pool is the unit of routing, nominally one Dynamo graph deployment."
+    },
+    "v1PoolAgent": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/definitions/v1FrontendRole"
+        },
+        "source": {
+          "$ref": "#/definitions/v1AgentSource"
+        },
+        "service": {
+          "$ref": "#/definitions/v1ServiceRef",
+          "description": "The exported Service, when source has LABEL."
+        },
+        "portName": {
+          "type": "string",
+          "description": "Port routers dial for INBOUND agents; empty for OUTBOUND."
+        },
+        "endpointCount": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Endpoints of the exported Service; 0 without a label source."
+        },
+        "readyEndpointCount": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Ready endpoints while the cluster lease is active."
+        },
+        "lease": {
+          "$ref": "#/definitions/v1Lease",
+          "description": "Lease of the API registration; unset without one."
+        },
+        "agentId": {
+          "type": "string",
+          "description": "Identity of the registering process (a Pylon inference_server_id, a\nrelay pod name); writer-owned."
+        },
+        "dialMode": {
+          "$ref": "#/definitions/v1DialMode"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Writer-owned, at most 16 entries."
+        },
+        "live": {
+          "type": "boolean",
+          "description": "Derived: a ready endpoint while the cluster lease is active, or an\nactive agent lease."
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64",
+          "description": "Writer generation of the API registration."
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "PoolAgent is one process kind of a pool, merged from its exported Service\nand its API registration. There is at most one per (pool, role)."
     },
     "v1PoolState": {
       "type": "string",
@@ -2115,7 +2430,7 @@
         "POOL_STATE_GONE"
       ],
       "default": "POOL_STATE_UNSPECIFIED",
-      "description": "PoolState is the desired or derived state of a pool.\n\nDerivation: REGISTERED until the first heartbeat (API-only pools) or the\nfirst ready endpoint (pools joined to exports); then desired_state (ACTIVE\nor DRAINING) while the pool is live, UNHEALTHY otherwise. A pool joined to\nexports is live while its cluster lease is active and at least one of its\nendpoints is ready; an API-only pool (no services and no labelled export) is\nlive while its own lease is active. GONE after DeregisterPool or when both\nthe labelled export and the API registration are gone; a GONE pool is kept\nas a tombstone for one bookmark interval."
+      "description": "PoolState is the desired or derived state of a pool.\n\nDerivation: REGISTERED until an ingress agent (OPENAI or PYLON) is live,\nor, for an API-only pool without agents, until its first heartbeat; then\ndesired_state (ACTIVE or DRAINING) while the pool is live, UNHEALTHY\notherwise. A pool is live while its cluster lease is active and an ingress\nagent has a ready endpoint, or while an ingress agent's lease is active; an\nAPI-only pool (no services, no labelled export, no agents) is live while\nits own lease is active. A pool whose only live agent is a KV_RELAY stays\nREGISTERED. GONE after DeregisterPool or when the labelled exports, the API\nregistration and every agent registration are gone; a GONE pool is kept as\na tombstone for one bookmark interval."
     },
     "v1Protocol": {
       "type": "string",
@@ -2142,6 +2457,26 @@
         "cluster": {
           "$ref": "#/definitions/v1Cluster",
           "description": "The stored registration with the newly minted lease."
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "v1RegisterPoolAgentResponse": {
+      "type": "object",
+      "properties": {
+        "poolId": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/definitions/v1PoolAgent",
+          "description": "The stored agent with its newly minted lease."
+        },
+        "poolState": {
+          "$ref": "#/definitions/v1PoolState",
+          "description": "Derived pool state after the registration."
         },
         "serverTime": {
           "type": "string",
@@ -2232,6 +2567,19 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "quicPort": {
+          "type": "integer",
+          "format": "int32",
+          "description": "UDP port of the reverse tunnel, named by gds.nvidia.com/quic-port-name\n(default quic); 0 if absent. Informational for Pylon, whose tunnel\naddress comes from the registration ack."
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ServicePort"
+          },
+          "description": "Every port of the exported Service, for consumers whose protocol GDS\ndoes not name."
         }
       },
       "description": "Router is derived from one export labelled gds.nvidia.com/role=router, one\nper (cluster, namespace, name). Pylons use its ready replicas as seeds,\n\u003cdial_scheme\u003e://\u003creplica address\u003e:\u003cgrpc_port\u003e, so that a seed reaches the\nrouters of this cluster even when other clusters export the same namespace\nand name into one shared import."

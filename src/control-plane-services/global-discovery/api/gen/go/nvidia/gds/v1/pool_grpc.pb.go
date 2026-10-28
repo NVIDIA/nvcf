@@ -34,15 +34,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PoolService_RegisterPool_FullMethodName   = "/nvidia.gds.v1.PoolService/RegisterPool"
-	PoolService_UpdatePool_FullMethodName     = "/nvidia.gds.v1.PoolService/UpdatePool"
-	PoolService_HeartbeatPool_FullMethodName  = "/nvidia.gds.v1.PoolService/HeartbeatPool"
-	PoolService_DeregisterPool_FullMethodName = "/nvidia.gds.v1.PoolService/DeregisterPool"
-	PoolService_GetPool_FullMethodName        = "/nvidia.gds.v1.PoolService/GetPool"
-	PoolService_ListPools_FullMethodName      = "/nvidia.gds.v1.PoolService/ListPools"
-	PoolService_WatchPools_FullMethodName     = "/nvidia.gds.v1.PoolService/WatchPools"
-	PoolService_ListRouters_FullMethodName    = "/nvidia.gds.v1.PoolService/ListRouters"
-	PoolService_WatchRouters_FullMethodName   = "/nvidia.gds.v1.PoolService/WatchRouters"
+	PoolService_RegisterPool_FullMethodName        = "/nvidia.gds.v1.PoolService/RegisterPool"
+	PoolService_UpdatePool_FullMethodName          = "/nvidia.gds.v1.PoolService/UpdatePool"
+	PoolService_HeartbeatPool_FullMethodName       = "/nvidia.gds.v1.PoolService/HeartbeatPool"
+	PoolService_DeregisterPool_FullMethodName      = "/nvidia.gds.v1.PoolService/DeregisterPool"
+	PoolService_RegisterPoolAgent_FullMethodName   = "/nvidia.gds.v1.PoolService/RegisterPoolAgent"
+	PoolService_HeartbeatPoolAgent_FullMethodName  = "/nvidia.gds.v1.PoolService/HeartbeatPoolAgent"
+	PoolService_DeregisterPoolAgent_FullMethodName = "/nvidia.gds.v1.PoolService/DeregisterPoolAgent"
+	PoolService_GetPool_FullMethodName             = "/nvidia.gds.v1.PoolService/GetPool"
+	PoolService_ListPools_FullMethodName           = "/nvidia.gds.v1.PoolService/ListPools"
+	PoolService_WatchPools_FullMethodName          = "/nvidia.gds.v1.PoolService/WatchPools"
+	PoolService_ListRouters_FullMethodName         = "/nvidia.gds.v1.PoolService/ListRouters"
+	PoolService_WatchRouters_FullMethodName        = "/nvidia.gds.v1.PoolService/WatchRouters"
 )
 
 // PoolServiceClient is the client API for PoolService service.
@@ -52,10 +55,18 @@ const (
 // PoolService is the pool and router registry.
 //
 // A Pool exists when a labelled export names it (Service labels
-// gds.nvidia.com/role=pool-frontend or kv-relay and gds.nvidia.com/pool=<name>),
-// when RegisterPool registered it, or both; the two are merged by
-// (cluster, pool name). Static metadata comes from the export's labels and
-// annotations, dynamic state (worker counts, DRAINING) from this API.
+// gds.nvidia.com/role=pool-frontend, kv-relay or pylon and
+// gds.nvidia.com/pool=<name>), when RegisterPool registered it, when a pool
+// agent registered through RegisterPoolAgent, or any combination; all are
+// merged by (cluster, pool name). Static metadata comes from the export's
+// labels and annotations, dynamic state (worker counts, DRAINING) from this
+// API, and per-process identity and liveness from the pool's agents.
+//
+// A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
+// the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
+// label source (its exported Service) and one API registration (its own
+// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
+// pool is live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -73,9 +84,25 @@ type PoolServiceClient interface {
 	// and the desired state. The epoch must be the current one
 	// (LEASE_EPOCH_MISMATCH). API pools heartbeat every 20 s by default.
 	HeartbeatPool(ctx context.Context, in *HeartbeatPoolRequest, opts ...grpc.CallOption) (*HeartbeatPoolResponse, error)
-	// DeregisterPool removes the API registration. Watchers receive a DELETE
-	// event with state GONE. Deregistering an unknown pool succeeds.
+	// DeregisterPool removes the API registration and every agent
+	// registration of the pool. Watchers receive a DELETE event with state
+	// GONE. Deregistering an unknown pool succeeds.
 	DeregisterPool(ctx context.Context, in *DeregisterPoolRequest, opts ...grpc.CallOption) (*DeregisterPoolResponse, error)
+	// RegisterPoolAgent registers one process kind of a pool, or re-registers
+	// it. It is idempotent on (cluster, pool_name, agent.role): a new agent
+	// lease epoch is minted. The pool is created when it does not exist, under
+	// the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
+	// in the request that differs from the pool holding the name fails with
+	// ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
+	// stored one (STALE_GENERATION).
+	RegisterPoolAgent(ctx context.Context, in *RegisterPoolAgentRequest, opts ...grpc.CallOption) (*RegisterPoolAgentResponse, error)
+	// HeartbeatPoolAgent renews one agent's lease and optionally replaces its
+	// attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+	HeartbeatPoolAgent(ctx context.Context, in *HeartbeatPoolAgentRequest, opts ...grpc.CallOption) (*HeartbeatPoolAgentResponse, error)
+	// DeregisterPoolAgent removes one agent registration. The pool stays while
+	// an export, the pool registration or another agent remains. Deregistering
+	// an unknown agent succeeds.
+	DeregisterPoolAgent(ctx context.Context, in *DeregisterPoolAgentRequest, opts ...grpc.CallOption) (*DeregisterPoolAgentResponse, error)
 	// GetPool returns one pool.
 	GetPool(ctx context.Context, in *GetPoolRequest, opts ...grpc.CallOption) (*GetPoolResponse, error)
 	// ListPools returns the pools of a clusterset that match every filter set.
@@ -133,6 +160,36 @@ func (c *poolServiceClient) DeregisterPool(ctx context.Context, in *DeregisterPo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeregisterPoolResponse)
 	err := c.cc.Invoke(ctx, PoolService_DeregisterPool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *poolServiceClient) RegisterPoolAgent(ctx context.Context, in *RegisterPoolAgentRequest, opts ...grpc.CallOption) (*RegisterPoolAgentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterPoolAgentResponse)
+	err := c.cc.Invoke(ctx, PoolService_RegisterPoolAgent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *poolServiceClient) HeartbeatPoolAgent(ctx context.Context, in *HeartbeatPoolAgentRequest, opts ...grpc.CallOption) (*HeartbeatPoolAgentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatPoolAgentResponse)
+	err := c.cc.Invoke(ctx, PoolService_HeartbeatPoolAgent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *poolServiceClient) DeregisterPoolAgent(ctx context.Context, in *DeregisterPoolAgentRequest, opts ...grpc.CallOption) (*DeregisterPoolAgentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeregisterPoolAgentResponse)
+	err := c.cc.Invoke(ctx, PoolService_DeregisterPoolAgent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,10 +271,18 @@ type PoolService_WatchRoutersClient = grpc.ServerStreamingClient[WatchRoutersRes
 // PoolService is the pool and router registry.
 //
 // A Pool exists when a labelled export names it (Service labels
-// gds.nvidia.com/role=pool-frontend or kv-relay and gds.nvidia.com/pool=<name>),
-// when RegisterPool registered it, or both; the two are merged by
-// (cluster, pool name). Static metadata comes from the export's labels and
-// annotations, dynamic state (worker counts, DRAINING) from this API.
+// gds.nvidia.com/role=pool-frontend, kv-relay or pylon and
+// gds.nvidia.com/pool=<name>), when RegisterPool registered it, when a pool
+// agent registered through RegisterPoolAgent, or any combination; all are
+// merged by (cluster, pool name). Static metadata comes from the export's
+// labels and annotations, dynamic state (worker counts, DRAINING) from this
+// API, and per-process identity and liveness from the pool's agents.
+//
+// A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
+// the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
+// label source (its exported Service) and one API registration (its own
+// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
+// pool is live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -235,9 +300,25 @@ type PoolServiceServer interface {
 	// and the desired state. The epoch must be the current one
 	// (LEASE_EPOCH_MISMATCH). API pools heartbeat every 20 s by default.
 	HeartbeatPool(context.Context, *HeartbeatPoolRequest) (*HeartbeatPoolResponse, error)
-	// DeregisterPool removes the API registration. Watchers receive a DELETE
-	// event with state GONE. Deregistering an unknown pool succeeds.
+	// DeregisterPool removes the API registration and every agent
+	// registration of the pool. Watchers receive a DELETE event with state
+	// GONE. Deregistering an unknown pool succeeds.
 	DeregisterPool(context.Context, *DeregisterPoolRequest) (*DeregisterPoolResponse, error)
+	// RegisterPoolAgent registers one process kind of a pool, or re-registers
+	// it. It is idempotent on (cluster, pool_name, agent.role): a new agent
+	// lease epoch is minted. The pool is created when it does not exist, under
+	// the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
+	// in the request that differs from the pool holding the name fails with
+	// ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
+	// stored one (STALE_GENERATION).
+	RegisterPoolAgent(context.Context, *RegisterPoolAgentRequest) (*RegisterPoolAgentResponse, error)
+	// HeartbeatPoolAgent renews one agent's lease and optionally replaces its
+	// attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+	HeartbeatPoolAgent(context.Context, *HeartbeatPoolAgentRequest) (*HeartbeatPoolAgentResponse, error)
+	// DeregisterPoolAgent removes one agent registration. The pool stays while
+	// an export, the pool registration or another agent remains. Deregistering
+	// an unknown agent succeeds.
+	DeregisterPoolAgent(context.Context, *DeregisterPoolAgentRequest) (*DeregisterPoolAgentResponse, error)
 	// GetPool returns one pool.
 	GetPool(context.Context, *GetPoolRequest) (*GetPoolResponse, error)
 	// ListPools returns the pools of a clusterset that match every filter set.
@@ -272,6 +353,15 @@ func (UnimplementedPoolServiceServer) HeartbeatPool(context.Context, *HeartbeatP
 }
 func (UnimplementedPoolServiceServer) DeregisterPool(context.Context, *DeregisterPoolRequest) (*DeregisterPoolResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeregisterPool not implemented")
+}
+func (UnimplementedPoolServiceServer) RegisterPoolAgent(context.Context, *RegisterPoolAgentRequest) (*RegisterPoolAgentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterPoolAgent not implemented")
+}
+func (UnimplementedPoolServiceServer) HeartbeatPoolAgent(context.Context, *HeartbeatPoolAgentRequest) (*HeartbeatPoolAgentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HeartbeatPoolAgent not implemented")
+}
+func (UnimplementedPoolServiceServer) DeregisterPoolAgent(context.Context, *DeregisterPoolAgentRequest) (*DeregisterPoolAgentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeregisterPoolAgent not implemented")
 }
 func (UnimplementedPoolServiceServer) GetPool(context.Context, *GetPoolRequest) (*GetPoolResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPool not implemented")
@@ -381,6 +471,60 @@ func _PoolService_DeregisterPool_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PoolService_RegisterPoolAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterPoolAgentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PoolServiceServer).RegisterPoolAgent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PoolService_RegisterPoolAgent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PoolServiceServer).RegisterPoolAgent(ctx, req.(*RegisterPoolAgentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PoolService_HeartbeatPoolAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatPoolAgentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PoolServiceServer).HeartbeatPoolAgent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PoolService_HeartbeatPoolAgent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PoolServiceServer).HeartbeatPoolAgent(ctx, req.(*HeartbeatPoolAgentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PoolService_DeregisterPoolAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeregisterPoolAgentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PoolServiceServer).DeregisterPoolAgent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PoolService_DeregisterPoolAgent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PoolServiceServer).DeregisterPoolAgent(ctx, req.(*DeregisterPoolAgentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PoolService_GetPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPoolRequest)
 	if err := dec(in); err != nil {
@@ -479,6 +623,18 @@ var PoolService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeregisterPool",
 			Handler:    _PoolService_DeregisterPool_Handler,
+		},
+		{
+			MethodName: "RegisterPoolAgent",
+			Handler:    _PoolService_RegisterPoolAgent_Handler,
+		},
+		{
+			MethodName: "HeartbeatPoolAgent",
+			Handler:    _PoolService_HeartbeatPoolAgent_Handler,
+		},
+		{
+			MethodName: "DeregisterPoolAgent",
+			Handler:    _PoolService_DeregisterPoolAgent_Handler,
 		},
 		{
 			MethodName: "GetPool",

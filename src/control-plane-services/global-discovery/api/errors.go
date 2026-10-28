@@ -85,5 +85,7 @@ const (
 	MaxEndpointsPerExport = 1000
 	MaxEndpointAttributes = 16
 	MaxModelsPerPool      = 256
+	MaxAgentAttributes    = 16
+	MaxAgentIDBytes       = 253
 	MaxMessageBytes       = 4 << 20
 )

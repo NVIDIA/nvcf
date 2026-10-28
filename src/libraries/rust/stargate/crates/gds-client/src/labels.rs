@@ -36,6 +36,13 @@ pub const ROLE_ROUTER: &str = "router";
 pub const ROLE_POOL_FRONTEND: &str = "pool-frontend";
 /// [`LABEL_ROLE`] value of a pool's KV event relay (Dynamo PoolRelay).
 pub const ROLE_KV_RELAY: &str = "kv-relay";
+/// [`LABEL_ROLE`] value of a pool's Pylon transport: an ingress that dials
+/// routers and carries requests over its reverse tunnel.
+pub const ROLE_PYLON: &str = "pylon";
+/// Service annotation: comma separated pool roles of a process that fills
+/// several (a frontend embedding Pylon). Replaces [`LABEL_ROLE`] for pool
+/// derivation when present; `router` is not allowed in it.
+pub const ANNOTATION_ROLES: &str = "gds.nvidia.com/roles";
 
 /// Service annotation: comma separated model ids.
 pub const ANNOTATION_POOL_MODELS: &str = "gds.nvidia.com/pool-models";
@@ -50,6 +57,9 @@ pub const ANNOTATION_DIAL_SCHEME: &str = "gds.nvidia.com/dial-scheme";
 pub const ANNOTATION_GRPC_PORT_NAME: &str = "gds.nvidia.com/grpc-port-name";
 /// Service annotation: name of the port that carries HTTP.
 pub const ANNOTATION_HTTP_PORT_NAME: &str = "gds.nvidia.com/http-port-name";
+/// Service annotation: name of the UDP port that carries the QUIC reverse
+/// tunnel.
+pub const ANNOTATION_QUIC_PORT_NAME: &str = "gds.nvidia.com/quic-port-name";
 
 /// [`ANNOTATION_DIAL_SCHEME`] value for plain HTTP.
 pub const DIAL_SCHEME_HTTP: &str = "http";
@@ -59,6 +69,8 @@ pub const DIAL_SCHEME_HTTPS: &str = "https";
 pub const DEFAULT_GRPC_PORT_NAME: &str = "grpc";
 /// Port name used when [`ANNOTATION_HTTP_PORT_NAME`] is absent.
 pub const DEFAULT_HTTP_PORT_NAME: &str = "http";
+/// Port name used when [`ANNOTATION_QUIC_PORT_NAME`] is absent.
+pub const DEFAULT_QUIC_PORT_NAME: &str = "quic";
 
 /// Label on objects the controller creates; the value is
 /// [`MANAGED_BY_CONTROLLER`].
@@ -77,7 +89,36 @@ pub fn is_exported<'a>(mut labels: impl Iterator<Item = (&'a String, &'a String)
 
 /// Whether `role` is a value of [`LABEL_ROLE`].
 pub fn is_role(role: &str) -> bool {
-    matches!(role, ROLE_ROUTER | ROLE_POOL_FRONTEND | ROLE_KV_RELAY)
+    matches!(role, ROLE_ROUTER | ROLE_POOL_FRONTEND | ROLE_KV_RELAY | ROLE_PYLON)
+}
+
+/// Whether `role` attaches an export to a pool.
+pub fn is_pool_role(role: &str) -> bool {
+    matches!(role, ROLE_POOL_FRONTEND | ROLE_KV_RELAY | ROLE_PYLON)
+}
+
+/// The pool roles of an exported Service: the entries of an
+/// [`ANNOTATION_ROLES`] value when `roles` is `Some` and non-empty, else the
+/// [`LABEL_ROLE`] value. Unknown entries, `router` and repeats are dropped in
+/// first-seen order. Mirrors `api.ParseRoles`.
+pub fn parse_roles(role_label: Option<&str>, roles_annotation: Option<&str>) -> Vec<String> {
+    let mut roles: Vec<String> = Vec::new();
+    let mut add = |role: &str| {
+        let role = role.trim();
+        if is_pool_role(role) && !roles.iter().any(|seen| seen == role) {
+            roles.push(role.to_string());
+        }
+    };
+    if let Some(value) = roles_annotation.map(str::trim).filter(|v| !v.is_empty()) {
+        for role in value.split(',') {
+            add(role);
+        }
+        return roles;
+    }
+    if let Some(role) = role_label {
+        add(role);
+    }
+    roles
 }
 
 /// Splits a [`ANNOTATION_POOL_MODELS`] value into model ids, trimming spaces
@@ -110,6 +151,8 @@ mod tests {
             ANNOTATION_DIAL_SCHEME,
             ANNOTATION_GRPC_PORT_NAME,
             ANNOTATION_HTTP_PORT_NAME,
+            ANNOTATION_QUIC_PORT_NAME,
+            ANNOTATION_ROLES,
             LABEL_MANAGED_BY,
             LABEL_CLUSTERSET,
             LABEL_POOL_ID,
@@ -125,7 +168,15 @@ mod tests {
         let labels = HashMap::from([(LABEL_EXPORT.to_string(), "yes".to_string())]);
         assert!(!is_exported(labels.iter()));
         assert!(is_role("router") && is_role("pool-frontend") && is_role("kv-relay"));
+        assert!(is_role("pylon") && is_pool_role("pylon") && !is_pool_role("router"));
         assert!(!is_role("frontend"));
+        assert_eq!(parse_roles(Some("pylon"), None), vec!["pylon"]);
+        assert_eq!(parse_roles(Some("router"), None), Vec::<String>::new());
+        assert_eq!(
+            parse_roles(Some("kv-relay"), Some(" pool-frontend, pylon ,router,pylon")),
+            vec!["pool-frontend", "pylon"]
+        );
+        assert_eq!(parse_roles(Some("kv-relay"), Some("  ")), vec!["kv-relay"]);
     }
 
     #[test]
