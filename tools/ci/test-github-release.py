@@ -586,7 +586,12 @@ class GithubReleaseTest(unittest.TestCase):
         ),
     )
     RUST_SERVICE = ("http-invocation", "src/invocation-plane-services/http-invocation", "0.6.1", "distroless_cc")
-    BASE_DIGESTS = {"distroless_cc": "c" * 64, "distroless_go": "a" * 64, "distroless_static": "b" * 64}
+    BASE_DIGESTS = {
+        "distroless_cc": "c" * 64,
+        "distroless_go": "a" * 64,
+        "distroless_static": "b" * 64,
+        "ubuntu_noble": "f" * 64,
+    }
     GO_SDK_BUMP = "fix(security): build Go services with Go 1.26.10"
 
     def go_service_metadata(self, service_id, path):
@@ -616,6 +621,7 @@ class GithubReleaseTest(unittest.TestCase):
         )
 
     def write_image_service(self, root, path, binary_rule, image_rule, base):
+        """A service with one binary and one image. A `base` of None leaves it to the macro default."""
         service_dir = root / path
         service_dir.mkdir(parents=True, exist_ok=True)
         (service_dir / "BUILD.bazel").write_text(
@@ -626,13 +632,30 @@ class GithubReleaseTest(unittest.TestCase):
             "\n"
             f"{image_rule}(\n"
             '    name = "image",\n'
-            f'    base = "@{base}",\n'
-            '    binary = ":server",\n'
+            + (f'    base = "@{base}",\n' if base else "")
+            + '    binary = ":server",\n'
+            ")\n"
+        )
+
+    def write_oci_rules(self, root):
+        """rules/oci in the shape of the real one: an image macro whose `base` defaults to DEFAULT_BASE."""
+        rules = root / "rules/oci/private"
+        rules.mkdir(parents=True, exist_ok=True)
+        (rules / "common.bzl").write_text('DEFAULT_BASE = "@ubuntu_noble"\n')
+        (rules / "go.bzl").write_text(
+            'load("//rules/oci/private:common.bzl", "DEFAULT_BASE")\n'
+            "\n"
+            "go_oci_image = macro(\n"
+            "    implementation = _go_oci_image_impl,\n"
+            "    attrs = {\n"
+            '        "binary": attr.label(mandatory = True, configurable = False),\n'
+            '        "base": attr.label(default = DEFAULT_BASE, configurable = False),\n'
+            "    },\n"
             ")\n"
         )
 
     def init_go_repo(self, root):
-        """Repo with the Go SDK, three pinned bases, two Go services and a Rust one, each tagged."""
+        """Repo with the Go SDK, the pinned bases, two Go services and a Rust one, each tagged."""
         self.init_repo(root)
         self.write_go_sdk(root, "go1.26.9")
         self.write_module_bazel(root, self.BASE_DIGESTS)
@@ -687,11 +710,14 @@ class GithubReleaseTest(unittest.TestCase):
         for service_id in ("http-invocation", "cloud-tasks", "grpc-proxy-helm", "nvcf-self-managed-stack"):
             with self.subTest(service=service_id):
                 self.assertFalse(self.github_release.builds_go_binary(calls[service_id]))
-        # A Go service image takes as its base a pin MODULE.bazel declares. If
-        # the parse or the base lookup drifts, base bumps stop fanning out.
-        for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui"):
+        # A Go service image is built on a pin MODULE.bazel declares, named as
+        # its `base` or, for nvcf-cli, its macro's default. If the parse or the
+        # base lookup drifts, base bumps stop fanning out.
+        defaults = self.github_release.image_macro_default_bases(root)
+        for service_id in ("grpc-proxy", "nvca", "byoo-otel-collector", "nvcf-ui", "nvcf-cli"):
             with self.subTest(service=service_id):
-                self.assertTrue(self.github_release.image_base_repositories(calls[service_id]) & set(pins))
+                bases = self.github_release.image_base_repositories(calls[service_id], defaults)
+                self.assertTrue(bases & set(pins))
 
     def test_go_sdk_change_fans_out_a_patch_release_to_every_go_service(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -748,6 +774,27 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertFalse(created)
             self.assertIn("no release-worthy Go SDK or base image commits since", text)
 
+    def test_a_go_image_without_a_base_releases_for_its_macro_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_go_repo(root)
+            self.write_oci_rules(root)
+            path, version = "src/clis/nvcf-cli", "1.25.1"
+            self.write_image_service(root, path, "go_binary", "go_oci_image", None)
+            self.commit_all(root, "seed a go image on the default base")
+            git(root, "tag", f"{path}/v{version}")
+            self.commit_base_repin(root, "ubuntu_noble", "e" * 64, "fix(security): repin ubuntu noble")
+
+            created, text = self.go_fanout_dry_run(root, self.go_service_metadata("nvcf-cli", path))
+            self.assertTrue(created)
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertIn("MODULE.bazel oci.pull ubuntu_noble (base image)", text)
+            # Services that set their own base are not built on the default.
+            for service_id, service_path, _version, _base in self.GO_SERVICES:
+                with self.subTest(service=service_id):
+                    created, _text = self.go_fanout_dry_run(root, self.go_service_metadata(service_id, service_path))
+                    self.assertFalse(created)
+
     def test_an_unparseable_build_file_stops_the_go_fanout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -759,7 +806,7 @@ class GithubReleaseTest(unittest.TestCase):
 
             with self.assertRaises(SystemExit) as raised:
                 self.go_fanout_dry_run(root, self.go_service_metadata(service_id, path))
-            self.assertIn(f"{path}/BUILD.bazel: cannot parse BUILD file", str(raised.exception))
+            self.assertIn(f"{path}/BUILD.bazel: cannot parse Starlark", str(raised.exception))
 
     def test_module_edits_that_leave_a_go_service_base_alone_release_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:

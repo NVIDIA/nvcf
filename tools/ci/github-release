@@ -43,10 +43,11 @@ JAVA_SERVICE_KIND = "java-service"
 JAVA_COMPONENT_KINDS = (JAVA_FRAMEWORK_KIND, JAVA_SERVICE_KIND)
 # Shared Go build inputs. rules_go compiles every go_binary with the SDK that
 # GO_SDK_FILE names (go_sdk.from_file in MODULE.bazel), and an image target
-# takes an oci.pull in MODULE.bazel as its `base = "@<name>"`. Both reach a Go
-# service's image without touching the service's directory. Which services
-# they reach is read from each service's own BUILD files, the files Bazel
-# builds it from.
+# takes an oci.pull in MODULE.bazel as its `base = "@<name>"`, or as its image
+# macro's default base when it sets none. Both reach a Go service's image
+# without touching the service's directory. Which services they reach is read
+# from each service's own BUILD files and the image macro definitions, the
+# files Bazel builds it from.
 GO_SDK_FILE = "tools/go-toolchain/go.mod"
 MODULE_FILE = "MODULE.bazel"
 BUILD_FILE_NAMES = ("BUILD.bazel", "BUILD")
@@ -54,6 +55,7 @@ BUILD_FILE_NAMES = ("BUILD.bazel", "BUILD")
 BUILD_SCAN_SKIPPED_DIRS = ("vendor", "node_modules")
 GO_BINARY_RULE = "go_binary"
 REPOSITORY_LABEL = re.compile(r"@([A-Za-z0-9_.-]+)")
+OCI_RULES_DIR = "rules/oci/private"
 # Commits quoted in dependency-triggered release notes. A service that is many
 # dependency commits behind should still get readable notes.
 MAX_QUOTED_DEPENDENCY_COMMITS = 20
@@ -1434,26 +1436,43 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
     return True
 
 
+def parse_starlark(path):
+    """A Starlark file, read with Python's parser.
+
+    A file that does not parse is fatal, like an invalid Java CI descriptor:
+    what it declares decides whether to publish.
+    """
+    try:
+        return ast.parse(path.read_text(errors="replace"), filename=str(path))
+    except SyntaxError as exc:
+        raise SystemExit(f"{path}: cannot parse Starlark: {exc}") from exc
+
+
+def keyword_arguments(call):
+    return {keyword.arg: keyword.value for keyword in call.keywords if keyword.arg}
+
+
+def starlark_string(node, assignments):
+    """A string literal, or the string a module-level name in `assignments` holds."""
+    if isinstance(node, ast.Name):
+        node = assignments.get(node.id)
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
 def service_build_calls(root, service):
     """Rule and macro calls in the service's own BUILD files. Vendored trees are skipped.
 
     BUILD files are Starlark, which Python's parser reads, so a rule or label
     that only a comment or docstring mentions is never taken for one the build
-    uses. A file that does not parse is fatal, like an invalid Java CI
-    descriptor: the answer decides whether to publish.
+    uses.
     """
     calls = []
     for dirpath, dirnames, filenames in os.walk(root / service["path"]):
         dirnames[:] = sorted(name for name in dirnames if name not in BUILD_SCAN_SKIPPED_DIRS)
         for name in sorted(filenames):
-            if name not in BUILD_FILE_NAMES:
-                continue
-            path = Path(dirpath) / name
-            try:
-                tree = ast.parse(path.read_text(errors="replace"), filename=str(path))
-            except SyntaxError as exc:
-                raise SystemExit(f"{path}: cannot parse BUILD file: {exc}") from exc
-            calls.extend(node for node in ast.walk(tree) if isinstance(node, ast.Call))
+            if name in BUILD_FILE_NAMES:
+                tree = parse_starlark(Path(dirpath) / name)
+                calls.extend(node for node in ast.walk(tree) if isinstance(node, ast.Call))
     return calls
 
 
@@ -1461,22 +1480,56 @@ def builds_go_binary(calls):
     return any(isinstance(call.func, ast.Name) and call.func.id == GO_BINARY_RULE for call in calls)
 
 
-def image_base_repositories(calls):
-    """Repositories the service's image targets take as their `base`.
+def image_macro_default_bases(root):
+    """The base each image macro in OCI_RULES_DIR builds on when a target sets none.
 
-    Only that attribute is read. A repository named anywhere else, a data
-    dependency or a comment, is not the image the service runs on.
+    Read from the macro definitions, so a go_oci_image without `base` is tied
+    to the default it is built on, and a new macro or default needs no edit
+    here.
+    """
+    assignments = {
+        target.id: node.value
+        for path in sorted((root / OCI_RULES_DIR).glob("*.bzl"))
+        for node in parse_starlark(path).body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    defaults = {}
+    for name, value in assignments.items():
+        if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "macro"):
+            continue
+        attrs = keyword_arguments(value).get("attrs")
+        if not isinstance(attrs, ast.Dict):
+            continue
+        for key, attr in zip(attrs.keys, attrs.values):
+            if isinstance(key, ast.Constant) and key.value == "base" and isinstance(attr, ast.Call):
+                default = starlark_string(keyword_arguments(attr).get("default"), assignments)
+                if default:
+                    defaults[name] = default
+    return defaults
+
+
+def image_base_repositories(calls, default_bases):
+    """Repositories the service's image targets are built on.
+
+    Only the `base` attribute is read. A repository named anywhere else, a
+    data dependency or a comment, is not the image the service runs on. A
+    target that sets no `base` gets its macro's entry in `default_bases`.
     """
     names = set()
     for call in calls:
-        for keyword in call.keywords:
-            if keyword.arg != "base":
-                continue
-            for node in ast.walk(keyword.value):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    match = REPOSITORY_LABEL.match(node.value)
-                    if match:
-                        names.add(match.group(1))
+        base = keyword_arguments(call).get("base")
+        if base is not None:
+            labels = [node.value for node in ast.walk(base) if isinstance(node, ast.Constant)]
+        elif isinstance(call.func, ast.Name) and call.func.id in default_bases:
+            labels = [default_bases[call.func.id]]
+        else:
+            continue
+        for label in labels:
+            match = REPOSITORY_LABEL.match(label) if isinstance(label, str) else None
+            if match:
+                names.add(match.group(1))
     return names
 
 
@@ -1536,7 +1589,7 @@ def oci_pull_pins(root, rev):
             and node.func.value.id == "oci"
         ):
             continue
-        arguments = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        arguments = keyword_arguments(node)
         try:
             name = ast.literal_eval(arguments["name"])
         except (KeyError, ValueError):
@@ -1618,7 +1671,7 @@ def publish_go_dependency_release(root, service, dry_run, draft):
     same baseline, counts only release-worthy commits, and is always a patch. A
     service qualifies when one of its BUILD files declares a go_binary, since
     rules_go builds every one of those with the SDK in GO_SDK_FILE. Its base
-    images are the oci.pull repositories its image targets take as `base`, so a
+    images are the oci.pull repositories its image targets are built on, so a
     base bump releases only the services built on that base.
     """
     calls = service_build_calls(root, service)
@@ -1633,7 +1686,7 @@ def publish_go_dependency_release(root, service, dry_run, draft):
         )
         return False
 
-    bases = image_base_repositories(calls) & set(oci_pull_pins(root, "HEAD"))
+    bases = image_base_repositories(calls, image_macro_default_bases(root)) & set(oci_pull_pins(root, "HEAD"))
     commits, inputs = release_worthy_go_dependency_commits_since(root, bases, last_tag)
     if not commits:
         print(
