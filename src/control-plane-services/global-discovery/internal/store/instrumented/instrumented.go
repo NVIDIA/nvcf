@@ -189,7 +189,7 @@ func (s *Store) DeletePool(ctx context.Context, key store.PoolKey) (err error) {
 }
 
 func poolAgentAttrs(k store.PoolAgentKey) []attribute.KeyValue {
-	return append(poolAttrs(k.PoolKey()), attribute.String("gds.pool_agent.role", string(k.Role)))
+	return append(poolAttrs(k.PoolKey()), attribute.String("gds.pool_agent.role", string(k.Role)), attribute.String("gds.pool_agent.id", k.AgentID))
 }
 
 // PutPoolAgent implements store.Store.

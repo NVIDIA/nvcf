@@ -104,6 +104,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"PoolAgentHeartbeat", poolAgentHeartbeat},
 		{"PoolAgentHeartbeatErrors", poolAgentHeartbeatErrors},
 		{"PoolAgentDeleteIdempotent", poolAgentDeleteIdempotent},
+		{"PoolAgentInstancesAreIndependent", poolAgentInstancesAreIndependent},
 		{"LoadClusterSetComplete", loadClusterSetComplete},
 		{"LoadClusterSetUnknown", loadClusterSetUnknown},
 		{"LoadClusterSetReturnsCopies", loadClusterSetReturnsCopies},
@@ -221,15 +222,20 @@ func poolRecord(key store.PoolKey, name string, gen uint64) store.PoolRecord {
 	}
 }
 
+// poolAgentKey returns the key of the registration of process "pod-0".
 func poolAgentKey(cs, cluster, poolID string, role store.FrontendRole) store.PoolAgentKey {
-	return store.PoolAgentKey{ClusterSet: cs, Cluster: cluster, PoolID: poolID, Role: role}
+	return store.PoolAgentKey{ClusterSet: cs, Cluster: cluster, PoolID: poolID, Role: role, AgentID: "pod-0"}
+}
+
+func withAgentID(k store.PoolAgentKey, agentID string) store.PoolAgentKey {
+	k.AgentID = agentID
+	return k
 }
 
 func poolAgentRecord(key store.PoolAgentKey, poolName string, gen uint64) store.PoolAgentRecord {
 	return store.PoolAgentRecord{
 		Key:        key,
 		PoolName:   poolName,
-		AgentID:    "pylon-" + string(key.Role),
 		Attributes: map[string]string{"models": "llama-3", "version": "v1"},
 		Lease:      store.Lease{TTL: time.Minute},
 		Generation: gen,
@@ -935,6 +941,9 @@ func poolDeleteCascadesAgents(t *testing.T, st store.Store, cs string) {
 	}
 	put("c1", "p1", store.FrontendRoleOpenAI, "pool-a")
 	put("c1", "p1", store.FrontendRolePylon, "pool-a")
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(withAgentID(poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon), "pod-1"), "pool-a", 1),
+		store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
 	keep := []store.PoolAgentRecord{
 		put("c1", "p10", store.FrontendRolePylon, "pool-b"), // a pool id extending p1
 		put("c2", "p1", store.FrontendRolePylon, "pool-a"),  // the same pool id in another cluster
@@ -983,7 +992,6 @@ func poolAgentReregisterMintsNewEpoch(t *testing.T, st store.Store, cs string) {
 	require.NoError(t, err)
 
 	rec := poolAgentRecord(key, "pool-a", 2)
-	rec.AgentID = "relay-1"
 	rec.Attributes = map[string]string{"models": "mistral"}
 	rec.Lease.TTL = 2 * time.Minute
 	t1 := t0.Add(5 * time.Second)
@@ -995,7 +1003,6 @@ func poolAgentReregisterMintsNewEpoch(t *testing.T, st store.Store, cs string) {
 	assert.True(t, second.Lease.RenewedAt.Equal(t1))
 	assert.True(t, second.RegisteredAt.Equal(t0), "RegisteredAt is kept")
 	assert.True(t, second.UpdatedAt.Equal(t1))
-	assert.Equal(t, "relay-1", second.AgentID)
 	assert.Equal(t, map[string]string{"models": "mistral"}, second.Attributes)
 
 	// The same millisecond still mints a new epoch.
@@ -1045,7 +1052,7 @@ func poolAgentStaleGeneration(t *testing.T, st store.Store, cs string) {
 	require.NoError(t, err)
 	for _, gen := range []uint64{0, 6, 7} {
 		stale := poolAgentRecord(key, "pool-a", gen)
-		stale.AgentID = "stale"
+		stale.Attributes = map[string]string{"stale": "true"}
 		_, err = st.PutPoolAgent(ctx(t), stale, store.PutPoolAgentOptions{Now: t0.Add(time.Second), MintLease: true})
 		requireStale(t, err, 7)
 	}
@@ -1136,6 +1143,42 @@ func poolAgentDeleteIdempotent(t *testing.T, st store.Store, cs string) {
 	// A deleted registration starts over: any generation is accepted.
 	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(key, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
 	assert.NoError(t, err)
+}
+
+func poolAgentInstancesAreIndependent(t *testing.T, st store.Store, cs string) {
+	pod0 := poolAgentKey(cs, "c1", "p1", store.FrontendRolePylon)
+	pod1 := withAgentID(pod0, "pod-1")
+	odd := withAgentID(pod0, "pod#1%")
+	first, err := st.PutPoolAgent(ctx(t), poolAgentRecord(pod0, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	second, err := st.PutPoolAgent(ctx(t), poolAgentRecord(pod1, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err, "each instance has its own generation")
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(odd, "pool-a", 1), store.PutPoolAgentOptions{Now: t0, MintLease: true})
+	require.NoError(t, err)
+	assert.Equal(t, first.Lease.Epoch, second.Lease.Epoch, "epochs are per instance")
+
+	// Re-registering one instance does not fence the other.
+	t1 := t0.Add(time.Second)
+	_, err = st.PutPoolAgent(ctx(t), poolAgentRecord(pod1, "pool-a", 2), store.PutPoolAgentOptions{Now: t1, MintLease: true})
+	require.NoError(t, err)
+	_, err = st.RenewPoolAgentLease(ctx(t), pod0, first.Lease.Epoch, t1, store.PoolAgentHeartbeatPatch{})
+	assert.NoError(t, err)
+	_, err = st.RenewPoolAgentLease(ctx(t), pod1, second.Lease.Epoch, t1, store.PoolAgentHeartbeatPatch{})
+	assert.ErrorIs(t, err, store.ErrLeaseEpochMismatch)
+
+	snap := load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 3)
+	var ids []string
+	for _, a := range snap.PoolAgents {
+		ids = append(ids, a.Key.AgentID)
+	}
+	assert.Equal(t, []string{"pod#1%", "pod-0", "pod-1"}, ids, "sorted by agent id, escaped ids round-trip")
+
+	require.NoError(t, st.DeletePoolAgent(ctx(t), pod0))
+	snap = load(t, st, cs)
+	require.Len(t, snap.PoolAgents, 2, "deleting one instance keeps the others")
+	require.NoError(t, st.DeletePool(ctx(t), pod0.PoolKey()))
+	assert.Empty(t, load(t, st, cs).PoolAgents)
 }
 
 // Snapshots.

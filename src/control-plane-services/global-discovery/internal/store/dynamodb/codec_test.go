@@ -124,9 +124,8 @@ func fullPool() store.PoolRecord {
 
 func fullPoolAgent() store.PoolAgentRecord {
 	return store.PoolAgentRecord{
-		Key:          store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "p1", Role: store.FrontendRolePylon},
+		Key:          store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "p1", Role: store.FrontendRolePylon, AgentID: "pylon-7f9c"},
 		PoolName:     "pool-a",
-		AgentID:      "pylon-7f9c",
 		Attributes:   map[string]string{"models": "llama-3"},
 		Lease:        store.Lease{Epoch: 43, TTL: time.Minute, RenewedAt: t0.Add(time.Minute)},
 		Generation:   6,
@@ -190,9 +189,9 @@ func TestCodecRoundTrip(t *testing.T) {
 		assert.Equal(t, rec, got)
 
 		// The top-level attributes are not also in the body.
-		var body gdsv1.PoolAgent
+		var body gdsv1.PoolAgentRegistration
 		require.NoError(t, proto.Unmarshal(it.Body, &body))
-		assert.Zero(t, body.Role)
+		assert.Empty(t, body.AgentId)
 		assert.Zero(t, body.Generation)
 		assert.Nil(t, body.UpdatedAt)
 		assert.Zero(t, body.Lease.Epoch)
@@ -376,7 +375,7 @@ func TestCodecDecodeErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = decodePool(item{PK: "CS#cs", SK: "PL#c1#p", Body: garbage})
 	assert.Error(t, err)
-	_, err = decodePoolAgent(item{PK: "CS#cs", SK: "PA#c1#p#PYLON", Body: garbage})
+	_, err = decodePoolAgent(item{PK: "CS#cs", SK: "PA#c1#p#PYLON#pod-0", Body: garbage})
 	assert.Error(t, err)
 	_, err = decodeEndpointSet(item{PK: "EP#cs#c1", SK: "n#s", Body: garbage})
 	assert.Error(t, err)

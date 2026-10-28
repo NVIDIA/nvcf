@@ -39,8 +39,8 @@ func TestKeyLayout(t *testing.T) {
 		{"export", exportKey(ek), key{"CS#prod", "EX#c1#llm#router"}},
 		{"pool", poolKey(pk), key{"CS#prod", "PL#c1#1b4e28ba"}},
 		{"pool name", poolNameKey("prod", "c1", "pool-a"), key{"CS#prod", "PN#c1#pool-a"}},
-		{"pool agent", poolAgentKey(store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "1b4e28ba", Role: store.FrontendRolePylon}),
-			key{"CS#prod", "PA#c1#1b4e28ba#PYLON"}},
+		{"pool agent", poolAgentKey(store.PoolAgentKey{ClusterSet: "prod", Cluster: "c1", PoolID: "1b4e28ba", Role: store.FrontendRolePylon, AgentID: "pylon-0"}),
+			key{"CS#prod", "PA#c1#1b4e28ba#PYLON#pylon-0"}},
 		{"endpoint partition marker", endpointMarkKey("prod", "c1"), key{"CS#prod", "EPX#c1"}},
 		{"endpoint set", endpointSetKey(ek), key{"EP#prod#c1", "llm#router"}},
 	}
@@ -81,7 +81,7 @@ func TestKeyEscaping(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, pk, gotPool)
 
-	ak := store.PoolAgentKey{ClusterSet: odd, Cluster: odd, PoolID: odd, Role: store.FrontendRole(odd)}
+	ak := store.PoolAgentKey{ClusterSet: odd, Cluster: odd, PoolID: odd, Role: store.FrontendRole(odd), AgentID: odd}
 	gotAgent, ok := parsePoolAgentSK(odd, poolAgentKey(ak).sk)
 	assert.True(t, ok)
 	assert.Equal(t, ak, gotAgent)
@@ -122,7 +122,7 @@ func TestParseRejectsOtherShapes(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = parsePoolSK("cs", "PL#c1")
 	assert.False(t, ok)
-	_, ok = parsePoolAgentSK("cs", "PA#c1#p")
+	_, ok = parsePoolAgentSK("cs", "PA#c1#p#PYLON")
 	assert.False(t, ok)
 	_, ok = parseEndpointSetSK("cs", "c1", "ns")
 	assert.False(t, ok)

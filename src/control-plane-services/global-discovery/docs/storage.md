@@ -44,7 +44,7 @@ Server flags: `--store=dynamodb`, `--dynamodb-table` (default `gds`) and
 | ServiceExport | `CS#<clusterset>` | `EX#<cluster>#<namespace>#<name>` | `ServiceExportSpec` | `gen`, `updated_at` | no |
 | Pool | `CS#<clusterset>` | `PL#<cluster>#<pool_id>` | `Pool` | `gen`, `lease_epoch` (leased pools), `lease_renewed_at`, `owner_id`, `updated_at`, `expires_at` | yes |
 | Pool name reservation | `CS#<clusterset>` | `PN#<cluster>#<name>` | none | `pool_id` | no |
-| Pool agent | `CS#<clusterset>` | `PA#<cluster>#<pool_id>#<role>` | `PoolAgent` | `gen`, `lease_epoch`, `lease_renewed_at`, `updated_at`, `expires_at`, `pool_name` | yes |
+| Pool agent registration | `CS#<clusterset>` | `PA#<cluster>#<pool_id>#<role>#<agent_id>` | `PoolAgentRegistration` | `gen`, `lease_epoch`, `lease_renewed_at`, `updated_at`, `expires_at`, `pool_name` | yes |
 | Endpoint partition marker | `CS#<clusterset>` | `EPX#<cluster>` | none | none | no |
 | EndpointSet | `EP#<clusterset>#<cluster>` | `<namespace>#<name>` | `ClusterEndpoints` (`endpoints` only) | `gen`, `updated_at` | no |
 
@@ -57,13 +57,17 @@ Notes:
 - The clusterset index is written once per gds-server process and
   clusterset, before the first record. `ListClusterSets` queries `pk = CSX`.
   The store never deletes it.
-- A pool agent item is the API registration of one agent role of a pool
-  (`RegisterPoolAgent`). `<role>` is the store spelling of the role:
-  `OPENAI`, `KV_RELAY` or `PYLON`. The body holds `agent_id`,
+- A pool agent registration item is one process instance's registration
+  of an agent role of a pool (`RegisterPoolAgent`), for example one per
+  Pylon pod. `<role>` is the store spelling of the role: `OPENAI`,
+  `KV_RELAY` or `PYLON`; `<agent_id>` is the process's id, escaped like
+  every key component. Each registration has its own lease, so the
+  instances of one role never fence each other. The body holds
   `attributes`, `lease.ttl` and `registered_at`; `pool_name`, the join key
-  with labelled exports and pool records, is a top-level attribute. Agents
-  of a pool share the prefix `PA#<cluster>#<pool_id>#`, agents of a
-  cluster the prefix `PA#<cluster>#`.
+  with labelled exports and pool records, is a top-level attribute. The
+  registrations of a pool share the prefix `PA#<cluster>#<pool_id>#`,
+  those of a cluster the prefix `PA#<cluster>#`. The server merges the
+  registrations of one role into the pool's `agents[]` entry.
 - The endpoint partition marker records that `EP#<clusterset>#<cluster>`
   exists, so that `LoadClusterSet` finds an endpoint set whose cluster has no
   registration, export or pool. A replica rewrites its marker at most every

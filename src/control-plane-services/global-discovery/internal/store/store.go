@@ -147,9 +147,10 @@ type PoolStore interface {
 	DeletePool(ctx context.Context, key PoolKey) error
 }
 
-// PoolAgentStore persists the API registrations of pool agents, at most one
-// per (cluster, pool id, role). Label-derived agents are computed from
-// exports and never stored.
+// PoolAgentStore persists the API registrations of pool agents: one per
+// process instance, keyed by (cluster, pool id, role, agent id), each with
+// its own lease, so that the instances of one role never fence each other.
+// Label-derived agents are computed from exports and never stored.
 type PoolAgentStore interface {
 	// PutPoolAgent creates or replaces an agent registration when
 	// rec.Generation is greater than the stored generation
@@ -235,13 +236,17 @@ func (k PoolKey) ClusterKey() ClusterKey {
 	return ClusterKey{ClusterSet: k.ClusterSet, Cluster: k.Cluster}
 }
 
-// PoolAgentKey identifies a pool agent registration: one per role of a
-// pool. The cluster is part of the key, as for pools.
+// PoolAgentKey identifies a pool agent registration: one per process
+// instance (AgentID) of a role of a pool. The cluster is part of the key, as
+// for pools.
 type PoolAgentKey struct {
 	ClusterSet string
 	Cluster    string
 	PoolID     string
 	Role       FrontendRole
+	// AgentID identifies the registering process, for example a Pylon
+	// inference_server_id or a relay pod name.
+	AgentID string
 }
 
 // PoolKey returns the key of the agent's pool.
@@ -331,8 +336,6 @@ type PoolAgentRecord struct {
 	// PoolName is the name of the agent's pool, the join key with labelled
 	// exports and pool records.
 	PoolName string
-	// AgentID identifies the registering process.
-	AgentID string
 	// Attributes are writer-owned.
 	Attributes map[string]string
 	// Lease has Epoch 0 when the registration has none.

@@ -70,9 +70,9 @@ func ComparePoolKeys(a, b PoolKey) int {
 }
 
 // ComparePoolAgentKeys orders pool agent keys by clusterset, cluster, pool
-// id, then role.
+// id, role, then agent id.
 func ComparePoolAgentKeys(a, b PoolAgentKey) int {
-	return cmp.Or(ComparePoolKeys(a.PoolKey(), b.PoolKey()), cmp.Compare(a.Role, b.Role))
+	return cmp.Or(ComparePoolKeys(a.PoolKey(), b.PoolKey()), cmp.Compare(a.Role, b.Role), cmp.Compare(a.AgentID, b.AgentID))
 }
 
 // Apply applies the patch to an agent registration and reports whether it

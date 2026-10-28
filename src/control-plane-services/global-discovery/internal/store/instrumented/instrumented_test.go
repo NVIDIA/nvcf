@@ -76,7 +76,7 @@ func TestMetricsAndSpans(t *testing.T) {
 	_, err = st.RenewPoolLease(ctx, pk, 1, now, store.PoolHeartbeatPatch{})
 	require.ErrorIs(t, err, store.ErrLeaseEpochMismatch)
 	require.NoError(t, st.DeletePool(ctx, pk))
-	ak := store.PoolAgentKey{ClusterSet: "cs", Cluster: "a", PoolID: "p", Role: store.FrontendRolePylon}
+	ak := store.PoolAgentKey{ClusterSet: "cs", Cluster: "a", PoolID: "p", Role: store.FrontendRolePylon, AgentID: "pod-0"}
 	_, err = st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: ak, Generation: 2}, store.PutPoolAgentOptions{Now: now, MintLease: true})
 	require.NoError(t, err)
 	_, err = st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: ak, Generation: 1}, store.PutPoolAgentOptions{Now: now})

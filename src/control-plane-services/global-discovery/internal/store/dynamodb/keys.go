@@ -31,7 +31,7 @@ import (
 //	service export           CS#<clusterset>             EX#<cluster>#<namespace>#<name>
 //	pool                     CS#<clusterset>             PL#<cluster>#<pool_id>
 //	pool name index          CS#<clusterset>             PN#<cluster>#<name>
-//	pool agent               CS#<clusterset>             PA#<cluster>#<pool_id>#<role>
+//	pool agent               CS#<clusterset>             PA#<cluster>#<pool_id>#<role>#<agent_id>
 //	endpoint partition mark  CS#<clusterset>             EPX#<cluster>
 //	endpoint set             EP#<clusterset>#<cluster>   <namespace>#<name>
 //
@@ -112,7 +112,7 @@ func poolNameSKPrefix(cluster string) string {
 // poolAgentKey is the key of an agent registration. The role is stored in
 // its store spelling (OPENAI, KV_RELAY, PYLON).
 func poolAgentKey(k store.PoolAgentKey) key {
-	return key{pk: clusterSetPK(k.ClusterSet), sk: poolAgentPoolSKPrefix(k.PoolKey()) + esc(string(k.Role))}
+	return key{pk: clusterSetPK(k.ClusterSet), sk: poolAgentPoolSKPrefix(k.PoolKey()) + esc(string(k.Role)) + sep + esc(k.AgentID)}
 }
 
 // poolAgentSKPrefix is the sort key prefix of every agent registration of a
@@ -190,11 +190,11 @@ func parsePoolSK(clusterSet, sk string) (store.PoolKey, bool) {
 }
 
 func parsePoolAgentSK(clusterSet, sk string) (store.PoolAgentKey, bool) {
-	parts, ok := splitSK(sk, poolAgentPrefix, 3)
+	parts, ok := splitSK(sk, poolAgentPrefix, 4)
 	if !ok {
 		return store.PoolAgentKey{}, false
 	}
-	return store.PoolAgentKey{ClusterSet: clusterSet, Cluster: parts[0], PoolID: parts[1], Role: store.FrontendRole(parts[2])}, true
+	return store.PoolAgentKey{ClusterSet: clusterSet, Cluster: parts[0], PoolID: parts[1], Role: store.FrontendRole(parts[2]), AgentID: parts[3]}, true
 }
 
 func parseEndpointMarkSK(sk string) (string, bool) {

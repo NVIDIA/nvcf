@@ -382,12 +382,11 @@ func decodePool(it item) (store.PoolRecord, error) {
 // Pool agents.
 
 // encodePoolAgentBody returns the body of an agent registration: the
-// agent id, the attributes, the lease TTL and RegisteredAt. The key (with
-// the role), the pool name, the generation, UpdatedAt and the lease epoch
-// and renewal time are top level.
+// attributes, the lease TTL and RegisteredAt. The key (with the role and
+// the agent id), the pool name, the generation, UpdatedAt and the lease
+// epoch and renewal time are top level.
 func encodePoolAgentBody(rec store.PoolAgentRecord) ([]byte, error) {
-	return marshalBody(&gdsv1.PoolAgent{
-		AgentId:      rec.AgentID,
+	return marshalBody(&gdsv1.PoolAgentRegistration{
 		Attributes:   rec.Attributes,
 		Lease:        leaseTTL(rec.Lease.TTL),
 		RegisteredAt: timestamp(rec.RegisteredAt),
@@ -425,14 +424,13 @@ func decodePoolAgent(it item) (store.PoolAgentRecord, error) {
 	if !ok {
 		return store.PoolAgentRecord{}, fmt.Errorf("dynamodb: %q is not a pool agent key", it.SK)
 	}
-	var body gdsv1.PoolAgent
+	var body gdsv1.PoolAgentRegistration
 	if err := unmarshalBody(it, &body); err != nil {
 		return store.PoolAgentRecord{}, err
 	}
 	return store.PoolAgentRecord{
 		Key:        key,
 		PoolName:   it.PoolName,
-		AgentID:    body.AgentId,
 		Attributes: body.Attributes,
 		Lease: store.Lease{
 			Epoch:     it.LeaseEpoch,

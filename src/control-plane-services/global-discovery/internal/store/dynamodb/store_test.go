@@ -70,7 +70,7 @@ func ek(cluster, name string) store.ExportKey {
 }
 
 func ak(cluster, id string, role store.FrontendRole) store.PoolAgentKey {
-	return store.PoolAgentKey{ClusterSet: "cs", Cluster: cluster, PoolID: id, Role: role}
+	return store.PoolAgentKey{ClusterSet: "cs", Cluster: cluster, PoolID: id, Role: role, AgentID: "pod-0"}
 }
 
 func pk(cluster, id string) store.PoolKey {

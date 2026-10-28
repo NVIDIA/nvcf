@@ -56,7 +56,7 @@ func TestKeyHelpers(t *testing.T) {
 	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c1"}, ek.ClusterKey())
 	pk := PoolKey{ClusterSet: "cs", Cluster: "c2", PoolID: "p"}
 	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c2"}, pk.ClusterKey())
-	ak := PoolAgentKey{ClusterSet: "cs", Cluster: "c2", PoolID: "p", Role: FrontendRolePylon}
+	ak := PoolAgentKey{ClusterSet: "cs", Cluster: "c2", PoolID: "p", Role: FrontendRolePylon, AgentID: "pod-0"}
 	assert.Equal(t, pk, ak.PoolKey())
 	assert.Equal(t, ClusterKey{ClusterSet: "cs", Cluster: "c2"}, ak.ClusterKey())
 }
@@ -73,9 +73,10 @@ func TestSnapshotSort(t *testing.T) {
 		EndpointSets: []EndpointSetRecord{{Key: ExportKey{"cs", "b", "ns", "a"}}, {Key: ExportKey{"cs", "a", "ns", "a"}}},
 		Pools:        []PoolRecord{{Key: PoolKey{"cs", "b", "1"}}, {Key: PoolKey{"cs", "a", "2"}}, {Key: PoolKey{"cs", "a", "1"}}},
 		PoolAgents: []PoolAgentRecord{
-			{Key: PoolAgentKey{"cs", "a", "2", FrontendRoleOpenAI}},
-			{Key: PoolAgentKey{"cs", "a", "1", FrontendRolePylon}},
-			{Key: PoolAgentKey{"cs", "a", "1", FrontendRoleKVRelay}},
+			{Key: PoolAgentKey{"cs", "a", "2", FrontendRoleOpenAI, "x"}},
+			{Key: PoolAgentKey{"cs", "a", "1", FrontendRolePylon, "y"}},
+			{Key: PoolAgentKey{"cs", "a", "1", FrontendRolePylon, "x"}},
+			{Key: PoolAgentKey{"cs", "a", "1", FrontendRoleKVRelay, "z"}},
 		},
 	}
 	snap.Sort()
@@ -96,7 +97,10 @@ func TestSnapshotSort(t *testing.T) {
 	for _, a := range snap.PoolAgents {
 		agents = append(agents, a.Key)
 	}
-	assert.Equal(t, []PoolAgentKey{{"cs", "a", "1", FrontendRoleKVRelay}, {"cs", "a", "1", FrontendRolePylon}, {"cs", "a", "2", FrontendRoleOpenAI}}, agents)
+	assert.Equal(t, []PoolAgentKey{
+		{"cs", "a", "1", FrontendRoleKVRelay, "z"}, {"cs", "a", "1", FrontendRolePylon, "x"},
+		{"cs", "a", "1", FrontendRolePylon, "y"}, {"cs", "a", "2", FrontendRoleOpenAI, "x"},
+	}, agents)
 
 	assert.Negative(t, CompareClusterKeys(ClusterKey{"a", "z"}, ClusterKey{"b", "a"}))
 	assert.Zero(t, CompareExportKeys(ExportKey{"a", "b", "c", "d"}, ExportKey{"a", "b", "c", "d"}))

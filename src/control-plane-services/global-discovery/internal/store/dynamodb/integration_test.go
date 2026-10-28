@@ -290,11 +290,11 @@ func TestItemAttributes(t *testing.T) {
 	it = get("EX#c1#ns#svc")
 	assert.NotContains(t, it, "expires_at", "exports do not expire")
 
-	agentKey := store.PoolAgentKey{ClusterSet: "attrs", Cluster: "c1", PoolID: "p1", Role: store.FrontendRolePylon}
+	agentKey := store.PoolAgentKey{ClusterSet: "attrs", Cluster: "c1", PoolID: "p1", Role: store.FrontendRolePylon, AgentID: "pod-0"}
 	agent, err := st.PutPoolAgent(ctx, store.PoolAgentRecord{Key: agentKey, PoolName: "pool-a", Generation: 7, Lease: store.Lease{TTL: time.Minute}},
 		store.PutPoolAgentOptions{Now: t0, MintLease: true})
 	require.NoError(t, err)
-	it = get("PA#c1#p1#PYLON")
+	it = get("PA#c1#p1#PYLON#pod-0")
 	assert.Equal(t, strconv.FormatUint(agent.Lease.Epoch, 10), num(it["lease_epoch"]))
 	assert.Equal(t, "7", num(it["gen"]))
 	assert.Equal(t, &ddbtypes.AttributeValueMemberS{Value: "pool-a"}, it["pool_name"])
