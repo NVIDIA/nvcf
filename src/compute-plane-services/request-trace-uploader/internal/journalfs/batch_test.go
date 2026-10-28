@@ -211,6 +211,32 @@ func TestBatchRetryAndAmbiguityFollowTheStateMachine(t *testing.T) {
 	mustState(t, store, ids[0], journal.StateConfirmed)
 }
 
+func TestABatchRemembersASubmitThatMayHaveLanded(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+
+	if err := store.RetryBatch("b1", h.clock.Now(), "backend_transient"); err != nil {
+		t.Fatalf("RetryBatch: %v", err)
+	}
+	if b := mustBatch(t, store, "b1", journal.StateRetryWait); b.MayHaveLanded {
+		t.Fatal("a refused batch is marked as possibly landed")
+	}
+	if err := store.ResumeBatch("b1"); err != nil {
+		t.Fatalf("ResumeBatch: %v", err)
+	}
+	if err := store.MarkBatchAmbiguous("b1", "timeout"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "backend_transient"); err != nil {
+		t.Fatalf("RetryBatch from Ambiguous: %v", err)
+	}
+	if b := mustBatch(t, h.restart(store), "b1", journal.StateRetryWait); !b.MayHaveLanded {
+		t.Fatal("a batch whose submit may have landed lost that mark after a restart")
+	}
+}
+
 func TestRetryBatchRefusesABatchWithAReceipt(t *testing.T) {
 	h := newHarness(t)
 	store := h.open()

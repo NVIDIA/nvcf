@@ -180,6 +180,10 @@ type Batch struct {
 	Receipt     *Receipt  `json:"receipt,omitempty"`
 	Attempts    int       `json:"attempts"`
 	NextRetryAt time.Time `json:"next_retry_at,omitzero"`
+	// MayHaveLanded records that a submit of this batch may have committed
+	// without a job id. A batch without it was only ever refused, so its
+	// members can be released and prepared again.
+	MayHaveLanded bool `json:"may_have_landed,omitempty"`
 	// LastErrorClass is a bounded error class, never error text.
 	LastErrorClass string    `json:"last_error_class,omitempty"`
 	CreatedAt      time.Time `json:"created_at,omitzero"`

@@ -394,5 +394,8 @@ func batchTransition(b *journal.Batch, to journal.State) error {
 		return fmt.Errorf("%w: batch %s from %s to %s", journal.ErrInvalidTransition, b.ID, b.State, to)
 	}
 	b.State = to
+	if to == journal.StateAmbiguous {
+		b.MayHaveLanded = true
+	}
 	return nil
 }

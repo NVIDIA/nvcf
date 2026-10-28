@@ -12,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend/backendtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/uploadertest"
@@ -208,5 +210,42 @@ func TestATransportPreparedUnderAnotherPolicyIsPreparedAgainAfterARestart(t *tes
 	}
 	if strings.Contains(logs.String(), "nca-acme-nca") {
 		t.Fatalf("logs carry a configured suppression value:\n%s", logs)
+	}
+}
+
+// refusingBackend refuses every submit in a way that shows nothing was
+// processed, as a 503 does.
+type refusingBackend struct{ dirBackend }
+
+func (refusingBackend) Submit(context.Context, backend.SubmitRequest) (string, error) {
+	return "", &backend.Fault{Class: backend.ClassRetryable, Scope: backend.ScopeUnknown, Reason: backend.ReasonUnavailable, Err: errors.New("unavailable")}
+}
+
+func TestARefusedBatchIsPreparedAgainWhenThePolicyChangesBeforeItsRetry(t *testing.T) {
+	landing := t.TempDir()
+	spool, closed := spoolWith(t, []string{suppressedLine})
+	first := newUploader(t, spool, refusingBackend{dirBackend{root: landing}}, service.Options{}, nil)
+	_ = first.Pass(context.Background())
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	batches := journalBatches(t, spool)
+	if len(batches) != 1 || batches[0].State != journal.StateRetryWait {
+		t.Fatalf("batches = %+v, want one refused batch waiting to retry", batches)
+	}
+
+	restarted := newUploader(t, spool, dirBackend{root: landing}, service.Options{}, map[string]string{config.EnvSuppressNCAIDs: "nca-acme-nca"})
+	passUntil(t, restarted, func() bool { return gone(closed[0]) })
+	files, err := filepath.Glob(filepath.Join(landing, "*", "*.jsonl.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported []string
+	for _, file := range files {
+		exported = append(exported, readGzipLines(t, file)...)
+	}
+	joined := strings.Join(exported, "\n")
+	if strings.Contains(joined, "secret") || !strings.Contains(joined, `"payload_suppressed":true`) {
+		t.Fatalf("exported = %s, want the record suppressed under the policy now configured", joined)
 	}
 }

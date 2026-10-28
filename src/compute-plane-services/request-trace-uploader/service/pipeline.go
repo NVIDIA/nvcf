@@ -307,10 +307,19 @@ func recordPolicy(cfg transform.Config, f backend.Format) (string, error) {
 // reprepareStale discards unsent transports written under a record policy
 // other than the one now configured, so newly enabled suppression or
 // redaction applies to them. Their segments are prepared again from the
-// source, which is still on the spool. Transports already in a batch may
-// have been sent and are left alone.
+// source, which is still on the spool. A batch whose submits were only ever
+// refused is released first, since nothing in it was sent. Transports in a
+// batch that may have landed are left alone.
 func (u *Uploader) reprepareStale() error {
 	var errs []error
+	for _, b := range u.store.Batches() {
+		if b.State != journal.StateRetryWait || b.Receipt != nil || b.MayHaveLanded || b.Backend != u.name || !u.holdsStale(b) {
+			continue
+		}
+		if err := u.store.ReleaseBatch(b.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	discarded := 0
 	for _, seg := range u.store.Segments() {
 		if seg.State != journal.StatePrepared || seg.Backend != u.name {
@@ -334,6 +343,21 @@ func (u *Uploader) reprepareStale() error {
 		slog.Info("record policy changed; unsent segments are prepared again", "segments", discarded)
 	}
 	return errors.Join(errs...)
+}
+
+// holdsStale reports whether a member of the batch was prepared under a
+// record policy other than the one now configured.
+func (u *Uploader) holdsStale(b journal.Batch) bool {
+	for _, m := range b.Members {
+		seg, ok := u.store.Segment(m.SegmentID)
+		if !ok {
+			continue
+		}
+		if dest, ok := seg.Destinations[b.Destination]; ok && dest.Transport.Policy != u.prepPolicy {
+			return true
+		}
+	}
+	return false
 }
 
 // quarantineSegment records a quarantine and then moves the files, so a crash
