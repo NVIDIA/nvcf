@@ -418,7 +418,7 @@ const (
 )
 
 // llmGatewaySections are the native protocol sections the LLM Gateway serves.
-var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "anthropicMessages"}
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings", "anthropicMessages", "decisions", "typesafeSystemOne"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -430,8 +430,10 @@ type V2Config struct {
 		ImageGenerations map[string]ModelFunctionDetails `json:"imageGenerations"`
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
+		Decisions        map[string]ModelFunctionDetails `json:"decisions"`
 	} `json:"openai"`
 	AnthropicMessages map[string]ModelFunctionDetails `json:"anthropicMessages"`
+	TypeSafeSystemOne map[string]ModelFunctionDetails `json:"typesafeSystemOne"`
 	Vanity            map[string]VanityEntry          `json:"vanity"`
 }
 
@@ -603,7 +605,11 @@ func validateSamplingMethods(location string, fieldName string, sectionName stri
 	return nil
 }
 
-const anthropicMessagesSection = "anthropicMessages"
+const (
+	anthropicMessagesSection = "anthropicMessages"
+	decisionsSection         = "openai.decisions"
+	typeSafeSystemOneSection = "typesafeSystemOne"
+)
 
 func supportsRequestBodySampling(sectionName string) bool {
 	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses" ||
@@ -630,6 +636,8 @@ func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetai
 		"openai.imageGenerations": c.OpenAI.ImageGenerations,
 		"openai.imageEdits":       c.OpenAI.ImageEdits,
 		"openai.imageVariations":  c.OpenAI.ImageVariations,
+		decisionsSection:          c.OpenAI.Decisions,
+		typeSafeSystemOneSection:  c.TypeSafeSystemOne,
 	}
 }
 

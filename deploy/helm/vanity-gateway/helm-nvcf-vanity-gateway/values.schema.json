@@ -145,6 +145,9 @@
                 "anthropicMessages": {
                   "$ref": "#/definitions/openAIStickyEndpointRoutes"
                 },
+                "typesafeSystemOne": {
+                  "$ref": "#/definitions/openAILLMEndpointRoutes"
+                },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
                 }
@@ -273,6 +276,29 @@
                                 "required": [
                                   "embeddings"
                                 ]
+                              },
+                              {
+                                "properties": {
+                                  "decisions": {
+                                    "not": {
+                                      "additionalProperties": {
+                                        "not": {
+                                          "properties": {
+                                            "functionType": {
+                                              "const": "LLM"
+                                            }
+                                          },
+                                          "required": [
+                                            "functionType"
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "decisions"
+                                ]
                               }
                             ]
                           }
@@ -302,6 +328,29 @@
                         },
                         "required": [
                           "anthropicMessages"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "typesafeSystemOne": {
+                            "not": {
+                              "additionalProperties": {
+                                "not": {
+                                  "properties": {
+                                    "functionType": {
+                                      "const": "LLM"
+                                    }
+                                  },
+                                  "required": [
+                                    "functionType"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "typesafeSystemOne"
                         ]
                       }
                     ]
@@ -355,6 +404,9 @@
           "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "embeddings": {
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
+        },
+        "decisions": {
           "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "responses": {

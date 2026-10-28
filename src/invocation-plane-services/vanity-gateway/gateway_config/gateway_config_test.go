@@ -1659,9 +1659,11 @@ func TestGatewayConfigValidateScopesRequestBodyShadowSampling(t *testing.T) {
 		})
 	}
 	for section, location := range map[string]string{
-		"completions":      "openai.completions",
-		"embeddings":       "openai.embeddings",
-		"imageGenerations": "openai.imageGenerations",
+		"completions":       "openai.completions",
+		"embeddings":        "openai.embeddings",
+		"imageGenerations":  "openai.imageGenerations",
+		"decisions":         "openai.decisions",
+		"typesafeSystemOne": "typesafeSystemOne",
 	} {
 		for _, perTarget := range []bool{false, true} {
 			form := "legacy"
@@ -1797,6 +1799,10 @@ func gatewayConfigWithShadow(
 		cfg.OpenAI.ImageGenerations = entries
 	case "anthropicMessages":
 		cfg.AnthropicMessages = entries
+	case "decisions":
+		cfg.OpenAI.Decisions = entries
+	case "typesafeSystemOne":
+		cfg.TypeSafeSystemOne = entries
 	}
 	return cfg
 }
@@ -1818,6 +1824,10 @@ func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 		cfg.OpenAI.Completions = entries
 	case "imageGenerations":
 		cfg.OpenAI.ImageGenerations = entries
+	case "decisions":
+		cfg.OpenAI.Decisions = entries
+	case "typesafeSystemOne":
+		cfg.TypeSafeSystemOne = entries
 	}
 	return cfg
 }
@@ -1978,4 +1988,46 @@ func TestAnthropicMessagesConfigNamespace(t *testing.T) {
 	entry.ModelName = ""
 	cfg.AnthropicMessages["native"] = entry
 	require.ErrorContains(t, cfg.Validate(), "anthropicMessages.native: modelName is required")
+}
+
+func TestDecisionSectionsAcceptRandomAndPerBearerKeySampling(t *testing.T) {
+	methods := samplingMethods(ShadowSamplingMethodPerBearerKey, ShadowSamplingMethodRandom)
+	for _, section := range []string{"decisions", "typesafeSystemOne"} {
+		t.Run(section, func(t *testing.T) {
+			require.NoError(t, gatewayConfigWithShadow(section, methods, nil, true).Validate())
+		})
+	}
+}
+
+func TestDecisionConfigNamespaces(t *testing.T) {
+	var cfg GatewayConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+  "v2config": {
+   "openai": {"host": "api.example.com", "decisions": {
+    "dec": {"modelName": "dec-model", "functionID": "dec-function", "modelInfoFields": {"family": "decision"}}
+   }},
+   "typesafeSystemOne": {
+    "s1": {"modelName": "s1-model", "functionID": "s1-function", "functionType": "LLM"}
+   }
+  }
+ }`), &cfg))
+	require.NoError(t, cfg.Validate())
+	require.True(t, cfg.HasLLMGatewayRoute())
+	require.Equal(t, "dec-model", cfg.OpenAI.Decisions["dec"].ModelName)
+	require.Equal(t, "s1-model", cfg.TypeSafeSystemOne["s1"].ModelName)
+	// Shadow targets must stay inside the same section.
+	entry := cfg.TypeSafeSystemOne["s1"]
+	entry.ShadowModelName = "dec-model"
+	cfg.TypeSafeSystemOne["s1"] = entry
+	require.ErrorContains(t, cfg.Validate(), "typesafeSystemOne.s1: shadow target must reference another model in typesafeSystemOne")
+}
+
+func TestDecisionSectionsRejectLLMOnlyFieldsWithUsePexec(t *testing.T) {
+	for _, section := range []string{"decisions", "typesafeSystemOne"} {
+		t.Run(section, func(t *testing.T) {
+			entry := llmModel()
+			entry.UsePexec = true
+			require.ErrorContains(t, llmModelConfig(section, entry).Validate(), "usePexec is unsupported")
+		})
+	}
 }
