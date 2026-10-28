@@ -661,8 +661,10 @@ Pool state follows from the agents: REGISTERED until an ingress agent is live; t
 `desired_state` (ACTIVE or DRAINING) while the cluster lease is active and an ingress agent has
 a ready endpoint, or while an ingress agent's lease is active; UNHEALTHY otherwise. A pool whose
 only live agent is the relay stays REGISTERED: routers can learn its cache facts but have
-nowhere to send requests. An API-only pool registered with `RegisterPool` and no agents keeps
-the pool-lease rule of earlier versions. GONE after `DeregisterPool`, or when the exports, the
+nowhere to send requests. A pool whose ingress is the frontend URL of its API registration (no
+labelled export, no `services[]`, for example a pool behind a LoadBalancer) is live while its
+pool lease is active, whatever agents register on it: its relay adds `kv_relay_live` without
+taking part in liveness. GONE after `DeregisterPool`, or when the exports, the
 overlay and every agent registration are gone.
 
 Pylon high availability is N transport pods, each with its own `inference_server_id`, each
@@ -855,8 +857,9 @@ ready frontend.
 
 Pool state derivation: REGISTERED until an ingress agent (OPENAI or PYLON) is live; then
 `desired_state` (ACTIVE or DRAINING) while the owning cluster lease is active and an ingress
-agent has a ready endpoint, or while an ingress agent's lease is active, or, for API-only pools
-without agents, while the pool lease is active; UNHEALTHY otherwise; GONE after
+agent has a ready endpoint, or while an ingress agent's lease is active, or, for pools whose
+ingress is the API-supplied frontend URL (no export, no `services[]`), while the pool lease is
+active; UNHEALTHY otherwise; GONE after
 `DeregisterPool` or when the labelled exports, the overlay and every agent registration are
 gone, retained for one bookmark interval as a tombstone. `kv_relay_live` is true while a
 KV_RELAY agent is live; `ready_ingress_count` sums ready OPENAI and PYLON endpoints;

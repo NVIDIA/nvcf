@@ -68,14 +68,23 @@ func (in PoolStateInput) APIOnly() bool {
 	return in.Overlay && !in.OverlayServices && !in.LabelledExport && !in.Agents
 }
 
-// Live reports whether the pool currently serves. An API-only pool is live
-// while its lease is active. Any other pool is live while its cluster lease
-// is active and an ingress Service has a ready endpoint, or while an
-// ingress agent's lease is active. A KV_RELAY agent alone never makes a
-// pool live.
+// StaticIngress reports whether the pool's ingress is the frontend URL of
+// its API registration: an API registration without services[] and without
+// a labelled export, whatever its agent registrations. The pool lease then
+// stands for that ingress.
+func (in PoolStateInput) StaticIngress() bool {
+	return in.Overlay && !in.OverlayServices && !in.LabelledExport
+}
+
+// Live reports whether the pool currently serves. A pool with a static
+// ingress is live while its pool lease is active or an ingress agent's lease
+// is active. Any other pool is live while its cluster lease is active and an
+// ingress Service has a ready endpoint, or while an ingress agent's lease is
+// active. A KV_RELAY agent alone never makes a pool live, and never stops a
+// pool with a static ingress from being live.
 func (in PoolStateInput) Live() bool {
-	if in.APIOnly() {
-		return in.PoolLeaseActive
+	if in.StaticIngress() {
+		return in.PoolLeaseActive || in.IngressAgentLeaseActive
 	}
 	return (in.ClusterLeaseActive && in.ReadyIngressEndpoints > 0) || in.IngressAgentLeaseActive
 }

@@ -256,9 +256,10 @@ own Service and role:
   `GetPool` returns it for one bookmark interval.
 - A pool is live while its cluster lease is active and an ingress Service
   (OPENAI or PYLON) has a ready endpoint, or while an ingress agent
-  registration has an active lease. An API-only pool (no labelled export,
-  no `services[]`, no agent registration) is live while its own lease is
-  active.
+  registration has an active lease. A pool whose ingress is the frontend
+  URL of its API registration (no labelled export, no `services[]`) is live
+  while its pool lease is active, whatever agents it has: a PoolRelay
+  registering on such a pool does not change its liveness.
 - `REGISTERED` until the pool has been live once (for an API-only pool:
   until its first heartbeat after registering), while a lease it depends on
   is active (the cluster lease, an agent lease or the pool lease; the pool

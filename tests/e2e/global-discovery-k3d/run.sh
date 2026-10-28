@@ -1039,11 +1039,10 @@ register_agent() {
 }
 
 # register_blue_relay AGENT_ID: a KV_RELAY registration joins the API pool
-# blue under blue's pool id. With an agent registration blue is no longer
-# API-only, so it is live only through an ingress agent (OPENAI or PYLON);
-# a relay is none, and the started pool turns UNHEALTHY.
+# blue under blue's pool id. Blue's ingress is the frontend URL of its API
+# registration, so its pool lease keeps it ACTIVE whatever agents it has.
 register_blue_relay() {
-  register_agent cluster-a blue FRONTEND_ROLE_KV_RELAY "$1" POOL_STATE_UNHEALTHY || return 1
+  register_agent cluster-a blue FRONTEND_ROLE_KV_RELAY "$1" POOL_STATE_ACTIVE || return 1
   LAST_OBSERVED="${LAST_OBSERVED}; pool id of blue ${POOL_ID}"
   [ "${AGENT_POOL_ID}" = "${POOL_ID}" ]
 }
@@ -1243,27 +1242,27 @@ run_phase_1() {
   # Agent registrations of blue are removed again at the end of this
   # section, so blue is an API-only pool for the checks that follow.
   section "Phase 1: pool agents"
-  if once "RegisterPoolAgent relay-1 (KV_RELAY) on blue: lease ACTIVE, blue's pool id, pool UNHEALTHY (a relay is no ingress agent)" \
+  if once "RegisterPoolAgent relay-1 (KV_RELAY) on blue: lease ACTIVE, blue's pool id, pool stays ACTIVE (static ingress)" \
     register_blue_relay relay-1; then
     RELAY_1_EPOCH="${AGENT_EPOCH}"
     expect "GET pool blue: agent KV_RELAY from the API, 1 active registration, kvRelayLive" "${T}" \
-      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-1):live" || true
+      pool_is "${POOL_ID}" "ACTIVE relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-1):live" || true
     once "relay-1 heartbeat with a stale epoch is 409 LEASE_EPOCH_MISMATCH" \
       agent_heartbeat_rejected "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 1 409 LEASE_EPOCH_MISMATCH || true
     once "relay-1 heartbeat with its epoch renews the lease" \
       heartbeat_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 "${RELAY_1_EPOCH}" || true
     once "RegisterPoolAgent relay-2 (KV_RELAY) on blue: its own ACTIVE lease" register_blue_relay relay-2 || true
     expect "GET pool blue: 2 active KV_RELAY registrations, relay-1 and relay-2" "${T}" \
-      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=2(relay-1+relay-2):live" || true
+      pool_is "${POOL_ID}" "ACTIVE relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=2(relay-1+relay-2):live" || true
     once "relay-1 heartbeat with its epoch still succeeds after relay-2 registered (no fencing)" \
       heartbeat_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 "${RELAY_1_EPOCH}" || true
     once "DELETE agents/FRONTEND_ROLE_KV_RELAY?agent_id=relay-1 deregisters relay-1" \
       deregister_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-1 || true
     expect "GET pool blue: 1 active KV_RELAY registration, relay-2" "${T}" \
-      pool_is "${POOL_ID}" "UNHEALTHY relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-2):live" || true
+      pool_is "${POOL_ID}" "ACTIVE relay=true ready=0 ingress=0 | KV_RELAY:API:-:ready=0:regs=1(relay-2):live" || true
     once "DELETE agents/FRONTEND_ROLE_KV_RELAY?agent_id=relay-2 deregisters relay-2" \
       deregister_agent "${POOL_ID}" FRONTEND_ROLE_KV_RELAY relay-2 || true
-    expect "GET pool blue: no agents, ACTIVE again through its pool lease" "${T}" \
+    expect "GET pool blue: no agents, still ACTIVE through its pool lease" "${T}" \
       pool_is "${POOL_ID}" "ACTIVE relay=false ready=0 ingress=0 |" || true
   fi
   if once "RegisterPoolAgent creates pool relay-only through a KV_RELAY agent (REGISTERED)" \

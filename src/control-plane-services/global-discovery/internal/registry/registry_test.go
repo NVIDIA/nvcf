@@ -198,11 +198,17 @@ func TestDerivePoolState(t *testing.T) {
 		{"relay only, cluster ready endpoints elsewhere do not count", with(relay, func(in *PoolStateInput) { in.ClusterLeaseActive = true }), PoolStateRegistered},
 		{"relay only, lease expired", with(relay, func(in *PoolStateInput) { in.AgentLeaseActive = false }), PoolStateUnhealthy},
 		{"relay only after the ingress left", with(relay, func(in *PoolStateInput) { in.Started = true }), PoolStateUnhealthy},
-		{"relay only, API overlay heartbeating", with(relay, func(in *PoolStateInput) {
+		{"relay only, API overlay heartbeating: the static ingress keeps it live", with(relay, func(in *PoolStateInput) {
 			in.Overlay, in.PoolLeaseActive, in.AgentLeaseActive, in.Started = true, true, false, true
-		}), PoolStateUnhealthy},
-		{"relay with a registered API pool", with(relay, func(in *PoolStateInput) {
+		}), PoolStateActive},
+		{"relay with a registered API pool, pool lease active", with(relay, func(in *PoolStateInput) {
 			in.Overlay, in.PoolLeaseActive, in.AgentLeaseActive = true, true, false
+		}), PoolStateActive},
+		{"relay with a registered API pool, pool lease expired", with(relay, func(in *PoolStateInput) {
+			in.Overlay, in.PoolLeaseActive, in.Started = true, false, true
+		}), PoolStateUnhealthy},
+		{"relay with a registered API pool, pool lease expired before first heartbeat", with(relay, func(in *PoolStateInput) {
+			in.Overlay, in.PoolLeaseActive = true, false
 		}), PoolStateRegistered},
 		{"agent registrations without a live lease", PoolStateInput{Agents: true}, PoolStateUnhealthy},
 		{"labelled relay endpoints only", with(labelled, func(in *PoolStateInput) { in.ReadyIngressEndpoints, in.Started = 0, false }), PoolStateRegistered},
@@ -227,6 +233,9 @@ func TestPoolStateInputAPIOnly(t *testing.T) {
 	assert.False(t, PoolStateInput{Overlay: true, LabelledExport: true}.APIOnly())
 	assert.False(t, PoolStateInput{LabelledExport: true}.APIOnly())
 	assert.False(t, PoolStateInput{Overlay: true, Agents: true}.APIOnly())
+	assert.True(t, PoolStateInput{Overlay: true, Agents: true}.StaticIngress())
+	assert.False(t, PoolStateInput{Overlay: true, OverlayServices: true}.StaticIngress())
+	assert.False(t, PoolStateInput{Overlay: true, LabelledExport: true}.StaticIngress())
 	assert.False(t, PoolStateInput{}.APIOnly())
 }
 

@@ -1156,13 +1156,10 @@ Known follow-ups:
 - The Go client agent tests run against a stub server, not `pkg/fakegds`.
 - Direct router mode (ws7 to ws9, Status (v0.6)) was not started at the v0.5 merge.
 - Subagent commits carry Co-Authored-By Claude Opus 5.5 trailers (their harness), left as is.
-- A KV_RELAY registration on an API-registered pool without ingress Services or ingress
-  registrations turns a started pool UNHEALTHY: with any agent registration the pool is no longer
-  API-only, so its pool lease no longer makes it live (`registry.PoolStateInput.Live`), and a
-  static frontend `url` counts as no ingress. This follows design 4.6 and `docs/api.md`, and phase
-  1 asserts it, but it affects a pool fronted by a static URL with a PoolRelay. Decide whether the
-  pool lease should keep the pool live while it has no ingress Service and no ingress
-  registration.
+- Resolved after the ws6 merge: a KV_RELAY registration on a pool whose ingress is the frontend
+  URL of its API registration no longer turns it UNHEALTHY. `registry.PoolStateInput.StaticIngress`
+  keeps the pool lease as that pool's liveness source whatever agents it has (design 4.6,
+  `docs/api.md`, phase 1 of the e2e).
 
 ## Revision v0.6: direct router mode (k8s-router optional)
 
