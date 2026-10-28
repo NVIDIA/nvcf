@@ -243,3 +243,20 @@ func TestRedactedRecordIsPlainJSON(t *testing.T) {
 		t.Fatalf("redacted = %s, want UTF-8 text, the source number and an inline token", encoded)
 	}
 }
+
+// TestPyStripMatchesPython uses expected values from Python's str.strip().
+func TestPyStripMatchesPython(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{in: " a ", want: "a"},
+		{in: "\t\n x \r\u000b\f", want: "x"},
+		{in: "\u001c\u001d\u001e\u001fy\u0085", want: "y"},
+		{in: "\u00a0z\u2028\u3000", want: "z"},
+		{in: "\u200bq\u200b", want: "\u200bq\u200b"},
+		{in: "", want: ""},
+	}
+	for _, tt := range tests {
+		if got := pyStrip(tt.in); got != tt.want {
+			t.Errorf("pyStrip(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

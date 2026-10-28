@@ -2,10 +2,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "compat",
-    srcs = [
-        "compat.go",
-        "python.go",
-    ],
+    srcs = ["compat.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat",
     visibility = ["//visibility:public"],
 )

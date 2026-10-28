@@ -75,6 +75,28 @@ func NewString(s string) *Value { return &Value{kind: String, str: s} }
 // NewObject returns an empty JSON object.
 func NewObject() *Value { return &Value{kind: Object} }
 
+// Clone returns a deep copy of v.
+func (v *Value) Clone() *Value {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	out.index = nil
+	if v.items != nil {
+		out.items = make([]*Value, len(v.items))
+		for i, item := range v.items {
+			out.items[i] = item.Clone()
+		}
+	}
+	if v.members != nil {
+		out.members = make([]Member, len(v.members))
+		for i, m := range v.members {
+			out.members[i] = Member{Key: m.Key, Value: m.Value.Clone()}
+		}
+	}
+	return &out
+}
+
 // Kind returns the value's JSON type.
 func (v *Value) Kind() Kind { return v.kind }
 
@@ -696,7 +718,7 @@ func encodeCanonical(buf []byte, v *Value) []byte {
 		case math.IsInf(v.float, -1):
 			return append(buf, "-Infinity"...)
 		}
-		return append(buf, FloatRepr(v.float)...)
+		return append(buf, floatRepr(v.float)...)
 	case String:
 		return appendASCIIQuoted(buf, v.str)
 	case Array:
@@ -776,10 +798,10 @@ func appendASCIIQuoted(buf []byte, s string) []byte {
 	return append(buf, '"')
 }
 
-// FloatRepr formats f as Python's repr(float) does: the shortest digits that
-// round-trip, fixed notation for exponents from -4 to 15 with at least one
-// fractional digit, otherwise d.ddde+XX, and nan, inf and -inf.
-func FloatRepr(f float64) string {
+// floatRepr formats a finite f the way the marker hash form needs: the
+// shortest digits that round-trip, fixed notation for exponents from -4 to
+// 15 with at least one fractional digit, and d.ddde+XX otherwise.
+func floatRepr(f float64) string {
 	switch {
 	case math.IsNaN(f):
 		return "nan"

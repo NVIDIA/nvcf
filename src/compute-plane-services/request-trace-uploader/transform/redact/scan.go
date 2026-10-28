@@ -408,7 +408,7 @@ func matchUnquoted(text string, i int) int {
 			break
 		}
 		r, size := compat.DecodeRune(text[i:])
-		if compat.IsSpace(r) {
+		if isPySpace(r) {
 			break
 		}
 		i += size
@@ -492,7 +492,7 @@ func (s *headerScanner) urlBody(i int) (int, bool) {
 			break
 		}
 		r, size := compat.DecodeRune(text[i:])
-		if compat.IsSpace(r) {
+		if isPySpace(r) {
 			break
 		}
 		i += size
@@ -503,11 +503,25 @@ func (s *headerScanner) urlBody(i int) (int, bool) {
 	return i, i > start
 }
 
+// isPySpace reports Python's str.isspace(), which is also what Python's
+// regular expression \s matches: Go's white space plus the four ASCII
+// separator controls. Media detection keeps the earlier uploader's
+// boundaries, so markers and their hashes stay the same.
+func isPySpace(r rune) bool {
+	return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f)
+}
+
+// pyStrip trims leading and trailing characters for which isPySpace is
+// true, as Python's str.strip() does.
+func pyStrip(s string) string {
+	return strings.TrimFunc(s, isPySpace)
+}
+
 // hasBase64Flag reports a bare ";base64" parameter. A value such as
 // name=base64.pdf is not the flag.
 func hasBase64Flag(params string) bool {
 	for _, param := range strings.Split(params, ";") {
-		if asciiLower(compat.PyStrip(param)) == "base64" {
+		if asciiLower(pyStrip(param)) == "base64" {
 			return true
 		}
 	}

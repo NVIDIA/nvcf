@@ -459,11 +459,11 @@ func redactString(text string) (*compat.Value, int) {
 	spans := mediaSpans(text)
 	if len(spans) == 0 {
 		if isBase64String(text) && len(text) >= base64StringMinChars && hasBase64Classes(text, 0, len(text)) {
-			return stringMarker(compat.PyStrip(text), "", mimeType{}).value(), 1
+			return stringMarker(pyStrip(text), "", mimeType{}).value(), 1
 		}
 		return nil, 0
 	}
-	if len(spans) == 1 && compat.PyStrip(text[:spans[0].start]) == "" && compat.PyStrip(text[spans[0].end:]) == "" {
+	if len(spans) == 1 && pyStrip(text[:spans[0].start]) == "" && pyStrip(text[spans[0].end:]) == "" {
 		// The whole string is the media.
 		s := spans[0]
 		return stringMarker(text[s.start:s.end], "", s.mediaType()).value(), 1
@@ -507,7 +507,7 @@ func mediaKind(text, field string) string {
 // sniffMIME matches the start of decoded base64 against known media magic
 // bytes.
 func sniffMIME(text string) (string, bool) {
-	head := prefixCodePoints(compat.PyStrip(prefixCodePoints(text, 4096)), 24)
+	head := prefixCodePoints(pyStrip(prefixCodePoints(text, 4096)), 24)
 	head = strings.NewReplacer("-", "+", "_", "/").Replace(head)
 	n := compat.CodePoints(head)
 	head = prefixCodePoints(head, n-n%4)
