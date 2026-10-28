@@ -61,6 +61,7 @@ func NewUploader(cfg config.Config, client backend.Client, opts Options) (*Uploa
 	}
 	prepareConfig := transform.DefaultConfig()
 	prepareConfig.Suppression = cfg.Suppression
+	prepareConfig.Redact = !cfg.SkipRedaction
 	preparer, err := transform.New(prepareConfig)
 	if err != nil {
 		return nil, err
@@ -162,11 +163,11 @@ func (u *Uploader) checkSecretsFile(context.Context) error {
 // Pass exports every closed segment once. A segment that fails is logged
 // and left for the next pass.
 func (u *Uploader) Pass(ctx context.Context) error {
-	segments, err := segment.Discover(u.cfg.SourceDir, u.cfg.SegmentPrefix)
+	scan, err := segment.ScanDir(u.cfg.SourceDir, u.cfg.Prefixes())
 	if err != nil {
 		return fmt.Errorf("discover request trace segments: %w", err)
 	}
-	for _, item := range segments {
+	for _, item := range scan.Closed {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

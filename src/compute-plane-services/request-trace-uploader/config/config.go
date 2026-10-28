@@ -110,6 +110,18 @@ type Config struct {
 	// Suppression is the validated suppression rule list. No rules turns
 	// suppression off.
 	Suppression suppress.Config
+	// AuditPrefix names a second segment family to upload, or is empty.
+	AuditPrefix string
+	// SkipRedaction turns redaction of inline media off. The zero value
+	// redacts, so a Config built by hand never exports media by accident.
+	SkipRedaction bool
+	// DrainTimeout bounds the shutdown drain after SIGTERM.
+	DrainTimeout time.Duration
+	// MaxJobAge is how long a submitted job may stay unfinished before it
+	// is reported stranded.
+	MaxJobAge time.Duration
+	// StatusInterval is how often every open job is polled.
+	StatusInterval time.Duration
 }
 
 // ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
@@ -235,6 +247,26 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	if err != nil {
 		return Config{}, nil, err
 	}
+	auditPrefix, err := auditPrefixValue(lookup, segmentPrefix)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	redactMultimodal, err := strictBool(lookup, EnvRedactMultimodal, true)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	drainTimeout, err := strictSeconds(lookup, EnvDrainTimeout, DefaultDrainTimeout, 0, time.Hour)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	maxJobAge, err := strictSeconds(lookup, EnvMaxJobAge, DefaultMaxJobAge, time.Minute, 7*24*time.Hour)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	pollInterval, err := strictSeconds(lookup, EnvStatusInterval, DefaultPollInterval, time.Second, time.Hour)
+	if err != nil {
+		return Config{}, nil, err
+	}
 
 	return Config{
 		SourceDir:     sourceDir,
@@ -260,6 +292,11 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		ObjectStore:    objectStore,
 		DebugVerbosity: debugVerbosity,
 		Suppression:    suppression,
+		AuditPrefix:    auditPrefix,
+		SkipRedaction:  !redactMultimodal,
+		DrainTimeout:   drainTimeout,
+		MaxJobAge:      maxJobAge,
+		StatusInterval: pollInterval,
 	}, warnings, nil
 }
 

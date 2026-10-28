@@ -53,6 +53,13 @@ Optional, with defaults:
 - `REQUEST_TRACE_UPLOADER_RETRY_INITIAL_BACKOFF`: default `100ms`
 - `REQUEST_TRACE_UPLOADER_RETRY_MAX_BACKOFF`: default `15s`
 - `REQUEST_TRACE_UPLOADER_RETRY_MULTIPLIER`: default `2.0`
+- `REQUEST_TRACE_UPLOADER_AUDIT_PREFIX`: a second segment family on the same
+  spool; default none
+- `REQUEST_TRACE_UPLOADER_REDACT_MULTIMODAL`: default `true`
+- `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`: shutdown drain after
+  SIGTERM; default `60`. Set it to fit the pod's grace period.
+- `REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS`: how long a submitted job may
+  stay unfinished before it is reported stranded; default `86400`
 
 Kratos Bulk Upload is an asynchronous job API, so it polls for terminal status.
 These settings apply only to that backend:
@@ -62,9 +69,24 @@ These settings apply only to that backend:
 
 Object-store submission is synchronous and has no status poll.
 
-Invalid policy values fall back to defaults and produce a safe startup warning.
-Missing paths, unreadable secret files, an unknown backend, and incompatible
-required values prevent readiness.
+The binary loads configuration strictly. An invalid or incompatible value,
+an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, or two aliases
+that disagree stops startup with a non-zero exit. Errors name the setting,
+never its value. `config.Load` on its own still falls back to defaults with
+a warning, for callers that want that.
+
+A deployment that already sets these sidecar names needs no change, because
+each is accepted as an alias. A setting's own name wins over its alias.
+
+- `TRACE_DIR` for `REQUEST_TRACE_UPLOADER_SOURCE_DIR`
+- `TRACE_FILE_PREFIX` for `REQUEST_TRACE_UPLOADER_SEGMENT_PREFIX`
+- `UPLOAD_INTERVAL_SECONDS` for `REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS`
+- `SHUTDOWN_DRAIN_SECONDS` for `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`
+
+A module that links its own backend can register more aliases with
+`config.RegisterEnvAlias` from an init function.
+
+Missing paths and unreadable secret files prevent readiness.
 
 ## Record suppression
 
