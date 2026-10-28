@@ -553,6 +553,70 @@ func TestRouterDerivation(t *testing.T) {
 	assert.Empty(t, routers)
 }
 
+func TestRouterModeAndIdentity(t *testing.T) {
+	f := newFixture(t)
+	direct := endpointSet("a", "llm", "stargate", 1, true, true, false)
+	// A StatefulSet pod keeps its hostname; a Deployment pod has only its
+	// pod name as targetRef.name; an endpoint without either has no identity.
+	direct.Endpoints[0].Attributes = map[string]string{api.EndpointAttrTargetName: "stargate-0-pod", "targetRef.kind": "Pod"}
+	direct.Endpoints[1].Hostname = ""
+	direct.Endpoints[1].Attributes = map[string]string{api.EndpointAttrTargetName: "stargate-7f9c-abcde"}
+	direct.Endpoints[2].Hostname = ""
+	snap := store.ClusterSetSnapshot{
+		ClusterSet: cs,
+		Clusters:   []store.ClusterRecord{clusterRec("a", "us-east-1", t0)},
+		Exports: []store.ExportRecord{
+			exportRec("a", "llm", "stargate", 1, t0, map[string]string{api.LabelRole: api.RoleRouter},
+				map[string]string{
+					api.AnnotationRouterMode:       " Direct ",
+					api.AnnotationHostnameTemplate: "{pod_name}.stargate.example.com",
+				},
+				store.ServicePort{Name: "grpc", Port: 50071}),
+			exportRec("a", "llm", "backend", 1, t0, map[string]string{api.LabelRole: api.RoleRouter},
+				map[string]string{api.AnnotationRouterMode: api.RouterModeBackendRouter},
+				store.ServicePort{Name: "grpc", Port: 50071}),
+			exportRec("a", "llm", "legacy", 1, t0, map[string]string{api.LabelRole: api.RoleRouter}, nil,
+				store.ServicePort{Name: "grpc", Port: 50071}),
+			exportRec("a", "llm", "bogus", 1, t0, map[string]string{api.LabelRole: api.RoleRouter},
+				map[string]string{api.AnnotationRouterMode: "k8s-router", api.AnnotationHostnameTemplate: " not-validated "},
+				store.ServicePort{Name: "grpc", Port: 50071}),
+		},
+		EndpointSets: []store.EndpointSetRecord{direct},
+	}
+	f.view.Replace(snap, t0)
+	router := func(name string) *gdsv1.Router {
+		o, ok := f.view.Get(cs, KindRouter, RouterKey("a", "llm", name))
+		require.True(t, ok, name)
+		return o.Full.(*gdsv1.Router)
+	}
+
+	r := router("stargate")
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_DIRECT, r.GetRouterMode())
+	assert.Equal(t, "{pod_name}.stargate.example.com", r.GetHostnameTemplate())
+	require.Len(t, r.GetReplicas(), 3)
+	assert.Equal(t, "stargate-0", r.GetReplicas()[0].GetIdentity(), "the hostname wins over targetRef.name")
+	assert.Equal(t, "stargate-0", r.GetReplicas()[0].GetHostname())
+	assert.Equal(t, "stargate-7f9c-abcde", r.GetReplicas()[1].GetIdentity())
+	assert.Empty(t, r.GetReplicas()[1].GetHostname())
+	assert.Empty(t, r.GetReplicas()[2].GetIdentity())
+	assert.Equal(t, "stargate-0.stargate.example.com:50071",
+		api.ReplicaAuthority(r.GetHostnameTemplate(), r.GetReplicas()[0].GetIdentity(), r.GetGrpcPort()))
+
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER, router("backend").GetRouterMode())
+	assert.Empty(t, router("backend").GetHostnameTemplate())
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, router("legacy").GetRouterMode())
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, router("bogus").GetRouterMode())
+	assert.Equal(t, " not-validated ", router("bogus").GetHostnameTemplate(), "the template is copied verbatim")
+
+	// Switching the mode back is a change of the router.
+	rev := f.view.Revision(cs)
+	snap.Exports[0].Spec.Annotations = map[string]string{api.AnnotationRouterMode: api.RouterModeBackendRouter}
+	f.view.Replace(snap, t0)
+	assert.NotEqual(t, rev, f.view.Revision(cs))
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER, router("stargate").GetRouterMode())
+	assert.Empty(t, router("stargate").GetHostnameTemplate())
+}
+
 func TestListFiltersAndIndexes(t *testing.T) {
 	f := newFixture(t)
 	snap := labelledPoolSnapshot()

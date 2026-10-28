@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api"
 	gdsv1 "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/registry"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/store"
@@ -120,6 +121,12 @@ var poolStates = map[registry.PoolState]gdsv1.PoolState{
 	registry.PoolStateGone:       gdsv1.PoolState_POOL_STATE_GONE,
 }
 
+// routerModes maps the values of the gds.nvidia.com/router-mode annotation.
+var routerModes = map[string]gdsv1.RouterMode{
+	api.RouterModeBackendRouter: gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER,
+	api.RouterModeDirect:        gdsv1.RouterMode_ROUTER_MODE_DIRECT,
+}
+
 var leaseStates = map[registry.LeaseState]gdsv1.LeaseState{
 	registry.LeaseStateActive:  gdsv1.LeaseState_LEASE_STATE_ACTIVE,
 	registry.LeaseStateExpired: gdsv1.LeaseState_LEASE_STATE_EXPIRED,
@@ -145,6 +152,7 @@ var (
 	dialModesRev         = reverse(dialModes)
 	desiredStatesRev     = reverse(desiredStates)
 	poolStatesRev        = reverse(poolStates)
+	routerModesRev       = reverse(routerModes)
 )
 
 // ServiceTypeToProto maps a store service type.
@@ -257,6 +265,14 @@ func PoolStateToProto(s registry.PoolState) gdsv1.PoolState { return poolStates[
 
 // PoolStateFromProto maps a proto pool state.
 func PoolStateFromProto(s gdsv1.PoolState) registry.PoolState { return poolStatesRev[s] }
+
+// RouterModeToProto maps a gds.nvidia.com/router-mode value as normalised by
+// api.RouterModeOf; "" and unknown values map to ROUTER_MODE_UNSPECIFIED.
+func RouterModeToProto(m string) gdsv1.RouterMode { return routerModes[m] }
+
+// RouterModeFromProto maps a proto router mode to its annotation value; ""
+// for ROUTER_MODE_UNSPECIFIED.
+func RouterModeFromProto(m gdsv1.RouterMode) string { return routerModesRev[m] }
 
 // LeaseStateToProto maps a lease state.
 func LeaseStateToProto(s registry.LeaseState) gdsv1.LeaseState { return leaseStates[s] }

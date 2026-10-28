@@ -65,7 +65,11 @@ limitations under the License.
 //     agent is a KV_RELAY stays REGISTERED.
 //   - Routers derived from exports labelled gds.nvidia.com/role=router, with
 //     the gRPC, HTTP and QUIC port numbers (gds.nvidia.com/quic-port-name,
-//     default quic) and every Service port.
+//     default quic), every Service port, the router mode
+//     (gds.nvidia.com/router-mode, api.RouterModeOf), the hostname template
+//     (gds.nvidia.com/hostname-template, verbatim) and each replica's
+//     identity (endpoint hostname, else the targetRef.name attribute,
+//     api.ReplicaIdentity).
 //   - Merged ServiceImports, simplified: the oldest export of a cluster with
 //     an active lease wins (export creation time, then cluster name), ports
 //     are unioned by (port, protocol) and no conflicts are reported.

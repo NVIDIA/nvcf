@@ -21,6 +21,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/convert",
     visibility = ["//src/control-plane-services/global-discovery:__subpackages__"],
     deps = [
+        "//src/control-plane-services/global-discovery/api",
         "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
         "//src/control-plane-services/global-discovery/internal/registry",
         "//src/control-plane-services/global-discovery/internal/store",
@@ -40,6 +41,7 @@ go_test(
     srcs = ["convert_test.go"],
     embed = [":convert"],
     deps = [
+        "//src/control-plane-services/global-discovery/api",
         "//src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1:gds",
         "//src/control-plane-services/global-discovery/internal/registry",
         "//src/control-plane-services/global-discovery/internal/store",

@@ -104,6 +104,26 @@ func TestBuildSpec(t *testing.T) {
 	assert.Nil(t, spec.GetExportCreationTimestamp())
 }
 
+// The direct router mode needs no controller change: the router-mode and
+// hostname-template annotations are forwarded like every gds.nvidia.com/
+// key, and GDS reads the replica identity from the targetRef.name attribute.
+func TestDirectRouterExport(t *testing.T) {
+	assert.Equal(t, api.EndpointAttrTargetName, AttrTargetName)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "llm", Name: "stargate",
+			Labels: map[string]string{api.LabelExport: api.ExportEnabled, api.LabelRole: api.RoleRouter},
+			Annotations: map[string]string{
+				api.AnnotationRouterMode:       api.RouterModeDirect,
+				api.AnnotationHostnameTemplate: "{pod_name}.stargate.example.com",
+			},
+		},
+		Spec: corev1.ServiceSpec{ClusterIP: "10.0.0.1", Ports: []corev1.ServicePort{{Name: "grpc", Port: 50071}}},
+	}
+	spec := BuildSpec(svc, &mcsv1beta1.ServiceExport{})
+	assert.Equal(t, svc.Annotations, spec.GetAnnotations())
+}
+
 func TestSpecHashIsStable(t *testing.T) {
 	a := &gdsv1.ServiceExportSpec{Labels: map[string]string{}, Annotations: map[string]string{}}
 	b := &gdsv1.ServiceExportSpec{Labels: map[string]string{}, Annotations: map[string]string{}}

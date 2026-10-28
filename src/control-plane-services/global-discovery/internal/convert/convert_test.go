@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api"
 	gdsv1 "github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/api/gen/go/nvidia/gds/v1"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/registry"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery/internal/store"
@@ -74,6 +75,20 @@ func TestEnumsRoundTrip(t *testing.T) {
 	assert.Equal(t, store.DesiredState(""), DesiredStateFromProto(gdsv1.PoolState_POOL_STATE_GONE))
 	assert.Equal(t, store.ServiceType(""), ServiceTypeFromProto(gdsv1.ServiceType_SERVICE_TYPE_UNSPECIFIED))
 	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_EXPIRED, LeaseStateToProto(registry.LeaseStateExpired))
+	for k := range routerModes {
+		assert.Equal(t, k, RouterModeFromProto(RouterModeToProto(k)))
+	}
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_DIRECT, RouterModeToProto(api.RouterModeDirect))
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_BACKEND_ROUTER, RouterModeToProto(api.RouterModeBackendRouter))
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, RouterModeToProto(""))
+	assert.Equal(t, gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED, RouterModeToProto("Direct"), "callers normalise with api.RouterModeOf")
+	assert.Empty(t, RouterModeFromProto(gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED))
+	// Every proto value except UNSPECIFIED has an annotation value.
+	for v := range gdsv1.RouterMode_name {
+		if m := gdsv1.RouterMode(v); m != gdsv1.RouterMode_ROUTER_MODE_UNSPECIFIED {
+			assert.NotEmpty(t, RouterModeFromProto(m), m.String())
+		}
+	}
 }
 
 func TestTimes(t *testing.T) {
