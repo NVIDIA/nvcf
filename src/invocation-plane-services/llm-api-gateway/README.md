@@ -253,7 +253,8 @@ Useful overrides:
 - `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
   413 (default `0`, no limit)
 - `NVCF_DECISION_IMAGE_TOKENS` for the flat input token estimate of each image
-  on the decision routes (default `1024`, must be `0` or more)
+  on the decision routes (default `1024`, must be `0` or more). The Helm
+  chart sets it with `llmApiGateway.config.decisionImageTokens`.
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `STARGATE_LAST_CLUSTER_ENABLED=true` to send session last-cluster hints to
