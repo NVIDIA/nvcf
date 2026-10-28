@@ -19,8 +19,6 @@ package fakegds
 
 import (
 	"cmp"
-	"crypto/sha256"
-	"encoding/hex"
 	"maps"
 	"slices"
 	"time"
@@ -239,9 +237,13 @@ func routersView(cs *clusterSet, active map[string]bool, region map[string]strin
 			ClusterLeaseState: lease,
 			GrpcPort:          portByName(spec.GetPorts(), grpcName),
 			HttpPort:          portByName(spec.GetPorts(), httpName),
+			QuicPort:          portByName(spec.GetPorts(), api.QUICPortName(spec.GetAnnotations())),
 			DialScheme:        spec.GetAnnotations()[api.AnnotationDialScheme],
 			Labels:            maps.Clone(spec.GetLabels()),
 			Annotations:       maps.Clone(spec.GetAnnotations()),
+		}
+		for _, port := range spec.GetPorts() {
+			r.Ports = append(r.Ports, proto.CloneOf(port))
 		}
 		if rec := cs.endpoints[key]; rec != nil {
 			for _, ep := range rec.endpoints {
@@ -261,12 +263,14 @@ func routersView(cs *clusterSet, active map[string]bool, region map[string]strin
 	return out
 }
 
-// LabelPoolID returns the pool id the fake assigns to a pool that exists
-// only through labelled exports: a stable hash of clusterset, cluster and
-// pool name.
+// LabelPoolID returns the pool id of a pool that no RegisterPool call named
+// an id for: the deterministic id of the server (UUID version 5 of
+// clusterset, cluster and pool name, registry.PoolID). Pools derived from
+// labelled exports, pools created by RegisterPoolAgent and pools registered
+// without pool_id all get it, so every source of one (cluster, pool name)
+// converges on one pool.
 func LabelPoolID(clusterset, cluster, name string) string {
-	sum := sha256.Sum256([]byte(clusterset + "/" + cluster + "/" + name))
-	return "label-" + hex.EncodeToString(sum[:8])
+	return registry.PoolID(clusterset, cluster, name)
 }
 
 var registryPoolStates = map[registry.PoolState]gdsv1.PoolState{
@@ -277,95 +281,260 @@ var registryPoolStates = map[registry.PoolState]gdsv1.PoolState{
 	registry.PoolStateGone:       gdsv1.PoolState_POOL_STATE_GONE,
 }
 
+// roleOf maps a pool role label value to its FrontendRole.
 func roleOf(role string) gdsv1.FrontendRole {
 	switch role {
 	case api.RolePoolFrontend:
 		return gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI
 	case api.RoleKVRelay:
 		return gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY
+	case api.RolePylon:
+		return gdsv1.FrontendRole_FRONTEND_ROLE_PYLON
 	}
 	return gdsv1.FrontendRole_FRONTEND_ROLE_UNSPECIFIED
 }
 
-type poolAgg struct {
-	cluster, name string
-	rec           *poolRec
-	exports       []*gdsv1.ServiceExport
+// exportRoles returns the pool roles of an export (api.ParseRoles).
+func exportRoles(e *gdsv1.ServiceExport) []string {
+	return api.ParseRoles(e.GetSpec().GetLabels(), e.GetSpec().GetAnnotations())
 }
 
+// rolePrecedence orders the pool roles of one Service: the frontend first,
+// then Pylon, then the relay.
+var rolePrecedence = []string{api.RolePoolFrontend, api.RolePylon, api.RoleKVRelay}
+
+// exportRank is the position of an export's first role in rolePrecedence.
+func exportRank(roles []string) int {
+	for i, r := range rolePrecedence {
+		if slices.Contains(roles, r) {
+			return i
+		}
+	}
+	return len(rolePrecedence)
+}
+
+// primaryRole is the role a Service with several pool roles is listed with
+// in services[].
+func primaryRole(roles []string) gdsv1.FrontendRole {
+	if i := exportRank(roles); i < len(rolePrecedence) {
+		return roleOf(rolePrecedence[i])
+	}
+	return gdsv1.FrontendRole_FRONTEND_ROLE_UNSPECIFIED
+}
+
+// validAgentRole reports whether a role can be registered as a pool agent.
+func validAgentRole(r gdsv1.FrontendRole) bool {
+	switch r {
+	case gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI, gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON:
+		return true
+	}
+	return false
+}
+
+// isIngress reports whether a role takes requests: OPENAI by inbound
+// dispatch, PYLON over its reverse tunnel.
+func isIngress(r gdsv1.FrontendRole) bool {
+	return r == gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI || r == gdsv1.FrontendRole_FRONTEND_ROLE_PYLON
+}
+
+// dialMode is INBOUND for the OPENAI frontend, which routers dial, and
+// OUTBOUND for PYLON and KV_RELAY, which dial the routers.
+func dialMode(r gdsv1.FrontendRole) gdsv1.DialMode {
+	if r == gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI {
+		return gdsv1.DialMode_DIAL_MODE_INBOUND
+	}
+	return gdsv1.DialMode_DIAL_MODE_OUTBOUND
+}
+
+// agentPortName is the Service port an agent of role r is reached on: the
+// HTTP port of the frontend, the gRPC port of the relay, none for Pylon.
+func agentPortName(r gdsv1.FrontendRole, annotations map[string]string) string {
+	grpcName, httpName := api.PortNames(annotations)
+	switch r {
+	case gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI:
+		return httpName
+	case gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY:
+		return grpcName
+	}
+	return ""
+}
+
+// poolAgg gathers the sources of one pool.
+type poolAgg struct {
+	key     poolKey
+	rec     *poolRec
+	exports []*gdsv1.ServiceExport
+	agents  []*agentRec
+}
+
+// agentPoolKey returns the pool an agent registration belongs to: the API
+// registration holding its pool id, which a rename moves, else the
+// (cluster, pool name) it registered with.
+func agentPoolKey(cs *clusterSet, ag *agentRec) poolKey {
+	if rec := cs.pools[ag.poolID]; rec != nil {
+		return poolKey{rec.p.GetLocation().GetCluster(), rec.p.GetName()}
+	}
+	return poolKey{ag.cluster, ag.pool}
+}
+
+// poolsView merges the API registrations, the labelled exports and the
+// agent registrations by (cluster, pool name) and derives one pool from
+// each. It records which pools have been live in cs.started.
 func poolsView(cs *clusterSet, active map[string]bool, region map[string]string, now time.Time) map[string]*gdsv1.Pool {
-	type aggKey struct{ cluster, name string }
-	aggs := map[aggKey]*poolAgg{}
-	get := func(cluster, name string) *poolAgg {
-		k := aggKey{cluster, name}
+	aggs := map[poolKey]*poolAgg{}
+	get := func(k poolKey) *poolAgg {
 		if aggs[k] == nil {
-			aggs[k] = &poolAgg{cluster: cluster, name: name}
+			aggs[k] = &poolAgg{key: k}
 		}
 		return aggs[k]
 	}
-	for _, rec := range cs.pools {
-		get(rec.p.GetLocation().GetCluster(), rec.p.GetName()).rec = rec
+	for _, id := range slices.Sorted(maps.Keys(cs.pools)) {
+		rec := cs.pools[id]
+		if a := get(poolKey{rec.p.GetLocation().GetCluster(), rec.p.GetName()}); a.rec == nil {
+			a.rec = rec
+		}
 	}
 	for _, e := range cs.exports {
-		labels := e.GetSpec().GetLabels()
-		role, ok := registry.ParseRole(labels[api.LabelRole])
-		if !ok || !role.IsPoolRole() || labels[api.LabelPool] == "" {
+		name := e.GetSpec().GetLabels()[api.LabelPool]
+		if len(exportRoles(e)) == 0 || !registry.IsDNSLabel(name) {
 			continue
 		}
-		a := get(e.GetCluster(), labels[api.LabelPool])
+		a := get(poolKey{e.GetCluster(), name})
 		a.exports = append(a.exports, e)
 	}
+	for _, ag := range cs.agents {
+		a := get(agentPoolKey(cs, ag))
+		a.agents = append(a.agents, ag)
+	}
 	out := map[string]*gdsv1.Pool{}
-	for _, a := range aggs {
-		p := poolView(cs, a, active, region, now)
-		out[p.GetPoolId()] = p
+	keys := slices.SortedFunc(maps.Keys(aggs), func(x, y poolKey) int {
+		return cmp.Or(cmp.Compare(x.cluster, y.cluster), cmp.Compare(x.name, y.name))
+	})
+	for _, k := range keys {
+		p := poolView(cs, aggs[k], active, region, now)
+		if _, dup := out[p.GetPoolId()]; !dup {
+			out[p.GetPoolId()] = p
+		}
+	}
+	for k := range cs.started {
+		if aggs[k] == nil {
+			delete(cs.started, k)
+		}
+	}
+	return out
+}
+
+// agentSources holds the two sources of one pool agent.
+type agentSources struct {
+	// label is the first export with the role by namespace and name;
+	// total and ready count the endpoints of every export with the role
+	// while the cluster lease is active.
+	label        *gdsv1.ServiceExport
+	total, ready int32
+	api          *agentRec
+}
+
+// poolAgents merges the label and API sources of a pool's agents, one per
+// role present, sorted by role.
+func poolAgents(cs *clusterSet, a *poolAgg, clusterActive bool, now time.Time) []*gdsv1.PoolAgent {
+	sources := map[gdsv1.FrontendRole]*agentSources{}
+	get := func(r gdsv1.FrontendRole) *agentSources {
+		if sources[r] == nil {
+			sources[r] = &agentSources{}
+		}
+		return sources[r]
+	}
+	exports := slices.Clone(a.exports)
+	slices.SortFunc(exports, func(x, y *gdsv1.ServiceExport) int {
+		return cmp.Or(cmp.Compare(x.GetNamespace(), y.GetNamespace()), cmp.Compare(x.GetName(), y.GetName()))
+	})
+	for _, e := range exports {
+		var total, ready int32
+		if clusterActive {
+			if rec := cs.endpoints[exportKey{a.key.cluster, e.GetNamespace(), e.GetName()}]; rec != nil {
+				total, ready = countEndpoints(rec.endpoints)
+			}
+		}
+		for _, role := range exportRoles(e) {
+			src := get(roleOf(role))
+			if src.label == nil {
+				src.label = e
+			}
+			src.total += total
+			src.ready += ready
+		}
+	}
+	for _, ag := range a.agents {
+		get(ag.a.GetRole()).api = ag
+	}
+	var out []*gdsv1.PoolAgent
+	for _, role := range slices.Sorted(maps.Keys(sources)) {
+		src := sources[role]
+		ag := &gdsv1.PoolAgent{Role: role, DialMode: dialMode(role)}
+		if e := src.label; e != nil {
+			ag.Source = gdsv1.AgentSource_AGENT_SOURCE_LABEL
+			ag.Service = &gdsv1.ServiceRef{Namespace: e.GetNamespace(), Name: e.GetName(), Role: role}
+			ag.PortName = agentPortName(role, e.GetSpec().GetAnnotations())
+			ag.EndpointCount, ag.ReadyEndpointCount = src.total, src.ready
+		}
+		if rec := src.api; rec != nil {
+			ag.Source = gdsv1.AgentSource_AGENT_SOURCE_API
+			if src.label != nil {
+				ag.Source = gdsv1.AgentSource_AGENT_SOURCE_BOTH
+			}
+			ag.Lease = leaseView(rec.a.GetLease(), rec.ttl, now)
+			ag.AgentId = rec.a.GetAgentId()
+			ag.Attributes = maps.Clone(rec.a.GetAttributes())
+			ag.Generation = rec.a.GetGeneration()
+			ag.RegisteredAt = rec.a.GetRegisteredAt()
+			ag.UpdatedAt = rec.a.GetUpdatedAt()
+		}
+		ag.Live = (clusterActive && ag.ReadyEndpointCount > 0) ||
+			ag.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE
+		out = append(out, ag)
 	}
 	return out
 }
 
 func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[string]string, now time.Time) *gdsv1.Pool {
+	clusterActive := active[a.key.cluster]
 	var p *gdsv1.Pool
-	if a.rec != nil {
+	var updated, registered time.Time
+	switch {
+	case a.rec != nil:
 		p = proto.CloneOf(a.rec.p)
 		p.Lease = leaseView(a.rec.p.GetLease(), a.rec.ttl, now)
-	} else {
-		p = &gdsv1.Pool{PoolId: LabelPoolID(cs.name, a.cluster, a.name), Name: a.name}
+		updated = a.rec.p.GetUpdatedAt().AsTime()
+	case len(a.agents) > 0:
+		p = &gdsv1.Pool{PoolId: a.agents[0].poolID, Name: a.key.name}
+	default:
+		p = &gdsv1.Pool{PoolId: LabelPoolID(cs.name, a.key.cluster, a.key.name), Name: a.key.name}
 	}
 	p.Clusterset = cs.name
 	if p.Location == nil {
 		p.Location = &gdsv1.Location{}
 	}
-	p.Location.Cluster = a.cluster
+	p.Location.Cluster = a.key.cluster
 	if p.Location.Region == "" {
-		p.Location.Region = region[a.cluster]
+		p.Location.Region = region[a.key.cluster]
 	}
-	// Frontends first, then relays, each by namespace and name.
+	// Frontends first, then Pylons, then relays, each by namespace and name.
 	slices.SortFunc(a.exports, func(x, y *gdsv1.ServiceExport) int {
-		rx, ry := x.GetSpec().GetLabels()[api.LabelRole], y.GetSpec().GetLabels()[api.LabelRole]
-		if rx != ry {
-			if rx == api.RolePoolFrontend {
-				return -1
-			}
-			if ry == api.RolePoolFrontend {
-				return 1
-			}
-		}
-		return cmp.Or(cmp.Compare(x.GetNamespace(), y.GetNamespace()), cmp.Compare(x.GetName(), y.GetName()))
+		return cmp.Or(cmp.Compare(exportRank(exportRoles(x)), exportRank(exportRoles(y))),
+			cmp.Compare(x.GetNamespace(), y.GetNamespace()), cmp.Compare(x.GetName(), y.GetName()))
 	})
-	var updated time.Time
-	if a.rec != nil {
-		updated = a.rec.p.GetUpdatedAt().AsTime()
-	}
-	hasOpenAI := false
-	for _, f := range p.GetFrontends() {
-		if f.GetRole() == gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI {
-			hasOpenAI = true
-		}
-	}
+	hasOpenAI := slices.ContainsFunc(p.GetFrontends(), func(f *gdsv1.FrontendEndpoint) bool {
+		return f.GetRole() == gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI
+	})
+	// labelRoles holds the roles of the pool's labelled exports by
+	// namespace/name.
+	labelRoles := map[string][]string{}
 	for _, e := range a.exports {
 		spec := e.GetSpec()
 		ann := spec.GetAnnotations()
-		role := spec.GetLabels()[api.LabelRole]
+		roles := exportRoles(e)
+		labelRoles[e.GetNamespace()+"/"+e.GetName()] = roles
+		frontend := slices.Contains(roles, api.RolePoolFrontend)
 		if p.HardwareClass == "" {
 			p.HardwareClass = ann[api.AnnotationHardwareClass]
 		}
@@ -377,57 +546,98 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 				p.Models = append(p.Models, &gdsv1.ModelServed{ModelId: m})
 			}
 		}
-		if len(p.Labels) == 0 && role == api.RolePoolFrontend {
+		if len(p.Labels) == 0 && (frontend || slices.Contains(roles, api.RolePylon)) {
 			p.Labels = maps.Clone(spec.GetLabels())
 		}
 		if !slices.ContainsFunc(p.Services, func(r *gdsv1.ServiceRef) bool {
 			return r.GetNamespace() == e.GetNamespace() && r.GetName() == e.GetName()
 		}) {
-			p.Services = append(p.Services, &gdsv1.ServiceRef{Namespace: e.GetNamespace(), Name: e.GetName(), Role: roleOf(role)})
+			p.Services = append(p.Services, &gdsv1.ServiceRef{Namespace: e.GetNamespace(), Name: e.GetName(), Role: primaryRole(roles)})
 		}
-		if role == api.RolePoolFrontend && !hasOpenAI {
+		if frontend && !hasOpenAI {
 			hasOpenAI = true
-			_, httpName := api.PortNames(ann)
 			p.Frontends = append(p.Frontends, &gdsv1.FrontendEndpoint{
 				Role:     gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI,
 				Service:  &gdsv1.ServiceRef{Namespace: e.GetNamespace(), Name: e.GetName(), Role: gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI},
-				PortName: httpName,
+				PortName: agentPortName(gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI, ann),
 			})
 		}
 		if t := e.GetUpdatedAt().AsTime(); t.After(updated) {
 			updated = t
 		}
 	}
-	var readyTotal, readyFrontend int32
-	if active[a.cluster] {
+	var readyAll, readyOpenAI, readyIngress int32
+	if clusterActive {
 		for _, ref := range p.Services {
-			ek := exportKey{a.cluster, ref.GetNamespace(), ref.GetName()}
+			ek := exportKey{a.key.cluster, ref.GetNamespace(), ref.GetName()}
 			if _, ok := cs.exports[ek]; !ok {
 				continue
 			}
-			ce := clusterEndpoints(a.cluster, region[a.cluster], cs.endpoints[ek])
+			ce := clusterEndpoints(a.key.cluster, region[a.key.cluster], cs.endpoints[ek])
 			ce.Namespace, ce.Name = ref.GetNamespace(), ref.GetName()
 			p.Endpoints = append(p.Endpoints, ce)
-			readyTotal += ce.ReadyEndpointCount
-			if ref.GetRole() == gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI {
-				readyFrontend += ce.ReadyEndpointCount
+			roles := []gdsv1.FrontendRole{ref.GetRole()}
+			for _, r := range labelRoles[ref.GetNamespace()+"/"+ref.GetName()] {
+				roles = append(roles, roleOf(r))
+			}
+			readyAll += ce.ReadyEndpointCount
+			if slices.Contains(roles, gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI) {
+				readyOpenAI += ce.ReadyEndpointCount
+			}
+			// A Service with several ingress roles counts once.
+			if slices.ContainsFunc(roles, isIngress) {
+				readyIngress += ce.ReadyEndpointCount
 			}
 		}
 	}
-	p.ReadyEndpointCount = readyFrontend
-	p.UpdatedAt = timestamppb.New(updated)
-	in := registry.PoolStateInput{
-		LabelledExport:     len(a.exports) > 0,
-		Overlay:            a.rec != nil,
-		OverlayServices:    a.rec != nil && len(a.rec.p.GetServices()) > 0,
-		ClusterLeaseActive: active[a.cluster],
-		PoolLeaseActive:    p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
-		ReadyEndpoints:     int(readyTotal),
-		Started:            a.rec != nil && a.rec.started,
+	p.ReadyEndpointCount = readyOpenAI
+	p.ReadyIngressCount = readyIngress
+	p.Agents = poolAgents(cs, a, clusterActive, now)
+
+	in := poolStateInput{
+		PoolStateInput: registry.PoolStateInput{
+			LabelledExport:     len(a.exports) > 0,
+			Overlay:            a.rec != nil,
+			OverlayServices:    a.rec != nil && len(a.rec.p.GetServices()) > 0,
+			ClusterLeaseActive: clusterActive,
+			PoolLeaseActive:    p.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE,
+			ReadyEndpoints:     int(readyAll),
+		},
+		ReadyIngressEndpoints: int(readyIngress),
+		Agents:                len(a.agents) > 0,
 	}
+	for _, ag := range p.Agents {
+		leaseActive := ag.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE
+		in.AgentLeaseActive = in.AgentLeaseActive || leaseActive
+		in.IngressAgentLeaseActive = in.IngressAgentLeaseActive || (leaseActive && isIngress(ag.GetRole()))
+		if ag.GetRole() == gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY && ag.GetLive() {
+			p.KvRelayLive = true
+		}
+	}
+	for _, ag := range a.agents {
+		if t := ag.a.GetUpdatedAt().AsTime(); t.After(updated) {
+			updated = t
+		}
+		if t := ag.a.GetRegisteredAt().AsTime(); registered.IsZero() || t.Before(registered) {
+			registered = t
+		}
+	}
+	if a.rec == nil && !registered.IsZero() {
+		p.RegisteredAt = timestamppb.New(registered)
+	}
+	p.UpdatedAt = timestamppb.New(updated)
 	if p.GetDesiredState() == gdsv1.PoolState_POOL_STATE_DRAINING {
 		in.Desired = registry.PoolStateDraining
 	}
-	p.State = registryPoolStates[registry.DerivePoolState(in)]
+	// An API-only pool starts with its first heartbeat; any other pool
+	// when it is first live.
+	if in.apiOnly() {
+		in.Started = a.rec.started
+	} else {
+		in.Started = cs.started[a.key]
+	}
+	in.Started = in.started()
+	cs.started[a.key] = in.Started
+	p.State = registryPoolStates[derivePoolState(in)]
 	return p
 }

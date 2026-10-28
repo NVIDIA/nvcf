@@ -131,6 +131,19 @@ func RouterSpec(grpcPort, httpPort int32, dialScheme string) *gdsv1.ServiceExpor
 	return spec
 }
 
+// RouterSpecWithQUIC returns RouterSpec with a UDP port named quic (the
+// default of gds.nvidia.com/quic-port-name) for the reverse tunnel, omitted
+// when quicPort is 0.
+func RouterSpecWithQUIC(grpcPort, httpPort int32, dialScheme string, quicPort int32) *gdsv1.ServiceExportSpec {
+	spec := RouterSpec(grpcPort, httpPort, dialScheme)
+	if quicPort != 0 {
+		spec.Ports = append(spec.Ports, &gdsv1.ServicePort{
+			Name: api.DefaultQUICPortName, Protocol: gdsv1.Protocol_PROTOCOL_UDP, Port: quicPort,
+		})
+	}
+	return spec
+}
+
 // PoolFrontendSpec returns the export spec of a pool frontend Service: role
 // pool-frontend, the pool label, an http port and the pool-models
 // annotation.
@@ -149,6 +162,55 @@ func PoolFrontendSpec(pool string, httpPort int32, models ...string) *gdsv1.Serv
 	if len(models) > 0 {
 		spec.Annotations = map[string]string{api.AnnotationPoolModels: strings.Join(models, ",")}
 	}
+	return spec
+}
+
+// PylonSpec returns the export spec of a Pylon Service as the Pylon
+// Operator creates it: role pylon, the pool label, a metrics port (omitted
+// when metricsPort is 0) and the pool-models annotation.
+func PylonSpec(pool string, metricsPort int32, models ...string) *gdsv1.ServiceExportSpec {
+	spec := &gdsv1.ServiceExportSpec{
+		Type: gdsv1.ServiceType_SERVICE_TYPE_CLUSTER_SET_IP,
+		Labels: map[string]string{
+			api.LabelExport: api.ExportEnabled,
+			api.LabelRole:   api.RolePylon,
+			api.LabelPool:   pool,
+		},
+	}
+	if metricsPort != 0 {
+		spec.Ports = []*gdsv1.ServicePort{{Name: "metrics", Protocol: gdsv1.Protocol_PROTOCOL_TCP, Port: metricsPort}}
+	}
+	if len(models) > 0 {
+		spec.Annotations = map[string]string{api.AnnotationPoolModels: strings.Join(models, ",")}
+	}
+	return spec
+}
+
+// KVRelaySpec returns the export spec of a KV relay Service (the Dynamo
+// PoolRelay): role kv-relay, the pool label and a grpc port.
+func KVRelaySpec(pool string, grpcPort int32) *gdsv1.ServiceExportSpec {
+	return &gdsv1.ServiceExportSpec{
+		Type: gdsv1.ServiceType_SERVICE_TYPE_CLUSTER_SET_IP,
+		Labels: map[string]string{
+			api.LabelExport: api.ExportEnabled,
+			api.LabelRole:   api.RoleKVRelay,
+			api.LabelPool:   pool,
+		},
+		Ports: []*gdsv1.ServicePort{{
+			Name: api.DefaultGRPCPortName, Protocol: gdsv1.Protocol_PROTOCOL_TCP, Port: grpcPort,
+		}},
+	}
+}
+
+// WithRoles sets the gds.nvidia.com/roles annotation of spec to the given
+// pool roles, for a process that fills several (a frontend embedding
+// Pylon: WithRoles(PoolFrontendSpec(...), api.RolePoolFrontend,
+// api.RolePylon)). It modifies and returns spec.
+func WithRoles(spec *gdsv1.ServiceExportSpec, roles ...string) *gdsv1.ServiceExportSpec {
+	if spec.Annotations == nil {
+		spec.Annotations = map[string]string{}
+	}
+	spec.Annotations[api.AnnotationRoles] = strings.Join(roles, ",")
 	return spec
 }
 

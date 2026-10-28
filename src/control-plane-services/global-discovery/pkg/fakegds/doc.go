@@ -31,12 +31,34 @@ limitations under the License.
 //     or UpdatePool whose generation does not exceed the stored one fails with
 //     FAILED_PRECONDITION, reason STALE_GENERATION, ErrorInfo metadata
 //     current_generation and a PreconditionFailure detail, like the server.
-//   - Pools registered through the API (RegisterPool, UpdatePool with a field
-//     mask, HeartbeatPool, DeregisterPool) and pools derived from exports
-//     labelled gds.nvidia.com/role=pool-frontend or kv-relay with
-//     gds.nvidia.com/pool, merged by (cluster, pool name). Pool state is
-//     derived with the server's rules (internal/registry).
-//   - Routers derived from exports labelled gds.nvidia.com/role=router.
+//   - Pools from three sources merged by (cluster, pool name): the Pool API
+//     (RegisterPool, UpdatePool with a field mask, HeartbeatPool,
+//     DeregisterPool), exports with a pool role and gds.nvidia.com/pool
+//     (roles pool-frontend, kv-relay and pylon from gds.nvidia.com/role, or
+//     several from the gds.nvidia.com/roles annotation, api.ParseRoles), and
+//     pool agent registrations (RegisterPoolAgent, HeartbeatPoolAgent,
+//     DeregisterPoolAgent; each agent has its own lease and epoch, default
+//     TTL 60 s). A pool registered without pool_id, created by an agent or
+//     known only from exports has the deterministic id of the server
+//     (LabelPoolID). DeregisterPool removes the pool's agents too.
+//   - Pool agents: Pool.agents has one entry per role present, sorted by
+//     role, merging the exported Service (LABEL) and the registration (API)
+//     into BOTH; OPENAI dials INBOUND, KV_RELAY and PYLON OUTBOUND. An agent
+//     is live with a ready endpoint while the cluster lease is active or
+//     with an active agent lease. kv_relay_live reports a live KV_RELAY,
+//     ready_ingress_count the ready endpoints of the OPENAI and PYLON
+//     Services (a Service with both roles counts once), ready_endpoint_count
+//     those of OPENAI only.
+//   - Pool state with the server's rules (internal/registry) extended by the
+//     agents: a pool is live while an ingress Service has a ready endpoint
+//     and the cluster lease is active, or while an OPENAI or PYLON agent
+//     lease is active; an API-only pool without agents lives on its pool
+//     lease. REGISTERED until first live while the cluster lease or an agent
+//     lease is active, so a pool whose only live agent is a KV_RELAY stays
+//     REGISTERED.
+//   - Routers derived from exports labelled gds.nvidia.com/role=router, with
+//     the gRPC, HTTP and QUIC port numbers (gds.nvidia.com/quic-port-name,
+//     default quic) and every Service port.
 //   - Merged ServiceImports, simplified: the oldest export of a cluster with
 //     an active lease wins (export creation time, then cluster name), ports
 //     are unioned by (port, protocol) and no conflicts are reported.
@@ -63,15 +85,20 @@ limitations under the License.
 //		grpc.WithContextDialer(run.Dialer()),
 //		grpc.WithTransportCredentials(insecure.NewCredentials()))
 //
+// Errors carry an ErrorInfo with the GDS domain and the server's reason,
+// INVALID_ARGUMENT (with a BadRequest) and NOT_FOUND included.
+//
 // Seeding helpers (EnsureCluster, PutExport, DeleteExport) write state
-// directly, with RouterSpec, PoolFrontendSpec and ReadyEndpoints building
-// typical export specs. They broadcast to watchers like the RPCs do.
+// directly, with RouterSpec, RouterSpecWithQUIC, PoolFrontendSpec,
+// PylonSpec, KVRelaySpec, WithRoles and ReadyEndpoints building typical
+// export specs. They broadcast to watchers like the RPCs do.
 //
 // Differences from gds-server: one replica and no store, so writes are
 // visible at once; no conflict detection (Conflict is never set); IP
 // families come from the winning export; a deregistered pool is removed at
 // once instead of being kept as a GONE tombstone (watchers still receive a
-// DELETE carrying state GONE); no limits beyond required fields are
-// validated. PutServiceExport and ReplaceEndpoints require a registered
+// DELETE carrying state GONE); beyond required fields only pool agent
+// requests are validated (role, agent_id length, attribute count, pool name
+// and id). PutServiceExport and ReplaceEndpoints require a registered
 // cluster (FAILED_PRECONDITION, CLUSTER_NOT_REGISTERED).
 package fakegds

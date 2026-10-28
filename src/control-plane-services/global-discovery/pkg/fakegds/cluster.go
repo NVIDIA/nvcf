@@ -120,7 +120,8 @@ func (c *clusterService) DeregisterCluster(_ context.Context, req *gdsv1.Deregis
 	return &gdsv1.DeregisterClusterResponse{}, nil
 }
 
-// removeCluster deletes a cluster with its exports, endpoint sets and pools.
+// removeCluster deletes a cluster with its exports, endpoint sets, pools
+// and pool agents.
 func (s *Server) removeCluster(clusterset, cluster string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,6 +140,11 @@ func (s *Server) removeCluster(clusterset, cluster string) {
 	for id, p := range cs.pools {
 		if p.p.GetLocation().GetCluster() == cluster {
 			delete(cs.pools, id)
+		}
+	}
+	for k := range cs.agents {
+		if k.cluster == cluster {
+			delete(cs.agents, k)
 		}
 	}
 	s.commitLocked(cs)

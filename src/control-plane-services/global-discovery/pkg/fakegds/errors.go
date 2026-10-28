@@ -44,14 +44,13 @@ func gdsError(code codes.Code, reason, msg string, metadata map[string]string, e
 	return st.Err()
 }
 
+// errInvalid returns INVALID_ARGUMENT, reason INVALID_ARGUMENT, with a
+// BadRequest naming the field, like the server.
 func errInvalid(field, description string) error {
-	st := status.New(codes.InvalidArgument, fmt.Sprintf("invalid %s: %s", field, description))
-	if withDetails, err := st.WithDetails(&errdetails.BadRequest{
-		FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: field, Description: description}},
-	}); err == nil {
-		st = withDetails
-	}
-	return st.Err()
+	return gdsError(codes.InvalidArgument, api.ReasonInvalidArgument, fmt.Sprintf("invalid %s: %s", field, description), nil,
+		&errdetails.BadRequest{
+			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: field, Description: description}},
+		})
 }
 
 func errStaleGeneration(what string, got, current uint64) error {
@@ -82,6 +81,11 @@ func errPoolNameTaken(cluster, name, poolID string) error {
 		fmt.Sprintf("pool name %q in cluster %q is taken by pool %s", name, cluster, poolID), nil)
 }
 
+func errPoolIDTaken(poolID string) error {
+	return gdsError(codes.AlreadyExists, api.ReasonPoolNameTaken,
+		fmt.Sprintf("pool id %q belongs to another pool", poolID), nil)
+}
+
 func errTooManyEndpoints(n int) error {
 	return gdsError(codes.InvalidArgument, api.ReasonTooManyEndpoints,
 		fmt.Sprintf("%d endpoints exceed the limit of %d", n, api.MaxEndpointsPerExport), nil)
@@ -91,8 +95,10 @@ func errShuttingDown() error {
 	return gdsError(codes.Unavailable, api.ReasonShuttingDown, "fakegds: watch closed", nil)
 }
 
+// errNotFound returns NOT_FOUND, reason NOT_FOUND, for objects other than
+// clusters, like the server.
 func errNotFound(format string, args ...any) error {
-	return status.Errorf(codes.NotFound, format, args...)
+	return gdsError(codes.NotFound, api.ReasonNotFound, fmt.Sprintf(format, args...), nil)
 }
 
 // require returns INVALID_ARGUMENT for the first empty value, given as
