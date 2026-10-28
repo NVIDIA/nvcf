@@ -200,6 +200,8 @@ pods (default 1) and no Service. Each pod has its own `inference_server_id`
 (`<cluster>.<namespace>.<name>.<pod>`), and the router load-balances a model across its
 registered servers. Pylon high availability is N independent registrations; nothing fronts the
 pods because they only dial out. The operator passes a static `--router-grpc-address` to Pylon.
+(With GDS pool export, 4.6 and 10, the operator adds a Service over the pods for GDS to count
+them; routers still never dial it.)
 
 Each Stargate pod keeps registrations in memory and does not replicate them; `ListModels` is "an
 eventually consistent discovery hint". Multi-region exists today only as hand-configured
@@ -276,7 +278,7 @@ Well-known labels and annotations (constants in `api/labels.go`, mirrored in the
  cluster 1 (EKS, region A, VPC peered)         cluster 2 (region A)            cluster 3 (region B)
    gds-mcs-controller  --export/watch-->  GDS  <--export/watch--  gds-mcs-controller  <--export/watch--  gds-mcs-controller
    Service + EndpointSlices (labelled)         ServiceImport, derived Service, EndpointSlices (from every cluster)
-   Stargate x N, stargate-k8s-router           Pylon pods (gds-client)         pool frontend, PoolRelay (Dynamo)
+   Stargate x N, stargate-k8s-router (optional) Pylon pods (gds-client)        pool frontend, PoolRelay (Dynamo)
    Pylon Operator (Go client)                  Global Router replicas (gds-client)
 ```
 
@@ -327,7 +329,8 @@ Pool layer:
   derived `live` flag. Each registration is its own record (`PA#`); the agent is computed.
 - Router (computed): one per exported Service with role `router`: cluster, region, namespace,
   name, type, port numbers (gRPC, HTTP, QUIC) and the full Service port list, dial scheme,
-  replicas (address, ready, hostname, zone), labels and annotations.
+  router mode and hostname template (4.5), replicas (address, ready, hostname, zone, identity),
+  labels and annotations.
 
 A Pool record exists when a labelled export names it, when the API registered it or one of its
 agents, or any combination; all are merged by (cluster, pool name), and the deterministic
@@ -336,9 +339,11 @@ record. Static metadata comes from labels and annotations; dynamic state (worker
 DRAINING) comes from the API overlay; per-process liveness and identity come from the agents.
 Ingress agents are OPENAI and PYLON: they take requests, by inbound dispatch or by the reverse
 tunnel. A pool is live when its cluster lease is active and at least one ingress agent has a
-ready endpoint, or when an ingress agent's lease is active; an API-only pool with no agents
-keeps using its pool lease. A live KV_RELAY alone makes a pool known (REGISTERED) but not
-routable; it sets `kv_relay_live` so KV-aware routers know the pool's cache facts are available.
+ready endpoint, or when an ingress agent's lease is active; a pool whose ingress is the frontend
+URL of its API registration (no labelled export, no `services[]`) is live while its pool lease
+is active, whatever agents it has (4.6). A live KV_RELAY alone makes a pool known (REGISTERED)
+but not routable; it sets `kv_relay_live` so KV-aware routers know the pool's cache facts are
+available.
 
 ### 4.3 Data flows
 
@@ -369,7 +374,9 @@ sequenceDiagram
     end
 ```
 
-Router path (a pylon in cluster B reaching routers in cluster A):
+Router path (a pylon in cluster B reaching routers in cluster A, backend-router mode; in direct
+mode, 4.5, the exported Service selects the Stargate pods, the seeds are the pods themselves and
+the two forwarding hops below disappear):
 
 ```mermaid
 sequenceDiagram
@@ -1022,8 +1029,12 @@ backoff, snapshot handling, resync callback), `PoolCache` and `RouterCache` (ini
 deltas, anti-entropy full list every TTL, `Stale` after two TTLs, `Snapshot`, `Updates`,
 `WaitSynced`), router seeds (`RouterState.SeedURLs`, `RouterSeedURLs` and `SeedRouters`, one URL
 per ready replica as in 4.5, `RelayURLs` and `RouterRelayURLs` for the PoolRelay, `RouterQUICAddrs`,
-and `DerivedServiceURL` for the merged VIP), pool helpers (`PoolState.Ingress`, pools with a live
-ingress agent, and `Agent(pool, role)`), a monotonic generation helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*` through interceptors. Consumers: the
+and `DerivedServiceURL` for the merged VIP; `RouterIsDirect` and `RouterReplicaAuthority` for
+direct mode, 4.5), pool helpers (`PoolState.Ingress`, pools with a live ingress agent,
+`IngressLive`, `KVRelayLive`, `Agent(pool, role)` and `Registrations(pool, role)`),
+`RegisterAgent(ctx, client, AgentSpec)` returning an `AgentRegistration` with its heartbeat,
+`SetAttributes` and `Close` (the Go counterpart of the Rust helper, 4.6), a monotonic generation
+helper, `OnReconnect` hooks. Metrics `nvcf_gds_client_*` through interceptors. Consumers: the
 controller, Pylon Operator, optionally the gateway.
 
 ### 9.2 Rust (`crates/gds-client`)
@@ -1045,8 +1056,10 @@ full re-list every TTL, stale flag); `routers` (`RouterCache`; `router_seed_urls
 `<scheme>://<replica address>:<grpc_port>` per ready replica; `pylon_seed_urls(state)` and
 `remote_watch_urls(state, own_cluster)`, the replica seeds of every router cluster, or of every
 other one, whose lease has not expired; `relay_seed_urls(state)` and `router_relay_urls(router)`
-for the PoolRelay; `quic_port(router)`; `derived_service_url(router)`, the merged VIP of the
-router's import, never a seed, per 4.5); `derived`
+for the PoolRelay; `quic_port(router)`; `is_direct(router)` and
+`replica_authority(router, replica)` for direct mode, with `labels::router_mode_of` and
+`labels::replica_authority` as the mode-free rules; `derived_service_url(router)`, the merged
+VIP of the router's import, never a seed, per 4.5); `derived`
 (`derived_service_name`, golden-tested against the Go implementation); `register`
 (`PoolRegistration::register` with a heartbeat task, `set_desired_state`, `update`, graceful
 `shutdown` that drains then deregisters, cancellation through `CancellationToken`;
@@ -1146,15 +1159,20 @@ propagated. Logs: zap JSON with `clusterset`, `cluster`, `namespace`, `name`, `p
   retry, pending namespaces; envtest scenarios for export, import, deletion, GC and status
   propagation; Rust tests against an in-process fake GDS for failover, registration heartbeats,
   cache TTL and stale flags. Race detector everywhere, 85 percent coverage of `internal/`.
-- E2e on k3d. Phase 1: one cluster, server with the memory store, REST register and list, watch
-  bookmarks. Phase 2: three clusters on one Docker network with distinct pod and service CIDRs
-  and static routes between node containers; export a labelled sample Service in cluster A;
-  assert ServiceImport, derived Service and EndpointSlices in B, conditions in A, a successful
-  curl through the derived VIP, scale-down propagation, a labelled pool appearing in `ListPools`,
-  the DRAINING overlay, an API-registered pool creating a labelled export, survival of a
-  controller restart, and removal when the label is removed. Phase 3: Stargate exported from A
-  and B under the same router Service name, Pylon in C registering with the Stargates of both
-  through their replica seeds.
+- E2e on k3d (`tests/e2e/global-discovery-k3d`, its README lists every check). Phase 1: one
+  cluster (the hub), server with the memory store, REST register, list and watch of clusters,
+  pools and pool agents, service export and import, heartbeats, leases and deregistration.
+  Phase 2: the hub plus clusters a and b on one Docker network with distinct pod and service
+  CIDRs and static routes between node containers; export a labelled sample Service in a;
+  assert ServiceImport, derived Service and EndpointSlices in b, conditions in a, a successful
+  request through the derived VIP, scale-down propagation, labelled pools and their agents
+  (Pylon and combined roles) in `ListPools`, the DRAINING overlay, an API-registered pool
+  creating a labelled export, survival of a controller restart, and removal when the label is
+  removed. Phase 3: Stargate exported from a, by default two replicas of a Deployment in direct
+  router mode (`E2E_ROUTER_MODE=direct`; `single` runs one replica as before direct mode), and
+  a Pylon in b that finds them only through GDS, is the PYLON agent of its pool, registers once
+  with each pod and serves a request through each. The planned variant with Stargate in a and b
+  under one router Service name and the Pylon in a third cluster is not run.
 - HLD acceptance cases. Blue/green: two pools with the same model, one DRAINING; `ListPools`
   reports both states and the router's cost function reads them. Pool failure: cluster lease or
   endpoint readiness loss turns the pool UNHEALTHY within ttl plus skew. PoolRelay replica

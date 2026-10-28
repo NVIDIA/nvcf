@@ -47,7 +47,8 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   ServiceImports with conflict resolution, pools derived from labelled
   exports with the API overlay, typed pool agents (see
   [Pools and pool agents](#pools-and-pool-agents)), routers with their
-  gRPC, HTTP and QUIC ports, and watches with resume.
+  gRPC, HTTP and QUIC ports, router mode and replica identities, and
+  watches with resume.
 - `gds-admin` inspects a store, including the pool agent registrations,
   and deletes clusters.
 - `gds-mcs-controller` implements the Multi-Cluster Services API in every
@@ -60,7 +61,8 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   and `deploy/helm/global-discovery-mcs-controller` charts,
   `docs/networking.md`, and the k3d end-to-end test in
   `tests/e2e/global-discovery-k3d` (phase 1: the server; phase 2: the
-  controller in two clusters; phase 3: Stargate and Pylon through GDS).
+  controller in two clusters; phase 3: two direct-mode Stargate replicas
+  and a Pylon through GDS).
 
 ## Layout
 
@@ -72,19 +74,16 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
 - `api/`: package `api` with `labels.go`, `errors.go` (error reasons,
   condition reasons, limits) and `derived.go` (`DerivedServiceName`).
 - `internal/store/`: `Store` and its per-aggregate interfaces, record types
-  and typed errors.
-- `internal/store/memory/`: in-memory `Store`.
+  and typed errors; `memory/` (in-memory store), `storetest/` (conformance
+  suite), `instrumented/` (metrics and spans around any store).
 - `internal/store/dynamodb/`: DynamoDB `Store` (`store.go`), item keys
   (`keys.go`), record codec (`codec.go`), table definition and creation
   (`schema.go`), client construction (`client.go`).
 - `internal/store/dynamodb/dynamodblocal/`: starts `amazon/dynamodb-local`
   for integration tests.
-- `internal/store/storetest/`: conformance suite every `Store` must pass.
-- `internal/registry/`: lease evaluation, TTL bounds, generations, roles and
-  pool state derivation.
-
 - `cmd/gds-server/`: the server entrypoint.
-- `cmd/gds-admin/`: the admin CLI (`describe`, `delete-cluster`).
+- `cmd/gds-admin/`: the admin CLI (`describe`, `delete-cluster`,
+  `create-table` in `cmd/gds-admin/createtable`).
 - `internal/config/`: `gds-server` flags with `GDS_` environment fallbacks.
 - `internal/server/`: listeners, interceptors, health, readiness, graceful
   shutdown, tracing setup and `NewApp`, which wires every component.
@@ -99,16 +98,12 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
   DNS label checks, roles and pool state derivation.
 - `internal/registry/merge/`: ServiceImport merge and conflict resolution
   ported from Cilium.
-- `internal/store/`: `Store` and its per-aggregate interfaces, record types
-  and typed errors; `memory/` (in-memory store), `storetest/` (conformance
-  suite), `instrumented/` (metrics and spans around any store).
 - `internal/storefactory/`: opens the store `--store` selects; the seam for
   the DynamoDB store.
 - `internal/metrics/`: the `nvcf_gds_*` collectors.
 - `internal/convert/`: store records to and from proto messages.
 - `internal/clock/`: real and fake clocks.
 - `internal/version/`: build metadata set by Bazel `x_defs`.
-- `cmd/gds-server/`: server entrypoint (configuration only for now).
 - `pkg/client/`: the Go client library; usage, failover and cache semantics
   are in `pkg/client/README.md`.
 - `pkg/fakegds/`: in-memory implementation of the five GDS services for tests
@@ -130,15 +125,11 @@ Module: `github.com/NVIDIA/nvcf/src/control-plane-services/global-discovery`.
 - `docs/mcs-controller.md`: controller behaviour, labels, conditions,
   garbage collection, flags, RBAC, metrics and the optional CoreDNS
   multicluster plugin.
-
-- `cmd/gds-admin/`: admin CLI; `create-table` is in `cmd/gds-admin/createtable`.
 - `docs/api.md`: REST paths, JSON and stream shapes, errors and limits.
 - `docs/storage.md`: DynamoDB item catalogue, conditional writes, table
   definition, Global Table replicas, TTL, PITR, capacity and limits.
 - `docs/iam.md`: server and admin IAM policies, IRSA trust policy.
 - `docs/consistency-dynamodb.md`: cross-region last-writer-wins reasoning.
-
-- `docs/api.md`: REST paths, JSON and stream shapes, errors and limits.
 - `docs/consistency.md`: write-through, refresh, leases and revisions.
 - `docs/networking.md`: the regional internal NLB, Route53 names, health
   checks, TTLs and client failover.
@@ -196,7 +187,10 @@ it are its agents, one per role (`docs/api.md`, Pools):
   endpoints; `ready_endpoint_count` counts OPENAI only).
 - A pool is live while its cluster lease is active and an ingress agent has
   a ready endpoint, or while an ingress agent registration has an active
-  lease. A pool whose only live agent is a KV_RELAY stays REGISTERED.
+  lease. A pool whose ingress is the frontend URL of its API registration
+  (no labelled export, no `services[]`) is live while its pool lease is
+  active, whatever agents it has. A pool whose only live agent is a
+  KV_RELAY stays REGISTERED.
 
 The agent RPCs of `PoolService`:
 

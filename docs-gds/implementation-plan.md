@@ -68,6 +68,8 @@ Topology facts the design relies on (verified in the chart and code):
 - Pylon: transport Deployment with N pods, no Service; each pod registers its own
   `inference_server_id` and opens stream + QUIC tunnel to every router replica. HA = N
   independent registrations. A Service in front of Pylon only matters in direct mode (unused).
+  (Superseded by v0.5: with `--gds-pool-export` the operator adds a Service over the pods as the
+  pool's PYLON agent, counted by GDS and never dialled; design 4.6 and 10.)
 
 Data flows:
 
@@ -649,7 +651,8 @@ the `WatchLoop` streams, which otherwise stay on the old connection. The
 caches reopen a watch that is silent for 30 s (`IdleTimeout`), since no
 client keepalive is configured. `SeedURLs` returns one URL per router
 cluster (the first router by namespace and name) and lists a URL shared by
-several clusters once. Not done in ws4: an OpenTelemetry stats handler is
+several clusters once (superseded by ws4b below: one seed per ready replica,
+design 4.5). Not done in ws4: an OpenTelemetry stats handler is
 not wired by default (pass it in `DialOptions`), and staticcheck and
 golangci-lint were not run (not installed locally); `go vet` and `gofmt` are
 clean.
@@ -1069,11 +1072,13 @@ Deviations from the plan:
 - The hub is phase 1's cluster, not a fourth cluster; phases 2 and 3 use their own clusterset
   `e2e-mcs`, so phase 1's records do not interfere. Phase 3 has one router cluster (a) and the
   Pylon in b, as the plan says; design 13's variant with Stargate in a and b and the Pylon in a
-  third cluster is not run.
+  third cluster is not run (design 13 now describes the phases as run).
 - Phase 3 sets Stargate's advertised hostname (`kubernetes.advertisedHostnameTemplate`) to
   `llm-router.a.gds-e2e.test` and maps it to the Stargate pod IP with `hostAliases` in the Pylon
   pod: without it the reverse tunnel dials the Service name of cluster a, which b cannot resolve
-  (design 4.5 asks deployments to advertise an address the peers reach). TLS between the clients
+  (design 4.5 asks deployments to advertise an address the peers reach). Since v0.6 (ws9) this is
+  the `E2E_ROUTER_MODE=single` variant; the default runs two direct-mode replicas and dials the
+  pod IPs. TLS between the clients
   and GDS or Stargate, worker credentials, DynamoDB and multi-node clusters are not covered.
 
 Issues found and not fixed:

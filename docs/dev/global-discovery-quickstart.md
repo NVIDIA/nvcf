@@ -118,8 +118,9 @@ themselves; pylons read GDS directly.
 
 `tests/e2e/global-discovery-k3d` runs this whole path on three k3d
 clusters: gds-server in a hub, the controller in clusters `a` and `b`,
-Stargate exported from `a`, and a Pylon in `b` that registers with it
-through GDS (phase 3).
+Stargate exported from `a` (two replicas in direct router mode by default,
+`E2E_ROUTER_MODE`), and a Pylon in `b` that is the PYLON agent of its pool
+and registers once with each Stargate pod through GDS (phase 3).
 
 ## TLS
 
