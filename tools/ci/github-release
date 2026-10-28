@@ -1057,9 +1057,14 @@ def released_commits(root, since_tag):
         return [run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()]
     raw = run(["git", "rev-list", f"{since_tag}..HEAD"], cwd=root, capture=True, check=False)
     commits = [line.strip() for line in raw.splitlines() if line.strip()]
+    return newest_commits_to_resolve(commits, f"since {since_tag}")
+
+
+def newest_commits_to_resolve(commits, described):
+    """`commits`, newest first, cut to MAX_RELEASE_COMMENT_COMMITS and reported when cut."""
     if len(commits) > MAX_RELEASE_COMMENT_COMMITS:
         print(
-            f"[github-release] {len(commits)} commits since {since_tag}; "
+            f"[github-release] {len(commits)} commits {described}; "
             f"only the newest {MAX_RELEASE_COMMENT_COMMITS} are resolved to pull requests"
         )
         return commits[:MAX_RELEASE_COMMENT_COMMITS]
@@ -1086,7 +1091,8 @@ def comment_release_on_pull_requests(root, service, tag, version, since_tag, com
     `commits` replaces the range since `since_tag` when the release is not made
     of that range. A dependency-triggered release ships the dependency commits
     only; every other pull request merged since the previous tag left the
-    service unchanged and must not be told it shipped.
+    service unchanged and must not be told it shipped. Either way, at most
+    MAX_RELEASE_COMMENT_COMMITS are resolved.
 
     A failure here never fails the job. The tag, the push, and the GitHub release
     have already succeeded; losing a courtesy comment must not mark a shipped
@@ -1102,8 +1108,12 @@ def comment_release_on_pull_requests(root, service, tag, version, since_tag, com
         "\n"
         f"The release is available on [GitHub release]({release_url(slug, tag)})."
     )
+    if commits is None:
+        commits = released_commits(root, since_tag)
+    else:
+        commits = newest_commits_to_resolve(commits, f"listed for {tag}")
     commented = []
-    for sha in released_commits(root, since_tag) if commits is None else commits:
+    for sha in commits:
         for number in pull_requests_for_commit(slug, sha):
             if number in commented:
                 continue

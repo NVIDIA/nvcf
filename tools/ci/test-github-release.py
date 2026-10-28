@@ -985,6 +985,34 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertIn(f"{path}/v{self.github_release.next_patch_version(version)}", self.list_tags(remote))
             self.assertEqual([number for number, _body in posted], ["2806"])
 
+    def test_dependency_release_comments_resolve_at_most_the_commit_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            remote = Path(tmp) / "remote.git"
+            root.mkdir()
+            init_bare_remote(remote)
+            self.init_go_repo(root)
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+            self.commit_go_sdk_bump(root)
+            older = git_out(root, "log", "-1", "--format=%h").strip()
+            self.commit_go_sdk_bump(root, "fix(security): bump the Go SDK again", toolchain="go1.26.11")
+            newer = git_out(root, "log", "-1", "--format=%h").strip()
+
+            self.github_release.MAX_RELEASE_COMMENT_COMMITS = 1
+            posted = self.stub_gh_comments({older: ["2806"], newer: ["2807"]})
+            self.github_release.create_release = lambda *a, **k: True
+            service_id, path, _version, _base = self.GO_SERVICES[0]
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                created = self.github_release.publish_go_dependency_release(
+                    root, self.go_service_metadata(service_id, path), dry_run=False, draft=False
+                )
+
+            self.assertTrue(created)
+            self.assertEqual([number for number, _body in posted], ["2807"])
+            self.assertIn("only the newest 1 are resolved", output.getvalue())
+
     def list_tags(self, root):
         result = subprocess.run(
             ["git", "tag", "-l"], cwd=root, check=True, stdout=subprocess.PIPE, text=True
