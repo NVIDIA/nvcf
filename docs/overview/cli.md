@@ -859,7 +859,7 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 ```
 
 For LLM models, `llmConfig.routingMethod` is a routing algorithm name, optionally followed by tuning parameters, such as `pulsar;seed=stable-a`. The CLI forwards the value unchanged and prints the API error for a malformed value. For algorithms, parameters, and errors, see [LLM Request Router Load Balancing](../self-managed/llm-request-router-load-balancing.md#tune-a-model-with-a-routing-expression).
-Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the beta `/v1/decisions` and `/v1/systemone`. Declare a decision route in `uris` when you create the function, because `uris` cannot change afterward.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
 
 #### Deploy Function

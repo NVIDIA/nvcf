@@ -23,6 +23,17 @@ Standard HTTP, gRPC, and LLS functions do not require this addon, even when a
 container exposes paths such as `/v1/chat/completions`, `/v1/responses`, or
 `/v1/embeddings`.
 
+The addon also serves the beta decision model routes, `POST /v1/decisions` and
+`POST /v1/systemone`. The gateway passes their bodies through unchanged and
+does not stream them. Declare each route the container serves in
+`models[].llmConfig.uris` when you create the function, for example
+`--llm-model "name=<model>,uris=/v1/decisions|/v1/systemone"`. The `uris` of a
+function cannot change after creation, and a model gets a `404` on a decision
+route that it does not declare. Through the Vanity Gateway, a function that
+serves both routes should use `usePexec: false`, because a `usePexec: true`
+function reaches only its default path. See the
+[LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta).
+
 When enabled, the stack creates:
 
 - `llm-api-gateway` in the `nvcf` namespace.
@@ -1020,7 +1031,7 @@ authentication hop.
 The LLM API Gateway returns errors in the format OpenAI and Anthropic SDKs
 read. Errors from the gateway and the LLM request router use the OpenAI
 format on `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and the
-other OpenAI-compatible endpoints:
+other OpenAI-compatible endpoints, including `/v1/decisions`:
 
 ```json
 {"error":{"message":"no eligible candidates","type":"invalid_request_error","param":null,"code":null}}
@@ -1037,7 +1048,15 @@ The `type` follows the HTTP status. For example, `401` is
 `overloaded_error`. On OpenAI-compatible endpoints, `529` always has
 `code: "overloaded_error"`.
 
-Model server errors already in the endpoint's format are returned unchanged,
+On `/v1/systemone`, they use the System One format, with `error.code`,
+`error.message`, and `error.request_id`. See the
+[LLM Gateway guide](../overview/llm-gateway.md#decision-models-beta) for the
+codes.
+
+On `/v1/decisions` and `/v1/systemone`, model server errors are returned
+unchanged, whatever their shape, size, or encoding.
+
+On the other endpoints, model server errors already in the endpoint's format are returned unchanged,
 including the server's `type` and `code`. Other model server bodies are
 converted to the endpoint's format, keeping up to 32 KiB of the server's
 message when the gateway can read it. The gateway reads uncompressed and gzip error bodies up
