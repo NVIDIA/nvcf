@@ -280,6 +280,11 @@ func TestAgentOnlyPool(t *testing.T) {
 	assert.Equal(t, gdsv1.DialMode_DIAL_MODE_OUTBOUND, ra.GetDialMode())
 	assert.Nil(t, ra.GetService())
 	assert.True(t, ra.GetLive())
+	assert.Equal(t, int32(1), ra.GetActiveRegistrationCount())
+	require.Len(t, ra.GetRegistrations(), 1)
+	assert.Equal(t, relay.GetRegistration(), ra.GetRegistrations()[0], "the response carries this process's registration")
+	assert.Equal(t, "relay-0", relay.GetRegistration().GetAgentId())
+	assert.Equal(t, ra.GetLease(), relay.GetRegistration().GetLease())
 
 	p := getPool(t, c, id)
 	assert.Equal(t, "blue", p.GetName())
@@ -306,7 +311,7 @@ func TestAgentOnlyPool(t *testing.T) {
 	for range 2 {
 		clk.Advance(25 * time.Second)
 		hb, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-			Clusterset: cs, PoolId: id, Role: kvRelay, Epoch: ra.GetLease().GetEpoch(),
+			Clusterset: cs, PoolId: id, Role: kvRelay, AgentId: "relay-0", Epoch: ra.GetLease().GetEpoch(),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, clk.Now(), hb.GetLease().GetRenewedAt().AsTime())
@@ -323,27 +328,32 @@ func TestAgentOnlyPool(t *testing.T) {
 	// A heartbeat with the current epoch revives it and replaces the
 	// attributes.
 	hb, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-		Clusterset: cs, PoolId: id, Role: pylon, Epoch: py.GetAgent().GetLease().GetEpoch(),
+		Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0", Epoch: py.GetAgent().GetLease().GetEpoch(),
 		Attributes: map[string]string{"inference_server_id": "pylon-0"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, active, hb.GetPoolState())
 	assert.Equal(t, map[string]string{"inference_server_id": "pylon-0"}, agentOf(getPool(t, c, id), pylon).GetAttributes())
 
-	// Re-registration mints a new epoch and keeps registered_at.
+	// Re-registration of the same agent id mints a new epoch, keeps
+	// registered_at and replaces the attributes.
 	clk.Advance(time.Second)
-	again := registerAgent(t, c, "a", "blue", pylon, "pylon-1")
-	assert.Greater(t, again.GetAgent().GetLease().GetEpoch(), py.GetAgent().GetLease().GetEpoch())
-	assert.Equal(t, py.GetAgent().GetRegisteredAt().AsTime(), again.GetAgent().GetRegisteredAt().AsTime())
-	assert.Equal(t, "pylon-1", again.GetAgent().GetAgentId())
-	assert.Empty(t, again.GetAgent().GetAttributes(), "registration replaces the attributes")
+	again := registerAgent(t, c, "a", "blue", pylon, "pylon-0")
+	assert.Greater(t, again.GetRegistration().GetLease().GetEpoch(), py.GetRegistration().GetLease().GetEpoch())
+	assert.Equal(t, py.GetRegistration().GetRegisteredAt().AsTime(), again.GetRegistration().GetRegisteredAt().AsTime())
+	assert.Empty(t, again.GetRegistration().GetAttributes(), "registration replaces the attributes")
+	assert.Len(t, again.GetAgent().GetRegistrations(), 1, "idempotent on the agent id")
+	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
+		Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0", Epoch: py.GetRegistration().GetLease().GetEpoch(),
+	})
+	requireReason(t, err, codes.Aborted, api.ReasonLeaseEpochMismatch)
 
 	// Deregistering Pylon leaves the relay: UNHEALTHY, since the pool has
 	// been live. Deregistering the relay removes the pool.
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: pylon})
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0"})
 	require.NoError(t, err)
 	assert.Equal(t, unhealthy, getPool(t, c, id).GetState())
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: kvRelay})
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: kvRelay, AgentId: "relay-0"})
 	require.NoError(t, err)
 	_, err = c.pools.GetPool(ctx(t), &gdsv1.GetPoolRequest{Clusterset: cs, PoolId: id})
 	requireReason(t, err, codes.NotFound, api.ReasonNotFound)
@@ -395,7 +405,7 @@ func TestAgentMergesWithExportAndRegisteredPool(t *testing.T) {
 	assert.Equal(t, unhealthy, p.GetState())
 	assert.Equal(t, gdsv1.AgentSource_AGENT_SOURCE_LABEL, agentOf(p, pylon).GetSource())
 	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-		Clusterset: cs, PoolId: id, Role: pylon, Epoch: ag.GetLease().GetEpoch(),
+		Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0", Epoch: ag.GetLease().GetEpoch(),
 	})
 	requireReason(t, err, codes.NotFound, api.ReasonNotFound)
 
@@ -485,29 +495,44 @@ func TestPoolAgentErrors(t *testing.T) {
 
 	// Heartbeats and deregistration.
 	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-		Clusterset: cs, PoolId: id, Role: pylon, Epoch: again.GetAgent().GetLease().GetEpoch() + 1,
+		Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0", Epoch: again.GetRegistration().GetLease().GetEpoch() + 1,
 	})
 	requireReason(t, err, codes.Aborted, api.ReasonLeaseEpochMismatch)
-	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{Clusterset: cs, PoolId: id, Role: kvRelay, Epoch: 1})
-	requireReason(t, err, codes.NotFound, api.ReasonNotFound)
-	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{Clusterset: cs, PoolId: id, Epoch: 1})
-	requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
-	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{Clusterset: cs, Role: pylon, Epoch: 1})
-	requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
+	for name, hb := range map[string]*gdsv1.HeartbeatPoolAgentRequest{
+		"unknown role":     {Clusterset: cs, PoolId: id, Role: kvRelay, AgentId: "pylon-0", Epoch: 1},
+		"unknown agent id": {Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-9", Epoch: 1},
+		"unknown pool":     {Clusterset: cs, PoolId: "unknown", Role: pylon, AgentId: "pylon-0", Epoch: 1},
+	} {
+		_, err = c.pools.HeartbeatPoolAgent(ctx(t), hb)
+		requireReason(t, err, codes.NotFound, api.ReasonNotFound)
+		assert.Contains(t, status.Convert(err).Message(), hb.GetAgentId(), name)
+	}
+	for name, hb := range map[string]*gdsv1.HeartbeatPoolAgentRequest{
+		"no role":           {Clusterset: cs, PoolId: id, AgentId: "pylon-0", Epoch: 1},
+		"no pool id":        {Clusterset: cs, Role: pylon, AgentId: "pylon-0", Epoch: 1},
+		"no agent id":       {Clusterset: cs, PoolId: id, Role: pylon, Epoch: 1},
+		"agent id too long": {Clusterset: cs, PoolId: id, Role: pylon, AgentId: strings.Repeat("x", api.MaxAgentIDBytes+1), Epoch: 1},
+	} {
+		_, err = c.pools.HeartbeatPoolAgent(ctx(t), hb)
+		requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
+		assert.NotEmpty(t, name)
+	}
 	attrs := map[string]string{}
 	for i := range api.MaxAgentAttributes + 1 {
 		attrs[strings.Repeat("k", i+1)] = "v"
 	}
 	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-		Clusterset: cs, PoolId: id, Role: pylon, Epoch: again.GetAgent().GetLease().GetEpoch(), Attributes: attrs,
+		Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0", Epoch: again.GetRegistration().GetLease().GetEpoch(), Attributes: attrs,
 	})
 	requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: "unknown", Role: pylon})
-	require.NoError(t, err, "deregistering an unknown agent succeeds")
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id})
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: "unknown", Role: pylon, AgentId: "pylon-0"})
+	require.NoError(t, err, "deregistering an unknown registration succeeds")
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, AgentId: "pylon-0"})
+	requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: pylon})
 	requireReason(t, err, codes.InvalidArgument, api.ReasonInvalidArgument)
 	for range 2 {
-		_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: pylon})
+		_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: id, Role: pylon, AgentId: "pylon-0"})
 		require.NoError(t, err)
 	}
 	_, err = c.pools.GetPool(ctx(t), &gdsv1.GetPoolRequest{Clusterset: cs, PoolId: id})
@@ -531,7 +556,7 @@ func TestPoolAgentWatchEvents(t *testing.T) {
 	// A heartbeat that renews the lease changes the pool: an UPSERT.
 	clk.Advance(5 * time.Second)
 	_, err = c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
-		Clusterset: cs, PoolId: reg.GetPoolId(), Role: pylon, Epoch: reg.GetAgent().GetLease().GetEpoch(),
+		Clusterset: cs, PoolId: reg.GetPoolId(), Role: pylon, AgentId: "pylon-0", Epoch: reg.GetAgent().GetLease().GetEpoch(),
 	})
 	require.NoError(t, err)
 	ev = recvPools(t, w, 1)[0]
@@ -544,12 +569,12 @@ func TestPoolAgentWatchEvents(t *testing.T) {
 	ev = recvPools(t, w, 1)[0]
 	assert.Equal(t, upsert, ev.GetType())
 	assert.True(t, ev.GetPool().GetKvRelayLive())
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: reg.GetPoolId(), Role: kvRelay})
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: reg.GetPoolId(), Role: kvRelay, AgentId: "relay-0"})
 	require.NoError(t, err)
 	ev = recvPools(t, w, 1)[0]
 	assert.Equal(t, upsert, ev.GetType())
 	assert.False(t, ev.GetPool().GetKvRelayLive())
-	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: reg.GetPoolId(), Role: pylon})
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{Clusterset: cs, PoolId: reg.GetPoolId(), Role: pylon, AgentId: "pylon-0"})
 	require.NoError(t, err)
 	ev = recvPools(t, w, 1)[0]
 	assert.Equal(t, del, ev.GetType())
@@ -564,4 +589,98 @@ func TestPoolAgentWatchEvents(t *testing.T) {
 	ev = recvPools(t, w, 1)[0]
 	assert.Equal(t, del, ev.GetType())
 	assert.Equal(t, gdsv1.PoolState_POOL_STATE_GONE, ev.GetPool().GetState())
+}
+
+func TestTwoRegistrationsOfOneRole(t *testing.T) {
+	clk := newClock()
+	srv, c := start(t, fakegds.WithClock(clk.Now), fakegds.WithRefreshInterval(0), fakegds.WithBookmarkInterval(0))
+	srv.EnsureCluster(cs, "a", "")
+	srv.PutExport(cs, "a", "pools", "blue-pylon", fakegds.PylonSpec("blue", 9090), []*gdsv1.Endpoint{})
+	register := func(agentID string, ttl time.Duration, attrs map[string]string) *gdsv1.RegisterPoolAgentResponse {
+		t.Helper()
+		resp, err := c.pools.RegisterPoolAgent(ctx(t), &gdsv1.RegisterPoolAgentRequest{
+			Clusterset: cs, Cluster: "a", PoolName: "blue", LeaseTtl: durationpb.New(ttl),
+			Agent: &gdsv1.PoolAgent{Role: pylon, AgentId: agentID, Attributes: attrs},
+		})
+		require.NoError(t, err)
+		return resp
+	}
+
+	// Two Pylon pods register the same role with their own ids: neither
+	// fences the other.
+	p1 := register("pylon-b", 20*time.Second, map[string]string{"pod": "b"})
+	clk.Advance(time.Second)
+	p0 := register("pylon-a", 60*time.Second, map[string]string{"pod": "a"})
+	assert.Equal(t, p1.GetPoolId(), p0.GetPoolId())
+	assert.NotEqual(t, p1.GetRegistration().GetLease().GetEpoch(), p0.GetRegistration().GetLease().GetEpoch())
+	ag := p0.GetAgent()
+	assert.Equal(t, gdsv1.AgentSource_AGENT_SOURCE_BOTH, ag.GetSource())
+	require.Len(t, ag.GetRegistrations(), 2)
+	assert.Equal(t, "pylon-a", ag.GetRegistrations()[0].GetAgentId(), "sorted by agent id")
+	assert.Equal(t, "pylon-b", ag.GetRegistrations()[1].GetAgentId())
+	assert.Equal(t, int32(2), ag.GetActiveRegistrationCount())
+	assert.Equal(t, "pylon-a", ag.GetAgentId(), "the agent mirrors the registration that expires last")
+	assert.Equal(t, map[string]string{"pod": "a"}, ag.GetAttributes())
+	assert.Equal(t, p0.GetRegistration().GetLease(), ag.GetLease())
+
+	// Both heartbeat with their own epochs (and the cluster renews).
+	clk.Advance(5 * time.Second)
+	srv.EnsureCluster(cs, "a", "")
+	for _, r := range []*gdsv1.RegisterPoolAgentResponse{p0, p1} {
+		_, err := c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
+			Clusterset: cs, PoolId: r.GetPoolId(), Role: pylon,
+			AgentId: r.GetRegistration().GetAgentId(), Epoch: r.GetRegistration().GetLease().GetEpoch(),
+		})
+		require.NoError(t, err)
+	}
+	_, err := c.pools.HeartbeatPoolAgent(ctx(t), &gdsv1.HeartbeatPoolAgentRequest{
+		Clusterset: cs, PoolId: p0.GetPoolId(), Role: pylon, AgentId: "pylon-b", Epoch: p0.GetRegistration().GetLease().GetEpoch(),
+	})
+	requireReason(t, err, codes.Aborted, api.ReasonLeaseEpochMismatch)
+
+	// pylon-b stops heartbeating and expires; pylon-a keeps the agent and
+	// the pool live.
+	w, err := c.pools.WatchPools(ctx(t), &gdsv1.WatchPoolsRequest{Clusterset: cs})
+	require.NoError(t, err)
+	recvPools(t, w, 3)
+	clk.Advance(30 * time.Second)
+	srv.Refresh()
+	ev := recvPools(t, w, 1)[0]
+	assert.Equal(t, upsert, ev.GetType(), "an expiring registration changes the pool")
+	p := ev.GetPool()
+	assert.Equal(t, active, p.GetState())
+	ag = agentOf(p, pylon)
+	require.Len(t, ag.GetRegistrations(), 2, "an expired registration stays until deregistered")
+	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_ACTIVE, ag.GetRegistrations()[0].GetLease().GetState())
+	assert.Equal(t, gdsv1.LeaseState_LEASE_STATE_EXPIRED, ag.GetRegistrations()[1].GetLease().GetState())
+	assert.Equal(t, int32(1), ag.GetActiveRegistrationCount())
+	assert.True(t, ag.GetLive())
+	assert.Equal(t, "pylon-a", ag.GetAgentId())
+
+	// Deregistering pylon-a leaves only the expired registration: the
+	// agent stays (registration and export) but is not live.
+	_, err = c.pools.DeregisterPoolAgent(ctx(t), &gdsv1.DeregisterPoolAgentRequest{
+		Clusterset: cs, PoolId: p0.GetPoolId(), Role: pylon, AgentId: "pylon-a",
+	})
+	require.NoError(t, err)
+	p = recvPools(t, w, 1)[0].GetPool()
+	ag = agentOf(p, pylon)
+	require.Len(t, ag.GetRegistrations(), 1)
+	assert.Equal(t, "pylon-b", ag.GetAgentId())
+	assert.Zero(t, ag.GetActiveRegistrationCount())
+	assert.False(t, ag.GetLive())
+	assert.Equal(t, unhealthy, p.GetState())
+
+	// A ready Pylon endpoint makes it live again; DeregisterPool removes
+	// every registration and leaves the label source.
+	srv.SetEndpoints(cs, "a", "pools", "blue-pylon", fakegds.ReadyEndpoints("10.0.1.1"))
+	assert.Equal(t, active, recvPools(t, w, 1)[0].GetPool().GetState())
+	_, err = c.pools.DeregisterPool(ctx(t), &gdsv1.DeregisterPoolRequest{Clusterset: cs, PoolId: p0.GetPoolId()})
+	require.NoError(t, err)
+	p = recvPools(t, w, 1)[0].GetPool()
+	ag = agentOf(p, pylon)
+	assert.Equal(t, gdsv1.AgentSource_AGENT_SOURCE_LABEL, ag.GetSource())
+	assert.Empty(t, ag.GetRegistrations())
+	assert.Nil(t, ag.GetLease())
+	assert.True(t, ag.GetLive())
 }

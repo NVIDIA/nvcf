@@ -72,19 +72,22 @@ type poolKey struct {
 	cluster, name string
 }
 
-// agentKey identifies one pool agent registration.
+// agentKey identifies one pool agent registration: one process instance
+// (agent_id) of one role of a pool.
 type agentKey struct {
 	cluster, poolID string
 	role            gdsv1.FrontendRole
+	agentID         string
 }
 
 type agentRec struct {
 	// cluster and pool are the (cluster, pool name) of the registration;
 	// poolID is the pool id it resolved to.
 	cluster, pool, poolID string
-	// a holds the writer-owned fields (role, agent_id, attributes), the
+	role                  gdsv1.FrontendRole
+	// r holds the writer-owned fields (agent_id, attributes), the
 	// generation, the timestamps and the lease (state filled when read).
-	a   *gdsv1.PoolAgent
+	r   *gdsv1.PoolAgentRegistration
 	ttl time.Duration
 }
 

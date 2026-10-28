@@ -23,39 +23,46 @@ limitations under the License.
 // controller and integration tests can run against a real gRPC endpoint
 // without a store or a server process:
 //
-//   - Cluster and pool leases with server-minted epochs. Heartbeats with
-//     another epoch fail with ABORTED and reason LEASE_EPOCH_MISMATCH.
-//     Leases are evaluated at read time against the server clock (see
-//     WithClock) with the default 2 s skew allowance.
-//   - Writer generations. A PutServiceExport, ReplaceEndpoints, RegisterPool
-//     or UpdatePool whose generation does not exceed the stored one fails with
-//     FAILED_PRECONDITION, reason STALE_GENERATION, ErrorInfo metadata
-//     current_generation and a PreconditionFailure detail, like the server.
+//   - Cluster, pool and pool agent leases with server-minted epochs.
+//     Heartbeats with another epoch fail with ABORTED and reason
+//     LEASE_EPOCH_MISMATCH. Leases are evaluated at read time against the
+//     server clock (see WithClock) with the default 2 s skew allowance.
+//   - Writer generations. A PutServiceExport, ReplaceEndpoints,
+//     RegisterPool, UpdatePool or RegisterPoolAgent whose generation does
+//     not exceed the stored one fails with FAILED_PRECONDITION, reason
+//     STALE_GENERATION, ErrorInfo metadata current_generation and a
+//     PreconditionFailure detail, like the server. RegisterPoolAgent assigns
+//     a generation when none is given, as the server does.
 //   - Pools from three sources merged by (cluster, pool name): the Pool API
 //     (RegisterPool, UpdatePool with a field mask, HeartbeatPool,
 //     DeregisterPool), exports with a pool role and gds.nvidia.com/pool
 //     (roles pool-frontend, kv-relay and pylon from gds.nvidia.com/role, or
 //     several from the gds.nvidia.com/roles annotation, api.ParseRoles), and
 //     pool agent registrations (RegisterPoolAgent, HeartbeatPoolAgent,
-//     DeregisterPoolAgent; each agent has its own lease and epoch, default
-//     TTL 60 s). A pool registered without pool_id, created by an agent or
-//     known only from exports has the deterministic id of the server
-//     (LabelPoolID). DeregisterPool removes the pool's agents too.
+//     DeregisterPoolAgent), one per (pool, role, agent_id), each with its
+//     own lease and epoch (default TTL 60 s), so N Pylon pods of one pool do
+//     not fence each other. A pool registered without pool_id, created by
+//     an agent or known only from exports has the deterministic id of the
+//     server (LabelPoolID). DeregisterPool removes every registration of the
+//     pool.
 //   - Pool agents: Pool.agents has one entry per role present, sorted by
-//     role, merging the exported Service (LABEL) and the registration (API)
-//     into BOTH; OPENAI dials INBOUND, KV_RELAY and PYLON OUTBOUND. An agent
-//     is live with a ready endpoint while the cluster lease is active or
-//     with an active agent lease. kv_relay_live reports a live KV_RELAY,
+//     role, merging the exported Service (LABEL) and the registrations
+//     (API) into BOTH; registrations[] is sorted by agent_id, and the
+//     agent's lease, agent_id, attributes, generation and timestamps mirror
+//     the registration whose lease expires last. OPENAI dials INBOUND,
+//     KV_RELAY and PYLON OUTBOUND. An agent is live with a ready endpoint
+//     while the cluster lease is active or with any active registration
+//     lease. kv_relay_live reports a live KV_RELAY,
 //     ready_ingress_count the ready endpoints of the OPENAI and PYLON
 //     Services (a Service with both roles counts once), ready_endpoint_count
 //     those of OPENAI only.
 //   - Pool state with the server's rules (internal/registry) extended by the
 //     agents: a pool is live while an ingress Service has a ready endpoint
-//     and the cluster lease is active, or while an OPENAI or PYLON agent
-//     lease is active; an API-only pool without agents lives on its pool
-//     lease. REGISTERED until first live while the cluster lease or an agent
-//     lease is active, so a pool whose only live agent is a KV_RELAY stays
-//     REGISTERED.
+//     and the cluster lease is active, or while an OPENAI or PYLON
+//     registration lease is active; an API-only pool without agents lives
+//     on its pool lease. REGISTERED until first live while the cluster
+//     lease or a registration lease is active, so a pool whose only live
+//     agent is a KV_RELAY stays REGISTERED.
 //   - Routers derived from exports labelled gds.nvidia.com/role=router, with
 //     the gRPC, HTTP and QUIC port numbers (gds.nvidia.com/quic-port-name,
 //     default quic) and every Service port.

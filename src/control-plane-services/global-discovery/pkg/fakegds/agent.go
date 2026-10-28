@@ -35,6 +35,25 @@ func errAgentRole(field string) error {
 	return errInvalid(field, "must be FRONTEND_ROLE_OPENAI, FRONTEND_ROLE_KV_RELAY or FRONTEND_ROLE_PYLON")
 }
 
+func validAgentID(field, id string) error {
+	if len(id) == 0 || len(id) > api.MaxAgentIDBytes {
+		return errInvalid(field, fmt.Sprintf("must have 1 to %d bytes", api.MaxAgentIDBytes))
+	}
+	return nil
+}
+
+// validateAgentKey checks the registration key of a heartbeat or a
+// deregistration.
+func validateAgentKey(clusterset, poolID string, role gdsv1.FrontendRole, agentID string) error {
+	if err := require("clusterset", clusterset, "pool_id", poolID); err != nil {
+		return err
+	}
+	if !validAgentRole(role) {
+		return errAgentRole("role")
+	}
+	return validAgentID("agent_id", agentID)
+}
+
 func validAgentAttributes(field string, attrs map[string]string) error {
 	if len(attrs) > api.MaxAgentAttributes {
 		return errInvalid(field, fmt.Sprintf("has %d entries; at most %d are allowed", len(attrs), api.MaxAgentAttributes))
@@ -57,8 +76,9 @@ func validateAgentRequest(req *gdsv1.RegisterPoolAgentRequest) error {
 		return errInvalid("agent", "required")
 	case !validAgentRole(agent.GetRole()):
 		return errAgentRole("agent.role")
-	case len(agent.GetAgentId()) == 0 || len(agent.GetAgentId()) > api.MaxAgentIDBytes:
-		return errInvalid("agent.agent_id", fmt.Sprintf("must have 1 to %d bytes", api.MaxAgentIDBytes))
+	}
+	if err := validAgentID("agent.agent_id", agent.GetAgentId()); err != nil {
+		return err
 	}
 	return validAgentAttributes("agent.attributes", agent.GetAttributes())
 }
@@ -95,14 +115,14 @@ func agentPoolIDLocked(cs *clusterSet, cluster, name, requested string) (string,
 	return requested, nil
 }
 
-// agentLocked returns the agent registration of a pool id and role.
-func agentLocked(cs *clusterSet, poolID string, role gdsv1.FrontendRole) *agentRec {
+// agentLocked returns the registration of a pool id, role and agent id.
+func agentLocked(cs *clusterSet, poolID string, role gdsv1.FrontendRole, agentID string) (agentKey, *agentRec) {
 	for k, rec := range cs.agents {
-		if k.poolID == poolID && k.role == role {
-			return rec
+		if k.poolID == poolID && k.role == role && k.agentID == agentID {
+			return k, rec
 		}
 	}
-	return nil
+	return agentKey{}, nil
 }
 
 // poolStateLocked returns the derived state of a pool from the last
@@ -123,17 +143,17 @@ func (ps *poolService) RegisterPoolAgent(_ context.Context, req *gdsv1.RegisterP
 	defer s.mu.Unlock()
 	now := s.now()
 	cs := s.setLocked(req.GetClusterset())
-	cluster, name, role := req.GetCluster(), req.GetPoolName(), req.GetAgent().GetRole()
+	cluster, name, role, agentID := req.GetCluster(), req.GetPoolName(), req.GetAgent().GetRole(), req.GetAgent().GetAgentId()
 	id, err := agentPoolIDLocked(cs, cluster, name, req.GetPoolId())
 	if err != nil {
 		return nil, err
 	}
-	key := agentKey{cluster: cluster, poolID: id, role: role}
+	key := agentKey{cluster: cluster, poolID: id, role: role, agentID: agentID}
 	var storedGen, prevEpoch uint64
 	registered := now
 	if old := cs.agents[key]; old != nil {
-		storedGen, prevEpoch = old.a.GetGeneration(), old.a.GetLease().GetEpoch()
-		registered = old.a.GetRegisteredAt().AsTime()
+		storedGen, prevEpoch = old.r.GetGeneration(), old.r.GetLease().GetEpoch()
+		registered = old.r.GetRegisteredAt().AsTime()
 	}
 	gen := req.GetGeneration()
 	switch {
@@ -143,14 +163,14 @@ func (ps *poolService) RegisterPoolAgent(_ context.Context, req *gdsv1.RegisterP
 		return nil, errStaleGeneration("pool agent", gen, storedGen)
 	}
 	ttl := registry.ClampLeaseTTL(req.GetLeaseTtl().AsDuration(), registry.DefaultPoolLeaseTTL)
-	cs.agents[key] = &agentRec{
+	rec := &agentRec{
 		cluster: cluster,
 		pool:    name,
 		poolID:  id,
+		role:    role,
 		ttl:     ttl,
-		a: &gdsv1.PoolAgent{
-			Role:         role,
-			AgentId:      req.GetAgent().GetAgentId(),
+		r: &gdsv1.PoolAgentRegistration{
+			AgentId:      agentID,
 			Attributes:   maps.Clone(req.GetAgent().GetAttributes()),
 			Generation:   gen,
 			RegisteredAt: timestamppb.New(registered),
@@ -162,11 +182,13 @@ func (ps *poolService) RegisterPoolAgent(_ context.Context, req *gdsv1.RegisterP
 			},
 		},
 	}
+	cs.agents[key] = rec
 	s.commitLocked(cs)
 	resp := &gdsv1.RegisterPoolAgentResponse{
-		PoolId:     id,
-		PoolState:  poolStateLocked(cs, id),
-		ServerTime: timestamppb.New(now),
+		PoolId:       id,
+		Registration: registrationView(rec, now),
+		PoolState:    poolStateLocked(cs, id),
+		ServerTime:   timestamppb.New(now),
 	}
 	if p, ok := cs.views[kindPools][id].(*gdsv1.Pool); ok {
 		for _, ag := range p.GetAgents() {
@@ -179,11 +201,8 @@ func (ps *poolService) RegisterPoolAgent(_ context.Context, req *gdsv1.RegisterP
 }
 
 func (ps *poolService) HeartbeatPoolAgent(_ context.Context, req *gdsv1.HeartbeatPoolAgentRequest) (*gdsv1.HeartbeatPoolAgentResponse, error) {
-	if err := require("clusterset", req.GetClusterset(), "pool_id", req.GetPoolId()); err != nil {
+	if err := validateAgentKey(req.GetClusterset(), req.GetPoolId(), req.GetRole(), req.GetAgentId()); err != nil {
 		return nil, err
-	}
-	if !validAgentRole(req.GetRole()) {
-		return nil, errAgentRole("role")
 	}
 	if err := validAgentAttributes("attributes", req.GetAttributes()); err != nil {
 		return nil, err
@@ -193,20 +212,21 @@ func (ps *poolService) HeartbeatPoolAgent(_ context.Context, req *gdsv1.Heartbea
 	defer s.mu.Unlock()
 	now := s.now()
 	cs := s.setLocked(req.GetClusterset())
-	rec := agentLocked(cs, req.GetPoolId(), req.GetRole())
+	_, rec := agentLocked(cs, req.GetPoolId(), req.GetRole(), req.GetAgentId())
 	if rec == nil {
-		return nil, errNotFound("agent %s of pool %s not found in clusterset %q", req.GetRole(), req.GetPoolId(), req.GetClusterset())
+		return nil, errNotFound("registration %q of agent %s of pool %s not found in clusterset %q",
+			req.GetAgentId(), req.GetRole(), req.GetPoolId(), req.GetClusterset())
 	}
-	if cur := rec.a.GetLease().GetEpoch(); req.GetEpoch() != cur {
+	if cur := rec.r.GetLease().GetEpoch(); req.GetEpoch() != cur {
 		return nil, errEpochMismatch("pool agent", req.GetEpoch(), cur)
 	}
-	next := proto.CloneOf(rec.a)
+	next := proto.CloneOf(rec.r)
 	next.Lease.RenewedAt = timestamppb.New(now)
 	next.UpdatedAt = timestamppb.New(now)
 	if len(req.GetAttributes()) > 0 {
 		next.Attributes = maps.Clone(req.GetAttributes())
 	}
-	rec.a = next
+	rec.r = next
 	s.commitLocked(cs)
 	return &gdsv1.HeartbeatPoolAgentResponse{
 		Lease:      leaseView(next.GetLease(), rec.ttl, now),
@@ -216,18 +236,15 @@ func (ps *poolService) HeartbeatPoolAgent(_ context.Context, req *gdsv1.Heartbea
 }
 
 func (ps *poolService) DeregisterPoolAgent(_ context.Context, req *gdsv1.DeregisterPoolAgentRequest) (*gdsv1.DeregisterPoolAgentResponse, error) {
-	if err := require("clusterset", req.GetClusterset(), "pool_id", req.GetPoolId()); err != nil {
+	if err := validateAgentKey(req.GetClusterset(), req.GetPoolId(), req.GetRole(), req.GetAgentId()); err != nil {
 		return nil, err
-	}
-	if !validAgentRole(req.GetRole()) {
-		return nil, errAgentRole("role")
 	}
 	s := ps.s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cs := s.setLocked(req.GetClusterset())
-	if rec := agentLocked(cs, req.GetPoolId(), req.GetRole()); rec != nil {
-		delete(cs.agents, agentKey{cluster: rec.cluster, poolID: rec.poolID, role: rec.a.GetRole()})
+	if key, rec := agentLocked(cs, req.GetPoolId(), req.GetRole(), req.GetAgentId()); rec != nil {
+		delete(cs.agents, key)
 		s.commitLocked(cs)
 	}
 	return &gdsv1.DeregisterPoolAgentResponse{}, nil

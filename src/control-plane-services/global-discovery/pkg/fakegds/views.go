@@ -424,18 +424,26 @@ func poolsView(cs *clusterSet, active map[string]bool, region map[string]string,
 	return out
 }
 
-// agentSources holds the two sources of one pool agent.
+// agentSources holds the sources of one pool agent.
 type agentSources struct {
 	// label is the first export with the role by namespace and name;
 	// total and ready count the endpoints of every export with the role
 	// while the cluster lease is active.
 	label        *gdsv1.ServiceExport
 	total, ready int32
-	api          *agentRec
+	regs         []*agentRec
 }
 
-// poolAgents merges the label and API sources of a pool's agents, one per
-// role present, sorted by role.
+// registrationView returns a registration with the read-time fields of its
+// lease filled.
+func registrationView(rec *agentRec, now time.Time) *gdsv1.PoolAgentRegistration {
+	r := proto.CloneOf(rec.r)
+	r.Lease = leaseView(rec.r.GetLease(), rec.ttl, now)
+	return r
+}
+
+// poolAgents merges the label source and the registrations of a pool's
+// agents, one per role present, sorted by role.
 func poolAgents(cs *clusterSet, a *poolAgg, clusterActive bool, now time.Time) []*gdsv1.PoolAgent {
 	sources := map[gdsv1.FrontendRole]*agentSources{}
 	get := func(r gdsv1.FrontendRole) *agentSources {
@@ -465,7 +473,8 @@ func poolAgents(cs *clusterSet, a *poolAgg, clusterActive bool, now time.Time) [
 		}
 	}
 	for _, ag := range a.agents {
-		get(ag.a.GetRole()).api = ag
+		src := get(ag.role)
+		src.regs = append(src.regs, ag)
 	}
 	var out []*gdsv1.PoolAgent
 	for _, role := range slices.Sorted(maps.Keys(sources)) {
@@ -477,20 +486,33 @@ func poolAgents(cs *clusterSet, a *poolAgg, clusterActive bool, now time.Time) [
 			ag.PortName = agentPortName(role, e.GetSpec().GetAnnotations())
 			ag.EndpointCount, ag.ReadyEndpointCount = src.total, src.ready
 		}
-		if rec := src.api; rec != nil {
+		if len(src.regs) > 0 {
 			ag.Source = gdsv1.AgentSource_AGENT_SOURCE_API
 			if src.label != nil {
 				ag.Source = gdsv1.AgentSource_AGENT_SOURCE_BOTH
 			}
-			ag.Lease = leaseView(rec.a.GetLease(), rec.ttl, now)
-			ag.AgentId = rec.a.GetAgentId()
-			ag.Attributes = maps.Clone(rec.a.GetAttributes())
-			ag.Generation = rec.a.GetGeneration()
-			ag.RegisteredAt = rec.a.GetRegisteredAt()
-			ag.UpdatedAt = rec.a.GetUpdatedAt()
+			slices.SortFunc(src.regs, func(x, y *agentRec) int { return cmp.Compare(x.r.GetAgentId(), y.r.GetAgentId()) })
+			// The agent mirrors the registration whose lease expires last,
+			// the first by agent_id on a tie.
+			var freshest *gdsv1.PoolAgentRegistration
+			for _, rec := range src.regs {
+				r := registrationView(rec, now)
+				ag.Registrations = append(ag.Registrations, r)
+				if r.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE {
+					ag.ActiveRegistrationCount++
+				}
+				if freshest == nil || r.GetLease().GetExpiresAt().AsTime().After(freshest.GetLease().GetExpiresAt().AsTime()) {
+					freshest = r
+				}
+			}
+			ag.Lease = freshest.GetLease()
+			ag.AgentId = freshest.GetAgentId()
+			ag.Attributes = freshest.GetAttributes()
+			ag.Generation = freshest.GetGeneration()
+			ag.RegisteredAt = freshest.GetRegisteredAt()
+			ag.UpdatedAt = freshest.GetUpdatedAt()
 		}
-		ag.Live = (clusterActive && ag.ReadyEndpointCount > 0) ||
-			ag.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE
+		ag.Live = (clusterActive && ag.ReadyEndpointCount > 0) || ag.ActiveRegistrationCount > 0
 		out = append(out, ag)
 	}
 	return out
@@ -607,7 +629,7 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 		Agents:                len(a.agents) > 0,
 	}
 	for _, ag := range p.Agents {
-		leaseActive := ag.GetLease().GetState() == gdsv1.LeaseState_LEASE_STATE_ACTIVE
+		leaseActive := ag.GetActiveRegistrationCount() > 0
 		in.AgentLeaseActive = in.AgentLeaseActive || leaseActive
 		in.IngressAgentLeaseActive = in.IngressAgentLeaseActive || (leaseActive && isIngress(ag.GetRole()))
 		if ag.GetRole() == gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY && ag.GetLive() {
@@ -615,10 +637,10 @@ func poolView(cs *clusterSet, a *poolAgg, active map[string]bool, region map[str
 		}
 	}
 	for _, ag := range a.agents {
-		if t := ag.a.GetUpdatedAt().AsTime(); t.After(updated) {
+		if t := ag.r.GetUpdatedAt().AsTime(); t.After(updated) {
 			updated = t
 		}
-		if t := ag.a.GetRegisteredAt().AsTime(); registered.IsZero() || t.Before(registered) {
+		if t := ag.r.GetRegisteredAt().AsTime(); registered.IsZero() || t.Before(registered) {
 			registered = t
 		}
 	}
