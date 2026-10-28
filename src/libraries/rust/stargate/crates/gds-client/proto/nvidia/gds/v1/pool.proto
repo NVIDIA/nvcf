@@ -152,9 +152,10 @@ service PoolService {
 // or, for an API-only pool without agents, until its first heartbeat; then
 // desired_state (ACTIVE or DRAINING) while the pool is live, UNHEALTHY
 // otherwise. A pool is live while its cluster lease is active and an ingress
-// agent has a ready endpoint, or while an ingress agent's lease is active; an
-// API-only pool (no services, no labelled export, no agents) is live while
-// its own lease is active. A pool whose only live agent is a KV_RELAY stays
+// agent has a ready endpoint, or while an ingress agent's lease is active. A
+// pool whose ingress is the frontend URL of its API registration (no
+// services, no labelled export) is also live while its own lease is active,
+// whatever agents it has. A pool whose only live agent is a KV_RELAY stays
 // REGISTERED. GONE after DeregisterPool or when the labelled exports, the API
 // registration and every agent registration are gone; a GONE pool is kept as
 // a tombstone for one bookmark interval.
