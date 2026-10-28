@@ -1,0 +1,92 @@
+{
+  "description": "A System One request with images and assets in both forms and an unknown member forwards them unchanged; the estimate counts each image slot as the flat default of 1024 tokens and never counts the base64.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "state": "Compare the images.",
+    "images": [
+      "iVBORw0KGgo=",
+      "/9j/4AAQ"
+    ],
+    "assets": {
+      "logo": {
+        "mediaType": "image/png",
+        "base64": "iVBORw0KGgo="
+      },
+      "shot": "data:image/jpeg;base64,/9j/4AAQ"
+    },
+    "questions": {
+      "q1": {
+        "type": "choice",
+        "options": [
+          "same",
+          "different"
+        ]
+      }
+    },
+    "vendor_extension": {
+      "flag": true,
+      "revision": 9007199254740993
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "state": "Compare the images.",
+    "images": [
+      "iVBORw0KGgo=",
+      "/9j/4AAQ"
+    ],
+    "assets": {
+      "logo": {
+        "mediaType": "image/png",
+        "base64": "iVBORw0KGgo="
+      },
+      "shot": "data:image/jpeg;base64,/9j/4AAQ"
+    },
+    "questions": {
+      "q1": {
+        "type": "choice",
+        "options": [
+          "same",
+          "different"
+        ]
+      }
+    },
+    "vendor_extension": {
+      "flag": true,
+      "revision": 9007199254740993
+    }
+  },
+  "upstream_input_tokens": "4138",
+  "upstream_affinity_key": "",
+  "upstream_response": {
+    "json": {
+      "answers": {
+        "q1": {
+          "probabilities": {
+            "same": 0.0625,
+            "different": 0.9375
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 4100
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "answers": {
+        "q1": {
+          "probabilities": {
+            "same": 0.0625,
+            "different": 0.9375
+          }
+        }
+      },
+      "usage": {
+        "input_tokens": 4100
+      }
+    }
+  }
+}

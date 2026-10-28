@@ -1,0 +1,74 @@
+{
+  "description": "Minimal decisions request only rewrites model; question members, unknown members and response extensions survive, and the input token estimate counts every string leaf.",
+  "path": "/v1/decisions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": "Is the sky blue?",
+    "questions": [
+      {
+        "id": "q1",
+        "type": "predicate",
+        "text": "Is it daytime?",
+        "vendor_hint": {
+          "flag": true,
+          "revision": 9007199254740993
+        }
+      }
+    ]
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": "Is the sky blue?",
+    "questions": [
+      {
+        "id": "q1",
+        "type": "predicate",
+        "text": "Is it daytime?",
+        "vendor_hint": {
+          "flag": true,
+          "revision": 9007199254740993
+        }
+      }
+    ]
+  },
+  "upstream_input_tokens": "43",
+  "upstream_affinity_key": "",
+  "upstream_response": {
+    "json": {
+      "results": [
+        {
+          "id": "q1",
+          "type": "predicate",
+          "probability": 0.12345678901234567890123456789,
+          "vendor_result": null
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "input_tokens": 43,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "results": [
+        {
+          "id": "q1",
+          "type": "predicate",
+          "probability": 0.12345678901234567890123456789,
+          "vendor_result": null
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "input_tokens": 43,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  }
+}
