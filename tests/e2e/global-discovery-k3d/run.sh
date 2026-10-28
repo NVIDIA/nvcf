@@ -676,7 +676,6 @@ stop_port_forward() {
     kill "${PF_PID}" 2>/dev/null || true
     wait "${PF_PID}" 2>/dev/null || true
     PF_PID=""
-ROUTER_PF_PID=""
   fi
 }
 
