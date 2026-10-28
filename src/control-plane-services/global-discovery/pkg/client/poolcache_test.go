@@ -65,6 +65,13 @@ func TestPoolStateIngressAndAgents(t *testing.T) {
 	assert.Nil(t, Agent(nil, rolePylon))
 	assert.False(t, Agent(down, roleOpenAI).GetLive())
 
+	pods := []*gdsv1.PoolAgentRegistration{{AgentId: "pylon-0"}, {AgentId: "pylon-1"}}
+	pylon.Agents[1].Registrations = pods
+	assert.Equal(t, pods, Registrations(pylon, rolePylon), "one registration per process instance")
+	assert.Nil(t, Registrations(pylon, roleKVRelay), "an agent without registrations")
+	assert.Nil(t, Registrations(pylon, roleOpenAI), "no agent of the role")
+	assert.Nil(t, Registrations(nil, rolePylon))
+
 	assert.True(t, KVRelayLive(relayOnly))
 	assert.True(t, KVRelayLive(&gdsv1.Pool{KvRelayLive: true}), "the derived flag alone")
 	assert.True(t, KVRelayLive(&gdsv1.Pool{Agents: []*gdsv1.PoolAgent{poolAgent(roleKVRelay, true)}}), "a live relay agent alone")

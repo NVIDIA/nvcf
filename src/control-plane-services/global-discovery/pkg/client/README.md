@@ -32,7 +32,8 @@ it the package provides:
 - `WatchLoop`, a reconnecting watch with snapshot and resume handling;
 - `PoolCache` and `RouterCache`, watch-driven caches with a TTL re-list,
   with router seed and pool agent helpers;
-- `AgentRegistration`, a pool agent registration kept alive by a heartbeat;
+- `AgentRegistration`, one process instance's pool agent registration, kept
+  alive by a heartbeat;
 - `NextGeneration` and `Generation` for writer generations, and helpers that
   read GDS error details;
 - `nvcf_gds_client_*` Prometheus metrics.
@@ -211,7 +212,12 @@ choose) and `Ingress()` (pools with a live ingress agent). Per pool:
   included.
 - `Agent(pool, role)` returns the pool's agent with a role, or nil. GDS keeps
   one agent per role, merged from the role's exported Service and its
-  `RegisterPoolAgent` registration (`source` LABEL, API or BOTH).
+  `RegisterPoolAgent` registrations (`source` LABEL, API or BOTH). Its
+  `lease`, `agent_id` and `attributes` mirror the freshest registration.
+- `Registrations(pool, role)` returns the agent's registrations, one per
+  process instance (for example one per Pylon pod), sorted by agent id.
+  Registrations whose lease expired stay listed until GDS removes them;
+  check `lease.state`, or read the agent's `active_registration_count`.
 - `KVRelayLive(pool)` reports a live KV relay (Dynamo PoolRelay):
   `kv_relay_live` or a live KV_RELAY agent.
 
@@ -340,9 +346,11 @@ streams over gRPC and uses `RelayURLs`:
 
 A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
 the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON) (design 4.6). Besides the
-label source (the role's exported Service), a process registers the agent
-itself with `RegisterPoolAgent`. `AgentRegistration` does that and keeps the
-lease alive, the Go counterpart of the Rust `AgentRegistration`:
+label source (the role's exported Service), every process instance
+registers itself with `RegisterPoolAgent` under its own agent id; GDS keys
+registrations by (cluster, pool name, role, agent id), and the agent is live
+while any of them is. `AgentRegistration` makes one registration and keeps
+its lease alive, the Go counterpart of the Rust `AgentRegistration`:
 
 ```go
 reg, err := client.RegisterAgent(ctx, c, client.AgentSpec{
@@ -350,7 +358,7 @@ reg, err := client.RegisterAgent(ctx, c, client.AgentSpec{
 	Cluster:    clusterID,
 	PoolName:   "llama-blue",
 	Role:       gdsv1.FrontendRole_FRONTEND_ROLE_PYLON,
-	AgentID:    "pylon-operator/llama-blue",
+	AgentID:    podName,
 	Attributes: map[string]string{"models": "llama-3"},
 })
 if err != nil {
@@ -364,8 +372,8 @@ reg.SetAttributes(map[string]string{"models": "llama-3,mistral"})
 | :---- | :---- | :---- |
 | `Clusterset`, `Cluster`, `PoolName` | required | The pool. GDS creates it when it does not exist, under the deterministic pool id of (clusterset, cluster, pool name), so a registration and a labelled export converge on one pool. |
 | `Role` | required | OPENAI, KV_RELAY or PYLON. |
-| `AgentID` | empty | The process identity, for example a Pylon `inference_server_id` or a relay pod name. |
-| `Attributes` | none | Writer-owned facts, at most 16 entries. |
+| `AgentID` | required | The process instance, for example a Pylon `inference_server_id` or a relay pod name; at most 253 bytes (`MaxAgentIDLength`). |
+| `Attributes` | none | Writer-owned facts of this registration, at most 16 entries. |
 | `LeaseTTL` | 60 s | Agent lease; GDS clamps it to [10 s, 5 m]. |
 | `HeartbeatInterval` | lease / 3 | A third of the lease GDS granted, else of `LeaseTTL`. |
 
@@ -374,30 +382,36 @@ reg.SetAttributes(map[string]string{"models": "llama-3,mistral"})
   generation. It returns the error of a failed first registration. Its
   context bounds that call only.
 - A goroutine heartbeats every interval, shortened by up to 20 percent of
-  jitter. On NOT_FOUND (GDS lost the registration) or ABORTED with
-  `LEASE_EPOCH_MISMATCH` (another registration minted a new epoch) it
-  registers again with the current spec. Other errors are retried after the
-  client's `Backoff`, at most every interval; the lease expires if they
-  last longer than the lease.
+  jitter. Heartbeats carry the agent id and this registration's epoch. On
+  NOT_FOUND (GDS lost the registration) or ABORTED with
+  `LEASE_EPOCH_MISMATCH` (a registration under the same agent id minted a
+  new epoch) it registers again with the current spec. Other errors are
+  retried after the client's `Backoff`, at most every interval; the lease
+  expires if they last longer than the lease.
 - `SetAttributes` replaces the attributes; the next heartbeat sends them
   and later registrations carry them. A heartbeat replaces attributes only
   with a non-empty map, so clearing them registers again (a new epoch).
-- `State()` returns the pool id, the epoch, the derived pool state and the
-  lease of the last success, the consecutive failures and the last error,
-  and the `Stopped` and `Deregistered` flags. `Updates()` subscribes a
-  channel that receives a value when one of them changes (plain lease
-  renewals do not count) and is closed after `Close` or when the `Client`
-  is closed.
-- `Close(ctx)` stops the heartbeat and calls `DeregisterPoolAgent`. The pool
-  stays while an export, the pool registration or another agent remains.
-  When the deregistration fails, the lease expires. Close the registration
-  before the `Client`; closing the client stops the heartbeat.
-- GDS keeps one agent per (pool, role), so a role has one writer. Two
-  registrations of the same role take each other's epoch on every heartbeat,
-  and `Close` of either removes the agent.
+- `State()` returns the pool id, the derived pool state, the epoch and lease
+  of this registration as of the last success, the consecutive failures,
+  the last error, and the `Stopped` and `Deregistered` flags. The epoch
+  comes from the response's `registration`, not from the merged agent,
+  which mirrors the freshest registration of the role. `Updates()`
+  subscribes a channel that receives a value when one of them changes
+  (plain lease renewals do not count) and is closed after `Close` or when
+  the `Client` is closed.
+- `Close(ctx)` stops the heartbeat and calls `DeregisterPoolAgent` with the
+  agent id. The agent stays while its export or another registration
+  remains, the pool while an export, the pool registration or another agent
+  remains. When the deregistration fails, the lease expires. Close the
+  registration before the `Client`; closing the client stops the heartbeat.
+- Make one registration per process instance: N Pylon pods are N
+  `AgentRegistration`s with N agent ids, and their heartbeats never fence
+  each other. Two registrations that share an agent id take each other's
+  epoch on every heartbeat.
 
 `Pools()` also exposes the RPCs directly: `RegisterAgent`, `HeartbeatAgent`
-and `DeregisterAgent`.
+and `DeregisterAgent`; heartbeat and deregistration requests name the
+registration with `agent_id`.
 
 ## Metrics
 

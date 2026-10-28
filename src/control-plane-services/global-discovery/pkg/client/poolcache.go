@@ -131,7 +131,8 @@ func IngressLive(p *gdsv1.Pool) bool {
 
 // Agent returns the pool's agent with the role, or nil when the pool has
 // none. GDS keeps at most one agent per role, merged from the role's
-// exported Service and its RegisterPoolAgent registration. Do not modify
+// exported Service and its RegisterPoolAgent registrations; its lease,
+// agent_id and attributes mirror the freshest registration. Do not modify
 // the agent of a cached pool.
 func Agent(p *gdsv1.Pool, role gdsv1.FrontendRole) *gdsv1.PoolAgent {
 	for _, a := range p.GetAgents() {
@@ -140,6 +141,16 @@ func Agent(p *gdsv1.Pool, role gdsv1.FrontendRole) *gdsv1.PoolAgent {
 		}
 	}
 	return nil
+}
+
+// Registrations returns every registration of the pool's agent with the
+// role, one per process instance (for example one per Pylon pod), sorted
+// by agent id; nil when the pool has no such agent or it has no
+// registration. Registrations whose lease expired are included until GDS
+// removes them: check Lease.State, or read the agent's
+// active_registration_count. Do not modify them.
+func Registrations(p *gdsv1.Pool, role gdsv1.FrontendRole) []*gdsv1.PoolAgentRegistration {
+	return Agent(p, role).GetRegistrations()
 }
 
 // KVRelayLive reports whether the pool's KV relay (Dynamo PoolRelay) is

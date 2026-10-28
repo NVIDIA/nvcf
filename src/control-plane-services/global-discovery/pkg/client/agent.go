@@ -39,12 +39,16 @@ import (
 // clamps agent leases to [10 s, 5 m].
 const DefaultAgentLeaseTTL = 60 * time.Second
 
+// MaxAgentIDLength is the longest AgentID GDS accepts, in bytes.
+const MaxAgentIDLength = 253
+
 // agentHeartbeatJitter shortens each heartbeat interval by up to this
 // fraction, so agents registered together spread their heartbeats.
 const agentHeartbeatJitter = 0.2
 
-// AgentSpec describes the pool agent an AgentRegistration registers: one
-// process kind of a pool (design 4.6).
+// AgentSpec describes the registration an AgentRegistration makes: one
+// process instance of a pool agent, the role a process plays for a pool
+// (design 4.6).
 type AgentSpec struct {
 	// Clusterset of the pool; required.
 	Clusterset string
@@ -57,11 +61,14 @@ type AgentSpec struct {
 	PoolName string
 	// Role of the agent: OPENAI, KV_RELAY or PYLON; required.
 	Role gdsv1.FrontendRole
-	// AgentID identifies the registering process, for example a Pylon
-	// inference_server_id or a relay pod name.
+	// AgentID identifies the registering process instance, for example a
+	// Pylon inference_server_id or a relay pod name; required, at most
+	// MaxAgentIDLength bytes. GDS keys registrations by (cluster, pool name,
+	// role, agent id): every process instance registers under its own id,
+	// and registrations of one role with different ids coexist.
 	AgentID string
-	// Attributes are writer-owned facts, at most 16 entries, for example the
-	// model list. SetAttributes replaces them later.
+	// Attributes are writer-owned facts of this registration, at most 16
+	// entries, for example the model list. SetAttributes replaces them later.
 	Attributes map[string]string
 	// LeaseTTL is the agent lease. Default DefaultAgentLeaseTTL.
 	LeaseTTL time.Duration
@@ -76,6 +83,7 @@ func (s AgentSpec) validate() error {
 		{"Clusterset", s.Clusterset},
 		{"Cluster", s.Cluster},
 		{"PoolName", s.PoolName},
+		{"AgentID", s.AgentID},
 	} {
 		if f.value == "" {
 			missing = append(missing, f.name)
@@ -92,6 +100,9 @@ func (s AgentSpec) validate() error {
 	case gdsv1.FrontendRole_FRONTEND_ROLE_OPENAI, gdsv1.FrontendRole_FRONTEND_ROLE_KV_RELAY, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON:
 	default:
 		return fmt.Errorf("gds: AgentSpec.Role %s is not OPENAI, KV_RELAY or PYLON", s.Role)
+	}
+	if len(s.AgentID) > MaxAgentIDLength {
+		return fmt.Errorf("gds: AgentSpec.AgentID is longer than %d bytes", MaxAgentIDLength)
 	}
 	if s.LeaseTTL < 0 || s.HeartbeatInterval < 0 {
 		return errors.New("gds: AgentSpec.LeaseTTL and HeartbeatInterval must not be negative")
@@ -116,14 +127,14 @@ func agentHeartbeatInterval(spec AgentSpec, granted *gdsv1.Lease) time.Duration 
 type AgentRegistrationState struct {
 	// PoolID is the id of the agent's pool as GDS returned it.
 	PoolID string
-	// Epoch is the agent lease epoch of the current registration. It
-	// changes on every registration.
+	// Epoch is the lease epoch of this process's registration. It changes
+	// on every registration.
 	Epoch uint64
 	// PoolState is the derived pool state GDS reported with the last
 	// successful registration or heartbeat.
 	PoolState gdsv1.PoolState
-	// Lease is the agent lease of the last successful registration or
-	// heartbeat. Do not modify it.
+	// Lease is this registration's lease as of the last successful
+	// registration or heartbeat. Do not modify it.
 	Lease *gdsv1.Lease
 	// UpdatedAt is the time of the last successful registration or
 	// heartbeat.
@@ -149,22 +160,24 @@ func (s AgentRegistrationState) changed(prev AgentRegistrationState) bool {
 		s.Stopped != prev.Stopped || s.Deregistered != prev.Deregistered
 }
 
-// AgentRegistration is a pool agent registered with RegisterPoolAgent and
-// kept alive by a heartbeat goroutine, the Go counterpart of the Rust
-// gds-client AgentRegistration. Pylon Operator and other Go processes use it
-// to register a PYLON, KV_RELAY or OPENAI agent of a pool.
+// AgentRegistration is one process instance's registration of a pool agent,
+// made with RegisterPoolAgent and kept alive by a heartbeat goroutine, the
+// Go counterpart of the Rust gds-client AgentRegistration. Pylon Operator
+// and other Go processes use it to register as a PYLON, KV_RELAY or OPENAI
+// agent of a pool.
 //
 // The heartbeat calls HeartbeatPoolAgent every HeartbeatInterval (a third
 // of the lease, shortened by up to 20 percent of jitter). When GDS answers
 // NOT_FOUND (the registration is gone) or ABORTED with LEASE_EPOCH_MISMATCH
-// (another registration minted a new epoch), it registers again with the
-// current spec. Failed heartbeats are retried after the client's Backoff,
+// (a registration under the same agent id minted a new epoch), it registers
+// again with the current spec. Failed heartbeats are retried after the client's Backoff,
 // at most every interval. Registrations use a Generation and retry once
 // after STALE_GENERATION.
 //
-// GDS keeps one agent per (pool, role), so a role has one writer: two
-// registrations of the same role take each other's epoch on every
-// heartbeat, and Close of either removes the agent.
+// Make one registration per process instance. GDS merges the registrations
+// of a role into one PoolAgent, live while any of them is, so N Pylon pods
+// are N AgentRegistrations with N agent ids. Two registrations that share an
+// agent id take each other's epoch on every heartbeat.
 //
 // It is safe for concurrent use. Close it before closing the Client.
 type AgentRegistration struct {
@@ -204,9 +217,11 @@ func RegisterAgent(ctx context.Context, c *Client, spec AgentSpec) (*AgentRegist
 	if spec.LeaseTTL == 0 {
 		spec.LeaseTTL = DefaultAgentLeaseTTL
 	}
+	logger := c.logger.With("clusterset", spec.Clusterset, "cluster", spec.Cluster, "pool", spec.PoolName,
+		"role", spec.Role.String(), "agent_id", spec.AgentID)
 	a := &AgentRegistration{
 		c:      c,
-		logger: c.logger.With("clusterset", spec.Clusterset, "cluster", spec.Cluster, "pool", spec.PoolName, "role", spec.Role.String()),
+		logger: logger,
 		spec:   spec,
 		done:   make(chan struct{}),
 		subs:   map[chan struct{}]struct{}{},
@@ -258,9 +273,10 @@ func (a *AgentRegistration) SetAttributes(attrs map[string]string) {
 	a.attrsVersion++
 }
 
-// Close stops the heartbeat and removes the agent with DeregisterPoolAgent;
-// ctx bounds that call. The pool stays while an export, the pool
-// registration or another agent remains. When the deregistration fails,
+// Close stops the heartbeat and removes this registration with
+// DeregisterPoolAgent; ctx bounds that call. The agent stays while its
+// export or another registration remains, the pool while an export, the
+// pool registration or another agent remains. When the deregistration fails,
 // Close returns its error and the lease expires after its TTL. Later calls
 // return the first result.
 func (a *AgentRegistration) Close(ctx context.Context) error {
@@ -272,7 +288,12 @@ func (a *AgentRegistration) Close(ctx context.Context) error {
 		<-a.done
 
 		a.mu.Lock()
-		req := &gdsv1.DeregisterPoolAgentRequest{Clusterset: a.spec.Clusterset, PoolId: a.state.PoolID, Role: a.spec.Role}
+		req := &gdsv1.DeregisterPoolAgentRequest{
+			Clusterset: a.spec.Clusterset,
+			PoolId:     a.state.PoolID,
+			Role:       a.spec.Role,
+			AgentId:    a.spec.AgentID,
+		}
 		a.mu.Unlock()
 		_, err := a.c.Pools().DeregisterAgent(ctx, req)
 
@@ -375,8 +396,15 @@ func (a *AgentRegistration) register(ctx context.Context) error {
 			}
 			return err
 		}
-		a.gen.Observe(resp.GetAgent().GetGeneration())
-		lease := resp.GetAgent().GetLease()
+		// The registration carries this process's lease; the agent mirrors
+		// the freshest registration of the role, which may be another
+		// process's.
+		own := resp.GetRegistration()
+		if own == nil {
+			own = &gdsv1.PoolAgentRegistration{Lease: resp.GetAgent().GetLease(), Generation: resp.GetAgent().GetGeneration()}
+		}
+		a.gen.Observe(own.GetGeneration())
+		lease := own.GetLease()
 		a.mu.Lock()
 		a.attrsApplied = max(a.attrsApplied, version)
 		a.updateLocked(func(s *AgentRegistrationState) {
@@ -400,6 +428,7 @@ func (a *AgentRegistration) heartbeat(ctx context.Context) error {
 		Clusterset: a.spec.Clusterset,
 		PoolId:     a.state.PoolID,
 		Role:       a.spec.Role,
+		AgentId:    a.spec.AgentID,
 		Epoch:      a.state.Epoch,
 	}
 	version := a.attrsVersion

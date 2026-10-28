@@ -49,11 +49,13 @@ limitations under the License.
 //     returns the pylon seeds, one URL per ready router replica of every
 //     router cluster, RouterState.RelayURLs the seeds of the Dynamo
 //     PoolRelay and RouterQUICAddrs a router's reverse tunnel addresses.
-//     PoolState.Ingress, Agent and KVRelayLive read the typed pool agents.
-//   - AgentRegistration: RegisterAgent registers a pool agent (OPENAI,
-//     KV_RELAY or PYLON) with RegisterPoolAgent, heartbeats at a third of
-//     its lease, registers again when GDS lost or superseded the lease, and
-//     deregisters on Close.
+//     PoolState.Ingress, Agent, Registrations and KVRelayLive read the typed
+//     pool agents.
+//   - AgentRegistration: RegisterAgent registers one process instance of a
+//     pool agent (OPENAI, KV_RELAY or PYLON) under its agent id with
+//     RegisterPoolAgent, heartbeats at a third of its lease, registers again
+//     when GDS lost or superseded the lease, and deregisters on Close. Make
+//     one registration per process instance.
 //   - NextGeneration and Generation for writer generations,
 //     max(previous + 1, unix milliseconds), and StaleGeneration and Reason
 //     to read GDS error details.
