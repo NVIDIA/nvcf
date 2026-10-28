@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "diskguard",
+    srcs = [
+        "config.go",
+        "guard.go",
+        "quarantine.go",
+        "volume.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/diskguard",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":diskguard",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
+
+go_test(
+    name = "diskguard_test",
+    srcs = [
+        "guard_test.go",
+        "quarantine_internal_test.go",
+    ],
+    embed = [":diskguard"],
+)
