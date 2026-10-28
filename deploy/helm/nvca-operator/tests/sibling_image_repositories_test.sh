@@ -25,11 +25,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp_dir="$(mktemp -d)"
 
+# Remove temporary rendered manifests when the test exits.
 cleanup() {
   rm -rf "${tmp_dir}"
 }
 trap cleanup EXIT
 
+# Render the chart for an operator repository and any additional Helm arguments.
 render() {
   local operator_repository="$1"
   shift
@@ -47,17 +49,20 @@ render() {
     "$@"
 }
 
+# Read the credential-helper repository from a rendered cluster DTO.
 cred_helper_repository() {
   yq -r 'select(.kind == "ConfigMap" and .metadata.name == "nvcfbackend-helm-managed") |
     .data."cluster-dto.yaml" | from_yaml | .imageCredentialHelper.imageConfig.repository' "$1"
 }
 
+# Read the collector repository from the rendered operator's environment.
 collector_repository() {
   yq -r 'select(.kind == "Deployment" and .metadata.name == "nvca-operator") |
     .spec.template.spec.containers[] | select(.name == "nvca-operator") |
     .env[] | select(.name == "OTEL_COLLECTOR_IMAGE_REPO") | .value' "$1"
 }
 
+# Fail with a labeled diagnostic when the actual repository differs from expected.
 expect() {
   local what="$1" got="$2" want="$3"
   if [[ "${got}" != "${want}" ]]; then
