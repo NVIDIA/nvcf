@@ -878,7 +878,7 @@ native Anthropic `/v1/messages`, and the beta decision model paths
 compatible gateway, Stargate, and Pylon build and a backend that serves that
 protocol. Published stack releases must qualify and include those builds before
 use. Declare a decision path in `uris` when you create the function, because
-`uris` cannot change afterwards.
+`uris` cannot change afterward.
 
 ### 5. List Functions
 
