@@ -829,6 +829,7 @@ func materializeResolvedInventorySourceCharts(
 	if err != nil {
 		return nil, fmt.Errorf("parse releases for source chart rendering: %w", err)
 	}
+	lineage := &stackSourceLineage{repoRoot: repoRoot, stackCommit: stackSource.Commit}
 	var used []string
 	for _, release := range releases {
 		alias, name, found := strings.Cut(release.Chart, "/")
@@ -852,8 +853,12 @@ func materializeResolvedInventorySourceCharts(
 			}
 			return nil, fmt.Errorf("source chart %s path %s is unavailable at %s: %w", name, sourceChart.Path, tag, err)
 		}
-		if _, err := gitOutput(repoRoot, "merge-base", "--is-ancestor", tag, stackSource.Commit); err != nil {
-			return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s: %w", name, tag, stackSource.Commit, err)
+		inSource, err := lineage.contains(tag)
+		if err != nil {
+			return nil, fmt.Errorf("source chart %s: %w", name, err)
+		}
+		if !inSource {
+			return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s%s", name, tag, stackSource.Commit, lineage.describeOrigins())
 		}
 		chartPath := filepath.Join(chartRoot, name, release.Version)
 		if err := extractResolvedInventoryGitChart(repoRoot, tag, sourceChart.Path, chartPath); err != nil {
@@ -868,6 +873,113 @@ func materializeResolvedInventorySourceCharts(
 		used = append(used, name)
 	}
 	return used, nil
+}
+
+const (
+	// releaseSnapshotSubject is the subject tools/ci/github-release gives the
+	// commit that roots a stack release branch. That commit copies a
+	// default-branch tree onto a merge-free parent, so chart tags released
+	// from the default branch are not its ancestors.
+	releaseSnapshotSubject = "chore(release): snapshot default branch for linear history"
+	// releaseSnapshotTrailer names the default-branch commit a snapshot copies.
+	releaseSnapshotTrailer = "Snapshot-Of"
+)
+
+var gitCommitNamePattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// stackSourceLineage answers whether a chart tag was released from source
+// that a stack commit contains.
+type stackSourceLineage struct {
+	repoRoot    string
+	stackCommit string
+	origins     []string
+	loaded      bool
+}
+
+// contains reports whether tag is an ancestor of the stack commit, or of the
+// default-branch commit that the stack's release branch snapshot copied.
+func (lineage *stackSourceLineage) contains(tag string) (bool, error) {
+	if _, err := gitOutput(lineage.repoRoot, "merge-base", "--is-ancestor", tag, lineage.stackCommit); err == nil {
+		return true, nil
+	}
+	if !lineage.loaded {
+		origins, err := releaseSnapshotOrigins(lineage.repoRoot, lineage.stackCommit)
+		if err != nil {
+			return false, err
+		}
+		lineage.origins, lineage.loaded = origins, true
+	}
+	for _, origin := range lineage.origins {
+		if _, err := gitOutput(lineage.repoRoot, "merge-base", "--is-ancestor", tag, origin); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (lineage *stackSourceLineage) describeOrigins() string {
+	if len(lineage.origins) == 0 {
+		return ""
+	}
+	return " or of its release snapshot source " + strings.Join(lineage.origins, ", ")
+}
+
+// releaseSnapshotOrigins returns the commits whose source the release branch
+// snapshot under stackCommit copied, or nothing when stackCommit does not
+// descend from a snapshot.
+//
+// A snapshot names its origin in a Snapshot-Of trailer, and that commit must
+// hold the snapshot's tree. A snapshot cut before the trailer existed has
+// none; any other commit in the checkout with the snapshot's exact tree holds
+// the same source.
+func releaseSnapshotOrigins(repoRoot, stackCommit string) ([]string, error) {
+	raw, err := gitOutput(repoRoot, "log", "--fixed-strings", "--grep="+releaseSnapshotSubject, "--format=%H%x00%T%x00%s", stackCommit)
+	if err != nil {
+		return nil, fmt.Errorf("find release snapshot under stack commit %s: %w", stackCommit, err)
+	}
+	var snapshot, snapshotTree string
+	for _, line := range strings.Split(trimOutput(raw), "\n") {
+		fields := strings.SplitN(line, "\x00", 3)
+		if len(fields) == 3 && fields[2] == releaseSnapshotSubject {
+			snapshot, snapshotTree = fields[0], fields[1]
+			break
+		}
+	}
+	if snapshot == "" {
+		return nil, nil
+	}
+
+	raw, err = gitOutput(repoRoot, "log", "-1", "--format=%(trailers:key="+releaseSnapshotTrailer+",valueonly)", snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("read release snapshot %s: %w", snapshot, err)
+	}
+	if recorded := strings.Fields(trimOutput(raw)); len(recorded) > 0 {
+		origin := recorded[0]
+		if len(recorded) != 1 || !gitCommitNamePattern.MatchString(origin) {
+			return nil, fmt.Errorf("release snapshot %s has an invalid %s trailer %q", snapshot, releaseSnapshotTrailer, trimOutput(raw))
+		}
+		tree, err := gitOutput(repoRoot, "rev-parse", "--verify", origin+"^{tree}")
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s commit %s of release snapshot %s: %w", releaseSnapshotTrailer, origin, snapshot, err)
+		}
+		if trimOutput(tree) != snapshotTree {
+			return nil, fmt.Errorf("release snapshot %s does not hold the tree of its %s commit %s", snapshot, releaseSnapshotTrailer, origin)
+		}
+		return []string{origin}, nil
+	}
+
+	raw, err = gitOutput(repoRoot, "log", "--all", "--format=%H %T")
+	if err != nil {
+		return nil, fmt.Errorf("find commits with the tree of release snapshot %s: %w", snapshot, err)
+	}
+	var origins []string
+	for _, line := range strings.Split(trimOutput(raw), "\n") {
+		commit, tree, found := strings.Cut(line, " ")
+		if found && tree == snapshotTree && commit != snapshot {
+			origins = append(origins, commit)
+		}
+	}
+	return origins, nil
 }
 
 func extractResolvedInventoryGitChart(repoRoot, tag, sourcePath, destination string) error {
