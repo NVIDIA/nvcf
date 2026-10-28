@@ -121,6 +121,9 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				// System One errors carry the NVCF ID in the body, so the
 				// header must match after backend headers are copied.
 				gc.Response().Before(func() {
+					if relayed, _ := gc.Get(contextKeyBackendErrorRelayed).(bool); relayed {
+						return
+					}
 					gc.Response().Header().Set(HeaderRequestID, requestID)
 				})
 			}
