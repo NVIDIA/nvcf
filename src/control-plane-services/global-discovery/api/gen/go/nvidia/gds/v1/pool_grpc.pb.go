@@ -64,9 +64,10 @@ const (
 //
 // A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
 // the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
-// label source (its exported Service) and one API registration (its own
-// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
-// pool is live while an ingress agent is live. See Pool.agents.
+// label source (its exported Service) and any number of API registrations,
+// one per process instance (agent_id), each with its own lease; they are
+// merged by (pool, role). OPENAI and PYLON are ingress agents: the pool is
+// live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -88,20 +89,23 @@ type PoolServiceClient interface {
 	// registration of the pool. Watchers receive a DELETE event with state
 	// GONE. Deregistering an unknown pool succeeds.
 	DeregisterPool(ctx context.Context, in *DeregisterPoolRequest, opts ...grpc.CallOption) (*DeregisterPoolResponse, error)
-	// RegisterPoolAgent registers one process kind of a pool, or re-registers
-	// it. It is idempotent on (cluster, pool_name, agent.role): a new agent
-	// lease epoch is minted. The pool is created when it does not exist, under
+	// RegisterPoolAgent registers one process instance of a pool agent, or
+	// re-registers it. It is idempotent on (cluster, pool_name, agent.role,
+	// agent.agent_id): a new lease epoch is minted for that registration. The
+	// pool is created when it does not exist, under
 	// the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
 	// in the request that differs from the pool holding the name fails with
 	// ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
 	// stored one (STALE_GENERATION).
 	RegisterPoolAgent(ctx context.Context, in *RegisterPoolAgentRequest, opts ...grpc.CallOption) (*RegisterPoolAgentResponse, error)
-	// HeartbeatPoolAgent renews one agent's lease and optionally replaces its
-	// attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+	// HeartbeatPoolAgent renews one registration's lease and optionally
+	// replaces its attributes. The epoch must be the current one
+	// (LEASE_EPOCH_MISMATCH).
 	HeartbeatPoolAgent(ctx context.Context, in *HeartbeatPoolAgentRequest, opts ...grpc.CallOption) (*HeartbeatPoolAgentResponse, error)
-	// DeregisterPoolAgent removes one agent registration. The pool stays while
-	// an export, the pool registration or another agent remains. Deregistering
-	// an unknown agent succeeds.
+	// DeregisterPoolAgent removes one registration. The agent stays while its
+	// export or another registration remains; the pool stays while an export,
+	// the pool registration or another agent remains. Deregistering an unknown
+	// registration succeeds.
 	DeregisterPoolAgent(ctx context.Context, in *DeregisterPoolAgentRequest, opts ...grpc.CallOption) (*DeregisterPoolAgentResponse, error)
 	// GetPool returns one pool.
 	GetPool(ctx context.Context, in *GetPoolRequest, opts ...grpc.CallOption) (*GetPoolResponse, error)
@@ -280,9 +284,10 @@ type PoolService_WatchRoutersClient = grpc.ServerStreamingClient[WatchRoutersRes
 //
 // A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
 // the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
-// label source (its exported Service) and one API registration (its own
-// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
-// pool is live while an ingress agent is live. See Pool.agents.
+// label source (its exported Service) and any number of API registrations,
+// one per process instance (agent_id), each with its own lease; they are
+// merged by (pool, role). OPENAI and PYLON are ingress agents: the pool is
+// live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -304,20 +309,23 @@ type PoolServiceServer interface {
 	// registration of the pool. Watchers receive a DELETE event with state
 	// GONE. Deregistering an unknown pool succeeds.
 	DeregisterPool(context.Context, *DeregisterPoolRequest) (*DeregisterPoolResponse, error)
-	// RegisterPoolAgent registers one process kind of a pool, or re-registers
-	// it. It is idempotent on (cluster, pool_name, agent.role): a new agent
-	// lease epoch is minted. The pool is created when it does not exist, under
+	// RegisterPoolAgent registers one process instance of a pool agent, or
+	// re-registers it. It is idempotent on (cluster, pool_name, agent.role,
+	// agent.agent_id): a new lease epoch is minted for that registration. The
+	// pool is created when it does not exist, under
 	// the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
 	// in the request that differs from the pool holding the name fails with
 	// ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
 	// stored one (STALE_GENERATION).
 	RegisterPoolAgent(context.Context, *RegisterPoolAgentRequest) (*RegisterPoolAgentResponse, error)
-	// HeartbeatPoolAgent renews one agent's lease and optionally replaces its
-	// attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+	// HeartbeatPoolAgent renews one registration's lease and optionally
+	// replaces its attributes. The epoch must be the current one
+	// (LEASE_EPOCH_MISMATCH).
 	HeartbeatPoolAgent(context.Context, *HeartbeatPoolAgentRequest) (*HeartbeatPoolAgentResponse, error)
-	// DeregisterPoolAgent removes one agent registration. The pool stays while
-	// an export, the pool registration or another agent remains. Deregistering
-	// an unknown agent succeeds.
+	// DeregisterPoolAgent removes one registration. The agent stays while its
+	// export or another registration remains; the pool stays while an export,
+	// the pool registration or another agent remains. Deregistering an unknown
+	// registration succeeds.
 	DeregisterPoolAgent(context.Context, *DeregisterPoolAgentRequest) (*DeregisterPoolAgentResponse, error)
 	// GetPool returns one pool.
 	GetPool(context.Context, *GetPoolRequest) (*GetPoolResponse, error)

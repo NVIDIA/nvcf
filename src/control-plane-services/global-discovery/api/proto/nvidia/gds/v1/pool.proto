@@ -38,9 +38,10 @@ option go_package = "github.com/NVIDIA/nvcf/src/control-plane-services/global-di
 //
 // A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
 // the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON). Each has at most one
-// label source (its exported Service) and one API registration (its own
-// lease), merged by (pool, role). OPENAI and PYLON are ingress agents: the
-// pool is live while an ingress agent is live. See Pool.agents.
+// label source (its exported Service) and any number of API registrations,
+// one per process instance (agent_id), each with its own lease; they are
+// merged by (pool, role). OPENAI and PYLON are ingress agents: the pool is
+// live while an ingress agent is live. See Pool.agents.
 //
 // Routers are derived from exports labelled gds.nvidia.com/role=router; they
 // are never registered.
@@ -83,9 +84,10 @@ service PoolService {
     option (google.api.http) = {delete: "/v1/clustersets/{clusterset}/pools/{pool_id}"};
   }
 
-  // RegisterPoolAgent registers one process kind of a pool, or re-registers
-  // it. It is idempotent on (cluster, pool_name, agent.role): a new agent
-  // lease epoch is minted. The pool is created when it does not exist, under
+  // RegisterPoolAgent registers one process instance of a pool agent, or
+  // re-registers it. It is idempotent on (cluster, pool_name, agent.role,
+  // agent.agent_id): a new lease epoch is minted for that registration. The
+  // pool is created when it does not exist, under
   // the deterministic pool_id of (clusterset, cluster, pool_name); a pool_id
   // in the request that differs from the pool holding the name fails with
   // ALREADY_EXISTS and reason POOL_NAME_TAKEN. generation must exceed the
@@ -97,8 +99,9 @@ service PoolService {
     };
   }
 
-  // HeartbeatPoolAgent renews one agent's lease and optionally replaces its
-  // attributes. The epoch must be the current one (LEASE_EPOCH_MISMATCH).
+  // HeartbeatPoolAgent renews one registration's lease and optionally
+  // replaces its attributes. The epoch must be the current one
+  // (LEASE_EPOCH_MISMATCH).
   rpc HeartbeatPoolAgent(HeartbeatPoolAgentRequest) returns (HeartbeatPoolAgentResponse) {
     option (google.api.http) = {
       post: "/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}:heartbeat"
@@ -106,9 +109,10 @@ service PoolService {
     };
   }
 
-  // DeregisterPoolAgent removes one agent registration. The pool stays while
-  // an export, the pool registration or another agent remains. Deregistering
-  // an unknown agent succeeds.
+  // DeregisterPoolAgent removes one registration. The agent stays while its
+  // export or another registration remains; the pool stays while an export,
+  // the pool registration or another agent remains. Deregistering an unknown
+  // registration succeeds.
   rpc DeregisterPoolAgent(DeregisterPoolAgentRequest) returns (DeregisterPoolAgentResponse) {
     option (google.api.http) = {delete: "/v1/clustersets/{clusterset}/pools/{pool_id}/agents/{role}"};
   }
@@ -197,8 +201,23 @@ enum DialMode {
   DIAL_MODE_OUTBOUND = 2;
 }
 
+// PoolAgentRegistration is one process instance's registration of an agent
+// role, with its own lease.
+message PoolAgentRegistration {
+  // Identity of the registering process (a Pylon inference_server_id, a
+  // relay pod name); unique within the agent.
+  string agent_id = 1;
+  Lease lease = 2;
+  // Writer-owned, at most 16 entries.
+  map<string, string> attributes = 3;
+  // Writer generation.
+  uint64 generation = 4;
+  google.protobuf.Timestamp registered_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
 // PoolAgent is one process kind of a pool, merged from its exported Service
-// and its API registration. There is at most one per (pool, role).
+// and its API registrations. There is at most one per (pool, role).
 message PoolAgent {
   FrontendRole role = 1;
   AgentSource source = 2;
@@ -210,21 +229,23 @@ message PoolAgent {
   int32 endpoint_count = 5;
   // Ready endpoints while the cluster lease is active.
   int32 ready_endpoint_count = 6;
-  // Lease of the API registration; unset without one.
+  // Fields 7, 8, 10, 12, 13 and 14 mirror the registration in registrations
+  // whose lease expires last (the freshest); unset without a registration.
   Lease lease = 7;
-  // Identity of the registering process (a Pylon inference_server_id, a
-  // relay pod name); writer-owned.
   string agent_id = 8;
   DialMode dial_mode = 9;
-  // Writer-owned, at most 16 entries.
   map<string, string> attributes = 10;
-  // Derived: a ready endpoint while the cluster lease is active, or an
-  // active agent lease.
+  // Derived: a ready endpoint while the cluster lease is active, or any
+  // active registration lease.
   bool live = 11;
-  // Writer generation of the API registration.
   uint64 generation = 12;
   google.protobuf.Timestamp registered_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // Every registration of this role, sorted by agent_id. One per process
+  // instance, for example one per Pylon pod.
+  repeated PoolAgentRegistration registrations = 15;
+  // Registrations whose lease is active.
+  int32 active_registration_count = 16;
 }
 
 // Location places a pool.
@@ -423,8 +444,8 @@ message RegisterPoolAgentRequest {
   string pool_name = 3;
   // Optional; must equal the pool's id when the pool exists.
   string pool_id = 4;
-  // Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id and
-  // attributes. Other fields are ignored.
+  // Writer-owned fields: role (OPENAI, KV_RELAY or PYLON), agent_id
+  // (required, at most 253 bytes) and attributes. Other fields are ignored.
   PoolAgent agent = 5;
   // Agent lease duration; clamped to [10 s, 5 m]; 60 s when unset.
   google.protobuf.Duration lease_ttl = 6;
@@ -434,8 +455,10 @@ message RegisterPoolAgentRequest {
 
 message RegisterPoolAgentResponse {
   string pool_id = 1;
-  // The stored agent with its newly minted lease.
+  // The merged agent; registration carries this process's newly minted
+  // lease.
   PoolAgent agent = 2;
+  PoolAgentRegistration registration = 5;
   // Derived pool state after the registration.
   PoolState pool_state = 3;
   google.protobuf.Timestamp server_time = 4;
@@ -447,8 +470,10 @@ message HeartbeatPoolAgentRequest {
   FrontendRole role = 3;
   // The lease epoch returned by RegisterPoolAgent.
   uint64 epoch = 4;
-  // Replaces the agent's attributes when non-empty.
+  // Replaces the registration's attributes when non-empty.
   map<string, string> attributes = 5;
+  // The registering process; required.
+  string agent_id = 6;
 }
 
 message HeartbeatPoolAgentResponse {
@@ -462,6 +487,9 @@ message DeregisterPoolAgentRequest {
   string clusterset = 1;
   string pool_id = 2;
   FrontendRole role = 3;
+  // The registering process; required. A REST caller passes it as the
+  // agent_id query parameter.
+  string agent_id = 4;
 }
 
 message DeregisterPoolAgentResponse {}
