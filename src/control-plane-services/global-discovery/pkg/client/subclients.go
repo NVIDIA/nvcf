@@ -160,6 +160,22 @@ func (x *PoolClient) Deregister(ctx context.Context, req *gdsv1.DeregisterPoolRe
 	return x.c.DeregisterPool(ctx, req, opts...)
 }
 
+// RegisterAgent calls RegisterPoolAgent. AgentRegistration wraps it with a
+// heartbeat.
+func (x *PoolClient) RegisterAgent(ctx context.Context, req *gdsv1.RegisterPoolAgentRequest, opts ...grpc.CallOption) (*gdsv1.RegisterPoolAgentResponse, error) {
+	return x.c.RegisterPoolAgent(ctx, req, opts...)
+}
+
+// HeartbeatAgent calls HeartbeatPoolAgent.
+func (x *PoolClient) HeartbeatAgent(ctx context.Context, req *gdsv1.HeartbeatPoolAgentRequest, opts ...grpc.CallOption) (*gdsv1.HeartbeatPoolAgentResponse, error) {
+	return x.c.HeartbeatPoolAgent(ctx, req, opts...)
+}
+
+// DeregisterAgent calls DeregisterPoolAgent.
+func (x *PoolClient) DeregisterAgent(ctx context.Context, req *gdsv1.DeregisterPoolAgentRequest, opts ...grpc.CallOption) (*gdsv1.DeregisterPoolAgentResponse, error) {
+	return x.c.DeregisterPoolAgent(ctx, req, opts...)
+}
+
 func (x *PoolClient) Get(ctx context.Context, req *gdsv1.GetPoolRequest, opts ...grpc.CallOption) (*gdsv1.GetPoolResponse, error) {
 	return x.c.GetPool(ctx, req, opts...)
 }

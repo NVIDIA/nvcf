@@ -30,7 +30,9 @@ it the package provides:
   `Pools()`, `Routers()` and `ServerInfo()`;
 - endpoint failover with DNS re-resolution and a return to the primary URL;
 - `WatchLoop`, a reconnecting watch with snapshot and resume handling;
-- `PoolCache` and `RouterCache`, watch-driven caches with a TTL re-list;
+- `PoolCache` and `RouterCache`, watch-driven caches with a TTL re-list,
+  with router seed and pool agent helpers;
+- `AgentRegistration`, a pool agent registration kept alive by a heartbeat;
 - `NextGeneration` and `Generation` for writer generations, and helpers that
   read GDS error details;
 - `nvcf_gds_client_*` Prometheus metrics.
@@ -197,8 +199,21 @@ controller-runtime add it as `manager.RunnableFunc(cache.Run)`. Give each
 cache in a process its own `Name`: it labels the cache and watch metrics.
 
 `PoolState` offers `Get(poolID)`, `ByModel(model)` (model id or alias),
-`ByCluster(cluster)` and `Active()` (state ACTIVE, the pools a router may
-choose).
+`ByCluster(cluster)`, `Active()` (state ACTIVE, the pools a router may
+choose) and `Ingress()` (pools with a live ingress agent). Per pool:
+
+- `IngressLive(pool)` reports a live ingress: `ready_ingress_count` above 0
+  (ready OPENAI and PYLON endpoints) or a live OPENAI or PYLON agent. A pool
+  reached only through Pylon's reverse tunnel has no OPENAI frontend and a
+  `ready_endpoint_count` of 0, but a live ingress. `Ingress()` does not
+  check the state, so it includes DRAINING pools; a pool whose only live
+  agent is its KV relay and an API-only pool without agents are not
+  included.
+- `Agent(pool, role)` returns the pool's agent with a role, or nil. GDS keeps
+  one agent per role, merged from the role's exported Service and its
+  `RegisterPoolAgent` registration (`source` LABEL, API or BOTH).
+- `KVRelayLive(pool)` reports a live KV relay (Dynamo PoolRelay):
+  `kv_relay_live` or a live KV_RELAY agent.
 
 ### LLM API gateway or Global Router
 
@@ -236,6 +251,16 @@ if err := routers.WaitSynced(ctx); err == nil && len(routers.Snapshot().SeedURLs
 	log.Warn("GDS knows no router; pylons will wait")
 }
 status.Registration.Routers = len(routers.Snapshot().SeedRouters())
+```
+
+A router that also dispatches through Pylon tunnels selects among the
+ACTIVE pools and reads the agents:
+
+```go
+for _, p := range st.Active() {
+	pylon := client.Agent(p, gdsv1.FrontendRole_FRONTEND_ROLE_PYLON) // nil without a Pylon agent
+	table.Add(p, pylon.GetLive(), client.KVRelayLive(p))
+}
 ```
 
 ### MCS controller
@@ -289,6 +314,90 @@ with a Stargate pod of cluster A, which B cannot forward to.
 with the cluster domain from `RouterCacheConfig.ClusterDomain` (default
 `cluster.local`). Use it only where the merged VIP is wanted; it is never a
 seed.
+
+### Relay seeds, QUIC and other ports
+
+Two kinds of pool-side process dial routers from the same Router record
+(design 4.5). Pylon uses `SeedURLs`; the Dynamo PoolRelay opens its state
+streams over gRPC and uses `RelayURLs`:
+
+- `RouterState.RouterRelayURLs(router)` returns the relay seeds of one
+  router and `RouterState.RelayURLs()` those of every router whose cluster
+  lease has not expired, with the rules and order of the pylon seeds. Today
+  they equal `RouterSeedURLs` and `SeedURLs`, since the relay dials the same
+  gRPC listener. They are separate functions so that a relay listener or
+  scheme can diverge without touching Pylon; use the one of your process.
+- `RouterState.RouterQUICAddrs(router)` returns
+  `<replica address>:<quic_port>` per ready replica (IPv6 bracketed, sorted,
+  once each), or nil when the router has no QUIC port. The QUIC port comes
+  from the port named by `gds.nvidia.com/quic-port-name` (default `quic`).
+  It is informational for Pylon, whose tunnel address comes from the
+  registration ack. The dial scheme and the cluster lease are not checked.
+- `Router.Ports` lists every port of the exported Service with its name,
+  protocol and number, for consumers whose protocol GDS does not name.
+
+## Pool agents
+
+A pool agent is one process kind of a pool: the OpenAI frontend (OPENAI),
+the Dynamo PoolRelay (KV_RELAY) or Pylon (PYLON) (design 4.6). Besides the
+label source (the role's exported Service), a process registers the agent
+itself with `RegisterPoolAgent`. `AgentRegistration` does that and keeps the
+lease alive, the Go counterpart of the Rust `AgentRegistration`:
+
+```go
+reg, err := client.RegisterAgent(ctx, c, client.AgentSpec{
+	Clusterset: cs,
+	Cluster:    clusterID,
+	PoolName:   "llama-blue",
+	Role:       gdsv1.FrontendRole_FRONTEND_ROLE_PYLON,
+	AgentID:    "pylon-operator/llama-blue",
+	Attributes: map[string]string{"models": "llama-3"},
+})
+if err != nil {
+	return err
+}
+defer reg.Close(context.WithoutCancel(ctx))
+reg.SetAttributes(map[string]string{"models": "llama-3,mistral"})
+```
+
+| Field | Default | Meaning |
+| :---- | :---- | :---- |
+| `Clusterset`, `Cluster`, `PoolName` | required | The pool. GDS creates it when it does not exist, under the deterministic pool id of (clusterset, cluster, pool name), so a registration and a labelled export converge on one pool. |
+| `Role` | required | OPENAI, KV_RELAY or PYLON. |
+| `AgentID` | empty | The process identity, for example a Pylon `inference_server_id` or a relay pod name. |
+| `Attributes` | none | Writer-owned facts, at most 16 entries. |
+| `LeaseTTL` | 60 s | Agent lease; GDS clamps it to [10 s, 5 m]. |
+| `HeartbeatInterval` | lease / 3 | A third of the lease GDS granted, else of `LeaseTTL`. |
+
+- `RegisterAgent` validates the spec and calls `RegisterPoolAgent` with a
+  new `Generation`; after STALE_GENERATION it retries once above the stored
+  generation. It returns the error of a failed first registration. Its
+  context bounds that call only.
+- A goroutine heartbeats every interval, shortened by up to 20 percent of
+  jitter. On NOT_FOUND (GDS lost the registration) or ABORTED with
+  `LEASE_EPOCH_MISMATCH` (another registration minted a new epoch) it
+  registers again with the current spec. Other errors are retried after the
+  client's `Backoff`, at most every interval; the lease expires if they
+  last longer than the lease.
+- `SetAttributes` replaces the attributes; the next heartbeat sends them
+  and later registrations carry them. A heartbeat replaces attributes only
+  with a non-empty map, so clearing them registers again (a new epoch).
+- `State()` returns the pool id, the epoch, the derived pool state and the
+  lease of the last success, the consecutive failures and the last error,
+  and the `Stopped` and `Deregistered` flags. `Updates()` subscribes a
+  channel that receives a value when one of them changes (plain lease
+  renewals do not count) and is closed after `Close` or when the `Client`
+  is closed.
+- `Close(ctx)` stops the heartbeat and calls `DeregisterPoolAgent`. The pool
+  stays while an export, the pool registration or another agent remains.
+  When the deregistration fails, the lease expires. Close the registration
+  before the `Client`; closing the client stops the heartbeat.
+- GDS keeps one agent per (pool, role), so a role has one writer. Two
+  registrations of the same role take each other's epoch on every heartbeat,
+  and `Close` of either removes the agent.
+
+`Pools()` also exposes the RPCs directly: `RegisterAgent`, `HeartbeatAgent`
+and `DeregisterAgent`.
 
 ## Metrics
 
