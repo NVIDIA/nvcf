@@ -17,6 +17,11 @@ docker run --rm --entrypoint /bin/sh "$image" -ec '
   migrate -version
   python3 -c "from urllib.parse import quote; assert quote(\"p@ss\", safe=\"\") == \"p%40ss\""
   test ! -e /usr/local/bin/gosu
+  # ca-certificates 20250419+deb13u1 distrusts these roots.
+  for root in emSign_ECC_Root_CA_-_G3 Comodo_AAA_Services_root; do
+    test ! -e "/usr/share/ca-certificates/mozilla/$root.crt"
+    test ! -e "/etc/ssl/certs/$root.pem"
+  done
 '
 
 # Check the complete overlay inside the built image against its source lock.
