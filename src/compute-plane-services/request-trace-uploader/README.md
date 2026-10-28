@@ -66,5 +66,35 @@ Invalid policy values fall back to defaults and produce a safe startup warning.
 Missing paths, unreadable secret files, an unknown backend, and incompatible
 required values prevent readiness.
 
-Record suppression is configured as rules with a header group, match values,
-and an action. It is not part of this scaffold.
+## Record suppression
+
+Suppression runs before redaction on every record of a closed segment. A
+rule has an operator-assigned name, a header group, match values, and an
+action. The first matching rule wins.
+
+- `REQUEST_TRACE_UPLOADER_SUPPRESS_NCA_IDS`: comma-separated NCA ids. Each id
+  is trimmed, and an `nca-<id>-nca` form is reduced to `<id>`. The list
+  builds one `stripPayload` rule named `nca_id` on the `nvcf-ncaid` and
+  `nvcf-nca-id` headers. Unset or blank turns it off.
+- `REQUEST_TRACE_UPLOADER_SUPPRESSION_RULES`: further rules as a JSON list,
+  evaluated after the NCA id rule, for example
+  `[{"name":"tenants","headers":["x-tenant"],"values":["t1"],"action":"dropRecord"}]`.
+  A name is a short lowercase token. The action is `stripPayload` or
+  `dropRecord`.
+- `REQUEST_TRACE_UPLOADER_SUPPRESS_HEADERLESS`: `export` (default) or `drop`
+  for records of a type that carries no headers. In Dynamo v1.4.0 only
+  `request_payload` carries headers. It applies only while a rule exists.
+
+`stripPayload` replaces the record with the stub the earlier shell exporter
+wrote, byte for byte. `dropRecord` removes the record.
+
+An unparseable rule list, an unknown action or policy, a missing or repeated
+name, or a rule with no value stops startup with a non-zero exit.
+
+Counters: `records_suppressed` (`rule`, `action`), `records_evaluated`
+(`record_type`), `suppression_header_present` (`rule`), and
+`records_incomplete` (`record_type`) for payload records whose
+`payload_complete` is false. Header names and values never become
+attributes. When suppression is on and the first 100 payload records carry
+no rule header, the uploader logs one warning. It never holds or drops
+records for that.

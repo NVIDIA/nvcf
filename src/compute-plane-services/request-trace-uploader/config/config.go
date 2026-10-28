@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/suppress"
 )
 
 const (
@@ -105,6 +107,9 @@ type Config struct {
 	Kratos         KratosPolicy
 	ObjectStore    ObjectStorePolicy
 	DebugVerbosity DebugVerbosity
+	// Suppression is the validated suppression rule list. No rules turns
+	// suppression off.
+	Suppression suppress.Config
 }
 
 // ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
@@ -226,6 +231,10 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		DryRun:    boolValue(lookup, EnvObjectStoreDryRun, false, &warnings),
 	}
 	debugVerbosity := debugVerbosityValue(lookup, EnvDebugVerbosity, &warnings)
+	suppression, err := suppressionValue(lookup)
+	if err != nil {
+		return Config{}, nil, err
+	}
 
 	return Config{
 		SourceDir:     sourceDir,
@@ -250,6 +259,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		},
 		ObjectStore:    objectStore,
 		DebugVerbosity: debugVerbosity,
+		Suppression:    suppression,
 	}, warnings, nil
 }
 

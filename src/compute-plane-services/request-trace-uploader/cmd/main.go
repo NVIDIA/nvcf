@@ -32,7 +32,7 @@ import (
 )
 
 func main() {
-	cfg, warnings, err := config.LoadFromEnv()
+	cfg, warnings, err := loadConfig(os.LookupEnv)
 	if err != nil {
 		slog.Error("invalid request trace uploader configuration", "error", err)
 		os.Exit(1)
@@ -43,16 +43,31 @@ func main() {
 
 	slog.Info("request trace uploader starting", "backend", cfg.Backend, "compiled_backends", backend.Registered())
 
-	svc, err := service.New(cfg)
+	client, err := backend.New(cfg)
 	if err != nil {
-		slog.Error("create request trace uploader service", "error", err)
+		slog.Error("create request trace uploader backend", "error", err)
+		os.Exit(1)
+	}
+	uploader, err := service.NewUploader(cfg, client, service.Options{})
+	if err != nil {
+		slog.Error("create request trace uploader", "error", err)
 		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := svc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := uploader.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("request trace uploader stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+// loadConfig reads configuration through lookup and the env aliases the
+// linked packages registered, so the names a deployment already sets work.
+func loadConfig(lookup config.LookupFunc) (config.Config, []string, error) {
+	aliased, err := config.WithAliases(lookup)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	return config.Load(aliased)
 }

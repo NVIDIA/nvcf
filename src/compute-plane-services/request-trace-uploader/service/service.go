@@ -170,9 +170,13 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) httpServer() *http.Server {
+	return newHTTPServer(s.config.HealthAddr, s.Handler())
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
-		Addr:              s.config.HealthAddr,
-		Handler:           s.Handler(),
+		Addr:              addr,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

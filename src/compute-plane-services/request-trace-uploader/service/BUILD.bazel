@@ -2,7 +2,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "service",
-    srcs = ["service.go"],
+    srcs = [
+        "service.go",
+        "suppression.go",
+        "uploader.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service",
     visibility = ["//visibility:public"],
     deps = [
@@ -10,16 +14,26 @@ go_library(
         "//src/compute-plane-services/request-trace-uploader/config",
         "//src/compute-plane-services/request-trace-uploader/internal/health",
         "//src/compute-plane-services/request-trace-uploader/segment",
+        "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/transform",
+        "//src/compute-plane-services/request-trace-uploader/transform/suppress",
     ],
 )
 
 go_test(
     name = "service_test",
-    srcs = ["service_test.go"],
+    srcs = [
+        "capture_test.go",
+        "service_test.go",
+        "suppression_e2e_test.go",
+    ],
     embed = [":service"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/backend/backendtest",
         "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/uploadertest",
     ],
 )
 
