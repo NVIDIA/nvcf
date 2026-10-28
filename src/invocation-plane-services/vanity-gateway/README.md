@@ -22,11 +22,14 @@ Use the [release workflow](../../../docs/dev/github-release-process.md) for sour
 ## About
 
 The Vanity Gateway fronts invocation APIs with route mappings from a YAML config
-file. It supports three request shapes:
+file. It supports four request shapes:
 
 - OpenAI-compatible `/v1/*` endpoints that map public model names to functions.
 - The native Anthropic Messages endpoint, `POST /v1/messages`, configured under
   `v2config.anthropicMessages`.
+- Beta decision model endpoints, `POST /v1/decisions` and
+  `POST /v1/systemone`, configured under `v2config.openai.decisions` and
+  `v2config.typesafeSystemOne`.
 - Vanity URL routes that forward caller-defined paths to function executions and polling.
 
 The gateway is meant to run against an upstream invocation service with pexec
@@ -156,6 +159,7 @@ v2config:
     completions: {}
     embeddings: {}
     responses: {}
+    decisions: {}
     imageGenerations: {}
     imageEdits: {}
     imageVariations: {}
@@ -208,7 +212,8 @@ v2config:
 
 Shadow traffic is supported for mapping sections with JSON request bodies:
 `chatCompletions`, `completions`, `embeddings`, `responses`, `imageGenerations`,
-and `anthropicMessages`. Shadow targets must be model names in the same mapping
+`anthropicMessages`, `decisions`, and `typesafeSystemOne`. The decision sections
+support `random` and `perBearerKey` sampling only. Shadow targets must be model names in the same mapping
 section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
@@ -352,8 +357,8 @@ added to logs, traces, or metric labels.
 
 Set `functionType: LLM` on a model entry to serve it from the LLM Gateway
 instead of the invocation service. Supported in `openai.chatCompletions`,
-`openai.responses`, `openai.embeddings`, and `anthropicMessages`, the four
-routes the LLM Gateway serves.
+`openai.responses`, `openai.embeddings`, `anthropicMessages`, `openai.decisions`,
+and `typesafeSystemOne`, the routes the LLM Gateway serves.
 
 ```yaml
 v2config:
@@ -383,7 +388,7 @@ forwarded: the mapping is what decides which function a caller reaches.
 Vanity Gateway passes `Authorization`, `NVCF-POLL-SECONDS`, and the caller's
 other headers to the LLM Gateway.
 
-Config validation rejects `functionType: LLM` outside the four supported
+Config validation rejects `functionType: LLM` outside the supported
 sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`
 on those entries because the LLM Gateway ignores them. An `X-Priority` entry in
 `customHeaders` is rejected too: the LLM Gateway answers `400 Bad Request` for
@@ -508,7 +513,8 @@ YAML merge defaults and explicit overrides are supported.
 For a repeated `modelName`, disjoint metadata keys merge. A conflicting key
 keeps its first value, including null, in this section order:
 `chatCompletions`, `completions`, `embeddings`, `responses`, `imageGenerations`,
-`imageEdits`, `imageVariations`, then `anthropicMessages`. Within each section,
+`imageEdits`, `imageVariations`, `anthropicMessages`, `decisions`, then
+`typesafeSystemOne`. Within each section,
 YAML entry order decides precedence. Programmatically constructed configs
 without source order use alphabetical entry keys. Nested objects are whole
 values; their contents do not merge. Both OpenAI discovery endpoints use the
@@ -582,6 +588,100 @@ are left out as in the OpenAI list. These responses also carry `request-id`.
 The Messages path requires compatible LLM Gateway, Stargate router, and Pylon
 worker builds. See `docs/overview/llm-gateway.md` for upgrade order, token
 accounting, session affinity, and Claude Code configuration.
+
+## Invoking Decision Models (Beta)
+
+Decision models answer typed questions about an input and return
+probabilities instead of generated text. Two beta routes pass these requests
+through on the shared API host set by `openai.host`:
+
+- `POST /v1/decisions` serves the OpenAI Decisions format. Map models under
+  `v2config.openai.decisions`.
+- `POST /v1/systemone` serves the TypeSafe System One format. Map models under
+  `v2config.typesafeSystemOne`, a top-level sibling of `anthropicMessages`.
+
+Entries use the same fields and validation as `openai.chatCompletions`. A model
+is enabled for a route only when it is listed in that route's section. A
+function that serves both formats is listed in both sections. A request for a
+model that is not listed in the section of the route it called returns `404`.
+
+```yaml
+v2config:
+  openai:
+    host: api.example.com
+    decisions:
+      example_decision-model:
+        modelName: example/decision-model
+        functionID: 00000000-0000-0000-0000-000000000001
+        functionVersionID: 11111111-1111-1111-1111-111111111111
+      example_decision-model-llm:
+        modelName: example/decision-model-llm
+        functionID: 00000000-0000-0000-0000-000000000002
+        functionType: LLM
+  typesafeSystemOne:
+    example_decision-model:
+      modelName: example/decision-model
+      functionID: 00000000-0000-0000-0000-000000000001
+      functionVersionID: 11111111-1111-1111-1111-111111111111
+```
+
+In this example `example/decision-model` is one function that serves both
+formats, so it appears in both sections. `example/decision-model-llm` is served
+through the LLM Gateway on `/v1/decisions` only.
+
+The gateway reads only `model` from the body and never translates between the
+two formats, so the backend must implement each route it is configured for.
+Request and response bodies pass through unchanged, including backend 4xx and
+5xx responses. Responses are not streamed: `stream` is ignored and the gateway
+does not ask for an event stream. Vendor headers such as
+`TypeSafe-Danger-Zone-Images: true` reach the backend unchanged. Request bodies
+may be up to 25 MB.
+
+```shell
+source .env
+curl http://localhost:10081/v1/decisions \
+-H "Host: api.example.com" \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer ${API_TOKEN}" \
+-d '{
+"model": "example/decision-model",
+"input": "The sky is clear.",
+"questions": [{"type": "predicate", "text": "Is it raining?"}]
+}'
+```
+
+Direct models: with `usePexec: false` and no `outgoingPathOverride`, the
+gateway keeps the path, `/v1/decisions` or `/v1/systemone`, and selects the
+function with function ID headers. With `usePexec: true` the gateway calls the
+pexec path of the function, and the invocation service then normally sends the request to
+the default invocation path registered for that function, whichever route the
+client called. A `usePexec: true` function therefore serves only its default path. A
+function that serves both routes should use `usePexec: false`.
+
+Errors generated by the Vanity Gateway use the native shape of the route:
+
+- `/v1/decisions` uses the OpenAI error shape.
+- `/v1/systemone` uses
+  `{"error":{"code":"...","message":"...","request_id":"..."},"request_id":"..."}`,
+  where `request_id` has the same value as the `X-Request-Id` response header.
+  The codes are `invalid_json` and `invalid_request` for `400`, `not_found` for
+  `404` and `410`, `request_too_large` for `413`, `provider_unavailable` for
+  `502` and `503`, and `internal_error`. The gateway does not set
+  `X-System-One-*` headers.
+
+Malformed JSON and a missing `model` return `400`, an unknown model returns
+`404`, a body over the size limit returns `413`, an offline model returns `503`
+with `Retry-After`, an end-of-life model returns `410`, and a failed upstream
+request returns `502`. Upstream status codes and bodies pass through unchanged.
+
+`/v1/models` and `/v1/models/{model}` list decision models and add
+`supported_endpoints`, for example `["/v1/decisions"]`.
+
+Shadow request body sampling (`promptCacheKey` and `firstMessageHash`) and
+`promptCacheKeyHeaders` are not valid in the decision sections.
+
+A model with `functionType: LLM` needs LLM Gateway and Stargate builds that
+serve these routes. Enable it only after those builds run in the environment.
 
 ## Invoking Vanity URL Routes
 
