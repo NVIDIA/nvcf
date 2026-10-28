@@ -1671,6 +1671,14 @@ async fn terminal_queue_mismatch_is_sanitized_across_tunnel_protocols_and_endpoi
                     "/v1/embeddings",
                     serde_json::json!({"model": model, "input": "hello"}),
                 ),
+                (
+                    "/v1/decisions",
+                    serde_json::json!({"model": model, "input": "hello", "questions": []}),
+                ),
+                (
+                    "/v1/systemone",
+                    serde_json::json!({"model": model, "state": "hello", "questions": {}}),
+                ),
             ] {
                 let body = Bytes::from(body.to_string());
                 let request_body = reqwest::Body::wrap_stream(futures::stream::once(async move {
@@ -3846,6 +3854,371 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
     }
     fixture.shutdown().await;
     backend_task.abort();
+}
+
+const DECISION_ROUTES: [(&str, &str); 2] = [
+    ("/v1/decisions", "decisions-model"),
+    ("/v1/systemone", "systemone-model"),
+];
+const DECISION_OK: &str =
+    r#"{"model":"m","answers":[{"type":"predicate","name":"q","probability":0.99}]}"#;
+const DECISION_RATE_LIMITED: &str =
+    r#"{"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limited"}}"#;
+const DECISION_FASTAPI_400: &str =
+    r#"{"detail":[{"loc":["body","questions"],"msg":"field required","type":"missing"}]}"#;
+const DECISION_OPENAI_400: &str = r#"{"error":{"message":"bad question","type":"invalid_request_error","param":"questions","code":"invalid_question"}}"#;
+const DECISION_MAX_BODY: usize = 32 << 20;
+
+type DecisionCapture = (String, axum::http::HeaderMap, Bytes);
+
+struct DecisionBackend {
+    addr: std::net::SocketAddr,
+    hits: Arc<AtomicUsize>,
+    captures: tokio::sync::mpsc::UnboundedReceiver<DecisionCapture>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+async fn start_decision_backend(path: &'static str) -> DecisionBackend {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let (capture_tx, captures) = tokio::sync::mpsc::unbounded_channel();
+    let handler_hits = hits.clone();
+    let app = Router::new()
+        .route(
+            path,
+            post(move |req: Request| {
+                let capture_tx = capture_tx.clone();
+                let hits = handler_hits.clone();
+                async move {
+                    let (parts, body) = req.into_parts();
+                    let body = axum::body::to_bytes(body, DECISION_MAX_BODY).await.unwrap();
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let query = parts.uri.query().unwrap_or_default().to_string();
+                    capture_tx
+                        .send((parts.uri.to_string(), parts.headers, body))
+                        .unwrap();
+                    let mut response =
+                        Response::builder().header("content-type", "application/json");
+                    let (status, text) = if query.contains("mode=rate_limit") {
+                        response = response.header("retry-after", "7");
+                        (StatusCode::TOO_MANY_REQUESTS, DECISION_RATE_LIMITED)
+                    } else if query.contains("mode=fastapi_400") {
+                        (StatusCode::BAD_REQUEST, DECISION_FASTAPI_400)
+                    } else if query.contains("mode=openai_400") {
+                        (StatusCode::BAD_REQUEST, DECISION_OPENAI_400)
+                    } else {
+                        (StatusCode::OK, DECISION_OK)
+                    };
+                    response.status(status).body(Body::from(text)).unwrap()
+                }
+            }),
+        )
+        .route("/health", get(|| async { "ok" }));
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    DecisionBackend {
+        addr,
+        hits,
+        captures,
+        task,
+    }
+}
+
+async fn register_http_backend(
+    fixture: &mut ProxyFixture,
+    id: &str,
+    model: &str,
+    addr: std::net::SocketAddr,
+    protocol: TunnelTransportProtocol,
+    reverse: bool,
+) {
+    let runtime_state = active_runtime(model);
+    if reverse {
+        fixture.register(
+            reverse_registration_config_for_protocol(
+                fixture.grpc_addr,
+                id,
+                id,
+                format!("http://{addr}"),
+                protocol,
+                runtime_state,
+            ),
+            "reverse registration failed",
+        );
+    } else {
+        let mut config =
+            QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), format!("http://{addr}"));
+        config.tunnel_protocol = protocol;
+        config.forwarding.runtime_state = runtime_state.clone();
+        let tunnel = start_quic_http_tunnel(config).await.unwrap();
+        fixture.register(
+            active_registration_config_with_state(
+                fixture.grpc_addr,
+                id,
+                id,
+                format!("quic://{}", tunnel.listen_addr()),
+                format!("http://{addr}"),
+                runtime_state,
+            ),
+            "direct registration failed",
+        );
+        fixture.own_tunnel(tunnel);
+    }
+    fixture.wait_for_clusters(model, 1).await;
+}
+
+fn large_image_body(model: &str, target_bytes: usize) -> Vec<u8> {
+    let image = "QUJD".repeat(target_bytes / 4);
+    serde_json::to_vec(&serde_json::json!({
+        "model": model,
+        "input": [{"type": "input_image", "image_url": format!("data:image/png;base64,{image}")}],
+        "questions": [{"type": "predicate", "name": "q", "text": "is it a cat?"}],
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn decision_routes_pass_requests_and_backend_responses_through() {
+    for protocol in [
+        TunnelTransportProtocol::RawQuic,
+        TunnelTransportProtocol::Http3,
+        TunnelTransportProtocol::WebTransport,
+    ] {
+        for reverse in [false, true] {
+            for (path, model) in DECISION_ROUTES {
+                exercise_decision_route_contract(protocol, reverse, path, model).await;
+            }
+        }
+    }
+}
+
+async fn exercise_decision_route_contract(
+    protocol: TunnelTransportProtocol,
+    reverse: bool,
+    path: &'static str,
+    model: &str,
+) {
+    let case = if reverse {
+        TunnelTestCase::reverse(protocol)
+    } else {
+        TunnelTestCase::direct(protocol)
+    };
+    let label = format!("{path} {protocol:?} reverse={reverse}");
+    let id = format!(
+        "decision-{}-{reverse}-{}",
+        case.protocol_label(),
+        &path[4..]
+    );
+    let (mut fixture, _) = ProxyFixture::start_for_tunnel_case(&id, case).await;
+    let mut backend = start_decision_backend(path).await;
+    register_http_backend(&mut fixture, &id, model, backend.addr, protocol, reverse).await;
+    let client = reqwest::Client::new();
+
+    // Vendor headers reach the backend and a small body is byte-identical.
+    let small = serde_json::to_vec(&serde_json::json!({
+        "model": model, "input": "hello", "questions": [{"type": "predicate", "name": "q"}],
+    }))
+    .unwrap();
+    let response = proxy_request(&client, fixture.http_addr, path, model, "req-decision-ok")
+        .header("typesafe-danger-zone-images", "true")
+        .header("x-vendor-test", "v")
+        .body(small.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{label}");
+    assert_eq!(response.text().await.unwrap(), DECISION_OK, "{label}");
+    let (captured_path, headers, body) = backend.captures.recv().await.unwrap();
+    assert_eq!(captured_path, path, "{label}");
+    assert_eq!(body.as_ref(), small, "{label}");
+    assert_eq!(headers["typesafe-danger-zone-images"], "true", "{label}");
+    assert_eq!(headers["x-vendor-test"], "v", "{label}");
+
+    // A base64 image sized request arrives unchanged.
+    let large = large_image_body(model, 13 * 1024 * 1024);
+    let response = proxy_request(
+        &client,
+        fixture.http_addr,
+        path,
+        model,
+        "req-decision-large",
+    )
+    .header("typesafe-danger-zone-images", "true")
+    .body(large.clone())
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{label}");
+    let (_, headers, body) = backend.captures.recv().await.unwrap();
+    assert_eq!(body.len(), large.len(), "{label}");
+    assert!(body.as_ref() == large.as_slice(), "{label}: body changed");
+    assert_eq!(headers["typesafe-danger-zone-images"], "true", "{label}");
+
+    // Backend errors reach the client unchanged and are not retried.
+    for (mode, status, retry_after, expected) in [
+        (
+            "rate_limit",
+            StatusCode::TOO_MANY_REQUESTS,
+            Some("7"),
+            DECISION_RATE_LIMITED,
+        ),
+        (
+            "fastapi_400",
+            StatusCode::BAD_REQUEST,
+            None,
+            DECISION_FASTAPI_400,
+        ),
+        (
+            "openai_400",
+            StatusCode::BAD_REQUEST,
+            None,
+            DECISION_OPENAI_400,
+        ),
+    ] {
+        let response = proxy_request(
+            &client,
+            fixture.http_addr,
+            &format!("{path}?mode={mode}"),
+            model,
+            "req-decision-error",
+        )
+        .body(small.clone())
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(response.status(), status, "{label} {mode}");
+        assert_eq!(
+            response_header(&response, "retry-after"),
+            retry_after,
+            "{label} {mode}"
+        );
+        assert_eq!(response.text().await.unwrap(), expected, "{label} {mode}");
+        backend.captures.recv().await.unwrap();
+    }
+    assert_eq!(
+        backend.hits.load(Ordering::SeqCst),
+        5,
+        "{label}: each request must reach the backend exactly once"
+    );
+
+    fixture.shutdown().await;
+    backend.task.abort();
+}
+
+#[tokio::test]
+async fn decision_routes_enforce_required_headers_without_upstream_call() {
+    let mut fixture = ProxyFixture::start("test-sg-decision-headers").await;
+    for (path, model) in DECISION_ROUTES {
+        let backend = start_decision_backend(path).await;
+        register_http_backend(
+            &mut fixture,
+            &format!("decision-headers-{}", &path[4..]),
+            model,
+            backend.addr,
+            TunnelTransportProtocol::RawQuic,
+            false,
+        )
+        .await;
+        for missing in ["x-model", "x-input-tokens", "x-request-id"] {
+            let mut request = reqwest::Client::new()
+                .post(format!("http://{}{path}", fixture.http_addr))
+                .header("content-type", "application/json");
+            for (name, value) in [
+                ("x-model", model),
+                ("x-input-tokens", "1"),
+                ("x-request-id", "req-decision-headers"),
+            ] {
+                if name != missing {
+                    request = request.header(name, value);
+                }
+            }
+            let response = request
+                .body(format!(r#"{{"model":"{model}","input":"hi"}}"#))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{path} without {missing}"
+            );
+        }
+        assert_eq!(
+            backend.hits.load(Ordering::SeqCst),
+            0,
+            "{path}: upstream must not run when a required header is missing"
+        );
+        backend.task.abort();
+    }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn decision_routes_reject_content_length_over_replay_limit_with_413() {
+    let mut fixture = ProxyFixture::start("test-sg-decision-413").await;
+    for (path, model) in DECISION_ROUTES {
+        let backend = start_decision_backend(path).await;
+        register_http_backend(
+            &mut fixture,
+            &format!("decision-413-{}", &path[4..]),
+            model,
+            backend.addr,
+            TunnelTransportProtocol::RawQuic,
+            false,
+        )
+        .await;
+        // Send only the head of a request that declares a body over the default
+        // 64 MiB replay limit; the proxy must answer before any body is sent.
+        let declared = 64 * 1024 * 1024 + 1;
+        let mut stream = tokio::net::TcpStream::connect(fixture.http_addr)
+            .await
+            .unwrap();
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nx-model: {model}\r\nx-request-id: req-413\r\nx-input-tokens: 1\r\ncontent-type: application/json\r\ncontent-length: {declared}\r\n\r\n",
+            fixture.http_addr
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut stream, head.as_bytes())
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; 256];
+        let read = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+        )
+        .await
+        .expect("413 response timed out")
+        .unwrap();
+        let text = String::from_utf8_lossy(&buf[..read]);
+        assert!(text.starts_with("HTTP/1.1 413"), "{path}: got {text}");
+        assert_eq!(backend.hits.load(Ordering::SeqCst), 0, "{path}");
+        backend.task.abort();
+    }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn decision_routes_unknown_model_carries_stargate_error_code() {
+    let (_, http_addr, handle) = start_stargate("test-sg-decision-unknown").await;
+    for (path, _) in DECISION_ROUTES {
+        let response = proxy_request(
+            &reqwest::Client::new(),
+            http_addr,
+            path,
+            "nonexistent",
+            "req-decision-unknown",
+        )
+        .body(r#"{"model":"nonexistent","input":"hi"}"#)
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            response_header(&response, "x-stargate-error-code"),
+            Some("no_eligible_candidates"),
+            "{path}"
+        );
+    }
+    finish_stargate(handle).await;
 }
 
 #[tokio::test]
