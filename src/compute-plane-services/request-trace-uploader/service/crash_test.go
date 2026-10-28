@@ -14,11 +14,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/retry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/journal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/uploadertest"
 )
 
@@ -194,5 +197,63 @@ func TestACrashAtAnyPointLosesAndDoubleDeletesNothing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func retainFaults() *retry.Config {
+	faults := fastFaults()
+	faults.AmbiguousWithoutID = retry.AmbiguousRetain
+	return faults
+}
+
+// TestCrashChildRunsThePipelineRetaining is the crash child for an uploader
+// configured to retain ambiguous submits.
+func TestCrashChildRunsThePipelineRetaining(t *testing.T) {
+	if !uploadertest.CrashChild() {
+		t.Skip("runs only as a crash child")
+	}
+	spool := &uploadertest.Spool{Dir: os.Getenv(envCrashSpool), Prefix: config.DefaultSegmentPrefix}
+	uploader := newUploader(t, spool, dirBackend{root: os.Getenv(envCrashLanding)}, service.Options{Point: uploadertest.CrashPoint, Faults: retainFaults()}, nil)
+	if err := uploader.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass() error = %v", err)
+	}
+}
+
+func TestACrashAfterSubmitIsNotResubmittedWhenAmbiguousSubmitsAreRetained(t *testing.T) {
+	if uploadertest.CrashChild() {
+		t.Skip("runs only in the parent")
+	}
+	landing := t.TempDir()
+	spool, closed := spoolWith(t, []string{uploadertest.RequestEnd("a", 1)})
+	result := uploadertest.RunCrash(t, "TestCrashChildRunsThePipelineRetaining", service.PointSubmitted,
+		envCrashSpool+"="+spool.Dir, envCrashLanding+"="+landing)
+	if !result.Killed || result.Point != service.PointSubmitted {
+		t.Fatalf("child was not killed at %s:\n%s", service.PointSubmitted, result.Output)
+	}
+
+	metrics, err := telemetry.NewMemory("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := newUploader(t, spool, dirBackend{root: landing}, service.Options{Faults: retainFaults(), Metrics: metrics}, nil)
+	for range 3 {
+		_ = restarted.Pass(context.Background())
+	}
+	if err := restarted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := landedRequests(t, landing)["a"]; n != 1 {
+		t.Fatalf("request a landed %d times, want the retained batch not submitted again", n)
+	}
+	if gone(closed[0]) {
+		t.Fatal("source deleted, want it kept for an operator")
+	}
+	if got, _ := metrics.Value(telemetry.SubmitsAmbiguous, nil); got != 1 {
+		t.Errorf("submits_ambiguous = %v, want the retained batch counted once", got)
+	}
+	for _, b := range journalBatches(t, spool) {
+		if b.NextRetryAt.Before(time.Now().Add(365 * 24 * time.Hour)) {
+			t.Fatalf("retained batch state %s retries at %v, want it parked for an operator", b.State, b.NextRetryAt)
+		}
 	}
 }

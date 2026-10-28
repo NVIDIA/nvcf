@@ -210,7 +210,8 @@ var batchTransitions = map[State][]State{
 	StateSubmitting: {StateSubmitted, StateRetryWait, StateAmbiguous, StateReleased},
 	StateRetryWait:  {StateSubmitting, StateReleased},
 	// An ambiguous batch with a receipt is polled, so it can still succeed.
-	StateAmbiguous: {StateSubmitting, StateReleased, StateConfirmed},
+	// One without a receipt waits in RetryWait when it is retained.
+	StateAmbiguous: {StateSubmitting, StateReleased, StateConfirmed, StateRetryWait},
 	StateSubmitted: {StateConfirmed, StateAmbiguous, StateStranded, StateReleased},
 	StateStranded:  {StateConfirmed},
 }

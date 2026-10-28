@@ -187,9 +187,13 @@ func (s *Store) SetReceipt(batchID string, r journal.Receipt) error {
 }
 
 // RetryBatch records a retryable failure that created nothing, with the time
-// of the next attempt, so the wait survives a restart.
+// of the next attempt, so the wait survives a restart. A batch with a
+// receipt has a job and is polled instead.
 func (s *Store) RetryBatch(batchID string, next time.Time, errorClass string) error {
 	return s.updateBatch(batchID, func(b *journal.Batch) error {
+		if b.Receipt != nil {
+			return fmt.Errorf("%w: batch %s has a job to poll", journal.ErrReceiptExists, batchID)
+		}
 		if err := batchTransition(b, journal.StateRetryWait); err != nil {
 			return err
 		}

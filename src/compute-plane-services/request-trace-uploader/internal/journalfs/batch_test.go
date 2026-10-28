@@ -211,6 +211,31 @@ func TestBatchRetryAndAmbiguityFollowTheStateMachine(t *testing.T) {
 	mustState(t, store, ids[0], journal.StateConfirmed)
 }
 
+func TestRetryBatchRefusesABatchWithAReceipt(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+	if err := store.MarkBatchAmbiguous("b1", "timeout"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "retained"); err != nil {
+		t.Fatalf("RetryBatch of an ambiguous batch with no receipt: %v", err)
+	}
+	if err := store.ResumeBatch("b1"); err != nil {
+		t.Fatalf("ResumeBatch: %v", err)
+	}
+	if err := store.SetReceipt("b1", journal.Receipt{Backend: "fake", ID: "job-1"}); err != nil {
+		t.Fatalf("SetReceipt: %v", err)
+	}
+	if err := store.MarkBatchAmbiguous("b1", "job_ambiguous"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous with a receipt: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "retained"); !errors.Is(err, journal.ErrReceiptExists) {
+		t.Fatalf("RetryBatch with a receipt error = %v, want ErrReceiptExists: a known job is polled", err)
+	}
+}
+
 func TestConfirmBatchNeedsAReceipt(t *testing.T) {
 	h := newHarness(t)
 	store := h.open()

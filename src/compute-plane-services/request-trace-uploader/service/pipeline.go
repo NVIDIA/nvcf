@@ -352,13 +352,21 @@ func (u *Uploader) submitPrepared(ctx context.Context) error {
 
 // resend submits again every batch whose retry is due, and every batch whose
 // earlier submit may have committed without a job id; the second kind can
-// land twice and is counted.
+// land twice and is counted. When ambiguous submits are retained, such a
+// batch is parked for an operator instead, as a failed submit would be.
 func (u *Uploader) resend(ctx context.Context) error {
 	now := time.Now()
 	var errs []error
 	for _, b := range u.store.Batches() {
 		switch {
 		case b.State == journal.StateRetryWait && !now.Before(b.NextRetryAt):
+		case b.State == journal.StateAmbiguous && b.Receipt == nil && u.retainsAmbiguous():
+			// Recovery counted it when it found the submit unfinished.
+			slog.Warn("submit retained for an operator", "batch", shortID(b.ID))
+			if err := u.store.RetryBatch(b.ID, retainedUntil, reasonRetained); err != nil {
+				errs = append(errs, err)
+			}
+			continue
 		case b.State == journal.StateAmbiguous && b.Receipt == nil:
 			u.metrics.Add(telemetry.SubmitsAmbiguous, 1, nil)
 		default:
@@ -369,6 +377,12 @@ func (u *Uploader) resend(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// retainsAmbiguous reports whether a submit that may have landed without a
+// job id waits for an operator instead of being sent again.
+func (u *Uploader) retainsAmbiguous() bool {
+	return u.faults.AmbiguousWithoutID == retry.AmbiguousRetain && !u.caps.ResubmitSafe
 }
 
 func toBatch(b journal.Batch) batch.Batch {
