@@ -179,3 +179,14 @@ apikeys:
   key-prefix: nvcfapi-
   data-domain-key: ${kv.data-domain-key.value}
   keep-after-expired-duration: P2D
+  migration:
+    legacy-keys:
+      enabled: false
+      initial-delay: PT1M
+      fixed-delay: PT10M
+      page-size: 500
+      batch-delay: PT0.2S
+      page-fetch-attempts: 3
+      page-fetch-backoff: PT1S
+      lease-duration: PT2M
+      maintenance-grace-period: PT15S

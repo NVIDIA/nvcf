@@ -68,4 +68,10 @@ public class NakProperties {
     @NotNull
     @NestedConfigurationProperty
     private EncryptedModelConverterProperties encryptedModelConverter;
+
+    @Valid
+    @NotNull
+    @NestedConfigurationProperty
+    @Builder.Default
+    private MigrationProperties migration = new MigrationProperties();
 }

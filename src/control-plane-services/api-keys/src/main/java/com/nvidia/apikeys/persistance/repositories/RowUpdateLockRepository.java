@@ -24,6 +24,7 @@ import static com.nvidia.apikeys.persistance.models.RowUpdateLockModel.TABLE_NAM
 
 import com.nvidia.apikeys.persistance.models.RowUpdateLockModel;
 import java.time.Instant;
+import java.util.Optional;
 import org.springframework.data.cassandra.repository.MapIdCassandraRepository;
 import org.springframework.data.cassandra.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -33,6 +34,8 @@ import org.springframework.stereotype.Repository;
 public interface RowUpdateLockRepository extends MapIdCassandraRepository<RowUpdateLockModel> {
 
     String TTL = "ttl";
+    String TOKEN = "token";
+    String EXPECTED_TOKEN = "expected_token";
 
     @Query("INSERT INTO " + TABLE_NAME
             + "(" + COLUMN_TABLE_NAME
@@ -51,4 +54,29 @@ public interface RowUpdateLockRepository extends MapIdCassandraRepository<RowUpd
             @Param(COLUMN_UPDATED_AT) Instant updatedAt,
             @Param(TTL) int ttl);
 
+    @Query("UPDATE " + TABLE_NAME
+            + " USING TTL :" + TTL
+            + " SET " + COLUMN_UPDATED_AT + " = :" + TOKEN
+            + " WHERE " + COLUMN_TABLE_NAME + " = :" + COLUMN_TABLE_NAME
+            + " AND " + COLUMN_RECORD_KEY + " = :" + COLUMN_RECORD_KEY
+            + " IF " + COLUMN_UPDATED_AT + " = :" + EXPECTED_TOKEN
+    )
+    boolean renew(
+            @Param(COLUMN_TABLE_NAME) String table,
+            @Param(COLUMN_RECORD_KEY) String recordKey,
+            @Param(TOKEN) Instant token,
+            @Param(EXPECTED_TOKEN) Instant expectedToken,
+            @Param(TTL) int ttl);
+
+    @Query("DELETE FROM " + TABLE_NAME
+            + " WHERE " + COLUMN_TABLE_NAME + " = :" + COLUMN_TABLE_NAME
+            + " AND " + COLUMN_RECORD_KEY + " = :" + COLUMN_RECORD_KEY
+            + " IF " + COLUMN_UPDATED_AT + " = :" + EXPECTED_TOKEN
+    )
+    boolean unlock(
+            @Param(COLUMN_TABLE_NAME) String table,
+            @Param(COLUMN_RECORD_KEY) String recordKey,
+            @Param(EXPECTED_TOKEN) Instant expectedToken);
+
+    Optional<RowUpdateLockModel> findByTableNameAndRecordKey(String tableName, String recordKey);
 }

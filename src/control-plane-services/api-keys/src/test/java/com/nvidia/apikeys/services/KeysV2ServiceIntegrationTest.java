@@ -348,7 +348,7 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void updateKeyAuthorizationsOfLegacyKeyLocksLegacyRow() {
+    void updateKeyAuthorizationsOfLegacyKeyLocksKeysV2Name() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
         service.updateKeyAuthorizations(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
@@ -358,8 +358,8 @@ class KeysV2ServiceIntegrationTest {
                 .get()
                 .extracting(KeyVo::getAuthorizations)
                 .isEqualTo(KEY_AUTHZ_2);
-        assertThat(lockExists("keys")).isTrue();
-        assertThat(lockExists("keys_v2")).isFalse();
+        assertThat(lockExists("keys_v2")).isTrue();
+        assertThat(lockExists("keys")).isFalse();
         assertThat(countRows("keys_v2")).isZero();
         assertThrowsExceptionWithDetails(
                 TooManyRequestsException.class,

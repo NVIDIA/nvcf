@@ -62,12 +62,15 @@ public class LegacyAccountTranslator {
                         MESG_UNKNOWN_ISSUER_SERVICE.formatted(serviceId)));
     }
 
-    public String toServiceId(String legacyServiceId) {
+    public Optional<String> findServiceId(String legacyServiceId) {
         return serviceIdMap().entrySet().stream()
                 .filter(entry -> Strings.CS.equals(entry.getValue(), legacyServiceId))
                 .map(Map.Entry::getKey)
-                .findFirst()
-                .orElse(legacyServiceId);
+                .findFirst();
+    }
+
+    public String toServiceId(String legacyServiceId) {
+        return findServiceId(legacyServiceId).orElse(legacyServiceId);
     }
 
     public KeyVo toLegacy(KeyV2Vo key) {
