@@ -18,7 +18,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/e2e-last-cluster.sh [--no-build]
+Usage: scripts/e2e-last-cluster.sh [--no-build] [--decisions-only]
 
 Runs the LLM API gateway against a real Stargate, two Pylons, and two
 mock-dynamo backends on loopback, and reproduces the overflow cache-thrash
@@ -34,12 +34,21 @@ scenario for last_cluster_affinity:
 The scenario runs for wait-and-widen and pulsar-wait-and-widen, each with the
 flag on (STARGATE_LAST_CLUSTER_ENABLED in the gateway and
 last_cluster_affinity in Stargate) and off, against a fresh set of processes.
+After those cases it runs a decision-route case: POST /v1/decisions and
+POST /v1/systemone through the gateway, Stargate, a Pylon, and mock-dynamo. The
+gateway authenticates against stargate-dev-auth, which declares both routes in
+the model's uris. The case checks that the 200 body, the TypeSafe-Danger-Zone-Images
+vendor header, and a 13 MB base64 body reach the backend unchanged, and that a
+backend 429 (with Retry-After) and a backend 400 come back unchanged and are not
+retried.
+
 The script exits non-zero when any expectation fails.
 
 Options:
   --no-build        Reuse the binaries in target/release. To run without
                     the gateway source or go, copy a prebuilt
                     llm-api-gateway there first.
+  --decisions-only  Run only the decision-route case.
 
 Environment:
   E2E_PORT_BASE     First loopback port, default 27100. Uses 32 ports.
@@ -51,12 +60,15 @@ EOF
 }
 
 build=1
-case "${1:-}" in
-    "") ;;
-    --no-build) build=0 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
-esac
+decisions_only=0
+for arg in "$@"; do
+    case "${arg}" in
+        --no-build) build=0 ;;
+        --decisions-only) decisions_only=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown argument: ${arg}" >&2; usage >&2; exit 2 ;;
+    esac
+done
 
 for tool in curl jq; do
     command -v "${tool}" >/dev/null || { echo "${tool} is required" >&2; exit 2; }
@@ -76,6 +88,13 @@ routing_key="e2e"
 worker_token="e2e-worker-token"
 service_token="e2e-service-token"
 session_id="e2e-last-cluster-session"
+# The decision-route case sends this client token to the gateway. The gateway
+# presents the service token to stargate-dev-auth, which answers the
+# invocation RPC and declares the routes each model serves.
+client_token="e2e-client-token"
+nca_id="e2e-nca"
+# 1 makes start_stack point the gateway at stargate-dev-auth.
+gateway_auth=0
 follow_up_count=10
 # Each mock-dynamo token takes token_delay_ms. Holders generate
 # holder_tokens tokens, so they keep A full for about 3 seconds.
@@ -229,11 +248,33 @@ start_stack() {
 EOF
 
     cat >"${run_dir}/worker-auth.json" <<EOF
-{"serviceToken": "${service_token}", "workerToken": "${worker_token}", "routingKey": "${routing_key}"}
+{
+  "serviceToken": "${service_token}",
+  "workerToken": "${worker_token}",
+  "routingKey": "${routing_key}",
+  "invocation": {
+    "clientToken": "${client_token}",
+    "ncaId": "${nca_id}",
+    "modelSpecs": {
+      "${model}": {"uris": ["/v1/chat/completions", "/v1/decisions", "/v1/systemone"]}
+    }
+  }
+}
 EOF
     cat >"${run_dir}/stargate-secrets.json" <<EOF
 {"authToken": "${service_token}"}
 EOF
+    cat >"${run_dir}/gateway-secrets.json" <<EOF
+{"nvcfApiToken": "${service_token}"}
+EOF
+    local gateway_auth_env=()
+    if [[ ${gateway_auth} -eq 1 ]]; then
+        gateway_auth_env=(
+            NVCF_GRPC_ADDR="127.0.0.1:${worker_auth}"
+            NVCF_GRPC_INSECURE=true
+            SECRETS_PATH="${run_dir}/gateway-secrets.json"
+        )
+    fi
     start "${run_dir}/worker-auth.log" \
         "${release_dir}/stargate-dev-auth" \
         --config-path "${run_dir}/worker-auth.json" \
@@ -301,6 +342,7 @@ EOF
         RATE_LIMIT_ENABLED=false \
         STARGATE_URL="http://127.0.0.1:${sg_http}" \
         STARGATE_LAST_CLUSTER_ENABLED="${flag}" \
+        "${gateway_auth_env[@]+"${gateway_auth_env[@]}"}" \
         "${release_dir}/llm-api-gateway"
     wait_for "gateway readiness" curl -sf "http://127.0.0.1:${gw_http}/readyz"
     wait_for "both pylon reverse tunnels" both_tunnels_connected
@@ -360,6 +402,115 @@ run_case() {
     cleanup
 }
 
+# Total requests the mock-dynamo backends counted for an endpoint.
+mock_endpoint_total() {
+    local endpoint="$1" index total=0 count
+    for index in 0 1; do
+        count=$(curl -sf "http://127.0.0.1:$(mock_port "${index}")/test-control" |
+            jq --arg endpoint "${endpoint}" --arg model "${model}" '[.counters[]
+                | select(.endpoint == $endpoint and .model == $model and .request_class == "api_gateway")
+                | .count] | add // 0')
+        total=$((total + count))
+    done
+    echo "${total}"
+}
+
+# Writes a decision request body with a base64 image of image_bytes bytes.
+write_decision_body() {
+    local route="$1" image_bytes="$2" file="$3" input_field questions
+    if [[ "${route}" == decisions ]]; then
+        input_field=input
+        questions='[{"type":"predicate","name":"cat","text":"is there a cat?"}]'
+    else
+        input_field=state
+        questions='{"cat":{"type":"noul","text":"is there a cat?"}}'
+    fi
+    {
+        printf '{"model":"%s/%s","%s":[{"type":"input_image","image_url":"data:image/png;base64,' \
+            "${routing_key}" "${model}" "${input_field}"
+        head -c "${image_bytes}" /dev/zero | tr '\0' 'A'
+        printf '"}],"questions":%s}' "${questions}"
+    } >"${file}"
+}
+
+# POSTs a decision request through the gateway and prints the status code.
+# Response headers go to ${run_dir}/decision-headers.txt and the body to
+# ${run_dir}/decision-body.txt.
+decision_request() {
+    local route="$1" query="$2" body_file="$3"
+    curl -s -o "${run_dir}/decision-body.txt" -D "${run_dir}/decision-headers.txt" \
+        -w '%{http_code}' --max-time 60 \
+        "http://127.0.0.1:${gw_http}/v1/${route}${query}" \
+        -H 'content-type: application/json' \
+        -H "authorization: Bearer ${client_token}" \
+        -H 'TypeSafe-Danger-Zone-Images: true' \
+        -H 'X-Vendor-Test: v' \
+        --data-binary "@${body_file}"
+}
+
+expect_decision() {
+    local description="$1" expected_status="$2" status="$3"
+    [[ "${status}" == "${expected_status}" ]] ||
+        fail "${description}: expected ${expected_status}, got ${status}: $(head -c 300 "${run_dir}/decision-body.txt")"
+}
+
+run_decision_case() {
+    run_dir="${work_dir}/decisions"
+    mkdir -p "${run_dir}"
+    echo "=== decision routes through gateway, Stargate, Pylon, mock-dynamo ==="
+    gateway_auth=1
+    start_stack wait-and-widen false
+
+    local route small large status before after
+    for route in decisions systemone; do
+        small="${run_dir}/${route}-small.json"
+        large="${run_dir}/${route}-large.json"
+        write_decision_body "${route}" 64 "${small}"
+        write_decision_body "${route}" $((13 * 1024 * 1024)) "${large}"
+
+        before=$(mock_endpoint_total "${route}")
+        status=$(decision_request "${route}" "" "${small}")
+        expect_decision "${route} 200" 200 "${status}"
+        jq -e --arg model "${model}" '.model == $model
+            and .echo["typesafe-danger-zone-images"] == "true"
+            and .echo["x-vendor-test"] == "v"
+            and (.echo["x-input-tokens"] | tonumber) > 0
+            and (.answers | length) > 0' "${run_dir}/decision-body.txt" >/dev/null ||
+            fail "${route} 200 body or echoed headers wrong: $(head -c 400 "${run_dir}/decision-body.txt")"
+        grep -qi '^x-mock-echo-typesafe-danger-zone-images: true' "${run_dir}/decision-headers.txt" ||
+            fail "${route}: TypeSafe-Danger-Zone-Images did not reach the backend"
+
+        status=$(decision_request "${route}" "" "${large}")
+        expect_decision "${route} 13 MB body" 200 "${status}"
+        jq -e '.echo.body_len > 13000000 and .echo["typesafe-danger-zone-images"] == "true"' \
+            "${run_dir}/decision-body.txt" >/dev/null ||
+            fail "${route}: 13 MB body did not arrive intact: $(head -c 300 "${run_dir}/decision-body.txt")"
+
+        status=$(decision_request "${route}" "?mock_error=429" "${small}")
+        expect_decision "${route} backend 429" 429 "${status}"
+        grep -qi '^retry-after: 7' "${run_dir}/decision-headers.txt" ||
+            fail "${route}: 429 lost its Retry-After header"
+
+        status=$(decision_request "${route}" "?mock_error=400" "${small}")
+        expect_decision "${route} backend 400" 400 "${status}"
+        if [[ "${route}" == decisions ]]; then
+            jq -e '.error.type == "invalid_request_error"' "${run_dir}/decision-body.txt" >/dev/null ||
+                fail "decisions 400 body was changed: $(head -c 300 "${run_dir}/decision-body.txt")"
+        else
+            jq -e '.detail | type == "array"' "${run_dir}/decision-body.txt" >/dev/null ||
+                fail "systemone 400 body was changed: $(head -c 300 "${run_dir}/decision-body.txt")"
+        fi
+
+        # Four requests, one backend attempt each: the 429 was not retried.
+        after=$(mock_endpoint_total "${route}")
+        [[ $((after - before)) -eq 4 ]] ||
+            fail "${route}: expected 4 backend requests, saw $((after - before))"
+        echo "PASS: ${route}"
+    done
+    gateway_auth=0
+    cleanup
+}
+
 if [[ ${build} -eq 1 ]]; then
     mkdir -p "${release_dir}"
     echo "building llm-api-gateway, stargate, pylon, and mock-dynamo"
@@ -370,9 +521,12 @@ for binary in llm-api-gateway stargate stargate-dev-auth pylon mock-dynamo; do
     [[ -x "${release_dir}/${binary}" ]] || fail "missing ${release_dir}/${binary}; run without --no-build"
 done
 
-for algorithm in wait-and-widen pulsar-wait-and-widen; do
-    for flag in true false; do
-        run_case "${algorithm}" "${flag}"
+if [[ ${decisions_only} -eq 0 ]]; then
+    for algorithm in wait-and-widen pulsar-wait-and-widen; do
+        for flag in true false; do
+            run_case "${algorithm}" "${flag}"
+        done
     done
-done
+fi
+run_decision_case
 echo "all cases passed"
