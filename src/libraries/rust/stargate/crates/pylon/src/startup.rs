@@ -42,6 +42,7 @@ use tokio::task::JoinError;
 use tracing::{error, info, warn};
 
 use super::gds::{GdsSeedConfig, RouterSeeds};
+use super::gds_agent::{GdsAgent, GdsAgentConfig};
 use super::{Args, OutputTokenCalibrationMode};
 
 /// The registration address without `--stargate-address` and `--gds-url`.
@@ -164,6 +165,7 @@ pub(crate) struct PylonStartupPlan {
     backend_tunnel: BackendTunnelStartup,
     tls_reload_interval: Duration,
     router_seeds: RouterSeedPlan,
+    gds_agent: Option<GdsAgentConfig>,
 }
 
 /// Where the registration seeds come from: `--stargate-address`, GDS, or
@@ -207,6 +209,53 @@ impl RouterSeedPlan {
     pub(crate) fn gds(&self) -> Option<&GdsSeedConfig> {
         self.gds.as_ref()
     }
+}
+
+/// The PYLON agent registration, `None` without `--gds-pool-name`. The pool
+/// lives in the cluster GDS knows, so `--cluster-id` must be set explicitly
+/// rather than default to the inference server id.
+fn gds_agent_config_from_args(
+    args: &Args,
+    gds: Option<&GdsSeedConfig>,
+) -> Result<Option<GdsAgentConfig>> {
+    let Some(pool_name) = args
+        .gds_pool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|pool_name| !pool_name.is_empty())
+    else {
+        return Ok(None);
+    };
+    let gds = gds.context("--gds-pool-name requires --gds-url")?;
+    let cluster = args
+        .cluster_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|cluster| !cluster.is_empty())
+        .context("--gds-pool-name requires --cluster-id, the cluster id GDS knows")?;
+    ensure!(
+        is_dns_label(pool_name),
+        "--gds-pool-name {pool_name:?} is not a DNS label: use at most 63 lowercase \
+         letters, digits and '-', starting and ending with a letter or digit"
+    );
+    Ok(Some(GdsAgentConfig::new(
+        gds.clusterset.clone(),
+        cluster,
+        pool_name,
+        args.inference_server_id.clone(),
+    )))
+}
+
+/// Whether `value` is an RFC 1123 label, as GDS requires of pool names.
+fn is_dns_label(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 63
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && bytes.first() != Some(&b'-')
+        && bytes.last() != Some(&b'-')
 }
 
 /// The GDS seed source, `None` without `--gds-url`. Plaintext GDS URLs are
@@ -278,6 +327,7 @@ impl BackendTunnelStartup {
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
         let router_seeds = RouterSeedPlan::from_args(args)?;
+        let gds_agent = gds_agent_config_from_args(args, router_seeds.gds.as_ref())?;
         validate_grpc_tls_ca_requires_https(args, router_seeds.static_address.as_deref())?;
         let model_initialization = model_initialization_from_args(args)?;
         let model_source = model_source_from_args(args)?;
@@ -308,12 +358,18 @@ impl PylonStartupPlan {
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
             tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
             router_seeds,
+            gds_agent,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn router_seeds(&self) -> &RouterSeedPlan {
         &self.router_seeds
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gds_agent(&self) -> Option<&GdsAgentConfig> {
+        self.gds_agent.as_ref()
     }
 
     pub(crate) fn direct_tunnel_listen_addr(&self) -> Option<SocketAddr> {
@@ -400,6 +456,8 @@ struct RunningPylon {
     model_lifecycle: ModelLifecycleHandle,
     metrics_server: MetricsServerHandle,
     tunnel: Option<QuicHttpTunnelHandle>,
+    /// The PYLON agent registration with GDS, deregistered after the drain.
+    gds_agent: Option<GdsAgent>,
     registration_inference_server_url: String,
     initial_model_ids: Vec<String>,
 }
@@ -470,6 +528,7 @@ impl RunningPylon {
             model_lifecycle,
             metrics_server,
             tunnel,
+            gds_agent,
             ..
         } = self;
         tokio::join!(
@@ -488,6 +547,11 @@ impl RunningPylon {
                 }
             },
         );
+        // After the tunnel drain, so the pool keeps this Pylon while in-flight
+        // requests complete. The agent lease covers a failed deregistration.
+        if let Some(gds_agent) = gds_agent {
+            gds_agent.shutdown().await;
+        }
     }
 }
 
@@ -626,6 +690,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
     );
     let mut registration_client = InferenceServerRegistrationClient::default();
     registration_client.start(registration_config)?;
+    let gds_agent = start_gds_agent(plan, &router_seeds, &runtime_state);
 
     Ok(RunningPylon {
         _router_seeds: router_seeds,
@@ -635,9 +700,27 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         model_lifecycle,
         metrics_server,
         tunnel,
+        gds_agent,
         registration_inference_server_url,
         initial_model_ids,
     })
+}
+
+/// Registers the PYLON agent with `--gds-pool-name`, on the GDS client of
+/// the router seeds. The `models` attribute follows the advertised models.
+fn start_gds_agent(
+    plan: &PylonStartupPlan,
+    router_seeds: &RouterSeeds,
+    runtime_state: &PylonRuntimeState,
+) -> Option<GdsAgent> {
+    let config = plan.gds_agent.clone()?;
+    let client = router_seeds.gds_client()?.clone();
+    let runtime_state = runtime_state.clone();
+    Some(GdsAgent::start(
+        client,
+        config,
+        Arc::new(move || runtime_state.advertised_model_ids()),
+    ))
 }
 
 fn start_engine_stats_runtime(
@@ -1342,6 +1425,7 @@ mod tests {
             .await
             .expect("metrics server should start"),
             tunnel: None,
+            gds_agent: None,
             registration_inference_server_url: "quic://127.0.0.1:4567".to_string(),
             initial_model_ids: Vec::new(),
         }
@@ -2627,9 +2711,72 @@ mod tests {
                 .concat(),
                 "/nonexistent/gds-ca.crt",
             ),
+            (
+                vec!["--cluster-id", "cluster-b", "--gds-pool-name", "llama"],
+                "--gds-pool-name requires --gds-url",
+            ),
+            (
+                [GDS.as_slice(), &["--gds-pool-name", "llama"]].concat(),
+                "--gds-pool-name requires --cluster-id",
+            ),
+            (
+                [
+                    GDS.as_slice(),
+                    &["--cluster-id", "cluster-b", "--gds-pool-name", "Llama_70B"],
+                ]
+                .concat(),
+                "--gds-pool-name \"Llama_70B\" is not a DNS label",
+            ),
         ] {
             let message = startup_plan_error(&flags);
             assert!(message.contains(expected), "{flags:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn gds_pool_name_registers_the_pylon_agent() {
+        let (_, plan) = startup(&GDS);
+        assert!(plan.gds_agent().is_none(), "no pool name, no agent");
+        let (_, plan) = startup(&["--gds-pool-name", " "]);
+        assert!(
+            plan.gds_agent().is_none(),
+            "an empty pool name is unset, with or without --gds-url"
+        );
+
+        let (_, plan) = startup(
+            &[
+                GDS.as_slice(),
+                &[
+                    "--cluster-id",
+                    "cluster-b",
+                    "--inference-server-id",
+                    "cluster-b.llama.pylon-0",
+                    "--gds-pool-name",
+                    " llama-70b ",
+                ],
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            plan.gds_agent(),
+            Some(&GdsAgentConfig::new(
+                "prod",
+                "cluster-b",
+                "llama-70b",
+                "cluster-b.llama.pylon-0"
+            ))
+        );
+    }
+
+    #[test]
+    fn pool_names_must_be_dns_labels() {
+        let longest = "a".repeat(63);
+        for name in ["llama", "a", "0", "llama-3-70b", longest.as_str()] {
+            assert!(is_dns_label(name), "{name}");
+        }
+        let too_long = "a".repeat(64);
+        for name in ["", "-a", "a-", "Llama", "a_b", "a.b", too_long.as_str()] {
+            assert!(!is_dns_label(name), "{name:?}");
         }
     }
 
@@ -2686,6 +2833,10 @@ mod tests {
         let seeds = plan.router_seeds().start().expect("GDS seeds should start");
         let receiver = seeds.receiver();
 
+        assert!(
+            seeds.gds_client().is_some(),
+            "the agent registration shares the client"
+        );
         assert_eq!(
             *receiver.borrow(),
             BTreeSet::from(["http://stargate:50071".to_string()])

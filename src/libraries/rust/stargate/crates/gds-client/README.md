@@ -21,15 +21,17 @@ Rust client for the Global Discovery Service (GDS), the multi-region pool and
 router registry of the Dynamo Global Router. Stargate, Pylon and the Dynamo
 PoolRelay use it. The server, the Go client and the proto contract live in
 `src/control-plane-services/global-discovery`; the design is
-`docs-gds/global-discovery-service-design.md` (sections 4.5, 4.7, 5 and 9.2).
+`docs-gds/global-discovery-service-design.md` (sections 4.5, 4.6, 4.7, 5 and
+9.2).
 
 The crate provides:
 
 - endpoint failover over an ordered list of GDS URLs (`endpoints`, `channel`)
 - typed calls with deadlines and retries (`client`)
 - TTL-cached, watch-driven pool and router views (`cache`, `routers`)
-- the seed URLs pylons and Stargates dial (`routers`)
+- the seed URLs pylons, PoolRelays and Stargates dial (`routers`)
 - pool registration with heartbeats and a draining shutdown (`register`)
+- typed pool agent registration for Pylon and the PoolRelay (`register`)
 - derived Service names and the well-known labels (`derived`, `labels`)
 
 ## Dependencies and features
@@ -134,6 +136,80 @@ returns that merged VIP,
 `<scheme>://derived-<hash>.<namespace>.svc.cluster.local:<grpc_port>`, for
 callers that want it; it is never a seed.
 
+Pylon dials the gRPC seeds only. Its QUIC tunnel goes to the address in the
+Stargate registration ack, so the router's `quic_port(router)` (annotation
+`gds.nvidia.com/quic-port-name`, default `quic`) is informational for it.
+
+### Pylon: pool agent registration
+
+With `--gds-pool-name` a pylon also registers itself as the PYLON agent of
+its pool: the cluster is `--cluster-id`, the agent id
+`--inference-server-id`, and the `models` attribute lists the served model
+ids. The registration gives GDS the process identity and model list a
+Service cannot carry, and keeps the pool visible for the agent lease when no
+Service is exported yet. GDS keeps one registration per agent id, each with
+its own lease, so the N Pylon pods of a pool register side by side without
+fencing each other. Pylon deregisters after its tunnel drain on shutdown;
+the lease covers a failed deregistration.
+
+```rust
+use std::collections::BTreeMap;
+
+use gds_client::v1::FrontendRole;
+use gds_client::{AgentRegistration, AgentSpec};
+
+let mut spec = AgentSpec::new("prod", "cluster-b", "llama-blue", FrontendRole::Pylon, "pylon-0");
+spec.attributes = BTreeMap::from([("models".to_string(), "meta/llama-3.1-70b".to_string())]);
+let agent = AgentRegistration::register(client.clone(), spec, stop.clone()).await?;
+
+agent.set_attributes(attributes); // sent with the next heartbeat
+agent.shutdown().await?; // after the tunnel drain
+```
+
+A frontend process that embeds Pylon exports one Service annotated
+`gds.nvidia.com/roles: pool-frontend,pylon`; GDS turns it into an OPENAI and
+a PYLON agent backed by the same endpoints. Its Pylon may still register
+with `--gds-pool-name` to add its identity and model list; GDS merges the
+label and API sources of each role (`source` `BOTH`).
+
+### Dynamo PoolRelay: agent registration and router seeds
+
+A PoolRelay registers itself as the KV_RELAY agent of its pool and
+subscribes to every Global Router replica. It opens its state streams over
+gRPC on the routers' gRPC port and uses no QUIC. `relay_seed_urls(state)`
+returns `<scheme>://<replica address>:<grpc_port>` for every ready replica of
+every router whose cluster lease is live, its own cluster included;
+`router_relay_urls(router)` does the same for one router. Today these equal
+the Pylon seeds. They are separate functions so that a relay listener or
+scheme can diverge later without touching Pylon.
+
+```rust
+use gds_client::v1::FrontendRole;
+use gds_client::{
+    AgentRegistration, AgentSpec, RouterCache, RouterCacheConfig, relay_seed_urls,
+};
+
+let spec = AgentSpec::new("prod", "cluster-c", "llama-blue", FrontendRole::KvRelay, pod_name);
+let agent = AgentRegistration::register(client.clone(), spec, stop.clone()).await?;
+
+let routers = RouterCache::spawn(client.clone(), RouterCacheConfig::new("prod"), stop.clone());
+let mut updates = routers.subscribe();
+loop {
+    let urls = relay_seed_urls(&updates.borrow_and_update());
+    // Open state streams to new URLs and close the removed ones.
+    if updates.changed().await.is_err() {
+        break;
+    }
+}
+agent.shutdown().await?; // on SIGTERM
+```
+
+A pool whose only live agent is the relay stays REGISTERED: routers learn
+its KV cache facts (`kv_relay_live`) but need a live ingress agent (OPENAI or
+PYLON) to send it requests. Both Pylon and the PoolRelay may register as
+agents of the same pool; they share its `pool_id`. Relay replicas register
+under their own pod names as agent ids.
+
 ### Dynamo PoolRelay: pool registration
 
 Pools exported through labelled Services need no API calls. The registration
@@ -164,8 +240,8 @@ registration.set_desired_state(DesiredState::Draining).await?; // blue/green cut
 registration.shutdown(Duration::from_secs(60)).await?; // on SIGTERM
 ```
 
-A PoolRelay that subscribes to every Global Router uses a `RouterCache` the
-same way a pylon does.
+The relay uses `PoolRegistration` only for what agents do not carry: worker
+counts, the DRAINING signal and pools that are not Kubernetes Services.
 
 ### Global Router: pool view
 
@@ -238,6 +314,28 @@ dropping the cache or cancelling its token stops the task.
   cancelling its token stops the heartbeat without deregistering; the lease
   then expires.
 
+`AgentRegistration` follows the same rules for one pool agent:
+
+- `AgentRegistration::register` calls `RegisterPoolAgent` without a pool id,
+  so GDS finds the pool by (cluster, pool name) or creates it, and fails if
+  that call fails. Registrations are keyed by (pool, role, agent id): the
+  epoch comes from `RegisterPoolAgentResponse.registration`, and heartbeats
+  and `DeregisterPoolAgent` name the agent id, so replicas of one role do not
+  fence each other. The heartbeat task runs every third of the lease GDS
+  granted (60 s unless `lease_ttl` asks otherwise; GDS clamps it to
+  [10 s, 5 m]), with the jitter, backoff, generations and re-registration on
+  NOT_FOUND or ABORTED described above.
+- `set_attributes` replaces the attributes. Heartbeats carry them until GDS
+  acknowledges them. A heartbeat cannot clear attributes, so an empty map is
+  sent with a new registration.
+- `state()` and `subscribe()` publish an `AgentRegistrationState`: the phase
+  (`Registered`, `Retrying`, `Stopped` or `Deregistered`), the pool id, the
+  lease epoch, the derived pool state and the last error.
+- `shutdown()` stops the heartbeat and calls `DeregisterPoolAgent` at once;
+  there is no drain phase. A failed deregistration is returned, the phase
+  turns `Stopped` and the agent lease expires. Dropping the registration or
+  cancelling its token stops the heartbeat without deregistering.
+
 ## Metrics
 
 With the `metrics` feature, register the metrics once per registry and attach
@@ -262,7 +360,10 @@ them. The names and labels are the contract for the Go client
 | `nvcf_gds_client_pool_heartbeats_total` | counter | `result` (`success`, `failure`, `reregister`) |
 
 `code` uses the canonical gRPC spelling (`OK`, `Unavailable`, ...). Counters
-are pre-initialised for every known label value.
+are pre-initialised for every known label value. The pool registration and
+heartbeat counters count `PoolRegistration` calls only; agent registrations
+show in `nvcf_gds_client_requests_total` under the `RegisterPoolAgent`,
+`HeartbeatPoolAgent` and `DeregisterPoolAgent` methods.
 
 ## Vendored protos
 

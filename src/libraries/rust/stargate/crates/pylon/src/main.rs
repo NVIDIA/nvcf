@@ -27,6 +27,7 @@ const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRY
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
 
 mod gds;
+mod gds_agent;
 mod startup;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
@@ -69,6 +70,9 @@ struct Args {
     /// PEM CA bundle trusted for https:// GDS URLs in addition to the system roots
     #[arg(long, env = "GDS_TLS_CA_CERT_PATH", value_name = "PATH")]
     gds_tls_ca_cert_path: Option<String>,
+    /// GDS pool this pylon serves, a DNS label. Registers the pylon as the pool's PYLON agent, with --cluster-id as the cluster, --inference-server-id as the agent id and the served model ids as the models attribute; deregistered after the tunnel drain on shutdown. Requires --gds-url and --cluster-id
+    #[arg(long, env = "GDS_POOL_NAME", value_name = "NAME")]
+    gds_pool_name: Option<String>,
     /// Inference server id for registration
     #[arg(long, default_value = "pylon", value_name = "ID")]
     inference_server_id: String,

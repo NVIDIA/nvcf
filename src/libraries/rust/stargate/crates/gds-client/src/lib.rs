@@ -23,7 +23,8 @@
 //! - [`cache`] and [`routers`]: TTL-cached, watch-driven pool and router
 //!   views, and the seed URLs pylons and Stargates dial.
 //! - [`register`]: pool registration with heartbeats and a graceful
-//!   drain-then-deregister shutdown.
+//!   drain-then-deregister shutdown, and the typed pool agent registration
+//!   of Pylon and the Dynamo PoolRelay.
 //! - [`derived`] and [`labels`]: derived Service names and the well-known
 //!   labels shared with the Go module.
 //!
@@ -61,9 +62,10 @@ pub use error::Error;
 pub use metrics::GdsClientMetrics;
 pub use proto::v1;
 pub use register::{
-    DesiredState, PoolRegistration, PoolSpec, PoolUpdate, RegistrationState, next_generation,
+    AgentPhase, AgentRegistration, AgentRegistrationState, AgentSpec, DesiredState,
+    PoolRegistration, PoolSpec, PoolUpdate, RegistrationState, next_generation,
 };
 pub use routers::{
-    RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls,
-    remote_watch_urls, router_seed_urls,
+    RouterCache, RouterCacheConfig, RouterState, derived_service_url, pylon_seed_urls, quic_port,
+    relay_seed_urls, remote_watch_urls, router_relay_urls, router_seed_urls,
 };

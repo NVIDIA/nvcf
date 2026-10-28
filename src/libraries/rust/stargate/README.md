@@ -187,6 +187,14 @@ root; the client is `crates/gds-client`.
   stop it and close the registrations they led to. `--stargate-address` is
   optional with `--gds-url` and is watched in addition; without `--gds-url`
   it keeps its `127.0.0.1:50071` default.
+- Pylon pool agent: `--gds-pool-name` (`GDS_POOL_NAME`, a DNS label;
+  requires `--gds-url` and `--cluster-id`) registers the pylon as the PYLON
+  agent of that pool, with `--cluster-id` as the cluster,
+  `--inference-server-id` as the agent id and the advertised model ids as
+  the `models` attribute. Registration retries in the background and never
+  delays startup; model changes reach GDS with the next heartbeat. On
+  shutdown Pylon deregisters after the tunnel drain, and the agent lease
+  covers a failed deregistration.
 
 `stargate-k8s-router` answers `WatchStargates` from its EndpointSlices and
 publishes only its static remote URLs, so pylons that dial the backend router
