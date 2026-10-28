@@ -20,6 +20,10 @@
 # - Service echo: exported by labelling it gds.nvidia.com/export=true.
 # - Service frontend: a labelled pool frontend of pool demo (role
 #   pool-frontend), exported by its labels.
+# - Service echo-pylon: the Pylon agent of pool demo (role pylon) over the
+#   same pods, as the Pylon Operator's transport Service would be.
+# - Service echo-combined: one process in two roles (annotation
+#   gds.nvidia.com/roles: pool-frontend,pylon) of pool combo.
 # - Service api-svc: not labelled; exported only while the API-registered
 #   pool api lists it in services[].
 apiVersion: apps/v1
@@ -81,6 +85,43 @@ metadata:
     gds.nvidia.com/pool: demo
   annotations:
     gds.nvidia.com/pool-models: demo-model
+    gds.nvidia.com/hardware-class: k3d
+spec:
+  selector:
+    app: echo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-pylon
+  labels:
+    app: echo
+    gds.nvidia.com/export: "true"
+    gds.nvidia.com/role: pylon
+    gds.nvidia.com/pool: demo
+spec:
+  selector:
+    app: echo
+  ports:
+    - name: metrics
+      port: 9089
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-combined
+  labels:
+    app: echo
+    gds.nvidia.com/export: "true"
+    gds.nvidia.com/pool: combo
+  annotations:
+    gds.nvidia.com/roles: pool-frontend,pylon
+    gds.nvidia.com/pool-models: combo-model
     gds.nvidia.com/hardware-class: k3d
 spec:
   selector:

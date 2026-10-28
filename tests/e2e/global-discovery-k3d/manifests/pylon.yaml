@@ -22,6 +22,31 @@
 # the hostname Stargate advertises (__ROUTER_HOST__), which a deployment
 # serves from DNS or a load balancer reachable from every cluster (design
 # 4.5); here a hosts entry maps it to the Stargate pod IP.
+#
+# The Pylon is also the PYLON agent of pool e2e-pylon in its cluster
+# (--cluster-id), from both sources: it registers itself with
+# --gds-pool-name (agent id: --inference-server-id), and the Service pylon
+# carries the export, role and pool labels that the Pylon Operator renders
+# with --gds-pool-export.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pylon
+  labels:
+    app: gds-e2e-pylon
+    gds.nvidia.com/export: "true"
+    gds.nvidia.com/role: pylon
+    gds.nvidia.com/pool: e2e-pylon
+  annotations:
+    gds.nvidia.com/pool-models: test-model
+spec:
+  selector:
+    app: gds-e2e-pylon
+  ports:
+    - name: metrics
+      port: 9089
+      targetPort: metrics
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -59,6 +84,7 @@ spec:
             - --gds-clusterset=__CLUSTERSET__
             - --inference-server-id=__CLUSTER_ID__.gds-e2e.pylon.$(POD_NAME)
             - --cluster-id=__CLUSTER_ID__
+            - --gds-pool-name=e2e-pylon
             - --model-name=test-model
             - --backend-connectivity=reverse
             - --upstream-health-path=/health

@@ -25,9 +25,9 @@ described in that module's `docs/api.md`.
 
 | Phase | Clusters | What runs |
 | --- | --- | --- |
-| 1 | hub | `gds-server` (chart `global-discovery`, memory store, one replica), driven over REST |
-| 2 | hub, a, b | `gds-mcs-controller` (chart `global-discovery-mcs-controller`, two replicas) in a and b against the hub's gds-server; export, import, pools, restart, unexport |
-| 3 | hub, a, b | Stargate (chart `llm-request-router`, GDS export on) in a; a Pylon in b that finds it only through GDS, registers and serves a request |
+| 1 | hub | `gds-server` (chart `global-discovery`, memory store, one replica), driven over REST, pool agent registrations included |
+| 2 | hub, a, b | `gds-mcs-controller` (chart `global-discovery-mcs-controller`, two replicas) in a and b against the hub's gds-server; export, import, pools and their label-derived agents, restart, unexport |
+| 3 | hub, a, b | Stargate (chart `llm-request-router`, GDS export on) in a; a Pylon in b that finds it only through GDS, is the PYLON agent of its pool, registers and serves a request |
 
 The hub is `$E2E_CLUSTER` (default `gds-e2e`); clusters a and b are
 `$E2E_CLUSTER-a` and `$E2E_CLUSTER-b`. All three share the Docker network
@@ -128,7 +128,8 @@ E2E_CLUSTER=gds-e2e-mine E2E_WORK_DIR=/tmp/gds-e2e-mine \
    and cluster ids `a` and `b`. The workload is `manifests/mcs-demo.yaml` in a
    and `manifests/mcs-client.yaml` in b, in namespace `gds-e2e-demo`.
 5. Phase 3: installs `llm-request-router` in a (namespace `gds-e2e-router`,
-   `manifests/router-values.yaml`) and `manifests/pylon.yaml` in b (namespace
+   `manifests/router-values.yaml`) and `manifests/pylon.yaml` (the Pylon
+   Deployment and its labelled Service `pylon`) in b (namespace
    `gds-e2e-pylon`).
 6. With `E2E_CLEANUP=1`, deletes the clusters and the network `run.sh`
    created; in clusters it reused it deletes the namespaces and releases (the
@@ -148,6 +149,7 @@ the pods, events and logs.
 | Server | `/readyz` and `/healthz` are `ok`; `/metrics` has `nvcf_gds_build_info`; `GET /v1/serverinfo` reports the region; `GET /v1/clustersets` has no clusterset `e2e` yet. |
 | Clusters | `PUT` registers `cluster-a` and `cluster-b` with ACTIVE leases; the clusterset lists 2 active clusters. |
 | Pools | `POST` registers pool `blue` (REGISTERED); a heartbeat with the lease epoch turns it ACTIVE; `GET pools?model=llama-3&region=e2e-local` lists it; other models and regions list nothing. |
+| Pool agents | `POST pool-agents` registers KV_RELAY agent `relay-1` on `blue` (registration lease ACTIVE, blue's pool id; blue turns UNHEALTHY because a pool with agent registrations needs a live ingress agent and a relay is none); `GET pools/<id>` has one KV_RELAY agent with source API, 1 active registration and `kvRelayLive`; a heartbeat with a stale epoch is 409 `LEASE_EPOCH_MISMATCH`, one with the epoch renews; `relay-2` adds a second registration (2 active) and `relay-1` still heartbeats (no fencing); `DELETE ...agents/FRONTEND_ROLE_KV_RELAY?agent_id=relay-1` leaves 1; without registrations blue is ACTIVE again. A pool registered only through a KV_RELAY agent (`relay-only`) is REGISTERED with `kvRelayLive`; one registered only through a PYLON agent (`pylon-only`) is ACTIVE with `readyIngressCount` 0 and a live agent; both are gone after their registrations are deregistered. |
 | MCS | `cluster-a` and `cluster-b` export `llm/frontend` (`manifests/frontend-export.json`, labelled as a pool frontend) with 2 and 1 ready endpoints; `GET imports/llm/frontend` merges both clusters without conflict; the labels derive pool `green` in each cluster. |
 | Watch | `curl -N` on `pools:watch?model=llama-3` for 12 s sees `SNAPSHOT_START`, the pools, `SNAPSHOT_END`, then an `UPSERT` with `blue` DRAINING after an `UpdatePool` sent during the watch, and a `BOOKMARK` within 10 s. |
 | Leases | A heartbeat with the epoch renews `cluster-a`; a stale epoch is 409 `LEASE_EPOCH_MISMATCH`; an unknown cluster is 404 `CLUSTER_NOT_REGISTERED`. `cluster-c` registers with a 10 s lease, exports one endpoint and sends no heartbeat: within 40 s its lease is EXPIRED, it stops participating in the import (endpoints hidden), its pool `green` is UNHEALTHY, and `ListClusters` omits it unless `includeExpired=true`. |
@@ -162,6 +164,7 @@ Clusterset `e2e-mcs`, cluster ids `a` and `b`.
 | Setup | Clusters a and b are Ready with their CIDRs; static routes between their pod CIDRs (or a `SKIP` with the reason, see below); the hub's gRPC NodePort address; `helm --wait` returns with both controller replicas ready in each cluster (connected to GDS, the leader registered). |
 | Controllers | GDS lists clusters `a` and `b` with ACTIVE leases; the Lease `gds-mcs-controller.gds.nvidia.com` in each cluster is held by a running controller pod. |
 | Export and import | Labelling Service `echo` (2 ready replicas) in a with `gds.nvidia.com/export=true` creates a managed ServiceExport with `Valid=True` and `Ready=True`; the GDS import has 2 ready endpoints from `a`; a and b get a ClusterSetIP ServiceImport whose `spec.ips` is its derived Service's ClusterIP; the EndpointSlices in b labelled `multicluster.kubernetes.io/source-cluster=a` hold exactly the 2 ready echo pod IPs of a; `wget` from a pod in b to the derived ClusterIP answers with an echo pod name from a. |
+| Pool agents from labels | Service `echo-pylon` (labels `gds.nvidia.com/export=true`, `gds.nvidia.com/role=pylon`, `gds.nvidia.com/pool=demo`, over the 2 echo pods) is exported Valid and Ready and joins pool `a/demo`: its `agents[]` are OPENAI (`frontend`) and PYLON (`echo-pylon`), both with source LABEL and 2 ready endpoints, `readyEndpointCount` stays 2 (OPENAI only) and `readyIngressCount` is 4; the pool still names `frontend` as its OPENAI frontend. Service `echo-combined` (annotation `gds.nvidia.com/roles: pool-frontend,pylon`, pool `combo`) yields pool `a/combo` with an OPENAI and a PYLON agent on the same Service, its 2 ready endpoints counted once in `readyIngressCount`. |
 | Scale down | Scaling echo to 1 leaves 1 ready endpoint in b's slices and in the GDS import. |
 | Labelled pool | Service `frontend` (labels `gds.nvidia.com/export=true`, `gds.nvidia.com/role=pool-frontend`, `gds.nvidia.com/pool=demo`) appears as pool `a/demo`, ACTIVE, with `frontend` as its OPENAI frontend, in `GET /v1/clustersets/e2e-mcs/pools`; `UpdatePool` with `desiredState` DRAINING (the overlay) turns it DRAINING; its ServiceExport in a and ServiceImport in b stay. |
 | API-registered pool | `RegisterPool api` with `services[] = gds-e2e-demo/api-svc` makes the controller in a create ServiceExport `api-svc` labelled `gds.nvidia.com/pool-id=<id>`; b imports it; `DeregisterPool` removes the export and the import. |
@@ -172,8 +175,8 @@ Clusterset `e2e-mcs`, cluster ids `a` and `b`.
 
 | Area | Checks |
 | --- | --- |
-| Router export | Stargate (one replica, open worker auth, `globalDiscovery.enabled` and `export.enabled`, dial scheme `http`) is ready in a; the controller exports its Service (`gds.nvidia.com/role=router`) with `Valid` and `Ready`; `GET /v1/clustersets/e2e-mcs/routers` lists the router of cluster `a` with dial scheme `http`, gRPC port 50071 and the Stargate pod IP as a ready replica. |
-| Pylon | A plain Pylon Deployment in b with `--gds-url`, `--gds-clusterset` and no `--stargate-address`, next to the OpenAI-compatible sample backend, logs `GDS Stargate seeds changed`. |
+| Router export | Stargate (one replica, open worker auth, `globalDiscovery.enabled` and `export.enabled`, dial scheme `http`) is ready in a; the controller exports its Service (`gds.nvidia.com/role=router`) with `Valid` and `Ready`; `GET /v1/clustersets/e2e-mcs/routers` lists the router of cluster `a` with dial scheme `http`, gRPC port 50071, QUIC port 50072 (the chart's `gds.nvidia.com/quic-port-name: quic`), `ports[]` with `grpc` and `quic` (UDP), and the Stargate pod IP as a ready replica. |
+| Pylon | A plain Pylon Deployment in b with `--gds-url`, `--gds-clusterset`, `--cluster-id=b`, `--gds-pool-name=e2e-pylon` and no `--stargate-address`, next to the OpenAI-compatible sample backend, logs `GDS Stargate seeds changed`. GDS lists pool `b/e2e-pylon` ACTIVE with one PYLON agent of source BOTH: the Service `pylon` over the Pylon pod (labels `export=true`, `role=pylon`, `pool=e2e-pylon`, port `metrics` 9089, as the Pylon Operator renders with `--gds-pool-export`) with 1 ready endpoint, and the Pylon's own registration under its `--inference-server-id` (1 active) with attribute `models: test-model`. These checks need no routes between the pod CIDRs. |
 | Registration | `pylon_registration_stream_connected` and `pylon_reverse_tunnel_connected` are 1 for the Stargate pod of a; Stargate's `/v1/models` lists `test-model` with a registered and healthy server of cluster `b`; a streamed chat completion sent to Stargate in a (with the `x-request-id`, `x-model` and `x-input-tokens` headers the LLM gateway sets) is answered by the sample backend in b over the reverse tunnel (`x-stargate-cluster-id: b`). |
 
 Registration dials the Stargate pod IP that GDS lists as the seed. The
