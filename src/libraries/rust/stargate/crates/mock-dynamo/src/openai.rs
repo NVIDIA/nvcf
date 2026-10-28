@@ -584,13 +584,7 @@ async fn decision_response(
                     questions
                         .iter()
                         .enumerate()
-                        .map(|(index, question)| {
-                            serde_json::json!({
-                                "type": question.get("type").and_then(serde_json::Value::as_str).unwrap_or("predicate"),
-                                "name": question.get("name").and_then(serde_json::Value::as_str).map_or_else(|| format!("q{index}"), str::to_string),
-                                "probability": DECISION_MOCK_PROBABILITY,
-                            })
-                        })
+                        .map(|(index, question)| decisions_answer(index, question))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -613,13 +607,8 @@ async fn decision_response(
                 .and_then(serde_json::Value::as_object)
                 .map(|questions| {
                     questions
-                        .keys()
-                        .map(|name| {
-                            (
-                                name.clone(),
-                                serde_json::json!({"type": "noul", "noul": DECISION_MOCK_PROBABILITY}),
-                            )
-                        })
+                        .iter()
+                        .map(|(name, question)| (name.clone(), systemone_answer(question)))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -638,6 +627,147 @@ async fn decision_response(
             .insert("x-mock-echo-typesafe-danger-zone-images", value.clone());
     }
     response
+}
+
+fn question_type(question: &serde_json::Value) -> &str {
+    question
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Probabilities for `count` options: the first gets the mock probability and
+/// the rest share the remainder.
+fn option_probabilities(count: usize) -> Vec<f64> {
+    let rest = 0.01 / count.saturating_sub(1).max(1) as f64;
+    (0..count)
+        .map(|index| {
+            if index == 0 {
+                DECISION_MOCK_PROBABILITY
+            } else {
+                rest
+            }
+        })
+        .collect()
+}
+
+fn mock_box() -> serde_json::Value {
+    serde_json::json!({"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9})
+}
+
+/// Canned answer for one Decisions question. Questions are read loosely so an
+/// unexpected field never fails the request; unknown types get the predicate
+/// answer.
+fn decisions_answer(index: usize, question: &serde_json::Value) -> serde_json::Value {
+    let kind = question_type(question);
+    let kind = if kind.is_empty() { "predicate" } else { kind };
+    let name = question
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| format!("q{index}"), str::to_string);
+    let options = |key: &str| -> Vec<serde_json::Value> {
+        question
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    match kind {
+        "choice" => {
+            let values: Vec<_> = options("choices")
+                .into_iter()
+                .map(|choice| choice.get("value").cloned().unwrap_or(choice))
+                .collect();
+            let probabilities = option_probabilities(values.len());
+            serde_json::json!({
+                "type": kind,
+                "name": name,
+                "choice": values.first().cloned().unwrap_or(serde_json::Value::Null),
+                "probabilities": values.iter().zip(&probabilities)
+                    .map(|(value, probability)| serde_json::json!({"value": value, "probability": probability}))
+                    .collect::<Vec<_>>(),
+                "confidence": DECISION_MOCK_PROBABILITY,
+            })
+        }
+        "score" => {
+            let labels: Vec<_> = options("levels")
+                .into_iter()
+                .map(|level| level.get("label").cloned().unwrap_or(level))
+                .collect();
+            let probabilities = option_probabilities(labels.len());
+            serde_json::json!({
+                "type": kind,
+                "name": name,
+                "score": 0,
+                "probabilities": labels.iter().zip(&probabilities).enumerate()
+                    .map(|(value, (label, probability))| serde_json::json!({"value": value, "label": label, "probability": probability}))
+                    .collect::<Vec<_>>(),
+                "confidence": DECISION_MOCK_PROBABILITY,
+            })
+        }
+        "box" => serde_json::json!({
+            "type": kind,
+            "name": name,
+            "box": mock_box(),
+            "confidence": DECISION_MOCK_PROBABILITY,
+        }),
+        _ => serde_json::json!({
+            "type": kind,
+            "name": name,
+            "probability": DECISION_MOCK_PROBABILITY,
+        }),
+    }
+}
+
+/// Canned answer for one System One question, keyed by the caller. Unknown
+/// types get the noul answer.
+fn systemone_answer(question: &serde_json::Value) -> serde_json::Value {
+    let criteria = question.get("criteria");
+    match question_type(question) {
+        "choice" => {
+            let keys: Vec<String> = match criteria {
+                Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let probabilities = option_probabilities(keys.len());
+            serde_json::json!({
+                "type": "choice",
+                "choice": keys.first().cloned().unwrap_or_default(),
+                "confidence": DECISION_MOCK_PROBABILITY,
+                "probabilities": keys.iter().zip(&probabilities)
+                    .map(|(key, probability)| (key.clone(), serde_json::json!(probability)))
+                    .collect::<serde_json::Map<_, _>>(),
+            })
+        }
+        "score" => {
+            let labels: Vec<serde_json::Value> = criteria
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let probabilities = option_probabilities(labels.len());
+            serde_json::json!({
+                "type": "score",
+                "score": 0,
+                "confidence": DECISION_MOCK_PROBABILITY,
+                "legend": labels.iter().enumerate()
+                    .map(|(index, label)| (index.to_string(), label.clone()))
+                    .collect::<serde_json::Map<_, _>>(),
+                "probabilities": probabilities.iter().enumerate()
+                    .map(|(index, probability)| (index.to_string(), serde_json::json!(probability)))
+                    .collect::<serde_json::Map<_, _>>(),
+            })
+        }
+        "box" => serde_json::json!({
+            "type": "box",
+            "box": mock_box(),
+            "confidence": DECISION_MOCK_PROBABILITY,
+        }),
+        _ => serde_json::json!({"type": "noul", "noul": DECISION_MOCK_PROBABILITY}),
+    }
 }
 
 /// Error bodies follow each route's native shape: OpenAI style for decisions,
