@@ -100,6 +100,8 @@ func TestModelInfoReservedFields(t *testing.T) {
 				cfg.OpenAI.ImageEdits = map[string]ModelFunctionDetails{}
 				cfg.OpenAI.ImageVariations = map[string]ModelFunctionDetails{}
 				cfg.AnthropicMessages = map[string]ModelFunctionDetails{}
+				cfg.OpenAI.Decisions = map[string]ModelFunctionDetails{}
+				cfg.TypeSafeSystemOne = map[string]ModelFunctionDetails{}
 				cfg.modelSections()[section]["example"] = entry
 				err := cfg.Validate()
 				require.ErrorContains(t, err, "example/model")
@@ -214,4 +216,24 @@ func TestModelInfoYAMLEmptyCompatibility(t *testing.T) {
 		require.NoError(t, cfg.Validate())
 		require.Empty(t, cfg.ModelInfoFieldsByName())
 	}
+}
+
+func TestModelInfoFieldsIncludeDecisionSections(t *testing.T) {
+	var cfg GatewayConfig
+	require.NoError(t, unmarshalGatewayConfig([]byte(`v2config:
+  openai:
+    decisions:
+      entry:
+        modelName: example/decision
+        modelInfoFields: {from_decisions: true, winner: decisions}
+  typesafeSystemOne:
+    entry:
+      modelName: example/decision
+      modelInfoFields: {from_system_one: true, winner: systemone}
+`), &cfg))
+	require.NoError(t, cfg.Validate())
+	fields := cfg.ModelInfoFieldsByName()["example/decision"]
+	require.Equal(t, "true", string(fields["from_decisions"]))
+	require.Equal(t, "true", string(fields["from_system_one"]))
+	require.Equal(t, `"decisions"`, string(fields["winner"]))
 }
