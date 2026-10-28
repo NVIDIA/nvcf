@@ -21,6 +21,7 @@ use crate::routes::app_error::AppError;
 use crate::routes::input_asset_header::InputAssetHeader;
 use crate::routes::pexec;
 use crate::routes::post_pexec::{FunctionRouting, NVCF_POLL_SECONDS};
+use crate::routes::WorkerResponse;
 use crate::s3::S3Service;
 use crate::settings::AppConfig;
 use crate::worker_streams::WorkerStreamService;
@@ -94,7 +95,14 @@ pub async fn exec(
     State(app_config): State<Arc<AppConfig>>,
     Extension(Authorization(bearer)): Extension<Authorization<Bearer>>,
     request: Request,
-) -> Result<(StatusCode, Json<InvokeFunctionResponse>), AppError> {
+) -> Result<
+    (
+        StatusCode,
+        Option<Extension<WorkerResponse>>,
+        Json<InvokeFunctionResponse>,
+    ),
+    AppError,
+> {
     let function_id = function_routing.function_id;
     let function_version_id = function_routing.function_version_id;
 
@@ -160,7 +168,14 @@ pub async fn exec(
 #[tracing::instrument(level = Level::TRACE, fields(request_id))]
 pub async fn map_passthrough_response_to_wrapped_response(
     response: Response,
-) -> Result<(StatusCode, Json<InvokeFunctionResponse>), AppError> {
+) -> Result<
+    (
+        StatusCode,
+        Option<Extension<WorkerResponse>>,
+        Json<InvokeFunctionResponse>,
+    ),
+    AppError,
+> {
     let (parts, body) = response.into_parts();
     let req_id = parts
         .headers
@@ -170,11 +185,18 @@ pub async fn map_passthrough_response_to_wrapped_response(
         .unwrap_or_default();
     let span = tracing::Span::current();
     span.record("request_id", format!("{}", req_id));
+    // The wrapper reports the worker's status, so it keeps the worker origin.
+    let worker_response = parts
+        .extensions
+        .get::<WorkerResponse>()
+        .copied()
+        .map(Extension);
     Ok((
         match parts.status {
             StatusCode::FOUND => StatusCode::OK,
             _ => parts.status,
         },
+        worker_response,
         Json(InvokeFunctionResponse {
             req_id,
             status: match parts.status {
