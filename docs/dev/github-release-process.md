@@ -220,11 +220,8 @@ list to keep in sync:
 - Its base images are the `oci.pull` repositories its image targets
   take as `base`. A repository named only in a comment or in another
   attribute does not count.
-- An image target that sets no `base` is built on its image macro's
-  default, read from the macro definitions in `rules/oci/private`. For
-  example, `go_oci_image` defaults to `DEFAULT_BASE`.
-- A `BUILD.bazel` or `rules/oci/private` file that does not parse stops
-  the run with an error naming the file.
+- A `BUILD.bazel` file that does not parse stops the run with an error
+  naming the file.
 
 A Go service gets a dependency-triggered release under the same
 conditions as a Java service: semantic-release computed no version for
