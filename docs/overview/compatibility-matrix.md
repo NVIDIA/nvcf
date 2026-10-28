@@ -21,7 +21,7 @@ to a maintained train before moving further.
 
 | Stack | Release | Works with |
 | --- | --- | --- |
-| Self-managed (control plane) | `1.1.0` | Compute plane `1.1.0` or later, Observability `1.0.0` or later |
+| Self-managed (control plane) | `1.1.0` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
 | Self-managed (control plane) | `1.0.1` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
 | Self-managed (control plane) | `1.0.0` | Compute plane `1.0.0` or later, Observability `1.0.0` or later |
 | Compute plane | `1.1.0` | Self-managed (control plane) `1.1.0` or later, Observability `1.0.0` or later |
