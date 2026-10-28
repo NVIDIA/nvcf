@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "telemetry",
+    srcs = [
+        "memory.go",
+        "safe.go",
+        "telemetry.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/telemetry",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":telemetry",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "telemetry_test",
+    srcs = [
+        "safe_test.go",
+        "telemetry_test.go",
+    ],
+    embed = [":telemetry"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/config"],
+)

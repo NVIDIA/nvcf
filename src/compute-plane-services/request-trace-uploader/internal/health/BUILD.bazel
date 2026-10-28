@@ -9,7 +9,10 @@ go_library(
 
 go_test(
     name = "health_test",
-    srcs = ["health_test.go"],
+    srcs = [
+        "health_test.go",
+        "start_test.go",
+    ],
     embed = [":health"],
 )
 
