@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,9 @@ const (
 )
 
 // Backend selects the export destination. Core behavior derives from the
-// backend's declared capabilities rather than from this value.
+// backend's declared capabilities rather than from this value. Load checks
+// only its shape; the backend registry decides which names exist, so a new
+// backend needs no change here.
 type Backend string
 
 const (
@@ -359,13 +362,15 @@ func backendValue(lookup LookupFunc, name string) (Backend, error) {
 	if !ok || value == "" {
 		return "", fmt.Errorf("%s is required", name)
 	}
-	switch Backend(value) {
-	case BackendObjectStore, BackendKratos, BackendDebug:
-		return Backend(value), nil
-	default:
-		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, BackendObjectStore, BackendKratos, BackendDebug)
+	if !backendNamePattern.MatchString(value) {
+		return "", fmt.Errorf("%s must be a lowercase backend name", name)
 	}
+	return Backend(value), nil
 }
+
+// backendNamePattern is the shape of a backend name, which is also a metrics
+// label value.
+var backendNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // debugVerbosityValue reads the debug backend's log verbosity. An unknown
 // value falls back to DebugVerbosityBasic with a warning rather than a hard

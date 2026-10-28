@@ -58,3 +58,25 @@ func TestNewWrapsFactoryError(t *testing.T) {
 		t.Fatalf("New() error = %v, want it to name the backend", err)
 	}
 }
+
+func TestANewBackendNeedsNoConfigChange(t *testing.T) {
+	const name config.Backend = "newstore"
+	t.Cleanup(func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	})
+	Register(name, func(config.Config) (Client, error) { return nil, nil })
+
+	env := map[string]string{config.EnvSourceDir: "/spool", config.EnvBackend: string(name)}
+	cfg, _, err := config.Load(func(key string) (string, bool) {
+		value, ok := env[key]
+		return value, ok
+	})
+	if err != nil {
+		t.Fatalf("config.Load() error = %v, want a registered backend accepted", err)
+	}
+	if _, err := New(cfg); err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+}

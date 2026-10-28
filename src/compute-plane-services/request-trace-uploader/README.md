@@ -87,7 +87,8 @@ packages from this module.
 Required:
 
 - `REQUEST_TRACE_UPLOADER_SOURCE_DIR`: absolute directory containing segments
-- `REQUEST_TRACE_UPLOADER_BACKEND`: `objectstore` or `kratos`
+- `REQUEST_TRACE_UPLOADER_BACKEND`: a backend linked into the build, such as
+  `objectstore` or `debug` in this binary
 
 Optional, with defaults:
 

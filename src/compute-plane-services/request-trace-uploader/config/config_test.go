@@ -105,7 +105,7 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 		{name: "missing directory", env: map[string]string{EnvBackend: "objectstore"}},
 		{name: "relative directory", env: map[string]string{EnvSourceDir: "records", EnvBackend: "objectstore"}},
 		{name: "missing backend", env: map[string]string{EnvSourceDir: "/records"}},
-		{name: "unknown backend", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "s3"}},
+		{name: "malformed backend name", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "Object Store"}},
 		{name: "prefix with separator", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvSegmentPrefix: "nested/prefix"}},
 		{name: "http objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "http://minio.internal:9000"}},
 		{name: "schemeless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "minio.internal:9000"}},
