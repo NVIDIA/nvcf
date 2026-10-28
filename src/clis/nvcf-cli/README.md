@@ -696,9 +696,12 @@ and the CLI prints the API error.
 `tokenRateLimit` supports positive integer token limits for `S`, `M`, `H`, `D`, and `W`.
 Use `1000-S` for a single inline CLI limit. Use JSON input for combined limits, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`, because inline model specs use commas as field separators.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
-and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
-Stargate, and Pylon build and a backend that serves that protocol. Published
-stack releases must qualify and include those builds before use.
+native Anthropic `/v1/messages`, and the beta decision model paths
+`/v1/decisions` and `/v1/systemone`. Messages and the decision paths require a
+compatible gateway, Stargate, and Pylon build and a backend that serves that
+protocol. Published stack releases must qualify and include those builds before
+use. Declare a decision path in `uris` when you create the function, because
+`uris` cannot change afterward.
 
 #### Deploy a Function *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
 

@@ -380,6 +380,8 @@ func newRouterWithConfig(config serverConfig) http.Handler {
 	mux.HandleFunc("/v1/completions", func(w http.ResponseWriter, r *http.Request) { handleCompletions(w, r, config) })
 	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) { handleEmbeddings(w, r, config) })
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) { handleMessages(w, r, config) })
+	mux.HandleFunc(decisionRoute, handleDecisions)
+	mux.HandleFunc(systemOneRoute, handleSystemOne)
 	return mux
 }
 

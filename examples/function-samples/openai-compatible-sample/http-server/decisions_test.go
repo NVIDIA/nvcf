@@ -1,0 +1,495 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+const decisionsBody = `{"model":"test-model","input":"a photo","questions":[` +
+	`{"type":"predicate","text":"is it red?"},` +
+	`{"type":"choice","text":"which?","choices":["cat","dog"]},` +
+	`{"type":"score","text":"how good?"}]}`
+
+const systemOneBody = `{"model":"test-model","state":{"text":"hello"},"questions":{` +
+	`"a":{"type":"noul"},"b":{"type":"choice","choices":["x","y"]},"c":{"type":"score"}}}`
+
+var decisionHeaders = map[string]string{
+	"TypeSafe-Danger-Zone-Images": "true",
+	"X-Model":                     "test-model",
+	"X-Input-Tokens":              "42",
+	"X-Request-Id":                "req-abc",
+	"X-Vendor-Test":               "vendor-value",
+}
+
+func TestDecisionsReturnsCannedAnswersInQuestionOrder(t *testing.T) {
+	recorder := postJSON(t, "/v1/decisions", decisionsBody)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Model   string           `json:"model"`
+		Answers []map[string]any `json:"answers"`
+		Usage   map[string]any   `json:"usage"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, recorder.Body.String())
+	}
+	if response.Model != "test-model" {
+		t.Fatalf("model = %q", response.Model)
+	}
+	if len(response.Answers) != 3 {
+		t.Fatalf("answers = %v, want 3", response.Answers)
+	}
+	for i, key := range []string{"probability", "choice", "score"} {
+		if _, ok := response.Answers[i][key]; !ok {
+			t.Fatalf("answer %d = %v, want key %q", i, response.Answers[i], key)
+		}
+	}
+	if response.Answers[1]["choice"] != "cat" {
+		t.Fatalf("choice = %v, want first listed choice", response.Answers[1]["choice"])
+	}
+	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
+		if _, ok := response.Usage[key]; !ok {
+			t.Fatalf("usage = %v, missing %q", response.Usage, key)
+		}
+	}
+	if response.Usage["total_tokens"].(float64) != response.Usage["input_tokens"].(float64)+response.Usage["output_tokens"].(float64) {
+		t.Fatalf("usage total mismatch: %v", response.Usage)
+	}
+}
+
+func TestSystemOneReturnsCannedAnswersByName(t *testing.T) {
+	recorder := postJSON(t, "/v1/systemone", systemOneBody)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Model   string                    `json:"model"`
+		Answers map[string]map[string]any `json:"answers"`
+		Usage   map[string]int            `json:"usage"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, recorder.Body.String())
+	}
+	if response.Model != "test-model" || len(response.Answers) != 3 {
+		t.Fatalf("response = %s", recorder.Body.String())
+	}
+	if response.Answers["a"]["type"] != "noul" || response.Answers["a"]["noul"] != 0.99 {
+		t.Fatalf("answer a = %v, want noul 0.99", response.Answers["a"])
+	}
+	if response.Answers["b"]["type"] != "choice" || response.Answers["b"]["choice"] != "x" {
+		t.Fatalf("answer b = %v", response.Answers["b"])
+	}
+	if response.Answers["c"]["type"] != "score" {
+		t.Fatalf("answer c = %v", response.Answers["c"])
+	}
+	if _, ok := response.Usage["input_tokens"]; !ok || len(response.Usage) != 2 {
+		t.Fatalf("usage = %v, want only input_tokens and output_tokens", response.Usage)
+	}
+}
+
+func TestDecisionRoutesEchoRequestHeadersAndBodyLength(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			body := decisionsBody
+			if path == "/v1/systemone" {
+				body = systemOneBody
+			}
+			recorder := postJSONWithHeaders(t, path, body, decisionHeaders)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+			}
+			var response struct {
+				Echo map[string]any `json:"echo"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"typesafe-danger-zone-images": "true",
+				"x-model":                     "test-model",
+				"x-input-tokens":              "42",
+				"x-request-id":                "req-abc",
+				"x-vendor-test":               "vendor-value",
+				"body_length":                 float64(len(body)),
+			}
+			for key, value := range want {
+				if response.Echo[key] != value {
+					t.Fatalf("echo[%q] = %v, want %v (echo %v)", key, response.Echo[key], value, response.Echo)
+				}
+			}
+			if got := recorder.Header().Get("x-mock-echo-typesafe-danger-zone-images"); got != "true" {
+				t.Fatalf("x-mock-echo-typesafe-danger-zone-images = %q, want true", got)
+			}
+		})
+	}
+}
+
+func TestDecisionRoutesOmitEchoHeaderWhenRequestHasNone(t *testing.T) {
+	recorder := postJSON(t, "/v1/decisions", decisionsBody)
+	if got := recorder.Header().Get("x-mock-echo-typesafe-danger-zone-images"); got != "" {
+		t.Fatalf("header = %q, want unset", got)
+	}
+}
+
+func TestDecisionRoutesEchoRequestBodyWhenAsked(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			body := `{"model":"m","x_load_tester_echo":true,"extra":{"k":[1,2]}}`
+			recorder := postJSON(t, path, body)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+			}
+			var response struct {
+				RequestBody json.RawMessage `json:"request_body"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if string(response.RequestBody) != body {
+				t.Fatalf("request_body = %s, want %s", response.RequestBody, body)
+			}
+		})
+	}
+}
+
+func TestDecisionRoutesAcceptEightMegabyteImageAtRealEncodedSize(t *testing.T) {
+	image := base64.StdEncoding.EncodeToString(make([]byte, 8_000_000))
+	if len(image) <= maxRequestBytes {
+		t.Fatalf("test image encodes to %d, not above the 10 MiB general limit", len(image))
+	}
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			body := `{"model":"m","input":{"image":"` + image + `"}}`
+			recorder := postJSON(t, path, body)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %.200s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestDecisionRoutesRejectBodiesAbove16MiB(t *testing.T) {
+	filler := strings.Repeat("a", decisionMaxRequestBytes)
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path, func(t *testing.T) {
+			recorder := postJSON(t, path, `{"model":"m","input":"`+filler+`"}`)
+			if recorder.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413", recorder.Code)
+			}
+			assertJSONError(t, recorder.Body.Bytes())
+		})
+	}
+}
+
+func TestExistingRoutesKeepTenMiBLimit(t *testing.T) {
+	if decisionMaxRequestBytes != 16<<20 {
+		t.Fatalf("decisionMaxRequestBytes = %d, want 16 MiB", decisionMaxRequestBytes)
+	}
+	if maxRequestBytes != 10<<20 {
+		t.Fatalf("maxRequestBytes = %d, want 10 MiB", maxRequestBytes)
+	}
+	filler := strings.Repeat("a", 11<<20)
+	recorder := postJSON(t, "/v1/embeddings", `{"model":"m","input":"`+filler+`"}`)
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("embeddings accepted an 11 MiB body")
+	}
+	recorder = postJSON(t, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"`+filler+`"}]}`)
+	if recorder.Code == http.StatusOK {
+		t.Fatalf("chat accepted an 11 MiB body")
+	}
+}
+
+func TestDecisionRoutesRejectInvalidBodies(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		for name, body := range map[string]string{
+			"not json":    `not json`,
+			"array":       `[1,2]`,
+			"string":      `"x"`,
+			"two objects": `{} {}`,
+			"empty":       ``,
+		} {
+			t.Run(path+" "+name, func(t *testing.T) {
+				recorder := postJSON(t, path, body)
+				if recorder.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+				}
+				assertJSONError(t, recorder.Body.Bytes())
+			})
+		}
+	}
+}
+
+func TestDecisionRoutesMockErrorTriggers(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		t.Run(path+" 429", func(t *testing.T) {
+			recorder := postJSON(t, path+"?mock_error=429", decisionsBody)
+			if recorder.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429", recorder.Code)
+			}
+			if got := recorder.Header().Get("Retry-After"); got != "7" {
+				t.Fatalf("Retry-After = %q, want 7", got)
+			}
+			assertJSONError(t, recorder.Body.Bytes())
+		})
+	}
+	t.Run("decisions 400 is OpenAI style", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/decisions?mock_error=400", decisionsBody)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", recorder.Code)
+		}
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Error.Message == "" || body.Error.Type == "" {
+			t.Fatalf("body = %s (err %v)", recorder.Body.String(), err)
+		}
+	})
+	t.Run("systemone 400 is FastAPI style", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/systemone?mock_error=400", systemOneBody)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", recorder.Code)
+		}
+		var body struct {
+			Detail []struct {
+				Loc  []any  `json:"loc"`
+				Msg  string `json:"msg"`
+				Type string `json:"type"`
+			} `json:"detail"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body.Detail) == 0 || body.Detail[0].Msg == "" {
+			t.Fatalf("body = %s (err %v)", recorder.Body.String(), err)
+		}
+	})
+}
+
+func TestDecisionRoutesRejectNonPost(t *testing.T) {
+	for _, path := range []string{"/v1/decisions", "/v1/systemone"} {
+		recorder := getPath(t, path)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s GET status = %d, want 405", path, recorder.Code)
+		}
+	}
+}
+
+func assertJSONError(t *testing.T, body []byte) {
+	t.Helper()
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed) == 0 {
+		t.Fatalf("error body is not a JSON object: %q (err %v)", body, err)
+	}
+}
+
+func getPath(t *testing.T, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+	recorder := httptest.NewRecorder()
+	newRouter().ServeHTTP(recorder, request)
+	return recorder
+}
+
+const realDecisionsBody = `{"model":"m","input":[{"role":"user","content":[` +
+	`{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}],"questions":[` +
+	`{"type":"predicate","name":"p","instructions":"is it red?"},` +
+	`{"type":"choice","name":"c","instructions":"which?","choices":[{"value":"cat","description":"a cat"},{"value":"dog","description":"a dog"}]},` +
+	`{"type":"choice","name":"c2","instructions":"which?","choices":["bird","fish"]},` +
+	`{"type":"score","name":"s","instructions":"rate","levels":[{"label":"bad","description":"d"},{"label":"good","description":"d"}]},` +
+	`{"type":"score","name":"s2","instructions":"rate","levels":["low","high"]},` +
+	`{"type":"box","name":"b","instructions":"find it"},` +
+	`{"type":"future","name":"f","extra":{"x":1}}]}`
+
+func TestDecisionsAcceptsRealQuestionShapes(t *testing.T) {
+	recorder := postJSON(t, "/v1/decisions", realDecisionsBody)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Answers []map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Answers) != 7 {
+		t.Fatalf("answers = %s, want 7", recorder.Body.String())
+	}
+	names := []string{"p", "c", "c2", "s", "s2", "b", "f"}
+	for i, name := range names {
+		if response.Answers[i]["name"] != name {
+			t.Fatalf("answer %d name = %v, want %s", i, response.Answers[i]["name"], name)
+		}
+	}
+	a := response.Answers
+	if a[0]["type"] != "predicate" || a[0]["probability"] == nil {
+		t.Fatalf("predicate = %v", a[0])
+	}
+	if a[1]["choice"] != "cat" || a[2]["choice"] != "bird" {
+		t.Fatalf("choices = %v %v", a[1], a[2])
+	}
+	for _, i := range []int{1, 2, 3, 4} {
+		if _, ok := a[i]["probabilities"].([]any); !ok || a[i]["confidence"] == nil {
+			t.Fatalf("answer %d lacks probabilities list/confidence: %v", i, a[i])
+		}
+	}
+	for _, i := range []int{3, 4} {
+		if _, ok := a[i]["score"].(float64); !ok {
+			t.Fatalf("score %d = %v, want a number", i, a[i]["score"])
+		}
+	}
+	box, ok := a[5]["box"].(map[string]any)
+	if a[5]["type"] != "box" || !ok || box["top"] == nil || box["bottom"] == nil || box["left"] == nil || box["right"] == nil || a[5]["confidence"] == nil {
+		t.Fatalf("box = %v", a[5])
+	}
+	if a[6]["type"] == "choice" || a[6]["name"] != "f" {
+		t.Fatalf("unknown type answer = %v", a[6])
+	}
+}
+
+const realSystemOneBody = `{"model":"m","state":[{"k":"v"}],"images":["AAAA"],"assets":{"a":{"x":1}},"questions":{` +
+	`"n":{"type":"noul","criteria":{"true":"yes","false":"no"}},` +
+	`"c":{"type":"choice","criteria":{"opt_a":"first","opt_b":"second"}},` +
+	`"s":{"type":"score","criteria":["worst","mid","best"]},` +
+	`"b":{"type":"box"},` +
+	`"u":{"type":"mystery","extra":[1,2]}}}`
+
+func TestSystemOneAcceptsRealQuestionShapes(t *testing.T) {
+	for _, state := range []string{`"text"`, `{"a":1}`, `[1,2]`} {
+		body := strings.Replace(realSystemOneBody, `[{"k":"v"}]`, state, 1)
+		recorder := postJSON(t, "/v1/systemone", body)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("state %s status = %d: %s", state, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder := postJSON(t, "/v1/systemone", realSystemOneBody)
+	var response struct {
+		Answers map[string]map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	a := response.Answers
+	if len(a) != 5 {
+		t.Fatalf("answers = %s, want 5", recorder.Body.String())
+	}
+	if a["n"]["type"] != "noul" || a["n"]["noul"] != 0.99 {
+		t.Fatalf("noul = %v", a["n"])
+	}
+	if a["c"]["choice"] != "opt_a" || a["c"]["probabilities"] == nil || a["c"]["confidence"] == nil {
+		t.Fatalf("choice = %v", a["c"])
+	}
+	if _, ok := a["s"]["score"].(float64); !ok {
+		t.Fatalf("score = %v, want a number", a["s"])
+	}
+	if _, ok := a["s"]["legend"].(map[string]any); !ok {
+		t.Fatalf("legend = %v, want an object", a["s"]["legend"])
+	}
+	if _, ok := a["s"]["probabilities"].(map[string]any); !ok {
+		t.Fatalf("probabilities = %v, want an object", a["s"]["probabilities"])
+	}
+	if _, ok := a["c"]["probabilities"].(map[string]any); !ok {
+		t.Fatalf("choice probabilities = %v, want an object", a["c"]["probabilities"])
+	}
+	if a["b"]["box"] == nil {
+		t.Fatalf("box = %v", a["b"])
+	}
+	if a["u"]["type"] == nil {
+		t.Fatalf("unknown = %v", a["u"])
+	}
+}
+
+func TestDecisionsMatchDocumentedTypes(t *testing.T) {
+	body := `{"model":"m","input":"x","questions":[` +
+		`{"type":"choice","name":"flag","choices":[{"value":true,"description":"yes"},{"value":false,"description":"no"}]},` +
+		`{"type":"choice","name":"num","choices":[3,4]},` +
+		`{"type":"score","name":"s","levels":[{"label":"lo","description":"d"},{"label":"mid","description":"d"},{"label":"hi","description":"d"}]}]}`
+	recorder := postJSON(t, "/v1/decisions", body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Answers []map[string]any `json:"answers"`
+		Usage   map[string]any   `json:"usage"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	a := response.Answers
+	if a[0]["choice"] != true {
+		t.Fatalf("boolean choice = %#v, want true", a[0]["choice"])
+	}
+	probs := a[0]["probabilities"].([]any)
+	if len(probs) != 2 || probs[0].(map[string]any)["value"] != true || probs[1].(map[string]any)["value"] != false || probs[0].(map[string]any)["probability"] == nil {
+		t.Fatalf("boolean probabilities = %v", probs)
+	}
+	if a[1]["choice"] != float64(3) {
+		t.Fatalf("number choice = %#v, want 3", a[1]["choice"])
+	}
+	score, ok := a[2]["score"].(float64)
+	if !ok || score < 0 || score > 2 {
+		t.Fatalf("score = %#v, want number in [0,2]", a[2]["score"])
+	}
+	levels := a[2]["probabilities"].([]any)
+	if len(levels) != 3 {
+		t.Fatalf("score probabilities = %v", levels)
+	}
+	for i, label := range []string{"lo", "mid", "hi"} {
+		level := levels[i].(map[string]any)
+		if level["value"] != float64(i) || level["label"] != label || level["probability"] == nil {
+			t.Fatalf("level %d = %v", i, level)
+		}
+	}
+	details, _ := response.Usage["input_tokens_details"].(map[string]any)
+	out, _ := response.Usage["output_tokens_details"].(map[string]any)
+	if details["cached_tokens"] == nil || details["cache_write_tokens"] == nil || out["reasoning_tokens"] == nil {
+		t.Fatalf("usage = %v, want token detail objects", response.Usage)
+	}
+}
+
+func TestSystemOneMatchesDocumentedTypes(t *testing.T) {
+	body := `{"model":"m","state":"s","questions":{` +
+		`"c":{"type":"choice","criteria":{"alpha":"first","beta":"second"}},` +
+		`"s":{"type":"score","criteria":["worst","mid","best"]}}}`
+	recorder := postJSON(t, "/v1/systemone", body)
+	var response struct {
+		Answers map[string]map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	c := response.Answers["c"]
+	probs, ok := c["probabilities"].(map[string]any)
+	if c["choice"] != "alpha" || !ok || probs["alpha"] == nil || probs["beta"] == nil || c["confidence"] == nil {
+		t.Fatalf("choice = %v", c)
+	}
+	s := response.Answers["s"]
+	legend, _ := s["legend"].(map[string]any)
+	sp, _ := s["probabilities"].(map[string]any)
+	if legend["0"] != "worst" || legend["2"] != "best" || len(legend) != 3 || len(sp) != 3 || sp["1"] == nil {
+		t.Fatalf("score = %v", s)
+	}
+	if score, ok := s["score"].(float64); !ok || score < 0 || score > 2 {
+		t.Fatalf("score = %#v", s["score"])
+	}
+}
