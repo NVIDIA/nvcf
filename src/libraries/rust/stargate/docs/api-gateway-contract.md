@@ -119,6 +119,8 @@ Supported:
 POST /v1/chat/completions
 POST /v1/responses
 POST /v1/embeddings
+POST /v1/decisions
+POST /v1/systemone
 ```
 
 Required headers:
@@ -195,6 +197,8 @@ Body rules:
 - `/v1/chat/completions` and `/v1/responses` must be valid JSON with
   `"stream": true`.
 - `/v1/embeddings` must be valid JSON and does not need `stream`.
+- `/v1/decisions` and `/v1/systemone` (beta) must be valid JSON and do not
+  need `stream`. Responses are not streamed.
 
 ## Responses
 
