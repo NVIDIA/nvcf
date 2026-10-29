@@ -239,6 +239,20 @@ This requires:
 |------|------|-------------|
 | `advancedProperties` | `DriverConfigLoaderBuilderCustomizer` (`@Primary`) | Binds `spring.cassandra.advanced.*` properties to the DataStax Java Driver. |
 
+#### Retry policies
+
+Select a retry policy with `spring.cassandra.advanced.retry-policy.class`
+(env var `SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS`).
+
+| Class | Behavior |
+|-------|----------|
+| `com.nvidia.boot.cassandra.retry.NextHostRetryPolicy` (default in the services) | Retries once on the next host: read timeout without data, write timeout, unavailable, aborted request, error response. |
+| `com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy` (opt-in) | Extends `NextHostRetryPolicy` and also retries once on the next host a read timeout that has data but fewer responses than required (range reads / index lookups). |
+
+`RangeReadRetryPolicy` is not enabled anywhere by default. Enable it when you
+need additional Cassandra resilience, for example to ride out the loss of a
+replica.
+
 ### CassandraHealthConfiguration
 
 | Bean | Type | Description |

@@ -17,11 +17,6 @@ spring:
     contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
     keyspace-name: nvcf_api
     local-datacenter: ${CASSANDRA_DATACENTER:ncp}
-    advanced:
-      retry-policy:
-        # Opt-in: also retry range-read (index lookup) timeouts on the next host, which the
-        # default NextHostRetryPolicy does not do.
-        class: com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy
     username: cassandra
     password: cassandra
   security:
