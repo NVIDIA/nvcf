@@ -11,10 +11,9 @@
 // able to export without any additional wiring.
 //
 // It links no backend that carries NVIDIA-internal dependencies. A
-// distribution that needs one, such as Kratos Bulk Upload, imports it in its
-// own main and reuses the packages here. Startup is runner.Run, which every
-// such main calls, so distributions differ only in their backend imports and
-// options.
+// distribution that needs one imports it in its own main and reuses the
+// packages here. Startup is runner.Run, which every such main calls, so
+// distributions differ only in their backend imports and options.
 package main
 
 import (

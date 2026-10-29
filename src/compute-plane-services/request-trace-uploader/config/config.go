@@ -27,8 +27,6 @@ const (
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
 	EnvHealthAddr           = "HEALTH_ADDR"
 	EnvScanInterval         = "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS"
-	EnvKratosStatusInterval = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_INTERVAL_SECONDS"
-	EnvKratosStatusTimeout  = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_TIMEOUT_SECONDS"
 	EnvAttemptTimeout       = "REQUEST_TRACE_UPLOADER_ATTEMPT_TIMEOUT"
 	EnvOperationTimeout     = "REQUEST_TRACE_UPLOADER_OPERATION_TIMEOUT"
 	EnvMaxRetries           = "REQUEST_TRACE_UPLOADER_MAX_RETRIES"
@@ -46,8 +44,6 @@ const (
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
 	DefaultScanInterval     = 30 * time.Second
-	DefaultStatusInterval   = 5 * time.Second
-	DefaultStatusTimeout    = 30 * time.Minute
 	DefaultAttemptTimeout   = 30 * time.Second
 	DefaultOperationTimeout = 90 * time.Second
 	DefaultMaxRetries       = 2
@@ -64,7 +60,6 @@ type Backend string
 
 const (
 	BackendObjectStore Backend = "objectstore"
-	BackendKratos      Backend = "kratos"
 	// BackendDebug reads and reports segments without exporting them. It
 	// exists so the read path can be exercised against a real Dynamo without
 	// credentials or a destination.
@@ -107,7 +102,6 @@ type Config struct {
 	HealthAddr     string
 	ScanInterval   time.Duration
 	RetryPolicy    RetryPolicy
-	Kratos         KratosPolicy
 	ObjectStore    ObjectStorePolicy
 	DebugVerbosity DebugVerbosity
 	// Suppression is the validated suppression rule list. No rules turns
@@ -150,14 +144,6 @@ type ObjectStorePolicy struct {
 	// exists to exercise config, key computation, and hostname namespacing
 	// without a destination, the same role debug plays for the read path.
 	DryRun bool
-}
-
-// KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
-// Upload backend performs. Object-store submission is synchronous and has no
-// status poll.
-type KratosPolicy struct {
-	StatusInterval time.Duration
-	StatusTimeout  time.Duration
 }
 
 // RetryPolicy bounds each remote operation. The initial scaffold validates but
@@ -212,12 +198,6 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 
 	scanInterval := durationSeconds(lookup, EnvScanInterval, DefaultScanInterval, time.Second, 24*time.Hour, &warnings)
-	statusInterval := durationSeconds(lookup, EnvKratosStatusInterval, DefaultStatusInterval, time.Second, time.Hour, &warnings)
-	statusTimeout := durationSeconds(lookup, EnvKratosStatusTimeout, DefaultStatusTimeout, time.Second, 24*time.Hour, &warnings)
-	if statusTimeout < statusInterval {
-		statusTimeout = statusInterval
-		warnings = append(warnings, EnvKratosStatusTimeout)
-	}
 	attemptTimeout := duration(lookup, EnvAttemptTimeout, DefaultAttemptTimeout, time.Second, 90*time.Second, &warnings)
 	operationTimeout := duration(lookup, EnvOperationTimeout, DefaultOperationTimeout, time.Second, 5*time.Minute, &warnings)
 	if operationTimeout < attemptTimeout {
@@ -280,10 +260,6 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		QuarantineDir: quarantineDir,
 		HealthAddr:    strings.TrimSpace(healthAddr),
 		ScanInterval:  scanInterval,
-		Kratos: KratosPolicy{
-			StatusInterval: statusInterval,
-			StatusTimeout:  statusTimeout,
-		},
 		RetryPolicy: RetryPolicy{
 			AttemptTimeout:   attemptTimeout,
 			OperationTimeout: operationTimeout,

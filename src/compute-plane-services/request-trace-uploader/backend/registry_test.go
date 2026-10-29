@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewReportsBackendNotCompiledIn(t *testing.T) {
-	_, err := New(config.Config{Backend: config.BackendKratos})
+	_, err := New(config.Config{Backend: "unlinked"})
 	if err == nil {
 		t.Fatal("New() error = nil, want not-compiled-in error")
 	}

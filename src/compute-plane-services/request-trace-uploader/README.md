@@ -112,15 +112,25 @@ Optional, with defaults:
 - `REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS`: how long a submitted job may
   stay unfinished before it is reported stranded; default `86400`
 - `REQUEST_TRACE_UPLOADER_STATUS_INTERVAL_SECONDS`: how often every open job
-  is polled; default `30`
+  is polled, whatever the backend; default `30`
 
-Kratos Bulk Upload is an asynchronous job API, so it polls for terminal status.
-These settings apply only to that backend:
+Used only by one backend:
 
-- `REQUEST_TRACE_UPLOADER_KRATOS_STATUS_INTERVAL_SECONDS`: default `5`
-- `REQUEST_TRACE_UPLOADER_KRATOS_STATUS_TIMEOUT_SECONDS`: default `1800`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_BUCKET` and
+  `REQUEST_TRACE_UPLOADER_OBJECTSTORE_REGION`: required by `objectstore`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_ENDPOINT`: an `https://` URL for an
+  S3-compatible store other than AWS; default the SDK endpoint for the region
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX`: prefix for object keys;
+  default the bucket root
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE`: path-style bucket
+  addressing, which most stores other than AWS need; default `false`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_DRY_RUN`: log what would be uploaded,
+  send nothing and need no credentials; default `false`
+- `REQUEST_TRACE_UPLOADER_DEBUG_VERBOSITY`: `basic` (default) or `detailed`
+  logging for `debug`
 
-Object-store submission is synchronous and has no status poll.
+Object-store submission is synchronous, so its first status poll reports the
+final outcome.
 
 The binary loads configuration strictly. An invalid or incompatible value,
 or an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, stops startup
@@ -128,8 +138,8 @@ with a non-zero exit. Errors name the setting, never its value.
 `config.Load` on its own still falls back to defaults with a warning, for
 callers that want that.
 
-The uploader reads only the names listed here. It has no aliases, so a
-deployment sets these names directly.
+The uploader reads only the names listed in this README. It has no aliases,
+so a deployment sets these names directly.
 
 Missing paths and unreadable secret files prevent readiness.
 

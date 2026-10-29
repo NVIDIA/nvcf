@@ -3,10 +3,7 @@
 
 package config
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestLoadDefaults(t *testing.T) {
 	cfg, warnings, err := Load(testLookup(map[string]string{
@@ -25,9 +22,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ScanInterval != DefaultScanInterval {
 		t.Fatalf("scan interval = %v, want %v", cfg.ScanInterval, DefaultScanInterval)
 	}
-	if cfg.Kratos.StatusInterval != DefaultStatusInterval || cfg.Kratos.StatusTimeout != DefaultStatusTimeout {
-		t.Fatalf("unexpected kratos polling defaults: %+v", cfg.Kratos)
-	}
 	if cfg.RetryPolicy.AttemptTimeout != DefaultAttemptTimeout || cfg.RetryPolicy.OperationTimeout != DefaultOperationTimeout {
 		t.Fatalf("unexpected retry defaults: %+v", cfg.RetryPolicy)
 	}
@@ -36,8 +30,8 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsSupportedBackends(t *testing.T) {
-	for _, backend := range []Backend{BackendObjectStore, BackendKratos} {
+func TestLoadAcceptsWellFormedBackendNames(t *testing.T) {
+	for _, backend := range []Backend{BackendObjectStore, BackendDebug, "example"} {
 		t.Run(string(backend), func(t *testing.T) {
 			cfg, _, err := Load(testLookup(map[string]string{
 				EnvSourceDir: "/records",
@@ -69,16 +63,14 @@ func TestLoadOverridesSegmentPrefix(t *testing.T) {
 
 func TestLoadFallsBackForInvalidPolicy(t *testing.T) {
 	cfg, warnings, err := Load(testLookup(map[string]string{
-		EnvSourceDir:            "/records",
-		EnvBackend:              "kratos",
-		EnvAttemptTimeout:       "0s",
-		EnvOperationTimeout:     "10s",
-		EnvMaxRetries:           "99",
-		EnvRetryInitialBackoff:  "not-a-duration",
-		EnvRetryMaximumBackoff:  "1ms",
-		EnvRetryMultiplier:      "nan",
-		EnvKratosStatusTimeout:  "1",
-		EnvKratosStatusInterval: "10",
+		EnvSourceDir:           "/records",
+		EnvBackend:             "objectstore",
+		EnvAttemptTimeout:      "0s",
+		EnvOperationTimeout:    "10s",
+		EnvMaxRetries:          "99",
+		EnvRetryInitialBackoff: "not-a-duration",
+		EnvRetryMaximumBackoff: "1ms",
+		EnvRetryMultiplier:     "nan",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -88,9 +80,6 @@ func TestLoadFallsBackForInvalidPolicy(t *testing.T) {
 	}
 	if cfg.RetryPolicy.MaxRetries != DefaultMaxRetries {
 		t.Errorf("max retries = %d, want %d", cfg.RetryPolicy.MaxRetries, DefaultMaxRetries)
-	}
-	if cfg.Kratos.StatusTimeout != 10*time.Second {
-		t.Errorf("status timeout = %v, want clamped %v", cfg.Kratos.StatusTimeout, 10*time.Second)
 	}
 	if len(warnings) < 6 {
 		t.Errorf("warnings = %v, want policy fallbacks", warnings)
