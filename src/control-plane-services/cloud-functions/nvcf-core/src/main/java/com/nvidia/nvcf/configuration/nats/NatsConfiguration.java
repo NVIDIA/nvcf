@@ -25,7 +25,6 @@ import io.micrometer.tracing.Tracer;
 import io.nats.client.Connection;
 import io.nats.client.Connection.Status;
 import io.nats.client.ConnectionListener.Events;
-import io.nats.client.ErrorListener;
 import io.nats.client.ForceReconnectOptions;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamManagement;
@@ -76,6 +75,7 @@ public class NatsConfiguration {
             // only required if the auth callout is enabled to establish ordering
             Optional<AuthCalloutService> authCalloutService,
             Optional<NatsTokenAuthProvider> natsTokenAuthProvider,
+            NatsFailureTelemetry failureTelemetry,
             Tracer tracer)
             throws IOException, InterruptedException {
         var optionsBuilder = Options.builder()
@@ -95,11 +95,12 @@ public class NatsConfiguration {
                 .pingInterval(Duration.ofSeconds(5))
                 .useDispatcherWithExecutor()
                 .reconnectWait(Duration.ofMillis(100))
-                .errorListener(new LoggingNatsErrorListener())
+                .errorListener(failureTelemetry.errorListener())
                 .connectionListener(
                         (conn, type) -> {
                             log.info("nats connection event {} {}", type,
                                      conn.getServerInfo());
+                            failureTelemetry.onConnectionEvent(conn, type);
                             if (type == Events.LAME_DUCK) {
                                 CompletableFuture.runAsync(() -> {
                                     try {
@@ -129,7 +130,13 @@ public class NatsConfiguration {
                             }
                         })
                 .build();
-        return connect(options, tracer);
+        try {
+            return connect(options, tracer);
+        } catch (IOException | RuntimeException e) {
+            NatsFailureReason reason = failureTelemetry.recordConnectFailure(e);
+            log.error("failed to connect to nats reason={}", reason.tag(), e);
+            throw e;
+        }
     }
 
     @Data
@@ -177,21 +184,6 @@ public class NatsConfiguration {
         }
     }
 
-    @Slf4j
-    private static class LoggingNatsErrorListener implements ErrorListener {
-
-        @Override
-        public void errorOccurred(Connection conn, String error) {
-            log.error("nats error occurred {} {}", conn.getServerInfo(), error);
-        }
-
-        @Override
-        public void exceptionOccurred(Connection conn, Exception exp) {
-            log.error("nats exception occurred {}", conn.getServerInfo(), exp);
-        }
-
-    }
-
     @Service
     public static class FixedNatsPool implements AutoCloseable {
 
@@ -199,9 +191,12 @@ public class NatsConfiguration {
         private final JetStream[] jetStreams;
         private final JetStreamManagement[] jetStreamManagements;
         private final AtomicInteger index = new AtomicInteger();
+        private final NatsFailureTelemetry failureTelemetry;
 
-        public FixedNatsPool(ApplicationContext applicationContext, NatsProperties natsProperties)
+        public FixedNatsPool(ApplicationContext applicationContext, NatsProperties natsProperties,
+                             NatsFailureTelemetry failureTelemetry)
                 throws IOException {
+            this.failureTelemetry = failureTelemetry;
             int processors = Runtime.getRuntime().availableProcessors();
             int poolSize = Math.min(processors, natsProperties.getMaxPoolSize());
             this.connections = new Connection[poolSize];
@@ -243,11 +238,23 @@ public class NatsConfiguration {
         public boolean healthy() {
             for (Connection connection : connections) {
                 if (connection.getStatus() != Status.CONNECTED) {
-                    log.warn("unhealthy nats connection {}", connection.getServerInfo());
+                    log.warn("unhealthy nats connection {} reason={}",
+                             connection.getServerInfo(),
+                             failureTelemetry.lastFailure(connection)
+                                     .map(NatsFailureReason::tag).orElse("unknown"));
                     return false;
                 }
             }
             return true;
+        }
+
+        public Optional<NatsFailureReason> lastFailureReason() {
+            for (Connection connection : connections) {
+                if (connection.getStatus() != Status.CONNECTED) {
+                    return failureTelemetry.lastFailure(connection);
+                }
+            }
+            return Optional.empty();
         }
     }
 

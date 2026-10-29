@@ -218,6 +218,7 @@ NVCF_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
