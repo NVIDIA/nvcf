@@ -52,8 +52,7 @@ public class PrefetchingCache<K, V> {
     private final LoadingCache<K, Instant> keyLastFetchTime;
 
     /**
-     * Methods invalidate all cache records. Not intended to be used in normal flows, only during
-     * testing.
+     * Clears cached values and prefetch tracking after management mutations.
      */
     public void invalidate() {
         records.clear();

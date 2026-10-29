@@ -3,6 +3,39 @@
 NVIDIA API Keys service manages the lifecycle of API keys (issue,
 authenticate, introspect, rotate, revoke).
 
+## Synchronous bulk operations
+
+`SyncKeysV2OperationsService` provides key-owner, account-admin and platform-admin
+entry points. HTTP integration with the actor controllers is pending. The key-owner
+entry point fixes the user, and the account-admin entry point fixes the account.
+
+Set `operation` to `REVOKED` or `DELETE`. Each dimension not fixed by the actor
+requires an `accounts`, `users`, or `issuerServices` array of distinct IDs or
+the singleton `["*"]`. Platform requests selecting all three wildcards also
+require `confirm_platform_wide: true`. Configure the array limit with
+`apikeys.bulk-max-selector-values` (default 10).
+
+The service returns `KeyOperationResponse` after processing finishes. Selection
+uses the submission time as its creation cutoff. Processing stops on failure,
+and the exception's problem details include `bulkOperation` with `FAILED` status and counts
+for eligible keys processed so far. `partialApplication` indicates that a mutation was
+attempted. Earlier writes remain applied. Retries start a new selection with
+a new cutoff.
+
+A failure between v2 and legacy writes can partially update one migrated key.
+The operation reports failure until both representations are updated. Retrying
+repeats the per-key mutation to repair partial writes.
+
+Selection fails when a legacy key lacks the creation time or issuer mapping
+needed to process it. Correct the record or deployment mapping before retrying.
+
+Bulk mutations clear cached key rows and introspection responses on this instance
+before the response, including after partial failure. Other replicas expire cached key
+rows after 60 seconds and cached introspection responses after 60 seconds.
+These layers can retain a successful decision for up to 120 seconds after a
+mutation, plus in-flight request time. Existing caller-side HTTP caching can
+add another 360 seconds for introspection or 60 seconds for evaluation.
+
 ## Minimum Requirements
 
 - [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)

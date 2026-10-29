@@ -34,10 +34,14 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.cassandra.core.CassandraBatchOperations;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.WriteResult;
+import org.springframework.data.cassandra.core.cql.QueryOptions;
+import org.springframework.data.cassandra.core.query.Criteria;
+import org.springframework.data.cassandra.core.query.Query;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -158,6 +162,24 @@ public class KeysDao {
                 .filter(key -> key.getKeyId() != null)
                 .map(this::modelToValidatedVo)
                 .toList();
+    }
+
+    /** Streams legacy rows in bounded driver pages, scanning when no owner is specified. */
+    public Stream<KeyByOwnerAndServiceVo> streamForBulk(
+            KeyOwnerType ownerType, String ownerId, String serviceId, int pageSize) {
+        var query = Query.empty();
+        if (ownerId != null) {
+            query = query.and(Criteria.where("owner_type").is(ownerType))
+                    .and(Criteria.where("owner_id").is(ownerId));
+            if (serviceId != null) {
+                query = query.and(Criteria.where("issuer_service_id").is(serviceId));
+            }
+        }
+        return cassandraTemplate.stream(query.queryOptions(QueryOptions.builder().pageSize(pageSize).build()),
+                        KeyByOwnerAndServiceModel.class)
+                .filter(row -> row.getKeyId() != null && row.getOwnerType() == ownerType)
+                .filter(row -> serviceId == null || serviceId.equals(row.getIssuerServiceId()))
+                .map(this::modelToValidatedVo);
     }
 
 
