@@ -1,6 +1,6 @@
 module ai-api-gateway-service
 
-go 1.25.0
+go 1.26.10
 
 require (
 	github.com/NVIDIA/nvcf-go v1.0.1

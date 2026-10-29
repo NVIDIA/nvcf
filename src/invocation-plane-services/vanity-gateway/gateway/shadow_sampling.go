@@ -141,6 +141,10 @@ func (s *shadowRequestSampler) bucket(method config.ShadowSamplingMethod) (int, 
 }
 
 func (s *shadowRequestSampler) promptCacheKey() ([]byte, bool) {
+	// Messages has no prompt_cache_key body field, so only headers apply.
+	if s.endpoint == shadowSamplingEndpointMessages {
+		return s.promptCacheKeyFromHeaders()
+	}
 	if raw, ok := s.parsedBodyFields()["prompt_cache_key"]; ok {
 		var value string
 		if json.Unmarshal(raw, &value) == nil {
@@ -151,6 +155,10 @@ func (s *shadowRequestSampler) promptCacheKey() ([]byte, bool) {
 		}
 	}
 
+	return s.promptCacheKeyFromHeaders()
+}
+
+func (s *shadowRequestSampler) promptCacheKeyFromHeaders() ([]byte, bool) {
 	if s.request == nil {
 		return nil, false
 	}
@@ -185,6 +193,8 @@ func (s *shadowRequestSampler) firstMessageMaterial() ([]byte, bool) {
 			return nil, false
 		}
 		return canonicalResponsesFirstMessage(fields)
+	case shadowSamplingEndpointMessages:
+		return canonicalMessagesFirstMessage(fields)
 	default:
 		return nil, false
 	}
@@ -322,6 +332,62 @@ func canonicalResponsesFirstMessage(fields map[string]json.RawMessage) ([]byte, 
 		)
 	}
 	return nil, false
+}
+
+// canonicalMessagesFirstMessage hashes the top-level system prompt and the
+// first user message of an Anthropic Messages request. cache_control markers
+// are dropped because clients move them between turns without changing the
+// conversation.
+func canonicalMessagesFirstMessage(fields map[string]json.RawMessage) ([]byte, bool) {
+	var messages []json.RawMessage
+	if json.Unmarshal(fields["messages"], &messages) != nil {
+		return nil, false
+	}
+
+	selected := make([]canonicalShadowMessage, 0, 2)
+	if system, ok := nonemptyCanonicalJSONValue(fields["system"]); ok {
+		selected = append(selected, canonicalShadowMessage{Role: "system", Content: withoutCacheControl(system)})
+	}
+	for _, rawMessage := range messages {
+		var message map[string]json.RawMessage
+		if json.Unmarshal(rawMessage, &message) != nil {
+			continue
+		}
+		var role string
+		if json.Unmarshal(message["role"], &role) != nil || role != "user" {
+			continue
+		}
+		content, ok := nonemptyCanonicalJSONValue(message["content"])
+		if !ok {
+			return nil, false
+		}
+		selected = append(selected, canonicalShadowMessage{Role: role, Content: withoutCacheControl(content)})
+		return marshalCanonicalFirstMessage(shadowSamplingEndpointMessages, nil, selected)
+	}
+	return nil, false
+}
+
+// withoutCacheControl returns value with every cache_control object key removed.
+func withoutCacheControl(value any) any {
+	switch value := value.(type) {
+	case []any:
+		result := make([]any, len(value))
+		for i, item := range value {
+			result[i] = withoutCacheControl(item)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for key, item := range value {
+			if key == "cache_control" {
+				continue
+			}
+			result[key] = withoutCacheControl(item)
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func marshalCanonicalFirstMessage(

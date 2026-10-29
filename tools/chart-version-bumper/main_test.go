@@ -55,7 +55,7 @@ func (f *fixture) chart(t *testing.T, id, appVersion, values string) {
 func (f *fixture) run(t *testing.T, tag string, write bool) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code, err := Run(f.root, tag, write, &out, &errOut)
+	code, err := Run(f.root, tag, "", write, &out, &errOut)
 	if err != nil {
 		// A returned error is the failure path; surface it on stderr the way the
 		// command does so tests can assert on the message.
@@ -86,19 +86,45 @@ func (f *fixture) source(t *testing.T, path, content string) {
 
 func (f *fixture) tag(t *testing.T, tag string) {
 	t.Helper()
-	commands := [][]string{
-		{"init", "--quiet"},
-		{"add", "."},
-		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "fixture"},
-		{"tag", tag},
+	f.git(t, "init", "--quiet")
+	f.git(t, "add", ".")
+	f.git(t, "commit", "--quiet", "-m", "fixture")
+	f.git(t, "tag", tag)
+}
+
+func (f *fixture) git(t *testing.T, args ...string) {
+	t.Helper()
+	args = append([]string{"-C", f.root, "-c", "user.name=Test", "-c", "user.email=test@example.com"}, args...)
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
-	for _, args := range commands {
-		cmd := exec.Command("git", append([]string{"-C", f.root}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-		}
+}
+
+// onBranches commits the fixture to main, tags mainTag there, then tags
+// branchTag on a commit that only a release branch holds, the way a backport
+// is cut. The work tree is left on main.
+func (f *fixture) onBranches(t *testing.T, mainTag, branchTag string) {
+	t.Helper()
+	f.git(t, "init", "--quiet", "--initial-branch=main")
+	f.git(t, "add", ".")
+	f.git(t, "commit", "--quiet", "-m", "fixture")
+	f.git(t, "tag", mainTag)
+	f.git(t, "switch", "--quiet", "-c", "release-1")
+	f.git(t, "commit", "--quiet", "--allow-empty", "-m", "backport")
+	f.git(t, "tag", branchTag)
+	f.git(t, "switch", "--quiet", "main")
+}
+
+func (f *fixture) runOnBase(t *testing.T, tag, base string) (int, string, string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code, err := Run(f.root, tag, base, true, &out, &errOut)
+	if err != nil {
+		fmt.Fprintln(&errOut, err)
 	}
+	return code, out.String(), errOut.String()
 }
 
 const meta = `{"services":[
@@ -371,6 +397,11 @@ func TestRefusalStillAppliesTheChartsThatCouldMove(t *testing.T) {
 func TestRealChartsResolve(t *testing.T) {
 	// Against the checked-in metadata and charts, so a chart directory layout
 	// this tool cannot read shows up here rather than during a release.
+	//
+	// A declared edge that refuses is caught here too. The refusal depends only
+	// on the chart, not on the version released, so such an edge refuses every
+	// release of its service. cloud-functions-helm did that once its chart
+	// gained a second image tag, until the edge named the API image's path.
 	root := repoRoot(t)
 	m, err := LoadMetadata(root)
 	if err != nil {
@@ -387,14 +418,19 @@ func TestRealChartsResolve(t *testing.T) {
 			continue
 		}
 		for _, d := range e.Deploys {
+			var p Plan
+			var err error
 			if len(d.ValuesPaths) > 0 || len(d.ValuesFiles) > 0 {
-				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion); err != nil {
-					t.Errorf("planning %s (%s values paths) failed: %v", e.ID, d.Service, err)
-				}
+				p, err = PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion)
+			} else {
+				p, err = PlanFor(root, e, "9.9.9")
+			}
+			if err != nil {
+				t.Errorf("planning %s (%s) failed: %v", e.ID, d.Service, err)
 				continue
 			}
-			if _, err := PlanFor(root, e, "9.9.9"); err != nil {
-				t.Errorf("planning %s failed: %v", e.ID, err)
+			if p.Action == ActionRefuse {
+				t.Errorf("%s refuses every %s release: %s", e.ID, d.Service, p.Detail)
 			}
 		}
 		seen++
@@ -913,6 +949,251 @@ func TestChartlessTargetStillRefusesWhenItDeclaresAValuesPath(t *testing.T) {
 	}
 }
 
+func TestStackValuesFileMovesOnlyTheReleasedServicesPins(t *testing.T) {
+	// The compute-plane stack's real shape: one values file repeats the NVCA
+	// operator and agent tags, which move together on an NVCA release, and
+	// the collector tag beside them, which belongs to another service.
+	f := newFixture(t, `{"services":[
+	 {"id":"agent","path":"src/agent"},
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"stack","path":"deploy/stacks/s","deploys":[
+	  {"service":"sidecar","values_files":[{"file":"environments/base.yaml","paths":["global.op.selfManaged.otelCollector.imageTag"]}]},
+	  {"service":"agent","values_files":[{"file":"environments/base.yaml","paths":["global.op.imageTag","global.op.selfManaged.nvcaVersion"]}]}
+	 ]}
+	]}`)
+	f.source(t, "deploy/stacks/s/environments/base.yaml",
+		"global:\n  op:\n    imageTag: \"1.0.0\"\n    selfManaged:\n      nvcaVersion: \"1.0.0\"\n      otelCollector:\n        imageTag: \"1.0.0\"\n")
+
+	code, out, errOut := f.run(t, "src/agent/v1.1.0", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	if !strings.Contains(out, "bump: minor") {
+		t.Fatalf("the stack pin's semver step should be reported:\n%s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "global:\n  op:\n    imageTag: \"1.1.0\"\n    selfManaged:\n      nvcaVersion: \"1.1.0\"\n      otelCollector:\n        imageTag: \"1.0.0\"\n"
+	if string(b) != want {
+		t.Fatalf("only the released service's pins should move:\n%s", b)
+	}
+}
+
+func TestRealStackPinsResolve(t *testing.T) {
+	// The checked-in stacks, planned the way a release would plan them. A
+	// renamed or restructured stack values key, or two pins of one service
+	// that have drifted apart, would otherwise surface only as a refused bump
+	// on the next release of that service.
+	root := repoRoot(t)
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatalf("checked-in release metadata does not load: %v", err)
+	}
+	seen := 0
+	for _, e := range m.Services {
+		if strings.HasPrefix(e.Path, ChartPrefix) {
+			continue
+		}
+		for _, d := range e.Deploys {
+			if len(d.ValuesFiles) == 0 {
+				continue
+			}
+			p, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion)
+			if err != nil {
+				t.Errorf("planning %s (%s) failed: %v", e.ID, d.Service, err)
+				continue
+			}
+			if p.Action != ActionValuesPaths {
+				t.Errorf("%s would not move its %s pins: %s", e.ID, d.Service, p.Detail)
+			}
+			seen++
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no stack declares a values_files pin; the metadata path or prefix is wrong")
+	}
+}
+
+func TestWorkerReleasesMoveOnlyTheirOwnAPIChartTags(t *testing.T) {
+	// The API charts compose each worker sidecar reference from one tag key
+	// per worker, and these edges point the bumper at those keys. worker-init
+	// is pinned by both API charts, so its release has to reach both. Each
+	// release must move its own key alone: the API image, appVersion, and the
+	// other workers' tags stay where they were.
+	root := repoRoot(t)
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatalf("checked-in release metadata does not load: %v", err)
+	}
+	want := map[string][]string{
+		"worker-init":            {"cloud-tasks-helm", "cloud-functions-helm"},
+		"worker-utils":           {"cloud-functions-helm"},
+		"worker-llm-credentials": {"cloud-functions-helm"},
+		"worker-task":            {"cloud-tasks-helm"},
+	}
+	for service, charts := range want {
+		t.Run(service, func(t *testing.T) {
+			deploys := m.ChartsDeploying(service)
+			var got []string
+			for _, d := range deploys {
+				got = append(got, d.ID)
+			}
+			if strings.Join(got, ",") != strings.Join(charts, ",") {
+				t.Fatalf("charts deploying %s = %v, want %v", service, got, charts)
+			}
+
+			f := newFixture(t, `{"services":[]}`)
+			copyRepoFile(t, root, f.root, MetadataPath)
+			for _, d := range deploys {
+				chartYAML, valuesYAML := ChartFiles(root, d.Path)
+				for _, file := range []string{chartYAML, valuesYAML} {
+					rel, err := filepath.Rel(root, file)
+					if err != nil {
+						t.Fatal(err)
+					}
+					copyRepoFile(t, root, f.root, rel)
+				}
+			}
+
+			release := "99.0.0"
+			var out, errOut bytes.Buffer
+			code, err := Run(f.root, "src/compute-plane-services/"+service+"/v"+release, "", true, &out, &errOut)
+			if err != nil || code != 0 {
+				t.Fatalf("want a clean bump, got %d, %v\n%s%s", code, err, out.String(), errOut.String())
+			}
+
+			for _, d := range deploys {
+				if len(d.ValuesPaths) != 1 || len(d.ValuesFiles) != 0 || d.AppVersion {
+					t.Fatalf("%s should own exactly one values path in %s and not appVersion", service, d.ID)
+				}
+				chartYAML, valuesYAML := ChartFiles(root, d.Path)
+				bumpedChartYAML, bumpedValuesYAML := ChartFiles(f.root, d.Path)
+				if readFile(t, bumpedChartYAML) != readFile(t, chartYAML) {
+					t.Errorf("%s: Chart.yaml must not move on a worker release", d.ID)
+				}
+				before := strings.Split(readFile(t, valuesYAML), "\n")
+				after := strings.Split(readFile(t, bumpedValuesYAML), "\n")
+				line, value, err := resolveValuesPath(after, d.ValuesPaths[0])
+				if err != nil {
+					t.Fatalf("%s: %v", d.ID, err)
+				}
+				if value != release {
+					t.Errorf("%s: %s = %s, want %s", d.ID, d.ValuesPaths[0], value, release)
+				}
+				if len(before) != len(after) {
+					t.Fatalf("%s: values.yaml changed length", d.ID)
+				}
+				for i := range before {
+					if i != line && before[i] != after[i] {
+						t.Errorf("%s: line %d moved but belongs to something else:\n-%s\n+%s", d.ID, i+1, before[i], after[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func copyRepoFile(t *testing.T, from, to, rel string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(from, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(to, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestBumpWorkflowStagesEveryDeclaredTarget(t *testing.T) {
+	// The compute-plane stack declared its collector pin through values_files
+	// and the bumper rewrote it, but the workflow checked and staged only
+	// deploy/helm, so the stack edit never reached the pull request. Every
+	// target the bumper can write has to sit under the paths the workflow
+	// both checks and stages.
+	root := repoRoot(t)
+	commands := bumpWorkflowPathspecs(t, filepath.Join(root, ".github", "workflows", "chart-version-bump.yml"))
+	m, err := LoadMetadata(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for command, specs := range commands {
+		for _, e := range m.Services {
+			if len(e.Deploys) == 0 {
+				continue
+			}
+			if !strings.HasPrefix(e.Path, ChartPrefix) && !declaresValuesFiles(e) {
+				continue
+			}
+			if !coveredByPathspecs(e.Path, specs) {
+				t.Errorf("%q in chart-version-bump.yml does not cover %s (%s)", command, e.Path, e.ID)
+			}
+		}
+	}
+}
+
+func declaresValuesFiles(e Entry) bool {
+	for _, d := range e.Deploys {
+		if len(d.ValuesFiles) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// bumpWorkflowPathspecs returns the pathspecs of the three commands a bump
+// workflow uses to decide whether anything moved, to show it, and to stage it.
+func bumpWorkflowPathspecs(t *testing.T, workflow string) map[string][]string {
+	t.Helper()
+	b, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixes := []string{"if git diff --quiet --", "git --no-pager diff --stat --", "git add"}
+	found := map[string][]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range prefixes {
+			if !strings.HasPrefix(line, prefix+" ") {
+				continue
+			}
+			rest := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, prefix)), "; then")
+			found[prefix] = append(found[prefix], strings.Fields(rest)...)
+		}
+	}
+	for _, prefix := range prefixes {
+		if len(found[prefix]) == 0 {
+			t.Fatalf("%s has no %q line; update this test to follow how the workflow stages a bump", workflow, prefix)
+		}
+	}
+	return found
+}
+
+func coveredByPathspecs(path string, specs []string) bool {
+	path = filepath.ToSlash(path)
+	for _, spec := range specs {
+		spec = strings.TrimSuffix(spec, "/")
+		if path == spec || strings.HasPrefix(path, spec+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func TestValuesPathRerunIsANoOp(t *testing.T) {
 	f := newFixture(t, `{"services":[
 	 {"id":"sidecar","path":"src/sidecar"},
@@ -1074,5 +1355,158 @@ func TestApplyPreservesTheQuotingOfEachLine(t *testing.T) {
 	}
 	if got := f.read(t, "bare", "values.yaml"); got != "image:\n  tag: 1.0.1\n" {
 		t.Errorf("bare image tag was quoted:\n%s", got)
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.1", "1.0.0", 1},
+		{"1.0.0", "1.0.0", 0},
+		{"v1.0.0", "1.0.0", 0},
+		{"1.0.0+build.2", "1.0.0+build.1", 0}, // build metadata has no precedence
+		{"1.9.0", "1.10.0", -1},               // numeric, not text
+		{"1.0.0-rc.1", "1.0.0", -1},           // a pre-release sorts below its release
+		{"1.0.0-rc.2", "1.0.0-rc.10", -1},
+		{"1.0.0-1", "1.0.0-alpha", -1}, // numeric identifiers sort below text
+		{"1.0.0-alpha", "1.0.0-alpha.1", -1},
+		// The collector's wrapper scheme: upstream core, then -nv-<release>.
+		{"0.160.0-nv-0.2.9", "0.160.0-nv-0.4.7", -1},
+		{"0.160.0-nv-0.4.7", "0.160.0-nv-0.4.7", 0},
+		{"0.160.0-nv-0.4.8", "0.160.0-nv-0.4.7", 1},
+		{"0.160.0-nv-10.0.0", "0.160.0-nv-9.9.9", 1}, // text order would say nv-1 < nv-9
+		{"0.161.0-nv-0.1.0", "0.160.0-nv-0.4.7", 1},  // a new upstream restarts the wrapper series
+		{"0.157.19", "0.160.0-nv-0.2.3", -1},
+		{"0.160.0-nv-0.1.0", "0.160.0", 1}, // a wrapper is not a pre-release of its upstream
+		{"0.160.0-nv-0.5.0-rc.1", "0.160.0-nv-0.5.0", -1},
+	}
+	for _, c := range cases {
+		got, ok := CompareVersions(c.a, c.b)
+		if !ok {
+			t.Errorf("CompareVersions(%q, %q) was not comparable", c.a, c.b)
+			continue
+		}
+		if sign(got) != c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", c.a, c.b, got, c.want)
+		}
+		if back, _ := CompareVersions(c.b, c.a); sign(back) != -c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", c.b, c.a, back, -c.want)
+		}
+	}
+	for _, c := range [][2]string{{"latest", "1.0.0"}, {"1.0", "1.0.0"}, {"1.0.0", "1.0.1-"}} {
+		if _, ok := CompareVersions(c[0], c[1]); ok {
+			t.Errorf("CompareVersions(%q, %q) should not be comparable", c[0], c[1])
+		}
+	}
+}
+
+func sign(n int) int {
+	switch {
+	case n < 0:
+		return -1
+	case n > 0:
+		return 1
+	}
+	return 0
+}
+
+// collectorMeta mirrors the collector's real edges: the nvca-operator chart
+// names its collector tag paths, and the compute-plane stack repeats them in a
+// values file. The release version carries the -nv-<release> wrapper suffix.
+const collectorMeta = `{"services":[
+ {"id":"byoo-otel-collector","path":"src/compute-plane-services/byoo-otel-collector"},
+ {"id":"op","path":"deploy/helm/op","deploys":[
+  {"service":"byoo-otel-collector","values_paths":["otelCollector.imageTag"]}
+ ]},
+ {"id":"stack","path":"deploy/stacks/s","deploys":[
+  {"service":"byoo-otel-collector","values_files":[{"file":"environments/base.yaml","paths":["global.op.otelCollector.imageTag"]}]}
+ ]}
+]}`
+
+func collectorFixture(t *testing.T, pinned string) *fixture {
+	f := newFixture(t, collectorMeta)
+	f.chart(t, "op", "9.9.9", "otelCollector:\n  imageTag: \""+pinned+"\"")
+	f.source(t, "deploy/stacks/s/environments/base.yaml", "global:\n  op:\n    otelCollector:\n      imageTag: \""+pinned+"\"\n")
+	return f
+}
+
+func (f *fixture) collectorPins(t *testing.T) string {
+	t.Helper()
+	return f.read(t, "op", "values.yaml") + readFile(t, filepath.Join(f.root, "deploy/stacks/s/environments/base.yaml"))
+}
+
+func TestCollectorReleaseNeverLowersAPin(t *testing.T) {
+	const pinned = "0.160.0-nv-0.4.7"
+	for _, c := range []struct {
+		name, version, want string
+		moves               bool
+	}{
+		// The backport that opened a downgrade: same upstream, older wrapper.
+		{"lower", "0.160.0-nv-0.2.9", "skipped older release 0.160.0-nv-0.2.9; keeping " + pinned, false},
+		{"equal", pinned, "already " + pinned, false},
+		{"higher", "0.160.0-nv-0.4.8", pinned + " -> 0.160.0-nv-0.4.8", true},
+		{"higher wrapper minor", "0.160.0-nv-0.10.0", pinned + " -> 0.160.0-nv-0.10.0", true},
+		{"higher upstream", "0.161.0-nv-0.1.0", pinned + " -> 0.161.0-nv-0.1.0", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := collectorFixture(t, pinned)
+			before := f.collectorPins(t)
+			code, out, errOut := f.run(t, "src/compute-plane-services/byoo-otel-collector/v"+c.version, true)
+			if code != 0 {
+				t.Fatalf("want exit 0, got %d\n%s%s", code, out, errOut)
+			}
+			for _, id := range []string{"op", "stack"} {
+				if !strings.Contains(out, id+": "+c.want) {
+					t.Errorf("%s: output lacks %q:\n%s", id, c.want, out)
+				}
+			}
+			after := f.collectorPins(t)
+			if !c.moves {
+				if after != before {
+					t.Fatalf("a release not above the pin changed it:\n%s", after)
+				}
+				return
+			}
+			if strings.Count(after, `imageTag: "`+c.version+`"`) != 2 {
+				t.Fatalf("both pins must move to %s:\n%s", c.version, after)
+			}
+		})
+	}
+}
+
+func TestReleaseBranchTagIsSkipped(t *testing.T) {
+	// A backport cut on a release branch publishes a release like any other,
+	// and its version can sort above or below what main pins. Either way it is
+	// that branch's release. Even a higher version moves nothing here.
+	f := full(t)
+	f.onBranches(t, "src/svc/v1.0.1", "src/svc/v1.1.0")
+	before := f.read(t, "agree", "values.yaml")
+
+	code, out, errOut := f.runOnBase(t, "src/svc/v1.1.0", "main")
+	if code != 0 {
+		t.Fatalf("a release-branch tag is a skip, not a failure: code=%d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "src/svc/v1.1.0: skipped, its commit is not on main") {
+		t.Fatalf("the skip must say why:\n%s", out)
+	}
+	if strings.Contains(out, "bump:") || f.read(t, "agree", "values.yaml") != before {
+		t.Fatalf("a release-branch tag moved a pin:\n%s", out)
+	}
+
+	// The same check lets a release from main through.
+	code, out, _ = f.runOnBase(t, "src/svc/v1.0.1", "main")
+	if code != RefusedExit || !strings.Contains(out, "agree: 1.0.0 -> 1.0.1") {
+		t.Fatalf("a tag on main must still bump (drift still refuses): code=%d\n%s", code, out)
+	}
+	if !strings.Contains(f.read(t, "agree", "values.yaml"), `tag: "1.0.1"`) {
+		t.Fatal("a tag on main did not move the pin")
+	}
+
+	// A tag that does not resolve is an error, never a skip.
+	code, _, errOut = f.runOnBase(t, "src/svc/v9.9.9", "main")
+	if code != 1 || !strings.Contains(errOut, "check whether src/svc/v9.9.9 is on main") {
+		t.Fatalf("a missing tag must fail: code=%d\n%s", code, errOut)
 	}
 }

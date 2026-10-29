@@ -1903,6 +1903,12 @@ func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig
 	logging.Plain("Name: %s", resp.Function.Name)
 	logging.Plain("Status: %s", resp.Function.Status)
 	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
+	if lines := attachedTelemetryLines(resp.Function.Telemetries); len(lines) > 0 {
+		logging.Plain("Telemetries:")
+		for _, line := range lines {
+			logging.Plain("  %s", line)
+		}
+	}
 
 	if health != nil {
 		logging.Plain("Health Configuration:")
@@ -2174,6 +2180,14 @@ func runGetFunction(cmd *cobra.Command, args []string) error {
 		}
 		if result.RateLimit.SyncCheck {
 			fmt.Printf("Sync Check: enabled\n")
+		}
+	}
+
+	if lines := attachedTelemetryLines(result.Telemetries); len(lines) > 0 {
+		fmt.Printf("\nTelemetries:\n")
+		fmt.Printf("============\n")
+		for _, line := range lines {
+			fmt.Printf("  %s\n", line)
 		}
 	}
 

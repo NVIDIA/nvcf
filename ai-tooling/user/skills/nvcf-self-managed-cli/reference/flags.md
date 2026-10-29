@@ -291,3 +291,29 @@ In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and
 | `--logs-telemetry-id UUID` | Logs telemetry endpoint ID | - |
 | `--metrics-telemetry-id UUID` | Metrics telemetry endpoint ID | - |
 | `--traces-telemetry-id UUID` | Traces telemetry endpoint ID | - |
+
+## `telemetry create`-specific
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--name NAME` | Telemetry name; also the stored secret name, unique per account (required) | - |
+| `--endpoint URL` | Exporter endpoint URL (required) | - |
+| `--provider PROVIDER` | Backend provider, case-insensitive (required) | - |
+| `--protocol HTTP\|GRPC` | Export protocol | `HTTP` |
+| `--type LOGS\|METRICS\|TRACES` | Signal type; repeatable or comma-separated (required) | - |
+| `--secret-file FILE` | Secret value from a file, or `-` for standard input | - |
+| `--secret VALUE` | Inline secret value; visible in process listings | - |
+
+Pass exactly one of `--secret-file` or `--secret`; `telemetry update-secret` takes the same two flags. A value that starts with `{` is sent as a JSON object, anything else as a string.
+
+| Provider | Types | Secret |
+|---|---|---|
+| `AZURE_MONITOR` | LOGS, METRICS, TRACES | JSON object with `instrumentationKey`, `applicationId`, `liveEndpoint` |
+| `DATADOG` | LOGS, METRICS, TRACES | String API key |
+| `GRAFANA_CLOUD` | LOGS, METRICS, TRACES | JSON object with `instanceId`, `apiKey` |
+| `KRATOS` | LOGS | JSON object with `collectorId`, `clientCert`, `clientKey` |
+| `KRATOS_THANOS` | METRICS | JSON object with `clientCert` and `clientKey` (together), `caFile`, or both |
+| `OTEL_COLLECTOR` | LOGS, METRICS, TRACES | String bearer token |
+| `PROMETHEUS` | METRICS | JSON object with `clientCert` and `clientKey` (together), `caFile`, or both |
+| `SERVICENOW` | TRACES | String access token |
+| `SPLUNK` | LOGS | String HEC token |

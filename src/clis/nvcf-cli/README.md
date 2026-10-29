@@ -16,21 +16,21 @@ limitations under the License.
 -->
 # NVIDIA Cloud Functions CLI (Go)
 
-**Enhanced with automatic token generation, state management, and multi-environment support!**
+Enhanced with automatic token generation, state management, and multi-environment support!
 
 ## Key Features
 
-- **Automatic Token Generation**: Generate admin tokens and API keys via direct API calls (no kubectl needed!)
-- **Smart State Management**: Eliminates manual ID copying with persistent workflow context  
-- **Multi-Environment Support**: Separate configurations for dev/staging/production
-- **Enhanced User Experience**: Colored output, status dashboard, and helpful guidance
-- **Advanced gRPC Support**: Native gRPC invocation with `--grpc` flag
-- **Comprehensive Authentication**: Multi-token support with automatic scope management
-- **Simple Architecture**: Everything works via direct HTTPS - no cluster access required
-- **NVCT Task Support**: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
-- **Cluster Diagnostics**: One-command health report and support bundle for self-managed deployments (`nvcf-cli cluster-dump`)
+- Automatic Token Generation: Generate admin tokens and API keys via direct API calls (no kubectl needed!)
+- Smart State Management: Eliminates manual ID copying with persistent workflow context
+- Multi-Environment Support: Separate configurations for dev/staging/production
+- Enhanced User Experience: Colored output, status dashboard, and helpful guidance
+- Advanced gRPC Support: Native gRPC invocation with `--grpc` flag
+- Comprehensive Authentication: Multi-token support with automatic scope management
+- Simple Architecture: Everything works via direct HTTPS - no cluster access required
+- NVCT Task Support: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
+- Cluster Diagnostics: One-command health report and support bundle for self-managed deployments (`nvcf-cli cluster-dump`)
 
-**[Jump to Token Generation Guide](#automatic-token-generation)**
+[Jump to Token Generation Guide](#automatic-token-generation)
 
 ---
 
@@ -77,37 +77,24 @@ install -m 0755 \
 
 ### Option 2: Download Pre-built Binary
 
-Pre-built binaries for multiple platforms are available in the [releases section](../../releases).
+Pre-built binaries for multiple platforms are available in the [releases section](https://github.com/NVIDIA/nvcf/releases).
 
 ## Release Process
 
-Releases are driven by Git tags and the GitLab CI pipeline.
-
-1. Create and push a version tag (for example `v0.0.21`):
-
-```bash
-git tag v0.0.21
-git push origin v0.0.21
-```
-
-1. GitLab CI runs the release pipeline, builds binaries, and prepares archives.
-
-2. After QA approval, manually trigger the `ngc-push-all-platforms` job in GitLab to push to `nvcf-onprem/nvcf-ncp-staging`.
-
-Notes:
-
-- The release pipeline only runs on tags.
-- The NGC push to staging is manual and gated by QA approval.
+CLI source tags use `src/clis/nvcf-cli/vX.Y.Z` in the monorepo. Follow the
+[component release workflow](../../../docs/dev/github-release-process.md)
+for automatic main releases and explicit maintenance patches. Verify the
+selected release's binary assets and checksums before distribution.
 
 ## Configuration
 
-### **Configuration File**
+### Configuration File
 
 The CLI looks for configuration files in this order:
 
-1. **Explicit path** via `--config` flag (highest priority)
-2. **Current directory**: `./.nvcf-cli.yaml`
-3. **Home directory**: `~/.nvcf-cli.yaml`
+1. Explicit path via `--config` flag (highest priority)
+2. Current directory: `./.nvcf-cli.yaml`
+3. Home directory: `~/.nvcf-cli.yaml`
 
 Use the provided template to get started:
 
@@ -142,19 +129,19 @@ debug: false
 
 See `.nvcf-cli.yaml.template` for comprehensive configuration options and documentation.
 
-### **Configuration Priority**
+### Configuration Priority
 
 Values are read in the following order (highest to lowest priority):
 
-1. **Command-line flags** (highest priority)
-2. **Environment variables**
-3. **Config file in current directory** (`./.nvcf-cli.yaml`)
-4. **Config file in home directory** (`~/.nvcf-cli.yaml`)
-5. **Default values** (lowest priority)
+1. Command-line flags (highest priority)
+2. Environment variables
+3. Config file in current directory (`./.nvcf-cli.yaml`)
+4. Config file in home directory (`~/.nvcf-cli.yaml`)
+5. Default values (lowest priority)
 
 ## Usage
 
-### **HTTP Debugging**
+### HTTP Debugging
 
 Enable comprehensive HTTP request/response logging for troubleshooting:
 
@@ -169,7 +156,7 @@ export NVCF_DEBUG=true
 echo 'debug: true' >> ~/.nvcf-cli.yaml
 ```
 
-**Debug Output Example:**
+Debug Output Example:
 
 ```text
 DEBUG: HTTP debugging enabled with multi-token support
@@ -208,11 +195,11 @@ Response Body:
 ---
 ```
 
-### **JSON Configuration Files**
+### JSON Configuration Files
 
 All commands support JSON configuration files with CLI override capability:
 
-**Usage:**
+Usage:
 
 ```bash
 # Use JSON file only
@@ -227,28 +214,28 @@ All commands support JSON configuration files with CLI override capability:
 
 ---
 
-## **Authentication & Token Management**
+## Authentication & Token Management
 
 The NVCF CLI supports advanced authentication management with automatic token generation and comprehensive state management.
 
-### **Authentication Methods**
+### Authentication Methods
 
 The CLI supports multiple authentication methods:
 
-1. **Manual Token Configuration** (traditional method)
-2. **Automatic Token Generation** (recommended for cluster environments)
-3. **Multi-Environment Support** (development, staging, production)
+1. Manual Token Configuration (traditional method)
+2. Automatic Token Generation (recommended for cluster environments)
+3. Multi-Environment Support (development, staging, production)
 
-### **Token Types**
+### Token Types
 
-- **Admin Token (`NVCF_TOKEN`)**: For function management operations (create, deploy, delete, update)
-- **API Key (`NVCF_API_KEY`)**: For function operations (list, invoke, queue details)
+- Admin Token (`NVCF_TOKEN`): For function management operations (create, deploy, delete, update)
+- API Key (`NVCF_API_KEY`): For function operations (list, invoke, queue details)
 
 ---
 
 ## Automatic Token Generation
 
-### **Prerequisites for Token Generation**
+### Prerequisites for Token Generation
 
 Token generation is simple - no cluster access needed!
 
@@ -257,7 +244,7 @@ Requirements:
 - Network access to the API Keys service endpoint
 - Configuration file (`.nvcf-cli.yaml`) with the API Keys service URL (optional)
 
-### **Generate Admin Token**
+### Generate Admin Token
 
 Generate a fresh admin token via direct API call:
 
@@ -279,14 +266,14 @@ nvcf-cli --debug init
 # Expires: 2025-11-19 06:08:15
 ```
 
-**What `init` does:**
+What `init` does:
 
 - Calls the API Keys service endpoint (`/v1/admin/keys`)
 - Generates JWT admin token for NVCF API operations
-- **Clears any existing function state** (fresh start)
+- Clears any existing function state (fresh start)
 - Saves token with expiration tracking to `~/.nvcf-cli-state.json`
 
-### **Refresh Admin Token**
+### Refresh Admin Token
 
 Refresh your admin token while preserving function context:
 
@@ -302,14 +289,14 @@ nvcf-cli refresh
 # Version ID: ver-def456
 ```
 
-**What `refresh` does:**
+What `refresh` does:
 
 - Generates new admin token via API call
-- **Preserves current function context** (ID, version, name)
+- Preserves current function context (ID, version, name)
 - Updates token expiration tracking
 - Maintains workflow continuity
 
-### **Generate API Key**
+### Generate API Key
 
 Generate API keys for function invocation and listing:
 
@@ -332,7 +319,7 @@ nvcf-cli api-key generate --validate
 # Expires: 2025-11-19 15:30:00 PDT
 ```
 
-**API Key Features:**
+API Key Features:
 
 - Automatic scope configuration (invoke_function, list_functions, queue_details)
 - Configurable expiration (default 24h)
@@ -341,9 +328,9 @@ nvcf-cli api-key generate --validate
 
 ---
 
-## **Multi-Environment Configuration**
+## Multi-Environment Configuration
 
-### **Environment-Specific Configs**
+### Environment-Specific Configs
 
 Use different configurations for different environments:
 
@@ -352,7 +339,7 @@ Use different configurations for different environments:
 nvcf-cli --config dev.yaml init
 nvcf-cli --config dev.yaml create --input-file function.json
 
-# Production environment  
+# Production environment
 nvcf-cli --config prod.yaml list functions
 nvcf-cli --config prod.yaml invoke --request-body '{"input": "test"}'
 
@@ -361,9 +348,9 @@ nvcf-cli --config staging.yaml init
 nvcf-cli --config staging.yaml function list
 ```
 
-### **Example Configuration Files**
+### Example Configuration Files
 
-**Development (`dev.yaml`):**
+Development (`dev.yaml`):
 
 ```yaml
 # Enable debug logging for development
@@ -378,7 +365,7 @@ grpc_url: grpc-dev.nvcf.nvidia.com:443
 api_keys_service_url: https://api-keys-dev.nvcf.nvidia.com
 ```
 
-**Production (`prod.yaml`):**
+Production (`prod.yaml`):
 
 ```yaml
 # Disable debug in production
@@ -393,7 +380,7 @@ NVCF_INVOKE_URL: "https://invocation.nvcf.nvidia.com"
 NVCF_API_KEY: "nvapi-your-production-key-here"
 ```
 
-### **Separate State Management**
+### Separate State Management
 
 Each configuration maintains separate state:
 
@@ -406,9 +393,9 @@ Each configuration maintains separate state:
 
 ---
 
-## **State Management & Workflow**
+## State Management & Workflow
 
-### **Persistent State**
+### Persistent State
 
 The CLI automatically manages state to eliminate manual ID copying:
 
@@ -428,7 +415,7 @@ nvcf-cli invoke --request-body '{"input": "test"}'
 nvcf-cli status
 ```
 
-### **Status Command**
+### Status Command
 
 Get comprehensive CLI state information:
 
@@ -438,31 +425,31 @@ nvcf-cli status
 # Example output:
 # [INFO] NVCF CLI Status
 # ==================================================
-# 
+#
 # Configuration:
 #    Config File: (default ~/.nvcf-cli.yaml)
 #    API Endpoint: https://api.nvcf.nvidia.com
 #    API Keys Service: https://api-keys.nvcf.nvidia.com
-# 
+#
 # Authentication:
 #    Admin Token: eyJhbGci***...***dH__uqEbEg [Valid]
 #    Token Expires: 2025-10-14 12:48:06 PDT
 #    API Key: nvapi-nvcf***...***hDNqjzaeSQ [Valid]
 #    API Key Expires: 2025-10-14 13:00:26 PDT
-# 
+#
 # Current Function:
 #    Function ID: func-abc123
 #    Version ID: ver-def456
 #    Name: my-test-function
 #    Status: Ready for operations
-# 
+#
 # Quick Actions:
 #    • nvcf-cli deploy            (deploy current function)
 #    • nvcf-cli invoke            (invoke current function)
 #    • nvcf-cli undeploy          (undeploy current function)
 ```
 
-### **Complete Workflow Example**
+### Complete Workflow Example
 
 ```bash
 # 1. Initialize with fresh admin token
@@ -490,11 +477,11 @@ nvcf-cli delete    # Uses saved context
 
 ---
 
-## **Command Reference**
+## Command Reference
 
-### **Authentication & Management Commands**
+### Authentication & Management Commands
 
-#### **Initialize CLI (Generate Admin Token)**
+#### Initialize CLI (Generate Admin Token)
 
 Generate a fresh admin token and start a new session:
 
@@ -508,14 +495,14 @@ nvcf-cli init
 # [SUCCESS] Admin token generated and saved
 ```
 
-**Key Features:**
+Key Features:
 
 - Clears existing function state for fresh start
 - Calls API Keys service directly (`/v1/admin/keys`)
 - Saves token with expiration tracking to `~/.nvcf-cli-state.json`
 - No kubectl or cluster access needed
 
-#### **Refresh Admin Token**
+#### Refresh Admin Token
 
 Refresh your admin token while keeping function context:
 
@@ -529,14 +516,14 @@ nvcf-cli refresh
 # Function ID: func-abc123  (preserved)
 ```
 
-**Key Features:**
+Key Features:
 
 - Generates new admin token
 - Preserves current function context
 - Updates expiration tracking
 - Maintains workflow continuity
 
-#### **Generate API Key**
+#### Generate API Key
 
 Create API keys for function operations:
 
@@ -555,13 +542,13 @@ nvcf-cli api-key generate \
 # API Key: nvapi-nvcf-stg-DsIa_igIRtkMlquoB7AzGi3l...
 ```
 
-**Options:**
+Options:
 
 - `--description`: Custom description (default: "Generated by nvcf-cli")
 - `--expires-in`: Expiration duration (default: "24h")
 - `--validate`: Validate the key after generation
 
-#### **Check CLI Status**
+#### Check CLI Status
 
 Display comprehensive CLI state and configuration:
 
@@ -572,7 +559,7 @@ nvcf-cli status
 nvcf-cli status --show-tokens
 ```
 
-**Displays:**
+Displays:
 
 - Configuration details (config file, API endpoints)
 - Authentication status (tokens, expiration, validity)
@@ -580,7 +567,7 @@ nvcf-cli status --show-tokens
 - API endpoints and account information
 - Quick action suggestions
 
-#### **Undeploy Function**
+#### Undeploy Function
 
 Remove function deployment while keeping function definition:
 
@@ -592,7 +579,7 @@ nvcf-cli undeploy
 nvcf-cli undeploy --function-id func-123 --version-id ver-456
 ```
 
-**Key Features:**
+Key Features:
 
 - Uses saved function context automatically
 - Supports both cluster and direct modes
@@ -600,9 +587,9 @@ nvcf-cli undeploy --function-id func-123 --version-id ver-456
 
 ---
 
-### **Function Management Commands**
+### Function Management Commands
 
-#### **Create a Function** *Uses `NVCF_TOKEN`*
+#### Create a Function *Uses `NVCF_TOKEN`*
 
 Create a new function with comprehensive configuration:
 
@@ -655,14 +642,14 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
   --llm-per-account-priority "nca-id:3"
 ```
 
-**Required flags:**
+Required flags:
 
 - `--name`: Function name
 - `--image`: Container image
 - `--inference-url`: Inference URL endpoint
 - `--inference-port`: Port number for inference
 
-**Example JSON file (`create-function.json`):**
+Example JSON file (`create-function.json`):
 
 ```json
 {
@@ -713,12 +700,12 @@ and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
 Stargate, and Pylon build and a backend that serves that protocol. Published
 stack releases must qualify and include those builds before use.
 
-#### **Deploy a Function** *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
+#### Deploy a Function *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
 
 Deploy a function with GPU specifications:
 
 ```bash
-# Set the required tokens  
+# Set the required tokens
 export NVCF_TOKEN="nvapi-your-function-creation-token"
 export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 
@@ -736,7 +723,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 ./nvcf-cli deploy --input-file deploy.json
 ```
 
-**New JSON format (deploymentSpecifications):**
+New JSON format (deploymentSpecifications):
 
 ```json
 {
@@ -751,7 +738,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 }
 ```
 
-**Legacy flat format (still supported):**
+Legacy flat format (still supported):
 
 ```json
 {
@@ -766,12 +753,12 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 }
 ```
 
-#### **Update a Function** *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
+#### Update a Function *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
 
 Update various aspects of an existing function:
 
 ```bash
-# Set the required tokens  
+# Set the required tokens
 export NVCF_TOKEN="nvapi-your-function-creation-token"
 export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 
@@ -807,7 +794,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 ./nvcf-cli function deploy update --input-file update-deployment.json
 ```
 
-**Update Function JSON format (`update-metadata.json`):**
+Update Function JSON format (`update-metadata.json`):
 
 ```json
 {
@@ -826,7 +813,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 }
 ```
 
-**Update Deployment JSON format (`update-deployment.json`):**
+Update Deployment JSON format (`update-deployment.json`):
 
 ```json
 {
@@ -840,14 +827,14 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 }
 ```
 
-**Update Command Features:**
+Update Command Features:
 
-- **Function Updates**: Change function tags and LLM model routing config without affecting code or deployment
-- **Deployment Updates**: Modify instance counts, concurrency, clusters, and other deployment settings
-- **Non-destructive**: Updates preserve existing function code and configuration
-- **Note**: GPU type and backend configurations cannot be modified through update operations
+- Function Updates: Change function tags and LLM model routing config without affecting code or deployment
+- Deployment Updates: Modify instance counts, concurrency, clusters, and other deployment settings
+- Non-destructive: Updates preserve existing function code and configuration
+- Note: GPU type and backend configurations cannot be modified through update operations
 
-#### **Invoke a Function** *Uses `NVCF_API_KEY`*
+#### Invoke a Function *Uses `NVCF_API_KEY`*
 
 Execute a function with JSON payload using HTTP or gRPC:
 
@@ -900,14 +887,14 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
 
 For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/overview/llm-gateway.md).
 
-**New Features:**
+New Features:
 
-- **Smart Context**: Uses saved function ID/version automatically
-- **gRPC Support**: `--grpc` flag for cluster-mode invocation
-- **Enhanced Response**: Colored output and better error messages
-- **Multi-Mode**: HTTP (default) and gRPC protocols supported
+- Smart Context: Uses saved function ID/version automatically
+- gRPC Support: `--grpc` flag for cluster-mode invocation
+- Enhanced Response: Colored output and better error messages
+- Multi-Mode: HTTP (default) and gRPC protocols supported
 
-**Example JSON file (`invoke.json`):**
+Example JSON file (`invoke.json`):
 
 ```json
 {
@@ -927,7 +914,7 @@ For LLM Gateway endpoint behavior, routing, and session stickiness details, see 
 
 `pollDurationSeconds` maps to the `NVCF-POLL-SECONDS` hold-open hint. The service may keep the invocation connection open for that duration before returning pending request metadata.
 
-#### **Delete a Function** *Uses `NVCF_TOKEN` ONLY*
+#### Delete a Function *Uses `NVCF_TOKEN` ONLY*
 
 Delete a function version or deployment:
 
@@ -951,7 +938,7 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 ./nvcf-cli delete --input-file delete-deployment.json
 ```
 
-**Example JSON file (`delete-deployment.json`):**
+Example JSON file (`delete-deployment.json`):
 
 ```json
 {
@@ -962,7 +949,7 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 }
 ```
 
-**Example JSON file (`delete-function.json`):**
+Example JSON file (`delete-function.json`):
 
 ```json
 {
@@ -975,9 +962,9 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 
 ---
 
-### **Resource Discovery Commands** *Uses `NVCF_API_KEY`*
+### Resource Discovery Commands *Uses `NVCF_API_KEY`*
 
-#### **List Functions and Resources**
+#### List Functions and Resources
 
 ```bash
 # Set the required token
@@ -996,7 +983,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ./nvcf-cli list clusters
 ```
 
-**Example outputs:**
+Example outputs:
 
 ```bash
 # List functions output
@@ -1005,14 +992,14 @@ Functions:
 - ID: func-abc123, Name: my-test-function, Status: ACTIVE, Created: 2023-12-01T10:00:00Z
 - ID: func-def456, Name: ml-model-api, Status: INACTIVE, Created: 2023-12-01T11:00:00Z
 
-# List clusters output  
+# List clusters output
 $ ./nvcf-cli list clusters
 Available Cluster Groups:
 - Name: GFN, GPUs: [L40, A100, H100], Regions: [us-west-2, us-east-1]
 - Name: OCI, GPUs: [H100, A100], Regions: [us-phoenix-1]
 ```
 
-#### **Get Detailed Information**
+#### Get Detailed Information
 
 ```bash
 # Set the required token
@@ -1025,7 +1012,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ./nvcf-cli get function --function-id func-12345678-1234-1234-1234-123456789abc --version-id ver-87654321-4321-4321-4321-123456789abc --json
 ```
 
-**Example get function output:**
+Example get function output:
 
 ```text
 Function Details:
@@ -1035,19 +1022,19 @@ Function Details:
   Status: ACTIVE
   Created: 2023-12-01T10:00:00Z
   Updated: 2023-12-01T12:00:00Z
-  
+
 Container Configuration:
   Image: nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8
   Inference URL: /echo
   Inference Port: 8000
-  
+
 Health Check:
   Protocol: HTTP
   URI: /health
   Port: 8000
   Timeout: PT30S
   Expected Status: 200
-  
+
 Deployment:
   Status: ACTIVE
   GPU: H100
@@ -1055,7 +1042,7 @@ Deployment:
   Instance Type: ON-PREM.GPU.H100_1x
 ```
 
-**Function details include:**
+Function details include:
 
 - Basic metadata (ID, name, status, created date)
 - Container configuration (image, ports, environment variables)
@@ -1067,7 +1054,7 @@ Deployment:
 
 ---
 
-### **Queue Management Commands** *Uses `NVCF_API_KEY`*
+### Queue Management Commands *Uses `NVCF_API_KEY`*
 
 Monitor function execution and queue status:
 
@@ -1088,7 +1075,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ./nvcf-cli queue position req-abcdef12-3456-7890-abcd-ef1234567890
 ```
 
-**Example queue monitoring:**
+Example queue monitoring:
 
 ```bash
 # Check queue status
@@ -1097,7 +1084,7 @@ Queue Status for Function: func-12345678-1234-1234-1234-123456789abc
   Active Instances: 2
   Queue Size: 5
   Estimated Wait Time: 30 seconds
-  
+
 Version Details:
 - Version: ver-87654321, Queue Size: 3, Processing: 1
 - Version: ver-12345678, Queue Size: 2, Processing: 1
@@ -1111,7 +1098,7 @@ Request Position:
   Status: QUEUED
 ```
 
-**Queue information includes:**
+Queue information includes:
 
 - Current queue size per function/version
 - Estimated wait times
@@ -1121,9 +1108,9 @@ Request Position:
 
 ---
 
-## **Example Workflows**
+## Example Workflows
 
-### **Complete Function Lifecycle**
+### Complete Function Lifecycle
 
 ```bash
 # Step 1: Set up authentication tokens
@@ -1187,7 +1174,7 @@ echo '{
 ./nvcf-cli delete func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc  # uses NVCF_TOKEN only
 ```
 
-### **Resource Discovery Workflow** *Uses `NVCF_API_KEY`*
+### Resource Discovery Workflow *Uses `NVCF_API_KEY`*
 
 ```bash
 # Set up authentication
@@ -1212,7 +1199,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ./nvcf-cli get function --function-id func-12345678-1234-1234-1234-123456789abc --version-id ver-87654321-4321-4321-4321-123456789abc --json > function-details.json
 ```
 
-### **Development & Testing Workflow**
+### Development & Testing Workflow
 
 ```bash
 # Set up both tokens for full functionality
@@ -1258,17 +1245,17 @@ export NVCF_CLI_DEBUG=true
 
 ---
 
-## **Troubleshooting**
+## Troubleshooting
 
-### **Common Authentication Issues**
+### Common Authentication Issues
 
-#### **401 Unauthorized on Function Creation**
+#### 401 Unauthorized on Function Creation
 
 ```text
 Error: API error 401: Invalid JWT serialization
 ```
 
-**Solution**: Check `NVCF_TOKEN` is valid for function creation
+Solution: Check `NVCF_TOKEN` is valid for function creation
 
 ```bash
 export NVCF_TOKEN="nvapi-your-function-creation-token"
@@ -1276,13 +1263,13 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 # Look for: "Using FUNCTION TOKEN for POST"
 ```
 
-#### **Missing NVCF_TOKEN on Delete Operations**
+#### Missing NVCF_TOKEN on Delete Operations
 
 ```text
 Error: failed to load configuration: NVCF_TOKEN is required for delete operations
 ```
 
-**Solution**: Delete operations require `NVCF_TOKEN` exclusively
+Solution: Delete operations require `NVCF_TOKEN` exclusively
 
 ```bash
 export NVCF_TOKEN="nvapi-your-function-creation-token"
@@ -1290,13 +1277,13 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 # Look for: "Using FUNCTION TOKEN for DELETE"
 ```
 
-#### **401 Unauthorized on Invoke/List Operations**
+#### 401 Unauthorized on Invoke/List Operations
 
 ```text
 Error: API error 401: Unauthorized
 ```
 
-**Solution**: Check `NVCF_API_KEY` is valid for general operations
+Solution: Check `NVCF_API_KEY` is valid for general operations
 
 ```bash
 export NVCF_API_KEY="nvapi-your-general-operations-token"
@@ -1304,13 +1291,13 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 # Look for: "Using API KEY for"
 ```
 
-#### **Deploy Operation Token Issues**
+#### Deploy Operation Token Issues
 
 ```text
 Error: API error 401: Unauthorized
 ```
 
-**Solution**: Deploy operations prefer `NVCF_TOKEN` but can fallback to `NVCF_API_KEY`
+Solution: Deploy operations prefer `NVCF_TOKEN` but can fallback to `NVCF_API_KEY`
 
 ```bash
 export NVCF_TOKEN="nvapi-your-function-creation-token"
@@ -1319,7 +1306,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 # Look for: "Using FUNCTION TOKEN for POST" or "Using API KEY for POST"
 ```
 
-### **Debug Token Selection**
+### Debug Token Selection
 
 ```bash
 # See exactly which token is being used for each command
@@ -1338,29 +1325,29 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 
 ```
 
-### **Authentication Token Summary**
+### Authentication Token Summary
 
-| **Operation** | **Required Token** | **Fallback** | **Debug Command** |
+| Operation | Required Token | Fallback | Debug Command |
 |---------------|-------------------|--------------|-------------------|
 | `create` | `NVCF_TOKEN` | `NVCF_API_KEY` | `./nvcf-cli create --debug ...` |
 | `deploy` | `NVCF_TOKEN` | `NVCF_API_KEY` | `./nvcf-cli deploy --debug ...` |
-| `delete` | `NVCF_TOKEN` | **None** | `./nvcf-cli delete --debug ...` |
+| `delete` | `NVCF_TOKEN` | None | `./nvcf-cli delete --debug ...` |
 | `invoke` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli invoke --debug ...` |
 | `list`, `get`, `queue` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli list --debug ...` |
 
-### **Configuration Issues**
+### Configuration Issues
 
-1. **Start with debug mode** when encountering API issues
-2. **Check the request URL** matches expected NVIDIA endpoints
-3. **Verify request body** contains expected parameters  
-4. **Compare response** with API documentation
-5. **Use configuration templates** for consistent setup
+1. Start with debug mode when encountering API issues
+2. Check the request URL matches expected NVIDIA endpoints
+3. Verify request body contains expected parameters
+4. Compare response with API documentation
+5. Use configuration templates for consistent setup
 
 ---
 
 ## Development
 
-### **Project Structure**
+### Project Structure
 
 ```text
 .
@@ -1455,29 +1442,29 @@ bazel coverage //src/clis/nvcf-cli/...
 
 ---
 
-## **API Coverage**
+## API Coverage
 
 The CLI now provides comprehensive coverage of NVIDIA Cloud Function APIs:
 
-| **API Category** | **Status** | **Endpoints** |
+| API Category | Status | Endpoints |
 |------------------|------------|---------------|
-| **Function Management** | Complete | Create, Deploy, Update, Delete, List, Get Details |
-| **Function Invocation** | Complete | Invoke with hold-open hint |
-| **Cluster Groups** | Complete | List available GPU resources |
-| **Queue Management** | Complete | Position, Details, Status |
-| **Function Sharing** | ⏳ Planned | Authorization management |
+| Function Management | Complete | Create, Deploy, Update, Delete, List, Get Details |
+| Function Invocation | Complete | Invoke with hold-open hint |
+| Cluster Groups | Complete | List available GPU resources |
+| Queue Management | Complete | Position, Details, Status |
+| Function Sharing | Pending Planned | Authorization management |
 
-**Total API Methods Supported**: Core function, invocation, cluster group, and queue endpoints
+Total API Methods Supported: Core function, invocation, cluster group, and queue endpoints
 
 ---
 
 ## Migration Guide for Existing Users
 
-### **Upgrading from Previous Versions**
+### Upgrading from Previous Versions
 
-The enhanced CLI is **100% backward compatible** with existing workflows. Here's how to take advantage of new features:
+The enhanced CLI is 100% backward compatible with existing workflows. Here's how to take advantage of new features:
 
-#### **Current Users: Keep Using What Works**
+#### Current Users: Keep Using What Works
 
 ```bash
 # Your existing workflows continue to work unchanged
@@ -1489,9 +1476,9 @@ export NVCF_TOKEN="your-existing-token"
 ./nvcf-cli invoke --function-id func-123 --version-id ver-456 --request-body '{}'  # Still works
 ```
 
-#### **Gradual Enhancement Path**
+#### Gradual Enhancement Path
 
-1. **Phase 1**: Add automatic context (no code changes needed)
+1. Phase 1: Add automatic context (no code changes needed)
 
    ```bash
    # After create/deploy, you can now skip IDs
@@ -1500,7 +1487,7 @@ export NVCF_TOKEN="your-existing-token"
    ./nvcf-cli invoke --request-body '{"input": "test"}'  # Uses saved context
    ```
 
-2. **Phase 2**: Try automatic token generation (optional)
+2. Phase 2: Try automatic token generation (optional)
 
    ```bash
    # Generate tokens automatically via API calls
@@ -1508,7 +1495,7 @@ export NVCF_TOKEN="your-existing-token"
    nvcf-cli api-key generate
    ```
 
-3. **Phase 3**: Use multi-environment configs (when ready)
+3. Phase 3: Use multi-environment configs (when ready)
 
    ```bash
    # Separate dev/prod environments
@@ -1516,49 +1503,49 @@ export NVCF_TOKEN="your-existing-token"
    nvcf-cli --config prod.yaml list functions
    ```
 
-#### **What's New vs What's The Same**
+#### What's New vs What's The Same
 
-| **Aspect** | **Before** | **After** | **Change Required** |
+| Aspect | Before | After | Change Required |
 |------------|------------|-----------|-------------------|
-| **Token Setup** | Manual export | Manual OR auto-generation | **None** (optional upgrade) |
-| **Function Creation** | Manual IDs everywhere | Smart context + manual fallback | **None** (automatic improvement) |
-| **Configuration** | Environment variables | Env vars OR YAML configs | **None** (additive) |
-| **Commands** | All existing commands | Same + new helper commands | **None** (additive) |
-| **Authentication** | Manual token management | Auto-management OR manual | **None** (optional upgrade) |
+| Token Setup | Manual export | Manual OR auto-generation | None (optional upgrade) |
+| Function Creation | Manual IDs everywhere | Smart context + manual fallback | None (automatic improvement) |
+| Configuration | Environment variables | Env vars OR YAML configs | None (additive) |
+| Commands | All existing commands | Same + new helper commands | None (additive) |
+| Authentication | Manual token management | Auto-management OR manual | None (optional upgrade) |
 
-### **New Command Summary**
+### New Command Summary
 
-**New commands you can try (optional):**
+New commands you can try (optional):
 
 - `nvcf-cli init` - Generate admin token
-- `nvcf-cli refresh` - Refresh token while keeping context  
+- `nvcf-cli refresh` - Refresh token while keeping context
 - `nvcf-cli api-key generate` - Generate API keys
 - `nvcf-cli status` - Check current state
 - `nvcf-cli undeploy` - Undeploy functions
 
-**Enhanced existing commands:**
+Enhanced existing commands:
 
 - All commands now support `--config` for multi-environment
 - `create`, `deploy`, `invoke`, `delete` now use smart context
 - `invoke` now supports `--grpc` for gRPC invocation
 - All commands have improved output and error messages
 
-### **Benefits You Get Immediately (No Changes Required)**
+### Benefits You Get Immediately (No Changes Required)
 
-- **Better Error Messages**: More helpful debugging information
-- **Automatic Context**: No more copying/pasting function IDs
-- **Enhanced Output**: Colored success/warning/error messages
-- **State Persistence**: CLI remembers your current function across commands
+- Better Error Messages: More helpful debugging information
+- Automatic Context: No more copying/pasting function IDs
+- Enhanced Output: Colored success/warning/error messages
+- State Persistence: CLI remembers your current function across commands
 
 ---
 
-## **Cloud Tasks (NVCT)**
+## Cloud Tasks (NVCT)
 
 The CLI also speaks to the NVIDIA Cloud Tasks (NVCT) service for managing
 GPU-backed batch jobs. NVCT commands live under `nvcf-cli task` and reuse the
 same authentication, state, and config conventions as the function commands.
 
-### **Configuration**
+### Configuration
 
 NVCT requests are sent to a dedicated base URL, configurable via:
 
@@ -1578,7 +1565,7 @@ nvcf-cli api-key generate
 The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
 `nvcf-cli task` subcommands. Use `--for task` if you only want the task key.
 
-### **Command Surface**
+### Command Surface
 
 | Command | Endpoint | Notes |
 | --- | --- | --- |
@@ -1592,7 +1579,7 @@ The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
 | `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. Optional `--timeout`. |
 | `task update-secrets [id]` | `PUT /v1/nvct/secrets/tasks/{id}` | Replace user secrets. |
 
-### **Quickstart**
+### Quickstart
 
 ```bash
 # Launch a task from a JSON spec (saves taskId to state)
@@ -1624,17 +1611,17 @@ nvcf-cli task delete
 nvcf-cli --json task list --status RUNNING
 ```
 
-### **JSON Input Files**
+### JSON Input Files
 
 Sample configs live under [`examples/`](./examples):
 
-- [`examples/create-task.json`](./examples/create-task.json) — minimal create
-- [`examples/create-task-with-results.json`](./examples/create-task-with-results.json) — UPLOAD strategy with NGC secret
-- [`examples/create-task-helm.json`](./examples/create-task-helm.json) — Helm chart based task
-- [`examples/update-task-secrets.json`](./examples/update-task-secrets.json) — secret rotation payload
-- [`examples/bulk-tasks.json`](./examples/bulk-tasks.json) — bulk task ID lookup payload
+- [`examples/create-task.json`](./examples/create-task.json) ; minimal create
+- [`examples/create-task-with-results.json`](./examples/create-task-with-results.json) ; UPLOAD strategy with NGC secret
+- [`examples/create-task-helm.json`](./examples/create-task-helm.json) ; Helm chart based task
+- [`examples/update-task-secrets.json`](./examples/update-task-secrets.json) ; secret rotation payload
+- [`examples/bulk-tasks.json`](./examples/bulk-tasks.json) ; bulk task ID lookup payload
 
-### **Required vs Optional Fields**
+### Required vs Optional Fields
 
 `task create` requires `name`, `gpuSpecification.gpu`, and
 `gpuSpecification.instanceType`. When `resultHandlingStrategy=UPLOAD`,
@@ -1976,11 +1963,11 @@ which carries `nodeDetails`, `gpu`, `icmsRequests`, and `stuckNamespaces`.
 
 ---
 
-## **License**
+## License
 
 This project is licensed under the terms specified in the repository license file.
 
-## **Support**
+## Support
 
 For support and questions:
 

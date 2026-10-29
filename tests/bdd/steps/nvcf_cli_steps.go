@@ -36,6 +36,10 @@ var vanityInvocationRetryInterval = time.Second
 
 var selectedFunctionPollInterval = 5 * time.Second
 
+// taskPollUnit is the duration one Gherkin "second" of task polling represents.
+// Tests shrink it so timeout and interval behavior runs quickly.
+var taskPollUnit = time.Second
+
 const vanityRouteNotFoundError = "Error: failed to invoke function: API error 404: 404 page not found"
 
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
@@ -43,6 +47,11 @@ func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I successfully create function "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateFunction)
 	ctx.Step(`^I successfully create function "([^"]*)" from Helm chart "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateHelmFunction)
 	ctx.Step(`^I successfully deploy the function selected by NVCF CLI with options:$`, sc.iSuccessfullyDeploySelectedFunction)
+	ctx.Step(`^I successfully generate an Event Ledger API key with CLI options:$`, sc.iSuccessfullyGenerateEventLedgerAPIKey)
+	ctx.Step(`^I successfully generate a task API key with CLI options:$`, sc.iSuccessfullyGenerateTaskAPIKey)
+	ctx.Step(`^I successfully create task "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateTask)
+	ctx.Step(`^the task selected by NVCF CLI should reach status "([^"]*)" within "([^"]*)" seconds, polling every "([^"]*)" seconds$`, sc.selectedTaskShouldReachStatus)
+	ctx.Step(`^I successfully delete the task selected by NVCF CLI$`, sc.iSuccessfullyDeleteSelectedTask)
 	ctx.Step(`^I successfully generate a function API key with CLI options:$`, sc.iSuccessfullyGenerateFunctionAPIKey)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over HTTP with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionHTTP)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over plaintext gRPC service "([^"]*)" method "([^"]*)" with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionGRPC)
@@ -86,14 +95,114 @@ func (sc *ScenarioContext) iSuccessfullyDeploySelectedFunction(ctx context.Conte
 }
 
 func (sc *ScenarioContext) iSuccessfullyGenerateFunctionAPIKey(ctx context.Context, table *godog.Table) error {
+	return sc.generateAPIKey(ctx, "function", table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyGenerateEventLedgerAPIKey(ctx context.Context, table *godog.Table) error {
+	return sc.generateAPIKey(ctx, "event-ledger", table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyGenerateTaskAPIKey(ctx context.Context, table *godog.Table) error {
+	return sc.generateAPIKey(ctx, "task", table)
+}
+
+// generateAPIKey runs api-key generate for one service. The CLI prints the key,
+// so stdout is dropped to keep it out of the command logs; the CLI saves the
+// key in its own state.
+func (sc *ScenarioContext) generateAPIKey(ctx context.Context, service string, table *godog.Table) error {
 	options, err := nvcfCLIOptions(table)
 	if err != nil {
 		return err
 	}
 	return sc.runNVCFCLISuppressingStdout(
 		ctx,
-		append([]string{"api-key", "generate", "--for", "function"}, options...)...,
+		append([]string{"api-key", "generate", "--for", service}, options...)...,
 	)
+}
+
+func (sc *ScenarioContext) iSuccessfullyCreateTask(
+	ctx context.Context,
+	name,
+	image string,
+	table *godog.Table,
+) error {
+	return sc.runNVCFCLIWithOptions(ctx, []string{
+		"task", "create", "--name", name, "--image", image,
+	}, table)
+}
+
+func (sc *ScenarioContext) iSuccessfullyDeleteSelectedTask(ctx context.Context) error {
+	return sc.runNVCFCLI(ctx, "task", "delete")
+}
+
+// selectedTaskShouldReachStatus repeats `task get --json` until `.task.status`
+// equals the expected string. It owns only the bounded timing: nvcf-cli has no
+// task wait command, and NVCT owns status meanings, so no status is classified
+// as terminal. Each poll is a separate runner invocation and must exit 0.
+func (sc *ScenarioContext) selectedTaskShouldReachStatus(
+	ctx context.Context,
+	status,
+	timeout,
+	pollInterval string,
+) error {
+	expected := dsl.Interpolate(status)
+	budget, err := positiveSeconds(timeout)
+	if err != nil {
+		return fmt.Errorf("timeout %w", err)
+	}
+	interval, err := positiveSeconds(pollInterval)
+	if err != nil {
+		return fmt.Errorf("poll interval %w", err)
+	}
+
+	deadline := time.Now().Add(budget)
+	pollCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	observed := "<none>"
+	for {
+		if err := sc.runNVCFCLI(pollCtx, "task", "get", "--json"); err != nil {
+			if ctx.Err() == nil && pollCtx.Err() != nil {
+				break
+			}
+			return err
+		}
+		current, err := dsl.TaskStatus(sc.LastResult.Stdout)
+		if err != nil {
+			return err
+		}
+		if current == expected {
+			return nil
+		}
+		observed = current
+		if time.Until(deadline) <= 0 {
+			break
+		}
+		timer := time.NewTimer(min(interval, time.Until(deadline)))
+		select {
+		case <-pollCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Until(deadline) <= 0 {
+			break
+		}
+	}
+	return fmt.Errorf("selected task did not reach status %q within %s: last observed status %q (see %s for command logs)",
+		expected, budget, observed, sc.Suite.Config.CommandLogDir)
+}
+
+// positiveSeconds parses a Gherkin seconds value after interpolation. Only the
+// positive-integer shape the runner needs for timing is validated.
+func positiveSeconds(value string) (time.Duration, error) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(dsl.Interpolate(value)))
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("%q must be a positive number of seconds", value)
+	}
+	return time.Duration(seconds) * taskPollUnit, nil
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionHTTP(
@@ -191,9 +300,13 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 // isNoEligibleCandidates reports whether the router has not registered the
 // model yet. Chat completions return the router message; passthrough
 // endpoints return the router code.
+// isNoEligibleCandidates reports a function that is deployed but not yet
+// routable: the gateway has no route for it yet (404), or its backend is
+// connected but still calibrating at startup (503 Service Unavailable).
 func isNoEligibleCandidates(output string) bool {
 	return strings.Contains(output, "no_eligible_candidates") ||
-		strings.Contains(output, "no eligible candidates")
+		strings.Contains(output, "no eligible candidates") ||
+		strings.Contains(output, `API error 503: {"message":"Service Unavailable"}`)
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(

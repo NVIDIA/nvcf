@@ -298,10 +298,12 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | base_grpc_url        | ${EKS_GATEWAY_ADDR}:10081      |
         | api_keys_service_url | http://${EKS_GATEWAY_ADDR}     |
         | icms_url             | http://${EKS_GATEWAY_ADDR}     |
+        | base_nvct_url        | http://${EKS_GATEWAY_ADDR}     |
         | api_host             | api.${EKS_GATEWAY_DOMAIN}        |
         | api_keys_host        | api-keys.${EKS_GATEWAY_DOMAIN}   |
         | invoke_host          | invocation.${EKS_GATEWAY_DOMAIN} |
         | icms_host            | sis.${EKS_GATEWAY_DOMAIN}        |
+        | nvct_host            | tasks.${EKS_GATEWAY_DOMAIN}      |
 
       # Export the installed control plane with compute-reachable endpoints.
       When I run command:
@@ -425,9 +427,27 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m
         """
 
-      When I run command:
-        """
-        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x tests/bdd/scripts/run-nvct-task-smoke.sh
-        """
-      Then the command exit code should be 0
-      And the command output should contain "COMPLETED"
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml"
+
+      When I successfully generate a task API key with CLI options:
+        | option        | value                                |
+        | --description | bdd-nvct-task-smoke                  |
+        | --scopes      | launch_task,task_details,delete_task |
+
+      And I successfully create task "bdd-nvct-task-smoke" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/task-simple-sample:local" with CLI options:
+        | option              | value                              |
+        | --gpu               | H100                               |
+        | --instance-type     | NCP.GPU.H100_8x                    |
+        | --backend           | ${EKS_COMPUTE_CLUSTER_NAME}        |
+        | --result-strategy   | NONE                               |
+        | --max-runtime       | PT10M                              |
+        | --max-queued        | PT10M                              |
+        | --termination-grace | PT1M                               |
+        | --container-env     | NUM_OF_RESULTS=1                   |
+        | --container-env     | DELAY_BETWEEN_RESULTS_IN_MINUTES=0 |
+        | --container-env     | FILE_SIZE_BYTES=8192               |
+        | --container-env     | INCLUDE_METADATA=false             |
+
+      Then the task selected by NVCF CLI should reach status "COMPLETED" within "900" seconds, polling every "10" seconds
+
+      And I successfully delete the task selected by NVCF CLI

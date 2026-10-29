@@ -46,6 +46,7 @@ func (c *CliArgs) Register(svcName string) {
 	c.SetupLogging(svcName)
 	c.SetupIndexer()
 	c.SetupCache()
+	c.SetupV3()
 	c.SetupProfiling()
 	c.SetupPublisher()
 	c.SetupHTTP()
@@ -151,6 +152,10 @@ func (c *CliArgs) SetupCache() {
 	c.bool("cache.enabled", defaults.Enabled, "Reserved for the local stats write cache. It has no effect until the cache is applied to writes", true)
 	c.int("cache.max-size", defaults.MaxSize, "Maximum number of entries in the stats write cache", true)
 	c.int("cache.flush-interval-seconds", defaults.FlushIntervalSeconds, "Seconds a pending stats entry waits before it is flushed", true)
+}
+
+func (c *CliArgs) SetupV3() {
+	c.bool("v3.account-columns-enabled", false, "Store nca_id and function_id in their own columns. Enable only after the event_ledger 04 migration has been applied", true)
 }
 
 func (c *CliArgs) SetupPublisher() {

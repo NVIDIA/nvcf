@@ -108,6 +108,7 @@ refactor in every consumer; that is a feature.
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
 | `And I write yaml file {string} with values:` (two-column table of dotted-path and value) | Creates a new YAML file from the visible table. The destination must not already exist; the step fails instead of overwriting so an authored file is never silently replaced. Parent directories are created. Path syntax and `${VAR}` expansion match `I update yaml file`. Boolean literals and collection literals such as `[]` are written as native YAML types, not quoted strings, because Helm treats the string `"false"` as truthy. Numbers stay as strings. The destination is ledger-backed and removed at teardown. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
+| `And I set yaml file {string} key {string} to:` (YAML docstring) | Replaces the subtree at the dotted key with the parsed docstring, keeping numbers, booleans, and lists typed. Missing parents are created as for `I update yaml file`; a scalar at an intermediate position fails. `${VAR}` expansion applies to the docstring before parsing. Snapshotted by the Ledger. |
 | `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
 | `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
@@ -131,8 +132,10 @@ and the target contexts stay visible as table rows.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
+| `When I poll command for up to {int} seconds until output contains {string}:` (docstring) | Repeats the visible command until an exit-zero result contains the expected text. Preserves the matching result for later assertions and JSON-field export. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
+| `When I export command output JSON field {string} to environment variable {string}` | Reads a dot-path field from the previous exit-zero command's JSON stdout and exports its non-empty value through the env Ledger. |
 | `When I export the function selected by NVCF CLI to environment variables {string} and {string}` | Runs one `nvcf-cli status --json` for the selected config and exports the selected function ID and version ID under the two named env vars, in that order. Fails when no function is selected or either ID is empty. Both names stay visible in Gherkin. Snapshotted by the env Ledger; restored at suite teardown. |
 
 #### Registration observability command adapters
@@ -145,14 +148,14 @@ They preserve the real command output for subsequent assertions.
 |------|---------|
 | `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
 
-#### Function lifecycle command adapters
+#### Function and task lifecycle command adapters
 
 These steps hide the repeated executable, config prefix, fixed subcommand, shell
-quoting, and exit-zero assertion. Every meaningful function, deployment, and
+quoting, and exit-zero assertion. Every meaningful function, task, deployment, and
 invocation input remains visible. Each action runs exactly one `nvcf-cli`
 command and preserves its result for existing output assertions.
 
-The adapters validate only Gherkin structure. They do not store function
+The adapters validate only Gherkin structure. They do not store function or task
 identity, apply defaults, parse or normalize product values, enforce product
 preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
 unchanged after `${VAR}` interpolation. The `successfully` wording is the
@@ -169,12 +172,17 @@ original order. Repeated options and empty values are preserved.
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
 | `When I successfully create function {string} from Helm chart {string} with CLI options:` | Runs `function create --name <name> --helm-chart <chart>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate an Event Ledger API key with CLI options:` | Runs `api-key generate --for event-ledger` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own Event Ledger key. |
 | `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
 | `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
-| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. Retries every second until the timeout while a newly deployed function is not yet routable (no eligible candidates, or 503 while its backend calibrates). |
 | `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
 | `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. A successful run is remembered, so a queued teardown undeploy skips it. |
+| `When I successfully generate a task API key with CLI options:` | Runs `api-key generate --for task` followed by the option rows and suppresses secret-bearing stdout. The CLI saves and later uses its own task key. |
+| `When I successfully create task {string} from image {string} with CLI options:` | Runs `task create --name <name> --image <image>` followed by the option rows. The CLI saves the created task as its selected task. |
+| `Then the task selected by NVCF CLI should reach status {string} within {string} seconds, polling every {string} seconds` | Repeats `task get --json` through the selected config, requires each poll to exit 0, and compares `.task.status` with the exact expected string. The runner owns only the timeout and poll interval, which must be positive integers. It keeps no status allowlist and treats no status as terminal. On timeout the error names the expected status, last observed status, timeout, and command-log location, never the task response. |
+| `And I successfully delete the task selected by NVCF CLI` | Runs `task delete`. Task selection remains owned by CLI state. |
 
 ### HTTP requests (Given / When / Then)
 
@@ -209,6 +217,8 @@ Cleanup written as a later step is skipped when an earlier step fails, because t
 | `When I send a {string} request to {string} at scenario teardown expecting status {int}` | Queues the request instead of sending it now. It takes the queued headers like the send step, so declare a credential just before it. `${VAR}` expansion applies to the URL when the step runs, so the variable must already be exported. Any status other than the expected one fails the scenario. |
 | `When the function selected by NVCF CLI is undeployed at scenario teardown` | Queues `function delete --deployment-only` for the selected CLI config. Register it after the function is created and before the deploy step, so a failed deploy is still cleaned up. It does nothing when the scenario already undeployed the function with the undeploy step. A "Deployment not found" result counts as done, and any other failure fails the scenario. |
 | `When the function selected by NVCF CLI is deleted at scenario teardown` | Queues `function delete` for the selected CLI config. Register it before the undeploy teardown step so it runs after the undeploy. Any failure fails the scenario. |
+| `When function {string} version {string} is undeployed at scenario teardown` | Queues `function delete --deployment-only --function-id <id> --version-id <version>` for the selected CLI config, for scenarios with more than one function. `${VAR}` expansion applies when the step runs, so export the IDs first. A function with no deployment counts as done. |
+| `When function {string} version {string} is deleted at scenario teardown` | Queues `function delete --function-id <id> --version-id <version>` for the selected CLI config. Register it before the matching undeploy step so it runs after the undeploy. Any failure fails the scenario. |
 
 ### Assertions (Then / And)
 

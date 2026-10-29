@@ -30,6 +30,7 @@ import (
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 )
 
 const (
@@ -48,6 +49,23 @@ const (
 
 func IsSelfHosted(nb *nvidiaiov1.NVCFBackend) bool {
 	return nb.Spec.ClusterSource == nvcaoptypes.ClusterSourceSelfHosted
+}
+
+// applySelfManagedBYOODefaults disables BYOO platform metrics federation on
+// self-hosted clusters that do not configure it. The collector otherwise
+// federates from the Prometheus that managed clusters run, which no
+// self-managed stack deploys, so every BYOO collector would fail those scrapes
+// and export up=0 series to the tenant. Setting enabled or target keeps the
+// configured value.
+func applySelfManagedBYOODefaults(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) nvcaconfig.Config {
+	if !IsSelfHosted(nb) {
+		return mergeCfg
+	}
+	federation := &mergeCfg.Agent.BYOOOTelCollector.PlatformMetricsFederation
+	if federation.IsZero() {
+		federation.Enabled = ptr.To(false)
+	}
+	return mergeCfg
 }
 
 // detectIdentitySource resolves the identity source for self-hosted clusters.

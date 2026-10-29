@@ -42,7 +42,7 @@ func TestUmbrellaManifestValidation(t *testing.T) {
 		want   string
 	}{
 		{"independent versions", func(*umbrellaManifest) {}, ""},
-		{"unknown schema", func(m *umbrellaManifest) { m.SchemaVersion++ }, "schema"},
+		{"unknown schema", func(m *umbrellaManifest) { m.SchemaVersion = 3 }, "schema"},
 		{"missing stack", func(m *umbrellaManifest) { delete(m.Stacks, releaseSetStackComputePlane) }, "exactly"},
 		{"missing provenance", func(m *umbrellaManifest) { m.SourceCommit = "main" }, "reviewed commit"},
 		{"unsupported Helm", func(m *umbrellaManifest) { m.Toolchain.Helm = "4.0.0" }, "Helm 3"},

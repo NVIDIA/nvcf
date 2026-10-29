@@ -6,7 +6,7 @@
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint, env, registry, extra_registries, tags, extra_layers):
+def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint, env, registry, extra_registries, tags, extra_layers, user):
     # Lay the binary down at a stable absolute path so the entrypoint
     # and pod-spec command can reference it directly. Defaults to
     # /usr/local/bin/{binary_target_name}, matching the legacy Dockerfile.
@@ -38,6 +38,7 @@ def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint
         base = base,
         entrypoint = entry,
         env = env,
+        user = user,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -80,6 +81,10 @@ rust_oci_image = macro(
         ),
         "extra_registries": attr.string_dict(
             doc = "Additional registries: suffix -> repository path. Generates {name}_push_{suffix} for each.",
+            configurable = False,
+        ),
+        "user": attr.string(
+            doc = "Numeric UID:GID recorded in the OCI image configuration.",
             configurable = False,
         ),
         "tags": attr.string_list(

@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	config "ai-api-gateway-service/gateway_config"
@@ -570,4 +571,198 @@ func mustJSONFields(t *testing.T, body string) map[string]json.RawMessage {
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(body), &fields))
 	return fields
+}
+
+func messagesSampler(body string, headers map[string]string, headerNames []string, randomBucket int) *shadowRequestSampler {
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	return newShadowRequestSampler(req, []byte(body), shadowSamplingEndpointMessages, headerNames, fixedRandomBucket(randomBucket))
+}
+
+func messagesDefaultHeaders() []string {
+	return config.ModelFunctionDetails{}.EffectivePromptCacheKeyHeadersForSection("anthropicMessages")
+}
+
+func TestMessagesPromptCacheKeyUsesSessionHeaders(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		headers   map[string]string
+		names     []string
+		available bool
+	}{
+		{
+			name:      "multi-turn session header",
+			body:      `{"messages":[{"role":"user","content":"a"}]}`,
+			headers:   map[string]string{config.DefaultPromptCacheKeyHeader: "session-123"},
+			names:     messagesDefaultHeaders(),
+			available: true,
+		},
+		{
+			name:      "Claude Code session header when the first is absent",
+			body:      `{"messages":[{"role":"user","content":"b"}]}`,
+			headers:   map[string]string{config.ClaudeCodeSessionIDHeader: " session-123 "},
+			names:     messagesDefaultHeaders(),
+			available: true,
+		},
+		{
+			name: "multi-turn session header wins over Claude Code",
+			body: `{"messages":[{"role":"user","content":"c"}]}`,
+			headers: map[string]string{
+				config.DefaultPromptCacheKeyHeader: "session-123",
+				config.ClaudeCodeSessionIDHeader:   "other-session",
+			},
+			names:     messagesDefaultHeaders(),
+			available: true,
+		},
+		{
+			name:  "body prompt_cache_key is not a Messages field",
+			body:  `{"prompt_cache_key":"session-123","metadata":{"user_id":"session-123"}}`,
+			names: messagesDefaultHeaders(),
+		},
+		{
+			name:    "empty header list disables lookup",
+			body:    `{}`,
+			headers: map[string]string{config.ClaudeCodeSessionIDHeader: "session-123"},
+			names:   []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sampler := messagesSampler(tc.body, tc.headers, tc.names, 0)
+			bucket, ok := sampler.bucket(config.ShadowSamplingMethodPromptCacheKey)
+			require.Equal(t, tc.available, ok)
+			if tc.available {
+				assert.Equal(t, 95, bucket)
+			}
+		})
+	}
+}
+
+func TestPromptCacheKeySessionValueHasSameBucketOnChatAndMessages(t *testing.T) {
+	chat := responsesSampler(`{}`, map[string]string{"X-Session-ID": "session-123"}, shadowSamplingEndpointChatCompletions, 0)
+	messages := messagesSampler(`{}`, map[string]string{config.ClaudeCodeSessionIDHeader: "session-123"}, messagesDefaultHeaders(), 0)
+
+	chatBucket, chatOK := chat.bucket(config.ShadowSamplingMethodPromptCacheKey)
+	messagesBucket, messagesOK := messages.bucket(config.ShadowSamplingMethodPromptCacheKey)
+	require.True(t, chatOK)
+	require.True(t, messagesOK)
+	assert.Equal(t, chatBucket, messagesBucket)
+}
+
+func TestCanonicalMessagesFirstMessageFixedVectors(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		material string
+	}{
+		{
+			name:     "string system and user",
+			body:     `{"system":"Be helpful.","messages":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Later"}]}`,
+			material: `{"version":1,"endpoint":"messages","messages":[{"role":"system","content":"Be helpful."},{"role":"user","content":"Hello"}]}`,
+		},
+		{
+			name:     "block system and user without cache_control",
+			body:     `{"system":[{"type":"text","text":"Stay concise","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"Describe this","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}]}`,
+			material: `{"version":1,"endpoint":"messages","messages":[{"role":"system","content":[{"text":"Stay concise","type":"text"}]},{"role":"user","content":[{"text":"Describe this","type":"text"},{"source":{"data":"AAAA","media_type":"image/png","type":"base64"},"type":"image"}]}]}`,
+		},
+		{
+			name:     "no system",
+			body:     `{"messages":[{"role":"user","content":"Hello"}]}`,
+			material: `{"version":1,"endpoint":"messages","messages":[{"role":"user","content":"Hello"}]}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			material, ok := messagesSampler(tc.body, nil, nil, 0).firstMessageMaterial()
+			require.True(t, ok)
+			assert.Equal(t, tc.material, string(material))
+		})
+	}
+}
+
+func TestMessagesFirstMessageHashIsStableAcrossTurns(t *testing.T) {
+	turn1 := `{"system":"Be helpful.","messages":[{"role":"user","content":[{"type":"text","text":"Hello","cache_control":{"type":"ephemeral"}}]}]}`
+	turn3 := `{"system":"Be helpful.","messages":[
+		{"content":[{"text":"Hello","type":"text"}],"role":"user"},
+		{"role":"assistant","content":"Hi"},
+		{"role":"user","content":[{"type":"text","text":"More","cache_control":{"type":"ephemeral"}}]}]}`
+	other := `{"system":"Be helpful.","messages":[{"role":"user","content":"Different"}]}`
+
+	first, ok := messagesSampler(turn1, nil, nil, 0).bucket(config.ShadowSamplingMethodFirstMessageHash)
+	require.True(t, ok)
+	later, ok := messagesSampler(turn3, nil, nil, 0).bucket(config.ShadowSamplingMethodFirstMessageHash)
+	require.True(t, ok)
+	assert.Equal(t, first, later)
+
+	firstMaterial, _ := messagesSampler(turn1, nil, nil, 0).firstMessageMaterial()
+	otherMaterial, ok := messagesSampler(other, nil, nil, 0).firstMessageMaterial()
+	require.True(t, ok)
+	assert.NotEqual(t, string(firstMaterial), string(otherMaterial))
+}
+
+func TestMessagesFirstMessageHashRequiresNonemptyUserContent(t *testing.T) {
+	methods := testShadowSamplingMethods(
+		config.ShadowSamplingMethodPromptCacheKey,
+		config.ShadowSamplingMethodFirstMessageHash,
+	)
+	for _, body := range []string{
+		`{"system":"Be helpful.","messages":[]}`,
+		`{"messages":[{"role":"assistant","content":"Hi"}]}`,
+		`{"messages":[{"role":"user","content":""}]}`,
+		`{"messages":[{"role":"user","content":[]}]}`,
+		`{"messages":"bad"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			sampler := messagesSampler(body, nil, messagesDefaultHeaders(), 5)
+			_, ok := sampler.bucket(config.ShadowSamplingMethodFirstMessageHash)
+			assert.False(t, ok)
+
+			admitted := admittedShadowsWithSampler([]shadowConfig{{modelName: "shadow", percentage: 10, samplingMethods: methods}}, sampler)
+			assert.Equal(t, []string{"shadow"}, shadowModelNames(admitted))
+			assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodRandom}, sampler.decidedMethods)
+		})
+	}
+}
+
+func TestStickyShadowSamplingAdmitsConfiguredShareOfConversations(t *testing.T) {
+	const conversations = 10_000
+	bodies := map[config.ShadowSamplingMethod]func(int) string{
+		config.ShadowSamplingMethodPromptCacheKey: func(i int) string {
+			return `{"prompt_cache_key":"session-` + strconv.Itoa(i) + `"}`
+		},
+		config.ShadowSamplingMethodFirstMessageHash: func(i int) string {
+			return `{"messages":[{"role":"user","content":"conversation ` + strconv.Itoa(i) + `"}]}`
+		},
+	}
+	for method, body := range bodies {
+		for _, percentage := range []int{1, 10, 25, 50, 90} {
+			t.Run(string(method)+"/"+strconv.Itoa(percentage), func(t *testing.T) {
+				shadow := shadowConfig{
+					modelName:       "shadow",
+					percentage:      percentage,
+					samplingMethods: testShadowSamplingMethods(method),
+				}
+				admitted := 0
+				for i := range conversations {
+					sampler := newShadowRequestSampler(
+						httptest.NewRequest(http.MethodPost, "/", nil),
+						[]byte(body(i)),
+						shadowSamplingEndpointChatCompletions,
+						nil,
+						func() int { t.Fatal("random fallback used"); return 0 },
+					)
+					admitted += len(admittedShadowsWithSampler([]shadowConfig{shadow}, sampler))
+				}
+				lower := conversations * max(percentage-3, 0) / 100
+				upper := conversations * (percentage + 3) / 100
+				assert.GreaterOrEqual(t, admitted, lower, "admitted %d of %d at %d%%", admitted, conversations, percentage)
+				assert.LessOrEqual(t, admitted, upper, "admitted %d of %d at %d%%", admitted, conversations, percentage)
+			})
+		}
+	}
 }

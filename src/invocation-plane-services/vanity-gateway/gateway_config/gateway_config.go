@@ -38,6 +38,7 @@ const (
 	ShadowSamplingMethodPromptCacheKey   ShadowSamplingMethod = "promptCacheKey"
 	ShadowSamplingMethodFirstMessageHash ShadowSamplingMethod = "firstMessageHash"
 	DefaultPromptCacheKeyHeader                               = "x-multi-turn-session-id"
+	ClaudeCodeSessionIDHeader                                 = "x-claude-code-session-id"
 )
 
 type ShadowSamplingMethods []ShadowSamplingMethod
@@ -167,9 +168,12 @@ type ModelFunctionDetails struct {
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
 	PromptCacheKeyHeaders          []string              `json:"promptCacheKeyHeaders,omitempty" yaml:"promptCacheKeyHeaders,omitempty"`
 	FunctionType                   FunctionType          `json:"functionType,omitempty"`
-	shadowsPresent                 bool
-	shadowsNotList                 bool
-	legacyShadowFieldsPresent      bool
+
+	ModelInfoFields map[string]json.RawMessage `json:"modelInfoFields,omitempty"`
+
+	shadowsPresent            bool
+	shadowsNotList            bool
+	legacyShadowFieldsPresent bool
 }
 
 func (m ModelFunctionDetails) TargetsLLMGateway() bool {
@@ -190,8 +194,14 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 	var shadowsRaw json.RawMessage
 	shadowsPresent := false
 	legacyShadowFieldsPresent := false
+	metadataPresent := false
 	for field, raw := range fields {
 		switch {
+		case strings.EqualFold(field, "modelInfoFields"):
+			if metadataPresent {
+				return fmt.Errorf("decode model %q: duplicate modelInfoFields field", modelName)
+			}
+			metadataPresent = true
 		case strings.EqualFold(field, "shadows"):
 			shadowsPresent = true
 			shadowsRaw = raw
@@ -305,6 +315,18 @@ func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
 	return shadow
 }
 
+// EffectivePromptCacheKeyHeadersForSection returns the configured headers, or
+// the default for the section when none are set. Anthropic Messages has no
+// prompt_cache_key body field, so its default also reads the Claude Code
+// session header, in the same order the LLM Gateway uses for Messages
+// affinity.
+func (m ModelFunctionDetails) EffectivePromptCacheKeyHeadersForSection(sectionName string) []string {
+	if m.PromptCacheKeyHeaders == nil && sectionName == anthropicMessagesSection {
+		return []string{DefaultPromptCacheKeyHeader, ClaudeCodeSessionIDHeader}
+	}
+	return m.EffectivePromptCacheKeyHeaders()
+}
+
 func (m ModelFunctionDetails) EffectivePromptCacheKeyHeaders() []string {
 	if m.PromptCacheKeyHeaders != nil {
 		return slices.Clone(m.PromptCacheKeyHeaders)
@@ -355,6 +377,7 @@ type PathFunctionDetails struct {
 	ShadowPercentage        *int                   `json:"shadowPercentage,omitempty"` // unsupported on vanity routes; rejected during validation
 	ShadowSamplingMethod    ShadowSamplingMethod   `json:"shadowSamplingMethod,omitempty"`
 	sessionTimeoutPresent   bool
+	modelInfoFieldsPresent  bool
 }
 
 func (p *PathFunctionDetails) UnmarshalJSON(data []byte) error {
@@ -372,6 +395,11 @@ func (p *PathFunctionDetails) UnmarshalJSON(data []byte) error {
 
 	*p = PathFunctionDetails(alias)
 	_, p.sessionTimeoutPresent = fields["sessionTimeout"]
+	for field := range fields {
+		if strings.EqualFold(field, "modelInfoFields") {
+			p.modelInfoFieldsPresent = true
+		}
+	}
 	return nil
 }
 
@@ -420,6 +448,8 @@ func notifySharedReload() {
 
 type GatewayConfig struct {
 	V2Config `json:"v2config"`
+
+	modelEntryOrder map[string][]string
 }
 
 func (c *GatewayConfig) UnmarshalJSON(data []byte) error {
@@ -573,8 +603,11 @@ func validateSamplingMethods(location string, fieldName string, sectionName stri
 	return nil
 }
 
+const anthropicMessagesSection = "anthropicMessages"
+
 func supportsRequestBodySampling(sectionName string) bool {
-	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses"
+	return sectionName == "openai.chatCompletions" || sectionName == "openai.responses" ||
+		sectionName == anthropicMessagesSection
 }
 
 func (c *GatewayConfig) Validate() error {
@@ -593,7 +626,7 @@ func (c *GatewayConfig) modelSections() map[string]map[string]ModelFunctionDetai
 		"openai.completions":      c.OpenAI.Completions,
 		"openai.embeddings":       c.OpenAI.Embeddings,
 		"openai.responses":        c.OpenAI.Responses,
-		"anthropicMessages":       c.AnthropicMessages,
+		anthropicMessagesSection:  c.AnthropicMessages,
 		"openai.imageGenerations": c.OpenAI.ImageGenerations,
 		"openai.imageEdits":       c.OpenAI.ImageEdits,
 		"openai.imageVariations":  c.OpenAI.ImageVariations,
@@ -617,6 +650,9 @@ func validateModelSection(sectionName string, entries map[string]ModelFunctionDe
 		location := sectionName + "." + modelKey
 		if entry.SessionTimeout < 0 {
 			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
+		}
+		if err := validateModelInfoFields(entry.ModelName, entry.ModelInfoFields); err != nil {
+			return fmt.Errorf("%s: %w", location, err)
 		}
 		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
 			return err
@@ -819,6 +855,9 @@ func (c *GatewayConfig) validateVanityConfig() error {
 		}
 		for pathKey, path := range vanity.Paths {
 			location := "vanity." + vanityName + ".paths." + pathKey
+			if path.modelInfoFieldsPresent {
+				return fmt.Errorf("%s: modelInfoFields is unsupported for vanity routes", location)
+			}
 			if path.sessionTimeoutPresent || path.SessionTimeout != nil {
 				return fmt.Errorf("%s: sessionTimeout is unsupported for vanity routes", location)
 			}
@@ -890,6 +929,7 @@ func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig],
 
 func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration) (rc.ReloadableConfig[GatewayConfig], error) {
 	opts := []rc.ConfigOption[GatewayConfig]{
+		rc.WithUnmarshalFunc(unmarshalGatewayConfig),
 		rc.WithValidateFunc(func(c *GatewayConfig) error {
 			return c.Validate()
 		}),
