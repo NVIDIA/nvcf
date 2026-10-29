@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("checker", Path(__file__).with_name("openbao-upgrade-check.py"))
 checker = importlib.util.module_from_spec(SPEC)
@@ -19,7 +20,7 @@ OLD_SHA, NEW_SHA = "c" * 64, "d" * 64
 
 
 def put(root, name, value):
-    (root / name).write_text(json.dumps(value))
+    (root / name).write_text(json.dumps(value), encoding="utf-8")
 
 
 def fixture(root):
@@ -56,8 +57,8 @@ def fixture(root):
         if i == 0:
             status["is_self"] = True
         put(root, name + "-status.json", status)
-        (root / (name + "-node-id.txt")).write_text("raft-" + name)
-        (root / (name + "-plugin.txt")).write_text(OLD_SHA + "  /openbao/plugins/vault-plugin-secrets-jwt\n")
+        (root / (name + "-node-id.txt")).write_text("raft-" + name, encoding="utf-8")
+        (root / (name + "-plugin.txt")).write_text(OLD_SHA + "  /openbao/plugins/vault-plugin-secrets-jwt\n", encoding="utf-8")
         peers.append({"node_id": "raft-" + name, "voter": True, "leader": i == 0})
         servers["raft-" + name] = {"healthy": True}
     put(root, "pods.json", {"items": pods})
@@ -104,10 +105,23 @@ class UpgradeChecks(unittest.TestCase):
                 c["imageID"] = NEW_IMAGE + "@" + NEW_ID
         self.edit("pods.json", update)
         self.edit(name + "-status.json", lambda j: j.update(version="2.5.5"))
-        (self.current / (name + "-plugin.txt")).write_text(NEW_SHA + "  plugin\n")
+        (self.current / (name + "-plugin.txt")).write_text(NEW_SHA + "  plugin\n", encoding="utf-8")
 
     def test_unchanged_template_still_selects_inherited_stale_pods(self):
         self.assertEqual(self.run_check()["stale"], checker.PODS)
+
+    def test_utf8_evidence_survives_an_ascii_locale(self):
+        data = checker.read(self.current, "statefulset.json")
+        data["metadata"]["annotations"] = {"description": "caf\u00e9"}
+        (self.current / "statefulset.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        events = self.root / "events.json"
+        events.write_text(json.dumps({"object": data}, ensure_ascii=False), encoding="utf-8")
+        (self.current / (checker.PODS[0] + "-plugin.txt")).write_text(
+            OLD_SHA + "  /plugins/caf\u00e9\n", encoding="utf-8")
+        with patch("io.text_encoding", side_effect=lambda encoding, *args: encoding or "ascii"):
+            self.assertEqual(checker.read(self.current, "statefulset.json"), data)
+            self.assertEqual(list(checker.watch_events(events)), [data])
+            self.assertEqual(self.run_check()["stale"], checker.PODS)
 
     def test_api_omitted_host_network_false_matches_reviewed_render(self):
         rendered = checker.read(self.target, "rendered-statefulset.json")
@@ -187,11 +201,11 @@ class UpgradeChecks(unittest.TestCase):
         ]
         for filename, change, message in cases:
             with self.subTest(message=message):
-                saved = (self.current / filename).read_text()
+                saved = (self.current / filename).read_text(encoding="utf-8")
                 self.edit(filename, change)
                 with self.assertRaisesRegex(ValueError, message):
                     self.run_check()
-                (self.current / filename).write_text(saved)
+                (self.current / filename).write_text(saved, encoding="utf-8")
 
     def test_other_architecture_node_rejects_unpinned_refresh_hook(self):
         self.edit("nodes.json", lambda j: j["items"].append({"metadata": {
@@ -222,21 +236,21 @@ class UpgradeChecks(unittest.TestCase):
                     "conditions": [{"type": "Complete", "status": "True"}]}}}
         refresh = job("openbao-server-refresh-jwt-plugin-catalog", "refresh", "2026-01-01T00:00:01Z", "2026-01-01T00:00:05Z")
         migration = job("openbao-server-migrations", "new", "2026-01-01T00:00:06Z", "2026-01-01T00:00:09Z")
-        events.write_text(json.dumps(refresh) + "\n" + json.dumps(migration))
+        events.write_text(json.dumps(refresh) + "\n" + json.dumps(migration), encoding="utf-8")
         self.assertEqual(checker.check_hooks(events, "old", "2026-01-01T00:00:00Z")["migration_uid"], "new")
         with self.assertRaisesRegex(ValueError, "fresh completed hook"):
             checker.check_hooks(events, "new", "2026-01-01T00:00:00Z")
-        events.write_text(json.dumps(migration))
+        events.write_text(json.dumps(migration), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "fresh completed hook"):
             checker.check_hooks(events, "old", "2026-01-01T00:00:00Z")
         migration["object"]["metadata"]["creationTimestamp"] = "2026-01-01T00:00:02Z"
-        events.write_text(json.dumps(refresh) + json.dumps(migration))
+        events.write_text(json.dumps(refresh) + json.dumps(migration), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "before catalog"):
             checker.check_hooks(events, "old", "2026-01-01T00:00:00Z")
 
     def test_documented_helm_gate_accepts_list_shape_only(self):
         guide = Path(__file__).parents[2] / "release-notes/0.6.1-to-0.6.2-upgrade.md"
-        query = re.search(r"jq -e '([^']+)' \\\n    \"\$SYNC_DIR/helm.json\"", guide.read_text()).group(1)
+        query = re.search(r"jq -e '([^']+)' \\\n    \"\$SYNC_DIR/helm.json\"", guide.read_text(encoding="utf-8")).group(1)
         release = {"name": "openbao-server", "namespace": "vault-system", "status": "deployed",
                    "chart": "helm-nvcf-openbao-server-0.32.6"}
         cases = [([release], 0), ([], 1), ([release, release], 1),

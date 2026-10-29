@@ -80,7 +80,7 @@ class OpenBaoProbeChecks(unittest.TestCase):
         missing = [tool for tool in ("bash", "curl", "jq") if not shutil.which(tool)]
         if missing:
             raise RuntimeError("Install the guide prerequisites: " + ", ".join(missing))
-        guide = GUIDE.read_text()
+        guide = GUIDE.read_text(encoding="utf-8")
         helper = re.search(r"^fresh_auth\(\) \{\n.*?^\}", guide, re.M | re.S)
         read_url = re.search(r"^export FUNCTION_READ_URL=.*$", guide, re.M)
         if helper is None or read_url is None:
@@ -108,13 +108,13 @@ class OpenBaoProbeChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="openbao-probe-") as temp:
             directory = Path(temp)
             bao = directory / "bao"
-            bao.write_text(BAO_STUB)
+            bao.write_text(BAO_STUB, encoding="utf-8")
             bao.chmod(0o700)
             request = directory / "request.json"
-            request.write_text('{"input":"synthetic"}')
+            request.write_text('{"input":"synthetic"}', encoding="utf-8")
             header = directory / "invocation-header"
             if not missing_header:
-                header.write_text("Authorization: Bearer synthetic-existing-api-key\n")
+                header.write_text("Authorization: Bearer synthetic-existing-api-key\n", encoding="utf-8")
                 header.chmod(0o600)
 
             body = self.helper
@@ -150,7 +150,7 @@ class OpenBaoProbeChecks(unittest.TestCase):
                 for name in ("auth-header", "function.json", "invocation.json",
                              "fresh-auth-passed.txt"):
                     self.assertEqual((directory / name).stat().st_mode & 0o777, 0o600, name)
-                response = json.loads((directory / "invocation.json").read_text())
+                response = json.loads((directory / "invocation.json").read_text(encoding="utf-8"))
                 self.assertEqual(response["result"], "synthetic-success")
             if shared_jwt:
                 self.assertEqual(self.server.events,
@@ -189,7 +189,7 @@ class OpenBaoProbeChecks(unittest.TestCase):
 
 class OpenBaoRenderChecks(unittest.TestCase):
     def run_render(self, *, as_list=False, statefulsets=1):
-        blocks = re.findall(r"^```bash\n(.*?)^```", GUIDE.read_text(), re.M | re.S)
+        blocks = re.findall(r"^```bash\n(.*?)^```", GUIDE.read_text(encoding="utf-8"), re.M | re.S)
         block = next(b for b in blocks if b.startswith('TARGET_STATE="$BACKUP_DIR/target"'))
         tags = re.findall(r'endswith\("(:[^"]+)"\)', block)
         self.assertEqual(len(tags), 2)
@@ -205,12 +205,12 @@ class OpenBaoRenderChecks(unittest.TestCase):
             root = Path(temp)
             baseline = root / "source"
             baseline.mkdir()
-            (baseline / "decision.json").write_text('{"architecture":"arm64"}')
+            (baseline / "decision.json").write_text('{"architecture":"arm64"}', encoding="utf-8")
             rendered = root / "synthetic-render.json"
             if as_list:
-                rendered.write_text(json.dumps({"kind": "List", "items": resources}))
+                rendered.write_text(json.dumps({"kind": "List", "items": resources}), encoding="utf-8")
             else:
-                rendered.write_text("\n".join(json.dumps(item) for item in resources))
+                rendered.write_text("\n".join(json.dumps(item) for item in resources), encoding="utf-8")
             script = 'set -euo pipefail\nkcp() { cat "$SYNTHETIC_RENDER"; }\n' + block
             env = dict(os.environ, BACKUP_DIR=str(root), BASELINE=str(baseline),
                        SYNTHETIC_RENDER=str(rendered))
@@ -218,9 +218,9 @@ class OpenBaoRenderChecks(unittest.TestCase):
                                     capture_output=True, timeout=10)
             self.assertEqual(result.returncode == 0, statefulsets == 1, result.stderr)
             if statefulsets == 1:
-                selected = json.loads((root / "target/rendered-statefulset.json").read_text())
+                selected = json.loads((root / "target/rendered-statefulset.json").read_text(encoding="utf-8"))
                 self.assertEqual(selected, server)
-                normalized = json.loads((root / "target/rendered.json").read_text())
+                normalized = json.loads((root / "target/rendered.json").read_text(encoding="utf-8"))
                 self.assertIsInstance(normalized, list)
 
     def test_accepts_kubectl_json_stream(self):

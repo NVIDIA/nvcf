@@ -22,7 +22,7 @@ def require(condition, message):
 
 
 def read(root, name):
-    return json.loads((Path(root) / name).read_text())
+    return json.loads((Path(root) / name).read_text(encoding="utf-8"))
 
 
 def digest(value):
@@ -94,9 +94,9 @@ def health(root):
         require(status["type"] == "shamir" and status["storage_type"] == "raft",
                 f"{name}: only Shamir seal and Raft storage are supported")
         require(status["version"] in ("2.5.4", "2.5.5"), f"{name}: unsupported version")
-        node_id = (root / f"{name}-node-id.txt").read_text().strip()
+        node_id = (root / f"{name}-node-id.txt").read_text(encoding="utf-8").strip()
         require(bool(node_id), f"{name}: empty Raft node ID")
-        sha = (root / f"{name}-plugin.txt").read_text().split()[0]
+        sha = (root / f"{name}-plugin.txt").read_text(encoding="utf-8").split()[0]
         require(re.fullmatch(r"[0-9a-f]{64}", sha) is not None, f"{name}: invalid plugin hash")
         claims = [v["persistentVolumeClaim"]["claimName"] for v in ps["volumes"]
                   if "persistentVolumeClaim" in v]
@@ -226,7 +226,7 @@ def check(root, stage="source", baseline_root=None, target_root=None, leader=Non
 
 
 def watch_events(path):
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding="utf-8")
     decoder, offset = json.JSONDecoder(), 0
     while offset < len(text):
         if text[offset].isspace():

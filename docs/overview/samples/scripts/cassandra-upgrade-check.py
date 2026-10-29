@@ -25,7 +25,7 @@ def require(condition, message):
 
 
 def read(path):
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def digest(path):
@@ -137,7 +137,7 @@ def topology(directory, baseline=None, unchanged=False, image=None):
     rings = []
     for name in sorted(names):
         ring = {}
-        for line in (root / f"{name}-ring.txt").read_text().splitlines():
+        for line in (root / f"{name}-ring.txt").read_text(encoding="utf-8").splitlines():
             if not re.match(r"^[UD][NLJM]\s", line):
                 continue
             fields = line.split()
@@ -176,7 +176,7 @@ def json_documents(text):
 
 
 def target(render, source_values, secret, source_sts, source_directory):
-    objects = json_documents(Path(render).read_text())
+    objects = json_documents(Path(render).read_text(encoding="utf-8"))
     values = read(source_values)
     source = values["cassandra"]
     password = base64.b64decode(read(secret)["data"]["cassandra-password"], validate=True).decode()
@@ -211,7 +211,7 @@ def target(render, source_values, secret, source_sts, source_directory):
     compatibility = {"uuid_sstable_identifiers_enabled": "true", "storage_compatibility_mode": "NONE",
                      "authenticator": "PasswordAuthenticator", "authorizer": "CassandraAuthorizer"}
     configurations = [config["data"]["cassandra-overrides.yaml"]]
-    configurations += [(Path(source_directory) / f"cassandra-{i}-cassandra.yaml").read_text() for i in range(3)]
+    configurations += [(Path(source_directory) / f"cassandra-{i}-cassandra.yaml").read_text(encoding="utf-8") for i in range(3)]
     for configuration in configurations:
         for key, value in compatibility.items():
             # Support the shipped scalar and class_name forms, without accepting custom YAML.
@@ -307,7 +307,7 @@ def space(directory):
     root = Path(directory)
     total = 0
     for ordinal in range(3):
-        lines = (root / f"cassandra-{ordinal}-space.txt").read_text().splitlines()
+        lines = (root / f"cassandra-{ordinal}-space.txt").read_text(encoding="utf-8").splitlines()
         used, available = int(lines[0].split()[0]), int(lines[-1].split()[3])
         require(used > 0 and available >= used, "Reserve at least one data footprint of free node space before flushing")
         total += used * 1024
@@ -362,7 +362,7 @@ def main():
     args = vars(parser.parse_args())
     command = args.pop("command")
     if command == "cql-json":
-        result = cql_rows(Path(args["file"]).read_text())
+        result = cql_rows(Path(args["file"]).read_text(encoding="utf-8"))
     elif command in ("releases", "jobs"):
         result = globals()[command](*(read(p) for p in args.values()))
     elif command == "archive":
