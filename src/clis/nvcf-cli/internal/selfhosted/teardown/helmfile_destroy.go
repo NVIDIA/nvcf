@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 
+	"nvcf-cli/internal/selfhosted/helmruntime"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -39,10 +40,13 @@ type DestroyOpts struct {
 	HelmfileFile string // override; if empty, defaults to StackPath+"/helmfile.d/" (the bundled layout, mirrors selfhosted.Render)
 	Selector     string
 	Env          string
-	ExtraEnv     []string
-	Stdout       io.Writer
-	Stderr       io.Writer
-	Ctx          context.Context
+	// HelmRuntimeMode selects compatibility flags for the installed helm
+	// major version. Empty preserves the Helm 3 legacy behavior.
+	HelmRuntimeMode helmruntime.Mode
+	ExtraEnv        []string
+	Stdout          io.Writer
+	Stderr          io.Writer
+	Ctx             context.Context
 }
 
 // destroyRunner is the test seam for the helmfile subprocess. Tests override
@@ -58,14 +62,17 @@ var destroyRunner = func(cmd *exec.Cmd) error { return cmd.Run() }
 // phase_progress events into sink as releases are removed.
 func Destroy(opts DestroyOpts, _ progress.EventSink) error {
 	var args []string
+	target := opts.HelmfileFile
 	if opts.HelmfileFile != "" {
-		args = append(args, "-f", opts.HelmfileFile)
+		args = append(args, "-f", target)
 	} else {
 		// Default mirrors selfhosted.Render's "helmfile.d/" target (the bundled
 		// stack layout). When the helmfile target is a directory, helmfile
 		// recursively finds *.yaml in it.
-		args = append(args, "-f", opts.StackPath+"/helmfile.d/")
+		target = opts.StackPath + "/helmfile.d/"
+		args = append(args, "-f", target)
 	}
+	args = append(args, helmruntime.HelmfileCompatibilityArgs(opts.HelmRuntimeMode, target, "destroy")...)
 	// NOTE: do NOT pass `-e $env` here. The bundled helmfile defines only
 	// `environments.default` (and reads HELMFILE_ENV at template time);
 	// passing `-e local` makes helmfile look for `environments.local` which

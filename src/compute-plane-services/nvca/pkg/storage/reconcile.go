@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"sync/atomic"
 	"time"
 
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
@@ -61,11 +62,27 @@ var (
 )
 
 const (
-	defaultRequeueDelay                       = 100 * time.Millisecond
-	ConditionTypeSMBCSIDriverInstalled        = "SMBCSIDriverInstalled"
-	ConditionTypeCleanupSuccessful            = "CleanupSuccessful"
-	ConditionReasonSomeObjectsPendingDeletion = "SomeObjectsPendingDeletion"
-	ConditionReasonAllObjectsDeleted          = "AllObjectsDeleted"
+	defaultRequeueDelay                        = 100 * time.Millisecond
+	deletingStorageRequestRequeueDelay         = 5 * time.Second
+	ConditionTypeSMBCSIDriverInstalled         = "SMBCSIDriverInstalled"
+	ConditionTypeSharedStorageResourcesCreated = "SharedStorageResourcesCreated"
+	ConditionReasonAdmissionRejected           = "AdmissionRejected"
+	ConditionTypeSMBServerReady                = "SMBServerReady"
+	ConditionReasonImagePullFailed             = "ImagePullFailed"
+	ConditionReasonUnschedulable               = "Unschedulable"
+	ConditionReasonPodReady                    = "PodReady"
+	ConditionTypeCleanupSuccessful             = "CleanupSuccessful"
+	ConditionReasonSomeObjectsPendingDeletion  = "SomeObjectsPendingDeletion"
+	ConditionReasonAllObjectsDeleted           = "AllObjectsDeleted"
+
+	// DefaultModelCacheStorageClassName is the storage class whose provisioner
+	// decides which mount option defaults model cache volumes need.
+	DefaultModelCacheStorageClassName = "nvcf-sc"
+
+	// DefaultCacheMountOptionsConfigMapName maps a CSI provisioner to the mount
+	// options its model cache volumes require, as comma separated values. It
+	// lives in ModelCacheInitNamespace and ships seeded with the NVMesh entry.
+	DefaultCacheMountOptionsConfigMapName = "nvca-cache-mount-options"
 )
 
 var (
@@ -100,6 +117,29 @@ func WithCSIVolumeMountOptions(mntOptions []string) ReconcilerOption {
 	return func(r *Reconciler) {
 		if len(mntOptions) > 0 {
 			r.csiVolumeMountOptions = mntOptions
+		}
+	}
+}
+
+// WithModelCacheStorageClass overrides the storage class model cache volumes
+// are provisioned on. It takes precedence over Agent.ModelCache.StorageClassName,
+// which is the production source; unset, the config value and then
+// DefaultModelCacheStorageClassName apply.
+func WithModelCacheStorageClass(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.modelCacheStorageClass = name
+		}
+	}
+}
+
+// WithCacheMountOptionsConfigMap overrides the ConfigMap holding the per
+// provisioner mount option defaults. Defaults to
+// DefaultCacheMountOptionsConfigMapName when unset.
+func WithCacheMountOptionsConfigMap(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.cacheMountOptionsConfigMap = name
 		}
 	}
 }
@@ -145,24 +185,29 @@ func NewReconciler(
 	opts ...ReconcilerOption,
 ) *Reconciler {
 	reconciler := &Reconciler{
-		cfg:                  cfg,
-		Client:               client,
-		Decoder:              decoder,
-		clusterName:          clusterName,
-		clusterRegion:        clusterRegion,
-		eventRecorder:        eventRecorder,
-		ICMSRequestNamespace: nvcatypes.DefaultICMSRequestNamespace,
-		k8sTimeConfig:        k8sTimeConfig,
-		tracer:               nvcaotel.NewTracer(),
-		nowFunc:              time.Now,
-		randReader:           rand.Reader,
-		fff:                  featureflag.DefaultFetcher,
-		initStatuses:         newInitStatusCache(client),
+		cfg:                    cfg,
+		Client:                 client,
+		Decoder:                decoder,
+		clusterName:            clusterName,
+		clusterRegion:          clusterRegion,
+		eventRecorder:          eventRecorder,
+		ICMSRequestNamespace:   nvcatypes.DefaultICMSRequestNamespace,
+		k8sTimeConfig:          k8sTimeConfig,
+		modelCacheStorageClass: cfg.Agent.ModelCache.StorageClassName,
+		tracer:                 nvcaotel.NewTracer(),
+		nowFunc:                time.Now,
+		randReader:             rand.Reader,
+		fff:                    featureflag.DefaultFetcher,
+		initStatuses:           newInitStatusCache(client),
 	}
 
 	for _, opt := range opts {
 		opt(reconciler)
 	}
+
+	// Resolve the model cache storage class once: it cannot change for the life
+	// of the reconciler, so every later use reads the field directly.
+	reconciler.modelCacheStorageClass = ModelCacheStorageClassName(reconciler.modelCacheStorageClass)
 
 	return reconciler
 }
@@ -180,6 +225,21 @@ type Reconciler struct {
 	// eventRecorder                record.EventRecorder
 	k8sTimeConfig         *k8sutil.TimeConfig
 	csiVolumeMountOptions []string
+
+	// modelCacheStorageClass is the storage class model cache volumes are
+	// provisioned on and whose provisioner selects the mount option defaults.
+	// NewReconciler resolves it once (option, then Agent.ModelCache, then the
+	// default), so it is always a concrete class name. NVCA owns this choice
+	// rather than taking it from the request spec, so every model cache volume
+	// in a cluster lands on the same class; model cache backend selection reads
+	// the same config value before choosing a backend that needs the class.
+	// cacheMountOptionsConfigMap holds the mount option defaults per
+	// provisioner. modelCacheProvisioner is the one time init: a StorageClass
+	// provisioner is immutable, so it is read once and kept. The ConfigMap is
+	// read on each use so operator edits take effect.
+	modelCacheStorageClass     string
+	cacheMountOptionsConfigMap string
+	modelCacheProvisioner      atomic.Pointer[string]
 
 	tracer            oteltrace.Tracer
 	nowFunc           func() time.Time
@@ -250,6 +310,13 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
 		return false, reconcile.Result{}, nil
 	}
+	// A persisted durable model cache owns objects in the global init
+	// namespace and cluster-scoped PVs. Namespace termination does not prove
+	// those resources are gone, so it cannot bypass cleanup. Annotation-free
+	// legacy requests keep the historical escape hatch.
+	if requiresStrictModelCacheCleanup(st) {
+		return false, reconcile.Result{}, nil
+	}
 	ns := &corev1.Namespace{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil || ns.DeletionTimestamp == nil {
 		return false, reconcile.Result{}, nil
@@ -267,6 +334,22 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	}
 	log.V(1).Info("Removed finalizer from StorageRequest in terminating namespace")
 	return true, reconcile.Result{}, nil
+}
+
+func requiresStrictModelCacheCleanup(st *nvcav1new.StorageRequest) bool {
+	if st == nil || st.Spec.Type != nvcav1new.ModelCacheRequest {
+		return false
+	}
+	raw := st.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return false
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		// An invalid persisted decision must not bypass cleanup protection.
+		return true
+	}
+	return selection.Mode == ModelCacheSelectionDurable
 }
 
 // getICMSRequestName returns the ICMS request name from the StorageRequest.
@@ -440,9 +523,12 @@ func (r *Reconciler) doReconcile(
 		res  reconcile.Result
 		rerr error
 	)
-	if stCopy.DeletionTimestamp == nil {
+	if stCopy.DeletionTimestamp == nil && !controllerutil.ContainsFinalizer(stCopy, StorageRequestFinalizer) {
+		// Persist cleanup ownership before any provider resource is created. The
+		// next reconcile performs provisioning only after observing the finalizer.
 		controllerutil.AddFinalizer(stCopy, StorageRequestFinalizer)
-
+		res = reconcile.Result{Requeue: true}
+	} else if stCopy.DeletionTimestamp == nil {
 		switch stCopy.Spec.Type {
 		case nvcav1new.ModelCacheRequest:
 			res, rerr = r.doModelCache(ctx, *st, stCopy, icmsReq)
@@ -489,7 +575,29 @@ func (r *Reconciler) doReconcile(
 		}
 	}
 
+	nextRes := requeueDeletingStorageRequestWithFinalizer(res, rerr, stCopy)
+	if nextRes != res {
+		log.V(1).Info("StorageRequest is deleting with finalizer still present, will requeue")
+		res = nextRes
+	}
+
 	return res, rerr
+}
+
+func requeueDeletingStorageRequestWithFinalizer(
+	res reconcile.Result,
+	err error,
+	st *nvcav1new.StorageRequest,
+) reconcile.Result {
+	// Keep deletion-pending StorageRequests level-triggered so a later namespace
+	// cache update can run the terminating-namespace finalizer escape hatch.
+	if err != nil || res != (reconcile.Result{}) || st.DeletionTimestamp == nil {
+		return res
+	}
+	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
+		return res
+	}
+	return reconcile.Result{RequeueAfter: deletingStorageRequestRequeueDelay}
 }
 
 func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nvcav1new.StorageRequest) error {
@@ -510,7 +618,7 @@ func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nv
 func (r *Reconciler) doCleanup(ctx context.Context, st *nvcav1new.StorageRequest) (res reconcile.Result, err error) {
 	switch st.Spec.Type {
 	case nvcav1new.ModelCacheRequest:
-		err = r.doCleanupModelCacheNVMesh(ctx, st)
+		res, err = r.doCleanupModelCacheNVMesh(ctx, st)
 		// Do not clean up primary PV. The periodic runner that invokes cleanupIdleModelCaches
 		// will handle those.
 	default:
@@ -829,6 +937,8 @@ func (r *Reconciler) setControlledObjectMeta(_ context.Context,
 	return nil
 }
 
+// applyControlledOne creates or updates obj under st. The returned error wraps
+// the API error so callers can still classify it with the k8serrors helpers.
 func (r *Reconciler) applyControlledOne(ctx context.Context,
 	st *nvcav1new.StorageRequest,
 	obj client.Object,
@@ -839,7 +949,7 @@ func (r *Reconciler) applyControlledOne(ctx context.Context,
 
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error { return nil })
 	if err != nil {
-		return controllerutil.OperationResultNone, fmt.Errorf("create or update %s %s: %v",
+		return controllerutil.OperationResultNone, fmt.Errorf("create or update %s %s: %w",
 			obj.GetObjectKind().GroupVersionKind(), client.ObjectKeyFromObject(obj), err)
 	}
 	return op, nil

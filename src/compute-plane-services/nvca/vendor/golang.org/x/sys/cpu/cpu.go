@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2018 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -155,13 +152,17 @@ var ARM struct {
 // The booleans in Loong64 contain the correspondingly named cpu feature bit.
 // The struct is padded to avoid false sharing.
 var Loong64 struct {
-	_         CacheLinePad
-	HasLSX    bool // support 128-bit vector extension
-	HasLASX   bool // support 256-bit vector extension
-	HasCRC32  bool // support CRC instruction
-	HasLAM_BH bool // support AM{SWAP/ADD}[_DB].{B/H} instruction
-	HasLAMCAS bool // support AMCAS[_DB].{B/H/W/D} instruction
-	_         CacheLinePad
+	_              CacheLinePad
+	HasLSX         bool // support 128-bit vector extension
+	HasLASX        bool // support 256-bit vector extension
+	HasCRC32       bool // support CRC instruction
+	HasLAMCAS      bool // support AMCAS[_DB].{B/H/W/D}
+	HasLAM_BH      bool // support AM{SWAP/ADD}[_DB].{B/H} instruction
+	HasLLACQ_SCREL bool // support LLACQ.{W/D}, SCREL.{W/D} instruction
+	HasSCQ         bool // support SC.Q instruction
+	HasDBAR_HINTS  bool // supports finer-grained DBAR hints
+
+	_ CacheLinePad
 }
 
 // MIPS64X contains the supported CPU features of the current mips64/mips64le
@@ -235,6 +236,7 @@ var RISCV64 struct {
 	HasZba            bool // Address generation instructions extension
 	HasZbb            bool // Basic bit-manipulation extension
 	HasZbs            bool // Single-bit instructions extension
+	HasZbc            bool // Carryless multiplication extension
 	HasZvbb           bool // Vector Basic Bit-manipulation
 	HasZvbc           bool // Vector Carryless Multiplication
 	HasZvkb           bool // Vector Cryptography Bit-manipulation

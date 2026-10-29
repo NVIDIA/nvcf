@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vLLM with TinyLlama-1.1B (single GPU) — criu-v2 checkpoint/restore demo.
+#
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the process
+# at the OS level, so the container just runs stock vLLM under setsid. Restore
+# lands in a dumb placeholder pod driven by the agent. See checkpoint_v2.go.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-small
+  namespace: nvsnap-system
+  labels:
+    app: vllm-small
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "vLLM"
+    nvsnap.io/desc: "TinyLlama 1.1B on vLLM"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+    nvsnap.io/ckpt-size: "30 GB"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          mkdir -p /var/run/vllm
+          # CRIU-V2 METHOD: no nvsnap injection stack — no LD_PRELOAD, no
+          # patched uvloop/libuv/libzmq, no init containers. The in-namespace
+          # CRIU engine handles everything at the process level.
+          # criu-v2 convention: launch the workload in its
+          # own session via setsid — the agent dumps the GPU leader's session,
+          # never container init (pid1 can't be restored into a placeholder
+          # whose pid1 slot is occupied). Stdio goes to a rootfs file so CRIU
+          # restores those fds as plain files; bash stays pid1 to reap orphan
+          # zombies and tails the file so kubectl logs keeps working.
+          nohup setsid vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 2048 \
+            --gpu-memory-utilization 0.3 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        # In-process v1 engine: no separate EngineCore process => no cross-process
+        # RPC unix socket, which is what upstream CRIU couldn't restore
+        # (setns(mnt_ns) EINVAL in a multi-proc restorer). Must match the restore pod.
+        - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "0" }
+        # torch TCPStore libuv backend: keep it on (stock). The criu-v2 2x2
+        # (nvsnap#107) showed the TCPStore libuv thread restores fine on
+        # single-GPU TP=1 — the only restore-breaking lever is the libuv
+        # event-loop io_uring ring below, not this. Set explicitly rather
+        # than relying on torch's default.
+        - { name: USE_LIBUV, value: "1" }
+        # libuv >=1.46 uses an internal SQPOLL io_uring ring for epoll_ctl
+        # batching. This used to abort the event loop on the first
+        # epoll_ctl_flush after a criu-v2 restore (SIGABRT): the CRIU restore
+        # recreated the ring but left its SQ-array index map zeroed, so
+        # submissions misrouted and completions never returned. Fixed in the
+        # CRIU fork (io-uring-cr, sq_array identity-map restore); io_uring is
+        # now C/R-safe and enabled. Validated e2e across the single-GPU
+        # workloads (vllm-small/8b/qwen32b, e5-mistral). nvsnap#107.
+        - { name: UV_USE_IO_URING, value: "1" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

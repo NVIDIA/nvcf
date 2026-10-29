@@ -14,13 +14,42 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
+<!-- Release-pipeline touchpoint for #315: validates version-registration on release. -->
 # NVCF GRPC Proxy
 
 A proxy service that facilitates communication between clients and NVIDIA Cloud Functions (NVCF) workers. This service handles HTTP/3 CONNECT endpoints, HTTP/1 CONNECT endpoints, and HTTP/1-2 forwarding for GRPC requests.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //:image_index
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
+
 ## Overview
 
 The NVCF GRPC Proxy runs the following endpoints:
+
 - HTTP/3 CONNECT endpoint: `http://localhost:10084/v1/proxy`
 - HTTP/1 CONNECT endpoint: `http://localhost:10086/v1/proxy` (configurable)
 - HTTP/1-2 forwarder: `http://localhost:10081`
@@ -42,9 +71,10 @@ GRPC clients typically use one TCP connection per session. The proxy assumes tha
 
 ### Request Headers
 
-**Standard Headers:**
+Standard Headers:
+
 - `authorization` - Bearer token for authentication (required)
-- `function-id` - Function ID to invoke (required)  
+- `function-id` - Function ID to invoke (required)
 - `function-version-id` - Optional function version ID
 
 ### Reconnection Support
@@ -55,18 +85,20 @@ The proxy supports reconnection flows, allowing clients to reconnect to existing
 - `Sec-WebSocket-Protocol` - Supported for browser websocket connections which cannot set traditional headers
 - `nvcf-request-id` - `Cookie` - For automatic support of clients that do not manage the request id headers themselves
 
-**WebSocket Protocol Headers:**
+WebSocket Protocol Headers:
 For browser based WebSocket connections, http headers can be passed via `Sec-WebSocket-Protocol` using a dot-separated
 key-value format (e.g., `authorization.token`, `function-id.my-function`) as standard header control is not available
 to browsers. HTTP Header structured values are not used, as browsers cannot send separator characters in websocket
 headers either.
 
-**Request ID Priority:**
+Request ID Priority:
+
 1. `nvcf-reqid` header (for manual client management of sessions)
 2. `Sec-WebSocket-Protocol` header (for browser based WebSocket connections)
 3. `nvcf-request-id` cookie (fallback)
 
-**Response Headers:**
+Response Headers:
+
 - `nvcf-reqid` - Request ID returned in all responses
 - `Set-Cookie: nvcf-request-id` - Cookie automatically set for session persistence
 
@@ -160,7 +192,7 @@ end
 loop until request finish
     worker -> nats: subscribe to stateful_session.reconnect.${request_id}
     nats --> worker: reconnect messages
-    note right 
+    note right
         containing same info as stateful request
     end note
     worker -> proxy: (re)connect as normal with HTTP(S) CONNECT
@@ -291,7 +323,7 @@ rectangle "NVCA Cluster" {
         rectangle "GRPC Client" as GRPCClient
         rectangle "GRPC Proxy Deployment" as GRPCProxy
     }
-    
+
     rectangle "Worker (target)" {
         rectangle "NVCF Worker Deployment" as NVCFWorker
     }
@@ -325,7 +357,7 @@ def test_worker_grpc(
                                   grpc.ssl_channel_credentials())
     # proto generated grpc client
     grpc_client = grpc_service_pb2_grpc.GRPCInferenceServiceStub(channel)
-    
+
     function_id = create_grpc_function.function.id
     function_version_id = create_grpc_function.function.version_id
     logging.info(f"function at {create_grpc_function}")
@@ -362,13 +394,62 @@ def test_worker_http():
         post.raise_for_status()
 ```
 
-**Note**: When hosting an HTTP function, set the inference URL to anything except `/grpc`. This is because `/grpc` triggers the utils container to use GRPC-based health checks rather than HTTP-based health checks.
+Note: When hosting an HTTP function, set the inference URL to anything except `/grpc`. This is because `/grpc` triggers the utils container to use GRPC-based health checks rather than HTTP-based health checks.
 
 ## Development and Configuration
 
 ### Prerequisites
 
-- Go 1.24 or higher
+- Bazel 8.6.0 via Bazelisk (Bazel is the only build path; see "Building with Bazel" below)
+- Go 1.25 is downloaded hermetically by Bazel; no system Go is required.
+
+### Building with Bazel
+
+This repo carries the same Bazel toolchain conventions as the NVCF
+monorepo. The root setup script drops Bazelisk into `~/.local/bin`
+and prints exactly what to install for Go + OCI + cross-compile
+toolchains; reuse it instead of duplicating the setup here:
+
+```bash
+# From this service checkout inside the monorepo:
+../../../setup.sh
+
+# Pinned Bazel version is read from this repo's .bazelversion (8.6.0).
+bazel version
+```
+
+Day-to-day commands:
+
+```bash
+# Build the grpc-proxy binary.
+bazel build //...
+
+# Run all tests. Tests tagged `requires-docker` (proxy/geo:geo_test
+# spins up testcontainers + localstack) need a reachable Docker
+# daemon; either run on a host with Docker installed or skip them
+# with --test_tag_filters=-requires-docker.
+bazel test //...
+
+# Just the proxy binary.
+bazel build //:nvcf-grpc-proxy
+./bazel-bin/nvcf-grpc-proxy_/nvcf-grpc-proxy --help
+
+# Build the multi-arch OCI image index (amd64 + arm64).
+bazel build //:image_index
+
+# Regenerate BUILD files after adding a Go file or import.
+bazel run //:gazelle
+
+# Refresh use_repo entries when go.mod changes.
+bazel mod tidy
+```
+
+CI runs the Bazel lane as the single source of truth for build, test,
+and image publication. The included `nvcf-golang-ci-pipeline.yml`
+template's Go-build / Go-test / docker-build / docker-push jobs are
+explicitly disabled in `.gitlab-ci.yml`. See the rollout tracker at
+[docs/dev/bazel-rollout.md](../../../docs/dev/bazel-rollout.md) for
+the broader Phase B context.
 
 ### Environment Setup
 
@@ -379,9 +460,28 @@ Configuration is primarily handled through environment variables or command-line
 - `NVCF_FQDN_GRPC`: FQDN for the NVCF API
 - `ENABLE_HTTP1_CONNECT`: Enable HTTP/1 CONNECT endpoints
 - `ENABLE_HTTP3_CONNECT`: Enable HTTP/3 CONNECT endpoints
+- `SELF_WORKER_FQDN`: Optional worker callback endpoint advertised for CONNECT traffic
+- `EVENT_LEDGER_ADDR`: Event ledger base URL, for example `http://event-ledger.nvcf.svc.cluster.local:8080`. Events are not published when empty
 
 See the `Config` struct in the code for a complete list of configuration options.
 
 GRPC Client credentials are provided by either OAuth2 Client Credentials or a bearer token loaded from the secrets.json file.
 OAuth2 Client Credentials should be provided at the json key "id" and "secret".
-Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken" and "ratelimiterToken".
+Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken", "ratelimiterToken", and "eventLedgerToken".
+
+#### Event ledger publisher
+
+When `EVENT_LEDGER_ADDR` is set, the proxy sends CloudEvents to
+`POST <EVENT_LEDGER_ADDR>/v3/ledger/cloudevents`. Delivery is best effort.
+Each send retries network errors, 429, and 5xx up to 3 times with jittered
+backoff, within 10 seconds. At
+most 1000 sends run at once and further events are dropped. Results are
+counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
+`event_type` (the CloudEvent `type`) and `result` (`sent`, `failed`,
+`dropped`). Send time, including retries, is recorded in
+`nvcf_grpc_proxy_service_event_ledger_send_duration_seconds` by `result`.
+
+Authentication follows the same rule as the NVCF API client. If the secrets
+file has an `eventLedgerToken` key, that token is sent as a bearer token and
+reloaded when the file changes. Otherwise the proxy uses OAuth2 client
+credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.

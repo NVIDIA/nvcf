@@ -306,12 +306,12 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			if sr.Spec.Action != common.TerminationAction {
 				continue
 			}
-			existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+			existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
 		}
 
 		// Process termination messages
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress while paused, skipping", message.MessageID)
 				continue
 			}
@@ -364,12 +364,12 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			if sr.Spec.Action != common.TerminationAction {
 				continue
 			}
-			existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+			existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
 		}
 
 		// Process termination messages
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
@@ -421,9 +421,14 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		return fmt.Errorf("failed to list ICMS requests for existence detection: %w", err)
 	}
 	existingMsgIDs := sets.Set[string]{}
+	rejectedSRsByMsgID := map[string]*nvcav2beta1.ICMSRequest{}
 	for _, sr := range existingSRs {
-		existingMsgIDs.Insert(sr.Labels[SQSMessageIDKey])
+		existingMsgIDs.Insert(queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID))
+		if GetCreationRejectionReason(sr) != "" {
+			rejectedSRsByMsgID[queueRequestKey(sr.Labels[SQSMessageIDKey], sr.Spec.RequestID)] = sr
+		}
 	}
+	qm.deleteRedeliveredRejectedMessages(ctx, qwInputs, qwOutputs, rejectedSRsByMsgID)
 
 	// Track if there is any error at all
 	anyQueuePullError := false
@@ -434,11 +439,11 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		anyQueuePullError = true
 	} else {
 		for _, message := range termQWOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Termination ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
-			existingMsgIDs.Insert(message.MessageID)
+			existingMsgIDs.Insert(queueMessageKey(message))
 			if message.Body == nil {
 				log.Debugf("Termination ICMS request for %s has an empty body, skipping", message.MessageID)
 				continue
@@ -449,9 +454,10 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 
 	// Hydrate the creation messages with the new request message IDs in matrics
 	// based on round-robin starting index.
-	creationMessagesByGPU, anyQueuePullError := createCreationMessageMatricesByGPU(
+	creationMessagesByGPU, hasCreationErrors := createCreationMessageMatricesByGPU(
 		log, qwInputs, qwOutputs, currQueueRingMetadata, existingMsgIDs,
 	)
+	anyQueuePullError = anyQueuePullError || hasCreationErrors
 
 	// Create worker pool to the number of termination messages plus the unique number of GPUs
 	// Termination requests can act in parallel while creation requests must be locked to a single GPU type per goroutine
@@ -504,6 +510,30 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 	return nil
 }
 
+// A memory stream can reuse a sequence after restart. Keep existing message
+// labels stable, but distinguish a new request from redelivery of the old one.
+func queueRequestKey(messageID, requestID string) string {
+	if requestID == "" {
+		return messageID
+	}
+	return messageID + "\x00" + requestID
+}
+
+func queueMessageKey(message queue.ReceiveMessageOutput) string {
+	var request struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := json.Unmarshal(message.Body, &request); err != nil {
+		// The normal message decoder remains responsible for reporting bad input.
+		return message.MessageID
+	}
+	return queueRequestKey(message.MessageID, request.RequestID)
+}
+
+func queueMessageExists(existing sets.Set[string], message queue.ReceiveMessageOutput) bool {
+	return existing.Has(queueMessageKey(message)) || existing.Has(message.MessageID)
+}
+
 func createCreationMessageMatricesByGPU(
 	log *logrus.Entry,
 	qwInputs []queueWorkInput,
@@ -525,11 +555,11 @@ func createCreationMessageMatricesByGPU(
 		var tuples []createMessageTuple
 		// Construct creation message tuples in order, and dedupe against current messages
 		for _, message := range qwOutput.messages {
-			if existingMsgIDs.Has(message.MessageID) {
+			if queueMessageExists(existingMsgIDs, message) {
 				log.Debugf("Creation ICMS request for %s already in progress, skipping", message.MessageID)
 				continue
 			}
-			existingMsgIDs.Insert(message.MessageID)
+			existingMsgIDs.Insert(queueMessageKey(message))
 			if message.Body == nil {
 				log.Debugf("Creation ICMS request for %s has an empty body, skipping", message.MessageID)
 				continue
@@ -720,9 +750,63 @@ func (qm *QueueManager) doCreationMessage(ctx context.Context,
 		return 0, fmt.Errorf("failed to apply creation message: %v", cerr)
 	}
 
+	if reason := GetCreationRejectionReason(icmsReq); reason != "" {
+		// The request is reported to ICMS as failed. Delete the message so it is
+		// not processed again, for example after the cluster configuration changes.
+		if err := qm.Client.DeleteMessage(ctx, queue.DeleteMessageInput{
+			QueueInfo:     qi,
+			ReceiptHandle: message.ReceiptHandle,
+		}); err != nil && !qm.Client.IsMessageNotFoundError(err) {
+			log.WithError(err).Warn("Failed to delete rejected creation message")
+		}
+		logging.NewICMSRequestFieldLogger(icmsReq, log).WithField("reason", reason).
+			Warn("Rejected creation message, reporting the request as failed")
+		return 0, nil
+	}
+
 	logging.NewICMSRequestFieldLogger(icmsReq, log).Info("Applied one creation message")
 
 	return request, nil
+}
+
+// deleteRedeliveredRejectedMessages deletes creation messages that NVCA already
+// rejected. The delete at rejection time can fail, and a redelivered message has
+// a new receipt handle, so delete it with that handle instead of only skipping it.
+// Otherwise the message could be processed again once its rejected ICMS request
+// is cleaned up.
+func (qm *QueueManager) deleteRedeliveredRejectedMessages(ctx context.Context,
+	qwInputs []queueWorkInput,
+	qwOutputs queueWorkOutputs,
+	rejectedSRsByMsgID map[string]*nvcav2beta1.ICMSRequest,
+) {
+	if len(rejectedSRsByMsgID) == 0 {
+		return
+	}
+	log := core.GetLogger(ctx).WithField("queueType", queue.CreationQueue)
+	for i, qwOutput := range qwOutputs {
+		if qwOutput.err != nil {
+			continue
+		}
+		for _, message := range qwOutput.messages {
+			sr, ok := rejectedSRsByMsgID[queueMessageKey(message)]
+			if !ok {
+				continue
+			}
+			msgLog := logging.NewICMSRequestFieldLogger(sr, log).WithFields(logrus.Fields{
+				"queueURL":  qwInputs[i].qi.QueueURL,
+				"messageId": message.MessageID,
+			})
+			err := qm.Client.DeleteMessage(ctx, queue.DeleteMessageInput{
+				QueueInfo:     qwInputs[i].qi,
+				ReceiptHandle: message.ReceiptHandle,
+			})
+			if err != nil && !qm.Client.IsMessageNotFoundError(err) {
+				msgLog.WithError(err).Warn("Failed to delete redelivered rejected creation message")
+				continue
+			}
+			msgLog.Info("Deleted redelivered rejected creation message")
+		}
+	}
 }
 
 func (qm *QueueManager) doTerminationMessage(ctx context.Context,

@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gojq",
+    srcs = [
+        "builtin.go",
+        "code.go",
+        "compare.go",
+        "compiler.go",
+        "encoder.go",
+        "env.go",
+        "error.go",
+        "execute.go",
+        "func.go",
+        "gojq.go",
+        "iter.go",
+        "lexer.go",
+        "module_loader.go",
+        "operator.go",
+        "option.go",
+        "parser.go",
+        "preview.go",
+        "query.go",
+        "release.go",
+        "scope_stack.go",
+        "stack.go",
+        "term_type.go",
+        "type.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/itchyny/gojq",
+    importpath = "github.com/itchyny/gojq",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/itchyny/timefmt-go"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gojq",
+    visibility = ["//visibility:public"],
+)

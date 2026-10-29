@@ -329,7 +329,7 @@ rules:
 			} else if assert.NoError(t, err) {
 				assert.NotNil(t, data)
 				assert.Contains(t, data, MiniServicesPermissionsRoleName)
-				assert.Equal(t, tt.expRole, data[MiniServicesPermissionsRoleName])
+				assert.Equal(t, tt.expRole, stripSPDXHeaders(data[MiniServicesPermissionsRoleName]))
 			}
 		})
 	}

@@ -34,6 +34,7 @@ import (
 	nvversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
@@ -84,7 +85,7 @@ func NewOperatorCommand() *cli.Command {
 				Name:    "kubeconfig",
 				EnvVars: []string{"KUBECONFIG"},
 				Value:   "",
-				Usage:   "'kubeconfig' is the KUBECONFIG path for bakend K8s cluster",
+				Usage:   "'kubeconfig' is the KUBECONFIG path for backend K8s cluster",
 			},
 			&cli.StringFlag{
 				Name:  "listen",
@@ -110,6 +111,16 @@ func NewOperatorCommand() *cli.Command {
 				Name:    "pod-namespace",
 				EnvVars: []string{"POD_NAMESPACE"},
 				Usage:   "Namespace of this pod (from Downward API)",
+			},
+			&cli.BoolFlag{
+				Name:    "cluster-validator-enabled",
+				EnvVars: []string{clustervalidator.EnabledEnv},
+				Usage:   "The chart runs the cluster-validator, so the agent publishes its metrics baseline",
+			},
+			&cli.StringFlag{
+				Name:    "cluster-validator-cronjob",
+				EnvVars: []string{clustervalidator.InitialRunCronJobEnv},
+				Usage:   "Cluster-validator CronJob in this pod's namespace to run whenever its validator spec changes",
 			},
 			&cli.StringFlag{
 				Name:    "deployment-name",
@@ -352,10 +363,9 @@ func NewOperatorCommand() *cli.Command {
 			&cli.StringFlag{
 				Name: "identity-source",
 				Usage: "Identity source for self-hosted NVCA agents: 'psat' (projected SA token; default and currently the only supported value)." +
-					" Empty/unset is treated as 'psat'. Ignored for managed clusters." +
+					" Empty/unset is treated as 'psat' for self-hosted clusters. Ignored for managed clusters." +
 					" SPIRE is scaffolded in-tree but not yet supported end-to-end.",
 				EnvVars: []string{"NVCA_IDENTITY_SOURCE"},
-				Value:   "psat",
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -451,6 +461,16 @@ func doAction(c *cli.Context) error {
 		}
 	}
 
+	// Resolve identity source for self-hosted clusters only.
+	identitySource := c.String("identity-source")
+	if clusterSource == nvcaoptypes.ClusterSourceSelfHosted {
+		if identitySource, err = detectIdentitySource(identitySource); err != nil {
+			return err
+		}
+	} else if identitySource != "" {
+		return fmt.Errorf("identity-source is not supported for cluster source %s", clusterSource)
+	}
+
 	opts := &AgentOptions{
 		NCAID:                             c.String("nca-id"),
 		KubeConfigPath:                    c.String("kubeconfig"),
@@ -460,6 +480,8 @@ func doAction(c *cli.Context) error {
 		ShutdownAddr:                      c.String("listen-shutdown"),
 		PodName:                           c.String("pod-name"),
 		PodNamespace:                      c.String("pod-namespace"),
+		ClusterValidatorEnabled:           c.Bool("cluster-validator-enabled"),
+		ClusterValidatorCronJob:           c.String("cluster-validator-cronjob"),
 		DeploymentName:                    c.String("deployment-name"),
 		SystemNamespace:                   c.String("system-namespace"),
 		PriorityClassName:                 c.String("priority-class-name"),
@@ -500,7 +522,7 @@ func doAction(c *cli.Context) error {
 		TaskEnvOverridesB64:               c.String("task-env-overrides-b64"),
 		AgentOverrideEnvVars:              agentOverrideEnvVars,
 		VaultOAuthClientMountPathTemplate: vaultOAuthClientMountPathTemplate,
-		IdentitySource:                    c.String("identity-source"),
+		IdentitySource:                    identitySource,
 	}
 
 	a, err := NewAgent(ctx, opts)

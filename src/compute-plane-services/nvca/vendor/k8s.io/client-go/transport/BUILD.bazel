@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "transport",
+    srcs = [
+        "cache.go",
+        "cache_go118.go",
+        "cert_rotation.go",
+        "config.go",
+        "round_trippers.go",
+        "token_source.go",
+        "transport.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/transport",
+    importpath = "k8s.io/client-go/transport",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/oauth2",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/net",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/metrics",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/connrotation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/workqueue",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":transport",
+    visibility = ["//visibility:public"],
+)

@@ -24,6 +24,14 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
+# The role this script creates lets any pod running as the proxy's service
+# account sign admin-scoped tokens, and OpenBao keeps it after the release is
+# uninstalled. Returning rather than exiting: the runner sources this file.
+if [ "${ADMIN_ISSUER_PROXY_ENABLED:-true}" != "true" ]; then
+  log_info "admin-issuer-proxy is disabled, skipping its OpenBao setup"
+  return 0
+fi
+
 SERVICE_ACCOUNT_NAMESPACE="api-keys"
 SERVICE_ACCOUNT_NAME="admin-issuer-proxy"
 SERVICE_NAME="admin-issuer-proxy"
@@ -53,7 +61,7 @@ NVCF_API_NAMESPACE="nvcf"
 NVCF_API_SERVICE_NAME="api"
 
 # Full admin-level scopes for NVCF operations
-SCOPES="register_function,list_functions,list_functions_details,deploy_function,update_function,update_secrets,delete_function,manage_telemetries,manage_registry_credentials,cluster-management"
+SCOPES="register_function,list_functions,list_functions_details,deploy_function,update_function,update_secrets,delete_function,manage_telemetries,manage_registry_credentials,list_cluster_groups,cluster-management"
 
 # Use ADMIN_CLIENT_ID from environment (set via Helm values) as the client identity in the JWT
 # This determines the sub, azp, and aud claims in the signed JWT

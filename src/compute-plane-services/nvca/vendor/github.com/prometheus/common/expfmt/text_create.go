@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2014 The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,38 +108,38 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 		n, err = w.WriteString("# HELP ")
 		written += n
 		if err != nil {
-			return
+			return written, err
 		}
 		n, err = writeName(w, name)
 		written += n
 		if err != nil {
-			return
+			return written, err
 		}
 		err = w.WriteByte(' ')
 		written++
 		if err != nil {
-			return
+			return written, err
 		}
 		n, err = writeEscapedString(w, *in.Help, false)
 		written += n
 		if err != nil {
-			return
+			return written, err
 		}
 		err = w.WriteByte('\n')
 		written++
 		if err != nil {
-			return
+			return written, err
 		}
 	}
 	n, err = w.WriteString("# TYPE ")
 	written += n
 	if err != nil {
-		return
+		return written, err
 	}
 	n, err = writeName(w, name)
 	written += n
 	if err != nil {
-		return
+		return written, err
 	}
 	metricType := in.GetType()
 	switch metricType {
@@ -154,14 +151,17 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 		n, err = w.WriteString(" summary\n")
 	case dto.MetricType_UNTYPED:
 		n, err = w.WriteString(" untyped\n")
-	case dto.MetricType_HISTOGRAM:
+	case dto.MetricType_HISTOGRAM, dto.MetricType_GAUGE_HISTOGRAM:
+		// The classic Prometheus text format has no notion of a gauge
+		// histogram. We render a gauge histogram in the same way as a
+		// regular histogram.
 		n, err = w.WriteString(" histogram\n")
 	default:
 		return written, fmt.Errorf("unknown metric type %s", metricType.String())
 	}
 	written += n
 	if err != nil {
-		return
+		return written, err
 	}
 
 	// Finally the samples, one line for each.
@@ -211,7 +211,7 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 				)
 				written += n
 				if err != nil {
-					return
+					return written, err
 				}
 			}
 			n, err = writeSample(
@@ -220,13 +220,13 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 			)
 			written += n
 			if err != nil {
-				return
+				return written, err
 			}
 			n, err = writeSample(
 				w, name, "_count", metric, "", 0,
 				float64(metric.Summary.GetSampleCount()),
 			)
-		case dto.MetricType_HISTOGRAM:
+		case dto.MetricType_HISTOGRAM, dto.MetricType_GAUGE_HISTOGRAM:
 			if metric.Histogram == nil {
 				return written, fmt.Errorf(
 					"expected histogram in metric %s %s", name, metric,
@@ -234,28 +234,36 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 			}
 			infSeen := false
 			for _, b := range metric.Histogram.Bucket {
+				v := b.GetCumulativeCountFloat()
+				if v == 0 {
+					v = float64(b.GetCumulativeCount())
+				}
 				n, err = writeSample(
 					w, name, "_bucket", metric,
 					model.BucketLabel, b.GetUpperBound(),
-					float64(b.GetCumulativeCount()),
+					v,
 				)
 				written += n
 				if err != nil {
-					return
+					return written, err
 				}
 				if math.IsInf(b.GetUpperBound(), +1) {
 					infSeen = true
 				}
 			}
 			if !infSeen {
+				v := metric.Histogram.GetSampleCountFloat()
+				if v == 0 {
+					v = float64(metric.Histogram.GetSampleCount())
+				}
 				n, err = writeSample(
 					w, name, "_bucket", metric,
 					model.BucketLabel, math.Inf(+1),
-					float64(metric.Histogram.GetSampleCount()),
+					v,
 				)
 				written += n
 				if err != nil {
-					return
+					return written, err
 				}
 			}
 			n, err = writeSample(
@@ -264,12 +272,13 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 			)
 			written += n
 			if err != nil {
-				return
+				return written, err
 			}
-			n, err = writeSample(
-				w, name, "_count", metric, "", 0,
-				float64(metric.Histogram.GetSampleCount()),
-			)
+			v := metric.Histogram.GetSampleCountFloat()
+			if v == 0 {
+				v = float64(metric.Histogram.GetSampleCount())
+			}
+			n, err = writeSample(w, name, "_count", metric, "", 0, v)
 		default:
 			return written, fmt.Errorf(
 				"unexpected type in metric %s %s", name, metric,
@@ -277,10 +286,10 @@ func MetricFamilyToText(out io.Writer, in *dto.MetricFamily) (written int, err e
 		}
 		written += n
 		if err != nil {
-			return
+			return written, err
 		}
 	}
-	return
+	return written, err
 }
 
 // writeSample writes a single sample in text format to w, given the metric

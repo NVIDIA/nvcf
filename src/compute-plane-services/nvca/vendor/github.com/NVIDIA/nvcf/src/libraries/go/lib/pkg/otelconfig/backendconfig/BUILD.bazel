@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "backendconfig",
+    srcs = [
+        "embed_config.go",
+        "funcmap.go",
+        "sourceconfig.go",
+        "types.go",
+    ],
+    embedsrcs = [
+        "source-config.yaml",
+        "templates/config-k8s-container.yaml.tmpl",
+        "templates/config-k8s-helm.yaml.tmpl",
+        "templates/config-vm-container.yaml.tmpl",
+        "templates/config-vm-helm.yaml.tmpl",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/nvca/vendor/gopkg.in/yaml.v3:yaml_v3"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backendconfig",
+    visibility = ["//visibility:public"],
+)

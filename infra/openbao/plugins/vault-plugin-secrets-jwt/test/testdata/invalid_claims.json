@@ -1,0 +1,5 @@
+{
+    "claims": {
+        "sub": "This name should be invalid because it has more than one space and the regex doesn't allow that"
+    }
+}

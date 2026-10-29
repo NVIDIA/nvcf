@@ -119,6 +119,26 @@ const AUTOSCALING_FUNCTION_DISCOVERY_DURATION: Metric = Metric {
     description: "Duration of function discovery thread",
 };
 
+const LOCAL_REGISTRY_SIZE: Metric = Metric {
+    name: "nvcf_autoscaler.local_registry_size",
+    description: "Number of function versions tracked by local discovery",
+};
+
+const LOCAL_DISCOVERY_CANDIDATES: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_candidates",
+    description: "Number of function versions returned by the last local discovery query",
+};
+
+const LOCAL_DISCOVERY_OWNED: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_owned",
+    description: "Number of discovered function versions owned by this node",
+};
+
+const LOCAL_DISCOVERY_FAILURES: Metric = Metric {
+    name: "nvcf_autoscaler.local_discovery_failures_total",
+    description: "Number of failed local discovery cycles",
+};
+
 const AUTOSCALING_CASSANDRA_HEALTH_STATUS: Metric = Metric {
     name: "nvcf_autoscaler.cassandra.health_status",
     description: "Cassandra health check status (1 if healthy, 0 if not)",
@@ -156,9 +176,21 @@ const AUTOSCALING_UTILIZATION_DATA_AGE: Metric = Metric {
         "Age in milliseconds of utilization data when successfully processing scaling requests",
 };
 
+const AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL: Metric = Metric {
+    name: "nvcf_autoscaler.processing.missing_current_instances_total",
+    description: "Total scaling cycles skipped because current instance data was unavailable",
+};
+
 const NVCF_API_REQUEST_DURATION: Metric = Metric {
     name: "nvcf_autoscaler.nvcf_api.request_duration_milliseconds",
     description: "Duration of NVCF API requests in milliseconds (includes count via _count)",
+};
+
+// Raw gRPC result of each completed NVCF API call, independent of the function status in the
+// response body.
+const NVCF_API_RPC_REQUESTS_TOTAL: Metric = Metric {
+    name: "nvcf_autoscaler.nvcf_api.rpc_requests_total",
+    description: "Total number of completed NVCF API gRPC calls by returned gRPC status code",
 };
 
 const OAUTH2_API_REQUEST_DURATION: Metric = Metric {
@@ -166,7 +198,7 @@ const OAUTH2_API_REQUEST_DURATION: Metric = Metric {
     description: "Duration of OAuth2 API requests in milliseconds (includes count via _count)",
 };
 
-const GAUGES: [Metric; 11] = [
+const GAUGES: [Metric; 14] = [
     AUTOSCALING_STATUS,
     AUTOSCALING_QUEUE_SIZE,
     AUTOSCALING_QUEUE_CAPACITY,
@@ -178,9 +210,12 @@ const GAUGES: [Metric; 11] = [
     AUTOSCALING_CASSANDRA_HEALTH_STATUS,
     AUTOSCALING_HEALTH_OVERALL_STATUS,
     AUTOSCALING_HEALTH_COMPONENT_STATUS,
+    LOCAL_REGISTRY_SIZE,
+    LOCAL_DISCOVERY_CANDIDATES,
+    LOCAL_DISCOVERY_OWNED,
 ];
 
-const COUNTERS: [Metric; 9] = [
+const COUNTERS: [Metric; 12] = [
     AUTOSCALING_REQUESTS_QUEUED_TOTAL,
     AUTOSCALING_REQUESTS_REJECTED_TOTAL,
     AUTOSCALING_REQUESTS_PROCESSED_TOTAL,
@@ -190,7 +225,24 @@ const COUNTERS: [Metric; 9] = [
     AUTOSCALING_DISTRIBUTED_LOCK,
     AUTOSCALING_DISTRIBUTED_LOCK_ACQUISITION_FAILURES_TOTAL,
     AUTOSCALING_TSDB_REQUESTS_TOTAL,
+    AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL,
+    NVCF_API_RPC_REQUESTS_TOTAL,
+    LOCAL_DISCOVERY_FAILURES,
 ];
+
+pub fn record_local_discovery(candidates: usize, owned: usize, registry_size: usize) {
+    gauge!(LOCAL_DISCOVERY_CANDIDATES.name).set(candidates as f64);
+    gauge!(LOCAL_DISCOVERY_OWNED.name).set(owned as f64);
+    record_local_registry_size(registry_size);
+}
+
+pub fn record_local_registry_size(size: usize) {
+    gauge!(LOCAL_REGISTRY_SIZE.name).set(size as f64);
+}
+
+pub fn record_local_discovery_failure() {
+    counter!(LOCAL_DISCOVERY_FAILURES.name).increment(1);
+}
 
 const HISTOGRAMS: [Metric; 5] = [
     AUTOSCALING_UTILIZATION_DATA_AGE,
@@ -214,6 +266,10 @@ pub fn record_request_processed() {
 
 pub fn record_request_rate_limited() {
     counter!(AUTOSCALING_REQUESTS_RATE_LIMITED_TOTAL.name).increment(1);
+}
+
+pub fn record_missing_current_instances() {
+    counter!(AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL.name).increment(1);
 }
 
 pub fn update_queue_metrics(current_size: usize, capacity: usize) {
@@ -361,6 +417,38 @@ pub fn record_nvcf_api_request(endpoint: &str, status: &str, duration_millisecon
     histogram!(NVCF_API_REQUEST_DURATION.name, &labels).record(duration_milliseconds);
 }
 
+pub fn record_nvcf_api_rpc(endpoint: &str, code: tonic::Code) {
+    let labels = [
+        ("endpoint", endpoint.to_string()),
+        ("grpc_code", grpc_code_label(code).to_string()),
+    ];
+
+    counter!(NVCF_API_RPC_REQUESTS_TOTAL.name, &labels).increment(1);
+}
+
+/// Canonical gRPC status code name, matching the server-side `grpc_status_code` label values.
+fn grpc_code_label(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::Ok => "OK",
+        tonic::Code::Cancelled => "CANCELLED",
+        tonic::Code::Unknown => "UNKNOWN",
+        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
+        tonic::Code::NotFound => "NOT_FOUND",
+        tonic::Code::AlreadyExists => "ALREADY_EXISTS",
+        tonic::Code::PermissionDenied => "PERMISSION_DENIED",
+        tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
+        tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
+        tonic::Code::Aborted => "ABORTED",
+        tonic::Code::OutOfRange => "OUT_OF_RANGE",
+        tonic::Code::Unimplemented => "UNIMPLEMENTED",
+        tonic::Code::Internal => "INTERNAL",
+        tonic::Code::Unavailable => "UNAVAILABLE",
+        tonic::Code::DataLoss => "DATA_LOSS",
+        tonic::Code::Unauthenticated => "UNAUTHENTICATED",
+    }
+}
+
 pub fn record_oauth2_api_request(status: &str, duration_milliseconds: f64) {
     let labels = [("status", status.to_string())];
 
@@ -451,4 +539,68 @@ fn register_counter(metric: Metric) {
 
 fn register_histogram(metric: Metric) {
     metrics::describe_histogram!(metric.name, metric.description);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    #[test]
+    fn grpc_code_label_uses_canonical_names() {
+        assert_eq!(grpc_code_label(tonic::Code::Ok), "OK");
+        assert_eq!(grpc_code_label(tonic::Code::NotFound), "NOT_FOUND");
+        assert_eq!(
+            grpc_code_label(tonic::Code::InvalidArgument),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(grpc_code_label(tonic::Code::Unavailable), "UNAVAILABLE");
+        assert_eq!(
+            grpc_code_label(tonic::Code::Unauthenticated),
+            "UNAUTHENTICATED"
+        );
+        assert_eq!(
+            grpc_code_label(tonic::Code::DeadlineExceeded),
+            "DEADLINE_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn record_nvcf_api_rpc_counts_by_endpoint_and_grpc_code() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nvcf_api_rpc("scale_function", tonic::Code::Ok);
+            record_nvcf_api_rpc("scale_function", tonic::Code::Ok);
+            record_nvcf_api_rpc("scale_function", tonic::Code::Unavailable);
+        });
+
+        let mut counts: Vec<(Vec<(String, String)>, u64)> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, ..)| key.key().name() == NVCF_API_RPC_REQUESTS_TOTAL.name)
+            .map(|(key, _, _, value)| {
+                let labels = key
+                    .key()
+                    .labels()
+                    .map(|l| (l.key().to_string(), l.value().to_string()))
+                    .collect();
+                let DebugValue::Counter(count) = value else {
+                    panic!("expected a counter");
+                };
+                (labels, count)
+            })
+            .collect();
+        counts.sort();
+
+        let labels = |code: &str| {
+            vec![
+                ("endpoint".to_string(), "scale_function".to_string()),
+                ("grpc_code".to_string(), code.to_string()),
+            ]
+        };
+        assert_eq!(counts, vec![(labels("OK"), 2), (labels("UNAVAILABLE"), 1)]);
+    }
 }

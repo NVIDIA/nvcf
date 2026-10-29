@@ -21,9 +21,12 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -63,6 +66,51 @@ type OpenTelemetryConfig struct {
 	} `yaml:"service"`
 }
 
+const (
+	defaultLogChunkMaxPayloadBytes       = 262144
+	minConfiguredLogChunkMaxPayloadBytes = 4
+	defaultLogExporterBatchFlushTimeout  = "200ms"
+	// Leave 100 KB below the 1 MB receiver limit for the export envelope.
+	defaultLogExporterBatchSizeBytes = int64(900_000)
+)
+
+const (
+	metricSubsetExporterID               = "prometheus/user-metrics"
+	metricSubsetFilterProcessorID        = "filter/metric_subset"
+	metricSubsetBatchProcessorID         = "batch/metric_subset"
+	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
+	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
+	setObservedTimeProcessorID           = "transform/set_observed_time"
+	defaultMetricSubsetPort              = 19091
+)
+
+// dropEmptyLabelsContexts are the OTTL contexts filtered for empty attribute
+// values before export.
+//
+// A Prometheus-compatible receiver rejects the whole write request when any
+// series carries a label with an empty value, and the remote-write exporter
+// classifies the resulting 4xx as permanent, so one empty attribute silently
+// drops every unrelated metric batched with it.
+//
+// resource covers server.port and url.scheme, which the Prometheus receiver's
+// CreateResource writes unconditionally (unlike server.address, which it guards
+// behind isDiscernibleHost): a scrape target whose instance label carries no
+// port yields server.port="".
+//
+// scope covers the otel_scope_* labels, which the translator's createAttributes
+// writes without an empty check. This is the only path the exporter does not
+// already guard.
+//
+// datapoint is deliberately excluded. The exporter's createAttributes drops
+// empty datapoint attribute values itself, and that statement would run once
+// per datapoint rather than once per resource, allocating a replacement map for
+// every point in every batch for no additional coverage.
+var dropEmptyLabelsContexts = []string{"resource", "scope"}
+
+var defaultWorkloadMetricsDropLabels = []string{
+	"metric_subset_enabled",
+}
+
 // Initialize the maps if they are nil
 func initializeConfigMaps(otelConfig *OpenTelemetryConfig) {
 	if otelConfig.Receivers == nil {
@@ -99,6 +147,12 @@ func RenderOtelConfigFromBytes(inputData []byte, tmplConfig TemplateConfig) ([]b
 }
 
 func RenderOtelConfig(telemetryConfig TelemetryConfig, tmplConfig TemplateConfig) ([]byte, error) {
+	// The templates render collector settings such as the federation target,
+	// so reject invalid settings before executing them.
+	if err := tmplConfig.OTelCollector.Validate(); err != nil {
+		return nil, fmt.Errorf("validate BYOO OTel collector config: %w", err)
+	}
+
 	configData := &bytes.Buffer{}
 	if err := ExecuteTemplate(configData, tmplConfig); err != nil {
 		return nil, fmt.Errorf("execute config template: %v", err)
@@ -135,6 +189,219 @@ func getCredentialsPath() string {
 	return "/etc/byoo-otel-collector/secrets"
 }
 
+// remoteWriteTLSCredentials builds the remote-write exporter's tls block from
+// the extracted secret files. The clientCert/clientKey pair and caFile are each
+// optional, but at least one must be usable. The secrets extractor writes a key
+// submitted as "" as an empty file, so an empty or whitespace-only file counts
+// as not provided instead of being passed to the collector.
+func remoteWriteTLSCredentials(credentialPath, telemetryName string) (map[string]string, error) {
+	secretsPathPrefix := filepath.Join(credentialPath, telemetryName)
+	certFile := secretsPathPrefix + "-clientCert"
+	keyFile := secretsPathPrefix + "-clientKey"
+	caFile := secretsPathPrefix + "-caFile"
+
+	hasCert, err := secretFileHasContent(certFile)
+	if err != nil {
+		return nil, err
+	}
+	hasKey, err := secretFileHasContent(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	hasCA, err := secretFileHasContent(caFile)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := map[string]string{}
+	switch {
+	case hasCert && hasKey:
+		creds["cert_file"] = certFile
+		creds["key_file"] = keyFile
+	case hasCert:
+		return nil, fmt.Errorf("metrics telemetry %q: clientCert is set but clientKey is empty or missing", telemetryName)
+	case hasKey:
+		return nil, fmt.Errorf("metrics telemetry %q: clientKey is set but clientCert is empty or missing", telemetryName)
+	}
+	if hasCA {
+		creds["ca_file"] = caFile
+	}
+	if len(creds) == 0 {
+		return nil, fmt.Errorf("metrics telemetry %q: TLS secret needs clientCert and clientKey, caFile, or both", telemetryName)
+	}
+	return creds, nil
+}
+
+const (
+	serviceNowLightstepHeader = "lightstep-access-token"
+	serviceNowOtelTokenHeader = "otel-token"
+	otelTokenPrefix           = "otel_"
+)
+
+// serviceNowTokenHeader picks the header a SERVICENOW traces token is sent in.
+// Tokens that start with "otel_" go in otel-token; any other token is a classic
+// Lightstep access token and keeps lightstep-access-token. Ingest gateways
+// reject a request that carries both headers, so exactly one is chosen. Only
+// the prefix is read: the rendered config still references the token file.
+// The prefix is matched against the raw file, not a trimmed copy, because the
+// collector sends the file's contents as they are. A missing file keeps the
+// classic header.
+func serviceNowTokenHeader(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return serviceNowLightstepHeader, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	if bytes.HasPrefix(content, []byte(otelTokenPrefix)) {
+		return serviceNowOtelTokenHeader, nil
+	}
+	return serviceNowLightstepHeader, nil
+}
+
+func secretFileHasContent(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	return len(bytes.TrimSpace(content)) > 0, nil
+}
+
+func resolvedLogChunkingConfig(config LogChunkingConfig) (LogChunkingConfig, error) {
+	if config.MaxPayloadBytes == 0 && config.MaxBodyBytes != 0 {
+		config.MaxPayloadBytes = config.MaxBodyBytes
+	}
+	if config.MaxPayloadBytes < 0 {
+		return LogChunkingConfig{}, fmt.Errorf("log chunk max payload bytes must be greater than or equal to 0")
+	}
+	if config.MaxPayloadBytes > 0 {
+		if config.MaxPayloadBytes < minConfiguredLogChunkMaxPayloadBytes {
+			return LogChunkingConfig{}, fmt.Errorf("log chunk max payload bytes must be 0 or at least %d", minConfiguredLogChunkMaxPayloadBytes)
+		}
+		config.Enabled = true
+	}
+	if config.Enabled && config.MaxPayloadBytes == 0 {
+		config.MaxPayloadBytes = defaultLogChunkMaxPayloadBytes
+	}
+	return config, nil
+}
+
+func defaultMetricSubsetFilterConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_conditions": []string{
+			`metric.name != "BpsInstrument" and metric.name != "FpsInstrument" and metric.name != "RtdInstrument" and metric.name != "StageOpenDuration"`,
+			`resource.attributes["metric_subset_enabled"] == "false"`,
+			`datapoint.attributes["metric_subset_enabled"] == "false"`,
+		},
+	}
+}
+
+func resolvedMetricSubsetFilterConfig(configured string) (map[string]interface{}, error) {
+	if strings.TrimSpace(configured) == "" {
+		return defaultMetricSubsetFilterConfig(), nil
+	}
+
+	filterConfig := map[string]interface{}{}
+	if err := yaml.Unmarshal([]byte(configured), &filterConfig); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %w", err)
+	}
+	if len(filterConfig) == 0 {
+		return nil, fmt.Errorf("filter config must not be empty")
+	}
+
+	return unwrapMetricSubsetFilterConfig(filterConfig)
+}
+
+func unwrapMetricSubsetFilterConfig(filterConfig map[string]interface{}) (map[string]interface{}, error) {
+	if rawProcessors, ok := filterConfig["processors"]; ok {
+		processors, err := mapFromConfigValue(rawProcessors, "processors")
+		if err != nil {
+			return nil, err
+		}
+		rawFilter, ok := processors[metricSubsetFilterProcessorID]
+		if !ok {
+			return nil, fmt.Errorf("processors must include %q", metricSubsetFilterProcessorID)
+		}
+		return mapFromConfigValue(rawFilter, metricSubsetFilterProcessorID)
+	}
+
+	if rawFilter, ok := filterConfig[metricSubsetFilterProcessorID]; ok {
+		return mapFromConfigValue(rawFilter, metricSubsetFilterProcessorID)
+	}
+
+	if rawFilter, ok := filterConfig["filter"]; ok && len(filterConfig) == 1 {
+		return mapFromConfigValue(rawFilter, "filter")
+	}
+
+	return filterConfig, nil
+}
+
+func mapFromConfigValue(value interface{}, field string) (map[string]interface{}, error) {
+	configMap, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be a YAML object", field)
+	}
+	if len(configMap) == 0 {
+		return nil, fmt.Errorf("%s must not be empty", field)
+	}
+	return configMap, nil
+}
+
+func resolvedWorkloadMetricsDropLabels(configured string, metricSubsetEnabled bool) []string {
+	if strings.TrimSpace(configured) == "" {
+		if !metricSubsetEnabled {
+			return nil
+		}
+		return append([]string(nil), defaultWorkloadMetricsDropLabels...)
+	}
+
+	seen := map[string]struct{}{}
+	labels := []string{}
+	if metricSubsetEnabled {
+		for _, label := range defaultWorkloadMetricsDropLabels {
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
+	for _, label := range strings.Split(configured, ",") {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	return labels
+}
+
+func logExporterSendingQueue() map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": 10,
+		"queue_size":    1000,
+	}
+}
+
+func enableChunkedLogExporterBatching(otelConfig *OpenTelemetryConfig, exporterID string) {
+	exporter := otelConfig.Exporters[exporterID]
+	queue := mapFromInterface(exporter["sending_queue"])
+	queue["batch"] = map[string]interface{}{
+		"flush_timeout": defaultLogExporterBatchFlushTimeout,
+		"sizer":         "bytes",
+		"min_size":      defaultLogExporterBatchSizeBytes,
+		"max_size":      defaultLogExporterBatchSizeBytes,
+	}
+	exporter["sending_queue"] = queue
+}
+
 func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
 	var exporterType, exporterName string
 	var exporterCredential interface{}
@@ -155,7 +422,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"token":    exporterCredential,
 		}
 	case ProviderGrafana:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-logs", config.Telemetries.Logs.Provider, config.Telemetries.Logs.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
@@ -186,8 +453,8 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Logs.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Logs.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
@@ -196,7 +463,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			},
 		}
 	case ProviderKratosLogs:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-logs", config.Telemetries.Logs.Provider, config.Telemetries.Logs.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
@@ -204,14 +471,11 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"logs_endpoint": config.Telemetries.Logs.Endpoint,
-			"encoding": "json",
+			"encoding":      "json",
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
-			"tls": map[string]interface{}{
-				"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", config.Telemetries.Logs.Name)),
-				"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", config.Telemetries.Logs.Name)),
-			},
+			"tls": kratosClientTLS(credentialPath, config.Telemetries.Logs.Name),
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -233,7 +497,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 		}
 	case ProviderOtelCollector:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-logs", config.Telemetries.Logs.Provider, config.Telemetries.Logs.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Logs.Name))
@@ -247,7 +511,18 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	default:
 		return "", fmt.Errorf("invalid logs provider: %s", config.Telemetries.Logs.Provider)
 	}
+	otelConfig.Exporters[exporterId]["sending_queue"] = logExporterSendingQueue()
 	return exporterId, nil
+}
+
+// kratosClientTLS returns the mTLS block for a KRATOS exporter. The secrets
+// extractor writes the clientCert and clientKey keys of the telemetry secret to
+// <name>-clientCert and <name>-clientKey.
+func kratosClientTLS(credentialPath, telemetryName string) map[string]interface{} {
+	return map[string]interface{}{
+		"cert_file": filepath.Join(credentialPath, fmt.Sprintf("%s-clientCert", telemetryName)),
+		"key_file":  filepath.Join(credentialPath, fmt.Sprintf("%s-clientKey", telemetryName)),
+	}
 }
 
 func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -260,7 +535,7 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 
 	switch config.Telemetries.Metrics.Provider {
 	case ProviderGrafana:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
@@ -286,26 +561,18 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		otelConfig.Service.Extensions = append(otelConfig.Service.Extensions, extensionId)
 
 	case ProviderThanos, ProviderPrometheus:
-		exporterType = "prometheusremotewrite"
+		exporterType = "prometheus_remote_write"
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
-		secretsPathPrefix := filepath.Join(credentialPath, config.Telemetries.Metrics.Name)
-
-		exporterCredential = make(map[string]string)
-		if creds, ok := exporterCredential.(map[string]string); ok {
-			creds["cert_file"] = fmt.Sprintf("%s-clientCert", secretsPathPrefix)
-			creds["key_file"] = fmt.Sprintf("%s-clientKey", secretsPathPrefix)
-
-			ca_file := fmt.Sprintf("%s-caFile", secretsPathPrefix)
-			if _, err := os.Stat(ca_file); err == nil {
-				creds["ca_file"] = ca_file
-			}
+		tlsCredentials, err := remoteWriteTLSCredentials(credentialPath, config.Telemetries.Metrics.Name)
+		if err != nil {
+			return "", err
 		}
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Metrics.Endpoint,
-			"tls":      exporterCredential,
+			"tls":      tlsCredentials,
 		}
 
 	case ProviderDatadog:
@@ -316,14 +583,26 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Metrics.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Metrics.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
 				"enabled":         true,
 				"hostname_source": "first_resource",
 			},
+			// Ensure short-lived counters (e.g. nvct_worker_service_result_total
+			// emitted by task containers) are not silently dropped while the
+			// Datadog exporter waits for a t-1 baseline. Keeping the initial
+			// value exports the first observed sample as-is, and a bounded
+			// shutdown timeout flushes the final batch before the task pod exits.
+			"metrics": map[string]interface{}{
+				"sums": map[string]interface{}{
+					"cumulative_monotonic_mode":          "to_delta",
+					"initial_cumulative_monotonic_value": "keep",
+				},
+			},
+			"timeout": "15s",
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"
@@ -345,7 +624,7 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 		}
 	case ProviderOtelCollector:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Metrics.Name))
@@ -362,6 +641,199 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 	return exporterId, nil
 }
 
+func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+
+	actions := make([]map[string]interface{}, 0, len(labels))
+	for _, label := range labels {
+		actions = append(actions, map[string]interface{}{
+			"key":    label,
+			"action": "delete",
+		})
+	}
+	otelConfig.Processors[workloadMetricsDropLabelsProcessorID] = map[string]interface{}{
+		"attributes": actions,
+	}
+	return workloadMetricsDropLabelsProcessorID
+}
+
+// addDropEmptyLabelsProcessor removes attributes that carry an empty value
+// before the metrics reach the exporter, so they never become an empty
+// Prometheus label. See dropEmptyLabelsContexts for the contexts and why.
+//
+// The Filter lambda requires the ottl.functions.enableLambda feature gate,
+// which the wrapper passes to the collector; see otelCollectorFeatureGates.
+func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
+	blocks := make([]map[string]interface{}, 0, len(dropEmptyLabelsContexts))
+	for _, ottlContext := range dropEmptyLabelsContexts {
+		blocks = append(blocks, map[string]interface{}{
+			"context": ottlContext,
+			"statements": []string{
+				fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					ottlContext, ottlContext),
+			},
+		})
+	}
+	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
+		"error_mode":        "ignore",
+		"metric_statements": blocks,
+	}
+	return dropEmptyLabelsProcessorID
+}
+
+// addSetObservedTimeProcessor sets the observed time of log records that
+// arrive without one to the time the collector processes them.
+//
+// The OpenTelemetry log data model requires the collection system to set
+// ObservedTimestamp. OpenTelemetry SDKs set it when they emit a record, but the
+// Fluent Bit opentelemetry output that forwards container stdout and stderr to
+// the same OTLP receiver leaves it at zero, so those records reached the
+// backend observed at the Unix epoch. The where clause keeps any observed time
+// a sender already set.
+func addSetObservedTimeProcessor(otelConfig *OpenTelemetryConfig) string {
+	otelConfig.Processors[setObservedTimeProcessorID] = map[string]interface{}{
+		"error_mode": "ignore",
+		"log_statements": []map[string]interface{}{
+			{
+				"context": "log",
+				"statements": []string{
+					"set(log.observed_time, Now()) where log.observed_time_unix_nano == 0",
+				},
+			},
+		},
+	}
+	return setObservedTimeProcessorID
+}
+
+func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
+	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
+		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
+		"send_timestamps":     true,
+		"metric_expiration":   "5m",
+		"enable_open_metrics": true,
+	}
+}
+
+func cloneConfigMap(config map[string]interface{}) map[string]interface{} {
+	clone := make(map[string]interface{}, len(config))
+	for key, value := range config {
+		clone[key] = cloneConfigValue(value)
+	}
+	return clone
+}
+
+func cloneConfigValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneConfigMap(typed)
+	case []interface{}:
+		clone := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			clone = append(clone, cloneConfigValue(item))
+		}
+		return clone
+	case []map[string]interface{}:
+		clone := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			clone = append(clone, cloneConfigMap(item))
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
+func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig, workloadMetricsDropLabelsProcessor string) {
+	addMetricSubsetExporter(otelConfig)
+
+	filterConfig := config.FilterConfig
+	if len(filterConfig) == 0 {
+		filterConfig = defaultMetricSubsetFilterConfig()
+	}
+	otelConfig.Processors[metricSubsetFilterProcessorID] = cloneConfigMap(filterConfig)
+
+	batchConfig := map[string]interface{}{
+		"send_batch_size":     4096,
+		"timeout":             "400ms",
+		"send_batch_max_size": 8192,
+	}
+	if existingBatchConfig, ok := otelConfig.Processors["batch"]; ok {
+		batchConfig = cloneConfigMap(existingBatchConfig)
+	}
+	otelConfig.Processors[metricSubsetBatchProcessorID] = batchConfig
+
+	metricSubsetPipeline := otelConfig.Service.Pipelines["metrics/metric_subset"]
+	metricSubsetPipeline.Receivers = []string{"otlp"}
+	metricSubsetPipeline.Exporters = []string{metricSubsetExporterID}
+	metricSubsetPipeline.Processors = []string{
+		"memory_limiter",
+		metricSubsetFilterProcessorID,
+		"resource",
+		addDropEmptyLabelsProcessor(otelConfig),
+	}
+	if workloadMetricsDropLabelsProcessor != "" {
+		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
+	}
+	metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors,
+		"metrics_transform",
+		metricSubsetBatchProcessorID,
+	)
+	otelConfig.Service.Pipelines["metrics/metric_subset"] = metricSubsetPipeline
+}
+
+func applyDebugMode(otelConfig *OpenTelemetryConfig) {
+	if otelConfig.Service.Telemetry == nil {
+		otelConfig.Service.Telemetry = map[string]map[string]interface{}{}
+	}
+	logs := mapFromInterface(otelConfig.Service.Telemetry["logs"])
+	logs["level"] = "debug"
+	logs["development"] = true
+	otelConfig.Service.Telemetry["logs"] = logs
+
+	ensureDebugExporter(otelConfig)
+}
+
+func ensureDebugExporter(otelConfig *OpenTelemetryConfig) {
+	if otelConfig.Exporters == nil {
+		otelConfig.Exporters = map[string]map[string]interface{}{}
+	}
+	if _, ok := otelConfig.Exporters["debug"]; !ok {
+		otelConfig.Exporters["debug"] = map[string]interface{}{}
+	}
+	for name, pipeline := range otelConfig.Service.Pipelines {
+		if slices.Contains(pipeline.Exporters, "debug") {
+			continue
+		}
+		pipeline.Exporters = append(pipeline.Exporters, "debug")
+		otelConfig.Service.Pipelines[name] = pipeline
+	}
+}
+
+func mapFromInterface(v interface{}) map[string]interface{} {
+	switch typed := v.(type) {
+	case nil:
+		return map[string]interface{}{}
+	case map[string]interface{}:
+		if typed == nil {
+			return map[string]interface{}{}
+		}
+		return typed
+	case map[string]string:
+		if typed == nil {
+			return map[string]interface{}{}
+		}
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[key] = value
+		}
+		return out
+	default:
+		return map[string]interface{}{}
+	}
+}
+
 func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
 	var exporterType, exporterName string
 	var exporterCredential interface{}
@@ -372,7 +844,7 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 
 	switch config.Telemetries.Traces.Provider {
 	case ProviderGrafana:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
@@ -405,8 +877,8 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Traces.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Traces.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
@@ -419,12 +891,17 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 		exporterType = "otlp"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
-		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Traces.Name))
+		credentialFile := filepath.Join(credentialPath, config.Telemetries.Traces.Name)
+		exporterCredential = fmt.Sprintf("${file:%s}", credentialFile)
 
+		header, err := serviceNowTokenHeader(credentialFile)
+		if err != nil {
+			return "", err
+		}
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Traces.Endpoint,
 			"headers": map[string]interface{}{
-				"lightstep-access-token": exporterCredential,
+				header: exporterCredential,
 			},
 		}
 	case ProviderAzureMonitor:
@@ -447,8 +924,61 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 			"connection_string": fmt.Sprintf("InstrumentationKey=${file:%s};IngestionEndpoint=%s;LiveEndpoint=${file:%s};ApplicationId=${file:%s}", instrumentationKey, ingestionEndpoint, liveEndpoint, applicationId),
 			"spaneventsenabled": true,
 		}
+	case ProviderKratosLogs:
+		exporterType = "otlp_http"
+		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
+		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
+
+		// The secrets extractor runs before render, so a missing or blank client
+		// cert or key fails here with a named error instead of an otelcol TLS
+		// load error at startup.
+		var missing []string
+		for _, key := range []string{"clientCert", "clientKey"} {
+			hasContent, err := secretFileHasContent(filepath.Join(credentialPath, fmt.Sprintf("%s-%s", config.Telemetries.Traces.Name, key)))
+			if err != nil {
+				return "", err
+			}
+			if !hasContent {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("traces telemetry %q: KRATOS secret needs clientCert and clientKey, missing or empty: %s",
+				config.Telemetries.Traces.Name, strings.Join(missing, ", "))
+		}
+
+		tls := kratosClientTLS(credentialPath, config.Telemetries.Traces.Name)
+		// The client cert pair is enough for the Kratos traces gateway, which uses
+		// public CA roots. caFile is optional, and a blank CA file stops the
+		// collector from starting, so it is used only when the file has content.
+		caFile := filepath.Join(credentialPath, fmt.Sprintf("%s-caFile", config.Telemetries.Traces.Name))
+		hasCA, err := secretFileHasContent(caFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCA {
+			tls["ca_file"] = caFile
+		}
+		exporter := map[string]interface{}{
+			"traces_endpoint": config.Telemetries.Traces.Endpoint,
+			"tls":             tls,
+		}
+		// The gateway authenticates with the client certificate alone, so
+		// collectorId is optional. Send the header only when the secret has one,
+		// so the config never references a missing file.
+		collectorIdFile := filepath.Join(credentialPath, fmt.Sprintf("%s-collectorId", config.Telemetries.Traces.Name))
+		hasCollectorId, err := secretFileHasContent(collectorIdFile)
+		if err != nil {
+			return "", err
+		}
+		if hasCollectorId {
+			exporter["headers"] = map[string]interface{}{
+				"collector-id": fmt.Sprintf("${file:%s}", collectorIdFile),
+			}
+		}
+		otelConfig.Exporters[exporterId] = exporter
 	case ProviderOtelCollector:
-		exporterType = "otlphttp"
+		exporterType = "otlp_http"
 		exporterName = fmt.Sprintf("%s-%s-traces", config.Telemetries.Traces.Provider, config.Telemetries.Traces.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 		exporterCredential = fmt.Sprintf("${file:%s}", filepath.Join(credentialPath, config.Telemetries.Traces.Name))
@@ -467,9 +997,10 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 
 func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemetryConfig, tmplConfig TemplateConfig) error {
 	// health_check and healthcheckv2 extensions are present for all configurations
-	otelConfig.Service.Extensions = []string{"healthcheckv2", "cgroupruntime"}
+	otelConfig.Service.Extensions = []string{"healthcheckv2", "cgroup_runtime"}
 
-	// Default telemetry configuration for the collector's own metrics, logs, and traces
+	// Default telemetry configuration for the collector's own metrics and logs.
+	// Its own traces are added below only when an OTLP endpoint is configured.
 	otelConfig.Service.Telemetry = map[string]map[string]interface{}{
 		"logs": {
 			"level": "warn",
@@ -478,7 +1009,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 			},
 		},
 		"metrics": {
-			"level": "normal",
+			"level": "detailed",
 			"readers": []map[string]interface{}{
 				{
 					"pull": map[string]interface{}{
@@ -492,7 +1023,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 				},
 			},
 		},
-		"traces": {
+	}
+	if tmplConfig.CollectorTracesEnabled {
+		otelConfig.Service.Telemetry["traces"] = map[string]interface{}{
 			"processors": []map[string]interface{}{
 				{
 					"batch": map[string]interface{}{
@@ -500,38 +1033,60 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 							"otlp": map[string]interface{}{
 								"protocol": "grpc",
 								"endpoint": "${env:OTEL_EXPORTER_OTLP_ENDPOINT}",
-								"headers": map[string]interface{}{
-									"lightstep-access-token": "${env:OTEL_TRACING_ACCESS_TOKEN}",
+								"headers": []map[string]interface{}{
+									{
+										"name":  "lightstep-access-token",
+										"value": "${env:OTEL_TRACING_ACCESS_TOKEN}",
+									},
 								},
 							},
 						},
 					},
 				},
 			},
+		}
+	}
+
+	resourceAttrs := []map[string]interface{}{
+		{
+			"name":  "service.namespace",
+			"value": tmplConfig.Namespace,
+		},
+		{
+			"name":  "service.name",
+			"value": "byoo-otel-collector",
 		},
 	}
 
-	resourceAttrs := map[string]string{
-		"service.namespace": tmplConfig.Namespace,
-		"service.name":      "byoo-otel-collector",
-	}
-
 	if tmplConfig.FunctionID != "" {
-		resourceAttrs["function.id"] = tmplConfig.FunctionID
-		resourceAttrs["function.version.id"] = tmplConfig.FunctionVersionID
+		resourceAttrs = append(resourceAttrs,
+			map[string]interface{}{
+				"name":  "function.id",
+				"value": tmplConfig.FunctionID,
+			},
+			map[string]interface{}{
+				"name":  "function.version.id",
+				"value": tmplConfig.FunctionVersionID,
+			},
+		)
 	}
 	if tmplConfig.TaskID != "" {
-		resourceAttrs["task.id"] = tmplConfig.TaskID
+		resourceAttrs = append(resourceAttrs, map[string]interface{}{
+			"name":  "task.id",
+			"value": tmplConfig.TaskID,
+		})
 	}
 
-	finalResourceAttrs := make(map[string]interface{}, len(resourceAttrs))
-	for k, v := range resourceAttrs {
-		finalResourceAttrs[k] = v
+	otelConfig.Service.Telemetry["resource"] = map[string]interface{}{
+		"attributes": resourceAttrs,
 	}
-	otelConfig.Service.Telemetry["resource"] = finalResourceAttrs
 
 	// Process Logs (if present)
 	if config.Telemetries.Logs != nil {
+		logChunking, err := resolvedLogChunkingConfig(tmplConfig.LogChunking)
+		if err != nil {
+			return err
+		}
 		exporterId, err := exporterLogs(config, otelConfig)
 		if err != nil {
 			return fmt.Errorf("failed to generate exporter for logs: %v", err)
@@ -541,7 +1096,22 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		logPipeline := otelConfig.Service.Pipelines["logs"]
 		logPipeline.Receivers = []string{"otlp"}
 		logPipeline.Exporters = []string{exporterId}
-		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata", "batch"}
+		logPipeline.Processors = []string{
+			"memory_limiter",
+			addSetObservedTimeProcessor(otelConfig),
+			"attributes/add-metadata",
+		}
+		if logChunking.Enabled {
+			otelConfig.Processors["logchunk/byoo"] = map[string]interface{}{
+				"max_payload_bytes": logChunking.MaxPayloadBytes,
+				"dry_run":           logChunking.DryRun,
+			}
+			logPipeline.Processors = append(logPipeline.Processors, "logchunk/byoo")
+			if !logChunking.DryRun {
+				enableChunkedLogExporterBatching(otelConfig, exporterId)
+			}
+		}
+		logPipeline.Processors = append(logPipeline.Processors, "batch")
 		otelConfig.Service.Pipelines["logs"] = logPipeline
 	}
 
@@ -555,8 +1125,22 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource", "metricstransform", "batch"}
+		metricPipeline.Processors = []string{
+			"memory_limiter",
+			"filter/metrics",
+			"resource",
+			addDropEmptyLabelsProcessor(otelConfig),
+		}
+		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
+		if workloadMetricsDropLabelsProcessor != "" {
+			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)
+		}
+		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
+
+		if tmplConfig.MetricSubset.Enabled {
+			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset, workloadMetricsDropLabelsProcessor)
+		}
 	}
 
 	// Process Traces (if present)
@@ -573,6 +1157,12 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		otelConfig.Service.Pipelines["traces"] = tracePipeline
 	}
 
+	if tmplConfig.DebugMode {
+		applyDebugMode(otelConfig)
+	}
+	if err := applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector); err != nil {
+		return fmt.Errorf("apply BYOO OTel collector config: %w", err)
+	}
+
 	return nil
 }
-

@@ -1,0 +1,161 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $backends := list .Values.mockDynamo.backend0 .Values.mockDynamo.backend1 -}}
+{{- range $index, $mock := $backends }}
+{{- $backendId := printf "%s-backend-%d" $.Values.clusterId $index -}}
+{{- if gt $index 0 }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stargate-dev-mockdc.fullname" $ }}-backend-{{ $index }}
+  labels:
+    {{- include "stargate-dev-mockdc.labels" $ | nindent 4 }}
+    stargate.nvidia.com/backend-index: {{ $index | quote }}
+spec:
+  replicas: 1
+  # Replace the pod before starting its successor so only one Pylon
+  # advertises each backend ID.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 6 }}
+      stargate.nvidia.com/backend-index: {{ $index | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: mock-backend
+        stargate.nvidia.com/backend-id: {{ $backendId | quote }}
+        stargate.nvidia.com/backend-index: {{ $index | quote }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9089"
+    spec:
+      serviceAccountName: {{ include "stargate-dev-mockdc.fullname" $ }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 20 }}
+      containers:
+        - name: mock-dynamo
+          image: {{ printf "%s@%s" $.Values.images.mockDynamo.repository $.Values.images.mockDynamo.digest }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --http-listen-addr=0.0.0.0:8090
+            - --model-name={{ $.Values.modelName }}
+            # The h100-llama-3.1-8b engine with 1,000,000 KV tokens per GPU
+            # worker, the full-scale engine of the stack's benchmark reports.
+            # MockDynamo rejects a KV capacity alongside --profile, so the
+            # profile's context limit and output tokens are passed explicitly.
+            - --engine-model=batched
+            - --num-gpu-workers={{ $mock.numGpuWorkers }}
+            - --kv-cache-capacity-tokens=1000000
+            - --context-length-tokens=131072
+            - --output-tokens-min=128
+            - --output-tokens-max=8192
+            - --output-token-distribution=gaussian
+          ports:
+            - name: mock-http
+              containerPort: 8090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: mock-http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: mock-http
+            periodSeconds: 10
+          resources:
+            {{- toYaml $.Values.resources.mockDynamo | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+        - name: pylon
+          image: {{ printf "%s@%s" $.Values.images.pylon.repository $.Values.images.pylon.digest }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --upstream-http-base-url=http://127.0.0.1:8090
+            - --upstream-health-path=/health
+            - --model-name={{ $.Values.modelName }}
+            - --stargate-address={{ $.Values.stargate.address }}
+            - --inference-server-id={{ $backendId }}
+            - --cluster-id={{ $backendId }}
+            - --backend-connectivity=reverse
+            - --tunnel-protocol=raw-quic
+            - --tls-cert-path=/var/run/stargate/tls/ca.crt
+            {{- /* Pylon rejects a gRPC CA for a plaintext local address. */}}
+            {{- if hasPrefix "https://" $.Values.stargate.address }}
+            - --grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt
+            {{- end }}
+            - --auth-token-file=/var/run/stargate/auth/token
+            - --kv-cache-stats-path=/kv-cache/stats
+            - --active-canary-interval-ms=0
+            # Pylon calibrates from fallback observations, not the stats stream.
+            - --engine-stats-stream=off
+            # The h100-llama-3.1-8b engine runs 25 sequences per GPU worker.
+            - --max-engine-concurrency={{ mul $mock.numGpuWorkers 25 }}
+            - --do-calibration
+            - --calibration-max-concurrency=25
+          ports:
+            - name: metrics
+              containerPort: 9089
+              protocol: TCP
+          # Pylon serves only /metrics over HTTP; it has no readiness route
+          # that reflects Stargate registration.
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            periodSeconds: 10
+          resources:
+            {{- toYaml $.Values.resources.pylon | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: worker-auth
+              mountPath: /var/run/stargate/auth
+              readOnly: true
+            - name: stargate-ca
+              mountPath: /var/run/stargate/tls
+              readOnly: true
+      volumes:
+        - name: worker-auth
+          secret:
+            secretName: {{ include "stargate-dev-mockdc.fullname" $ }}-worker-credentials
+        - name: stargate-ca
+          secret:
+            secretName: stargate-router-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+{{- end }}

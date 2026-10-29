@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2018-2019 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +19,7 @@ package nkeys
 import "io"
 
 // Version is our current version
-const Version = "0.4.7"
+const Version = "0.4.16"
 
 // KeyPair provides the central interface to nkeys.
 type KeyPair interface {
@@ -69,15 +66,11 @@ func CreateOperator() (KeyPair, error) {
 
 // FromPublicKey will create a KeyPair capable of verifying signatures.
 func FromPublicKey(public string) (KeyPair, error) {
-	raw, err := decode([]byte(public))
+	prefix, key, err := decodePublicKey(public)
 	if err != nil {
 		return nil, err
 	}
-	pre := PrefixByte(raw[0])
-	if err := checkValidPublicPrefixByte(pre); err != nil {
-		return nil, ErrInvalidPublicKey
-	}
-	return &pub{pre, raw[1:]}, nil
+	return &pub{prefix, key}, nil
 }
 
 // FromSeed will create a KeyPair capable of signing and verifying signatures.

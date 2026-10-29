@@ -19,8 +19,11 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +37,7 @@ func TestSelfHosted_RegisteredOnRoot(t *testing.T) {
 
 func TestSelfHosted_HasGlobalFlags(t *testing.T) {
 	cmd, _, _ := rootCmd.Find([]string{"self-hosted"})
-	for _, name := range []string{"stack", "env", "no-apply", "non-interactive", "token", "output", "wait", "icms-url", "nats-url",
+	for _, name := range []string{"control-plane-stack", "compute-plane-stack", "env", "no-apply", "non-interactive", "token", "output", "wait", "icms-url", "nats-url",
 		"control-plane-context", "compute-plane-context"} {
 		assert.NotNil(t, cmd.PersistentFlags().Lookup(name), "missing flag %q", name)
 	}
@@ -47,6 +50,7 @@ func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {
 	t.Cleanup(func() {
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		selfHostedNonInter = false
 	})
 	err := rootCmd.Execute()
 	require.Error(t, err)
@@ -54,6 +58,7 @@ func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {
 }
 
 func TestSelfHostedFlags_SameContextErrors(t *testing.T) {
+	resetCheckFlags(t)
 	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane-context=cp", "--compute-plane-context=cp"})
 	t.Cleanup(func() {
 		selfHostedControlPlaneContext = ""
@@ -121,6 +126,22 @@ func TestDeriveNATSURL(t *testing.T) {
 	}
 }
 
+func TestLocalEndpointDefaultsFromLocalSISURL(t *testing.T) {
+	got, ok := localEndpointDefaultsFromICMSURL("http://sis.localhost:8080")
+	require.True(t, ok)
+	assert.Equal(t, "http://api.localhost:8080", got.BaseHTTPURL)
+	assert.Equal(t, "http://invocation.localhost:8080", got.InvokeURL)
+	assert.Equal(t, "http://api-keys.localhost:8080", got.APIKeysURL)
+	assert.Equal(t, "api.localhost", got.APIHost)
+	assert.Equal(t, "invocation.localhost", got.InvokeHost)
+	assert.Equal(t, "api-keys.localhost", got.APIKeysHost)
+}
+
+func TestLocalEndpointDefaultsIgnoreNonLocalURL(t *testing.T) {
+	_, ok := localEndpointDefaultsFromICMSURL("https://sis.example.com")
+	assert.False(t, ok)
+}
+
 func TestResolveICMSURL_FlagWins(t *testing.T) {
 	t.Setenv("NVCF_ICMS_URL", "http://env.example:8080")
 	got := resolveICMSURL("http://flag.example:8080")
@@ -131,6 +152,49 @@ func TestResolveICMSURL_EnvBeforeConfig(t *testing.T) {
 	t.Setenv("NVCF_ICMS_URL", "http://env.example:8080")
 	got := resolveICMSURL("")
 	assert.Equal(t, "http://env.example:8080", got)
+}
+
+func TestResolveICMSURL_LegacySISEnv(t *testing.T) {
+	t.Setenv("NVCF_ICMS_URL", "")
+	t.Setenv("NVCF_SIS_URL", "http://sis.localhost:8080")
+	got := resolveICMSURL("")
+	assert.Equal(t, "http://sis.localhost:8080", got)
+}
+
+func TestResolveICMSURL_ConfigBeforeDerived(t *testing.T) {
+	configureSelfHostedTestConfig(t, `
+base_http_url: "http://api.localhost:8080"
+icms_url: "http://configured-sis.localhost:8080"
+`)
+
+	got := resolveICMSURL("")
+	assert.Equal(t, "http://configured-sis.localhost:8080", got)
+}
+
+func configureSelfHostedTestConfig(t *testing.T, body string) {
+	t.Helper()
+	prevCfgFile := cfgFile
+	viper.Reset()
+	viper.SetEnvPrefix("NVCF")
+	viper.AutomaticEnv()
+	t.Setenv("NVCF_ICMS_URL", "")
+	t.Setenv("NVCF_SIS_URL", "")
+
+	configPath := filepath.Join(t.TempDir(), "nvcf-cli.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(body), 0o600))
+	// Cobra's OnInitialize callback reruns initConfig for every Execute call.
+	// Keep it pinned to this fixture instead of letting it rediscover a
+	// developer's ~/.nvcf-cli.yaml during command tests.
+	cfgFile = configPath
+	viper.SetConfigFile(configPath)
+	require.NoError(t, viper.ReadInConfig())
+
+	t.Cleanup(func() {
+		cfgFile = prevCfgFile
+		viper.Reset()
+		viper.SetEnvPrefix("NVCF")
+		viper.AutomaticEnv()
+	})
 }
 
 func TestResolveRegisterEndpointValues_LocalSplitUsesControlPlaneExternalEndpoints(t *testing.T) {
@@ -145,6 +209,20 @@ func TestResolveRegisterEndpointValues_LocalSplitUsesControlPlaneExternalEndpoin
 	assert.Equal(t, "http://sis.nvcf-control-plane.test:18080", got.ICMSServiceURL)
 	assert.Equal(t, "http://reval.nvcf-control-plane.test:18080", got.ReValServiceURL)
 	assert.Equal(t, "nats://nats.nvcf-control-plane.test:4222", got.NATSURL)
+}
+
+func TestResolveNVCAEndpointValues_LocalSingleUsesInClusterEndpoints(t *testing.T) {
+	got := resolveNVCAEndpointValues(
+		"local",
+		"",
+		"",
+		"http://sis.localhost:8080",
+		"",
+	)
+
+	assert.Equal(t, "http://api.sis.svc.cluster.local:8080", got.ICMSServiceURL)
+	assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", got.ReValServiceURL)
+	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", got.NATSURL)
 }
 
 func TestResolveRegisterEndpointValues_LocalSplitKeepsExplicitExternalDomain(t *testing.T) {

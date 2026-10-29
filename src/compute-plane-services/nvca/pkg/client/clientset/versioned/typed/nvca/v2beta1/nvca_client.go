@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
-Copyright The Kubernetes Authors.
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,6 +30,7 @@ import (
 type NvcaV2beta1Interface interface {
 	RESTClient() rest.Interface
 	ICMSRequestsGetter
+	ModelCacheBindingsGetter
 	StorageRequestsGetter
 }
 
@@ -42,6 +41,10 @@ type NvcaV2beta1Client struct {
 
 func (c *NvcaV2beta1Client) ICMSRequests(namespace string) ICMSRequestInterface {
 	return newICMSRequests(c, namespace)
+}
+
+func (c *NvcaV2beta1Client) ModelCacheBindings(namespace string) ModelCacheBindingInterface {
+	return newModelCacheBindings(c, namespace)
 }
 
 func (c *NvcaV2beta1Client) StorageRequests(namespace string) StorageRequestInterface {

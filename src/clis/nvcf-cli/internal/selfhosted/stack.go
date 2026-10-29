@@ -31,8 +31,8 @@ import (
 
 // StackOptions controls how ResolveStack locates the helmfile bundle.
 type StackOptions struct {
-	// Source is the user-supplied --stack= value, or empty to fall through
-	// to BuiltInOCIRef.
+	// Source is the user-supplied --control-plane-stack= or --compute-plane-stack= value,
+	// or empty to fall through to BuiltInOCIRef.
 	Source string
 	// BuiltInOCIRef is the CLI-version-pinned default (digest-suffixed),
 	// used when Source is empty.
@@ -72,7 +72,7 @@ func ResolveStack(ctx context.Context, opts StackOptions) (*ResolvedStack, error
 	src := opts.Source
 	if src == "" {
 		if opts.BuiltInOCIRef == "" {
-			return nil, fmt.Errorf("no --stack provided and no built-in OCI default configured")
+			return nil, fmt.Errorf("no stack provided and no built-in OCI default configured")
 		}
 		src = opts.BuiltInOCIRef
 	}
@@ -89,13 +89,13 @@ func ResolveStack(ctx context.Context, opts StackOptions) (*ResolvedStack, error
 	}
 }
 
-func resolveLocal(ctx context.Context, path string) (*ResolvedStack, error) {
+func resolveLocal(_ context.Context, path string) (*ResolvedStack, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolving --stack=%s: %w", path, err)
+		return nil, fmt.Errorf("resolving stack %s: %w", path, err)
 	}
 	if _, err := os.Stat(filepath.Join(abs, "helmfile.d")); err != nil {
-		return nil, fmt.Errorf("--stack=%s: missing helmfile.d/ directory", abs)
+		return nil, fmt.Errorf("stack %s: missing helmfile.d/ directory", abs)
 	}
 	return &ResolvedStack{Path: abs, Source: "local"}, nil
 }
@@ -169,16 +169,10 @@ func splitGitRef(ref string) (url, branch string) {
 // without the org.opencontainers.image.title layer annotation (which plain
 // "oras pull" requires to save files to disk).
 func resolveOCI(ctx context.Context, ref, cacheDir string) (*ResolvedStack, error) {
-	if cacheDir == "" {
-		home, err := os.UserCacheDir()
-		if err != nil {
-			return nil, fmt.Errorf("resolving cache dir: %w", err)
-		}
-		cacheDir = filepath.Join(home, "nvcf-cli", "stacks")
+	dst, err := ociStackCacheDir(ref, cacheDir)
+	if err != nil {
+		return nil, err
 	}
-
-	digest := digestFromRef(ref)
-	dst := filepath.Join(cacheDir, "oci-"+digest)
 
 	// Cache hit: sentinel file exists (written only after successful extraction).
 	if _, err := os.Stat(filepath.Join(dst, ".extraction-complete")); err == nil {
@@ -230,6 +224,37 @@ func resolveOCI(ctx context.Context, ref, cacheDir string) (*ResolvedStack, erro
 	}
 
 	return &ResolvedStack{Path: dst, Source: "oci", OCIRef: ref}, nil
+}
+
+// ociStackCacheDir is where resolveOCI extracts ref under cacheDir, the
+// default cache root when cacheDir is empty.
+func ociStackCacheDir(ref, cacheDir string) (string, error) {
+	if cacheDir == "" {
+		home, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving cache dir: %w", err)
+		}
+		cacheDir = filepath.Join(home, "nvcf-cli", "stacks")
+	}
+	return filepath.Join(cacheDir, "oci-"+digestFromRef(ref)), nil
+}
+
+// ExtractedOCIStack returns the directory an earlier ResolveStack extracted
+// the oci:// reference ref into, or "" when ref is not an oci:// reference or
+// was never extracted. It never fetches: a later ResolveStack reuses that
+// extraction as it is, so it holds exactly what the install read.
+func ExtractedOCIStack(ref string) string {
+	if !strings.HasPrefix(ref, "oci://") {
+		return ""
+	}
+	dir, err := ociStackCacheDir(ref, "")
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".extraction-complete")); err != nil {
+		return ""
+	}
+	return dir
 }
 
 // ociManifest is a minimal OCI manifest used to extract layer descriptors.

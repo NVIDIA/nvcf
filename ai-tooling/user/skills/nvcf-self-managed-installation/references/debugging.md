@@ -25,13 +25,14 @@ kubectl describe pod -n <namespace> <pod-name>
 
 ### Symptoms
 
-```
+```text
 NAME           READY   STATUS             RESTARTS   AGE
 cassandra-0    0/1     ImagePullBackOff   0          5m
 ```
 
 Events show:
-```
+
+```text
 Failed to pull image "nvcr.io/.../image:tag": 401 Unauthorized
 ```
 
@@ -54,6 +55,7 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
 ### Fixes
 
 1. **Secret missing in namespace**: Create it
+
    ```bash
    kubectl create secret docker-registry nvcr-creds \
      --docker-server=nvcr.io \
@@ -68,6 +70,7 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
 3. **Chart doesn't support imagePullSecrets** (openbao, invocation-service, ess-api, notary-service): Patch ServiceAccounts and restart pods. See [pull-secrets.md](pull-secrets.md).
 
 4. **Wrong credentials in secret**: Delete and recreate
+
    ```bash
    kubectl delete secret nvcr-creds -n <namespace>
    # Recreate with correct credentials
@@ -78,7 +81,8 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
 ### Symptoms
 
 Service pods stuck in `Init:0/1` for minutes:
-```
+
+```bash
 NAME                        READY   STATUS     RESTARTS   AGE
 nvcf-api-7f4c76f788-44vlt  0/2     Init:0/1   0          10m
 ```
@@ -106,6 +110,7 @@ kubectl logs -n <namespace> <pod-name> -c vault-agent-init
 1. **OpenBao pods not running**: Check their events for image pull issues, resource issues, etc.
 
 2. **OpenBao migration job didn't run**: This happens when `helmfile sync` was interrupted. Destroy and re-sync openbao:
+
    ```bash
    HELMFILE_ENV=<env> helmfile --selector name=openbao-server destroy
    kubectl delete namespace vault-system
@@ -115,15 +120,43 @@ kubectl logs -n <namespace> <pod-name> -c vault-agent-init
    ```
 
 3. **OpenBao pods running but not initialized**: Check unseal status:
+
    ```bash
    kubectl exec -n vault-system openbao-server-0 -c openbao -- bao status
    ```
+
+4. **`vault-agent-init` logs `auth/jwt/login` -> `400 ... no known key successfully validated the token signature`**
+   (common on AKS, and on any cluster whose OIDC issuer publishes a rotating multi-key JWKS):
+   the OpenBao `auth/jwt` method was configured with a single static mounted public key
+   (`jwt_validation_pubkeys`) instead of the issuer's live JWKS, so it cannot validate the
+   cluster-signed ServiceAccount tokens the vault-agents present. Every service's
+   `vault-agent-init` then loops on that 400 and the pod never leaves `Init:0/1`. This is the
+   behavior of the base default `openbao.migrations.issuerDiscovery.enabled: false`; the
+   migration log shows `OIDC issuer discovery is disabled. Using ServiceAccount issuer and
+   mounted public key fallback`. Enable issuer discovery so the migration uses the live JWKS,
+   then re-run it:
+
+   ```bash
+   # In your env values (e.g. environments/<env>.yaml), set:
+   #   openbao:
+   #     migrations:
+   #       issuerDiscovery:
+   #         enabled: true
+   kubectl delete job -n vault-system openbao-server-migrations
+   HELMFILE_ENV=<env> helmfile --selector name=openbao-server sync
+   ```
+
+   The migration log should then show `Received discovery document from
+   .../.well-known/openid-configuration` and `Final OpenBao JWT JWKS URL set to:
+   .../openid/v1/jwks`, and the service pods authenticate and reach Ready within ~1 min.
+   AKS clusters with the cluster OIDC issuer enabled (the `aks-cluster` default) always need
+   this because the static-pubkey fallback cannot match the issuer's rotating signing keys.
 
 ## Failure: OOMKilled on Cassandra
 
 ### Symptoms
 
-```
+```text
 NAME          READY   STATUS    RESTARTS   AGE
 cassandra-0   0/1     OOMKilled  3         10m
 ```
@@ -136,7 +169,8 @@ kubectl describe pod -n cassandra-system cassandra-0 | grep -A3 "Last State"
 
 ### Fix
 
-Override Cassandra resources via helmfile values. See Example 1 in [examples.md](/ai-tooling/user/skills/nvcf-self-managed-installation/examples.md).
+Override Cassandra resources via helmfile values. See Example 1 in
+[examples.md](../examples.md).
 
 ```yaml
 - cassandra:
@@ -155,7 +189,7 @@ Note: `resourcePreset` is not available in the NVCF cassandra wrapper chart. Use
 
 ### Symptoms
 
-```
+```text
 NAME          READY   STATUS    RESTARTS   AGE
 cassandra-0   0/1     Pending   0          10m
 ```
@@ -175,16 +209,19 @@ kubectl describe pod -n <namespace> <pod-name>
 ### Fixes
 
 1. **Node selector mismatch**: Check `nodeSelectors` in environment file
+
    ```bash
    kubectl get nodes --show-labels | grep nvcf
    ```
 
 2. **Storage class not found**: Check storage class exists
+
    ```bash
    kubectl get storageclass
    ```
 
 3. **Insufficient resources**: Check node capacity
+
    ```bash
    kubectl describe node <node-name> | grep -A5 "Allocated resources"
    ```
@@ -241,6 +278,7 @@ kubectl logs -n nvcf -l app.kubernetes.io/name=nvcf-api --tail=100
 ### Common Causes
 
 1. **Wrong base64 credentials**: Credentials in `secrets/<env>-secrets.yaml` must be `$oauthtoken:API_KEY` base64-encoded, not just the API key
+
    ```bash
    # Verify your encoded credential
    echo 'YOUR_BASE64_STRING' | base64 -d
@@ -266,7 +304,8 @@ HELMFILE_ENV=<env> helmfile --selector release-group=services sync
 
 ### Symptoms
 
-`helmfile destroy` hangs. Namespaces stuck in `Terminating`:
+Compute-plane cleanup hangs. Namespaces
+stuck in `Terminating`:
 
 ```bash
 kubectl get ns
@@ -276,19 +315,24 @@ kubectl get ns
 
 ### Fix
 
-Remove finalizers from NVCFBackend custom resources and force-delete stuck namespaces:
+Run this only against the compute context, after the normal compute-plane
+teardown has failed. Remove finalizers from NVCFBackend custom resources and
+force-delete stuck namespaces:
 
 ```bash
+export COMPUTE_CONTEXT=<compute-plane-context>
+
 # Remove finalizers from NVCFBackend resources
-kubectl get nvcfbackends -A -o json | \
+kubectl --context "$COMPUTE_CONTEXT" get nvcfbackends -A -o json | \
   jq '.items[] | .metadata.namespace + "/" + .metadata.name' -r | \
-  xargs -I{} sh -c 'ns="${1%%/*}"; name="${1##*/}"; kubectl patch nvcfbackend "$name" -n "$ns" --type=merge -p "{\"metadata\":{\"finalizers\":[]}}"' _ {}
+  xargs -I{} sh -c 'context="$1"; ns="${2%%/*}"; name="${2##*/}"; kubectl --context "$context" patch nvcfbackend "$name" -n "$ns" --type=merge -p "{\"metadata\":{\"finalizers\":[]}}"' _ "$COMPUTE_CONTEXT" {}
 
 # Force-delete stuck namespaces by clearing their finalizers
 for ns in nvca-operator nvcf-backend; do
-  kubectl get namespace "$ns" -o json 2>/dev/null | \
+  kubectl --context "$COMPUTE_CONTEXT" get namespace "$ns" -o json 2>/dev/null | \
     jq '.spec.finalizers = []' | \
-    kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null
+    kubectl --context "$COMPUTE_CONTEXT" replace \
+      --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null
 done
 ```
 
@@ -296,65 +340,66 @@ done
 
 ### Symptoms
 
-After `helmfile sync` completes, no `nvca-operator` Deployment exists, or it exists but pods are not ready:
+After compute-plane install completes, no `nvca-operator` Deployment exists, or
+it exists but pods are not ready:
 
 ```bash
-kubectl get deployment nvca-operator -n nvca-operator
-# Error from server (NotFound): deployments.apps "nvca-operator" not found
-# -- OR --
-# NAME            READY   UP-TO-DATE   AVAILABLE   AGE
-# nvca-operator   0/1     1            0           5m
+kubectl --context <compute-plane-context> get deployment nvca-operator \
+  -n nvca-operator
+kubectl --context <compute-plane-context> get pods -n nvca-operator
 ```
 
-### Diagnosis
+### Diagnosis and Fixes
+
+First identify whether the installation used the Helmfile values flow or the
+CLI profile flow. Re-run only that flow's registration and installation steps
+from [Split Compute-Plane Installation](compute-plane-installation.md). Do not
+substitute one handoff for the other.
+
+If installation succeeds but pods still fail, inspect the compute context:
 
 ```bash
-# Is the release enabled?
-grep -A1 nvcaOperator environments/<env>.yaml
-
-# Did helmfile consider the release at sync time?
-HELMFILE_ENV=<env> helmfile --selector name=nvca-operator list
-# If empty output: condition evaluated false (nvcaOperator.enabled != true)
-
-# If the Deployment exists but pods are not ready:
-kubectl describe deploy nvca-operator -n nvca-operator
-kubectl get pods -n nvca-operator
-kubectl logs deployment/nvca-operator -n nvca-operator --tail=200
+kubectl --context <compute-plane-context> describe deploy nvca-operator \
+  -n nvca-operator
+kubectl --context <compute-plane-context> logs deployment/nvca-operator \
+  -n nvca-operator --tail=200
+kubectl --context <compute-plane-context> get nvcfbackend -n nvca-operator
 ```
 
-### Fixes
+For private registry failures, verify that the pull secret exists in
+`nvca-operator`. The chart and operator mirror it to `nvca-system`; do not use a
+broader manual namespace loop. See
+[pull-secrets.md](pull-secrets.md#compute-plane-secret).
 
-1. **Release skipped (opt-in flag off)** — set `nvcaOperator.enabled: true` in `environments/<env>.yaml`, then:
-   ```bash
-   HELMFILE_ENV=<env> helmfile --selector name=nvca-operator sync
-   kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=180s
-   ```
-
-2. Pod CrashLoopBackOff with `no backend GPUs were found`: see [Fake GPU Operator](/ai-tooling/user/skills/nvcf-self-managed-installation/SKILL.md#fake-gpu-operator-non-gpu-clusters) in SKILL.md.
-
-3. **ImagePullBackOff on the operator pod** — pull secret missing in the `nvca-operator` namespace. Create it and restart the pod. See `ImagePullBackOff` recipe above.
-
-4. **Operator up but `nvca-system` / `nvcf-backend` never created** — check operator logs for CRD or RBAC errors; re-run the bootstrap command from the post-helmfile-sync section of SKILL.md.
-
-## Failure: Gateway Address Changed
+## Failure: Gateway Endpoint Changed
 
 ### Symptoms
 
-SIS cluster registration fails. API returns connection errors. HTTPRoutes/TCPRoutes reference old address.
+Requests through the configured route domain fail after the Gateway or its load balancer is replaced. The Gateway reports a new endpoint.
 
 ### Diagnosis
 
 ```bash
-# Check current gateway address
-kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}'
+GATEWAY_ADDR=$(kubectl --context <control-plane-context> get gateway \
+  nvcf-gateway -n envoy-gateway \
+  -o jsonpath='{.status.addresses[0].value}')
+test -n "$GATEWAY_ADDR"
+dig +short "api.<domain>"
+curl -H "Host: api.<domain>" "http://$GATEWAY_ADDR/health"
 
-# Compare with environment file domain
-grep domain environments/<env>.yaml
+# Check direct address fields used by a split deployment
+grep nvcfNatsServiceURL deploy/stacks/self-managed/environments/<env>.yaml
+grep -E 'icmsService|revalService|nats' \
+  deploy/stacks/nvcf-compute-plane/environments/<env>.yaml
 ```
 
 ### Fix
 
-See Example 4 in [examples.md](/ai-tooling/user/skills/nvcf-self-managed-installation/examples.md): update domain in environment file, re-sync ingress and services.
+Keep `global.domain`, route hostnames, and Host overrides unchanged. Update DNS
+or the direct client destination. For split deployments, update only direct
+Gateway-address fields and refresh registration and installation through the
+same selected handoff. See
+[Example 4](../examples.md#example-4-recover-from-a-gateway-endpoint-change).
 
 ## Useful Namespace-to-Service Mapping
 
@@ -369,6 +414,5 @@ Quick reference for which services run in which namespace:
 | api-keys | api-keys, admin-issuer-proxy |
 | ess | ess-api |
 | sis | sis |
-| nvca-operator | nvca-operator |
 | envoy-gateway-system | envoy gateway (ingress controller) |
 | envoy-gateway | gateway resource + routes |

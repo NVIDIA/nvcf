@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "counter",
+    srcs = [
+        "counter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
+    importpath = "go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":counter",
+    visibility = ["//visibility:public"],
+)

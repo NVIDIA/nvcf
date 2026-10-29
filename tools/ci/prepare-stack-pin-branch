@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Check out a shared bump branch on top of the current base branch.
+#
+#   prepare-stack-pin-branch [--derived <path>]... <branch> <base-branch> [<bump-command>...]
+#
+# The chart version bump and stack pin bump workflows each add one commit per
+# release to a shared branch. Every run first moves that branch onto the
+# current base branch, so it never applies a bump on a tree that predates the
+# tools or release metadata the run needs.
+#
+# The branch's commits are replayed onto the base branch one at a time, oldest
+# first:
+#
+#   only derived files    dropped, whether or not it applies. See below.
+#   applies cleanly       kept as it is.
+#   already on the base   dropped. Someone landed the same change.
+#   conflicts             a workflow bump commit is regenerated; any other
+#                         commit stops the run.
+#
+# A --derived path holds files the caller renders from the rest of the tree
+# after its bump, such as golden render fixtures. A commit that changes only
+# files under such paths is not replayed: it was rendered for the pins the
+# branch had then, and the caller renders those files again for the pins it
+# ends up with. Replaying it would conflict whenever the base branch rendered
+# them too.
+#
+# A conflict means the base branch moved the same pin after the bump was
+# recorded, usually through a manual bump. Merging the two version lines as
+# text cannot choose the right one, and a rebase stuck on that conflict blocks
+# every later release. So a bump commit is not merged. Its release tag, from
+# the "on release of <tag>." line the workflows write, goes back through the
+# bump tool against the current tree:
+#
+#   <bump-command> --tag <tag> --write
+#
+# The tools move a pin forward and skip a release older than the pin, so a bump
+# the base branch already superseded drops out instead of downgrading it. The
+# result is committed in place of the original, typed from the tool's
+# "bump: <level>" line.
+#
+# A conflicting commit that no workflow wrote stops the run, and nothing is
+# pushed. A person wrote it, and choosing which side of that conflict wins is a
+# decision for a person. Without a <bump-command>, every conflict stops it.
+
+set -euo pipefail
+
+usage="usage: prepare-stack-pin-branch [--derived <path>]... <branch> <base-branch> [<bump-command>...]"
+derived=()
+while [ "${1:-}" = --derived ]; do
+  derived+=("${2:?${usage}}")
+  shift 2
+done
+branch="${1:?${usage}}"
+base_branch="${2:?${usage}}"
+shift 2
+bump_command=("$@")
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+git check-ref-format --branch "${branch}" >/dev/null
+git check-ref-format --branch "${base_branch}" >/dev/null
+
+# The bump tools resolve paths from the repository root, and a regenerated bump
+# stages whatever the tool changed. Both need a clean tree to start from.
+cd "$(git rev-parse --show-toplevel)"
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "refusing to prepare ${branch}: the work tree has uncommitted changes" >&2
+  git status --short --untracked-files=no >&2
+  exit 1
+fi
+
+kept=0
+regenerated=0
+dropped=0
+
+tracked_changes() {
+  [ -n "$(git status --porcelain --untracked-files=no)" ]
+}
+
+# Prints the first capture of <regex> in <commit>'s message, or nothing. No
+# pipe into head or grep -m: under pipefail an early exit there can kill the
+# writer with SIGPIPE and fail the run.
+message_match() {
+  local commit=$1 re=$2 line
+  while IFS= read -r line; do
+    if [[ "${line}" =~ ${re} ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return
+    fi
+  done <<<"$(git log -1 --format=%B "${commit}")"
+}
+
+recorded_tag() {
+  message_match "$1" '^Opened by the .* workflow on release of (.*)\.$'
+}
+
+# True when <commit> changes at least one file and every file it changes is
+# under a --derived path.
+only_derived() {
+  local commit=$1 path
+  local outside=()
+  [ "${#derived[@]}" -gt 0 ] || return 1
+  for path in "${derived[@]}"; do
+    outside+=(":(exclude)${path}")
+  done
+  ! git diff --quiet "${commit}^" "${commit}" \
+    && git diff --quiet "${commit}^" "${commit}" -- . "${outside[@]}"
+}
+
+stop() {
+  local commit=$1 reason=$2
+  git reset --quiet --hard HEAD
+  {
+    echo "error: cannot move ${branch} onto ${base_branch}."
+    echo "  $(git log -1 --format='%h %s' "${commit}")"
+    echo "  ${reason}"
+    echo "  Rebase ${branch} by hand, or remove that commit from it, then rerun."
+  } >&2
+  exit 1
+}
+
+# Commits the tool's edit in place of <commit>. The scope and description stay;
+# the type is recomputed from the step the pin took from the current base.
+commit_regenerated() {
+  local commit=$1 tag=$2 level=$3
+  local subject type scope rest opened breaking
+  local subject_re='^[A-Za-z]+(\([^)]*\))?!?: (.*)$'
+
+  subject="$(git log -1 --format=%s "${commit}")"
+  if ! [[ "${subject}" =~ ${subject_re} ]]; then
+    stop "${commit}" "Its subject is not a Conventional Commit, so it cannot be retyped."
+  fi
+  scope="${BASH_REMATCH[1]}"
+  rest="${BASH_REMATCH[2]}"
+
+  type="$("${script_dir}/release-bump-type" for-level "${level}")"
+  opened="$(message_match "${commit}" '^(Opened by the .* workflow on release of .*)$')"
+  breaking="$(message_match "${commit}" '^(BREAKING CHANGE:.*)$')"
+
+  local args=()
+  case "${type}" in
+    *!)
+      args+=(-m "${type%!}${scope}!: ${rest}")
+      breaking="${breaking:-BREAKING CHANGE: ${tag} is a major release.}"
+      ;;
+    *)
+      args+=(-m "${type}${scope}: ${rest}")
+      breaking=""
+      ;;
+  esac
+  args+=(-m "${opened}")
+  args+=(-m "Regenerated from ${tag} on ${base_branch}: $(git rev-parse --short "${commit}") no longer applied.")
+  if [ -n "${breaking}" ]; then
+    args+=(-m "${breaking}")
+  fi
+
+  git add --update
+  git commit --quiet "${args[@]}"
+}
+
+regenerate() {
+  local commit=$1 tag=$2 out status level
+
+  if [ "${#bump_command[@]}" -eq 0 ]; then
+    stop "${commit}" "It no longer applies, and no bump command was given to regenerate it."
+  fi
+  # The tag reaches the tool as one argument and is never evaluated, but it was
+  # read out of a commit message, so hold it to the shape of a tag first.
+  if ! [[ "${tag}" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; then
+    stop "${commit}" "It records something that is not a plain release tag: ${tag}"
+  fi
+
+  echo "regenerating $(git rev-parse --short "${commit}") from ${tag}"
+  out="$(mktemp)"
+  set +e
+  "${bump_command[@]}" --tag "${tag}" --write >"${out}"
+  status=$?
+  set -e
+  sed 's/^/    /' "${out}"
+  level="$(sed -n 's/^bump: //p' "${out}" | tail -n 1)"
+  rm -f "${out}"
+  # 3 is chart-version-bumper's "some charts refused, the rest moved". The run
+  # that recorded this release already surfaced those refusals.
+  if [ "${status}" -ne 0 ] && [ "${status}" -ne 3 ]; then
+    stop "${commit}" "${bump_command[*]} --tag ${tag} failed (exit ${status})."
+  fi
+
+  if ! tracked_changes; then
+    echo "  dropped: ${base_branch} already pins ${tag} or later"
+    dropped=$((dropped + 1))
+    return
+  fi
+  commit_regenerated "${commit}" "${tag}" "${level}"
+  echo "  committed $(git log -1 --format='%h %s')"
+  regenerated=$((regenerated + 1))
+}
+
+replay() {
+  local commit=$1 tag conflicts
+
+  if only_derived "${commit}"; then
+    echo "dropped $(git log -1 --format='%h %s' "${commit}"): only derived files, which the caller renders again"
+    dropped=$((dropped + 1))
+    return
+  fi
+
+  if git cherry-pick --no-commit "${commit}" >/dev/null 2>&1; then
+    if git diff --cached --quiet; then
+      echo "dropped $(git log -1 --format='%h %s' "${commit}"): already on ${base_branch}"
+      dropped=$((dropped + 1))
+    else
+      git commit --quiet --reuse-message="${commit}"
+      echo "kept $(git log -1 --format='%h %s')"
+      kept=$((kept + 1))
+    fi
+    return
+  fi
+
+  conflicts="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+  echo "$(git log -1 --format='%h %s' "${commit}") conflicts with ${base_branch} in: ${conflicts}"
+  # Leave no half-applied pick behind, whichever way this goes next.
+  git reset --quiet --hard HEAD
+  tag="$(recorded_tag "${commit}")"
+  if [ -z "${tag}" ]; then
+    stop "${commit}" "It no longer applies, and no workflow wrote it, so it cannot be regenerated."
+  fi
+  regenerate "${commit}" "${tag}"
+}
+
+git fetch origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}"
+set +e
+git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null
+branch_status=$?
+set -e
+
+case "${branch_status}" in
+  0)
+    git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+    # Merge commits are skipped, as a rebase skips them. One left by updating
+    # the pull request from the base branch carries nothing of its own.
+    commits="$(git rev-list --reverse --no-merges "origin/${base_branch}..origin/${branch}")"
+    git checkout -B "${branch}" "origin/${base_branch}"
+    for commit in ${commits}; do
+      replay "${commit}"
+    done
+    echo "${branch} on ${base_branch}: ${kept} kept, ${regenerated} regenerated, ${dropped} dropped"
+    ;;
+  2)
+    git checkout -B "${branch}" "origin/${base_branch}"
+    ;;
+  *)
+    echo "failed to check whether origin/${branch} exists" >&2
+    exit "${branch_status}"
+    ;;
+esac

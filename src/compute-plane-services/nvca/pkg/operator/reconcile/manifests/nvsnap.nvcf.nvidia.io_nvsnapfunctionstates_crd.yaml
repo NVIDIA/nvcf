@@ -1,0 +1,52 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nvsnapfunctionstates.nvsnap.nvcf.nvidia.io
+spec:
+  group: nvsnap.nvcf.nvidia.io
+  names:
+    kind: NvSnapFunctionState
+    listKind: NvSnapFunctionStateList
+    plural: nvsnapfunctionstates
+    singular: nvsnapfunctionstate
+    shortNames:
+    - cfs
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    additionalPrinterColumns:
+      - name: Function
+        jsonPath: .spec.functionVersionID
+        description: NGC function-version UUID
+        type: string
+      - name: Cache
+        jsonPath: .status.localCacheState
+        description: Per-cluster cache readiness (Cold | Fetching | Warm | Failed)
+        type: string
+      - name: Hash
+        jsonPath: .status.checkpointHash
+        description: Content-addressed checkpoint hash (first 12 chars displayed)
+        type: string
+      - name: Attempts
+        jsonPath: .status.attemptCount
+        description: Cumulative checkpoint attempts
+        type: integer
+      - name: Age
+        jsonPath: .metadata.creationTimestamp
+        type: date
+    schema:
+      openAPIV3Schema:
+        type: object
+        required:
+        - spec
+        properties:
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+    served: true
+    storage: true
+    subresources:
+      status: {}

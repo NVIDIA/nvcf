@@ -128,20 +128,14 @@ This is the repo's source-header check.
 - It can allow alternate SPDX identifiers per directory with `--allow-spdx-dir DIR:LICENSE_ID`.
 - It skips generated files when the file looks generated and includes both `Code generated` and `DO NOT EDIT` in the first 30 lines.
 - It skips common non-source and dependency directories including `vendor`, `node_modules`, virtualenv caches, and similar directories.
-- It groups failures by synthetic import path from `imports.yaml` or by top-level repo directory to make reports actionable.
+- It groups failures by `imports.yaml` path or by top-level repo directory to make reports actionable.
 
 Useful commands:
 
 ```bash
-<<<<<<< Updated upstream
 ./tools/ci/check-license-headers
 ./tools/ci/check-license-headers tools
-./tools/ci/check-license-headers src/libraries/go/nvcf-go
-=======
-./tools/scripts/check-license-headers
-./tools/scripts/check-license-headers tools
-./tools/scripts/check-license-headers src/libraries/go/lib
->>>>>>> Stashed changes
+./tools/ci/check-license-headers src/libraries/go/lib
 ```
 
 ### `./tools/scripts/collect-notices` and `./tools/scripts/update-license`
@@ -172,7 +166,7 @@ It fails if:
 - `NOTICE` is missing.
 - `NOTICE` is out of sync with the generated output from `collect-notices`.
 - source headers fail `check-license-headers`.
-- a monorepo-native Go root contains `github.com/NVIDIA/...` module paths or imports in `go.mod`, `go.work`, or `.go` files.
+- a monorepo-native Go root contains private/internal Go module paths or imports in `go.mod`, `go.work`, or `.go` files.
 
 Today it runs `check-license-headers` with the `ess-agent` MPL exception shown above.
 
@@ -234,6 +228,42 @@ Imported projects keep their own source-level CI, but the umbrella repo adds the
 ### `go run ./tools/collect-dependencies`
 
 This tool generates `dependencies.md`, the shared internal audit rollup across Go, Rust, Python, Java, and Helm.
+
+On the GitHub monorepo, where `imports.yaml` is intentionally absent, the
+collector scans the repository rather than silently collecting nothing. Java
+components are discovered through `src/**/bazel-java-ci.json`. Each registered
+component must expose
+`//<component-directory>:runtime_inventory.json`, and Java rows come from
+those Bazel-generated runtime inventories instead of project POM files.
+
+The root `MODULE.bazel` and `maven_install.json` still define and lock the
+complete shared Java dependency hub. The collector reports only dependencies
+reachable from component runtime targets, so unused hub entries and test-only
+tools do not become runtime audit entries. Shared runtime dependencies are
+deduplicated across components.
+
+`dependencies.md` is the repository-wide human review view. Per-component
+`NOTICE`, runtime inventory, and OSRB delta outputs remain the component-level
+compliance evidence. None of these outputs replaces legal review.
+
+### Java alternative license designations
+
+Java component `notice_metadata.json` files retain the upstream `licenses`
+list. When an approved choice exists for a versioned dependency with
+alternative licenses, add `designated_license` with the chosen SPDX identifier.
+The generator accepts a listed license name or an alias in
+`tools/bazel/java/license_aliases.json`.
+
+The generated component `NOTICE` records the designated license and the
+normalized upstream alternatives. The runtime inventory retains the alternatives
+in `declared_licenses` and reports the choice in `designated_license`. Its
+existing `licenses` field reports the designated license so dependency review
+uses the applicable choice.
+
+Only record a designation supported by the dependency's license material and
+the required compliance review. Do not add private approval identifiers to
+public metadata. `--update-metadata` preserves an existing designation for the
+same coordinate and version, but does not carry it to a new version.
 
 Use it when:
 

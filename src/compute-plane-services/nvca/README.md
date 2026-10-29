@@ -1,6 +1,6 @@
 # NVIDIA Cloud Functions Agent (NVCA)
 
-NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the **NVCA Operator**, which automates the deployment and lifecycle management of NVCA.
+NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the NVCA Operator, which automates the deployment and lifecycle management of NVCA.
 
 ## Overview
 
@@ -45,7 +45,7 @@ Enable self-hosted on an already running cluster:
 
 ```bash
 helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values \
-  ./deployments/nvca-operator \
+  ../../../deploy/helm/nvca-operator/nvca-operator \
   --set ngcConfig.serviceKey=${NGC_KEY} \
   --set ngcConfig.clusterSource=self-managed \
   --set selfManaged.nvcaVersion=${NVCA_VERSION}
@@ -61,7 +61,7 @@ The typical cluster layout is 2 GPU worker nodes, 1 control-plane node, and a mo
 kind create cluster --image kindest/node:"${K8S_VERSION:-"v1.32.8"}" --config test/kind-env/r750x2-h100x8/kind-config.yaml
 ```
 
-2. Install fake-gpu-operator
+1. Install fake-gpu-operator
 
 ```bash
 helm repo add fake-gpu-operator https://runai.jfrog.io/artifactory/api/helm/fake-gpu-operator-charts-prod --force-update
@@ -69,27 +69,27 @@ helm repo update
 helm upgrade -i gpu-operator fake-gpu-operator/fake-gpu-operator --namespace gpu-operator --create-namespace --values test/kind-env/r750x2-h100x8/fake-gpu-values.yaml
 ```
 
-3. Install SMB CSI Driver
+1. Install SMB CSI Driver
 
 ```bash
 helm repo add csi-driver-smb https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts
 helm upgrade -i csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-system --version v1.17.0 --set 'controller.nodeSelector.nodeGroup=monitoring'
 ```
 
-4. Register the cluster at [NVCF Settings](https://nvcf.ngc.nvidia.com/settings) and install with the provided command, adding:
+1. Register the cluster at [NVCF Settings](https://nvcf.ngc.nvidia.com/settings) and install with the provided command, adding:
 
-```
+```text
 --set 'nodeSelector.key=nodeGroup' --set 'nodeSelector.value=monitoring'
 ```
 
-5. Run E2E tests
+1. Run E2E tests
 
 ```bash
 make dev-shell
 make test-e2e
 ```
 
-> **Note:** Ensure there are no overriding localhost DNS docker configurations as that would cause the e2e tests to fail.
+> Note: Ensure there are no overriding localhost DNS docker configurations as that would cause the e2e tests to fail.
 
 ### Force NVCA Rollout
 
@@ -103,7 +103,7 @@ kubectl annotate nvcfbackends --all -n nvca-operator --overwrite nvca.nvcf.nvidi
 
 Add custom network policies during installation using the `--set-file` flag. These policies are added to each function namespace.
 
-Example — create `allow-all-ingress.yaml`:
+Example ; create `allow-all-ingress.yaml`:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -132,11 +132,62 @@ helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values
   --set-file 'networkPolicy.customPolicies={allow-all-ingress.yaml}'
 ```
 
-## Testing and Debugging
+## Building and Testing
+
+NVCA builds via Bazel. The legacy Dockerfile and `goreleaser` paths are
+retired. Use the [release workflow](../../../docs/dev/github-release-process.md) for source versions
+and image publication.
+
+### Bazel
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on PATH
+delegating to the version pinned in `.bazelversion`). MODULE.bazel pulls
+the Go toolchain (1.25.0), `rules_go`, Gazelle, `rules_oci`, and the
+distroless Go base image ; no host toolchains are needed beyond a recent
+Linux (or macOS) and the `bazel` shim.
+
+OSS contributors building from the GitHub mirror: the default `oci.pull`
+in `MODULE.bazel` points at `urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go`,
+which is NVIDIA-internal Artifactory. To build off-network, swap that
+entry for a public base such as `gcr.io/distroless/static-debian12` (then
+`bazel mod tidy` to refresh the lockfile). `bazel build //...` and
+`bazel test //...` work without modification.
+
+Common commands:
+
+```sh
+# Build every Bazel target.
+bazel build //...
+
+# Build the four OCI images (multi-arch index format):
+bazel build //cmd/nvca:image_index \
+            //cmd/nvca-operator:image_index \
+            //cmd/cluster-validator:image_index \
+            //cmd/tools:image_index
+
+# Run all unit + envtest-backed tests:
+eval "$(./scripts/setup_envtest)"  # exports KUBEBUILDER_ASSETS
+bazel test //... --test_env=KUBEBUILDER_ASSETS
+
+# Re-run Gazelle after adding new Go imports or files. Updates
+# srcs / deps lists and refreshes go_deps overrides in MODULE.bazel.
+bazel run @rules_go//go -- mod tidy
+bazel run @rules_go//go -- mod vendor
+find vendor -name BUILD.bazel -delete
+bazel run //:gazelle
+bazel mod tidy
+
+# Load an image into the local Docker daemon for ad-hoc testing:
+bazel run //cmd/nvca:image_load
+```
+
+Release images are built from the component's published source tag. Follow
+[monorepo release automation](../../../docs/dev/github-release-process.md) for versioning and maintenance releases.
+Local image builds do not publish a release.
 
 ### Envtest
 
-Some tests in the NVCA repository require [envtest]() to run.
+Some tests in the NVCA repository require [envtest](https://book.kubebuilder.io/reference/envtest.html) to run.
 The [`setup_envtest`](./scripts/setup_envtest) script will do this automatically, in both CI and on `make test`.
 
 To configure VSCode or clones like Cursor so you can run these tests directly in your editor,
@@ -145,10 +196,15 @@ ensure the `KUBEBUILDER_ASSETS` environment variable is set to the output of the
 For example, in VSCode `settings.json` add:
 
 ```json
-	"go.testEnvVars": {
-		"KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
-	}
+ "go.testEnvVars": {
+  "KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
+ }
 ```
+
+When running under Bazel, the `storage_test` and `miniservice_test`
+targets inherit `KUBEBUILDER_ASSETS` via `env_inherit` and run with
+`rundir = "."`; you must export it (via `setup_envtest`) in the shell
+where you launch `bazel test`.
 
 ### Monitoring and Metrics
 
