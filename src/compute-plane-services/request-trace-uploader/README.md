@@ -35,9 +35,11 @@ volume, so every step survives a restart.
    is recorded before the backend is called, and a returned job id is saved
    before the error is looked at.
 5. Polling: one loop polls every open job on the status interval. A job with
-   a saved id is polled, never submitted again. A job unfinished past the max
-   job age is kept as stranded. A status the core does not know is counted
-   in `unknown_status` and polled again.
+   a saved id is polled, never submitted again. A submitted job that still
+   reports pending past the max job age is kept as stranded and polled less
+   often; a job the backend no longer knows is kept as stranded at once. A
+   failed status read or an ambiguous job is not aged. A status the core
+   does not know is counted in `unknown_status` and polled again.
 6. Cleanup: after success, transports are deleted, the source is re-hashed
    if its size or modification time changed, and only then deleted. A
    backend that does not export, such as `debug` or a dry run, never deletes
@@ -110,7 +112,9 @@ Optional, with defaults:
 - `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`: shutdown drain after
   SIGTERM; default `60`. Set it to fit the pod's grace period.
 - `REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS`: how long a submitted job may
-  stay unfinished before it is reported stranded; default `86400`
+  keep reporting pending before it is reported stranded; default `86400`
+  (24 hours). Planned, not built yet: a 6 hour default, and the same limit
+  for every unresolved job that has an id.
 - `REQUEST_TRACE_UPLOADER_STATUS_INTERVAL_SECONDS`: how often every open job
   is polled, whatever the backend; default `30`
 
@@ -162,8 +166,9 @@ action. The first matching rule wins.
   for records of a type that carries no headers. In Dynamo v1.4.0 only
   `request_payload` carries headers. It applies only while a rule exists.
 
-`stripPayload` replaces the record with the stub the earlier shell exporter
-wrote, byte for byte. `dropRecord` removes the record.
+`stripPayload` replaces the record with a stub that has the same structure
+and values as the one the earlier shell exporter wrote; its JSON formatting
+can differ. `dropRecord` removes the record.
 
 An unparseable rule list, an unknown action or policy, a missing or repeated
 name, or a rule with no value stops startup with a non-zero exit.
