@@ -48,12 +48,14 @@ for source_dir in "$project_dir" "$project_dir/helm/scripts"; do
     stage="$test_root/stage"
     mkdir -p "$stage/utils"
     hook_args=(test openbao helm)
-    if [ -d "$source_dir/utils" ]; then
+    if [ -f "$source_dir/utils/utils.sh" ]; then
         cp "$source_dir/deploy.sh" "$stage/deploy.sh"
         cp "$source_dir/utils/utils.sh" "$source_dir/utils/log.sh" "$stage/utils/"
+        mkdir -p "$stage/helm/scripts/utils"
+        cp "$project_dir/helm/scripts/utils/jwt-plugin.sh" "$stage/helm/scripts/utils/"
     else
         yq -r 'select(.kind == "ConfigMap" and .metadata.name == "openbao-server-init-script") | .data."deploy.sh"' "$rendered" > "$stage/deploy.sh"
-        for script in utils log; do
+        for script in utils log jwt-plugin; do
             yq -r "select(.kind == \"ConfigMap\" and .metadata.name == \"openbao-server-utils-script\") | .data.\"$script.sh\"" "$rendered" > "$stage/utils/$script.sh"
         done
         hook_args=("${chart_command[@]:1}")

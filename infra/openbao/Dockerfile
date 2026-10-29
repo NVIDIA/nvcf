@@ -16,6 +16,12 @@ ARG GO_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d
 ARG BAO_SOURCE_COMMIT=63a65e6b907589dbb952c371a70260a065bf8bd7
 ARG BAO_SOURCE_SHA256=471a2c2e3a156a833704f43335ed5e66476a90719ce692b80c3f541e346cda69
 ARG BAO_RUNTIME_IMAGE=openbao/openbao:2.6.3@sha256:a60afafda36337abe833c4a63894bf1095098f29abea4091e7e555a33dd52889
+# Preserve the published bytes, including their build metadata. Rebuilding the
+# old source would not preserve the digest stored in existing catalogs.
+ARG JWT_LEGACY_IMAGE=nvcr.io/nvidia/nvcf/nvcf-openbao:2.6.3-nv-1.3.6@sha256:5a42082907c9b59de31d80a293c06e4faaa47b1dd364f6473b63088eb7af6284
+ARG JWT_INCLUDE_LEGACY=true
+
+FROM ${JWT_LEGACY_IMAGE} AS legacy-plugin
 
 FROM ${GO_IMAGE} AS bao-build
 ARG BAO_VERSION
@@ -46,6 +52,22 @@ COPY plugins/vault-plugin-secrets-jwt/ ./
 RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
     go build -trimpath -o /out/vault-plugin-secrets-jwt ./cmd/vault-plugin-secrets-jwt
 
+FROM ${BAO_RUNTIME_IMAGE} AS plugin-package-base
+USER root
+COPY --from=plugin-build /out/vault-plugin-secrets-jwt /target/vault-plugin-secrets-jwt
+COPY jwt-plugin-versions.env /versions.env
+COPY scripts/package-jwt-plugins.sh /package-jwt-plugins.sh
+
+FROM plugin-package-base AS plugin-package-true
+COPY --from=legacy-plugin /openbao/plugins/vault-plugin-secrets-jwt /legacy/vault-plugin-secrets-jwt
+RUN JWT_INCLUDE_LEGACY=true /bin/sh /package-jwt-plugins.sh
+
+FROM plugin-package-base AS plugin-package-false
+RUN JWT_INCLUDE_LEGACY=false /bin/sh /package-jwt-plugins.sh
+
+# BuildKit skips the legacy image dependency when selecting target-only output.
+FROM plugin-package-${JWT_INCLUDE_LEGACY} AS plugin-package
+
 FROM ${BAO_RUNTIME_IMAGE}
 ARG TARGETARCH
 
@@ -61,6 +83,11 @@ RUN apk upgrade --no-cache && \
     mkdir -p /openbao/plugins
 
 COPY --from=bao-build --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
-COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
+COPY --from=plugin-package /out/plugins/ /openbao/plugins/
+COPY --from=plugin-package /out/plugin-config/ /openbao/plugin-config/
+COPY jwt-plugin-versions.env /openbao/jwt-plugin-versions.env
+COPY --chmod=0555 scripts/jwt-plugin-lifecycle.sh /usr/local/bin/jwt-plugin-lifecycle
+RUN mv /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint-upstream.sh
+COPY --chmod=0555 scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 USER 100:1000

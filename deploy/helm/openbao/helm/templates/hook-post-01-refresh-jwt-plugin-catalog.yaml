@@ -1,3 +1,4 @@
+{{- if eq (include "nvcf-openbao.jwtLifecycleMode" .) "legacy" }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -62,6 +63,10 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |-
+              if test -r /openbao/jwt-plugin-versions.env; then
+                echo 'Versioned OpenBao images require bridge or versioned lifecycle mode' >&2
+                exit 1
+              fi
               plugin_name="vault-plugin-secrets-jwt"
               plugin_path="/openbao/plugins/${plugin_name}"
               test -x "${plugin_path}"
@@ -69,8 +74,7 @@ spec:
               plugin_sha256="$(sha256sum "${plugin_path}" | awk '{print $1}')"
               test -n "${plugin_sha256}"
 
-              export BAO_ADDR="http://{{ $serverFullname }}-active:8200"
-              export BAO_TOKEN="$(cat /secrets/root_token/root_token)"
+              {{- include "nvcf-openbao.adminEnvironment" . | nindent 14 }}
 
               attempt=1
               until bao plugin register \
@@ -102,3 +106,4 @@ spec:
             items:
               - key: root_token
                 path: root_token
+{{- end }}

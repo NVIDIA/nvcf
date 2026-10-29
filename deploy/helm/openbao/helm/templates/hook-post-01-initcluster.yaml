@@ -62,6 +62,8 @@ spec:
             - -c
             - /scripts/deploy.sh {{ include "nvcf-openbao.namespace" . }} {{ $serverFullname }} helm
           env:
+            - name: JWT_PLUGIN_LIFECYCLE_MODE
+              value: {{ include "nvcf-openbao.jwtLifecycleMode" . | quote }}
             - name: AUTO_UNSEAL
               value: {{ .Values.openbao.server.autoUnseal.enabled | quote }}
             {{- if .Values.openbao.server.autoUnseal.enabled }}
@@ -128,3 +130,5 @@ data:
     {{- .Files.Get "scripts/utils.sh" | nindent 4 }}
   log.sh: |-
     {{- .Files.Get "scripts/log.sh" | nindent 4 }}
+  jwt-plugin.sh: |-
+    {{- .Files.Get "scripts/utils/jwt-plugin.sh" | nindent 4 }}

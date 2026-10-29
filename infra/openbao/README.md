@@ -28,6 +28,26 @@ The plugin is built from source in this repository, at
 `plugins/vault-plugin-secrets-jwt`. Nothing needs to be cloned or placed by
 hand, and no binaries are committed.
 
+The bridge also copies the exact legacy plugin from a digest-pinned published
+image matching the chart's published pre-bridge baseline.
+`jwt-plugin-versions.env` records its explicit old and target catalog
+versions. Do not rebuild the legacy source or overwrite an existing target
+version with a different binary. Bump the target version for changes to source,
+dependencies, toolchain, or build flags.
+
+The image writes `/openbao/plugin-config/jwt.hcl` from the packaged binaries,
+including their architecture-specific SHA-256 values. The image entrypoint
+adds `-config=/openbao/plugin-config` alongside the normal server config.
+Custom commands that bypass that entrypoint must supply the argument.
+All members in one OpenBao cluster must use the same CPU architecture because
+catalog digests are cluster-wide.
+
+Use [the JWT plugin upgrade procedure](../../docs/self-managed/runbooks/openbao-jwt-plugin-upgrade.md)
+for bridge rollout, version pinning, rollback, and later cleanup. The bridge
+keeps old binaries by default. A later qualified release can build with
+`--build-arg JWT_INCLUDE_LEGACY=false` after the metadata gate passes. Keep
+the target source and build inputs unchanged so its digest remains identical.
+
 The image build compiles it in a Dockerfile build stage, so `docker build .`
 here produces the same image as the release pipeline:
 
@@ -115,4 +135,7 @@ At runtime the image provides:
 
 - The OpenBao server at `/usr/bin/bao`, built from the upstream 2.6.3 source
 - Alpine packages `curl`, `jq`, and `bash` (used by entrypoint scripts in consumers such as the migrations Job)
-- `/openbao/plugins/vault-plugin-secrets-jwt` - the JWT secrets plugin built from `github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt`
+- `/openbao/plugins/vault-plugin-secrets-jwt` - the exact legacy plugin retained through the rollback window
+- `/openbao/plugins/vault-plugin-secrets-jwt-v<version>` - explicit old and target commands from the version manifest
+- `/openbao/plugin-config/jwt.hcl` - declarative version registration with binary hashes
+- `/usr/local/bin/jwt-plugin-lifecycle` - state checks, explicit mount tuning, and gated catalog cleanup
