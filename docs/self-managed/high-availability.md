@@ -344,6 +344,28 @@ The control-plane services default to `LOCAL_QUORUM` consistency, and some
   [Zone spread for the quorum services](#zone-spread-for-the-quorum-services))
   and does not hold above three pods.
 
+#### Cassandra read retry policy (`RangeReadRetryPolicy`)
+
+When one Cassandra pod dies, index-backed reads (for example listing function
+versions) can fail for a few seconds until the other replicas stop treating
+the dead node as alive. The default `NextHostRetryPolicy` retries a read
+timeout on the next replica only when no data came back.
+
+The self-managed `nvcf-api` and `api-keys` services (ncp profile) select
+`RangeReadRetryPolicy`, which also retries once, on the next replica, a read
+timeout that has data but too few responses. This is independent of
+`highAvailability.mode`. To return to the default, or to tune resilience
+further, override the driver retry-policy class through the operator env hooks:
+
+```yaml
+api:
+  env:
+    SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+apikeys:
+  env:
+    SPRING_CASSANDRA_ADVANCED_RETRY_POLICY_CLASS: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+```
+
 ## Tuning scheduling policy (`global.affinity` / `global.topologySpreadConstraints`)
 
 Affinity and zone topology spread are shared scheduling policy, so you can
