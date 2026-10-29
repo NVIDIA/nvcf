@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // goldenCase holds what the earlier Python uploader produced for one line:
@@ -34,9 +34,9 @@ func loadGolden(t *testing.T) []goldenCase {
 	return cases
 }
 
-func mustDecode(t *testing.T, line string) *compat.Value {
+func mustDecode(t *testing.T, line string) *jsonvalue.Value {
 	t.Helper()
-	value, err := compat.Decode([]byte(line))
+	value, err := jsonvalue.Decode([]byte(line))
 	if err != nil {
 		t.Fatalf("Decode(%s) error = %v", line, err)
 	}
@@ -52,19 +52,46 @@ func mustEngine(t *testing.T, cfg Config) *Engine {
 	return engine
 }
 
-func TestStubMatchesPythonUploaderByteForByte(t *testing.T) {
+// plainValueChanges lists the reference cases, by request id, where reading
+// header values as plain values resolves a different id than the earlier
+// Python uploader did: a boolean is no longer read as "True", and a zero is
+// a value instead of falling through to the next header.
+var plainValueChanges = map[string]string{
+	`"request_id":"r22"`: "",
+	`"request_id":"r23"`: "0",
+}
+
+func plainValueChange(line string) (string, bool) {
+	for key, id := range plainValueChanges {
+		if strings.Contains(line, key) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// TestStubMatchesPythonUploader checks that the stub has the earlier Python
+// uploader's keys, key order and values. Its bytes are plain JSON, so
+// formatting such as non-ASCII escapes may differ.
+func TestStubMatchesPythonUploader(t *testing.T) {
 	for _, tc := range loadGolden(t) {
 		t.Run(tc.In, func(t *testing.T) {
 			engine := mustEngine(t, FromIDs(strings.Split(tc.IDs, ",")))
 			record := mustDecode(t, tc.In)
-			before := string(compat.Encode(record))
+			before := string(jsonvalue.Encode(record))
 
 			got, outcome := engine.Apply(record)
+			if _, changed := plainValueChange(tc.In); changed {
+				if outcome.Action != "" || got != record {
+					t.Fatalf("outcome = %+v, want the record passed through", outcome)
+				}
+				return
+			}
 			if tc.Out == nil {
 				if outcome.Action != "" || got != record {
 					t.Fatalf("outcome = %+v, want the record passed through", outcome)
 				}
-				if after := string(compat.Encode(record)); after != before {
+				if after := string(jsonvalue.Encode(record)); after != before {
 					t.Fatalf("record changed to %s", after)
 				}
 				return
@@ -72,8 +99,8 @@ func TestStubMatchesPythonUploaderByteForByte(t *testing.T) {
 			if outcome.Action != StripPayload || outcome.ID != tc.NCAID {
 				t.Fatalf("outcome = %+v, want stripPayload with id %q", outcome, tc.NCAID)
 			}
-			if encoded := string(compat.Encode(got)); encoded != *tc.Out {
-				t.Errorf("stub = %s\nwant   %s", encoded, *tc.Out)
+			if want := mustDecode(t, *tc.Out); !jsonvalue.Equal(got, want) {
+				t.Errorf("stub = %s\nwant   %s", jsonvalue.Encode(got), *tc.Out)
 			}
 		})
 	}
@@ -86,8 +113,12 @@ func TestResolveIDMatchesPythonUploader(t *testing.T) {
 		if CarriesPayload(event) {
 			got = NormalizeID(ResolveHeader(HeaderSets(event), DefaultHeaders...))
 		}
-		if got != tc.NCAID {
-			t.Errorf("%s: id = %q, want %q", tc.In, got, tc.NCAID)
+		want := tc.NCAID
+		if id, changed := plainValueChange(tc.In); changed {
+			want = id
+		}
+		if got != want {
+			t.Errorf("%s: id = %q, want %q", tc.In, got, want)
 		}
 	}
 }
@@ -187,5 +218,16 @@ func TestConfigValidate(t *testing.T) {
 				t.Fatalf("New() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestStubIsPlainJSON(t *testing.T) {
+	engine := mustEngine(t, FromIDs([]string{"acme"}))
+	record := mustDecode(t, "{\"timestamp\":1.5e3,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"model\":\"caf\u00e9 \u2603\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}")
+	got, _ := engine.Apply(record)
+	want := "{\"timestamp\":1.5e3,\"event\":{\"event_type\":\"request_payload\",\"payload\":{\"model\":\"caf\u00e9 \u2603\",\"payload_complete\":false," +
+		"\"payload_drop_reason\":\"nca_id\",\"payload_suppressed\":true,\"suppression_reason\":\"nca_id\",\"nca_id\":\"acme\",\"http_request_headers\":{\"nvcf-ncaid\":\"acme\"}}}}"
+	if encoded := string(jsonvalue.Encode(got)); encoded != want {
+		t.Fatalf("stub = %s\nwant   %s", encoded, want)
 	}
 }

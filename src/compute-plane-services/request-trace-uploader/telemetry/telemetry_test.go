@@ -44,8 +44,8 @@ func TestCatalogNamesAreUniqueAndLabelsBounded(t *testing.T) {
 
 func TestCatalogNamesAreBackendNeutral(t *testing.T) {
 	for _, instrument := range Instruments() {
-		backends := []string{"s3"}
-		for _, backend := range []config.Backend{config.BackendKratos, config.BackendObjectStore, config.BackendDebug} {
+		backends := []string{"s3", "example"}
+		for _, backend := range []config.Backend{config.BackendObjectStore, config.BackendDebug} {
 			backends = append(backends, string(backend))
 		}
 		for _, backend := range backends {
@@ -65,7 +65,6 @@ func TestCatalogCoversRequiredInstruments(t *testing.T) {
 		JobsStranded, SegmentsEvicted, QuarantineTripped,
 		SpoolUsedBytes, SpoolFreeBytes, PendingBytes, OldestPendingAge,
 		BatchSegments, BatchBytes, BatchSplits,
-		LeftoversRemoved, LeftoversKept, SegmentsMissed,
 	}
 	for _, name := range required {
 		if _, ok := Lookup(name); !ok {

@@ -20,11 +20,18 @@ alias(
 go_test(
     name = "telemetry_test",
     srcs = [
+        "buckets_test.go",
+        "imports_test.go",
         "receiver_test.go",
         "safe_test.go",
         "suppression_test.go",
         "telemetry_test.go",
     ],
+    # imports_test.go reads the package sources.
+    data = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
     embed = [":telemetry"],
     deps = ["//src/compute-plane-services/request-trace-uploader/config"],
 )

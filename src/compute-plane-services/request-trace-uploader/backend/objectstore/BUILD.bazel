@@ -21,10 +21,14 @@ alias(
 
 go_test(
     name = "objectstore_test",
-    srcs = ["objectstore_test.go"],
+    srcs = [
+        "key_test.go",
+        "objectstore_test.go",
+    ],
     embed = [":objectstore"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/backend",
         "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/segment",
     ],
 )

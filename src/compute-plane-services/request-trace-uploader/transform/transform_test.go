@@ -11,13 +11,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/suppress"
 )
 
@@ -39,7 +40,7 @@ func (w *memoryWriter) Write(r Record) error {
 	w.records = append(w.records, r)
 	var headers []string
 	for _, set := range r.Headers {
-		headers = append(headers, string(compat.Encode(set)))
+		headers = append(headers, string(jsonvalue.Encode(set)))
 	}
 	w.headers = append(w.headers, headers)
 	return nil
@@ -255,10 +256,58 @@ func TestPrepareQuarantinePastBadFraction(t *testing.T) {
 	}
 }
 
-func TestPrepareQuarantinesOlderDynamoRecord(t *testing.T) {
-	result, writer, _ := prepare(t, DefaultConfig(), segmentFile(t, textLine, `{"schema_version":1,"request_id":"r","model":"m"}`, textLine))
-	if result.Quarantine != ReasonUnsupportedVersion || !writer.aborted || writer.closed {
-		t.Fatalf("result = %+v aborted = %v, want the segment quarantined as unsupported", result, writer.aborted)
+// olderDynamoLine is a Dynamo v1.3.x AuditRecord.
+const olderDynamoLine = `{"schema_version":1,"request_id":"r","requested_streaming":false,"model":"m"}`
+
+func TestPrepareDropsOlderDynamoRecordsAndKeepsLaterOnes(t *testing.T) {
+	result, writer, rejects := prepare(t, DefaultConfig(), segmentFile(t, textLine, olderDynamoLine, textLine, olderDynamoLine, `{"event":`+olderDynamoLine+`}`))
+	if result.UnsupportedVersion != 3 || result.Written != 2 || len(writer.payloads) != 2 {
+		t.Fatalf("result = %+v, want 3 older records dropped and both v1.4.0 records written", result)
+	}
+	if result.Quarantine != "" || !writer.closed || writer.aborted {
+		t.Fatalf("result = %+v closed = %v, want the segment exported", result, writer.closed)
+	}
+	if rejects != "" || result.Bad() != 0 {
+		t.Fatalf("rejects = %q bad = %d, want dropped older records neither rejected nor bad", rejects, result.Bad())
+	}
+}
+
+func TestPrepareSegmentOfOnlyOlderDynamoRecordsIsEmpty(t *testing.T) {
+	result, writer, _ := prepare(t, DefaultConfig(), segmentFile(t, olderDynamoLine, olderDynamoLine))
+	if result.UnsupportedVersion != 2 || result.Written != 0 || result.Quarantine != "" {
+		t.Fatalf("result = %+v, want both records dropped and no quarantine", result)
+	}
+	if !writer.aborted || writer.closed {
+		t.Fatalf("aborted = %v closed = %v, want no transport, as for an empty segment", writer.aborted, writer.closed)
+	}
+}
+
+func TestPrepareLogsOneVersionErrorPerSegment(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	prepare(t, DefaultConfig(), segmentFile(t, olderDynamoLine, textLine, olderDynamoLine))
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "level=ERROR") || !strings.Contains(lines[0], "v1.4.0") || !strings.Contains(lines[0], "records=2") {
+		t.Fatalf("logs = %q, want one error naming the minimum version and the count", logs.String())
+	}
+	if strings.Contains(logs.String(), "request_id") || strings.Contains(logs.String(), "request-trace.") {
+		t.Fatalf("logs = %q, want no record content or path", logs.String())
+	}
+}
+
+func TestPrepareLogsNothingWithoutOlderDynamoRecords(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	prepare(t, DefaultConfig(), segmentFile(t, textLine))
+	if logs.Len() != 0 {
+		t.Fatalf("logs = %q, want none", logs.String())
 	}
 }
 
@@ -359,7 +408,7 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestPrepareLegacyQuarantineStillFingerprintsTheWholeFile(t *testing.T) {
+func TestPrepareWithOlderDynamoRecordsFingerprintsTheWholeFile(t *testing.T) {
 	long := `{"event_type":"request_end","note":"` + strings.Repeat("x", 300) + `"}`
 	tests := []struct {
 		name         string
@@ -367,8 +416,8 @@ func TestPrepareLegacyQuarantineStillFingerprintsTheWholeFile(t *testing.T) {
 		lineTooLong  int
 		wantRejected string
 	}{
-		{name: "legacy first", lines: []string{`{"schema_version":1}`, `{}`, `not json`}},
-		{name: "after a long line", lines: []string{long, textLine, `{"schema_version":1}`, `not json`}, lineTooLong: 1, wantRejected: long + "\n"},
+		{name: "older record first", lines: []string{`{"schema_version":1}`, `{}`, `not json`}, wantRejected: "not json\n"},
+		{name: "after a long line", lines: []string{long, textLine, `{"schema_version":1}`, `not json`}, lineTooLong: 1, wantRejected: long + "\nnot json\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -383,11 +432,11 @@ func TestPrepareLegacyQuarantineStillFingerprintsTheWholeFile(t *testing.T) {
 			if want := sha256.Sum256(data); !bytes.Equal(result.Fingerprint, want[:]) {
 				t.Fatalf("fingerprint = %x, want the file hash %x", result.Fingerprint, want)
 			}
-			if result.Quarantine != ReasonUnsupportedVersion || !writer.aborted || writer.closed {
-				t.Fatalf("result = %+v aborted = %v, want an unsupported-version quarantine", result, writer.aborted)
+			if result.UnsupportedVersion != 1 || result.Quarantine != "" || !writer.closed {
+				t.Fatalf("result = %+v closed = %v, want the older record dropped and the rest exported", result, writer.closed)
 			}
 			if result.LineTooLong != tt.lineTooLong || rejects != tt.wantRejected {
-				t.Fatalf("line too long = %d rejects = %.40q, want %d and only lines before the legacy record", result.LineTooLong, rejects, tt.lineTooLong)
+				t.Fatalf("line too long = %d rejects = %q, want %d and %q", result.LineTooLong, rejects, tt.lineTooLong, tt.wantRejected)
 			}
 		})
 	}
@@ -410,5 +459,17 @@ func TestPrepareAbortsWhenCloseFails(t *testing.T) {
 	}
 	if !writer.aborted {
 		t.Fatal("writer not aborted after Close failed")
+	}
+}
+
+func TestPrepareReencodesChangedRecordsAsPlainJSON(t *testing.T) {
+	line := `{"event_type":"request_payload","event_time_unix_ms":1.5e3,"payload":{"note":"caf\u00e9","request":{"messages":[{"role":"user","content":"` + pngURL + `"}]}}}`
+	_, writer, _ := prepare(t, DefaultConfig(), segmentFile(t, line))
+	if len(writer.payloads) != 1 {
+		t.Fatalf("payloads = %d, want 1", len(writer.payloads))
+	}
+	payload := writer.payloads[0]
+	if !strings.Contains(payload, "\"note\":\"caf\u00e9\"") || !strings.Contains(payload, `"event_time_unix_ms":1.5e3`) || strings.Contains(payload, `\u00e9`) {
+		t.Fatalf("payload = %s, want UTF-8 text and the source number", payload)
 	}
 }

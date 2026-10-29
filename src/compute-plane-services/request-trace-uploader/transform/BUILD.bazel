@@ -10,7 +10,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/record",
-        "//src/compute-plane-services/request-trace-uploader/transform/compat",
+        "//src/compute-plane-services/request-trace-uploader/transform/jsonvalue",
         "//src/compute-plane-services/request-trace-uploader/transform/redact",
         "//src/compute-plane-services/request-trace-uploader/transform/suppress",
     ],
@@ -33,7 +33,7 @@ go_test(
     embed = [":transform"],
     deps = [
         "//src/compute-plane-services/request-trace-uploader/segment",
-        "//src/compute-plane-services/request-trace-uploader/transform/compat",
+        "//src/compute-plane-services/request-trace-uploader/transform/jsonvalue",
         "//src/compute-plane-services/request-trace-uploader/transform/suppress",
     ],
 )

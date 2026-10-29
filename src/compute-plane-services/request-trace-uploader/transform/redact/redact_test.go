@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // golden holds what the earlier Python uploader produced: the redacted
@@ -50,26 +50,39 @@ func loadGolden(t *testing.T) golden {
 	return g
 }
 
+// TestRecordMatchesPythonUploader checks that redaction finds the same media
+// and writes the same markers as the earlier Python uploader. The record is
+// compared by keys, key order and values; its bytes are plain JSON.
 func TestRecordMatchesPythonUploader(t *testing.T) {
 	for _, tc := range loadGolden(t).Records {
 		t.Run(tc.Name, func(t *testing.T) {
-			record, err := compat.Decode([]byte(tc.In))
+			record, err := jsonvalue.Decode([]byte(tc.In))
+			if strings.Contains(tc.In, "NaN") {
+				if err == nil {
+					t.Fatal("Decode() accepted NaN, which is not JSON")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := string(compat.Encode(record))
+			before := string(jsonvalue.Encode(record))
 			got, count := Record(record)
 			if count != tc.Count {
 				t.Fatalf("count = %d, want %d", count, tc.Count)
 			}
-			encoded := string(compat.Encode(got))
+			encoded := string(jsonvalue.Encode(got))
 			if tc.Out == nil {
 				if encoded != before {
 					t.Fatalf("record changed with nothing redacted:\n%s", encoded)
 				}
 				return
 			}
-			if encoded != *tc.Out {
+			want, err := jsonvalue.Decode([]byte(*tc.Out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !jsonvalue.Equal(got, want) {
 				t.Errorf("redacted =\n%s\nwant\n%s", encoded, *tc.Out)
 			}
 		})
@@ -149,7 +162,7 @@ func TestLargeRecordIsRedactedQuickly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := compat.Decode(line)
+	record, err := jsonvalue.Decode(line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +174,7 @@ func TestLargeRecordIsRedactedQuickly(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
 	}
-	if size := len(compat.Encode(got)); size > 4096 {
+	if size := len(jsonvalue.Encode(got)); size > 4096 {
 		t.Errorf("redacted record is %d bytes, want the media replaced", size)
 	}
 	if elapsed > 10*time.Second {
@@ -215,5 +228,35 @@ func TestDataURLScanIsLinear(t *testing.T) {
 				t.Fatalf("redacting %d bytes of %q took over 10 s", len(text), unit)
 			}
 		})
+	}
+}
+
+func TestRedactedRecordIsPlainJSON(t *testing.T) {
+	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
+	record, err := jsonvalue.Decode([]byte("{\"score\":1.50,\"content\":\"caf\u00e9 " + png + "\"}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, count := Record(record)
+	encoded := string(jsonvalue.Encode(got))
+	if count != 1 || !strings.HasPrefix(encoded, "{\"score\":1.50,\"content\":\"caf\u00e9 [redacted:multimodal kind=data_url mime=image/png bytes=") {
+		t.Fatalf("redacted = %s, want UTF-8 text, the source number and an inline token", encoded)
+	}
+}
+
+// TestPyStripMatchesPython uses expected values from Python's str.strip().
+func TestPyStripMatchesPython(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{in: " a ", want: "a"},
+		{in: "\t\n x \r\u000b\f", want: "x"},
+		{in: "\u001c\u001d\u001e\u001fy\u0085", want: "y"},
+		{in: "\u00a0z\u2028\u3000", want: "z"},
+		{in: "\u200bq\u200b", want: "\u200bq\u200b"},
+		{in: "", want: ""},
+	}
+	for _, tt := range tests {
+		if got := pyStrip(tt.in); got != tt.want {
+			t.Errorf("pyStrip(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }

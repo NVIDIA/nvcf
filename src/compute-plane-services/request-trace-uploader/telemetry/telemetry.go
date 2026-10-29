@@ -80,13 +80,6 @@ const (
 	BatchSegments     = "batch_segments"
 	BatchBytes        = "batch_bytes"
 	BatchSplits       = "batch_splits"
-	// LeftoversRemoved and LeftoversKept count files another uploader left on
-	// the spool, by registered kind.
-	LeftoversRemoved = "leftovers_removed"
-	LeftoversKept    = "leftovers_kept"
-	// SegmentsMissed counts segments that left the spool before this uploader
-	// read them, which only happens in shadow mode.
-	SegmentsMissed = "segments_missed"
 	// RecordsEvaluated counts records checked against suppression rules,
 	// RecordsSuppressed the records a rule acted on, and
 	// SuppressionHeaderPresent the evaluated records that carried a rule's
@@ -101,6 +94,9 @@ const (
 	// UnknownStatus counts job status reads that returned a status the core
 	// does not know. The job is treated as still running.
 	UnknownStatus = "unknown_status"
+	// SegmentsQuarantined counts segments moved to quarantine, by reason. A
+	// reason outside QuarantineReasons is counted as "unknown".
+	SegmentsQuarantined = "segments_quarantined"
 )
 
 // Labels are the attributes of one observation, without BackendLabel.
@@ -117,7 +113,20 @@ type Instrument struct {
 	// Values enumerates the allowed values of a label key. A counter whose
 	// keys are all enumerated is preset to zero for every combination.
 	Values map[string][]string
+	// Buckets are a histogram's explicit upper bounds, chosen for its unit.
+	// Other kinds have none.
+	Buckets []float64
 }
+
+// Histogram boundaries by unit.
+var (
+	// secondsBuckets span a sub-second call to a confirmation a day later.
+	secondsBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400}
+	// bytesBuckets span 1 KiB to the 8 GiB a single job may carry.
+	bytesBuckets = []float64{1 << 10, 16 << 10, 256 << 10, 1 << 20, 4 << 20, 16 << 20, 64 << 20, 256 << 20, 1 << 30, 4 << 30, 8 << 30}
+	// countBuckets span one segment to the 500 files a single job may carry.
+	countBuckets = []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512}
+)
 
 var allowedLabelKeys = map[string]bool{
 	BackendLabel:  true,
@@ -143,12 +152,20 @@ var payloadRecords = map[string][]string{"record_type": {"request_payload"}}
 // SuppressionActions are the action label values of RecordsSuppressed.
 var SuppressionActions = []string{"strip_payload", "drop_record"}
 
+// QuarantineReasons are the reason label values of SegmentsQuarantined: the
+// reasons prepare, batching and the fault policy record, and the backend
+// fault reasons. "unknown" also counts any reason not listed here.
+var QuarantineReasons = []string{
+	"bad_records", "unreadable", "unsupported_version", "too_large", "rejected", "retained",
+	"source_missing", "auth", "rate_limit", "timeout", "canceled", "unavailable", "unknown",
+}
+
 var catalog = []Instrument{
 	{Name: Uploads, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
-	{Name: UploadDuration, Kind: Histogram, Unit: "s"},
+	{Name: UploadDuration, Kind: Histogram, Unit: "s", Buckets: secondsBuckets},
 	{Name: SourceBytes, Kind: Counter, Unit: "By"},
 	{Name: TransportBytes, Kind: Counter, Unit: "By"},
-	{Name: ConfirmLatency, Kind: Histogram, Unit: "s"},
+	{Name: ConfirmLatency, Kind: Histogram, Unit: "s", Buckets: secondsBuckets},
 	{Name: RecordsDropped, Kind: Counter, Unit: "1", Labels: []string{"record_type", "reason"}},
 	{Name: Deletions, Kind: Counter, Unit: "1", Labels: []string{"status"}, Values: outcome},
 	{Name: PendingSegments, Kind: Gauge, Unit: "1"},
@@ -168,18 +185,17 @@ var catalog = []Instrument{
 	{Name: SpoolFreeBytes, Kind: Gauge, Unit: "By"},
 	{Name: PendingBytes, Kind: Gauge, Unit: "By"},
 	{Name: OldestPendingAge, Kind: Gauge, Unit: "s"},
-	{Name: BatchSegments, Kind: Histogram, Unit: "1"},
-	{Name: BatchBytes, Kind: Histogram, Unit: "By"},
+	{Name: BatchSegments, Kind: Histogram, Unit: "1", Buckets: countBuckets},
+	{Name: BatchBytes, Kind: Histogram, Unit: "By", Buckets: bytesBuckets},
 	{Name: BatchSplits, Kind: Counter, Unit: "1"},
-	{Name: LeftoversRemoved, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
-	{Name: LeftoversKept, Kind: Counter, Unit: "1", Labels: []string{"kind"}},
-	{Name: SegmentsMissed, Kind: Counter, Unit: "1"},
 	{Name: RecordsEvaluated, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 	{Name: RecordsSuppressed, Kind: Counter, Unit: "1", Labels: []string{"rule", "action"},
 		Values: map[string][]string{"action": SuppressionActions}},
 	{Name: SuppressionHeaderPresent, Kind: Counter, Unit: "1", Labels: []string{"rule"}},
 	{Name: RecordsIncomplete, Kind: Counter, Unit: "1", Labels: []string{"record_type"}, Values: payloadRecords},
 	{Name: UnknownStatus, Kind: Counter, Unit: "1"},
+	{Name: SegmentsQuarantined, Kind: Counter, Unit: "1", Labels: []string{"reason"},
+		Values: map[string][]string{"reason": QuarantineReasons}},
 }
 
 var byName = func() map[string]Instrument {
@@ -214,7 +230,7 @@ type Metrics interface {
 
 // ValidLabelValue reports whether value is a short lowercase token, the only
 // shape a label value may take. Packages that define label values at startup,
-// such as the backend name or a leftover kind, check them with it.
+// such as the backend name, check them with it.
 func ValidLabelValue(value string) error {
 	if !labelValuePattern.MatchString(value) {
 		return fmt.Errorf("telemetry label value %q must match %s", value, labelValuePattern)

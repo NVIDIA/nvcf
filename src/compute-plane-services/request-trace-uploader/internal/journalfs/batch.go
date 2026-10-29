@@ -187,9 +187,13 @@ func (s *Store) SetReceipt(batchID string, r journal.Receipt) error {
 }
 
 // RetryBatch records a retryable failure that created nothing, with the time
-// of the next attempt, so the wait survives a restart.
+// of the next attempt, so the wait survives a restart. A batch with a
+// receipt has a job and is polled instead.
 func (s *Store) RetryBatch(batchID string, next time.Time, errorClass string) error {
 	return s.updateBatch(batchID, func(b *journal.Batch) error {
+		if b.Receipt != nil {
+			return fmt.Errorf("%w: batch %s has a job to poll", journal.ErrReceiptExists, batchID)
+		}
 		if err := batchTransition(b, journal.StateRetryWait); err != nil {
 			return err
 		}
@@ -274,8 +278,28 @@ func (s *Store) ReleaseBatch(batchID string) error {
 	return s.settleMembersLocked(s.batches[batchID])
 }
 
+// SettleBatches applies every confirmed or released batch to the members
+// it has not reached yet, such as after a member write failed during
+// ConfirmBatch. It writes nothing when every member is settled, so a caller
+// can run it on every round.
+func (s *Store) SettleBatches() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.openLocked(); err != nil {
+		return err
+	}
+	var errs []error
+	for _, b := range s.sortedBatchesLocked() {
+		if terminalBatch(b.State) {
+			errs = append(errs, s.settleMembersLocked(b))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // settleMembersLocked applies a terminal batch state to every member
-// destination that still points at the batch. It is idempotent.
+// destination that still points at the batch. It is idempotent and skips a
+// destination that is already settled.
 func (s *Store) settleMembersLocked(b *journal.Batch) error {
 	var errs []error
 	for _, m := range b.Members {
@@ -287,12 +311,16 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 		if dest == nil || dest.BatchID != b.ID {
 			continue
 		}
+		if b.State == journal.StateConfirmed && dest.State == journal.StateConfirmed && inFlightTarget(seg) == seg.State {
+			continue
+		}
 		err := s.updateSegmentLocked(seg.ID, func(seg *journal.Segment) error {
 			dest := seg.Destinations[b.Destination]
 			switch b.State {
 			case journal.StateConfirmed:
 				dest.State = journal.StateConfirmed
 				dest.ConfirmedAt = b.ConfirmedAt
+				dest.Exported = b.Receipt != nil && b.Receipt.Exported
 			case journal.StateReleased:
 				dest.BatchID = ""
 				if dest.State == journal.StateSubmitting {
@@ -310,22 +338,7 @@ func (s *Store) settleMembersLocked(b *journal.Batch) error {
 // in flight: Confirmed when every destination is, Submitting while any is in
 // a batch, and Prepared otherwise.
 func (s *Store) settleInFlight(seg *journal.Segment) error {
-	if seg.State != journal.StatePrepared && seg.State != journal.StateSubmitting {
-		return nil
-	}
-	target := journal.StatePrepared
-	confirmed := 0
-	for _, dest := range seg.Destinations {
-		switch dest.State {
-		case journal.StateSubmitting:
-			target = journal.StateSubmitting
-		case journal.StateConfirmed:
-			confirmed++
-		}
-	}
-	if confirmed > 0 && confirmed == len(seg.Destinations) {
-		target = journal.StateConfirmed
-	}
+	target := inFlightTarget(seg)
 	if target == seg.State {
 		return nil
 	}
@@ -366,5 +379,30 @@ func batchTransition(b *journal.Batch, to journal.State) error {
 		return fmt.Errorf("%w: batch %s from %s to %s", journal.ErrInvalidTransition, b.ID, b.State, to)
 	}
 	b.State = to
+	if to == journal.StateAmbiguous {
+		b.MayHaveLanded = true
+	}
 	return nil
+}
+
+// inFlightTarget returns the state an in-flight segment should hold given
+// its destinations. A segment that is not in flight keeps its state.
+func inFlightTarget(seg *journal.Segment) journal.State {
+	if !inFlight(seg.State) {
+		return seg.State
+	}
+	target := journal.StatePrepared
+	confirmed := 0
+	for _, dest := range seg.Destinations {
+		switch dest.State {
+		case journal.StateSubmitting:
+			target = journal.StateSubmitting
+		case journal.StateConfirmed:
+			confirmed++
+		}
+	}
+	if confirmed > 0 && confirmed == len(seg.Destinations) {
+		target = journal.StateConfirmed
+	}
+	return target
 }

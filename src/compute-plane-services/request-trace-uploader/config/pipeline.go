@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
@@ -39,15 +40,6 @@ const (
 	settingPrefix = "REQUEST_TRACE_UPLOADER_"
 )
 
-// The names a deployment already sets for a sidecar uploader. They carry no
-// backend meaning, so this package owns their aliases.
-func init() {
-	RegisterEnvAlias(EnvSourceDir, "TRACE_DIR")
-	RegisterEnvAlias(EnvSegmentPrefix, "TRACE_FILE_PREFIX")
-	RegisterEnvAlias(EnvScanInterval, "UPLOAD_INTERVAL_SECONDS")
-	RegisterEnvAlias(EnvDrainTimeout, "SHUTDOWN_DRAIN_SECONDS")
-}
-
 // Prefixes lists the segment families to upload: the segment prefix, then
 // the audit prefix when one is set.
 func (c Config) Prefixes() []string {
@@ -57,18 +49,14 @@ func (c Config) Prefixes() []string {
 	return []string{c.SegmentPrefix, c.AuditPrefix}
 }
 
-// LoadStrict reads Config the way a deployed uploader must: through the
-// registered aliases, with every value that Load would replace by a default
-// treated as an error, and with any unknown name that carries this
+// LoadStrict reads Config the way a deployed uploader must: only from this
+// package's own setting names, with every value that Load would replace by a
+// default treated as an error, and with any unknown name that carries this
 // package's prefix in environ treated as an error too, so a misspelled
 // setting cannot be ignored. environ is the process environment in
 // os.Environ form. Errors name settings, never their values.
 func LoadStrict(lookup LookupFunc, environ []string) (Config, error) {
-	aliased, err := WithAliases(lookup)
-	if err != nil {
-		return Config{}, err
-	}
-	cfg, warnings, err := Load(aliased)
+	cfg, warnings, err := Load(lookup)
 	if err != nil {
 		return Config{}, err
 	}
@@ -81,20 +69,31 @@ func LoadStrict(lookup LookupFunc, environ []string) (Config, error) {
 	return cfg, nil
 }
 
+// knownSettings is the set of names Load reads, found by running Load once
+// with a recording lookup, so it cannot drift from Load.
+var knownSettings = sync.OnceValue(func() map[string]bool {
+	names := map[string]bool{}
+	_, _, _ = Load(func(name string) (string, bool) {
+		names[name] = true
+		switch name {
+		case EnvSourceDir:
+			return "/", true
+		case EnvBackend:
+			return string(BackendDebug), true
+		}
+		return "", false
+	})
+	return names
+})
+
 func unknownSettings(environ []string) []string {
 	known := knownSettings()
-	aliasMu.RLock()
-	defer aliasMu.RUnlock()
 	var unknown []string
 	for _, entry := range environ {
 		name, _, _ := strings.Cut(entry, "=")
-		if !strings.HasPrefix(name, settingPrefix) || known[name] {
-			continue
+		if strings.HasPrefix(name, settingPrefix) && !known[name] {
+			unknown = append(unknown, name)
 		}
-		if _, isAlias := aliasOwner[name]; isAlias {
-			continue
-		}
-		unknown = append(unknown, name)
 	}
 	sort.Strings(unknown)
 	return unknown

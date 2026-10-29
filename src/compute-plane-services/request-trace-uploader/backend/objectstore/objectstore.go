@@ -173,9 +173,13 @@ func loadCredentials(path string) (credentials, error) {
 	return creds, nil
 }
 
-// Submit uploads the segment at request.Path and returns once the store has
+// Submit uploads the file at request.Path and returns once the store has
 // durably accepted it. The returned id is the object key: Status looks
-// nothing up because Capabilities declares TerminalOutcomeSync.
+// nothing up because the outcome is already final.
+//
+// The key names the source segment, request.Segment.Path, when the request
+// carries one, so the object layout does not depend on what the uploader
+// calls the prepared file it sends. Otherwise it names request.Path.
 //
 // In dry-run mode, Submit stats the segment, computes the key, logs both
 // along with the bucket and size, and returns without opening the file or
@@ -189,7 +193,7 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 		return "", fmt.Errorf("objectstore backend: segment is %d bytes, over the %d byte single-object limit", info.Size(), maxObjectBytes)
 	}
 
-	key := c.key(request.Path)
+	key := c.key(objectName(request))
 	if c.dryRun {
 		slog.Info("objectstore backend: dry run, not uploading",
 			"segment", request.Segment.Index,
@@ -227,23 +231,27 @@ func (c *Client) Status(context.Context, string) (backend.Status, error) {
 	return backend.StatusSuccess, nil
 }
 
-// Capabilities declares that PutObject is a single synchronous, idempotent
-// call: a Submit that returns success is already durable, resubmitting the
-// same segment overwrites the same key, and segments are independent objects
-// so nothing requires in-order delivery.
+// Capabilities declares that PutObject is idempotent: resubmitting the same
+// segment overwrites the same key.
 //
 // Exports is false in dry-run mode: nothing was sent anywhere, so a caller
 // must never delete a source segment on the strength of a dry-run Submit
 // succeeding, the same rule debug's Capabilities enforces for its own reads.
 func (c *Client) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		ResubmitSafe:        true,
-		TerminalOutcomeSync: true,
-		OutOfOrderTolerant:  true,
-		AcceptedFormats:     []backend.Format{backend.FormatGzipJSONL},
-		MaxObjectBytes:      maxObjectBytes,
-		Exports:             !c.dryRun,
+		ResubmitSafe:    true,
+		AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+		MaxObjectBytes:  maxObjectBytes,
+		Exports:         !c.dryRun,
 	}
+}
+
+// objectName returns the path whose file name the object key uses.
+func objectName(request backend.SubmitRequest) string {
+	if request.Segment.Path != "" {
+		return request.Segment.Path
+	}
+	return request.Path
 }
 
 func (c *Client) key(sourcePath string) string {

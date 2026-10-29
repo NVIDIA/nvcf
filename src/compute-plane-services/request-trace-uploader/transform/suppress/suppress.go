@@ -5,17 +5,16 @@
 //
 // A rule names a header group, the values that match, and an action. Only
 // records that carry a request payload are evaluated, because only those
-// carry request headers and bodies. A header value is looked up and
-// normalized exactly as the earlier Python uploader did, and stripPayload
-// writes that uploader's stub byte for byte, so suppressed rows do not change
-// shape for their consumers.
+// carry request headers and bodies. stripPayload writes the stub the earlier
+// uploader wrote, with the same keys in the same order, so suppressed rows
+// keep their shape for their consumers.
 package suppress
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // Action is what a matching rule does to a record.
@@ -193,7 +192,7 @@ type Outcome struct {
 // rule matches, the stub for StripPayload, and nil for DropRecord. record is
 // never changed. Every rule's header group is checked, so Outcome.Present is
 // complete even after an earlier rule matched.
-func (e *Engine) Apply(record *compat.Value) (*compat.Value, Outcome) {
+func (e *Engine) Apply(record *jsonvalue.Value) (*jsonvalue.Value, Outcome) {
 	var outcome Outcome
 	if len(e.rules) == 0 {
 		return record, outcome
@@ -243,8 +242,8 @@ func (e *Engine) Apply(record *compat.Value) (*compat.Value, Outcome) {
 // EventOf returns the event of a record: the "event" member of a wrapped
 // record, the record itself when bare, and nil when the record is not an
 // object.
-func EventOf(record *compat.Value) *compat.Value {
-	if record == nil || record.Kind() != compat.Object {
+func EventOf(record *jsonvalue.Value) *jsonvalue.Value {
+	if record == nil || record.Kind() != jsonvalue.Object {
 		return nil
 	}
 	if record.Has("event") {
@@ -254,25 +253,26 @@ func EventOf(record *compat.Value) *compat.Value {
 }
 
 // CarriesPayload reports whether event is a request_payload record.
-func CarriesPayload(event *compat.Value) bool {
-	if event == nil || event.Kind() != compat.Object || !event.Has("event_type") {
+func CarriesPayload(event *jsonvalue.Value) bool {
+	if event == nil || event.Kind() != jsonvalue.Object || !event.Has("event_type") {
 		return false
 	}
-	return compat.PyStr(event.Get("event_type")) == "request_payload"
+	eventType, ok := event.Get("event_type").String()
+	return ok && eventType == "request_payload"
 }
 
 // HeaderSets returns the header objects of an event in lookup order: the
 // top-level "headers", then "payload.http_request_headers".
-func HeaderSets(event *compat.Value) []*compat.Value {
-	if event == nil || event.Kind() != compat.Object {
+func HeaderSets(event *jsonvalue.Value) []*jsonvalue.Value {
+	if event == nil || event.Kind() != jsonvalue.Object {
 		return nil
 	}
-	var sets []*compat.Value
-	if headers := event.Get("headers"); headers != nil && headers.Kind() == compat.Object {
+	var sets []*jsonvalue.Value
+	if headers := event.Get("headers"); headers != nil && headers.Kind() == jsonvalue.Object {
 		sets = append(sets, headers)
 	}
-	if payload := event.Get("payload"); payload != nil && payload.Kind() == compat.Object {
-		if headers := payload.Get("http_request_headers"); headers != nil && headers.Kind() == compat.Object {
+	if payload := event.Get("payload"); payload != nil && payload.Kind() == jsonvalue.Object {
+		if headers := payload.Get("http_request_headers"); headers != nil && headers.Kind() == jsonvalue.Object {
 			sets = append(sets, headers)
 		}
 	}
@@ -280,26 +280,26 @@ func HeaderSets(event *compat.Value) []*compat.Value {
 }
 
 // ResolveHeader returns the first non-blank value for names across sets. In
-// each set, each name takes the first key that lower-cases to it; a list
-// value gives its first truthy item; the value is Python's str() of it,
-// stripped.
-func ResolveHeader(sets []*compat.Value, names ...string) string {
+// each set, each name takes the first key that equals it ignoring ASCII
+// case. A header value is a string trimmed of white space or a number as it
+// was written; a list gives its first item that is a value. Booleans, null
+// and objects are not values.
+func ResolveHeader(sets []*jsonvalue.Value, names ...string) string {
 	for _, headers := range sets {
 		for _, name := range names {
 			value := firstKey(headers, name)
 			if value == nil {
 				continue
 			}
-			if value.Kind() == compat.Array {
-				value = firstTruthy(value.Items())
-				if value == nil {
-					continue
+			if value.Kind() == jsonvalue.Array {
+				for _, item := range value.Items() {
+					if text := headerText(item); text != "" {
+						return text
+					}
 				}
-			}
-			if !compat.Truthy(value) {
 				continue
 			}
-			if text := compat.PyStrip(compat.PyStr(value)); text != "" {
+			if text := headerText(value); text != "" {
 				return text
 			}
 		}
@@ -307,54 +307,53 @@ func ResolveHeader(sets []*compat.Value, names ...string) string {
 	return ""
 }
 
-func firstKey(headers *compat.Value, name string) *compat.Value {
+func headerText(value *jsonvalue.Value) string {
+	switch value.Kind() {
+	case jsonvalue.String:
+		text, _ := value.String()
+		return strings.TrimSpace(text)
+	case jsonvalue.Int, jsonvalue.Float:
+		return jsonvalue.Text(value)
+	}
+	return ""
+}
+
+func firstKey(headers *jsonvalue.Value, name string) *jsonvalue.Value {
 	for _, m := range headers.Members() {
-		if lowerEquals(m.Key, name) {
+		if asciiEqualFold(m.Key, name) {
 			return m.Value
 		}
 	}
 	return nil
 }
 
-func firstTruthy(items []*compat.Value) *compat.Value {
-	for _, item := range items {
-		if compat.Truthy(item) {
-			return item
-		}
+// asciiEqualFold reports whether key equals the lower-case name when ASCII
+// capitals are lower-cased. Header names are ASCII, so no other character
+// folds.
+func asciiEqualFold(key, name string) bool {
+	if len(key) != len(name) {
+		return false
 	}
-	return nil
-}
-
-// lowerEquals reports whether Python's key.lower() equals the ASCII name.
-// Only ASCII capitals and the Kelvin sign lower-case to ASCII letters, so
-// any other non-ASCII rune cannot match.
-func lowerEquals(key, name string) bool {
-	i := 0
-	for _, r := range key {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			r += 'a' - 'A'
-		case r == '\u212a':
-			r = 'k'
-		case r >= 0x80:
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != name[i] {
 			return false
 		}
-		if i >= len(name) || name[i] != byte(r) {
-			return false
-		}
-		i++
 	}
-	return i == len(name)
+	return true
 }
 
 // NormalizeID strips white space and, when both are present, the "nca-"
 // prefix and "-nca" suffix, so "nca-abc-nca" and "abc" match.
 func NormalizeID(value string) string {
-	value = compat.PyStrip(value)
+	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "nca-") || !strings.HasSuffix(value, "-nca") {
 		return value
 	}
-	// The affixes can overlap, as in "nca-nca"; Python's slice is then empty.
+	// The affixes can overlap, as in "nca-nca"; that id is empty.
 	if len(value) < len("nca--nca") {
 		return ""
 	}
@@ -364,24 +363,24 @@ func NormalizeID(value string) string {
 // stub builds the record that replaces a suppressed one. Copied keys keep
 // this order and appear only when present; a wrapped record keeps only its
 // timestamp.
-func stub(record, event *compat.Value, id string) *compat.Value {
-	var safeEvent *compat.Value
-	if payload := event.Get("payload"); payload != nil && payload.Kind() == compat.Object {
+func stub(record, event *jsonvalue.Value, id string) *jsonvalue.Value {
+	var safeEvent *jsonvalue.Value
+	if payload := event.Get("payload"); payload != nil && payload.Kind() == jsonvalue.Object {
 		safePayload := copyKeys(payload, "request_id", "endpoint", "model")
-		safePayload.Set("payload_complete", compat.NewBool(false))
-		safePayload.Set("payload_drop_reason", compat.NewString("nca_id"))
-		safePayload.Set("payload_suppressed", compat.NewBool(true))
-		safePayload.Set("suppression_reason", compat.NewString("nca_id"))
-		safePayload.Set("nca_id", compat.NewString(id))
+		safePayload.Set("payload_complete", jsonvalue.NewBool(false))
+		safePayload.Set("payload_drop_reason", jsonvalue.NewString("nca_id"))
+		safePayload.Set("payload_suppressed", jsonvalue.NewBool(true))
+		safePayload.Set("suppression_reason", jsonvalue.NewString("nca_id"))
+		safePayload.Set("nca_id", jsonvalue.NewString(id))
 		safePayload.Set("http_request_headers", singleHeader(id))
 		safeEvent = copyKeys(event, "schema", "event_type", "event_time_unix_ms", "event_source")
 		safeEvent.Set("payload", safePayload)
 	} else {
 		safeEvent = copyKeys(event, "schema", "schema_version", "event_type", "event_time_unix_ms",
 			"request_id", "requested_streaming", "model")
-		safeEvent.Set("payload_suppressed", compat.NewBool(true))
-		safeEvent.Set("suppression_reason", compat.NewString("nca_id"))
-		safeEvent.Set("nca_id", compat.NewString(id))
+		safeEvent.Set("payload_suppressed", jsonvalue.NewBool(true))
+		safeEvent.Set("suppression_reason", jsonvalue.NewString("nca_id"))
+		safeEvent.Set("nca_id", jsonvalue.NewString(id))
 		safeEvent.Set("headers", singleHeader(id))
 	}
 	if record == event {
@@ -392,8 +391,8 @@ func stub(record, event *compat.Value, id string) *compat.Value {
 	return safeRecord
 }
 
-func copyKeys(from *compat.Value, keys ...string) *compat.Value {
-	out := compat.NewObject()
+func copyKeys(from *jsonvalue.Value, keys ...string) *jsonvalue.Value {
+	out := jsonvalue.NewObject()
 	for _, key := range keys {
 		if from.Has(key) {
 			out.Set(key, from.Get(key))
@@ -402,8 +401,8 @@ func copyKeys(from *compat.Value, keys ...string) *compat.Value {
 	return out
 }
 
-func singleHeader(id string) *compat.Value {
-	headers := compat.NewObject()
-	headers.Set("nvcf-ncaid", compat.NewString(id))
+func singleHeader(id string) *jsonvalue.Value {
+	headers := jsonvalue.NewObject()
+	headers.Set("nvcf-ncaid", jsonvalue.NewString(id))
 	return headers
 }

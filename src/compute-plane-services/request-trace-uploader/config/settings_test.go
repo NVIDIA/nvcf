@@ -69,19 +69,45 @@ func TestLoadRejectsInvalidPipelineSettings(t *testing.T) {
 	}
 }
 
-func TestGenericDeploymentNamesAreAliases(t *testing.T) {
-	cfg, warnings, err := loadWithAliases(t, map[string]string{
-		"TRACE_DIR":               "/spool",
-		"TRACE_FILE_PREFIX":       "trace",
-		"UPLOAD_INTERVAL_SECONDS": "60",
-		"SHUTDOWN_DRAIN_SECONDS":  "15",
-		EnvBackend:                string(BackendDebug),
-	})
-	if err != nil || len(warnings) != 0 {
-		t.Fatalf("Load() error = %v warnings = %v", err, warnings)
+func mapLookup(values map[string]string) LookupFunc {
+	return func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
 	}
-	if cfg.SourceDir != "/spool" || cfg.SegmentPrefix != "trace" || cfg.ScanInterval != time.Minute || cfg.DrainTimeout != 15*time.Second {
-		t.Fatalf("got source %q prefix %q scan %v drain %v", cfg.SourceDir, cfg.SegmentPrefix, cfg.ScanInterval, cfg.DrainTimeout)
+}
+
+// bashNames are the names the Bash uploader's chart sets for settings Go also
+// has. Go reads only its own names, so none of them may change a setting.
+var bashNames = map[string]string{
+	"TRACE_DIR":               "/bash-spool",
+	"TRACE_FILE_PREFIX":       "bash-trace",
+	"UPLOAD_INTERVAL_SECONDS": "60",
+	"SHUTDOWN_DRAIN_SECONDS":  "15",
+}
+
+func TestLoadStrictIgnoresBashEnvironmentNames(t *testing.T) {
+	env := requiredEnv(nil)
+	environ := []string{EnvSourceDir + "=" + env[EnvSourceDir], EnvBackend + "=" + env[EnvBackend]}
+	for name, value := range bashNames {
+		env[name] = value
+		environ = append(environ, name+"="+value)
+	}
+	cfg, err := LoadStrict(mapLookup(env), environ)
+	if err != nil {
+		t.Fatalf("LoadStrict() error = %v", err)
+	}
+	if cfg.SourceDir != env[EnvSourceDir] || cfg.SegmentPrefix != DefaultSegmentPrefix ||
+		cfg.ScanInterval != DefaultScanInterval || cfg.DrainTimeout != DefaultDrainTimeout {
+		t.Fatalf("got source %q prefix %q scan %v drain %v, want the Go settings and defaults only",
+			cfg.SourceDir, cfg.SegmentPrefix, cfg.ScanInterval, cfg.DrainTimeout)
+	}
+}
+
+func TestLoadStrictNeedsTheGoSourceDirEvenWhenTheBashOneIsSet(t *testing.T) {
+	env := map[string]string{EnvBackend: string(BackendDebug), "TRACE_DIR": "/bash-spool"}
+	_, err := LoadStrict(mapLookup(env), []string{"TRACE_DIR=/bash-spool"})
+	if err == nil || !strings.Contains(err.Error(), EnvSourceDir) {
+		t.Fatalf("LoadStrict() error = %v, want %s required", err, EnvSourceDir)
 	}
 }
 
@@ -103,23 +129,28 @@ func TestLoadStrictRejectsUnknownSettings(t *testing.T) {
 	}
 }
 
-func TestLoadStrictAcceptsTheChartEnvironment(t *testing.T) {
-	env := map[string]string{
-		"TRACE_DIR":               "/spool",
-		"TRACE_FILE_PREFIX":       "request-trace",
-		"UPLOAD_INTERVAL_SECONDS": "60",
-		"SHUTDOWN_DRAIN_SECONDS":  "30",
-		EnvBackend:                string(BackendDebug),
+// The uploader reads only these settings, all of them generic or for a
+// backend this module links. README.md lists the same names; a setting
+// added or removed here must be added or removed there too.
+func TestStrictModeAcceptsExactlyTheDocumentedSettings(t *testing.T) {
+	want := []string{
+		EnvAttemptTimeout, EnvAuditPrefix, EnvBackend, EnvDebugVerbosity,
+		EnvDrainTimeout, EnvHealthAddr, EnvMaxJobAge, EnvMaxRetries,
+		EnvObjectStoreBucket, EnvObjectStoreDryRun, EnvObjectStoreEndpoint,
+		EnvObjectStoreKeyPrefix, EnvObjectStorePathStyle, EnvObjectStoreRegion,
+		EnvOperationTimeout, EnvQuarantineDir, EnvRedactMultimodal,
+		EnvRetryInitialBackoff, EnvRetryMaximumBackoff, EnvRetryMultiplier,
+		EnvScanInterval, EnvSecretsFile, EnvSegmentPrefix, EnvSourceDir,
+		EnvStateDir, EnvStatusInterval, EnvSuppressHeaderless,
+		EnvSuppressionRules, EnvSuppressNCAIDs,
 	}
-	environ := []string{"HOME=/root"}
-	for name, value := range env {
-		environ = append(environ, name+"="+value)
+	var got []string
+	for name := range knownSettings() {
+		got = append(got, name)
 	}
-	cfg, err := LoadStrict(mapLookup(env), environ)
-	if err != nil {
-		t.Fatalf("LoadStrict() error = %v", err)
-	}
-	if cfg.SourceDir != "/spool" || cfg.DrainTimeout != 30*time.Second {
-		t.Fatalf("got source %q drain %v", cfg.SourceDir, cfg.DrainTimeout)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("settings Load reads:\n got  %v\n want %v", got, want)
 	}
 }

@@ -175,6 +175,22 @@ func TestGzipJSONLWriteAfterCloseFails(t *testing.T) {
 	}
 }
 
+// The caller owns the segment id. A writer only needs a plain file name to
+// start its files with, not a journal key.
+func TestGzipJSONLNamesFilesAfterAnyPlainSegmentID(t *testing.T) {
+	target := newTarget(t)
+	target.SegmentID = "segment-7"
+	w := newJSONL(t, target)
+	write(t, w, `{"a":1}`)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	outputs := w.Outputs()
+	if want := filepath.Join(target.Dir, "segment-7.e3b0c44298fc1c14.jsonl.gz"); len(outputs) != 1 || outputs[0].Path != want {
+		t.Fatalf("Outputs() = %+v, want one file at %q", outputs, want)
+	}
+}
+
 func TestNewWriterRejectsBadTarget(t *testing.T) {
 	control, err := format.GzipJSONL{}.NewWriter(newTarget(t))
 	if err != nil {
@@ -186,8 +202,10 @@ func TestNewWriterRejectsBadTarget(t *testing.T) {
 		name   string
 		change func(*format.Target)
 	}{
-		{"segment id is not a journal key", func(tg *format.Target) { tg.SegmentID = "abc" }},
+		{"no segment id", func(tg *format.Target) { tg.SegmentID = "" }},
 		{"segment id is a path", func(tg *format.Target) { tg.SegmentID = "../" + tg.SegmentID[3:] }},
+		{"segment id has a backslash", func(tg *format.Target) { tg.SegmentID = `a\b` }},
+		{"segment id is the parent directory", func(tg *format.Target) { tg.SegmentID = ".." }},
 		{"relative directory", func(tg *format.Target) { tg.Dir = "transport" }},
 		{"missing directory", func(tg *format.Target) { tg.Dir = filepath.Join(tg.Dir, "missing") }},
 		{"no destination", func(tg *format.Target) { tg.Destinations = nil }},

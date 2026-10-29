@@ -100,6 +100,10 @@ type Transport struct {
 	SHA256 string `json:"sha256"`
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
+	// Policy fingerprints the record handling the transport was written
+	// under: suppression, redaction and format. It is a hash, never the
+	// configured values.
+	Policy string `json:"policy,omitempty"`
 }
 
 // Destination is one segment's progress toward one backend destination, for
@@ -109,6 +113,9 @@ type Destination struct {
 	Transport   Transport `json:"transport"`
 	BatchID     string    `json:"batch_id,omitempty"`
 	ConfirmedAt time.Time `json:"confirmed_at,omitzero"`
+	// Exported is copied from the confirmed batch's receipt. The source is
+	// deleted only when every destination was exported.
+	Exported bool `json:"exported,omitempty"`
 }
 
 // Segment is the journal record for one source segment.
@@ -145,6 +152,11 @@ type Receipt struct {
 	Backend string    `json:"backend"`
 	ID      string    `json:"id"`
 	At      time.Time `json:"at,omitzero"`
+	// Exported reports whether the submit that produced the receipt was a
+	// real export. A dry run or a diagnostic read records false, so its
+	// receipt never authorizes deleting a source, also after a restart
+	// under a backend that exports.
+	Exported bool `json:"exported,omitempty"`
 }
 
 // Member is one segment's transport inside a batch.
@@ -168,6 +180,10 @@ type Batch struct {
 	Receipt     *Receipt  `json:"receipt,omitempty"`
 	Attempts    int       `json:"attempts"`
 	NextRetryAt time.Time `json:"next_retry_at,omitzero"`
+	// MayHaveLanded records that a submit of this batch may have committed
+	// without a job id. A batch without it was only ever refused, so its
+	// members can be released and prepared again.
+	MayHaveLanded bool `json:"may_have_landed,omitempty"`
 	// LastErrorClass is a bounded error class, never error text.
 	LastErrorClass string    `json:"last_error_class,omitempty"`
 	CreatedAt      time.Time `json:"created_at,omitzero"`
@@ -210,7 +226,8 @@ var batchTransitions = map[State][]State{
 	StateSubmitting: {StateSubmitted, StateRetryWait, StateAmbiguous, StateReleased},
 	StateRetryWait:  {StateSubmitting, StateReleased},
 	// An ambiguous batch with a receipt is polled, so it can still succeed.
-	StateAmbiguous: {StateSubmitting, StateReleased, StateConfirmed},
+	// One without a receipt waits in RetryWait when it is retained.
+	StateAmbiguous: {StateSubmitting, StateReleased, StateConfirmed, StateRetryWait},
 	StateSubmitted: {StateConfirmed, StateAmbiguous, StateStranded, StateReleased},
 	StateStranded:  {StateConfirmed},
 }

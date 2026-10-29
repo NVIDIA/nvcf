@@ -110,6 +110,8 @@ func TestBatchTransitionsFollowTheStateMachine(t *testing.T) {
 		{journal.StateStranded, journal.StateConfirmed, true},
 		// An ambiguous batch with a receipt is polled, so SUCCESS confirms it.
 		{journal.StateAmbiguous, journal.StateConfirmed, true},
+		// An ambiguous batch with no receipt is parked when retained.
+		{journal.StateAmbiguous, journal.StateRetryWait, true},
 
 		// A known job id is polled, never resubmitted.
 		{journal.StateSubmitted, journal.StateSubmitting, false},

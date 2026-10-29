@@ -389,8 +389,8 @@ func TestFakeConcurrentUse(t *testing.T) {
 func TestFakeCapabilities(t *testing.T) {
 	fake := backendtest.NewFake()
 	got := fake.Capabilities()
-	if got.TerminalOutcomeSync || got.ResubmitSafe || !got.Exports {
-		t.Errorf("default capabilities = %+v, want an exporting asynchronous backend that is not resubmit safe", got)
+	if got.ResubmitSafe || !got.Exports {
+		t.Errorf("default capabilities = %+v, want an exporting backend that is not resubmit safe", got)
 	}
 
 	fake.SetCapabilities(backend.Capabilities{ResubmitSafe: true})

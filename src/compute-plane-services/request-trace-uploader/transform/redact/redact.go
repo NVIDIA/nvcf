@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/compat"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue"
 )
 
 // Version identifies this redaction algorithm. A transport prepared with a
@@ -124,17 +124,17 @@ type marker struct {
 	sha256 string
 }
 
-func (m marker) value() *compat.Value {
-	out := compat.NewObject()
-	out.Set("redacted", compat.NewString("multimodal"))
-	out.Set("kind", compat.NewString(m.kind))
+func (m marker) value() *jsonvalue.Value {
+	out := jsonvalue.NewObject()
+	out.Set("redacted", jsonvalue.NewString("multimodal"))
+	out.Set("kind", jsonvalue.NewString(m.kind))
 	if m.mime.set {
-		out.Set("mime", compat.NewString(m.mime.value))
+		out.Set("mime", jsonvalue.NewString(m.mime.value))
 	} else {
-		out.Set("mime", compat.NewNull())
+		out.Set("mime", jsonvalue.NewNull())
 	}
-	out.Set("bytes", compat.NewInt(int64(m.bytes)))
-	out.Set("sha256", compat.NewString(m.sha256))
+	out.Set("bytes", jsonvalue.NewInt(int64(m.bytes)))
+	out.Set("sha256", jsonvalue.NewString(m.sha256))
 	return out
 }
 
@@ -160,7 +160,7 @@ func newMarker(text, kind string, mime mimeType) marker {
 		}
 	}
 	sum := sha256.Sum256([]byte(text))
-	return marker{kind: kind, mime: mime, bytes: compat.CodePoints(text), sha256: hex.EncodeToString(sum[:])}
+	return marker{kind: kind, mime: mime, bytes: jsonvalue.CodePoints(text), sha256: hex.EncodeToString(sum[:])}
 }
 
 func stringMarker(text, field string, mime mimeType) marker {
@@ -169,11 +169,11 @@ func stringMarker(text, field string, mime mimeType) marker {
 
 // valueMarker marks any value. A value that is not a string, such as an
 // embedding list, is hashed as its canonical JSON.
-func valueMarker(v *compat.Value, field string, mime mimeType) marker {
+func valueMarker(v *jsonvalue.Value, field string, mime mimeType) marker {
 	if text, ok := v.String(); ok {
 		return stringMarker(text, field, mime)
 	}
-	return newMarker(string(compat.EncodeSorted(v)), "inline", mime)
+	return newMarker(string(jsonvalue.CanonicalSorted(v)), "inline", mime)
 }
 
 // Record redacts media anywhere in a decoded record and returns the record,
@@ -181,27 +181,27 @@ func valueMarker(v *compat.Value, field string, mime mimeType) marker {
 // replaced. Containers are changed in place. When anything was replaced and
 // the record is an object, the count is stored as multimodal_redacted_parts
 // on the payload, or on the event when there is no payload object.
-func Record(record *compat.Value) (*compat.Value, int) {
-	wasObject := record.Kind() == compat.Object
+func Record(record *jsonvalue.Value) (*jsonvalue.Value, int) {
+	wasObject := record.Kind() == jsonvalue.Object
 	root, count := redactTree(record)
 	if count > 0 && wasObject {
 		event := root
 		if root.Has("event") {
 			event = root.Get("event")
 		}
-		if event.Kind() != compat.Object {
+		if event.Kind() != jsonvalue.Object {
 			event = root
 		}
 		container := event
-		if payload := event.Get("payload"); payload != nil && payload.Kind() == compat.Object {
+		if payload := event.Get("payload"); payload != nil && payload.Kind() == jsonvalue.Object {
 			container = payload
 		}
-		container.Set("multimodal_redacted_parts", compat.NewInt(int64(count)))
+		container.Set("multimodal_redacted_parts", jsonvalue.NewInt(int64(count)))
 	}
 	return root, count
 }
 
-func redactTree(root *compat.Value) (*compat.Value, int) {
+func redactTree(root *jsonvalue.Value) (*jsonvalue.Value, int) {
 	if text, ok := root.String(); ok {
 		if replaced, count := redactString(text); count > 0 {
 			return replaced, count
@@ -209,7 +209,7 @@ func redactTree(root *compat.Value) (*compat.Value, int) {
 		return root, 0
 	}
 	type item struct {
-		node   *compat.Value
+		node   *jsonvalue.Value
 		inList bool
 	}
 	count := 0
@@ -219,7 +219,7 @@ func redactTree(root *compat.Value) (*compat.Value, int) {
 		stack = stack[:len(stack)-1]
 		node := top.node
 		switch node.Kind() {
-		case compat.Object:
+		case jsonvalue.Object:
 			if redactMediaPart(node, top.inList) {
 				count++
 				continue
@@ -244,20 +244,20 @@ func redactTree(root *compat.Value) (*compat.Value, int) {
 						node.Set(key, replaced)
 						count += found
 					}
-				} else if kind := value.Kind(); kind == compat.Object || kind == compat.Array {
+				} else if kind := value.Kind(); kind == jsonvalue.Object || kind == jsonvalue.Array {
 					stack = append(stack, item{node: value})
 				}
 			}
-		case compat.Array:
+		case jsonvalue.Array:
 			for i, value := range node.Items() {
 				if text, ok := value.String(); ok {
 					if replaced, found := redactString(text); found > 0 {
 						node.SetItem(i, replaced)
 						count += found
 					}
-				} else if kind := value.Kind(); kind == compat.Object || kind == compat.Array {
+				} else if kind := value.Kind(); kind == jsonvalue.Object || kind == jsonvalue.Array {
 					// A dict in a list may be a content part.
-					stack = append(stack, item{node: value, inList: kind == compat.Object})
+					stack = append(stack, item{node: value, inList: kind == jsonvalue.Object})
 				}
 			}
 		}
@@ -265,7 +265,7 @@ func redactTree(root *compat.Value) (*compat.Value, int) {
 	return root, count
 }
 
-func isString(v *compat.Value, want string) bool {
+func isString(v *jsonvalue.Value, want string) bool {
 	text, ok := v.String()
 	return ok && text == want
 }
@@ -281,7 +281,7 @@ const (
 
 // redactMediaPart redacts one content part in place and reports whether it
 // was media.
-func redactMediaPart(part *compat.Value, inList bool) bool {
+func redactMediaPart(part *jsonvalue.Value, inList bool) bool {
 	partType, typed := part.Get("type").String()
 	var candidates []string
 	switch {
@@ -297,7 +297,7 @@ func redactMediaPart(part *compat.Value, inList bool) bool {
 	}
 	field := ""
 	for _, key := range candidates {
-		if v := part.Get(key); v != nil && v.Kind() != compat.Null {
+		if v := part.Get(key); v != nil && v.Kind() != jsonvalue.Null {
 			field = key
 			break
 		}
@@ -330,13 +330,13 @@ func redactMediaPart(part *compat.Value, inList bool) bool {
 	}
 	part.Clear()
 	if typed {
-		part.Set("type", compat.NewString(partType))
+		part.Set("type", jsonvalue.NewString(partType))
 	}
 	part.Set(field, m.value())
 	return true
 }
 
-func hasAny(object *compat.Value, keys []string) bool {
+func hasAny(object *jsonvalue.Value, keys []string) bool {
 	for _, key := range keys {
 		if object.Has(key) {
 			return true
@@ -347,8 +347,8 @@ func hasAny(object *compat.Value, keys []string) bool {
 
 // mediaValueMarker finds the media in one media field, looking inside an
 // object value when needed. A MIME type stated closer to the media wins.
-func mediaValueMarker(value *compat.Value, field string, mime mimeType) (marker, mediaResult) {
-	if value.Kind() != compat.Object {
+func mediaValueMarker(value *jsonvalue.Value, field string, mime mimeType) (marker, mediaResult) {
+	if value.Kind() != jsonvalue.Object {
 		return valueMarker(value, field, mime), foundMedia
 	}
 	if sourceType, ok := value.Get("type").String(); ok && textSourceTypes[sourceType] {
@@ -363,7 +363,7 @@ func mediaValueMarker(value *compat.Value, field string, mime mimeType) (marker,
 		}
 	}
 	for _, key := range mediaStringKeys {
-		if nested := value.Get(key); nested != nil && nested.Kind() == compat.Object {
+		if nested := value.Get(key); nested != nil && nested.Kind() == jsonvalue.Object {
 			if m, result := mediaValueMarker(nested, key, mime); result == foundMedia {
 				return m, foundMedia
 			}
@@ -374,7 +374,7 @@ func mediaValueMarker(value *compat.Value, field string, mime mimeType) (marker,
 
 // mimeHint returns a MIME type stated next to the media, such as media_type.
 // For audio, a "format" such as "wav" gives audio/wav.
-func mimeHint(container *compat.Value, audio bool) mimeType {
+func mimeHint(container *jsonvalue.Value, audio bool) mimeType {
 	for _, key := range mimeHintKeys {
 		if text, ok := container.Get(key).String(); ok && text != "" {
 			return someMIME(text)
@@ -390,7 +390,7 @@ func mimeHint(container *compat.Value, audio bool) mimeType {
 
 // rawMediaMarker marks a string in a field that holds media, when it looks
 // like media.
-func rawMediaMarker(value *compat.Value, field string, mime mimeType) (marker, bool) {
+func rawMediaMarker(value *jsonvalue.Value, field string, mime mimeType) (marker, bool) {
 	text, ok := value.String()
 	if !ok || !looksLikeMedia(text) {
 		return marker{}, false
@@ -400,7 +400,7 @@ func rawMediaMarker(value *compat.Value, field string, mime mimeType) (marker, b
 
 // redactRawMediaField redacts a field known to hold raw media and returns the
 // part count.
-func redactRawMediaField(node *compat.Value, key string, value *compat.Value) int {
+func redactRawMediaField(node *jsonvalue.Value, key string, value *jsonvalue.Value) int {
 	count := 0
 	switch {
 	case rawMediaStringKeys[key]:
@@ -409,7 +409,7 @@ func redactRawMediaField(node *compat.Value, key string, value *compat.Value) in
 			count = 1
 		}
 	case rawMediaListKeys[key]:
-		if value.Kind() == compat.Array {
+		if value.Kind() == jsonvalue.Array {
 			for i, item := range value.Items() {
 				if m, ok := rawMediaMarker(item, key, mimeType{}); ok {
 					value.SetItem(i, m.value())
@@ -421,12 +421,12 @@ func redactRawMediaField(node *compat.Value, key string, value *compat.Value) in
 			count = 1
 		}
 	case rawMediaMapKeys[key]:
-		if value.Kind() != compat.Object {
+		if value.Kind() != jsonvalue.Object {
 			break
 		}
 		for _, member := range value.Members() {
 			modality, item := member.Key, member.Value
-			if item.Kind() == compat.Array {
+			if item.Kind() == jsonvalue.Array {
 				for i, entry := range item.Items() {
 					if m, ok := rawMediaMarker(entry, modality, mimeType{}); ok {
 						item.SetItem(i, m.value())
@@ -439,7 +439,7 @@ func redactRawMediaField(node *compat.Value, key string, value *compat.Value) in
 			}
 		}
 	case rawMediaObjectKeys[key]:
-		if value.Kind() != compat.Object {
+		if value.Kind() != jsonvalue.Object {
 			break
 		}
 		mime := mimeHint(value, key == "audio")
@@ -455,15 +455,15 @@ func redactRawMediaField(node *compat.Value, key string, value *compat.Value) in
 
 // redactString returns the replacement for a string and the number of media
 // parts in it. A count of zero means the string is kept as is.
-func redactString(text string) (*compat.Value, int) {
+func redactString(text string) (*jsonvalue.Value, int) {
 	spans := mediaSpans(text)
 	if len(spans) == 0 {
 		if isBase64String(text) && len(text) >= base64StringMinChars && hasBase64Classes(text, 0, len(text)) {
-			return stringMarker(compat.PyStrip(text), "", mimeType{}).value(), 1
+			return stringMarker(pyStrip(text), "", mimeType{}).value(), 1
 		}
 		return nil, 0
 	}
-	if len(spans) == 1 && compat.PyStrip(text[:spans[0].start]) == "" && compat.PyStrip(text[spans[0].end:]) == "" {
+	if len(spans) == 1 && pyStrip(text[:spans[0].start]) == "" && pyStrip(text[spans[0].end:]) == "" {
 		// The whole string is the media.
 		s := spans[0]
 		return stringMarker(text[s.start:s.end], "", s.mediaType()).value(), 1
@@ -476,7 +476,7 @@ func redactString(text string) (*compat.Value, int) {
 		position = s.end
 	}
 	b.WriteString(text[position:])
-	return compat.NewString(b.String()), len(spans)
+	return jsonvalue.NewString(b.String()), len(spans)
 }
 
 // looksLikeMedia reports a data URL, a URL, or base64 long enough to be
@@ -507,9 +507,9 @@ func mediaKind(text, field string) string {
 // sniffMIME matches the start of decoded base64 against known media magic
 // bytes.
 func sniffMIME(text string) (string, bool) {
-	head := prefixCodePoints(compat.PyStrip(prefixCodePoints(text, 4096)), 24)
+	head := prefixCodePoints(pyStrip(prefixCodePoints(text, 4096)), 24)
 	head = strings.NewReplacer("-", "+", "_", "/").Replace(head)
-	n := compat.CodePoints(head)
+	n := jsonvalue.CodePoints(head)
 	head = prefixCodePoints(head, n-n%4)
 	raw, ok := decodeBase64Strict(head)
 	if !ok {
@@ -526,7 +526,7 @@ func sniffMIME(text string) (string, bool) {
 func prefixCodePoints(text string, n int) string {
 	i := 0
 	for count := 0; count < n && i < len(text); count++ {
-		_, size := compat.DecodeRune(text[i:])
+		_, size := jsonvalue.DecodeRune(text[i:])
 		i += size
 	}
 	return text[:i]

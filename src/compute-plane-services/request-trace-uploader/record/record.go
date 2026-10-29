@@ -6,7 +6,8 @@
 // Dynamo v1.4.0 writes every record type to one segment family as gzipped
 // JSON lines. A record is classified by its event_type, never by the file it
 // came from. Dynamo v1.3.x additionally emitted a separate AuditRecord type to
-// its own family; that format is detected and rejected rather than parsed.
+// its own family; that format is detected, dropped and counted rather than
+// parsed.
 package record
 
 import "encoding/json"

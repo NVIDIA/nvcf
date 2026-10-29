@@ -71,18 +71,13 @@ func readGzipLines(t testing.TB, path string) []string {
 	return lines
 }
 
-// loadEnv loads configuration from env the way the binary does: through the
-// registered aliases.
+// loadEnv loads configuration from env.
 func loadEnv(t *testing.T, env map[string]string) config.Config {
 	t.Helper()
-	lookup, err := config.WithAliases(func(name string) (string, bool) {
+	cfg, _, err := config.Load(func(name string) (string, bool) {
 		value, ok := env[name]
 		return value, ok
 	})
-	if err != nil {
-		t.Fatalf("WithAliases() error = %v", err)
-	}
-	cfg, _, err := config.Load(lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}

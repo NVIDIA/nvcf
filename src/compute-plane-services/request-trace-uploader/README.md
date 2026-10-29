@@ -13,31 +13,85 @@ supported.
 This service discovers only closed segments. The highest indexed segment
 remains owned by the Dynamo writer.
 
-## Initial scaffold
+## How it works
 
-This initial implementation validates the sidecar configuration, verifies its
-secret-file mount, creates state and quarantine directories, exposes health,
-and verifies local segment discovery. It intentionally does not export logs,
-traces, or metrics, parse or transform records, submit uploads, poll remote
-status, delete source files, or publish a release image.
+`service.Uploader` runs the pipeline against a journal kept on the spool
+volume, so every step survives a restart.
+
+1. Startup: health answers at once and reports not ready. The uploader
+   takes the spool lock, waiting up to the drain timeout plus 10 seconds for
+   an earlier uploader. It loads the journal, repairs what a crash left, and
+   reports ready. Files another uploader left on the spool stay where they
+   are. A journal entry whose source it cannot identify keeps the process
+   live and not ready until an operator acts.
+2. Intake: each closed segment is fingerprinted (SHA-256) and recorded
+   before it is read. The highest indexed segment is never read or deleted.
+3. Record handling: suppression, then redaction, then the backend's format
+   writer. A backend chooses its transport format by implementing
+   `format.Factory` on its client; a backend that takes gzip JSON lines on
+   one destination gets the default writer.
+4. Batching: prepared segments are grouped per destination within the
+   backend's file and byte limits, and lanes are flushed every pass. A batch
+   is recorded before the backend is called, and a returned job id is saved
+   before the error is looked at.
+5. Polling: one loop polls every open job on the status interval. A job with
+   a saved id is polled, never submitted again. A submitted job that still
+   reports pending past the max job age is kept as stranded and polled less
+   often; a submitted job the backend no longer knows is kept as stranded at
+   once. A failed status read or an ambiguous job is not aged, and an
+   ambiguous job stays ambiguous. A status the core does not know is counted
+   in `unknown_status` and polled again.
+6. Cleanup: after success, transports are deleted, the source is re-hashed
+   if its size or modification time changed, and only then deleted. A
+   backend that does not export, such as `debug` or a dry run, never deletes
+   a source.
+7. Shutdown: on SIGTERM the uploader lets work in progress finish, scans
+   the spool one last time so a segment that closed after the last scan is
+   not left behind, submits what is prepared, polls once more, and releases
+   the spool, all within the drain timeout. What is left stays in
+   the journal for the next start.
+
+Faults follow `internal/retry`: auth failures and outages hold every submit
+without moving a segment; a segment fault quarantines that segment after a
+batch is split to find it. A backend that records its own metrics implements
+`telemetry.Receiver` and gets the shared recorder. This binary exports
+metrics over OTLP when an endpoint is set (see Metrics below); a distribution
+can pass its own recorder in `service.Options.Metrics`.
+
+## Metrics
+
+Metrics are pushed over OTLP to the workload's collector. There is no scrape
+endpoint. Two settings configure the export, and no other `OTEL_*` variable
+changes it:
+
+- `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`: the collector URL, `http` or
+  `https`, used as given. For `http/protobuf` include the path, usually
+  `/v1/metrics`. Unset turns the export off.
+- `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`: `grpc`, `http`, or `http/protobuf`.
+  Required when the endpoint is set.
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` is never used as a fallback. Every instrument is
+named `dynamo.request_trace.<name>`, carries a `backend` attribute, and uses
+only bounded attributes; counters start at zero. Metrics are pushed every 60
+seconds and once more after the shutdown drain, for up to 5 seconds, so the
+pod's grace period must cover the drain timeout plus 5 seconds. A failed
+export never blocks an upload or changes readiness.
 
 The `backend` package defines the export destination contract and a registry.
 Submit and status are separate operations so a slow confirmation cannot block
 other segments. Backends register themselves from an init function, so a build
-links only the backends it imports.
-
-This binary links no backend, so it reports the configured backend as not
-compiled in. That is what the `-oss` image ships. A distribution that needs a
-backend imports it in its own `main` and reuses the `config`, `segment`,
-`backend`, and `service` packages from this module. The real adapters and
-durable journal are separate follow-up work.
+links only the backends it imports. This binary links `debug` and
+`objectstore`. A distribution that needs another backend imports it in its own
+`main`, starts through `runner`, and reuses the `config`, `backend`, `format`,
+`telemetry`, `telemetry/otlp`, and `service` packages from this module.
 
 ## Configuration
 
 Required:
 
 - `REQUEST_TRACE_UPLOADER_SOURCE_DIR`: absolute directory containing segments
-- `REQUEST_TRACE_UPLOADER_BACKEND`: `objectstore` or `kratos`
+- `REQUEST_TRACE_UPLOADER_BACKEND`: a backend linked into the build, such as
+  `objectstore` or `debug` in this binary
 
 Optional, with defaults:
 
@@ -59,32 +113,38 @@ Optional, with defaults:
 - `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`: shutdown drain after
   SIGTERM; default `60`. Set it to fit the pod's grace period.
 - `REQUEST_TRACE_UPLOADER_MAX_JOB_AGE_SECONDS`: how long a submitted job may
-  stay unfinished before it is reported stranded; default `86400`
+  keep reporting pending before it is reported stranded; default `86400`
+  (24 hours). Planned, not built yet: a 6 hour default, and the same limit
+  for every unresolved job that has an id.
+- `REQUEST_TRACE_UPLOADER_STATUS_INTERVAL_SECONDS`: how often every open job
+  is polled, whatever the backend; default `30`
 
-Kratos Bulk Upload is an asynchronous job API, so it polls for terminal status.
-These settings apply only to that backend:
+Used only by one backend:
 
-- `REQUEST_TRACE_UPLOADER_KRATOS_STATUS_INTERVAL_SECONDS`: default `5`
-- `REQUEST_TRACE_UPLOADER_KRATOS_STATUS_TIMEOUT_SECONDS`: default `1800`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_BUCKET` and
+  `REQUEST_TRACE_UPLOADER_OBJECTSTORE_REGION`: required by `objectstore`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_ENDPOINT`: an `https://` URL for an
+  S3-compatible store other than AWS; default the SDK endpoint for the region
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX`: prefix for object keys;
+  default the bucket root
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE`: path-style bucket
+  addressing, which most stores other than AWS need; default `false`
+- `REQUEST_TRACE_UPLOADER_OBJECTSTORE_DRY_RUN`: log what would be uploaded,
+  send nothing and need no credentials; default `false`
+- `REQUEST_TRACE_UPLOADER_DEBUG_VERBOSITY`: `basic` (default) or `detailed`
+  logging for `debug`
 
-Object-store submission is synchronous and has no status poll.
+Object-store submission is synchronous, so its first status poll reports the
+final outcome.
 
 The binary loads configuration strictly. An invalid or incompatible value,
-an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, or two aliases
-that disagree stops startup with a non-zero exit. Errors name the setting,
-never its value. `config.Load` on its own still falls back to defaults with
-a warning, for callers that want that.
+or an unknown name that starts with `REQUEST_TRACE_UPLOADER_`, stops startup
+with a non-zero exit. Errors name the setting, never its value.
+`config.Load` on its own still falls back to defaults with a warning, for
+callers that want that.
 
-A deployment that already sets these sidecar names needs no change, because
-each is accepted as an alias. A setting's own name wins over its alias.
-
-- `TRACE_DIR` for `REQUEST_TRACE_UPLOADER_SOURCE_DIR`
-- `TRACE_FILE_PREFIX` for `REQUEST_TRACE_UPLOADER_SEGMENT_PREFIX`
-- `UPLOAD_INTERVAL_SECONDS` for `REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS`
-- `SHUTDOWN_DRAIN_SECONDS` for `REQUEST_TRACE_UPLOADER_DRAIN_TIMEOUT_SECONDS`
-
-A module that links its own backend can register more aliases with
-`config.RegisterEnvAlias` from an init function.
+The uploader reads only the names listed in this README. It has no aliases,
+so a deployment sets these names directly.
 
 Missing paths and unreadable secret files prevent readiness.
 
@@ -107,8 +167,9 @@ action. The first matching rule wins.
   for records of a type that carries no headers. In Dynamo v1.4.0 only
   `request_payload` carries headers. It applies only while a rule exists.
 
-`stripPayload` replaces the record with the stub the earlier shell exporter
-wrote, byte for byte. `dropRecord` removes the record.
+`stripPayload` replaces the record with a stub that has the same structure
+and values as the one the earlier shell exporter wrote; its JSON formatting
+can differ. `dropRecord` removes the record.
 
 An unparseable rule list, an unknown action or policy, a missing or repeated
 name, or a rule with no value stops startup with a non-zero exit.

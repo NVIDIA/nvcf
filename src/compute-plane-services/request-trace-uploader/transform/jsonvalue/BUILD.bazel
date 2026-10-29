@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "jsonvalue",
+    srcs = ["jsonvalue.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/transform/jsonvalue",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonvalue",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jsonvalue_test",
+    srcs = ["jsonvalue_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":jsonvalue"],
+)

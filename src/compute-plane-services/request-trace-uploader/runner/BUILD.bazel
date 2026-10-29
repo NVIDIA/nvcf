@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "runner",
+    srcs = ["runner.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/runner",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/service",
+        "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/telemetry/otlp",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":runner",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "runner_test",
+    srcs = ["runner_test.go"],
+    embed = [":runner"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend/debug",
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/telemetry",
+        "//src/compute-plane-services/request-trace-uploader/telemetry/otlp",
+        "@io_opentelemetry_go_proto_otlp//collector/metrics/v1:metrics",
+        "@org_golang_google_protobuf//proto",
+    ],
+)

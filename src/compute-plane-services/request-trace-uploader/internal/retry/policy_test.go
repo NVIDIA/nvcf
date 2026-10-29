@@ -38,7 +38,7 @@ func TestNewPolicyRejectsInvalidConfig(t *testing.T) {
 
 func TestPolicyDecide(t *testing.T) {
 	asyncJobs := backend.Capabilities{MaxBatchFiles: 16}
-	resubmitSafe := backend.Capabilities{ResubmitSafe: true, TerminalOutcomeSync: true}
+	resubmitSafe := backend.Capabilities{ResubmitSafe: true}
 	fault := func(class backend.Class, scope backend.Scope, reason backend.Reason) backend.Fault {
 		return backend.Fault{Class: class, Scope: scope, Reason: reason}
 	}
@@ -374,7 +374,7 @@ func (s httpStatus) HTTPStatusCode() int { return int(s) }
 // holds; a job id that came back is polled.
 func TestPolicyServerErrorOnCreate(t *testing.T) {
 	asyncJobs := backend.Capabilities{MaxBatchFiles: 16}
-	resubmitSafe := backend.Capabilities{ResubmitSafe: true, TerminalOutcomeSync: true}
+	resubmitSafe := backend.Capabilities{ResubmitSafe: true}
 	tests := []struct {
 		name  string
 		code  int

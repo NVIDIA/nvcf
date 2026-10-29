@@ -211,6 +211,57 @@ func TestBatchRetryAndAmbiguityFollowTheStateMachine(t *testing.T) {
 	mustState(t, store, ids[0], journal.StateConfirmed)
 }
 
+func TestABatchRemembersASubmitThatMayHaveLanded(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+
+	if err := store.RetryBatch("b1", h.clock.Now(), "backend_transient"); err != nil {
+		t.Fatalf("RetryBatch: %v", err)
+	}
+	if b := mustBatch(t, store, "b1", journal.StateRetryWait); b.MayHaveLanded {
+		t.Fatal("a refused batch is marked as possibly landed")
+	}
+	if err := store.ResumeBatch("b1"); err != nil {
+		t.Fatalf("ResumeBatch: %v", err)
+	}
+	if err := store.MarkBatchAmbiguous("b1", "timeout"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "backend_transient"); err != nil {
+		t.Fatalf("RetryBatch from Ambiguous: %v", err)
+	}
+	if b := mustBatch(t, h.restart(store), "b1", journal.StateRetryWait); !b.MayHaveLanded {
+		t.Fatal("a batch whose submit may have landed lost that mark after a restart")
+	}
+}
+
+func TestRetryBatchRefusesABatchWithAReceipt(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+	if err := store.MarkBatchAmbiguous("b1", "timeout"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "retained"); err != nil {
+		t.Fatalf("RetryBatch of an ambiguous batch with no receipt: %v", err)
+	}
+	if err := store.ResumeBatch("b1"); err != nil {
+		t.Fatalf("ResumeBatch: %v", err)
+	}
+	if err := store.SetReceipt("b1", journal.Receipt{Backend: "fake", ID: "job-1"}); err != nil {
+		t.Fatalf("SetReceipt: %v", err)
+	}
+	if err := store.MarkBatchAmbiguous("b1", "job_ambiguous"); err != nil {
+		t.Fatalf("MarkBatchAmbiguous with a receipt: %v", err)
+	}
+	if err := store.RetryBatch("b1", h.clock.Now(), "retained"); !errors.Is(err, journal.ErrReceiptExists) {
+		t.Fatalf("RetryBatch with a receipt error = %v, want ErrReceiptExists: a known job is polled", err)
+	}
+}
+
 func TestConfirmBatchNeedsAReceipt(t *testing.T) {
 	h := newHarness(t)
 	store := h.open()
@@ -247,6 +298,30 @@ func TestConfirmBatchConfirmsEveryMember(t *testing.T) {
 		if seg.ConfirmedAt.IsZero() || seg.Destinations["primary"].State != journal.StateConfirmed {
 			t.Fatalf("member = %+v, want confirmed with a time", seg)
 		}
+	}
+}
+
+func TestSettleBatchesDoesNotRewriteADestinationAlreadySettled(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 1, "primary", "secondary")
+	createBatch(t, store, batchFor("b1", "primary", ids, transports))
+	createBatch(t, store, batchFor("b2", "secondary", ids, transports))
+	if err := store.SetReceipt("b1", journal.Receipt{Backend: "fake", ID: "job-1"}); err != nil {
+		t.Fatalf("SetReceipt: %v", err)
+	}
+	if err := store.ConfirmBatch("b1"); err != nil {
+		t.Fatalf("ConfirmBatch: %v", err)
+	}
+	// The segment stays in flight while its other destination is pending.
+	before := mustState(t, store, ids[0], journal.StateSubmitting).UpdatedAt
+
+	h.clock.Advance(time.Minute)
+	if err := store.SettleBatches(); err != nil {
+		t.Fatalf("SettleBatches: %v", err)
+	}
+	if after := mustState(t, store, ids[0], journal.StateSubmitting).UpdatedAt; !after.Equal(before) {
+		t.Fatalf("segment rewritten at %s, want no write for a destination already settled", after)
 	}
 }
 
@@ -305,4 +380,26 @@ func indexOf(list []string, item string) int {
 		}
 	}
 	return -1
+}
+
+func TestReprepareResetsOnlyAnUnbatchedPreparedSegment(t *testing.T) {
+	h := newHarness(t)
+	store := h.open()
+	ids, transports := preparedSegments(t, h, store, 2, "primary")
+	createBatch(t, store, batchFor("b1", "primary", ids[1:], transports[1:]))
+
+	if err := store.Reprepare(ids[0]); err != nil {
+		t.Fatalf("Reprepare of an unbatched segment: %v", err)
+	}
+	seg := mustState(t, store, ids[0], journal.StateDiscovered)
+	if len(seg.Destinations) != 0 {
+		t.Fatalf("destinations = %v, want the transports dropped", seg.Destinations)
+	}
+	if _, err := os.Stat(transports[0]["primary"].Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("transport stat = %v, want it removed", err)
+	}
+	if err := store.Reprepare(ids[1]); !errors.Is(err, journal.ErrInvalidTransition) {
+		t.Fatalf("Reprepare of a batched segment error = %v, want ErrInvalidTransition", err)
+	}
+	mustState(t, store, ids[1], journal.StateSubmitting)
 }

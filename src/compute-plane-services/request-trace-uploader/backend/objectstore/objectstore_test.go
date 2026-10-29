@@ -326,7 +326,7 @@ func TestSubmitRejectsAnHTTPSToHTTPRedirect(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesDeclareExportAndSyncOutcome(t *testing.T) {
+func TestCapabilitiesDeclareAResubmitSafeExport(t *testing.T) {
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	client, err := New(cfg)
 	if err != nil {
@@ -335,9 +335,6 @@ func TestCapabilitiesDeclareExportAndSyncOutcome(t *testing.T) {
 	caps := client.Capabilities()
 	if !caps.Exports {
 		t.Error("Capabilities().Exports = false, want true")
-	}
-	if !caps.TerminalOutcomeSync {
-		t.Error("Capabilities().TerminalOutcomeSync = false, want true")
 	}
 	if !caps.ResubmitSafe {
 		t.Error("Capabilities().ResubmitSafe = false, want true")

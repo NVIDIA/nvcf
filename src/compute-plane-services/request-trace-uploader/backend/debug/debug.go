@@ -125,11 +125,9 @@ func (c *Client) Status(context.Context, string) (backend.Status, error) {
 // delete a source segment on the strength of a debug Submit succeeding.
 func (c *Client) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		ResubmitSafe:        true,
-		TerminalOutcomeSync: true,
-		OutOfOrderTolerant:  true,
-		AcceptedFormats:     []backend.Format{backend.FormatGzipJSONL},
-		Exports:             false,
+		ResubmitSafe:    true,
+		AcceptedFormats: []backend.Format{backend.FormatGzipJSONL},
+		Exports:         false,
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,8 +27,6 @@ const (
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
 	EnvHealthAddr           = "HEALTH_ADDR"
 	EnvScanInterval         = "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS"
-	EnvKratosStatusInterval = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_INTERVAL_SECONDS"
-	EnvKratosStatusTimeout  = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_TIMEOUT_SECONDS"
 	EnvAttemptTimeout       = "REQUEST_TRACE_UPLOADER_ATTEMPT_TIMEOUT"
 	EnvOperationTimeout     = "REQUEST_TRACE_UPLOADER_OPERATION_TIMEOUT"
 	EnvMaxRetries           = "REQUEST_TRACE_UPLOADER_MAX_RETRIES"
@@ -45,8 +44,6 @@ const (
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
 	DefaultScanInterval     = 30 * time.Second
-	DefaultStatusInterval   = 5 * time.Second
-	DefaultStatusTimeout    = 30 * time.Minute
 	DefaultAttemptTimeout   = 30 * time.Second
 	DefaultOperationTimeout = 90 * time.Second
 	DefaultMaxRetries       = 2
@@ -56,12 +53,13 @@ const (
 )
 
 // Backend selects the export destination. Core behavior derives from the
-// backend's declared capabilities rather than from this value.
+// backend's declared capabilities rather than from this value. Load checks
+// only its shape; the backend registry decides which names exist, so a new
+// backend needs no change here.
 type Backend string
 
 const (
 	BackendObjectStore Backend = "objectstore"
-	BackendKratos      Backend = "kratos"
 	// BackendDebug reads and reports segments without exporting them. It
 	// exists so the read path can be exercised against a real Dynamo without
 	// credentials or a destination.
@@ -104,7 +102,6 @@ type Config struct {
 	HealthAddr     string
 	ScanInterval   time.Duration
 	RetryPolicy    RetryPolicy
-	Kratos         KratosPolicy
 	ObjectStore    ObjectStorePolicy
 	DebugVerbosity DebugVerbosity
 	// Suppression is the validated suppression rule list. No rules turns
@@ -147,14 +144,6 @@ type ObjectStorePolicy struct {
 	// exists to exercise config, key computation, and hostname namespacing
 	// without a destination, the same role debug plays for the read path.
 	DryRun bool
-}
-
-// KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
-// Upload backend performs. Object-store submission is synchronous and has no
-// status poll.
-type KratosPolicy struct {
-	StatusInterval time.Duration
-	StatusTimeout  time.Duration
 }
 
 // RetryPolicy bounds each remote operation. The initial scaffold validates but
@@ -209,12 +198,6 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 
 	scanInterval := durationSeconds(lookup, EnvScanInterval, DefaultScanInterval, time.Second, 24*time.Hour, &warnings)
-	statusInterval := durationSeconds(lookup, EnvKratosStatusInterval, DefaultStatusInterval, time.Second, time.Hour, &warnings)
-	statusTimeout := durationSeconds(lookup, EnvKratosStatusTimeout, DefaultStatusTimeout, time.Second, 24*time.Hour, &warnings)
-	if statusTimeout < statusInterval {
-		statusTimeout = statusInterval
-		warnings = append(warnings, EnvKratosStatusTimeout)
-	}
 	attemptTimeout := duration(lookup, EnvAttemptTimeout, DefaultAttemptTimeout, time.Second, 90*time.Second, &warnings)
 	operationTimeout := duration(lookup, EnvOperationTimeout, DefaultOperationTimeout, time.Second, 5*time.Minute, &warnings)
 	if operationTimeout < attemptTimeout {
@@ -277,10 +260,6 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		QuarantineDir: quarantineDir,
 		HealthAddr:    strings.TrimSpace(healthAddr),
 		ScanInterval:  scanInterval,
-		Kratos: KratosPolicy{
-			StatusInterval: statusInterval,
-			StatusTimeout:  statusTimeout,
-		},
 		RetryPolicy: RetryPolicy{
 			AttemptTimeout:   attemptTimeout,
 			OperationTimeout: operationTimeout,
@@ -359,13 +338,15 @@ func backendValue(lookup LookupFunc, name string) (Backend, error) {
 	if !ok || value == "" {
 		return "", fmt.Errorf("%s is required", name)
 	}
-	switch Backend(value) {
-	case BackendObjectStore, BackendKratos, BackendDebug:
-		return Backend(value), nil
-	default:
-		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, BackendObjectStore, BackendKratos, BackendDebug)
+	if !backendNamePattern.MatchString(value) {
+		return "", fmt.Errorf("%s must be a lowercase backend name", name)
 	}
+	return Backend(value), nil
 }
+
+// backendNamePattern is the shape of a backend name, which is also a metrics
+// label value.
+var backendNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
 
 // debugVerbosityValue reads the debug backend's log verbosity. An unknown
 // value falls back to DebugVerbosityBasic with a warning rather than a hard

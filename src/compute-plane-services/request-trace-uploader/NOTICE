@@ -1,0 +1,60 @@
+This project includes dependencies on the following open-source projects:
+
+- OpenTelemetry Go (https://github.com/open-telemetry/opentelemetry-go)
+  go.opentelemetry.io/otel, otel/metric, otel/sdk, otel/sdk/metric,
+  otel/trace, otel/exporters/otlp/otlpmetric/otlpmetricgrpc and
+  otel/exporters/otlp/otlpmetric/otlpmetrichttp
+  Licensed under the Apache License, Version 2.0
+
+- OpenTelemetry Go Auto SDK (https://github.com/open-telemetry/opentelemetry-go-instrumentation)
+  go.opentelemetry.io/auto/sdk
+  Licensed under the Apache License, Version 2.0
+
+- OpenTelemetry Protocol Go bindings (https://github.com/open-telemetry/opentelemetry-proto-go)
+  go.opentelemetry.io/proto/otlp
+  Licensed under the Apache License, Version 2.0
+
+- gRPC-Go (https://github.com/grpc/grpc-go)
+  google.golang.org/grpc
+  Copyright 2014 gRPC authors.
+  Licensed under the Apache License, Version 2.0
+
+- Go generated Google APIs (https://github.com/googleapis/go-genproto)
+  google.golang.org/genproto/googleapis/api and googleapis/rpc
+  Licensed under the Apache License, Version 2.0
+
+- gRPC-Gateway (https://github.com/grpc-ecosystem/grpc-gateway)
+  github.com/grpc-ecosystem/grpc-gateway/v2
+  Licensed under the BSD 3-Clause License
+
+- Go Protocol Buffers (https://github.com/protocolbuffers/protobuf-go)
+  google.golang.org/protobuf
+  Licensed under the BSD 3-Clause License
+
+- Go supplementary network, system and text packages (https://go.googlesource.com)
+  golang.org/x/net, golang.org/x/sys and golang.org/x/text
+  Licensed under the BSD 3-Clause License
+
+- logr (https://github.com/go-logr/logr) and stdr (https://github.com/go-logr/stdr)
+  Licensed under the Apache License, Version 2.0
+
+- uuid (https://github.com/google/uuid)
+  Licensed under the BSD 3-Clause License
+
+- backoff (https://github.com/cenkalti/backoff)
+  Licensed under the MIT License
+
+- xxhash (https://github.com/cespare/xxhash)
+  Licensed under the MIT License
+
+- AWS SDK for Go v2 (https://github.com/aws/aws-sdk-go-v2)
+  github.com/aws/aws-sdk-go-v2 and its service/s3 modules
+  AWS SDK for Go
+  Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Copyright 2014-2015 Stripe, Inc.
+  Licensed under the Apache License, Version 2.0
+
+- Smithy Go (https://github.com/aws/smithy-go)
+  github.com/aws/smithy-go
+  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+  Licensed under the Apache License, Version 2.0
