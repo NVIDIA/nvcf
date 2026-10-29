@@ -484,6 +484,14 @@ func runService(cfg config.Config) error {
 		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.ReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetEventsV3)),
 	).Methods("GET", "OPTIONS")
 
+	// Account-scoped V3 reads for KAS. The account in the path is trusted.
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/events",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountEventsV3)),
+	).Methods("GET", "OPTIONS")
+	authRouter.Handle("/v3/ledger/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}/stats",
+		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.AdminReadScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.GetAccountStatsV3)),
+	).Methods("GET", "OPTIONS")
+
 	// Cross Account Endpoints for KAS (V2)
 	// Remove when legacy clients migrate to V3.
 	if !cfg.DeprecateEndpoints {
