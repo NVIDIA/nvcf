@@ -986,7 +986,7 @@ def generate_resolved_stack_inventory(root, tag, version, commit, output_path):
     validate_resolved_stack_inventory(output_path, tag, version, commit)
 
 
-def publish_resolved_stack_inventory(tag, asset_path):
+def publish_resolved_stack_inventory(tag, asset_path, version, commit):
     asset_path = Path(asset_path)
     existing = set(
         run(
@@ -998,6 +998,11 @@ def publish_resolved_stack_inventory(tag, asset_path):
         run(["gh", "release", "upload", tag, str(asset_path)])
         print(f"[github-release] uploaded {asset_path.name} to {tag}")
         return
+
+    with tempfile.TemporaryDirectory(prefix="nvcf-retained-stack-inventory-") as tmp:
+        retained = Path(tmp) / asset_path.name
+        run(["gh", "release", "download", tag, "--pattern", asset_path.name, "--output", str(retained)])
+        validate_resolved_stack_inventory(retained, tag, version, commit)
 
     print(f"[github-release] GitHub release {tag} already has {asset_path.name}; leaving it unchanged")
 
@@ -2527,7 +2532,7 @@ def tag_release(args):
         generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
         created = create_release(tag, tag, notes, draft=True, dry_run=False)
         try:
-            publish_resolved_stack_inventory(tag, asset_path)
+            publish_resolved_stack_inventory(tag, asset_path, parsed["version"], commit)
         except (Exception, SystemExit):
             if created:
                 delete_release_after_inventory_failure(tag)

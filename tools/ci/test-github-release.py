@@ -2515,7 +2515,7 @@ class GithubReleaseTest(unittest.TestCase):
             lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
         )
         self.github_release.publish_resolved_stack_inventory = (
-            lambda _tag, path: calls.append(("upload", Path(path).name))
+            lambda _tag, path, _version, _commit: calls.append(("upload", Path(path).name))
         )
         self.github_release.publish_release = (
             lambda _tag, dry_run: calls.append(("publish", dry_run))
@@ -2615,20 +2615,7 @@ class GithubReleaseTest(unittest.TestCase):
     def test_resolved_stack_inventory_identity_must_match_release(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "inventory.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "source": {
-                            "version": "1.2.3",
-                            "tag": "deploy/stacks/self-managed/v1.2.3",
-                            "commit": "d" * 40,
-                        },
-                        "releases": [{}],
-                        "artifacts": [{}],
-                    }
-                )
-            )
+            path.write_text(json.dumps(self.retained_stack_inventory()))
             self.github_release.validate_resolved_stack_inventory(
                 path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "d" * 40
             )
@@ -2637,19 +2624,91 @@ class GithubReleaseTest(unittest.TestCase):
                     path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
                 )
 
+    def retained_stack_inventory(self, chart_version="1.0.0"):
+        return {
+            "schema_version": 1,
+            "source": {"version": "1.2.3", "tag": "deploy/stacks/self-managed/v1.2.3", "commit": "d" * 40},
+            "releases": [{
+                "plane": "control-plane",
+                "name": "original",
+                "namespace": "nvcf",
+                "required": True,
+                "chart": "https://charts.example.com/original",
+                "version": chart_version,
+            }],
+            "artifacts": [{
+                "type": "helm-chart",
+                "name": "original",
+                "repository": "https://charts.example.com",
+                "version": chart_version,
+                "reference": f"https://charts.example.com/original@{chart_version}",
+                "sources": [{"plane": "control-plane", "release": "original", "requirement": "required"}],
+            }],
+        }
+
     def test_existing_release_inventory_is_left_unchanged(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            asset = Path(tmp) / "inventory.json"
-            asset.write_text("same\n")
+        original = json.dumps(self.retained_stack_inventory()).encode()
+        fresh = self.retained_stack_inventory(chart_version="1.0.1")
+        for local in (original, json.dumps(fresh).encode()):
+            with self.subTest(local=local), tempfile.TemporaryDirectory() as tmp:
+                asset = Path(tmp) / "inventory.json"
+                asset.write_bytes(local)
+                calls = []
 
-            def fake_run(args, **_kwargs):
-                if args[:3] == ["gh", "release", "view"]:
-                    return "inventory.json\n"
-                raise AssertionError(f"unexpected call: {args}")
+                def fake_run(args, **_kwargs):
+                    calls.append(args[:3])
+                    if args[:3] == ["gh", "release", "view"]:
+                        return "inventory.json\n"
+                    if args[:3] == ["gh", "release", "download"]:
+                        Path(args[-1]).write_bytes(original)
+                        return ""
+                    raise AssertionError(f"unexpected mutation: {args}")
 
-            self.github_release.run = fake_run
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+                self.github_release.run = fake_run
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.github_release.publish_resolved_stack_inventory(
+                        "deploy/stacks/self-managed/v1.2.3", asset, "1.2.3", "d" * 40,
+                    )
+                self.assertEqual(asset.read_bytes(), local)
+                self.assertEqual(calls, [["gh", "release", "view"], ["gh", "release", "download"]])
+
+    def test_invalid_retained_inventory_prevents_publication_without_deleting_release(self):
+        failures = ("malformed", "missing", "releases", "artifacts", "version", "tag", "commit", "download")
+        for failure in failures:
+            with self.subTest(failure=failure):
+                calls = []
+                inventory = self.retained_stack_inventory()
+                if failure in ("releases", "artifacts"):
+                    inventory[failure] = []
+                if failure in ("version", "tag", "commit"):
+                    inventory["source"][failure] = "wrong"
+                self.github_release.repo_root = lambda: Path("unused")
+                self.github_release.load_metadata = lambda *_args: self.stack_release_metadata()
+                self.github_release.github_release_mode = lambda: (True, False)
+                self.github_release.tag_sha = lambda *_args: "d" * 40
+                self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+                self.github_release.create_release = lambda *_args, **_kwargs: calls.append("create") or False
+                self.github_release.publish_release = lambda *_args, **_kwargs: calls.append("publish")
+                self.github_release.delete_release_after_inventory_failure = lambda *_args: calls.append("delete")
+
+                def fake_run(args, **_kwargs):
+                    if args[:3] == ["gh", "release", "view"]:
+                        return "inventory.json\n"
+                    if args[:3] == ["gh", "release", "download"]:
+                        if failure == "download":
+                            raise subprocess.CalledProcessError(1, args)
+                        if failure != "missing":
+                            Path(args[-1]).write_text("invalid" if failure == "malformed" else json.dumps(inventory))
+                        return ""
+                    raise AssertionError(f"unexpected mutation: {args}")
+
+                self.github_release.run = fake_run
+                with self.assertRaises((SystemExit, subprocess.CalledProcessError)):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.github_release.tag_release(types.SimpleNamespace(
+                            tag="deploy/stacks/self-managed/v1.2.3", metadata="metadata.json",
+                        ))
+                self.assertEqual(calls, ["generate", "create"])
 
     def test_missing_release_inventory_is_uploaded(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2667,7 +2726,7 @@ class GithubReleaseTest(unittest.TestCase):
 
             self.github_release.run = fake_run
             with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset, "1.2.3", "d" * 40)
 
             self.assertEqual(
                 calls,
