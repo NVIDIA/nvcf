@@ -149,6 +149,7 @@ jobs:
           make -C deploy/helm/nvca-operator test-default-ownership
           make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/helm/nvca-operator test-sibling-image-repositories
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
