@@ -157,6 +157,161 @@ func TestMaterializeResolvedInventorySourceChartsAllowsUnavailableHistoricalPath
 	}
 }
 
+// TestMaterializeResolvedInventorySourceChartsAcceptsChartReleaseBranches
+// covers a maintenance stack that pins a chart version released outside its
+// own history: from the default branch after the stack's maintenance branch
+// split off, or from the chart's maintenance branch. The release workflow's
+// full-history checkout holds a remote-tracking ref for every branch.
+func TestMaterializeResolvedInventorySourceChartsAcceptsChartReleaseBranches(t *testing.T) {
+	repo := initTestGitRepo(t)
+	git := func(args ...string) string {
+		t.Helper()
+		output, err := gitOutput(repo, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return trimOutput(output)
+	}
+	commit := func(parent, message string, files map[string]string) string {
+		t.Helper()
+		if parent != "" {
+			git("checkout", "--quiet", "--detach", parent)
+		}
+		for name, body := range files {
+			writeFile(t, filepath.Join(repo, filepath.FromSlash(name)), body)
+		}
+		git("add", "--all")
+		git("commit", "--quiet", "-m", message)
+		return git("rev-parse", "HEAD")
+	}
+	remoteBranch := func(name, commit string) {
+		t.Helper()
+		git("update-ref", "refs/remotes/origin/"+name, commit)
+	}
+	values := func(replicas string) map[string]string {
+		return map[string]string{"deploy/helm/example/values.yaml": "replicas: " + replicas + "\n"}
+	}
+
+	const statePath = "deploy/stacks/nvcf-compute-plane/helmfile.d/state.yaml.gotmpl"
+	stateBody := "releases:\n  - name: example\n    chart: nvcf/helm-example\n    version: 1.0.0\n"
+	sourceCharts := map[string]resolvedInventorySourceChart{
+		"helm-example": {TagPrefix: "deploy/helm/example/v", Path: "deploy/helm/example"},
+	}
+
+	seed := commit("", "chore: seed", map[string]string{"README.md": "seed\n"})
+	chart := commit(seed, "feat: example chart", map[string]string{
+		"deploy/helm/example/Chart.yaml":  "apiVersion: v2\nname: helm-example\nversion: 0.0.0\n",
+		"deploy/helm/example/values.yaml": "replicas: 1\n",
+		"deploy/helm/other/Chart.yaml":    "apiVersion: v2\nname: helm-other\nversion: 0.0.0\n",
+	})
+	git("tag", "deploy/helm/example/v1.0.0")
+	base := commit(chart, "feat: pin example chart", map[string]string{statePath: stateBody})
+	// The stack's maintenance branch continues from the default branch.
+	patch := commit(base, "fix(stack): maintenance patch", map[string]string{"deploy/stacks/nvcf-compute-plane/VERSION": "1.0.0\n"})
+
+	// Released from the default branch after the maintenance branch split off.
+	commit(base, "fix(chart): example 1.1.0", values("2"))
+	git("tag", "deploy/helm/example/v1.1.0")
+	git("tag", "deploy/helm/other/v1.5.0")
+	remoteBranch("main", commit("HEAD", "docs: later default-branch change", map[string]string{"README.md": "later\n"}))
+
+	// Released from the chart's 1.0 maintenance branch, which also carries a
+	// tag that belongs to another minor.
+	commit(chart, "fix(chart): backport to 1.0", values("3"))
+	git("tag", "deploy/helm/example/v1.0.1")
+	commit("HEAD", "fix(chart): mislabeled release", values("4"))
+	git("tag", "deploy/helm/example/v1.4.0")
+	remoteBranch("release-deploy/helm/example/v1.0", git("rev-parse", "HEAD"))
+
+	// Tags at commits that no release branch of the chart contains.
+	remoteBranch("feature/unreviewed", commit(base, "feat: unreviewed chart change", values("5")))
+	git("tag", "deploy/helm/example/v1.2.0")
+	remoteBranch("release-deploy/helm/other/v1.3", commit(chart, "fix(other): another chart's backport", values("6")))
+	git("tag", "deploy/helm/example/v1.3.0")
+
+	materialize := func(t *testing.T, stackCommit, chartVersion, chartRoot string) ([]string, error) {
+		t.Helper()
+		stateFile := filepath.Join(t.TempDir(), "state.yaml.gotmpl")
+		writeFile(t, stateFile, stateBody)
+		fullRaw := mustJSON(t, []helmfileRelease{{Name: "example", Chart: "nvcf/helm-example", Version: chartVersion}})
+		return materializeResolvedInventorySourceCharts(
+			repo,
+			stateFile,
+			chartRoot,
+			stackSourceRelease{Version: "1.0.5", Tag: "deploy/stacks/nvcf-compute-plane/v1.0.5", Commit: stackCommit},
+			fullRaw,
+			sourceCharts,
+			false,
+		)
+	}
+
+	accepted := []struct {
+		name         string
+		stackCommit  string
+		chartVersion string
+		wantReplicas string
+	}{
+		{name: "maintenance patch pins a chart release from its own history", stackCommit: patch, chartVersion: "1.0.0", wantReplicas: "1"},
+		{name: "maintenance patch pins a default-branch release after the split", stackCommit: patch, chartVersion: "1.1.0", wantReplicas: "2"},
+		{name: "maintenance patch pins a chart maintenance release", stackCommit: patch, chartVersion: "1.0.1", wantReplicas: "3"},
+		{name: "default-branch stack pins a chart maintenance release", stackCommit: base, chartVersion: "1.0.1", wantReplicas: "3"},
+	}
+	for _, test := range accepted {
+		t.Run(test.name, func(t *testing.T) {
+			chartRoot := t.TempDir()
+			used, err := materialize(t, test.stackCommit, test.chartVersion, chartRoot)
+			if err != nil {
+				t.Fatalf("materialize source charts: %v", err)
+			}
+			if !reflect.DeepEqual(used, []string{"helm-example"}) {
+				t.Fatalf("used source charts = %v, want [helm-example]", used)
+			}
+			raw, err := os.ReadFile(filepath.Join(chartRoot, "helm-example", test.chartVersion, "values.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := string(raw), "replicas: "+test.wantReplicas+"\n"; got != want {
+				t.Fatalf("extracted values.yaml = %q, want %q from the pinned tag", got, want)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name         string
+		chartVersion string
+		wantErr      string
+	}{
+		{
+			name:         "tag on an unmerged branch",
+			chartVersion: "1.2.0",
+			wantErr:      "nor of chart release branch origin/main or origin/release-deploy/helm/example/v1.2",
+		},
+		{
+			name:         "tag only on another chart's maintenance branch",
+			chartVersion: "1.3.0",
+			wantErr:      "nor of chart release branch origin/main or origin/release-deploy/helm/example/v1.3",
+		},
+		{
+			name:         "tag only on the maintenance branch of another minor",
+			chartVersion: "1.4.0",
+			wantErr:      "nor of chart release branch origin/main or origin/release-deploy/helm/example/v1.4",
+		},
+		{
+			name:         "another chart's release tag at the pinned version",
+			chartVersion: "1.5.0",
+			wantErr:      "is unavailable at deploy/helm/example/v1.5.0",
+		},
+	}
+	for _, test := range rejected {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := materialize(t, patch, test.chartVersion, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
