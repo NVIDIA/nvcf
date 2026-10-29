@@ -1064,7 +1064,7 @@ api:
         "NVCF_NATS_REGION_PLACEMENT_TAG" "dc"
         "NVCF_SIDECARS_HOSTNAME" $sidecarsHost
         "NVCF_SIDECARS_REPOSITORY" $sidecarsRepo
-        "MANAGEMENT_TRACING_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
+        "MANAGEMENT_TRACING_EXPORT_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
   {{- with $nvcfWorkerServiceURL }}
   {{- $_ := set $apiEnv "NVCF_FQDN" . }}
   {{- end }}
@@ -1091,7 +1091,8 @@ api:
   {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
   {{- end }}
   {{- if .Values.global.observability.tracing.enabled }}
-  {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT" (printf "%s://%s:%v" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT" "grpc" }}
   {{- end }}
   {{- with include "nvcf.natsStreamReplicas" .Values }}
   {{- $_ := set $apiEnv "NVCF_NATS_REPLICAS" . }}
@@ -1266,9 +1267,10 @@ nvctApi:
     SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
     {{- end }}
     # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_TRACING_EXPORT_ENABLED: {{ .Values.global.observability.tracing.enabled }}
     {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT: "grpc"
     {{- end }}
 
 eventLedger:
@@ -1442,9 +1444,10 @@ ess:
 
   env:
     # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    MANAGEMENT_TRACING_EXPORT_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT: "grpc"
     {{- end }}
   {{- if $haEnabled }}
   {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
@@ -1501,9 +1504,10 @@ notary:
   {{- end }}
 
   {{- /* Observability */}}
-  {{- $notaryEnv := dict "MANAGEMENT_TRACING_ENABLED" (.Values.global.observability.tracing.enabled | toString) }}
+  {{- $notaryEnv := dict "MANAGEMENT_TRACING_EXPORT_ENABLED" (.Values.global.observability.tracing.enabled | toString) }}
   {{- if .Values.global.observability.tracing.enabled }}
-  {{- $_ := set $notaryEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- $_ := set $notaryEnv "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT" (printf "%s://%s:%v" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- $_ := set $notaryEnv "MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT" "grpc" }}
   {{- end }}
   {{- $notaryEnv = mergeOverwrite $notaryEnv $configuredNotaryEnv }}
   env:
@@ -1560,11 +1564,12 @@ sis:
 
   env:
     # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    MANAGEMENT_TRACING_EXPORT_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
     MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: {{ .Values.global.observability.metrics.enabled | quote }}
     MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_TRANSPORT: "grpc"
     {{- end }}
     {{- if dig "addons" "eventLedger" "enabled" false .Values }}
     # Send function deployment stage events to the event-ledger addon.
