@@ -20,7 +20,6 @@ package progress
 import (
 	"context"
 	"fmt"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
 	"io"
 	"net/http"
 	"os"
@@ -30,21 +29,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
 )
 
+// TestMonitor waits for each progress update before overwriting the file.
 func TestMonitor(t *testing.T) {
 	zapLogger := logs.NewZapLogger(zap.NewAtomicLevelAt(zap.DebugLevel))
-	zap.ReplaceGlobals(zapLogger.GetZapLogger())
-	zap.RedirectStdLog(zapLogger.GetZapLogger())
+	t.Cleanup(zap.ReplaceGlobals(zapLogger.GetZapLogger()))
+	t.Cleanup(zap.RedirectStdLog(zapLogger.GetZapLogger()))
 
 	testDir := t.TempDir()
 	monitor := New(testDir)
-	err := monitor.Start()
-	if err != nil {
-		t.Fatalf("failed to start progress monitor")
-	}
+	require.NoError(t, monitor.Start())
+	responseChan := make(chan *http.Response, 3)
+	t.Cleanup(func() {
+		// Close without holding monitor.lock so an in-flight event can finish.
+		// Stop's lifecycle behavior is covered separately.
+		require.NoError(t, monitor.watcher.Close())
+		select {
+		case <-monitor.monitorClosed:
+			if extra := len(responseChan); extra != 0 {
+				t.Errorf("received %d unexpected extra progress messages", extra)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("progress monitor did not stop after closing its watcher")
+		}
+	})
 
 	requestId := "reqid-abc-123"
 	meteringConfig := metering.Config{
@@ -57,7 +71,6 @@ func TestMonitor(t *testing.T) {
 	}
 	meteringEvent := metering.New(&meteringConfig, requestId, "sub-abc-123", "invoker-nca-id", nil)
 
-	responseChan := make(chan *http.Response, 100)
 	monitoredWork := &MonitoredWork{
 		Context:       context.Background(),
 		MeteringEvent: meteringEvent,
@@ -67,34 +80,23 @@ func TestMonitor(t *testing.T) {
 	monitor.Monitor(requestId, monitoredWork)
 
 	requestDir := filepath.Join(testDir, requestId)
-	err = os.Mkdir(requestDir, 0777)
-	if err != nil {
-		t.Fatalf("failed to create request directory: %v", err)
-	}
-
-	// Small breather for the watcher to catch up.
-	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, os.Mkdir(requestDir, 0777))
+	require.Eventually(t, func() bool {
+		return slices.Contains(monitor.watcher.WatchList(), requestDir)
+	}, 5*time.Second, time.Millisecond, "request directory was not watched")
 
 	progressFile := filepath.Join(requestDir, "progress")
 	progressToSend := []uint32{15, 45, 75}
 	for _, p := range progressToSend {
 		t.Logf("writing file for %d", p)
-		err := writeProgressMessage(progressFile, requestId, p)
-		if err != nil {
-			t.Error(err)
+		require.NoError(t, writeProgressMessage(progressFile, requestId, p))
+		var progressMessage *http.Response
+		select {
+		case progressMessage = <-responseChan:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for progress update %d", p)
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
 
-	err = monitor.Stop()
-	if err != nil {
-		t.Fatalf("failed to stop progress monitor")
-	}
-
-	close(responseChan)
-
-	progressMessagesCount := 0
-	for progressMessage := range responseChan {
 		// Use direct map access for the custom header
 		percentCompleteHeader := progressMessage.Header.Get("Nvcf-Percent-Complete")
 		// Parse the percent complete from header
@@ -102,8 +104,8 @@ func TestMonitor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to parse percent complete from header: %v", err)
 		}
-		if !slices.Contains(progressToSend, uint32(percentComplete)) {
-			t.Fatalf("unexpected percent complete = %d", percentComplete)
+		if percentComplete != int(p) {
+			t.Fatalf("percent complete = %d, want = %d", percentComplete, p)
 		}
 		if progressMessage.StatusCode != http.StatusAccepted {
 			t.Fatalf("message status code = %d, want = %d", progressMessage.StatusCode, http.StatusAccepted)
@@ -119,14 +121,16 @@ func TestMonitor(t *testing.T) {
 		if receivedMessage != expectedMessage {
 			t.Fatalf("received message = %s, want = %s", receivedMessage, expectedMessage)
 		}
-		progressMessagesCount++
-	}
-	if progressMessagesCount != len(progressToSend) {
-		t.Fatalf("num received messages = %d, want = %d", progressMessagesCount, len(progressToSend))
 	}
 }
 
 func writeProgressMessage(progressFile string, requestId string, progress uint32) error {
 	progressMessage := fmt.Sprintf("{\"id\": \"%s\", \"progress\": %d, \"partialResponse\": {\"message\": \"i'm %d complete\"}}", requestId, progress, progress)
-	return os.WriteFile(progressFile, []byte(progressMessage), 0644)
+	// Publish a complete update atomically so the watcher never reads a
+	// truncated file while the next message is being written.
+	temporaryFile := progressFile + ".tmp"
+	if err := os.WriteFile(temporaryFile, []byte(progressMessage), 0644); err != nil {
+		return err
+	}
+	return os.Rename(temporaryFile, progressFile)
 }

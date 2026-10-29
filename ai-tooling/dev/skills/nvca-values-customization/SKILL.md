@@ -111,4 +111,7 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
   the tag release fails when they differ. Only the version is set at
   packaging time; `appVersion` is packaged as committed.
+- Collector image tags live only in `values.yaml`, where the release bump
+  updates them. Do not copy a tag into a template fallback, the schema, or
+  the README. `make test-collector-image-tag` fails on a copy.
 - Never commit real service keys or rendered secret material.

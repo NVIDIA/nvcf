@@ -115,6 +115,7 @@ go_test(
         "persistentstorage_test.go",
         "reconcile_modelcache_test.go",
         "reconcile_test.go",
+        "sharedstorage_pending_test.go",
         "sharedstorage_test.go",
         "smbcsidriver_test.go",
         "storage_capabilities_test.go",

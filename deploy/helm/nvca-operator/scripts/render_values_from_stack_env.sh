@@ -122,6 +122,7 @@ yq eval -i '
   .selfManaged.featureGateValues = ["DynamicGPUDiscovery", "SelfHosted"] |
   .selfManaged.imageCredHelper.imageRepository = strenv(REPO_PREFIX) + "/nvcf-image-credential-helper" |
   .selfManaged.sharedStorage.imageRepository = strenv(REPO_PREFIX) + "/samba" |
+  .agent.byooOtelCollector.imageRepository = strenv(REPO_PREFIX) + "/byoo-otel-collector" |
   .nameOverride = "nvca-operator" |
   .fullnameOverride = "nvca-operator"
 ' "${output_file}"

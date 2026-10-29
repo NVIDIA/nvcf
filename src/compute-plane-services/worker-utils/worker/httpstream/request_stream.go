@@ -21,7 +21,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvcf"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/tracing"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
@@ -53,8 +55,18 @@ func NewProxiedClient() ProxyClient {
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(false)
 	protocols.SetUnencryptedHTTP2(false)
+	// Same trust pool as the grpc-proxy path, so NVCF_PROXY_CA_PEM / NVCF_PROXY_CA_FILE
+	// cover both https proxies and https targets inside the tunnel.
+	proxyCAs, err := ca.ProxyCAs()
+	if err != nil {
+		zap.L().Fatal("failed to load proxy CA trust pool", zap.Error(err))
+	}
 	return &http.Client{
 		Transport: tracing.NewOtelTransport(&http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    proxyCAs,
+				MinVersion: tls.VersionTLS12,
+			},
 			MaxIdleConnsPerHost: 256,
 			// envoy is set to 1 hour 5 seconds.
 			// ensure we time out first so we never send a request on a dead connection.

@@ -27,7 +27,8 @@ godog_test.go
             TestMultiClusterUp, TestSingleClusterHelmfile, TestSingleClusterHA,
             TestMultiClusterHelmfile,
             TestMultiClusterHelmfileLLMLastClusterAffinity,
-            TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
+            TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile,
+            TestBYOORender, TestBYOO, TestBYOOExistingInstall) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
 .goheader.tmpl
@@ -59,6 +60,10 @@ supports the `x_load_tester_echo` body control, and reads the forwarded request
 from its reply. It defaults to the released
 `nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:5.1.0`;
 set `SAMPLE_LLM_ECHO_IMAGE` to override it.
+The Vanity Gateway shadow sampling scenario deploys two LLM functions from the
+same image, so it must also honor the `LOAD_TESTER_DEFAULT_*` container
+settings, and the cluster needs two free 1x GPU instances. It serves OpenAI
+routes on `vanity-openai.localhost`.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -129,6 +134,77 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestMultiClusterHelmfileLLMLastClusterAffinity$' -timeout 120m -v
 ```
 
+### BYOO features
+
+`byoo-render.feature` renders the compute-plane stack for each observability
+profile and checks that only `compute` and `all` enable the `BYOObservability`
+NVCA gate. It needs no cluster.
+
+```sh
+cd tests/bdd
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  go test -run '^TestBYOORender$' -timeout 30m -v
+```
+
+`byoo.feature` registers a telemetry endpoint that points at an in-cluster
+OpenTelemetry Collector Contrib sink, runs a task, a container function, and
+the BYOO sample function with telemetries, and checks the sink's counters. The
+BYOO collector also forwards its own metrics, so the task metrics check and
+all three sample-function signal checks read `otelcol_exporter_sent_*`
+counters from sink pipelines that keep only that sample's `service.name`. The
+task span and log checks read the sink's receiver counters. The last scenario
+reinstalls NVCA with the gate off and checks that a function with telemetries
+moves to `ERROR` with a reason that names the missing NVCA feature flags. It
+has two entry points:
+
+- `TestBYOO` brings up the single-cluster topology, installs the stack with
+  the `compute` observability profile, runs the workload scenarios, then runs
+  the gate-off scenario. Use `BDD_CLEANUP_MODE=stack-single` to switch from
+  another install. Rerun the install to turn the gate back on.
+- `TestBYOOExistingInstall` skips the `@stack-change` scenarios and runs only
+  the workload scenarios against the current `ncp-local` install. It does not
+  bring up the cluster or install, upgrade, or remove the stack. It runs
+  `nvcf-cli init` for an admin token. The install must use the local endpoints in
+  `fixtures/nvcf-cli-local.yaml` and have the `BYOObservability` gate on, for
+  example a `nvcf-cli self-hosted up` install with the default compute-plane
+  observability profile.
+
+Preconditions:
+
+- `SAMPLE_BYOO_TASK_IMAGE` names `examples/task-samples/task-byoo-sample` and
+  `SAMPLE_BYOO_FUNCTION_IMAGE` names
+  `examples/function-samples/byoo-telemetry-sample`, each in a registry the
+  cluster can pull. The tasks and functions APIs check that the image exists
+  in its registry, so a locally imported image is not enough on a default
+  install. Publish them the same way as `task-simple-sample:local`.
+- The cluster can pull the BYOO collector sidecar image. The compute-plane
+  stack resolves it as `byoo-otel-collector` under `global.image.registry` and
+  `global.image.repository`, with the tag pinned in its base values. Mirror
+  that image to the sample NGC repository, or override
+  `global.nvcaOperator.byooOtelCollector.imageRepository`.
+- The cluster can pull `otel/opentelemetry-collector-contrib` from Docker Hub
+  for the reference sink.
+
+```sh
+cd tests/bdd
+
+# Fresh install
+NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOO$' -timeout 120m -v
+
+# Existing local install
+SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_BYOO_TASK_IMAGE=<image-reference> \
+  SAMPLE_BYOO_FUNCTION_IMAGE=<image-reference> \
+  go test -run '^TestBYOOExistingInstall$' -timeout 60m -v
+```
+
+The workload scenarios leave the `bdd-byoo-sink` namespace in place and
+restart its sinks at the start of each scenario so counters start at zero.
+Remove it with `kubectl --context k3d-ncp-local delete namespace bdd-byoo-sink`.
+
 ### EKS Helmfile features (non-local)
 
 These run against pre-provisioned EKS clusters instead of k3d. They install
@@ -148,9 +224,8 @@ EKS_CONTEXT=<ctx> EKS_CLUSTER_NAME=<name> EKS_REGION=<region> \
 # register + NVCA + function and task execution on a separate compute EKS
 # cluster (EKS_COMPUTE_CONTEXT). The feature derives a nip.io wildcard domain
 # from the provisioned NLB so worker-facing Gateway hostnames resolve without
-# requiring a preconfigured DNS zone. The task smoke expects
-# task-simple-sample:local in the sample NGC repository unless
-# NVCT_BDD_TASK_IMAGE names another published image.
+# requiring a preconfigured DNS zone. The task scenario expects
+# task-simple-sample:local in the sample NGC repository.
 EKS_CONTEXT=<cp-ctx> EKS_COMPUTE_CONTEXT=<compute-ctx> \
   EKS_COMPUTE_CLUSTER_NAME=<compute-name> EKS_REGION=<region> \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \

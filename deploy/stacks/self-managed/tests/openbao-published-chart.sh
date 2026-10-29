@@ -61,10 +61,19 @@ HELMFILE_ENV="$environment_name" \
 test -s "$openbao_values" || fail "helmfile wrote no OpenBao values"
 test "$(yq -r '.openbao.migrations.image.tag // ""' "$openbao_values")" = "" ||
   fail "stack values should let the OpenBao chart supply the migrations image tag"
+
+published_chart="oci://${published_chart_registry}/${published_chart_repository}/helm-nvcf-openbao-server"
+# The pinned chart's own default is the source of truth for the tag.
+chart_migrations_tag="$(helm show values "$published_chart" \
+  --version "$published_chart_version" |
+  yq -r '.openbao.migrations.image.tag // ""')" ||
+  fail "could not read published OpenBao $published_chart_version chart values"
+test -n "$chart_migrations_tag" ||
+  fail "published OpenBao $published_chart_version chart has no default migrations image tag"
 expected_migrations_image="$(yq -r '
   .openbao.migrations.image |
-  "\(.registry)/\(.repository):0.19.5"
-' "$openbao_values")"
+  "\(.registry)/\(.repository)"
+' "$openbao_values"):${chart_migrations_tag}"
 
 HELMFILE_ENV="$environment_name" \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
@@ -91,7 +100,6 @@ if test -z "$expected_password" || test "$expected_password" = 'null'; then
 fi
 
 published_manifest="$work_dir/openbao-published-manifest.yaml"
-published_chart="oci://${published_chart_registry}/${published_chart_repository}/helm-nvcf-openbao-server"
 helm template openbao-server "$published_chart" \
   --version "$published_chart_version" \
   --namespace vault-system \

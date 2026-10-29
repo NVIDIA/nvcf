@@ -149,6 +149,14 @@ for section in chatCompletions responses; do
   assert_renders "legacy sticky sampling and disabled header lookup render in ${section}"
 done
 
+write_anthropic_values "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod:
+                  - promptCacheKey
+                  - firstMessageHash
+                  - random"
+assert_renders "ordered sticky sampling with default headers renders in anthropicMessages"
+
 write_values completions "            shadows:
               - modelName: acme/a-model-next
                 samplingMethod:
@@ -254,18 +262,17 @@ for section in completions embeddings imageGenerations; do
   assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in ${section}"
 done
 
-write_anthropic_values "            shadows:
+write_anthropic_values "            promptCacheKeyHeaders:
+              - x-session-id
+            shadows:
               - modelName: acme/a-model-next
                 samplingMethod: promptCacheKey"
-assert_rejected "samplingMethod" "promptCacheKey is rejected in anthropicMessages"
+assert_renders "promptCacheKey and promptCacheKeyHeaders render in anthropicMessages"
 
-write_anthropic_values "            shadowModelName: acme/a-model-next
+write_anthropic_values "            promptCacheKeyHeaders: []
+            shadowModelName: acme/a-model-next
             shadowSamplingMethod: firstMessageHash"
-assert_rejected "shadowSamplingMethod" "legacy firstMessageHash is rejected in anthropicMessages"
-
-write_anthropic_values "            promptCacheKeyHeaders:
-              - x-session-id"
-assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in anthropicMessages"
+assert_renders "legacy firstMessageHash and disabled header lookup render in anthropicMessages"
 
 for headers in 'null' '[""]' '["bad header"]' '["x-session-id", "x-session-id"]' '["Authorization"]' '["pRoXy-AuThOrIzAtIoN"]'; do
   write_values chatCompletions "            promptCacheKeyHeaders: ${headers}"

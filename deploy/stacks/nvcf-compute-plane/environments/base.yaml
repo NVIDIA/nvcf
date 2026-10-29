@@ -33,7 +33,7 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.10.0"
+    imageTag: "3.18.6"
     # Optional task pod utils and init container reservation, applied as both
     # requests and limits. NVCA subtracts it from every instance type it
     # registers. Leave unset to keep the chart default. Quote the CPU value.
@@ -41,18 +41,75 @@ global:
     #   resources:
     #     cpu: "1"
     #     memory: 2Gi
+    # Optional Bring Your Own Observability (BYOO) sidecar settings, passed to
+    # the nvca-operator chart as its byoo values: resources (collector),
+    # fluentbit.resources, logChunking, otelCollector, and
+    # additionalResourceOverhead. The collector and Fluent Bit sidecars run in
+    # every BYOO workload. Leave unset to keep the agent defaults. Quote
+    # plain-number quantities.
+    #
+    # Platform metrics federation is off on self-managed clusters unless
+    # otelCollector.platformMetricsFederation sets enabled or target. Set
+    # target to the host:port of a Prometheus-compatible server that serves
+    # /federate. With the observability stack compute or all profile, the
+    # VictoriaMetrics target below exports worker, NVCA, and NVCA-labeled DCGM
+    # metrics for each workload: the stack monitors store them under the
+    # nvcf-worker, nvca, and nvidia-dcgm-exporter jobs that federation
+    # selects. That stack does not scrape cAdvisor or kube-state-metrics. For
+    # the job names those series need, refer to docs/self-managed/byoo.md.
+    # byoo:
+    #   resources:
+    #     requests:
+    #       cpu: 250m
+    #       memory: 1Gi
+    #     limits:
+    #       cpu: 500m
+    #       memory: 1Gi
+    #   fluentbit:
+    #     resources:
+    #       requests:
+    #         cpu: 50m
+    #         memory: 64Mi
+    #   otelCollector:
+    #     platformMetricsFederation:
+    #       target: vmsingle.monitoring.svc.cluster.local:8428
+    # BYOO OpenTelemetry Collector sidecar image, passed to the nvca-operator
+    # chart as agent.byooOtelCollector. A byoo-otel-collector release bumps
+    # imageTag. imageRepository defaults to
+    # ${global.image.registry}/${global.image.repository}/byoo-otel-collector.
+    # Set it only when the collector is published outside global.image.
+    byooOtelCollector:
+      # imageRepository: <registry>/<repository>/byoo-otel-collector
+      imageTag: "0.160.0-nv-0.4.7"
+    # BYOO Fluent Bit log collector. enabled turns on the BYOOFluentBit NVCA
+    # feature gate, which adds a Fluent Bit sidecar to BYOO workloads that
+    # export logs. It needs BYOObservability, which observability.profile
+    # compute or all enables; the render fails if enabled is true while
+    # BYOObservability is off. The image defaults to the upstream Docker Hub
+    # image that NVCA uses. Override registry, repository, and tag for a
+    # private or disconnected registry.
+    byooFluentBit:
+      enabled: false
+      image:
+        registry: docker.io
+        repository: fluent/fluent-bit
+        tag: "3.2"
     selfManaged:
       # The chart ships no tag for this image, only the stack knows which samba
       # build pairs with the operator it is pinning, so supply the whole
       # reference here alongside the repository below.
       sharedStorage:
-        imageTag: "1.0.5"
-      nvcaVersion: "3.10.0"
+        imageTag: "1.0.9"
+      # The chart default predates the numeric non-root image user, so pin a
+      # credential helper release that runs as a non-root user.
+      imageCredHelper:
+        imageTag: "0.11.4"
+      nvcaVersion: "3.18.6"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
         enabled: false
-        imageTag: "0.160.0-nv-0.2.5"
+        imageTag: "0.160.0-nv-0.4.7"
       # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""
@@ -74,6 +131,18 @@ global:
       # InfraResourceOverhead on while any Enforce*ResourceLimits gate is on.
       # Example: ["SelfHosted", "LogPosting"]
       featureGateValues: []
+    agent:
+      # PEM bundle of the CA that signs the certificate workers see on TLS
+      # callbacks to the control plane, whether they call grpc-proxy directly
+      # or go through a callback proxy. Function pods receive it as
+      # NVCF_PROXY_CA_PEM and trust it in addition to the system roots. Leave
+      # empty when callbacks use plain HTTP or a publicly trusted certificate.
+      # Only function pods created after the change receive it.
+      # workerCallbackCaPem: |
+      #   -----BEGIN CERTIFICATE-----
+      #   ...
+      #   -----END CERTIFICATE-----
+      workerCallbackCaPem: ""
 
   # =============================================================================
   # Node Selector / Toleration Overlays

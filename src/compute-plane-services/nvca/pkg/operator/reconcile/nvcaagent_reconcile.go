@@ -1410,6 +1410,7 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err := validateMergedAgentConfig(nb, mergeCfg); err != nil {
 		return nil, err
 	}
+	mergeCfg = applySelfManagedBYOODefaults(nb, mergeCfg)
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)

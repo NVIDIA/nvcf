@@ -79,6 +79,10 @@ computePlane:
     path: /metrics
     # NVCA uses this name for the injected DCGM metrics port.
     port: dcgm-metrics
+    # Value of the job label on scraped series. Federation clients, such as
+    # the BYOO collector, select DCGM series by this job name. Set it to an
+    # empty string to keep the PodMonitor default of namespace/name.
+    jobName: nvidia-dcgm-exporter
     labels: {}
 
   worker:
@@ -93,6 +97,10 @@ computePlane:
     interval: 30s
     path: /metrics
     port: worker-metrics
+    # Value of the job label on scraped series. Federation clients, such as
+    # the BYOO collector, select worker series by this job name. Set it to an
+    # empty string to keep the PodMonitor default of namespace/name.
+    jobName: nvcf-worker
     # Preserve function identity for autoscaler queries on worker metrics.
     podTargetLabels:
       - function-id

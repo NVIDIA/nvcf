@@ -344,14 +344,6 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			fmt.Sprintf("'input' array is too large, must be less than %d elements", MaxEmbeddingInputs),
 		)
 	}
-	for idx, input := range request.Input {
-		if len(input.Text) == 0 && len(input.Tokens) == 0 {
-			return "", echo.NewHTTPError(
-				http.StatusBadRequest,
-				fmt.Sprintf("'input.%d' must not be empty", idx),
-			)
-		}
-	}
 	return requestModel, nil
 }
 
@@ -568,7 +560,9 @@ func countEmbeddingTokens(
 ) int {
 	total := 0
 	for _, input := range request.Input {
-		if input.Tokens != nil {
+		if input.Raw != nil {
+			total += estimatedTokenCountForRawJSON(input.Raw)
+		} else if input.Tokens != nil {
 			total += len(input.Tokens)
 		} else {
 			total += estimatedTokenCountForText(input.Text)

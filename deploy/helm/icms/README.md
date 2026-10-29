@@ -27,9 +27,10 @@ sis:
     tag: <image-tag>
 ```
 
-Set `sis.image.tag` explicitly rather than relying on `Chart.appVersion`. The
-chart release pipeline rewrites `appVersion` to the chart version when it
-publishes, so a published chart's `appVersion` is not the application version.
+Set `sis.image.tag` explicitly for the selected application release. Chart
+packaging sets the chart version independently and preserves the source
+`appVersion`. Inspect the downloaded chart and effective stack values; a chart
+version bump alone does not identify the deployed application image.
 
 ## Prerequisites
 
