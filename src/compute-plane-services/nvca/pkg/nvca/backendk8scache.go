@@ -618,6 +618,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	nvcaInformerFactory := nvcainformers.NewSharedInformerFactoryWithOptions(
 		b.clients.BART,
 		ResyncInterval,
+		nvcainformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	icmsReqGenInf, err := nvcaInformerFactory.ForResource(nvcav2beta1new.SchemeGroupVersion.WithResource("icmsrequests"))
 	if err != nil {
@@ -633,7 +634,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	nodeInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 		c.clients.K8s,
 		c.resyncPeriod,
-		nodefeatures.NewNodeInformerOptions(c.featureFlagFetcher)...,
+		append(nodefeatures.NewNodeInformerOptions(c.featureFlagFetcher),
+			k8sinformers.WithTransform(k8sutil.StripManagedFields))...,
 	)
 	nodeInf := nodeInfFactory.Core().V1().Nodes()
 	sharedNodeIInf := nodeInf.Informer()
@@ -673,6 +675,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			podInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 				k8sClient,
 				resyncPeriod,
+				k8sinformers.WithTransform(k8sutil.StripManagedFields),
 			)
 			podInf := podInfFactory.Core().V1().Pods()
 			_, err := podInf.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
@@ -725,6 +728,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			eventInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 				k8sClient,
 				resyncPeriod,
+				k8sinformers.WithTransform(k8sutil.StripManagedFields),
 			)
 			eventInf := eventInfFactory.Core().V1().Events()
 			_, err := eventInf.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
@@ -1014,6 +1018,7 @@ func (c *BackendK8sCache) startSecretMirroringInformer(ctx context.Context) erro
 		k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.LabelSelector = labelSelector.String()
 		}),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	secretInf := secretInfFactory.Core().V1().Secrets()
 	c.secretLister = secretInf.Lister()
@@ -1506,7 +1511,8 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 	f := k8sinformers.NewSharedInformerFactoryWithOptions(
 		c.clients.K8s,
 		c.resyncPeriod,
-		k8sinformers.WithNamespace(c.systemNamespace))
+		k8sinformers.WithNamespace(c.systemNamespace),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields))
 
 	cmi := f.Core().V1().ConfigMaps()
 	c.syncedFuncs = append(c.syncedFuncs, cmi.Informer().HasSynced)
@@ -1641,6 +1647,7 @@ func (c *BackendK8sCache) initInstanceNamespaceInformer(ctx context.Context) err
 		k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.LabelSelector = namespaceLabelSel.String()
 		}),
+		k8sinformers.WithTransform(k8sutil.StripManagedFields),
 	)
 	namespaceInf := infFactory.Core().V1().Namespaces()
 	c.instanceNamespaceLister = namespaceInf.Lister()
