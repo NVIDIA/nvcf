@@ -1536,7 +1536,7 @@ sis:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/icms-service-oss
+    repository: {{ dig "sis" "image" "repository" "" .Values | default (printf "%s/icms-service-oss" .Values.global.image.repository) }}
     {{- if dig "sis" "image" "tag" "" .Values }}
     tag: {{ dig "sis" "image" "tag" "" .Values }}
     {{- end }}
