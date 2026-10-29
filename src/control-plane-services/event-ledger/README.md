@@ -138,6 +138,24 @@ curl 'http://localhost:8080/v3/ledger/namespace/example/stats?eventFilter=ready,
 The optional `view=filtered` query selects the filtered stats view when it is
 enabled in configuration. The endpoint returns `404` when that view is disabled.
 
+### Read account-scoped events and stats
+
+Two routes read the events and stats recorded for one account and function:
+
+```bash
+curl 'http://localhost:8080/v3/ledger/accounts/acct-1/functions/<function-id>/versions/<function-version-id>/events?instance_id=instance-1'
+curl 'http://localhost:8080/v3/ledger/accounts/acct-1/functions/<function-id>/versions/<function-version-id>/stats'
+```
+
+The function version ID is the namespace. The routes require the `admin:read`
+scope and trust the account in the path; they do not check who owns the
+function version. Malformed IDs return `400`, and a request that matches
+nothing returns `200` with empty lists. The events route takes the same query
+parameters as the namespace events route, and the stats route takes
+`eventFilter`. The response shapes have no `nca_id` field, and event details
+are returned as stored. Only events stored with `nca_id` and `function_id` can
+match, which needs `v3.account-columns-enabled`.
+
 ## Authentication
 
 Authentication is enabled by default. For the JWT provider, configure

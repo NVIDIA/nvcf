@@ -221,6 +221,14 @@ func (m *mockDBHandlerV3) ReadDeploymentDeploymentStats(context.Context, uuid.UU
 func (m *mockDBHandlerV3) ListDeploymentInstancesPaginated(ctx context.Context, functionVersionId, deploymentId uuid.UUID, paginationParams data_access.PaginationParams) (data_access.PaginatedInstancesResponse, error) {
 	return data_access.PaginatedInstancesResponse{}, nil
 }
+func (m *mockDBHandlerV3) GetAccountEventsV3(ctx context.Context, namespace, eventContext, ncaID, functionID string) ([]data_access.EventV3Record, error) {
+	return []data_access.EventV3Record{}, nil
+}
+
+func (m *mockDBHandlerV3) GetAccountStatsV3(ctx context.Context, namespace, ncaID, functionID string) ([]data_access.StatsV3Record, error) {
+	return []data_access.StatsV3Record{}, nil
+}
+
 func (m *mockDBHandlerV3) Close() error {
 	return nil
 }
