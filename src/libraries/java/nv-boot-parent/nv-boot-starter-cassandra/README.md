@@ -247,11 +247,11 @@ Select a retry policy with `spring.cassandra.advanced.retry-policy.class`
 | Class | Behavior |
 |-------|----------|
 | `com.nvidia.boot.cassandra.retry.NextHostRetryPolicy` (default in the services) | Retries once on the next host: read timeout without data, write timeout, unavailable, aborted request, error response. |
-| `com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy` (opt-in) | Extends `NextHostRetryPolicy` and also retries once on the next host a read timeout that has data but fewer responses than required (range reads / index lookups). |
+| `com.nvidia.boot.cassandra.retry.RangeReadRetryPolicy` (selected by the nvcf-service and api-keys ncp profiles) | Extends `NextHostRetryPolicy` and also retries once on the next host a read timeout that has data but fewer responses than required (range reads / index lookups). |
 
-`RangeReadRetryPolicy` is not enabled anywhere by default. Enable it when you
-need additional Cassandra resilience, for example to ride out the loss of a
-replica.
+Other services keep `NextHostRetryPolicy`. Select `RangeReadRetryPolicy` in a
+service when you need additional Cassandra resilience, for example to ride out
+the loss of a replica.
 
 ### CassandraHealthConfiguration
 
