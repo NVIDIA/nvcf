@@ -33,6 +33,9 @@ public class CapacityGatingPropertiesTest extends IntegrationTest {
     // Declared under icms.capacity-gating in application-test.yaml.
     private static final String GATED_NCA_ID = "DummyGatedNcaId1aBcDeF";
 
+    // Declared under icms.gpu-allowed-nca-ids in application-test.yaml.
+    private static final String GRANTED_NCA_ID = "DummyGrantedNcaId2gHiJkL";
+
     // The two orgs holding the production B40 grant, and the staging pair, as deployed. These
     // pin what the live overlays do today so a refactor cannot quietly change who has access.
     private static final String PRD_B40_NCA_ID_1 = "T7OsTI9riazYJRfFk_iZcplBcnt5tnfjfFHLyyVFwEo";
@@ -65,6 +68,23 @@ public class CapacityGatingPropertiesTest extends IntegrationTest {
         // Empty list for the GPU -> treated as unrestricted.
         props.setGpuAllowedNcaIds(Map.of("dummy-restricted-gpu", List.of()));
         assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "other-nca"));
+    }
+
+    /**
+     * Binding regression guard for the key that restricts limited GPUs in production. It is bound
+     * on this bean rather than on {@link com.nvidia.icms.configuration.bean.IcmsConfigurationProperties},
+     * so a running context has to confirm it still resolves: a silent binding failure here would
+     * drop the restriction and open the GPU to every account.
+     */
+    @Test
+    void test_gpuAllowedNcaIds_bindsFromConfigurationInARunningContext() {
+        assertTrue(capacityGatingProperties.isNcaAllowedForGpu("DUMMY_RESTRICTED_GPU",
+                                                              GRANTED_NCA_ID));
+        assertFalse(capacityGatingProperties.isNcaAllowedForGpu("DUMMY_RESTRICTED_GPU",
+                                                               "unlisted-nca"));
+
+        // A GPU the key does not name stays unrestricted for everyone.
+        assertTrue(capacityGatingProperties.isNcaAllowedForGpu("DUMMY_GPU_1", "unlisted-nca"));
     }
 
     /**

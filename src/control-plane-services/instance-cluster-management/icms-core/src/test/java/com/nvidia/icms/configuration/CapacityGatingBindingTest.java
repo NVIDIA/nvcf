@@ -134,4 +134,54 @@ class CapacityGatingBindingTest {
         assertFalse(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
         assertFalse(props.hasCapacityGating(CONFIGMAP_NCA_ID));
     }
+
+    /**
+     * Migrating a ConfigMap means moving the GPU map down one level under {@code gpus}. Writing
+     * the old shape straight under the new key makes every property below the NCA ID unknown, and
+     * because unknown properties are ignored rather than rejected the binder produces no map entry
+     * at all. The account is left ungated, not denied.
+     *
+     * <p>That direction is deliberate to record: a half-converted entry over-grants rather than
+     * locking an account out, so it cannot cause a lost-access complaint, but it also will not
+     * announce itself. The only signal is the absence of the account from the policy map.
+     */
+    @Test
+    void oldGpuGatingShapeUnderTheNewKeyLeavesTheAccountUngated() {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put(PREFIX + JAR_NCA_ID + ".L40S[0]", "gl40s_1.br25_2xlarge");
+        // A correctly shaped neighbour, so a failure here cannot be mistaken for the whole bean
+        // failing to bind.
+        source.putAll(gpuPolicy(CONFIGMAP_NCA_ID, "L40S", "gl40s_1.br25_2xlarge"));
+
+        CapacityGatingProperties props = bind(source, Map.of());
+
+        assertTrue(props.hasCapacityGating(CONFIGMAP_NCA_ID));
+
+        assertFalse(props.getCapacityGating().containsKey(JAR_NCA_ID));
+        assertFalse(props.hasCapacityGating(JAR_NCA_ID));
+        assertFalse(props.isOrgDenied(JAR_NCA_ID));
+        // Ungated means unrestricted, including GPUs the half-converted entry meant to exclude.
+        assertTrue(props.isInstanceTypeAllowedForNca(JAR_NCA_ID, "B40", "gb40_1.br30_2xlarge"));
+    }
+
+    /**
+     * {@code icms.gpu-allowed-nca-ids} moved onto this bean, and it is the key that restricts
+     * limited GPUs in production. Bound here from a ConfigMap-shaped source so the move is proven
+     * against the binder and not just against a setter.
+     */
+    @Test
+    void gpuAllowedNcaIdsStillBindsOntoThisBean() {
+        CapacityGatingProperties props = bind(Map.of(),
+                Map.of("icms.gpu-allowed-nca-ids.B40[0]", "granted-nca",
+                       "icms.gpu-allowed-nca-ids.B40[1]", "second-granted-nca"));
+
+        assertEquals(Map.of("B40", List.of("granted-nca", "second-granted-nca")),
+                     props.getGpuAllowedNcaIds());
+
+        assertTrue(props.isNcaAllowedForGpu("B40", "granted-nca"));
+        assertTrue(props.isNcaAllowedForGpu("B40", "second-granted-nca"));
+        assertFalse(props.isNcaAllowedForGpu("B40", "other-nca"));
+        // A GPU the key does not name stays unrestricted.
+        assertTrue(props.isNcaAllowedForGpu("L40S", "other-nca"));
+    }
 }
