@@ -418,10 +418,12 @@ Usage: {{ include "nvcaop.jsonListOrEmpty" <list> }}
 
 {{/*
 Registry path (registry plus org and team) of a repository: everything
-before the last path element. The operator, agent, credential helper and
-collector images are published together, so a sibling image lives next to
-image.repository wherever that is: the public org, staging, or the SBOM
-org of a managed cluster.
+before the last path element. The credential helper and collector default
+to this path, so a sibling image lives next to image.repository wherever
+that is: the public org, staging, or any other registry path. A repository
+with no registry path falls back to the public path nvcr.io/nvidia/nvcf-byoc
+instead of a bare name, which a container runtime would resolve on Docker
+Hub.
 Usage: {{ include "nvcaop.imageRegistryPath" .Values.image.repository }}
 */}}
 {{- define "nvcaop.imageRegistryPath" -}}
@@ -429,22 +431,18 @@ Usage: {{ include "nvcaop.imageRegistryPath" .Values.image.repository }}
 {{- if gt (len $parts) 1 -}}
 {{- join "/" (initial $parts) -}}
 {{- else -}}
-{{- . -}}
+nvcr.io/nvidia/nvcf-byoc
 {{- end -}}
 {{- end -}}
 
 {{/*
 Get the imageCredHelper repository based on image.repository.
 If imageRepository is explicitly set, use it. Otherwise it is the sibling of
-image.repository: nvcf-image-credential-helper under the same registry path.
-The default image.repository therefore still resolves to
-nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper and staging to
-stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper, while a cluster
-whose operator image comes from another org (the SBOM org on managed
-clusters) pulls the helper from that org, which is where releases past
-0.10.2 are published. Pinning the public org regardless of the operator
-image left the hourly image-cred-updater in ImagePullBackOff on such
-clusters (NVCA 3.12, 2026-09-18).
+image.repository: nvcf-image-credential-helper under the same registry path
+(see nvcaop.imageRegistryPath). The default image.repository therefore still
+resolves to nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper and staging
+to stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper. An operator
+image from any other registry path gets the helper from that same path.
 Usage: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.helmManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository) }}
 */}}
 {{- define "nvcaop.imageCredHelperRepository" -}}
