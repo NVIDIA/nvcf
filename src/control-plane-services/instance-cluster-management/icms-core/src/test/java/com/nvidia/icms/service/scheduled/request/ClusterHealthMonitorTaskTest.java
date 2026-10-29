@@ -144,8 +144,7 @@ class ClusterHealthMonitorTaskTest {
         doNothing().when(clusterRepository).updateClusterInfo(Mockito.argThat(
                                                                       entity -> entity.getClusterId().equals("cluster-3") &&
                                                                               entity.getClusterStatus().equals(
-                                                                                      ClusterStatusEnum.ABANDONED)), Mockito.anySet(),
-                                                              Mockito.eq(false));
+                                                                                      ClusterStatusEnum.ABANDONED)));
         doNothing().when(auditService)
                 .sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(), Mockito.any());
         doNothing().when(telemetryEventClient).triggerEvent(Mockito.any());
@@ -165,8 +164,7 @@ class ClusterHealthMonitorTaskTest {
         verify(clusterRepository).updateClusterInfo(Mockito.argThat(
                                                             entity -> entity.getClusterId().equals("cluster-3") &&
                                                                     entity.getClusterStatus().equals(
-                                                                            ClusterStatusEnum.ABANDONED)), Mockito.anySet(),
-                                                    Mockito.eq(false));
+                                                                            ClusterStatusEnum.ABANDONED)));
         verify(clusterRepository, times(2)).saveClusterHealth(Mockito.any(), Mockito.anyInt());
         verify(cloudHealthRepository).findAll();
         verify(auditService).sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(),
@@ -225,7 +223,7 @@ class ClusterHealthMonitorTaskTest {
         doNothing().when(clusterRepository).updateClusterInfo(Mockito.argThat(
                 entity -> Set.of("cluster-2", "cluster-3").contains(entity.getClusterId()) &&
                         entity.getClusterStatus().equals(
-                                ClusterStatusEnum.ABANDONED)), Mockito.anySet(), Mockito.eq(false));
+                                ClusterStatusEnum.ABANDONED)));
         doNothing().when(auditService)
                 .sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(), Mockito.any());
         doNothing().when(telemetryEventClient).triggerEvent(Mockito.any());
@@ -246,7 +244,7 @@ class ClusterHealthMonitorTaskTest {
         verify(clusterRepository, times(2)).updateClusterInfo(Mockito.argThat(
                 entity -> Set.of("cluster-2", "cluster-3").contains(entity.getClusterId()) &&
                         entity.getClusterStatus().equals(
-                                ClusterStatusEnum.ABANDONED)), Mockito.anySet(), Mockito.eq(false));
+                                ClusterStatusEnum.ABANDONED)));
         verify(clusterRepository).saveClusterHealth(Mockito.any(), Mockito.anyInt());
         verify(cloudHealthRepository).findAll();
         verify(auditService, times(2)).sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(),
@@ -357,7 +355,7 @@ class ClusterHealthMonitorTaskTest {
         doNothing().when(clusterRepository).updateClusterInfo(Mockito.argThat(
                 entity -> Set.of("cluster-1", "cluster-2").contains(entity.getClusterId()) &&
                         entity.getClusterStatus().equals(
-                                ClusterStatusEnum.ABANDONED)), Mockito.anySet(), Mockito.eq(false));
+                                ClusterStatusEnum.ABANDONED)));
         doNothing().when(auditService)
                 .sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(), Mockito.any());
         doNothing().when(telemetryEventClient).triggerEvent(Mockito.any());
@@ -378,8 +376,8 @@ class ClusterHealthMonitorTaskTest {
         verify(queueManager).deleteQueue("creation-queue");
         verifyNoMoreInteractions(queueManager);
         verify(clusterRepository, times(2)).updateClusterInfo(Mockito.argThat(
-                                                                      entity -> Set.of("cluster-1", "cluster-2").contains(entity.getClusterId())),
-                                                              Mockito.anySet(), Mockito.eq(false));
+                                                                      entity -> Set.of("cluster-1", "cluster-2")
+                                                                              .contains(entity.getClusterId())));
         verify(cloudHealthRepository).findAll();
         verify(auditService, times(2)).sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(),
                                                                       Mockito.any());
@@ -423,7 +421,7 @@ class ClusterHealthMonitorTaskTest {
         doNothing().when(clusterRepository).updateClusterInfo(Mockito.argThat(
                 entity -> Objects.equals("cluster-1", entity.getClusterId()) &&
                         entity.getClusterStatus().equals(
-                                ClusterStatusEnum.ABANDONED)), Mockito.anySet(), Mockito.eq(false));
+                                ClusterStatusEnum.ABANDONED)));
         doNothing().when(auditService)
                 .sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(), Mockito.any());
         doNothing().when(telemetryEventClient).triggerEvent(Mockito.any());
@@ -445,8 +443,7 @@ class ClusterHealthMonitorTaskTest {
         verify(clusterRepository, times(1)).updateClusterInfo(Mockito.argThat(
                                                                       entity -> Objects.equals(
                                                                               "cluster-1",
-                                                                              entity.getClusterId())),
-                                                              Mockito.anySet(), Mockito.eq(false));
+                                                                              entity.getClusterId())));
         verify(cloudHealthRepository).findAll();
         verify(auditService, times(1)).sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(),
                                                                       Mockito.any());
@@ -483,8 +480,7 @@ class ClusterHealthMonitorTaskTest {
         doNothing().when(clusterRepository).updateClusterInfo(Mockito.argThat(
                                                                       entity -> entity.getClusterId().equals("cluster-2") &&
                                                                               entity.getClusterStatus().equals(
-                                                                                      ClusterStatusEnum.ABANDONED)), Mockito.anySet(),
-                                                              Mockito.eq(false));
+                                                                                      ClusterStatusEnum.ABANDONED)));
         doNothing().when(auditService)
                 .sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(), Mockito.any());
         doNothing().when(telemetryEventClient).triggerEvent(Mockito.any());
@@ -502,8 +498,7 @@ class ClusterHealthMonitorTaskTest {
         verify(clusterRepository).updateClusterInfo(Mockito.argThat(
                                                             entity -> entity.getClusterId().equals("cluster-2") &&
                                                                     entity.getClusterStatus().equals(
-                                                                            ClusterStatusEnum.ABANDONED)), Mockito.anySet(),
-                                                    Mockito.eq(false));
+                                                                            ClusterStatusEnum.ABANDONED)));
         verifyNoMoreInteractions(clusterRepository);
         verify(cloudHealthRepository).findAll();
         verify(auditService).sendAuditEventForClusterEntity(Mockito.any(), Mockito.any(),

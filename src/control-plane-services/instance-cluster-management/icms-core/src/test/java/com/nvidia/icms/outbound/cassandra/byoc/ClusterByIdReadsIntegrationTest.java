@@ -146,8 +146,6 @@ public class ClusterByIdReadsIntegrationTest extends IntegrationTest {
         Assertions.assertTrue(clusterRepository.getAllClustersInAnAccount("missing-nca").isEmpty());
         Assertions.assertTrue(
                 clusterRepository.getClustersFromClusterGroup("missing-group").isEmpty());
-        Assertions.assertTrue(clusterRepository.getAllClusterGroupsInAuthorizedAccount(
-                "missing-nca").isEmpty());
         Assertions.assertTrue(nvcaClusterRepository.getAllClustersInAuthorizedAccount(
                 "missing-nca").isEmpty());
     }

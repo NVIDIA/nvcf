@@ -398,17 +398,6 @@ public class ByocCreateServiceTest {
         doNothing().when(telemetryEventClient).triggerEvent(anyList());
         doNothing().when(instanceRequestV2Repository).insert(Mockito.any(InstanceRequestV2Entity.class));
 
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName))
-                .thenReturn(List.of(getDummyClusterGroupResponse(clusterGroupName,
-                                                                 DUMMY_BYOC_NCA_ID,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                 DUMMY_GPU_NAME, 8)));
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName))
-                .thenReturn(List.of());
-
         when(clusterRepository.getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
                 Set.of(getDummyClusterEntity(clusterGroupName)));
 
@@ -474,11 +463,7 @@ public class ByocCreateServiceTest {
         verify(kubernetesResourceProvider).injectPodNameAndGenerateBase64EncodedSecretList(
                 Mockito.any(), eq("dummy-embedded-secret-template"));
         verify(telemetryEventClient).triggerEvent(anyList());
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName);
         verify(clusterRepository).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName);
         verify(instanceServiceHelper).generateRequestInfo(eq(instanceRequest), eq(DUMMY_CUSTOMER_ID),
                                                       anyString(), eq(null));
     }
@@ -498,17 +483,6 @@ public class ByocCreateServiceTest {
         when(byocConfigurationProperties.getInstanceBatchCount()).thenReturn(1);
         doNothing().when(telemetryEventClient).triggerEvent(anyList());
         doNothing().when(instanceRequestV2Repository).insert(Mockito.any(InstanceRequestV2Entity.class));
-
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName))
-                .thenReturn(List.of(getDummyClusterGroupResponse(clusterGroupName,
-                                                                 DUMMY_BYOC_NCA_ID,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                 DUMMY_GPU_NAME, -1)));
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName))
-                .thenReturn(List.of());
 
         when(clusterRepository.getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
                 Set.of(getDummyClusterEntity(clusterGroupName)));
@@ -579,11 +553,7 @@ public class ByocCreateServiceTest {
         verify(kubernetesResourceProvider).injectPodNameAndGenerateBase64EncodedSecretList(
                 Mockito.any(), eq("dummy-embedded-secret-template"));
         verify(telemetryEventClient).triggerEvent(anyList());
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName);
         verify(clusterRepository).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName);
         verify(instanceServiceHelper).generateRequestInfo(eq(instanceRequest), eq(DUMMY_CUSTOMER_ID),
                                                       Mockito.anyString(), eq(null));
     }
@@ -602,17 +572,6 @@ public class ByocCreateServiceTest {
         when(byocConfigurationProperties.getInstanceBatchCount()).thenReturn(1);
         doNothing().when(telemetryEventClient).triggerEvent(anyList());
         doNothing().when(instanceRequestV2Repository).insert(Mockito.any(InstanceRequestV2Entity.class));
-
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName))
-                .thenReturn(List.of(getDummyClusterGroupResponse(clusterGroupName,
-                                                                 DUMMY_BYOC_NCA_ID,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                 DUMMY_GPU_NAME, 0)));
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName))
-                .thenReturn(List.of());
 
         when(clusterRepository.getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
                 Set.of(getDummyClusterEntity(clusterGroupName)));
@@ -679,11 +638,7 @@ public class ByocCreateServiceTest {
         verify(kubernetesResourceProvider).injectPodNameAndGenerateBase64EncodedSecretList(
                 Mockito.any(), eq("dummy-embedded-secret-template"));
         verify(telemetryEventClient).triggerEvent(anyList());
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName);
         verify(clusterRepository).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName);
         verify(instanceServiceHelper).generateRequestInfo(eq(instanceRequest), eq(DUMMY_CUSTOMER_ID),
                                                       anyString(), eq(null));
     }
@@ -699,17 +654,6 @@ public class ByocCreateServiceTest {
                 DUMMY_BYOC_NCA_ID);
 
         when(byocConfigurationProperties.getInstanceBatchCount()).thenReturn(1);
-
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName))
-                .thenReturn(List.of(getDummyClusterGroupResponse(clusterGroupName,
-                                                                 DUMMY_BYOC_NCA_ID,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                 DUMMY_GPU_NAME, 8)));
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName))
-                .thenReturn(List.of());
 
         when(clusterRepository.getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
                 Set.of(getDummyClusterEntity(clusterGroupName)));
@@ -776,11 +720,7 @@ public class ByocCreateServiceTest {
         verify(kubernetesResourceProvider).getEmbeddedSecretTemplate(Mockito.any());
         verify(kubernetesResourceProvider).injectPodNameAndGenerateBase64EncodedSecretList(
                 Mockito.any(), eq("dummy-embedded-secret-template"));
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName);
         verify(clusterRepository).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName);
     }
 
     @Test
@@ -802,17 +742,6 @@ public class ByocCreateServiceTest {
         when(byocServiceHelper.isModelCachingEnabled(Mockito.any())).thenReturn(true);
         doNothing().when(telemetryEventClient).triggerEvent(anyList());
         doNothing().when(instanceRequestV2Repository).insert(Mockito.any(InstanceRequestV2Entity.class));
-
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName))
-                .thenReturn(List.of(getDummyClusterGroupResponse(clusterGroupName,
-                                                                 DUMMY_BYOC_NCA_ID,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE,
-                                                                 DUMMY_BYOC_INSTANCE_TYPE_VALUE,
-                                                                 DUMMY_GPU_NAME, 8)));
-        when(clusterRepository.getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName))
-                .thenReturn(List.of());
 
         when(clusterRepository.getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID)).thenReturn(
                 Set.of(clusterEntity));
@@ -888,11 +817,7 @@ public class ByocCreateServiceTest {
         verify(kubernetesResourceProvider).injectPodNameAndGenerateBase64EncodedSecretList(
                 Mockito.any(), eq("dummy-embedded-secret-template"));
         verify(telemetryEventClient).triggerEvent(anyList());
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                DUMMY_BYOC_NCA_ID, clusterGroupName);
         verify(clusterRepository).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(clusterRepository).getClusterGroupsByAccountAndNameInAuthorizedAccounts(
-                ClusterRepository.WILDCARD, clusterGroupName);
         verify(instanceServiceHelper).generateRequestInfo(eq(instanceRequest), eq(DUMMY_CUSTOMER_ID),
                                                       anyString(), eq(null));
         verify(kubernetesResourceProvider).generateBase64EncodedInitContainerJobSpec(Mockito.any(),

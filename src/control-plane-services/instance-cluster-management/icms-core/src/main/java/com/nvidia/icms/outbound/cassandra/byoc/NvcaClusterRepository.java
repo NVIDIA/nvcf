@@ -198,8 +198,6 @@ public class NvcaClusterRepository {
         // Currently the authorized nca_ids will be the first registered clusters nca_id
         if (!clusterGroupByGroupIdRepo.isInserted(toClusterGroupByGroupIdEntity(entity)) ||
                 !clusterGroupsByAccountRepo.isInserted(toClusterGroupsByAccountsEntity(entity))) {
-            // NOTE: We are not adding the changes in table !clusterRepository.insertForAuthorizedAccounts(entity)
-            // Since this table is only needed in NVCA 1.0 old flow as nca id keys were at cluster group level
             log.error(errMsg);
             try {
                 // Try deleting entry from previous table

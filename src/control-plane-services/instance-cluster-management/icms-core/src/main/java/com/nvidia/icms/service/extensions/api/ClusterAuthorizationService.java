@@ -33,7 +33,7 @@ public interface ClusterAuthorizationService {
 
     /**
      * Build an authorized {@code ClusterGroups} response (or {@code null})
-     * for the given requester using the detailed-targeting flow.
+     * for the given requester using the authorized non-BYOC provider.
      *
      * <p>The implementation is expected to:
      * <ol>
@@ -53,16 +53,6 @@ public interface ClusterAuthorizationService {
     ClusterGroups fetchAuthorizedClusterGroup(
             @NotNull String requestingNcaId,
             @NotNull InstanceTypeUsageEnum instanceTypeUsageEnum);
-
-    /**
-     * Returns whether the non-BYOC detailed-targeting flow (authorized cluster aggregation via
-     * {@link #fetchAuthorizedClusterGroup}) is enabled for this deployment.
-     *
-     * <p>When {@code false}, callers should treat back to the legacy BART path. The default no-op
-     * implementation returns {@code false} so that core code running without the internal
-     * backend registered never enters the detailed-targeting branch.</p>
-     */
-    boolean isDetailedTargetingFlowEnabled();
 
     /**
      * Apply backend-specific authorization filtering to the supplied mutable set of
