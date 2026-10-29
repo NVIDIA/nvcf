@@ -134,12 +134,12 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 
 `TestOpenBaoJWTPluginLifecycle` exercises real file-backed OpenBao restarts,
 declarative registration, version tuning, plugin reload, rollback, and gated
-cleanup. It verifies JWT signatures and retained public keys. It uses a new
-disposable Docker containers and does not install a Kubernetes stack. It starts
-the published legacy server binary, upgrades to the bridge server binary, and
-tests legacy, bridge, and target-only plugin layouts with retained storage.
-It does not qualify Helm hooks, HA failover, or multi-architecture release images.
-It also verifies recovery when migrations have not created their first JWT mount.
+cleanup. The test verifies JWT signatures, retained public keys, and recovery
+when migrations have not created their first JWT mount. It uses new disposable
+Docker containers without installing a Kubernetes stack. It starts the
+published legacy server binary, upgrades to the bridge server binary, and tests
+legacy, bridge, and target-only plugin layouts with retained storage. The test
+does not qualify Helm hooks, HA failover, or multi-architecture release images.
 
 Follow the root local QA rules before running. Use a fresh worktree containing
 the candidate changes, inventory existing Docker and cluster state, and choose

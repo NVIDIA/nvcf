@@ -119,14 +119,34 @@ The driver also runs outside Kubernetes or Helm using an authenticated `bao`:
 set `JWT_VERSIONS_FILE` to the image's version manifest and `JWT_PLUGIN_DIR` to
 its extracted plugin directory. It does not register plugins or restart servers.
 
-## Pin, Reload, Then Upgrade
+## Pin, Rotate, Then Upgrade
+
+After each tune below, rotate all members to load the configured plugin
+version. A local reload and a status check on the active member do not prove
+that every member has switched. OpenBao 2.6 global reload is not a substitute
+for this rotation.
+
+For each rotation, follow the standby replacement and leadership transfer
+checks in the patch upgrade procedure. Replace one standby at a time and wait
+for all members to recover before continuing. Transfer leadership to a
+recovered member, then replace the former active as a standby. Never replace
+multiple members at once. Reassign `BAO_POD` to the current active after each
+transfer.
+
+After the rotation, verify each member while it is active. Record the member
+name, run the requested `status` or `verify` check, and issue a JWT and verify
+its signature with the recorded public key. Transfer leadership and repeat
+until every member has been active and checked. Confirm the new active and
+cluster health after each transfer. Stop if a transfer or check fails, or if
+leadership cannot be transferred to an unchecked member. Do not proceed based
+on a status response forwarded from a standby.
 
 ```bash
 bao_admin jwt-plugin-lifecycle pin-old
-bao_admin bao plugin reload -plugin vault-plugin-secrets-jwt
-bao_admin jwt-plugin-lifecycle status
 ```
 
+Rotate and check every member as described above, using
+`bao_admin jwt-plugin-lifecycle status` on each active member.
 Require every legacy mount's configured and running versions to equal the old
 version and its running SHA to equal the old catalog SHA. Existing mounts
 already on the target stay there when `pin-old` is repeated. New mounts use the
@@ -134,15 +154,12 @@ target version. The next command refuses any mount still running unversioned.
 
 ```bash
 bao_admin jwt-plugin-lifecycle upgrade
-bao_admin bao plugin reload -plugin vault-plugin-secrets-jwt
-bao_admin jwt-plugin-lifecycle verify
 ```
 
-Tuning updates configured metadata; reloading switches the running backend.
-If reload fails, stop and inspect `status`. A checked member rotation is an
-alternative to reload. After every leadership transfer, rerun verification
-against the active member and repeat signed JWT issuance and signature
-verification. Preserve existing keys, roles, and policies.
+Rotate and check every member again, using
+`bao_admin jwt-plugin-lifecycle verify` on each active member. Tuning updates
+configured metadata; rotation switches the running backend. If a check fails,
+stop and inspect `status`. Preserve existing keys, roles, and policies.
 
 After every member runs the bridge and verification passes, change
 `openbao.jwtPluginLifecycle.mode` to `versioned` in the persistent release
@@ -173,19 +190,20 @@ mount. Manual `verify`, tuning, and cleanup still reject empty inventories.
 ## Rollback During the Window
 
 Keep both versioned binaries and their declarative config throughout the
-rollback window. Roll back plugin selection explicitly:
+rollback window. Pause migrations and new mount creation during rollback.
+Roll back plugin selection explicitly:
 
 ```bash
 bao_admin jwt-plugin-lifecycle rollback
-bao_admin bao plugin reload -plugin vault-plugin-secrets-jwt
-bao_admin jwt-plugin-lifecycle status
 ```
 
+Repeat the checked member rotation and active-member checks from the previous
+section, using `bao_admin jwt-plugin-lifecycle status` on each member.
 Require configured and running versions to equal the explicit old version,
-with the old SHA, and repeat JWT issuance and signature verification. Pause
-migrations and new mount creation during rollback. If migrations must run,
-set their `BAO_JWT_PLUGIN_VERSION` environment variable to the explicit old
-version for this window. Restore the target setting before resuming upgrade.
+with the old SHA, and repeat JWT issuance and signature verification. If
+migrations must run, set their `BAO_JWT_PLUGIN_VERSION` environment variable
+to the explicit old version for this window. Restore the target setting before
+resuming upgrade.
 Do not clear version pins or roll back to a pre-bridge image. Such an image
 lacks the versioned command paths now referenced in storage. OpenBao server
 downgrades and snapshot restore need a separately validated recovery plan.
@@ -226,8 +244,8 @@ policy; rollback to the retired plugin ends after cleanup.
 ```mermaid
 flowchart LR
   A[Unversioned mounts] --> B[Bridge with original and versioned commands]
-  B --> C[Pin old and reload]
-  C --> D[Tune target and reload]
+  B --> C[Pin old and rotate members]
+  C --> D[Tune target and rotate members]
   D --> E[Validate and retain rollback window]
   E --> F[Later target-only image]
   F --> G[Verify then remove old catalog entries]
