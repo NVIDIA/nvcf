@@ -18,12 +18,12 @@ package com.nvidia.icms.service.createInstances;
 
 import com.amazonaws.services.sqs.model.QueueAttributeName;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
-import com.nvidia.icms.service.gating.ClusterGatingService;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.extensions.impl.NoOpInstanceDestinationProvider;
 import com.nvidia.icms.configuration.aws.AwsConfigurationProperties;
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import com.nvidia.icms.errors.PreConditionFailedException;
@@ -158,6 +158,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     @Mock
     private IcmsConfigurationProperties icmsConfigurationProperties;
     @Mock
+    private CapacityGatingProperties capacityGatingProperties;
+    @Mock
     private ByocConfigurationProperties byocConfigurationProperties;
     @Mock
     private InstanceValidationService instanceValidationService;
@@ -235,14 +237,14 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 instanceLifecycleService,
                 byocValidationService,
                 icmsConfigurationProperties,
+                capacityGatingProperties,
                 requestDestinationProvider,
                 clusterTargetingHelper,
                 telemetryEventClient,
                 reservationProcessor,
                 computePlatformService,
                 instanceValidationService,
-                new GpuGatingService(icmsConfigurationProperties, unifiedErrorReporter),
-                new ClusterGatingService(icmsConfigurationProperties, unifiedErrorReporter, null));
+                new CapacityGatingService(capacityGatingProperties, unifiedErrorReporter, null));
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
@@ -1723,7 +1725,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                         ClusterProviderEnum.OCI)));
 
         // Restrict this GPU: the caller's NCA is NOT in the allowlist.
-        when(icmsConfigurationProperties.isNcaAllowedForGpu(DUMMY_GPU, TEST_NCA_ID)).thenReturn(false);
+        when(capacityGatingProperties.isNcaAllowedForGpu(DUMMY_GPU, TEST_NCA_ID)).thenReturn(false);
 
         // Act & Assert
         IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class, () ->
@@ -1735,7 +1737,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     }
 
     @Test
-    void processTargetedInstanceRequest_gpuGatingAllowsRequestedGpu_proceeds() {
+    void processTargetedInstanceRequest_capacityGatingAllowsRequestedGpu_proceeds() {
         // Arrange
         SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
                 "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
@@ -1743,9 +1745,9 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         CreateSpotInstancesResponse expectedResponse = new CreateSpotInstancesResponse();
 
         setupGatedTargetedRequest(expectedResponse, instanceRequest, auditProps);
-        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+        when(capacityGatingProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
                 .thenReturn(true);
-        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+        when(capacityGatingProperties.isInstanceTypeAllowedForNca(
                 DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
 
         // Act
@@ -1757,14 +1759,14 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     }
 
     @Test
-    void processTargetedInstanceRequest_gpuGatingDeniesGpu_throwsNoAccessToGpuConflict() {
+    void processTargetedInstanceRequest_capacityGatingDeniesGpu_throwsNoAccessToGpuConflict() {
         // Arrange
         SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
                 "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
         Map<String, Object> auditProps = new HashMap<>();
 
         setupGatedTargetedRequest(null, instanceRequest, auditProps);
-        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+        when(capacityGatingProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
                 .thenReturn(false);
 
         // Act & Assert
@@ -1778,16 +1780,16 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     }
 
     @Test
-    void processTargetedInstanceRequest_gpuGatingDeniesInstanceType_throwsNoAccessToInstanceTypeConflict() {
+    void processTargetedInstanceRequest_capacityGatingDeniesInstanceType_throwsNoAccessToInstanceTypeConflict() {
         // Arrange
         SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
                 "instance-type", ResourceProvider.BYOC.toString(), DUMMY_GPU, DUMMY_BYOC_NCA_ID, true);
         Map<String, Object> auditProps = new HashMap<>();
 
         setupGatedTargetedRequest(null, instanceRequest, auditProps);
-        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+        when(capacityGatingProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
                 .thenReturn(true);
-        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+        when(capacityGatingProperties.isInstanceTypeAllowedForNca(
                 DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(false);
 
         // Act & Assert
@@ -1828,7 +1830,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         assertTrue(exception.getMessage().contains("capacity"));
         // Gating never runs, so the account is not even checked for a gating entry.
-        verify(icmsConfigurationProperties, never()).hasGpuGating(anyString());
+        verify(capacityGatingProperties, never()).hasCapacityGating(anyString());
     }
 
     /**
@@ -1836,7 +1838,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
      * a gated GPU the same way the targeted flow does.
      */
     @Test
-    void processNonTargetedInstanceRequest_gpuGatingDeniesGpu_throwsNoAccessToGpuConflict() {
+    void processNonTargetedInstanceRequest_capacityGatingDeniesGpu_throwsNoAccessToGpuConflict() {
         // Arrange
         SpotInstanceRequestSchema instanceRequest = createInstanceRequestSchema(
                 DUMMY_NON_BYOC_INSTANCE_TYPE, DUMMY_BYOC_CLUSTER_GROUP_NAME, DUMMY_GPU,
@@ -1865,8 +1867,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         mockNonByocReservationProcessorWithNoOp();
 
-        when(icmsConfigurationProperties.hasGpuGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
-        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+        when(capacityGatingProperties.hasCapacityGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
+        when(capacityGatingProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
                 .thenReturn(false);
 
         // Act & Assert
@@ -1892,11 +1894,11 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         CreateSpotInstancesResponse expectedResponse = new CreateSpotInstancesResponse();
 
         setupGatedTargetedRequest(expectedResponse, instanceRequest, auditProps);
-        when(icmsConfigurationProperties.isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID))
+        when(capacityGatingProperties.isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID))
                 .thenReturn(false);
-        when(icmsConfigurationProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
+        when(capacityGatingProperties.isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU))
                 .thenReturn(true);
-        when(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+        when(capacityGatingProperties.isInstanceTypeAllowedForNca(
                 DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
 
         // Act
@@ -1905,8 +1907,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         // Assert
         assertEquals(expectedResponse, response);
-        verify(icmsConfigurationProperties).isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID);
-        verify(icmsConfigurationProperties).isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU);
+        verify(capacityGatingProperties).isNcaAllowedForGpu(DUMMY_GPU, DUMMY_BYOC_NCA_ID);
+        verify(capacityGatingProperties).isGpuAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_GPU);
     }
 
     /** Healthy single-cluster targeted request with gating enabled for the requesting account. */
@@ -1927,7 +1929,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         healthMap.put(DUMMY_CLUSTER_ID, cloudHealth);
         when(clusterTargetingHelper.getAllClusterHealthInMap()).thenReturn(healthMap);
 
-        when(icmsConfigurationProperties.hasGpuGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
+        when(capacityGatingProperties.hasCapacityGating(DUMMY_BYOC_NCA_ID)).thenReturn(true);
     }
 
     private void mockNonByocReservationProcessorWithNoOp() {

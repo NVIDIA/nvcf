@@ -92,7 +92,7 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
 
     String ncaId = DUMMY_BYOC_NCA_ID;
 
-    // Declared under icms.gpu-gating in application-test.yaml.
+    // Declared under icms.capacity-gating in application-test.yaml.
     private static final String GATED_NCA_ID = "DummyGatedNcaId1aBcDeF";
     private static final String GATED_ALLOWED_GPU = "DUMMY_GPU_1";
     private static final String GATED_ALLOWED_INSTANCE_TYPE = "dummy_gpu_1.large";
@@ -181,7 +181,7 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
     }
 
     /**
-     * End-to-end check of {@code icms.gpu-gating}, which application-test.yaml declares for
+     * End-to-end check of {@code icms.capacity-gating}, which application-test.yaml declares for
      * {@link #GATED_NCA_ID} as DUMMY_GPU_1 limited to dummy_gpu_1.large and dummy_gpu_1.xlarge.
      * The same clusters are visible to both accounts, so any difference is gating.
      */

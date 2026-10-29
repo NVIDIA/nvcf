@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.factory.InstanceRequestEntityFactory;
 import com.nvidia.icms.inbound.rest.model.CloudHealthStatus;
@@ -46,8 +47,7 @@ import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import com.nvidia.icms.outbound.cassandra.reservation.ReservationRepository;
-import com.nvidia.icms.service.gating.ClusterGatingService;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleHelper;
 import com.nvidia.icms.service.extensions.impl.NoOpClusterAuthorizationService;
@@ -90,6 +90,9 @@ class GpuUsageEventServiceTest {
     private IcmsConfigurationProperties icmsConfigurationProperties;
 
     @Mock
+    private CapacityGatingProperties capacityGatingProperties;
+
+    @Mock
     private ReservationRepository reservationRepository;
 
     @Mock
@@ -101,6 +104,7 @@ class GpuUsageEventServiceTest {
     @BeforeEach
     void setUp() {
         clusterGpuInfoHelper = new ClusterGpuInfoHelper(icmsConfigurationProperties,
+                                                        capacityGatingProperties,
                                                         clusterTargetingHelper,
                                                         reservationProcessor,
                                                         instanceLifecycleHelper,
@@ -113,8 +117,7 @@ class GpuUsageEventServiceTest {
                 icmsConfigurationProperties,
                 clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new GpuGatingService(icmsConfigurationProperties, null),
-                new ClusterGatingService(icmsConfigurationProperties, null, null));
+                new CapacityGatingService(capacityGatingProperties, null, null));
     }
 
     @Test

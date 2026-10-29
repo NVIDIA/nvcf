@@ -31,8 +31,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.reservation.entity.ReservationEntity;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
-import com.nvidia.icms.service.gating.ClusterGatingService;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
@@ -71,9 +70,7 @@ public class AccountInfoService {
 
     private final ComputePlatformService computePlatformService;
 
-    private final GpuGatingService gpuGatingService;
-
-    private final ClusterGatingService clusterGatingService;
+    private final CapacityGatingService capacityGatingService;
 
     @Observed
     public Map<String, Set<String>> getAllGpusForAccount(
@@ -280,8 +277,7 @@ public class AccountInfoService {
 
         // Applied last, once every region, cluster, capacity and instance type filter has run,
         // so a gating removal is never confused with an unrelated reason for an empty response.
-        gpuGatingService.removeGatedGpusFromAccountInfo(result, ncaId);
-        clusterGatingService.removeGatedClustersFromAccountInfo(result, ncaId);
+        capacityGatingService.removeGatedFromAccountInfo(result, ncaId);
 
         return result;
     }
