@@ -577,6 +577,7 @@ Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
     "gatewayNames" (list)
     "externalComponents" (list)
     "storageClass" ""
+    "haMode" ""
     "nodeToNodeProbeImage" ""
     "tolerations" (list)
     "networkChecks" (dict)
@@ -750,6 +751,12 @@ template:
           # The stack's global.storageClass: the class every PVC names.
           - name: NVCF_STORAGE_CLASS
             value: {{ $cv.storageClass | quote }}
+          {{- end }}
+          {{- if and $cv.haMode (eq (lower (trim (toString $cv.role))) "control-plane") }}
+          # The stack's highAvailability.mode, which the HA rows judge the
+          # cluster against. The compute-plane checks have no HA rows.
+          - name: NVCF_HA_MODE
+            value: {{ $cv.haMode | quote }}
           {{- end }}
           {{- if $cv.nodeToNodeProbeImage }}
           - name: NVCF_N2N_PROBE_IMAGE

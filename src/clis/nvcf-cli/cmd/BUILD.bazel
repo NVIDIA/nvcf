@@ -82,6 +82,7 @@ go_library(
         "//src/clis/nvcf-cli/internal/state",
         "//src/clis/nvcf-cli/internal/trustbundle",
         "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
         "@com_github_spf13_viper//:viper",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_api//core/v1:core",

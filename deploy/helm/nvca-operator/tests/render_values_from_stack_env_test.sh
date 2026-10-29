@@ -132,6 +132,15 @@ if [[ -n "${actual_probe_image}" ]]; then
   exit 1
 fi
 
+# helmfile layers base.yaml, which sets highAvailability.mode preferred, under
+# the environment file, so an environment file that sets no mode installs
+# preferred.
+actual_ha_mode="$(yq -r '.clusterValidator.haMode' "${output_file}")"
+if [[ "${actual_ha_mode}" != "preferred" ]]; then
+  echo "expected clusterValidator.haMode to default to base.yaml's preferred, got ${actual_ha_mode}" >&2
+  exit 1
+fi
+
 # An upgrade reuses the release's values, but the stack-derived validator
 # keys follow the stack: a component it installs again, a StorageClass or
 # Gateways it no longer sets, and a mirror registry the probe must pull from.
@@ -153,6 +162,7 @@ clusterValidator:
   gatewayNames: [envoy-gateway/nvcf-gateway]
   storageClass: ceph-rbd
   externalComponents: [cassandra]
+  haMode: enforced
 EOF
 
 script_root="${repo_root}"
@@ -177,6 +187,11 @@ if [[ "${actual_storage_class}" != '""' ]]; then
   echo "expected clusterValidator.storageClass to follow the stack and be empty, got ${actual_storage_class}" >&2
   exit 1
 fi
+actual_ha_mode="$(yq -r '.clusterValidator.haMode' "${output_file}")"
+if [[ "${actual_ha_mode}" != "preferred" ]]; then
+  echo "expected clusterValidator.haMode to follow the stack, not the release's enforced, got ${actual_ha_mode}" >&2
+  exit 1
+fi
 actual_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage' "${output_file}")"
 if [[ "${actual_probe_image}" != "registry.example.com/mirror/nvcf/busybox:1.36" ]]; then
   echo "expected the probe image from the stack's mirror registry, got ${actual_probe_image}" >&2
@@ -194,6 +209,50 @@ if [[ "${actual_probe_image}" != "tools.example.com/busybox:1.37" ]]; then
   echo "expected NODE_TO_NODE_PROBE_IMAGE to override the probe image, got ${actual_probe_image}" >&2
   exit 1
 fi
+
+# render_ha_mode HIGH_AVAILABILITY renders a stack environment file holding
+# that highAvailability block and prints the rendered clusterValidator.haMode.
+render_ha_mode() {
+  cat > "${stack_env_file}" <<EOF
+global:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+highAvailability: $1
+EOF
+  printf 'clusterValidator: {}\n' > "${existing_values_file}"
+  render_upgrade || return
+  yq -r '.clusterValidator.haMode' "${output_file}"
+}
+
+for mode in none preferred enforced; do
+  got="$(render_ha_mode "{mode: ${mode}}")"
+  if [[ "${got}" != "${mode}" ]]; then
+    echo "expected highAvailability.mode ${mode} in clusterValidator.haMode, got ${got}" >&2
+    exit 1
+  fi
+done
+got="$(render_ha_mode '{}')"
+if [[ "${got}" != "preferred" ]]; then
+  echo "expected an empty highAvailability to leave base.yaml's preferred, got ${got}" >&2
+  exit 1
+fi
+
+# helmfile layers a null, an empty string or a non-string over base.yaml's
+# mode, and the stack then fails to render, as it does for any other mode. No
+# install has one, so the render fails and names it rather than handing the
+# validator a mode to misjudge.
+for block in null enforced '[]' '{mode: null}' '{mode: ""}' '{mode: Preferred}' '{mode: strict}' \
+  '{mode: true}' '{mode: false}' '{mode: 1}' '{mode: [preferred]}'; do
+  if err="$(render_ha_mode "${block}" 2>&1)"; then
+    echo "expected highAvailability ${block} to fail the render, got ${err}" >&2
+    exit 1
+  fi
+  if [[ "${err}" != *"highAvailability.mode"*"none, preferred or enforced"* ]]; then
+    echo "expected the error for highAvailability ${block} to name the key and the modes, got ${err}" >&2
+    exit 1
+  fi
+done
 
 # render_probe_image REGISTRY CLUSTER_VALIDATOR_VALUES renders with that
 # registry over a release holding those clusterValidator values, and prints

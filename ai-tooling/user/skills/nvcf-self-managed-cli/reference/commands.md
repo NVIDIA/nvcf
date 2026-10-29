@@ -7,7 +7,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | Command | Purpose | Output | Notes |
 |---|---|---|---|
 | `self-hosted check --pre [flags]` | Pre-flight before install (no admin creds): local tools, registry credentials, and both planes' cluster checks | streaming events on stderr | Split clusters need both `--control-plane-context` and `--compute-plane-context`; `--local-only` makes no cluster or registry contact |
-| `self-hosted check --control-plane [--wait DUR]` | Installed control plane: leftover namespaces and the control-plane cluster-validator | streaming events on stderr | `--wait` polls until pass or DUR elapses |
+| `self-hosted check --control-plane [--mode MODE] [--wait DUR]` | Installed control plane: leftover namespaces and the control-plane cluster-validator | streaming events on stderr | `--mode` names the HA mode the validator checks against, `none`, `preferred` or `enforced`; it defaults to the stack's when `--env` names the install's environment. `--wait` polls until pass or DUR elapses |
 | `self-hosted check --compute-plane [--wait DUR]` | Installed compute plane: leftover namespaces, node inotify limits, SIS reachability, and the compute-plane cluster-validator | streaming events on stderr | SIS is probed only at a configured `--icms-url`. Without context flags it checks the current context |
 | `self-hosted check --all [--wait DUR]` | Both of the above | streaming events on stderr | Gate on the `final` event; see [exit-codes.md](exit-codes.md) |
 | `self-hosted install --control-plane` | Render control-plane manifests | YAML on stdout | Pipe to `kubectl apply -f -` |

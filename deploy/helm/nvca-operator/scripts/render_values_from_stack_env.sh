@@ -59,6 +59,31 @@ if [ -z "${stack_image_registry}" ] || [ -z "${stack_image_repository}" ]; then
   exit 1
 fi
 
+# The validator judges the HA guarantee of the stack's highAvailability.mode.
+# helmfile layers base.yaml, which sets preferred, under this file, so a mode
+# the file leaves out is preferred. helmfile layers a null or any other value
+# over it as is, and the stack then fails to render, so no install has one.
+ha_mode="preferred"
+if [ "$(yq -r 'has("highAvailability")' "${stack_env_file}")" = "true" ]; then
+  ha_mode=""
+  if [ "$(yq -r '.highAvailability | tag' "${stack_env_file}")" = '!!map' ]; then
+    if [ "$(yq -r '.highAvailability | has("mode")' "${stack_env_file}")" != "true" ]; then
+      ha_mode="preferred"
+    elif [ "$(yq -r '.highAvailability.mode | tag' "${stack_env_file}")" = '!!str' ]; then
+      ha_mode="$(yq -r '.highAvailability.mode' "${stack_env_file}")"
+    fi
+  fi
+fi
+case "${ha_mode}" in
+  none | preferred | enforced) ;;
+  *)
+    echo "Error: ${stack_env_file} sets highAvailability to" \
+      "$(yq -o=json -I=0 '.highAvailability' "${stack_env_file}");" \
+      "the stack renders only highAvailability.mode none, preferred or enforced" >&2
+    exit 1
+    ;;
+esac
+
 repo_prefix="${stack_image_registry}/${stack_image_repository}"
 tmp_dir="$(mktemp -d)"
 tmp_existing="${tmp_dir}/existing-values.yaml"
@@ -104,9 +129,9 @@ yq eval -i '
 
 # The clusterValidator keys below, but for the probe image, describe the
 # stack, so they are written on every render, empty included. Values reused
-# from the release would otherwise keep a Gateway, a StorageClass or an
-# external component the stack no longer has, and the validator would judge
-# the cluster against it.
+# from the release would otherwise keep a Gateway, a StorageClass, an HA mode
+# or an external component the stack no longer has, and the validator would
+# judge the cluster against it.
 
 # The control-plane validator judges only the NVCF Gateways, so name them as
 # the stack wires its routes (base.yaml defaults: gatewayApi enabled, optional
@@ -148,6 +173,10 @@ yq eval -i '.clusterValidator.gatewayNames = (strenv(GATEWAY_NAMES) | split(",")
 STORAGE_CLASS="$(stack_value '.global.storageClass // ""')"
 export STORAGE_CLASS
 yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
+
+HA_MODE="${ha_mode}"
+export HA_MODE
+yq eval -i '.clusterValidator.haMode = strenv(HA_MODE)' "${output_file}"
 
 # A quorum dependency the stack does not install runs outside the cluster,
 # so after install the validator must not expect its StatefulSet.

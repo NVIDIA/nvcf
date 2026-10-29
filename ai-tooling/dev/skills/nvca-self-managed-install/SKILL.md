@@ -44,10 +44,13 @@ make render-values-from-stack \
 Inspect the generated file under `bin/`, then install or upgrade. The render
 also sets the values the control-plane validator role needs from the stack:
 `clusterValidator.gatewayNames` from the wired `ingress.gatewayApi.gateways`,
-`clusterValidator.storageClass` from `global.storageClass`, and
+`clusterValidator.storageClass` from `global.storageClass`,
+`clusterValidator.haMode` from `highAvailability.mode` (`preferred`, as
+`base.yaml` sets, when the environment file sets no mode), and
 `clusterValidator.externalComponents` from the quorum components the stack
 disables. It rewrites them on every render, empty included, so an upgrade does
-not keep a stale value from the release. On a registry other than NGC
+not keep a stale value from the release. A `highAvailability.mode` the stack
+cannot render fails the render. On a registry other than NGC
 (`nvcr.io` or a subdomain) it also sets `clusterValidator.nodeToNodeProbeImage`
 to `busybox:1.36` under the stack's repository, so mirror that image there. It
 keeps a probe image the release already sets, and sets none when
