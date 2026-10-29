@@ -49,6 +49,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -218,6 +219,13 @@ func (w *miniserviceMutatingWebhook) Handle(ctx context.Context, req admission.R
 		// Cluster-scoped objects have no namespace. The namespaceSelector on the
 		// MutatingWebhookConfiguration should prevent this case in practice.
 		return admission.Allowed("cluster-scoped object: skipping miniservice mutating webhook")
+	}
+	if namespace == storage.ModelCacheInitNamespace {
+		// The shared model-cache init namespace matches the webhook's namespace
+		// selector (it carries the miniservice instance-type label for DNS
+		// injection) but hosts cache writer jobs, not function instances: there
+		// is no per-instance metadata ConfigMap to inject.
+		return admission.Allowed("model-cache init namespace: no NVCF metadata to inject")
 	}
 
 	gvk := schema.GroupVersionKind(req.Kind)

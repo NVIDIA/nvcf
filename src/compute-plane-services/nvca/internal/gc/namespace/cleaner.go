@@ -33,6 +33,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	metricsgctypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/gctypes"
 	bartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -112,6 +113,13 @@ func (c *Cleaner) collectOrphanedNamespaces(ctx context.Context) ([]corev1.Names
 
 	var toCleanup []corev1.Namespace
 	for _, ns := range nsList.Items {
+		// The shared model-cache init namespace carries the miniservice
+		// instance-type label so the unbound-DNS policy matches its writer
+		// jobs, but it never has an ICMSRequest. It is owned by the agent
+		// for the cluster's lifetime, not by any function instance.
+		if ns.Name == storage.ModelCacheInitNamespace {
+			continue
+		}
 		if c.isOrphaned(ctx, &ns) {
 			toCleanup = append(toCleanup, ns)
 		} else if ns.DeletionTimestamp != nil {

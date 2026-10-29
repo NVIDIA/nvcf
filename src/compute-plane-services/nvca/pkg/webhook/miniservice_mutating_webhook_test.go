@@ -183,6 +183,26 @@ func TestMiniserviceOperatorWebhook_ConfigMapMissing(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, int(resp.Result.Code), "Denied should use 403, not 500 (Errored)")
 }
 
+func TestMiniserviceOperatorWebhook_ModelCacheInitNamespace_Allowed(t *testing.T) {
+	wh := makeWebhook(t) // no ConfigMap, as in the real init namespace
+	ctx := core.WithDefaultLogger(context.Background())
+
+	pod := &corev1.Pod{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-job-abc-xyz", Namespace: cmnnvcastorage.ModelCacheInitNamespace},
+	}
+	raw, _ := json.Marshal(pod)
+	req := admission.Request{}
+	req.Namespace = cmnnvcastorage.ModelCacheInitNamespace
+	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
+
+	resp := wh.Handle(ctx, req)
+	assert.True(t, resp.Allowed, "cache writer pods carry no instance metadata and must not be denied")
+	assert.Empty(t, resp.Patches)
+}
+
 func TestMiniserviceOperatorWebhook_ClusterScopedObject(t *testing.T) {
 	wh := makeWebhook(t) // no ConfigMap needed
 	ctx := core.WithDefaultLogger(context.Background())
