@@ -834,6 +834,14 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			c.nfClient = nodefeatures.NewStaticClient(c.clients, ag, c.systemNamespace, b.staticGPUCapacity)
 		}
 
+		// Tell the workers on a cordoned node that it was cordoned. Does nothing unless the
+		// NodeCordonSignal feature flag is enabled.
+		cordonSignaler := newNodeCordonSignaler(c.podLister, c.nodeLister, c.clients.K8s, c.featureFlagFetcher)
+		if err := cordonSignaler.addNodeHandler(ctx, sharedNodeIInf); err != nil {
+			return nil, nil, fmt.Errorf("add node cordon handler: %w", err)
+		}
+		cordonSignaler.run(ctx, 1)
+
 		nodeInfFactory.Start(ctx.Done())
 	}
 
