@@ -1932,15 +1932,19 @@ func podHasCreateContainerError(pod *corev1.Pod) (msg string, ok bool) {
 	if pod == nil {
 		return "", false
 	}
-	for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
-		if cs.State.Waiting == nil {
-			continue
-		}
-		// CreateContainerError is set when a container fails to be created on the node.
-		// CreateContainerConfigError is similar but indicates a configuration issue.
-		// Both are terminal for the current pod spec and should trigger instance termination.
-		if cs.State.Waiting.Reason == "CreateContainerError" || cs.State.Waiting.Reason == "CreateContainerConfigError" {
-			return cs.State.Waiting.Message, true
+	// Read both slices in place: appending one to the other writes into the spare capacity of
+	// the first, which belongs to the informer cache when pod is a cached Pod.
+	for _, statuses := range [...][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if cs.State.Waiting == nil {
+				continue
+			}
+			// CreateContainerError is set when a container fails to be created on the node.
+			// CreateContainerConfigError is similar but indicates a configuration issue.
+			// Both are terminal for the current pod spec and should trigger instance termination.
+			if cs.State.Waiting.Reason == "CreateContainerError" || cs.State.Waiting.Reason == "CreateContainerConfigError" {
+				return cs.State.Waiting.Message, true
+			}
 		}
 	}
 	return "", false
