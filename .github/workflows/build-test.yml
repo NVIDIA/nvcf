@@ -149,12 +149,19 @@ jobs:
           make -C deploy/helm/nvca-operator test-default-ownership
           make -C deploy/helm/nvca-operator test-collector-image-tag
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/helm/nvca-operator test-sibling-image-repositories
           make -C deploy/helm/nvca-operator test-worker-timeouts-schema
           make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/helm/nvca-operator test-byoo-fluent-bit-image
           make -C deploy/helm/nvca-operator test-self-managed-nvca-image-reference
           make -C deploy/helm/nvca-operator test-render-values
-          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership test-collector-images test-nvca-callback-ca
+
+      - name: Test invocation-service chart rendering
+        run: |
+          for test in deploy/helm/http-invocation/tests/*_test.sh; do
+            bash "${test}"
+          done
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
@@ -302,6 +309,9 @@ jobs:
 
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch
+
+      - name: Test compute-plane golden refresh on bump branches
+        run: bash tools/ci/test-refresh-compute-plane-goldens
 
       - name: Test bump workflow push credentials
         run: bash tools/ci/test-bump-workflow-push

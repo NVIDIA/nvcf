@@ -273,6 +273,7 @@ Key behaviors:
 | `images.server` | `<your-registry>/<your-org>/nvcf-container-cache:v1.1.33` | Cache proxy image |
 | `images.exporter` | `<your-registry>/<your-org>/nginx-prometheus-exporter:1.0` | Metrics exporter |
 | `images.certificates` | `<your-registry>/<your-org>/nvcf-proxy-tls-certs:1.2.2` | TLS cert bundle |
+| `images.init` | `""` (uses `images.certificates`) | Init image that fixes cache volume ownership; needs bash, chown, chmod, find |
 | `images.secrets` | `[nvidia-ngcuser-pull-secret]` | Image pull secrets |
 
 ### Cache Behavior

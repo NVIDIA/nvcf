@@ -81,12 +81,12 @@ class BootMvcExceptionHandlerTest {
 
     @Test
     void handleUnmappedReturnsInternalServerErrorAndRecordsException() throws Exception {
-        var ex = new IllegalStateException("unexpected");
+        var ex = new IllegalStateException("Query; CQL [SELECT * FROM t]; timeout");
         var response = handler.handleUnmapped(ex, webRequest);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody()).isInstanceOf(ProblemDetail.class);
         var body = (ProblemDetail) response.getBody();
-        assertThat(body.getDetail()).isEqualTo("unexpected");
+        assertThat(body.getDetail()).isEqualTo("Internal server error");
         // recordException is invoked from handleExceptionInternal with the wrapped exception
         assertThat(handler.recordedException).isInstanceOf(org.springframework.web.ErrorResponseException.class);
         assertThat(handler.recordedException.getCause()).isSameAs(ex);

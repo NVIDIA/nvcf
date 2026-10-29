@@ -68,6 +68,13 @@ curl -X POST http://localhost:8080/v3/ledger/cloudevents \
 set, they must match. The optional context fields are `instanceId`,
 `deploymentId`, `gpuSpecificationId`, `clusterId`, and `resourceId`.
 
+Events may also carry the owning account and function: `ncaId` (up to 128
+characters of `A-Za-z0-9_-`) and `functionId` (a UUID). They are stored as
+columns, not in the context or details, and are optional. An empty value never
+overwrites a stored one. This happens only when `v3.account-columns-enabled` is
+true, which needs the `04` migration. While it is false, the values stay in the
+event details and are not validated.
+
 ### Send OTLP log records
 
 `POST /v3/ledger/k8s-events` accepts an OTLP
@@ -81,7 +88,9 @@ Each log record must include these string attributes:
 - `source`
 
 It may also include `instance_id`, `deployment_id`, `gpu_specification_id`,
-`cluster_id`, and `resource_id`.
+`cluster_id`, and `resource_id`. The optional `nca_id`, `function_id`, and
+`function_version_id` attributes follow the same rules as `ncaId`,
+`functionId`, and `functionVersionId` above.
 
 ### Read events
 
@@ -133,6 +142,24 @@ curl 'http://localhost:8080/v3/ledger/namespace/example/stats?eventFilter=ready,
 
 The optional `view=filtered` query selects the filtered stats view when it is
 enabled in configuration. The endpoint returns `404` when that view is disabled.
+
+### Read account-scoped events and stats
+
+Two routes read the events and stats recorded for one account and function:
+
+```bash
+curl 'http://localhost:8080/v3/ledger/accounts/acct-1/functions/<function-id>/versions/<function-version-id>/events?instance_id=instance-1'
+curl 'http://localhost:8080/v3/ledger/accounts/acct-1/functions/<function-id>/versions/<function-version-id>/stats'
+```
+
+The function version ID is the namespace. The routes require the `admin:read`
+scope and trust the account in the path; they do not check who owns the
+function version. Malformed IDs return `400`, and a request that matches
+nothing returns `200` with empty lists. The events route takes the same query
+parameters as the namespace events route, and the stats route takes
+`eventFilter`. The response shapes have no `nca_id` field, and event details
+are returned as stored. Only events stored with `nca_id` and `function_id` can
+match, which needs `v3.account-columns-enabled`.
 
 ## Authentication
 

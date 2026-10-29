@@ -68,11 +68,24 @@ public class NextHostRetryPolicy implements RetryPolicy {
             int received,
             boolean dataPresent,
             int retryCount) {
-        var verdict = retryCount == 0 && !dataPresent ?
-                                                RetryVerdict.RETRY_NEXT : RetryVerdict.RETHROW;
+        var verdict = shouldRetryReadTimeout(blockFor, received, dataPresent, retryCount)
+                ? RetryVerdict.RETRY_NEXT : RetryVerdict.RETHROW;
         log.info(VERDICT_ON_READ_TIMEOUT, logPrefix, cl, blockFor, received, dataPresent,
                  retryCount, verdict);
         return verdict;
+    }
+
+    /**
+     * Decides whether a read timeout is retried on the next host. By default only a first
+     * attempt that timed out before the coordinator had any data is retried. Subclasses can
+     * widen this for other kinds of reads; see {@link RangeReadRetryPolicy}.
+     */
+    protected boolean shouldRetryReadTimeout(
+            int blockFor,
+            int received,
+            boolean dataPresent,
+            int retryCount) {
+        return retryCount == 0 && !dataPresent;
     }
 
     @Override

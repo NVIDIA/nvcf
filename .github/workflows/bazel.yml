@@ -132,7 +132,7 @@ jobs:
           # before it even starts. byoo-otel-collector is the longest row (its
           # collector genrule dominates the build), so it leads. Keep the
           # longest-first ordering when adding rows.
-          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false|go-root|build-container
           root|.|false
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false|go-root|docker-host
           admin-token-issuer-proxy|src/control-plane-services/admin-token-issuer-proxy|false|go-root|build-container
