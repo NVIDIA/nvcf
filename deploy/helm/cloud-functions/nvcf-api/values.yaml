@@ -251,7 +251,7 @@ api:
     # matching configData.nvcf.sidecars entry to replace a whole reference.
     workerImageTags:
       init: "1.3.1"
-      utils: "1.3.3"
+      utils: "1.4.2"
       llmCredentials: "1.1.2"
     # Can be used for remote configuration by adding NVCF-specific properties here. 
     # Add only the keys you need to override.
