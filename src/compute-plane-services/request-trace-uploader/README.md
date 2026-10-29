@@ -37,9 +37,10 @@ volume, so every step survives a restart.
 5. Polling: one loop polls every open job on the status interval. A job with
    a saved id is polled, never submitted again. A submitted job that still
    reports pending past the max job age is kept as stranded and polled less
-   often; a job the backend no longer knows is kept as stranded at once. A
-   failed status read or an ambiguous job is not aged. A status the core
-   does not know is counted in `unknown_status` and polled again.
+   often; a submitted job the backend no longer knows is kept as stranded at
+   once. A failed status read or an ambiguous job is not aged, and an
+   ambiguous job stays ambiguous. A status the core does not know is counted
+   in `unknown_status` and polled again.
 6. Cleanup: after success, transports are deleted, the source is re-hashed
    if its size or modification time changed, and only then deleted. A
    backend that does not export, such as `debug` or a dry run, never deletes
