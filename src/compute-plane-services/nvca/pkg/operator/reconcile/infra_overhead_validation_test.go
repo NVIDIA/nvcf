@@ -20,6 +20,9 @@ package operator
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +381,62 @@ func TestSyncNVCFBackend_OverheadRemovingActiveInstanceTypeDoesNotRollOutAgent(t
 	require.NoError(t, err)
 	additionalCPU := managedConfig.Agent.AdditionalResourceOverhead[corev1.ResourceCPU]
 	assert.Equal(t, "6360m", additionalCPU.String())
+}
+
+// TestSyncAllNVCFBackends_HeldOverheadChangeStaysUnhealthy checks that a held
+// overhead change keeps the NVCFBackend Unhealthy across periodic syncs while the
+// previous agent still reports healthy. SyncAllNVCFBackends runs the health sync
+// only after SyncNVCFBackend succeeds, so the previous agent's health cannot reset
+// the status while the change is held back.
+func TestSyncAllNVCFBackends_HeldOverheadChangeStaysUnhealthy(t *testing.T) {
+	ctx := newTestContext()
+	bc, backend, mergeCM := newOverheadSyncTest(t, "100m")
+	clients := bc.clients
+	recorder := bc.eventRecorder.(*record.FakeRecorder)
+	require.NoError(t, bc.syncNVCFBackend(ctx, backend, false))
+
+	// The previous agent keeps serving: /healthz reports healthy and the
+	// Deployment has a ready replica.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		assert.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{Status: nvidiaiov1.AgentStatusHealthy}))
+	}))
+	t.Cleanup(server.Close)
+	previousHealthzURL := makeNVCAHealthzURL
+	makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) { return server.URL, nil }
+	t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+	bc.httpClient = server.Client()
+	deployments := clients.K8s.AppsV1().Deployments(getSystemNamespace(backend))
+	dep, err := deployments.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	dep.Status.Replicas, dep.Status.ReadyReplicas = 1, 1
+	_, err = deployments.UpdateStatus(ctx, dep, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	_, err = clients.DynamicClient.Resource(icmsRequestGVR).Namespace("nvcf-backend").
+		Create(ctx, overheadTestActiveRequest(t), metav1.CreateOptions{})
+	require.NoError(t, err)
+	exhausting := mergeCM.DeepCopy()
+	exhausting.Data[agentConfigFile] = "agent:\n  additionalResourceOverhead:\n    cpu: 6360m\n"
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, exhausting, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	for len(recorder.Events) > 0 {
+		<-recorder.Events
+	}
+
+	for range 3 {
+		require.NoError(t, bc.SyncAllNVCFBackends(ctx))
+		got, err := clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+	}
+	var healthEvents []string
+	for len(recorder.Events) > 0 {
+		if event := <-recorder.Events; strings.Contains(event, "health changed") {
+			healthEvents = append(healthEvents, event)
+		}
+	}
+	require.Len(t, healthEvents, 1, "the status should change once, when the change is first held back")
+	assert.Contains(t, healthEvents[0], "Unhealthy")
 }
 
 // TestSyncNVCFBackend_OverheadCheckFollowsAgentEnvOverrides checks that the
