@@ -15,6 +15,11 @@ from pathlib import Path
 BROTLI_FLOOR = "1.1.0-2+deb13u1"
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
 def version_compare(left, right):
     """Compare Debian versions, including epochs, revisions and tilde suffixes."""
     # https://www.debian.org/doc/debian-policy/ch-controlfields.html#version
@@ -73,6 +78,14 @@ def merged_files(layout, layers):
                 if deleted and p != deleted
                 and not p.startswith(deleted.rstrip("/") + "/")
             }
+        replaced = {path for path, (member, _) in additions.items() if not member.isdir()}
+        for path in list(files):
+            ancestor = posixpath.dirname(path)
+            while ancestor:
+                if ancestor in replaced:
+                    del files[path]
+                    break
+                ancestor = posixpath.dirname(ancestor)
         files.update(additions)
     return files
 
@@ -80,14 +93,21 @@ def merged_files(layout, layers):
 def resolve(files, path):
     path = posixpath.normpath(path).lstrip("/")
     for _ in range(40):
-        member, content = files[path]
-        if member.issym():
-            target = posixpath.join(posixpath.dirname(path), member.linkname)
-            path = posixpath.normpath(target).lstrip("/")
-        elif member.islnk():
-            path = posixpath.normpath(member.linkname).lstrip("/")
+        parts = path.split("/")
+        for length in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:length])
+            if prefix not in files:
+                continue  # Tar archives may omit directory entries.
+            member, _ = files[prefix]
+            if member.issym() or member.islnk():
+                parent = posixpath.dirname(prefix) if member.issym() else ""
+                target = posixpath.join(parent, member.linkname, *parts[length:])
+                path = posixpath.normpath(target).lstrip("/")
+                break
+            require(length == len(parts) or member.isdir(),
+                    f"non-directory runtime path component: {prefix}")
         else:
-            return member, content
+            return files[path]
     raise ValueError(f"symlink loop at {path}")
 
 
@@ -110,19 +130,19 @@ def image_manifests(layout, descriptor):
 def check_runtime(layout, manifest):
     config = json.loads(blob_path(layout, manifest["config"]["digest"]).read_text())
     arch = config["architecture"]
-    assert config["os"] == "linux", "Java runtime must use Linux"
+    require(config["os"] == "linux", "Java runtime must use Linux")
     files = merged_files(layout, manifest["layers"])
     user = config["config"].get("User", "")
     if user != "1000:1000":
         passwd = resolve(files, "etc/passwd")[1].decode()
         accounts = [line.split(":") for line in passwd.splitlines()]
-        assert any(account[0] == user and account[2:4] == ["1000", "1000"]
-                   for account in accounts), "runtime must use UID:GID 1000:1000"
+        require(any(account[0] == user and account[2:4] == ["1000", "1000"]
+                    for account in accounts), "runtime must use UID:GID 1000:1000")
     release = resolve(files, "etc/os-release")[1].decode()
-    assert re.search(r'^ID="?debian"?$', release, re.M), (
+    require(re.search(r'^ID="?debian"?$', release, re.M),
         "review the package floor for this distribution"
     )
-    assert re.search(r'^VERSION_ID="?13"?$', release, re.M), (
+    require(re.search(r'^VERSION_ID="?13"?$', release, re.M),
         "review the package floor for this Debian release"
     )
     status = resolve(files, "var/lib/dpkg/status.d/libbrotli1")[1].decode()
@@ -130,23 +150,23 @@ def check_runtime(layout, manifest):
         line.split(": ", 1) for line in status.splitlines()
         if ": " in line and not line.startswith((" ", "\t"))
     )
-    assert fields["Package"] == "libbrotli1"
-    assert fields["Architecture"] == arch, "Brotli package architecture mismatch"
+    require(fields["Package"] == "libbrotli1", "missing Brotli package record")
+    require(fields["Architecture"] == arch, "Brotli package architecture mismatch")
     version = fields["Version"]
-    assert version_compare(version, BROTLI_FLOOR) >= 0, (
+    require(version_compare(version, BROTLI_FLOOR) >= 0,
         f"libbrotli1 {version} is below {BROTLI_FLOOR}"
     )
     for path in ("usr/bin/java", "usr/bin/shelless_ulimit"):
         member, _ = resolve(files, path)
-        assert member.isfile() and member.mode & 0o111, f"{path} must resolve to an executable"
+        require(member.isfile() and member.mode & 0o111, f"{path} must resolve to an executable")
     env = dict(entry.split("=", 1) for entry in config["config"]["Env"])
     java_home = env["JAVA_HOME"]
     java_release = resolve(files, java_home + "/release")[1].decode()
-    assert re.search(r'^JAVA_VERSION="25(?:\.|\")', java_release, re.M), (
+    require(re.search(r'^JAVA_VERSION="25(?:\.|\")', java_release, re.M),
         "runtime must support Java 25 bytecode"
     )
     truststore, _ = resolve(files, java_home + "/lib/security/cacerts")
-    assert truststore.isfile() and truststore.size > 0, "Java trust store is missing or empty"
+    require(truststore.isfile() and truststore.size > 0, "Java trust store is missing or empty")
     print(f"ok: {arch} Java 25 runtime, trust store and libbrotli1 {version}")
     return arch
 
@@ -158,7 +178,7 @@ def main(layouts):
         for descriptor in index["manifests"]:
             for manifest in image_manifests(layout, descriptor):
                 architectures.append(check_runtime(layout, manifest))
-    assert sorted(architectures) == ["amd64", "arm64"], (
+    require(sorted(architectures) == ["amd64", "arm64"],
         f"expected both runtime platforms, got {architectures}"
     )
 
