@@ -34,12 +34,23 @@ if [ -z "${zones}" ]; then
   echo "FAILED: no shared zones found in the render" >&2
   exit 1
 fi
+# nginx size units: none = bytes, k = 1024, m = 1024^2, g = 1024^3.
+to_bytes() {
+  local n="${1%[kKmMgG]}" u="${1##*[0-9]}"
+  case "${u}" in
+    "")   echo "${n}" ;;
+    k|K)  echo $((n * 1024)) ;;
+    m|M)  echo $((n * 1024 * 1024)) ;;
+    g|G)  echo $((n * 1024 * 1024 * 1024)) ;;
+  esac
+}
+MIN_BYTES=$((1024 * 1024))
 bad=0
 while read -r name size; do
-  case "${size}" in
-    *m|*M|*g|*G) ;;
-    *) echo "FAILED: zone ${name} is ${size}; must be at least 1m" >&2; bad=1 ;;
-  esac
+  if [ "$(to_bytes "${size}")" -lt "${MIN_BYTES}" ]; then
+    echo "FAILED: zone ${name} is ${size}; must be at least 1m" >&2
+    bad=1
+  fi
 done <<< "${zones}"
 [ "${bad}" -eq 0 ]
 echo "${zones}" | sed 's/^/  /'
