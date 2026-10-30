@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,10 +110,20 @@ func sharedPrivateModelAccess(endpoint string, transport http.RoundTripper) (*pr
 	return shared.(*privateModelAccess), nil
 }
 
+// newPrivateModelAccess validates endpoint without echoing it, since a URL can
+// carry credentials. A *url.Error repeats the whole URL, so only its cause is
+// wrapped.
 func newPrivateModelAccess(endpoint string, transport http.RoundTripper) (*privateModelAccess, error) {
 	base, err := url.Parse(endpoint)
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("invalid NVCF control plane endpoint: %s", endpoint)
+	if err != nil {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("invalid NVCF control plane endpoint: %w", err)
+	}
+	if base.Scheme == "" || base.Host == "" {
+		return nil, errors.New("invalid NVCF control plane endpoint: scheme and host are required")
 	}
 	lookupURL := base.JoinPath(privateModelLookupPath)
 	lookupURL.RawQuery = url.Values{"visibility": {privateModelLookupVisibility}}.Encode()

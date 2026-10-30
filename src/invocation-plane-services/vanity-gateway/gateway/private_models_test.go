@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -440,9 +441,17 @@ func TestPrivateModelAccessCacheExpiresAndStaysBounded(t *testing.T) {
 }
 
 func TestNewPrivateModelAccessRejectsInvalidEndpoint(t *testing.T) {
-	for _, endpoint := range []string{"nvcf.example.com", "http://", "://bad"} {
+	withCredentials := (&url.URL{
+		Scheme: "http",
+		User:   url.UserPassword("user", "secret"),
+		Host:   "nvcf.example.com:bad",
+	}).String()
+	for _, endpoint := range []string{"nvcf.example.com", "http://", "://bad", withCredentials} {
 		_, err := newPrivateModelAccess(endpoint, http.DefaultTransport)
 		require.Error(t, err, endpoint)
+		// The endpoint can carry credentials, so the error leaves it out.
+		require.NotContains(t, err.Error(), endpoint)
+		require.NotContains(t, err.Error(), "secret")
 	}
 }
 
