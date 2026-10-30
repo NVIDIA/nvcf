@@ -5,7 +5,7 @@
 set -eu
 
 kubectl=${KUBECTL_BINARY:-/out/kubectl}
-kubectl_go_version=${KUBECTL_GO_VERSION:-go1.26.9}
+kubectl_go_version=${KUBECTL_GO_VERSION:-go1.26.10}
 target_arch=${TARGETARCH:?TARGETARCH must be set}
 metadata=$(mktemp)
 trap 'rm -f "$metadata"' EXIT INT TERM
