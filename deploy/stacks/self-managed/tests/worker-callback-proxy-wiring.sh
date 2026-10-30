@@ -136,12 +136,13 @@ test "$(yq -r '.invocation.workerTls.tls.certificate.issuerRef.name' "$i")" = "n
 inv_manifest="$work_dir/inv-manifest.yaml"
 helm template invocation-service "$helm_dir/http-invocation/nvcf-invocation-service" --namespace nvcf --values "$i" >"$inv_manifest" ||
   fail "invocation-service chart must render with stack values"
-# Charts without invocation.workerTls ignore it and render no Certificate.
-if yq ea -e 'select(.kind == "Certificate")' "$inv_manifest" >/dev/null 2>&1; then
-  inv_dns_names="$(yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "$inv_manifest")"
-  test "$inv_dns_names" = '*.invocation.nvcf.svc.cluster.local' ||
-    fail "invocation: certificate must cover the per-pod names Envoy tunnels to, got $inv_dns_names"
-fi
+yq ea -e 'select(.kind == "Certificate")' "$inv_manifest" >/dev/null 2>&1 ||
+  fail "invocation: expected a Certificate for the worker TLS listener"
+inv_dns_names="$(yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames | join(",")' "$inv_manifest")"
+test "$inv_dns_names" = '*.invocation.nvcf.svc.cluster.local' ||
+  fail "invocation: certificate must cover the per-pod names Envoy tunnels to, got $inv_dns_names"
+yq ea -e 'select(.kind == "Service") | .spec.ports[] | select(.port == 8443)' "$inv_manifest" >/dev/null 2>&1 ||
+  fail "invocation: expected the Service to expose the worker TLS port 8443"
 
 render_values worker-callback-proxy "$work_dir/wcp-on.yaml"
 w="$work_dir/wcp-on.yaml"
