@@ -20,4 +20,11 @@ if TARGETARCH=amd64 OUTPUT_DIR="$work/out" \
 fi
 grep -q 'FAILED' "$work/build.log"
 test ! -e "$work/out/kubectl"
-echo 'PASS: kubectl build rejects unsupported targets and invalid source bytes'
+for invalid in "" 1.35 1.36.6 invalid; do
+    status=0
+    NVCF_KUBECTL_MINOR="$invalid" scripts/kubectl version --client >/dev/null 2>&1 || status=$?
+    test "$status" = 64
+done
+echo 'PASS: source checksums, targets and client selections reject invalid inputs'
+
+./tests/verify-kubectl-metadata-test.sh

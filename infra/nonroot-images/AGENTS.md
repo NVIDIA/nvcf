@@ -1,8 +1,11 @@
 # Helper image producers
 
 Run commands from this directory. These images patch the pinned upstream
-Kubernetes toolbox and NATS box while preserving their tools except kubectl. Build kubectl from checksum-pinned
-source with the same Go and dependency baseline as the migration producer. Keep numeric
+Kubernetes toolbox and NATS box while preserving their tools except kubectl.
+Build kubectl from checksum-pinned source with the same Go and dependency baseline as the migration producer.
+Keep `NVCF_KUBECTL_MINOR` behavior aligned: unset selects 1.37; explicit 1.37
+or 1.36 selects that client; empty/invalid input exits 64. Both PATH and
+`/usr/bin/kubectl` must use the selector. Keep numeric
 UID/GID 1000, upstream attribution, and writable home/cache under `/tmp`.
 
 - Verify source rejection paths: `./source-test.sh`.

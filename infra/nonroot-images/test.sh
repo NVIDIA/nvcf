@@ -27,17 +27,34 @@ for target in k8s-helper nats-box; do
     '
     if [[ "$target" == k8s-helper ]]; then
         "${run[@]}" "$image" -ec '
-            sha256sum -c /usr/share/nvcf/kubectl.sha256
-            grep -Eq "dep[[:space:]]+golang.org/x/net[[:space:]]+v0.60.0([[:space:]]|$)" /usr/share/nvcf/kubectl.buildinfo
+            sha256sum -c /usr/share/nvcf/kubectl.sha256 /usr/share/nvcf/kubectl-compat.sha256
+            for metadata in /usr/share/nvcf/kubectl*.buildinfo; do
+                grep -Eq "dep[[:space:]]+golang.org/x/net[[:space:]]+v0.60.0([[:space:]]|$)" "$metadata"
+            done
         '
         tools=(helm curl jq bash)
+        for minor in 1.37 1.36; do
+            version_file=kubectl-version.txt
+            [[ "$minor" == 1.36 ]] && version_file=kubectl-compat-version.txt
+            "${run[@]}" --env KUBECTL_VERSION="$(cat "$version_file")" --env NVCF_KUBECTL_MINOR="$minor" "$image" -ec '
+                for command in kubectl /usr/local/bin/kubectl /usr/bin/kubectl; do
+                    "$command" version --client -o json | jq -e --arg version "v$KUBECTL_VERSION" ".clientVersion.gitVersion == \$version and .clientVersion.gitTreeState == \"dirty\" and .clientVersion.goVersion == \"go1.26.10\""
+                done
+                kubectl create configmap receipt --from-literal="value=with spaces" --dry-run=client -o json | jq -e ".data.value == \"with spaces\""
+                if kubectl --invalid-helper-test-flag >/dev/null 2>&1; then exit 1; else test "$?" = 1; fi
+            '
+        done
         "${run[@]}" --env KUBECTL_VERSION="$(cat kubectl-version.txt)" "$image" -ec '
-            kubectl version --client -o json | jq -e --arg version "v$KUBECTL_VERSION" ".clientVersion.gitVersion == \$version and .clientVersion.gitTreeState == \"dirty\" and .clientVersion.goVersion == \"go1.26.10\""
-            kubectl create configmap receipt --from-literal=installed_stack_version=test --dry-run=client -o yaml >/tmp/receipt.yaml
+            kubectl version --client -o json | jq -e --arg version "v$KUBECTL_VERSION" ".clientVersion.gitVersion == \$version"
             helm version --short
             curl --version
             bash -ec '\''test "$(printf test | base64 -w0 | base64 -d)" = test'\''
         '
+        for invalid in "" 1.35 1.36.6 invalid; do
+            status=0
+            "${run[@]}" --env NVCF_KUBECTL_MINOR="$invalid" "$image" -ec 'kubectl version --client' >/dev/null 2>&1 || status=$?
+            test "$status" = 64
+        done
     else
         tools=(nats nsc nk)
         "${run[@]}" "$image" -ec '

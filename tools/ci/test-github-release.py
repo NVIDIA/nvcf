@@ -190,6 +190,7 @@ class GithubReleaseTest(unittest.TestCase):
         return created, output.getvalue()
 
     def test_helper_package_producer_is_registered_without_server_derivatives(self):
+        """Keep helper release routing separate from NATS server images."""
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
         services = [s for s in metadata["services"] if s["id"] == "nonroot-images"]
         self.assertEqual(services, [{

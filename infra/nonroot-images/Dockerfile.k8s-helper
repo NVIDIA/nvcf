@@ -1,14 +1,31 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 ARG KUBECTL_GO_IMAGE=golang:1.26.10-alpine3.23@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43
-FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-builder
+FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-source
 ARG TARGETARCH
 RUN apk add --no-cache curl
 COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
-RUN GOMAXPROCS=2 GOFLAGS=-p=2 /usr/local/bin/build-kubectl.sh && \
+
+FROM kubectl-source AS kubectl-builder
+RUN --mount=type=cache,id=nvcf-helper-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=nvcf-helper-go-build,target=/root/.cache/go-build \
+    GOMAXPROCS=2 GOFLAGS=-p=2 /usr/local/bin/build-kubectl.sh && \
     /usr/local/bin/verify-kubectl.sh && \
     go version -m /out/kubectl > /out/kubectl.buildinfo && \
-    sha256sum /out/kubectl | sed 's,/out/kubectl,/usr/bin/kubectl,' > /out/kubectl.sha256
+    sha256sum /out/kubectl | sed 's,/out/kubectl,/usr/local/bin/kubectl-1.37,' > /out/kubectl.sha256
+
+FROM kubectl-source AS kubectl-compat-builder
+RUN --mount=type=cache,id=nvcf-helper-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=nvcf-helper-go-build,target=/root/.cache/go-build \
+    KUBECTL_VERSION=v1.36.6 \
+    KUBECTL_SOURCE_COMMIT=1b2171b110bb2a2542e1322035c6583ec86eb976 \
+    KUBECTL_SOURCE_SHA256=26e00690ead876ad5d2022c1e63d6b6ec0fbd59727e04f2d87ac0c58a734527c \
+    KUBECTL_BUILD_DATE=2026-10-27T12:02:52Z \
+    KUBECTL_SOURCE_DATE_EPOCH=1793102572 \
+    GOMAXPROCS=2 GOFLAGS=-p=2 /usr/local/bin/build-kubectl.sh && \
+    /usr/local/bin/verify-kubectl.sh && \
+    go version -m /out/kubectl > /out/kubectl-compat.buildinfo && \
+    sha256sum /out/kubectl | sed 's,/out/kubectl,/usr/local/bin/kubectl-1.36,' > /out/kubectl-compat.sha256
 
 FROM docker.io/alpine/k8s:1.37.1@sha256:712dc5385d1c1a3f83b747fa9e40f64d433a97f72ff42f9755ff7dd1f62846e4
 LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
@@ -17,8 +34,12 @@ LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
 USER 0:0
 COPY patch-brotli.sh brotli-checksums.txt /tmp/helper-patch/
 RUN sh /tmp/helper-patch/patch-brotli.sh edge && rm -rf /tmp/helper-patch
-COPY --from=kubectl-builder --chmod=0555 /out/kubectl /usr/bin/kubectl
+COPY --from=kubectl-builder --chmod=0555 /out/kubectl /usr/local/bin/kubectl-1.37
+COPY --from=kubectl-compat-builder --chmod=0555 /out/kubectl /usr/local/bin/kubectl-1.36
+COPY --chmod=0555 scripts/kubectl /usr/local/bin/kubectl
+RUN ln -sf /usr/local/bin/kubectl /usr/bin/kubectl
 COPY --from=kubectl-builder /out/kubectl.buildinfo /out/kubectl.sha256 /usr/share/nvcf/
+COPY --from=kubectl-compat-builder /out/kubectl-compat.buildinfo /out/kubectl-compat.sha256 /usr/share/nvcf/
 COPY licenses/ /usr/share/licenses/nvcf-k8s-helper/
 ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache
 WORKDIR /tmp

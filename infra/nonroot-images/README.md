@@ -2,7 +2,8 @@
 
 We patch Brotli in the upstream Kubernetes toolbox and NATS box package
 layers. The Kubernetes helper also builds kubectl 1.37.2 from checksum-pinned
-source with Go 1.26.10 and x/net 0.60.0. Both images run as numeric UID/GID
+source with Go 1.26.10, x/net 0.60.0 and OpenTelemetry 1.44.0. It also includes patched kubectl
+1.36.6 for Kubernetes 1.35 compatibility. Both images run as numeric UID/GID
 `1000:1000`. NATS server and config reloader remain separate upstream images.
 
 | Output | Upstream input | Package branch |
@@ -39,8 +40,8 @@ VERSION=validation PLATFORM=linux/arm64 ./test.sh
 
 Repeat with `linux/amd64`. The checks inspect the final package version,
 numeric identity, required tools, kubectl build metadata and checksum, and
-unchanged upstream executable hashes. Containers run with a read-only root filesystem, dropped capabilities, no network and
-a writable `/tmp` mount. Tests exercise ConfigMap client rendering, shell
+unchanged upstream executable hashes. Containers run with a read-only root
+filesystem, dropped capabilities, no network and a writable `/tmp` mount. Tests exercise ConfigMap client rendering, shell
 encoding, NATS context storage and NKey generation. Live receipt install and
 upgrade, account bootstrap and authenticated NATS operations still need
 cluster qualification.
@@ -61,9 +62,15 @@ Keep upstream defaults until the derivative artifacts are published and
 qualified. Regenerate inventories and catalogs from the released consumers.
 
 The Kubernetes image is a CLI toolbox, not a cluster server requirement.
-Its kubectl 1.37 client supports API servers one minor older or newer under
-the [upstream skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
-Kubernetes 1.35 remains in the documented NVCF support window, but a 1.37
-client is outside that upstream skew. Record this qualification gap and use
-an explicitly qualified compatible override for that environment; do not
-silently change the supported cluster window.
+The default client is kubectl 1.37.2. For a Kubernetes 1.35 API server, set
+`NVCF_KUBECTL_MINOR=1.36` in the helper container to select patched kubectl
+1.36.6 from the same image. An unset selector uses 1.37; explicit 1.37 or
+1.36 values are accepted. Empty and other values fail with exit code 64
+before cluster access. Both PATH and `/usr/bin/kubectl` use the selector,
+which forwards arguments and exit status to the chosen binary.
+
+This preserves NVCF's documented cluster window without automatic server
+probing or a second image release lane. Configure the selector explicitly
+in receipt, bootstrap and smoke-hook Pod environments when consuming the
+image on Kubernetes 1.35. Qualify both client choices with the target server
+under the [upstream skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
