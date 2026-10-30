@@ -258,6 +258,36 @@ class CapacityGatingBindingTest {
     }
 
     /**
+     * A {@code gpus} key written with nothing under it behaves the same as {@code gpus: {}}: it
+     * places no GPU restriction. Pinned alongside a cluster list because that is the realistic
+     * way to reach it, by converting an entry and leaving the GPU map to be filled in later.
+     *
+     * <p>The cluster list still applies, so the entry narrows clusters while quietly opening
+     * every GPU, which is the opposite of what a half-written entry looks like it does.
+     */
+    @Test
+    void gpusKeyWithNothingUnderItRestrictsNoGpu() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                      clusters:
+                        - cluster-a
+                      gpus:
+                """);
+
+        assertEquals(Map.of(), props.getCapacityGating().get(JAR_NCA_ID).getGpus());
+        assertFalse(props.isOrgDenied(JAR_NCA_ID));
+
+        assertTrue(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
+        assertTrue(props.isInstanceTypeAllowedForNca(JAR_NCA_ID, "B40", "gb40_1.br30_2xlarge"));
+
+        // The cluster list is unaffected and still restricts.
+        assertTrue(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-a"));
+        assertFalse(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-b"));
+    }
+
+    /**
      * An empty {@code clusters} list is the deliberate kill switch. YAML renders it as an empty
      * string, which binds to an empty list, so unlike the empty gpus map it does reach the
      * compile step and denies the account everything.
