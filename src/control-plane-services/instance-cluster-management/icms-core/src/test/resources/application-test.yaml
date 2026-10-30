@@ -419,11 +419,19 @@ icms:
     DUMMY_GPU_4: dgpu4
     DUMMY_GPU_5: dgpu5
 
-  gpu-gating:
+  capacity-gating:
     "DummyGatedNcaId1aBcDeF":
-      DUMMY_GPU_1:
-        - dummy_gpu_1.large
-        - dummy_gpu_1.xlarge
+      gpus:
+        DUMMY_GPU_1:
+          - dummy_gpu_1.large
+          - dummy_gpu_1.xlarge
+
+  # Bound alongside capacity-gating on the same bean, so a running context proves both keys
+  # still resolve under the icms prefix. Names a GPU no other fixture uses, so asserting on the
+  # restriction cannot perturb an unrelated integration test.
+  gpu-allowed-nca-ids:
+    DUMMY_RESTRICTED_GPU:
+      - "DummyGrantedNcaId2gHiJkL"
 
   nats:
     enabled: false

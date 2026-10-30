@@ -16,6 +16,7 @@
  */
 package com.nvidia.icms.service.account;
 
+import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.CloudHealthStatus;
 import com.nvidia.icms.inbound.rest.model.InstanceTypeDetails;
@@ -56,6 +57,7 @@ import static com.nvidia.icms.service.byoc.ClustersService.toReadyClusterInfo;
 public class ClusterGpuInfoHelper {
 
     private final IcmsConfigurationProperties icmsConfigurationProperties;
+    private final CapacityGatingProperties capacityGatingProperties;
     private final ClusterTargetingHelper clusterTargetingHelper;
     private final ReservationProcessor reservationProcessor;
     private final InstanceLifecycleHelper instanceLifecycleHelper;
@@ -274,7 +276,7 @@ public class ClusterGpuInfoHelper {
         // No-op when icms.gpu-allowed-nca-ids is empty or the GPU is not listed (existing behavior);
         readyClusterInfoSet.removeIf(rci ->
                 computePlatformService.isComputePlatformProvider(rci.getClusterProvider())
-                        && !icmsConfigurationProperties.isNcaAllowedForGpu(rci.getGpu(), ncaId));
+                        && !capacityGatingProperties.isNcaAllowedForGpu(rci.getGpu(), ncaId));
 
         return readyClusterInfoSet;
     }

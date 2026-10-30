@@ -40,7 +40,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.service.CloudHealthService;
-import com.nvidia.icms.service.gating.GpuGatingService;
+import com.nvidia.icms.service.gating.CapacityGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.TestUtil;
 
@@ -114,7 +114,7 @@ class ClusterListingServiceTest {
     private ComputePlatformService computePlatformService;
 
     @Mock
-    private GpuGatingService gpuGatingService;
+    private CapacityGatingService capacityGatingService;
 
     @InjectMocks
     private ClusterListingService clusterListingService;
@@ -768,8 +768,8 @@ class ClusterListingServiceTest {
         clusterListingService.getClustersByNcaId(DUMMY_BYOC_NCA_ID, true, true);
 
         // Assert
-        verify(gpuGatingService).removeGatedAuthorizedClusters(ArgumentMatchers.anyList(),
-                                                               ArgumentMatchers.eq(DUMMY_BYOC_NCA_ID));
+        verify(capacityGatingService).removeGatedAuthorizedClusters(ArgumentMatchers.anyList(),
+                                                                    ArgumentMatchers.eq(DUMMY_BYOC_NCA_ID));
     }
 
     /**
@@ -777,7 +777,7 @@ class ClusterListingServiceTest {
      * through it.
      */
     @Test
-    void getClustersByNcaId_withOwnClustersOnly_doesNotApplyGpuGating() {
+    void getClustersByNcaId_withOwnClustersOnly_doesNotApplyCapacityGating() {
         // Prepare
         when(clusterRepository.getAllClustersInAnAccount(DUMMY_BYOC_NCA_ID))
                 .thenReturn(new ArrayList<>());
@@ -786,7 +786,7 @@ class ClusterListingServiceTest {
         clusterListingService.getClustersByNcaId(DUMMY_BYOC_NCA_ID, false, false);
 
         // Assert
-        verifyNoInteractions(gpuGatingService);
+        verifyNoInteractions(capacityGatingService);
     }
 
     @Test
