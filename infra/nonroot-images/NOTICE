@@ -1,0 +1,35 @@
+NVCF patched upstream helper images
+Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+The derivative build definitions are licensed under Apache-2.0. Upstream tools,
+licenses and attribution files remain in the images. The build replaces only
+the Brotli libraries with signed Alpine packages, preserving the base branch.
+The Kubernetes helper rebuilds kubectl 1.37.2 with Go 1.26.10 and x/net 0.60.0.
+
+Alpine Kubernetes toolbox 1.37.1
+Source: https://github.com/alpine-docker/k8s
+Build definition source license: MIT
+Base: docker.io/alpine/k8s:1.37.1
+Index digest: sha256:712dc5385d1c1a3f83b747fa9e40f64d433a97f72ff42f9755ff7dd1f62846e4
+
+NATS box 0.20.1-nonroot
+Source: https://github.com/nats-io/nats-box
+Build definition source license: Apache-2.0
+Base: docker.io/natsio/nats-box:0.20.1-nonroot
+Index digest: sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+
+kubectl 1.37.2
+Source: https://github.com/kubernetes/kubernetes/tree/v1.37.2
+License: Apache-2.0
+
+golang.org/x/net 0.60.0
+Source: https://go.googlesource.com/net/+/refs/tags/v0.60.0
+License: BSD-3-Clause
+
+Brotli 1.2.1 (Alpine brotli-libs 1.2.1-r0)
+Source: https://github.com/google/brotli
+License: MIT
+
+Each base contains other operating-system packages and tools under their own
+licenses. Preserve the full image SBOM and package attribution during release;
+this notice does not replace those component-specific license records.

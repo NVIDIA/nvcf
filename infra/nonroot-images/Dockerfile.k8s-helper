@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+ARG KUBECTL_GO_IMAGE=golang:1.26.10-alpine3.23@sha256:34414731924cf2263160f0021f5cf6e1807382d85248f7cb419d4187b96d5e43
+FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-builder
+ARG TARGETARCH
+RUN apk add --no-cache curl
+COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
+RUN GOMAXPROCS=2 GOFLAGS=-p=2 /usr/local/bin/build-kubectl.sh && \
+    /usr/local/bin/verify-kubectl.sh && \
+    go version -m /out/kubectl > /out/kubectl.buildinfo && \
+    sha256sum /out/kubectl | sed 's,/out/kubectl,/usr/bin/kubectl,' > /out/kubectl.sha256
+
+FROM docker.io/alpine/k8s:1.37.1@sha256:712dc5385d1c1a3f83b747fa9e40f64d433a97f72ff42f9755ff7dd1f62846e4
+LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
+      org.opencontainers.image.base.name="docker.io/alpine/k8s:1.37.1" \
+      org.opencontainers.image.base.digest="sha256:712dc5385d1c1a3f83b747fa9e40f64d433a97f72ff42f9755ff7dd1f62846e4"
+USER 0:0
+COPY patch-brotli.sh brotli-checksums.txt /tmp/helper-patch/
+RUN sh /tmp/helper-patch/patch-brotli.sh edge && rm -rf /tmp/helper-patch
+COPY --from=kubectl-builder --chmod=0555 /out/kubectl /usr/bin/kubectl
+COPY --from=kubectl-builder /out/kubectl.buildinfo /out/kubectl.sha256 /usr/share/nvcf/
+COPY licenses/ /usr/share/licenses/nvcf-k8s-helper/
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache
+WORKDIR /tmp
+USER 1000:1000

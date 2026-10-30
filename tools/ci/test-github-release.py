@@ -189,11 +189,18 @@ class GithubReleaseTest(unittest.TestCase):
             )
         return created, output.getvalue()
 
-    def test_upstream_dependencies_have_no_derivative_release_registration(self):
+    def test_helper_package_producer_is_registered_without_server_derivatives(self):
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
-        for service in metadata["services"]:
-            self.assertNotEqual(service["id"], "nonroot-images")
-            self.assertNotEqual(service["path"], "infra/nonroot-images")
+        services = [s for s in metadata["services"] if s["id"] == "nonroot-images"]
+        self.assertEqual(services, [{
+            "id": "nonroot-images", "path": "infra/nonroot-images",
+            "service_name": "nvcf-nonroot-images",
+        }])
+        producer = SCRIPT_PATH.parents[2] / "infra/nonroot-images"
+        self.assertEqual(
+            {p.name for p in producer.glob("Dockerfile.*")},
+            {"Dockerfile.k8s-helper", "Dockerfile.nats-box"},
+        )
 
     def test_java_ci_components_match_registered_subprojects(self):
         root = SCRIPT_PATH.parents[2]

@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM docker.io/natsio/nats-box:0.20.1-nonroot@sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44
+LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
+      org.opencontainers.image.base.name="docker.io/natsio/nats-box:0.20.1-nonroot" \
+      org.opencontainers.image.base.digest="sha256:9eec37227e52bf4d207ffc246284034c18dd09d51bae0bfd2af9dbbd77ba4d44"
+USER 0:0
+COPY patch-brotli.sh brotli-checksums.txt /tmp/helper-patch/
+RUN sh /tmp/helper-patch/patch-brotli.sh v3.24 && rm -rf /tmp/helper-patch
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache \
+    XDG_CONFIG_HOME=/tmp/.config XDG_DATA_HOME=/tmp/.local/share \
+    NKEYS_PATH=/tmp/.local/share/nkeys
+WORKDIR /tmp
+USER 1000:1000
