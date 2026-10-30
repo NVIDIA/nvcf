@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Pull base image.
-FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.1.7@sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812
+FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.1.9@sha256:3160c01b86a90c2cf11cae052957ac5ce49951b3f668ced7665e12d63d5c6a83
 
 # Add the service jar
 ARG APP_JAR=app.jar
