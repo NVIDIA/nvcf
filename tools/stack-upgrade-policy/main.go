@@ -41,6 +41,7 @@ func main() {
 	stack := flag.String("stack", "", "release-metadata id of the stack, for example nvcf-self-managed-stack")
 	bump := flag.String("bump", "", "proposed bump as a conventional-commit type, as reported by tools/ci/release-bump-type")
 	root := flag.String("root", ".", "repository root")
+	baseRef := flag.String("base-ref", "", "maintenance PR target ref; defaults to the latest published stack tag")
 	asJSON := flag.Bool("json", false, "emit the evidence report as JSON")
 	flag.Parse()
 
@@ -48,7 +49,7 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	code, err := run(*root, *stack, *bump, *asJSON, os.Stdout, os.Stderr)
+	code, err := run(*root, *stack, *bump, *baseRef, *asJSON, os.Stdout, os.Stderr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -89,7 +90,7 @@ type report struct {
 	Changes    []reportChange `json:"changes"`
 }
 
-func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (int, error) {
+func run(root, stackID, bumpType, baseRef string, asJSON bool, out, errOut io.Writer) (int, error) {
 	stack, err := LoadStack(root, stackID)
 	if err != nil {
 		return 1, err
@@ -103,17 +104,19 @@ func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (in
 		return 0, nil
 	}
 
-	baseTag, err := LatestReleaseTag(root, stack.Path)
-	if err != nil {
-		return 1, err
+	if baseRef == "" {
+		baseRef, err = LatestReleaseTag(root, stack.Path)
+		if err != nil {
+			return 1, err
+		}
 	}
-	ev, err := GatherEvidence(root, baseTag, stack.MigrationPaths)
+	ev, err := GatherEvidence(root, baseRef, stack.MigrationPaths)
 	if err != nil {
 		return 1, err
 	}
 	decision := Decide(ev, bump)
 
-	rep := report{Stack: stack.ID, BaseTag: baseTag, Bump: bump.String(), Qualifying: decision.Qualifying, OK: decision.OK, Checked: true}
+	rep := report{Stack: stack.ID, BaseTag: baseRef, Bump: bump.String(), Qualifying: decision.Qualifying, OK: decision.OK, Checked: true}
 	for _, c := range ev.Changes {
 		rc := reportChange{Path: c.Path, Status: c.Status.String(), Class: c.Class.String()}
 		if c.Status == Deleted {

@@ -53,7 +53,7 @@ func TestRunFailsOnADestructiveMigrationWithoutAMajorBump(t *testing.T) {
 	git(t, dir, "commit", "-qm", "drop health_info")
 
 	var out, errOut bytes.Buffer
-	code, err := run(dir, "nvcf-self-managed-stack", "feat", false, &out, &errOut)
+	code, err := run(dir, "nvcf-self-managed-stack", "feat", "", false, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRunPassesTheSameChangeWithAMajorBump(t *testing.T) {
 	git(t, dir, "commit", "-qm", "drop health_info")
 
 	var out, errOut bytes.Buffer
-	code, err := run(dir, "nvcf-self-managed-stack", "feat!", false, &out, &errOut)
+	code, err := run(dir, "nvcf-self-managed-stack", "feat!", "", false, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,18 +82,25 @@ func TestRunPassesTheSameChangeWithAMajorBump(t *testing.T) {
 	}
 }
 
-func TestRunMaintenanceIgnoresSiblingReleaseButStillRejectsMigrationDeletion(t *testing.T) {
+func TestRunMaintenanceSnapshotChecksOnlyItsChangesAndStillRejectsDeletion(t *testing.T) {
 	dir := fullFixture(t)
-	git(t, dir, "branch", "maintenance")
+	// Release automation can copy a tree onto a history with no stack tags.
+	tree := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD^{tree}"))
+	baseline := strings.TrimSpace(git(t, dir, "commit-tree", tree, "-m", "release snapshot"))
+	git(t, dir, "branch", "maintenance", baseline)
 	write(t, dir, "migrations/cassandra/keyspaces/nvcf_api/04_add_column.up.sql",
 		"ALTER TABLE nvcf_api.functions_v3 ADD name text;")
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-qm", "new minor migration")
 	git(t, dir, "tag", "deploy/stacks/self-managed/v1.1.2")
 	git(t, dir, "checkout", "-q", "maintenance")
+	latest, err := LatestReleaseTag(dir, "deploy/stacks/self-managed")
+	if err != nil || latest != "deploy/stacks/self-managed/v1.1.2" {
+		t.Fatalf("default release baseline = %q, %v; want newest published tag", latest, err)
+	}
 
 	var out, errOut bytes.Buffer
-	code, err := run(dir, "nvcf-self-managed-stack", "fix", true, &out, &errOut)
+	code, err := run(dir, "nvcf-self-managed-stack", "fix", baseline, true, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +111,7 @@ func TestRunMaintenanceIgnoresSiblingReleaseButStillRejectsMigrationDeletion(t *
 	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.BaseTag != "deploy/stacks/self-managed/v1.0.0" || len(rep.Changes) != 0 {
+	if rep.BaseTag != baseline || len(rep.Changes) != 0 {
 		t.Fatalf("maintenance report = %+v, want unchanged released baseline", rep)
 	}
 
@@ -116,12 +123,27 @@ func TestRunMaintenanceIgnoresSiblingReleaseButStillRejectsMigrationDeletion(t *
 	git(t, dir, "commit", "-qm", "delete a released migration")
 	out.Reset()
 	errOut.Reset()
-	code, err = run(dir, "nvcf-self-managed-stack", "fix", false, &out, &errOut)
+	code, err = run(dir, "nvcf-self-managed-stack", "fix", baseline, false, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code != 1 || !strings.Contains(errOut.String(), path) {
 		t.Fatalf("deletion exit = %d, want 1 naming %s\nstderr:\n%s", code, path, &errOut)
+	}
+
+	write(t, dir, path, "CREATE TABLE IF NOT EXISTS nvcf_api.functions_v3 (id uuid PRIMARY KEY);")
+	drop := "migrations/cassandra/keyspaces/nvcf_api/04_drop_table.up.sql"
+	write(t, dir, drop, "DROP TABLE nvcf_api.functions_v3;")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-qm", "add destructive migration")
+	out.Reset()
+	errOut.Reset()
+	code, err = run(dir, "nvcf-self-managed-stack", "fix", baseline, false, &out, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 1 || !strings.Contains(errOut.String(), drop) {
+		t.Fatalf("destructive addition exit = %d, want 1 naming %s\nstderr:\n%s", code, drop, &errOut)
 	}
 }
 
@@ -136,7 +158,7 @@ func TestRunReportsAdditiveMigrationsAndStillPasses(t *testing.T) {
 	git(t, dir, "commit", "-qm", "add column")
 
 	var out, errOut bytes.Buffer
-	code, err := run(dir, "nvcf-self-managed-stack", "fix", false, &out, &errOut)
+	code, err := run(dir, "nvcf-self-managed-stack", "fix", "", false, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +181,7 @@ func TestRunIsANoOpForAStackWithNoMigrationPaths(t *testing.T) {
 	git(t, dir, "tag", "deploy/stacks/observability/v0.3.0")
 
 	var out, errOut bytes.Buffer
-	code, err := run(dir, "nvcf-observability-stack", "fix", false, &out, &errOut)
+	code, err := run(dir, "nvcf-observability-stack", "fix", "", false, &out, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +198,7 @@ func TestRunEmitsJSON(t *testing.T) {
 	git(t, dir, "commit", "-qm", "add column")
 
 	var out, errOut bytes.Buffer
-	if _, err := run(dir, "nvcf-self-managed-stack", "fix", true, &out, &errOut); err != nil {
+	if _, err := run(dir, "nvcf-self-managed-stack", "fix", "", true, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `"class": "Additive"`) {
@@ -187,7 +209,7 @@ func TestRunEmitsJSON(t *testing.T) {
 func TestRunRejectsAnUnknownStack(t *testing.T) {
 	dir := fullFixture(t)
 	var out, errOut bytes.Buffer
-	if _, err := run(dir, "not-a-stack", "fix", false, &out, &errOut); err == nil {
+	if _, err := run(dir, "not-a-stack", "fix", "", false, &out, &errOut); err == nil {
 		t.Fatal("err = nil, want an error naming the unknown stack")
 	}
 }
@@ -203,7 +225,7 @@ func TestRunEmitsJSONForAStackWithNoMigrationPaths(t *testing.T) {
 	git(t, dir, "commit", "-qm", "observability only")
 
 	var out, errOut bytes.Buffer
-	if _, err := run(dir, "nvcf-observability-stack", "fix", true, &out, &errOut); err != nil {
+	if _, err := run(dir, "nvcf-observability-stack", "fix", "", true, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	var parsed map[string]any
@@ -212,5 +234,13 @@ func TestRunEmitsJSONForAStackWithNoMigrationPaths(t *testing.T) {
 	}
 	if parsed["stack"] != "nvcf-observability-stack" {
 		t.Errorf("stack = %v", parsed["stack"])
+	}
+}
+
+func TestRunRejectsInvalidExplicitBaseline(t *testing.T) {
+	dir := fullFixture(t)
+	var out, errOut bytes.Buffer
+	if _, err := run(dir, "nvcf-self-managed-stack", "fix", "missing-maintenance-ref", false, &out, &errOut); err == nil {
+		t.Fatal("missing baseline must fail rather than skip validation")
 	}
 }
