@@ -1,0 +1,82 @@
+{
+  "description": "A decisions request with an input_image data URL forwards the image unchanged; the estimate counts the image as the flat default of 1024 tokens whatever the base64 length.",
+  "path": "/v1/decisions",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      {
+        "type": "input_text",
+        "text": "What is shown?"
+      },
+      {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,iVBORw0KGgo="
+      }
+    ],
+    "questions": [
+      {
+        "id": "c1",
+        "type": "choice",
+        "options": [
+          "cat",
+          "dog"
+        ]
+      }
+    ]
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      {
+        "type": "input_text",
+        "text": "What is shown?"
+      },
+      {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,iVBORw0KGgo="
+      }
+    ],
+    "questions": [
+      {
+        "id": "c1",
+        "type": "choice",
+        "options": [
+          "cat",
+          "dog"
+        ]
+      }
+    ]
+  },
+  "upstream_input_tokens": "1077",
+  "upstream_affinity_key": "",
+  "upstream_response": {
+    "json": {
+      "results": [
+        {
+          "id": "c1",
+          "type": "choice",
+          "probabilities": {
+            "cat": 0.75,
+            "dog": 0.25
+          }
+        }
+      ],
+      "model": "company/model"
+    }
+  },
+  "response": {
+    "json": {
+      "results": [
+        {
+          "id": "c1",
+          "type": "choice",
+          "probabilities": {
+            "cat": 0.75,
+            "dog": 0.25
+          }
+        }
+      ],
+      "model": "company/model"
+    }
+  }
+}

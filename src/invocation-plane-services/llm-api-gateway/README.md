@@ -1,7 +1,8 @@
 # llm-api-gateway
 
 `llm-api-gateway` is an OpenAI-compatible gateway for routing chat,
-responses, and embeddings traffic to NVCF functions through Stargate.
+responses, embeddings, and decision model traffic to NVCF functions through
+Stargate.
 
 Requests reach this gateway as OpenAI-compatible payloads. The gateway does
 not render Hugging Face or Jinja chat templates, does not tokenize prompts, and
@@ -34,6 +35,8 @@ The gateway currently serves:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `POST /v1/decisions`
+- `POST /v1/systemone`
 
 ## Request Routing
 
@@ -71,6 +74,42 @@ persist the response header and send it on later requests for the same
 conversation. The gateway preserves the raw body field for the model backend.
 It forwards only a SHA-256-derived value in the internal
 `x-cache-affinity-key` header to Stargate.
+
+### Decision routes
+
+`POST /v1/decisions` and `POST /v1/systemone` forward the request and response
+bodies unchanged to a decision model. The gateway reads only `model`, rewrites
+it to the function's model name, and does not translate between the two
+formats. Responses are not streamed; `stream` is ignored.
+
+- A model is enabled for a route only when its function declares the route in
+  the model's `uris`, for example `--llm-model name=<model>,uris=/v1/decisions`.
+  A model with no `uris`, or without the route in them, gets a 404 in the
+  route's own error shape. These routes have no default-allow and are not
+  affected by `MODEL_URI_ALLOWLIST_ENABLED`.
+- Admission counts one request and the estimated input tokens, and the
+  estimate is sent to Stargate as `x-input-tokens` and `x-token-estimate`. The
+  estimate counts every string in the body as text. Each image counts a flat
+  `NVCF_DECISION_IMAGE_TOKENS` (default `1024`) and its base64 is never
+  counted. An image is an object with `type` set to `input_image`, an element
+  of `images`, a value of `assets`, or any string that is a base64 data URL.
+- Client headers, including `TypeSafe-Danger-Zone-Images`, reach the model
+  server.
+- `/v1/decisions` returns errors in the OpenAI shape. `/v1/systemone` returns
+  `{"error":{"code","message","request_id"},"request_id"}`, where `request_id`
+  equals the `X-Request-ID` response header. Codes are `invalid_json`,
+  `invalid_request`, `invalid_api_key`, `not_found`, `request_too_large`,
+  `rate_limit_exceeded`, `internal_error`, `provider_unavailable`, and
+  `provider_timeout`.
+- An error from the model server is relayed byte for byte, whatever its shape,
+  size, or encoding. Only errors the gateway or the request router generates
+  use the shapes above. The router marks its own errors with
+  `X-Stargate-Error-Code`.
+- When a 2xx response reports `usage.input_tokens`, the gateway records it on
+  `llm_api_gateway_llm_tokens_total` and counts the response in
+  `llm_api_gateway_decision_usage_observations_total` with `status="observed"`.
+  A response without it counts as `absent`. The estimate stays the admission
+  value.
 
 ### Last-cluster hints
 
@@ -213,6 +252,9 @@ Useful overrides:
 - `NVCF_GATEWAY_ADDR` to bind a specific listen address
 - `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
   413 (default `0`, no limit)
+- `NVCF_DECISION_IMAGE_TOKENS` for the flat input token estimate of each image
+  on the decision routes (default `1024`, must be `0` or more). The Helm
+  chart sets it with `llmApiGateway.config.decisionImageTokens`.
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `STARGATE_LAST_CLUSTER_ENABLED=true` to send session last-cluster hints to

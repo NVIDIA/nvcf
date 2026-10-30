@@ -90,7 +90,14 @@ func newPassthroughAPI(t *testing.T, upstreamURL string) *echo.Echo {
 	e := echo.New()
 	e.Use(NewContextMiddleware(cfg))
 	// Models without a spec skip the allowlist; company/restricted has no allowed route.
-	e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{"company/restricted": {URIs: []string{"/v1/other"}}}))
+	// The decision routes have no default-allow, so the models the corpus uses
+	// declare every route.
+	allRoutes := []string{chatCompletionsEndpointPath, responsesEndpointPath, embeddingsEndpointPath, messagesEndpointPath, decisionsEndpointPath, systemOneEndpointPath}
+	e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{
+		"company/restricted":      {URIs: []string{"/v1/other"}},
+		"company/model":           {URIs: allRoutes},
+		"company-name/model-name": {URIs: allRoutes},
+	}))
 	RegisterRoutes(e, NewHandlers(cfg, stargate, nil, nil))
 	return e
 }

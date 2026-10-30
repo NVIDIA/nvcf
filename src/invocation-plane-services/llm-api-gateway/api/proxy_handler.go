@@ -44,6 +44,8 @@ var hopByHopHeaders = map[string]struct{}{
 
 func (h *OpenAIProxyHandlers) RegisterRoutes(group *echo.Group) {
 	group.POST("/v1/embeddings", h.Embeddings)
+	group.POST(decisionsEndpointPath, h.Decisions)
+	group.POST(systemOneEndpointPath, h.SystemOne)
 }
 
 func (h *OpenAIProxyHandlers) forwardJSONRequest(
@@ -78,7 +80,19 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
 
-	return writeProxyResponse(c, resp)
+	var tee io.Writer
+	var observer *decisionUsageObserver
+	if observesDecisionUsage(c.Request(), resp) {
+		observer = &decisionUsageObserver{}
+		tee = observer
+	}
+	if err := writeProxyResponseObserved(c, resp, tee); err != nil {
+		return err
+	}
+	if observer != nil {
+		h.recordDecisionUsage(c, observer)
+	}
+	return nil
 }
 
 func (h *Handlers) requireFunctionRequestContext(
@@ -153,6 +167,12 @@ func (h *Handlers) dispatchEstimatedProxyRequest(
 }
 
 func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
+	return writeProxyResponseObserved(c, resp, nil)
+}
+
+// writeProxyResponseObserved writes resp to the client. When tee is not nil,
+// every body byte written to the client is also written to it.
+func writeProxyResponseObserved(c *GatewayContext, resp *provider.ProxyResponse, tee io.Writer) error {
 	if resp == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "proxy provider returned no response")
 	}
@@ -161,15 +181,96 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 	}
 
 	copyProxyHeaders(c.Response().Header(), resp.Header)
-	if err := proxyUpstreamError(resp); err != nil {
+	if isDecisionRoute(c.Request()) && resp.StatusCode >= http.StatusBadRequest {
+		if isBackendErrorOnDecisionRoute(resp) {
+			// The model server's own error is part of its API: relay it as is.
+			c.Set(contextKeyBackendErrorRelayed, true)
+		} else {
+			// Gateway-written errors carry no backend X-System-One-* headers.
+			for name := range c.Response().Header() {
+				if strings.HasPrefix(strings.ToLower(name), "x-system-one-") {
+					c.Response().Header().Del(name)
+				}
+			}
+			return proxyUpstreamError(resp)
+		}
+	} else if err := proxyUpstreamError(resp); err != nil {
 		return err
 	}
 	c.Response().WriteHeader(resp.StatusCode)
 	if resp.Body == nil {
 		return nil
 	}
-	_, err := io.Copy(c.Response().Writer, resp.Body)
+	var body io.Reader = resp.Body
+	if tee != nil {
+		body = io.TeeReader(body, tee)
+	}
+	_, err := io.Copy(c.Response().Writer, body)
 	return err
+}
+
+func isDecisionRoute(r *http.Request) bool {
+	return r.URL.Path == decisionsEndpointPath || r.URL.Path == systemOneEndpointPath
+}
+
+// bareRouterErrorStatuses are the statuses Stargate answers with no body and
+// no X-Stargate-Error-Code when the router itself fails: a replay buffer
+// overflow (413), a client that went away (499) and tunnel or transport
+// failures (502, 503, 504). Stargate marks only routing rejections and overload
+// with the header. Its bare 400s come from malformed gateway-set headers, which
+// the gateway never sends, so 400 is left out and an empty 400 is the
+// backend's. Marking every Stargate-generated error would remove this
+// heuristic (follow-up).
+var bareRouterErrorStatuses = map[int]bool{
+	http.StatusRequestEntityTooLarge: true,
+	499:                              true,
+	http.StatusBadGateway:            true,
+	http.StatusServiceUnavailable:    true,
+	http.StatusGatewayTimeout:        true,
+}
+
+// isBackendErrorOnDecisionRoute reports whether the non-2xx resp on a decision
+// route is a model server error. Stargate marks the errors it generates with
+// X-Stargate-Error-Code, except a bare status with an empty body for the
+// statuses in bareRouterErrorStatuses. Anything else, including an empty 401,
+// 404 or 429, is the backend's answer. Those routes relay backend errors
+// untouched, because the backend defines the error shapes of its own API (for
+// example a FastAPI detail list).
+func isBackendErrorOnDecisionRoute(resp *provider.ProxyResponse) bool {
+	if provider.IsRouterRejection(resp.Header) {
+		return false
+	}
+	if bareRouterErrorStatuses[resp.StatusCode] && emptyBody(resp) {
+		return false
+	}
+	return true
+}
+
+// emptyBody reports whether resp has no body, reading at most one byte. A
+// byte that is read is put back in front of the stream. Stargate answers some
+// router failures, such as a replay buffer overflow or a failed tunnel, with a
+// bare status and no body or error code header; those are router errors, not
+// backend errors.
+func emptyBody(resp *provider.ProxyResponse) bool {
+	if resp.Body == nil {
+		return true
+	}
+	var first [1]byte
+	for {
+		n, err := resp.Body.Read(first[:])
+		if n == 1 {
+			resp.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(first[:]), resp.Body), Closer: resp.Body}
+			return false
+		}
+		if err != nil {
+			return err == io.EOF
+		}
+	}
+}
+
+type prefixedBody struct {
+	io.Reader
+	io.Closer
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {

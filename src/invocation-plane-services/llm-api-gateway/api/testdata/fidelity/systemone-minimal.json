@@ -1,0 +1,54 @@
+{
+  "description": "Minimal System One request only rewrites model; state, questions and response extensions survive, and the response may omit usage.",
+  "path": "/v1/systemone",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "state": "The user opened the settings page.",
+    "questions": {
+      "q1": {
+        "type": "noul",
+        "instruction": "Describe intent."
+      }
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "state": "The user opened the settings page.",
+    "questions": {
+      "q1": {
+        "type": "noul",
+        "instruction": "Describe intent."
+      }
+    }
+  },
+  "upstream_input_tokens": "40",
+  "upstream_affinity_key": "",
+  "upstream_response": {
+    "json": {
+      "answers": {
+        "q1": {
+          "text": "The user wants to change a setting.",
+          "score": 0.5,
+          "vendor_answer": {
+            "revision": 9007199254740993,
+            "empty": null
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "answers": {
+        "q1": {
+          "text": "The user wants to change a setting.",
+          "score": 0.5,
+          "vendor_answer": {
+            "revision": 9007199254740993,
+            "empty": null
+          }
+        }
+      }
+    }
+  }
+}
