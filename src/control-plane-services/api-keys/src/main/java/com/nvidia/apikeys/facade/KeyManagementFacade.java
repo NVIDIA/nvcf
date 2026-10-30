@@ -220,6 +220,7 @@ public class KeyManagementFacade {
             throw new ForbiddenException(MESG_ACTOR_NOT_ALLOWED);
         }
         assertScope(ncaId, serviceId, userId);
+        validator.requireService(serviceId);
 
         var saved = keysService.updateOwnerStatusByAccountAndService(
                 ncaId, USER, userId, serviceId, request.getStatus());

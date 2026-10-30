@@ -494,8 +494,19 @@ class KeyManagementFacadeIntegrationTest {
                 ACCOUNT_ADMIN, NCA_ID_1, SERVICE_ID_1, USER_KEY_OWNER_ID_1,
                 issuerStatusRequest(KeyOwnerStatus.SUSPENDED)));
         assertThrows(BadRequestException.class, () -> facade.updateIssuerServiceStatus(
-                PLATFORM_ADMIN, LEGACY_NCA_ID, LEGACY_CANONICAL_SERVICE_ID, USER_KEY_OWNER_ID_1,
+                PLATFORM_ADMIN, LEGACY_NCA_ID, SERVICE_ID_1, USER_KEY_OWNER_ID_1,
                 issuerStatusRequest(KeyOwnerStatus.SUSPENDED)));
+    }
+
+    @Test
+    void issuerServiceStatusRejectsUnregisteredService() {
+        assertThrows(BadRequestException.class, () -> facade.updateIssuerServiceStatus(
+                PLATFORM_ADMIN, NCA_ID_1, "unregistered-service", USER_KEY_OWNER_ID_1,
+                issuerStatusRequest(KeyOwnerStatus.SUSPENDED)));
+
+        assertThat(facade.getAccountOwnerStatuses(NCA_ID_1, USER_KEY_OWNER_ID_1).getAccounts())
+                .singleElement()
+                .satisfies(account -> assertThat(account.getIssuerServices()).isNullOrEmpty());
     }
 
     private KeyResponse create(KeyManagementActor actor, String ncaId, String userId) {
