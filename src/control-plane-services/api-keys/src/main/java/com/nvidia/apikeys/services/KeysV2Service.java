@@ -82,6 +82,7 @@ public class KeysV2Service {
     static final String MESG_KEY_NOT_ACTIVE = "Key is not active";
     static final String MESG_KEY_STATUS_FINAL = "Key status cannot change from %s";
     static final String MESG_OWNER_SUSPENDED = "Key owner suspended.";
+    static final String MESG_OWNER_STATUS_REQUIRED = "Owner status is required";
     static final String MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED =
             "Owner status for account and service is not supported for account '%s'";
 
@@ -328,6 +329,7 @@ public class KeysV2Service {
 
     public OwnerStatusByAccountModel updateOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
+        requireOwnerStatus(status);
         if (legacyAccount.isLegacy(ncaId)) {
             var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
             var saved = keyOwnerService.updateKeyOwner(owner, status, clock.instant());
@@ -341,6 +343,7 @@ public class KeysV2Service {
     public OwnerStatusByAccountAndServiceModel updateOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
+        requireOwnerStatus(status);
         if (legacyAccount.isLegacy(ncaId)) {
             throw new BadRequestException(
                     MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED.formatted(ncaId));
@@ -451,6 +454,12 @@ public class KeysV2Service {
                 minAuthzUpdateIntervalSeconds);
         if (!lockAcquired) {
             throw new TooManyRequestsException(ERROR_SLOW_DOWN);
+        }
+    }
+
+    private static void requireOwnerStatus(KeyOwnerStatus status) {
+        if (status == null) {
+            throw new BadRequestException(MESG_OWNER_STATUS_REQUIRED);
         }
     }
 
