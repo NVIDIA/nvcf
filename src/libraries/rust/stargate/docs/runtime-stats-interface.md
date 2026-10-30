@@ -19,10 +19,12 @@ client -> stargate -> QUIC tunnel -> pylon -> runtime
 runtime -> /pylon/v1/stats/stream -> pylon -> registration -> stargate routing
 runtime -> /kv-cache/stats ---------> pylon -> registration -> stargate routing
 CLI concurrency fallback ----------> pylon -> registration -> stargate routing
+Dynamo KV DC Relay (gRPC) ---------> pylon -> registration -> stargate routing
 ```
 
 The stream reports request counters. `/kv-cache/stats` is optional machine
-state.
+state. With a Dynamo upstream, the Relay can replace both; see
+[Dynamo Relay Mode](#dynamo-relay-mode).
 
 ## Registration Updates
 
@@ -213,6 +215,54 @@ overhead.
 
 Use it only when the runtime has reliable KV state.
 
+## Dynamo Relay Mode
+
+```text
+--dynamo-relay-grpc-url=http://relay:50051
+```
+
+With the Dynamo upstream backend, Pylon can take model stats from the Dynamo
+KV DC Relay (`dynamo.kvrelay.v1.KvEventRelay`) instead of the runtime:
+`SubscribeServingLoad` for model load and readiness, `SubscribeKvPoolLoad` for
+KV usage, and `WatchKvPoolCatalog` to join both to model names. Pylon then
+starts neither the stats stream nor KV polling, and the flag is a startup error
+next to `--kv-cache-stats-path`, `--engine-stats-stream`, or
+`--engine-stats-stream-path`. Every Dynamo frontend and router behind the Relay
+must set `DYN_SERVING_LOAD_PUBLISH`: when only some publish, the Relay reports
+a partial sum as complete.
+
+- Readiness: a model is ready while the Relay reports a ready frontend and a
+  serving pool for it, whatever the window's coverage. Pylon admits no requests
+  for a model before its first window or after the Relay is lost.
+- Load: the queue, running, and input-size gauges, the output throughput, and
+  the engine concurrency limit come from a window in which the model's load is
+  complete, and local request observations never replace them. An incomplete
+  window clears them to zero, except that the concurrency limit, the sum over
+  the model's aggregated and decode pools, falls back to
+  `--max-engine-concurrency` whenever the Relay reports none. Rates use the
+  Relay clock within one `relay_incarnation`, so the first window of an
+  incarnation has no rate.
+- KV usage: capacity and used tokens sum the model's aggregated and decode
+  pools (prefill KV is transient), and count only when every such pool's ranks
+  all reported. A model with incomplete usage reports zero capacity, which
+  Stargate reads as no KV view: a cluster takes KV usage from its freshest
+  backend that reports capacity.
+- Shared clusters: every Pylon reading one Relay reports the Relay's whole
+  load, so Stargate takes a cluster's load from its freshest complete Relay view
+  (source `dynamo_relay_load`) instead of summing its backends.
+- Loss: when any Relay stream ends or sends an invalid message, or a load
+  stream is silent for max(3 s, 3 × the window), Pylon clears the Relay's stats
+  and readiness and reconnects with backoff. Opening the streams, the first
+  catalog, and each load stream's first window each get 30 s. It never falls
+  back to OpenAI stats.
+- Capacity: the Relay reports load, not capacity, and relay mode turns off the
+  OpenAI fallback, so a model's mean input capacity comes only from
+  `--do-calibration` or `--initial-input-tps`. Calibration still measures
+  Pylon's own calibration requests.
+
+A ready model whose load is incomplete reports zero load until a complete
+window arrives, because registration stats cannot say "unknown".
+
 ## Aggregation
 
 Pylon publishes:
@@ -251,8 +301,9 @@ Pylon publishes `pylon_model_max_input_tps` when the maximum is known and remove
 the series when the model is removed or replaced with unknown maximum state.
 The additive protobuf field preserves older messages as an absent maximum.
 
-Shared clusters sum backend-local live load and union labels. Effective input
-capacity is:
+Shared clusters sum backend-local live load and union labels. A complete Dynamo
+Relay load view is shared engine state instead: the cluster takes the freshest
+one (see [Dynamo Relay Mode](#dynamo-relay-mode)). Effective input capacity is:
 
 ```text
 mean input capacity = sum(active runtime mean reports)
@@ -276,8 +327,10 @@ Later valid runtime samples continue updating either unpinned distribution.
 Labels:
 
 - capabilities: `request.output.chunk_usage`,
-  `machine.kv_cache.http`, `model.throughput.engine_stream`
-- sources: `chunk_usage`, `kv_cache_stats`, `engine_stats_stream`
+  `machine.kv_cache.http`, `model.throughput.engine_stream`,
+  `model.load.dynamo_relay`, `machine.kv_cache.dynamo_relay`
+- sources: `chunk_usage`, `kv_cache_stats`, `engine_stats_stream`,
+  `dynamo_relay_load`, `dynamo_relay_kv_usage`
 
 ## Metrics
 
@@ -295,6 +348,12 @@ does not inflate that gauge.
 chat/Responses/embeddings endpoints, and `/kv-cache/stats`. Use
 `pylon --engine-stats-stream=off` when a test intentionally exercises OpenAI
 fallback.
+
+It also serves a mock KV DC Relay over gRPC on the same port, for
+`pylon --dynamo-relay-grpc-url=http://<mock-dynamo address>`: one aggregated
+pool serving `--model-name`, with load from mock-dynamo's own requests and
+windows every second. `PUT /test-control/relay` with `{"enabled": false}` ends
+its streams and refuses new ones, as a lost Relay would.
 
 With `--profile h100-llama-3.1-8b`, `mock-dynamo` uses the batched engine model
 from the `mock-engine` crate by default. The model represents one Dynamo

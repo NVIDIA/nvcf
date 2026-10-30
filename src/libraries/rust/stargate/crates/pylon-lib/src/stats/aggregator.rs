@@ -14,10 +14,11 @@
 // limitations under the License.
 
 use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
-use stargate_protocol::common::valid_last_mean_input_tps;
+use stargate_protocol::common::{DYNAMO_RELAY_LOAD_STATS_SOURCE, valid_last_mean_input_tps};
 use tokio::time::Instant as TokioInstant;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
@@ -28,11 +29,15 @@ use super::collector::{
     FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
     StatsUpdateSource,
 };
+use super::relay_update::{RelayKvUpdate, RelayLoadUpdate, RelayModelGauges, RelayModelKv};
 use super::token_metrics::TpsDistribution;
 pub(super) const ENGINE_STATS_SOURCE: &str = "engine_stats_stream";
 
 #[derive(Debug, Default)]
 pub(super) struct ModelMetricsState {
+    pub(super) relay_load: Option<RelayModelGauges>,
+    pub(super) relay_kv: Option<RelayModelKv>,
+    pub(super) relay_observed_at_unix_ms: u64,
     pub(super) last_mean_input_tps: f64,
     pub(super) max_input_tps: Option<f64>,
     pub(super) max_engine_concurrency: Option<u64>,
@@ -568,7 +573,12 @@ pub(super) struct StatsAggregator {
 }
 
 impl StatsAggregator {
-    pub(super) fn new(config: StatsCollectorConfig, runtime_state: PylonRuntimeState) -> Self {
+    pub(super) fn new(mut config: StatsCollectorConfig, runtime_state: PylonRuntimeState) -> Self {
+        if config.relay_enabled {
+            config.openai_fallback_stats_enabled = false;
+            config.kv_cache_stats_url = None;
+            runtime_state.enable_relay_readiness();
+        }
         Self {
             config,
             runtime_state,
@@ -654,6 +664,16 @@ impl StatsAggregator {
         self.per_model.get(model_id).map(|state| &state.generation)
     }
 
+    pub(super) fn calibration_snapshot_generation(
+        &self,
+        generation: &ModelGeneration,
+    ) -> Option<CurrentModelStats> {
+        self.per_model
+            .get(generation.model_id())
+            .filter(|state| state.generation == *generation)
+            .map(|_| self.local_snapshot(generation.model_id()))
+    }
+
     #[cfg(test)]
     pub(super) fn apply_update(&mut self, update: StatsAggregatorUpdate) -> Vec<ModelStatsUpdate> {
         let mut updated_models = Vec::new();
@@ -691,6 +711,79 @@ impl StatsAggregator {
                 updated_models.extend(self.finalize_request(update))
             }
             StatsAggregatorUpdate::EnableOpenAiFallback => self.enable_openai_fallback(),
+            // Placeholder until the collector integration slice lands.
+            StatsAggregatorUpdate::RelayLoad(update) => {
+                self.apply_relay_load(update, updated_models);
+            }
+            StatsAggregatorUpdate::RelayKv(update) => {
+                self.apply_relay_kv(update, updated_models);
+            }
+            StatsAggregatorUpdate::RelayLost => self.clear_relay(updated_models),
+        }
+    }
+
+    fn apply_relay_load(
+        &mut self,
+        mut update: RelayLoadUpdate,
+        updates: &mut Vec<ModelStatsUpdate>,
+    ) {
+        if !self.config.relay_enabled {
+            return;
+        }
+        self.runtime_state
+            .replace_relay_readiness(self.per_model.iter().filter_map(|(model_id, state)| {
+                update.models.get(model_id).filter(|model| model.ready)?;
+                Some(&state.generation)
+            }));
+        for (model_id, state) in &mut self.per_model {
+            state.metrics.relay_load = update.models.remove(model_id).and_then(|model| model.load);
+            state.metrics.relay_observed_at_unix_ms = state
+                .metrics
+                .relay_observed_at_unix_ms
+                .max(update.observed_at_unix_ms);
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
+        }
+    }
+
+    fn apply_relay_kv(&mut self, mut update: RelayKvUpdate, updates: &mut Vec<ModelStatsUpdate>) {
+        if !self.config.relay_enabled {
+            return;
+        }
+        for (model_id, state) in &mut self.per_model {
+            state.metrics.relay_kv = update.models.remove(model_id);
+            state.metrics.relay_observed_at_unix_ms = state
+                .metrics
+                .relay_observed_at_unix_ms
+                .max(update.observed_at_unix_ms);
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
+        }
+    }
+
+    fn clear_relay(&mut self, updates: &mut Vec<ModelStatsUpdate>) {
+        if !self.config.relay_enabled {
+            return;
+        }
+        self.runtime_state.replace_relay_readiness([]);
+        for state in self.per_model.values_mut() {
+            state.metrics.relay_load = None;
+            state.metrics.relay_kv = None;
+            state.metrics.relay_observed_at_unix_ms = 0;
+            updates.push((
+                state.generation.clone(),
+                state
+                    .metrics
+                    .relay_stats(self.config.fallback_max_engine_concurrency),
+            ));
         }
     }
 
@@ -1117,7 +1210,7 @@ impl StatsAggregator {
     }
 
     fn enable_openai_fallback(&mut self) {
-        if self.config.openai_fallback_stats_enabled {
+        if self.config.relay_enabled || self.config.openai_fallback_stats_enabled {
             return;
         }
         self.config.openai_fallback_stats_enabled = true;
@@ -1208,6 +1301,53 @@ pub(super) struct ModelStatsSnapshotInputs {
 }
 
 impl ModelMetricsState {
+    pub(super) fn relay_stats(
+        &self,
+        fallback_max_engine_concurrency: Option<NonZeroU64>,
+    ) -> CurrentModelStats {
+        let mut stats = CurrentModelStats {
+            // Capacity evidence still belongs to this local model generation;
+            // aggregate Relay rates measure demand, not capacity.
+            last_mean_input_tps: self.last_mean_input_tps,
+            max_input_tps: self.max_input_tps,
+            max_output_tps: self.max_chat_output_tps,
+            max_embedding_item_tps: self.max_embedding_item_tps,
+            stats_observed_at_unix_ms: self.relay_observed_at_unix_ms,
+            ..CurrentModelStats::default()
+        };
+        if let Some(load) = &self.relay_load {
+            stats.output_tps = load.output_tps.unwrap_or_default();
+            stats.queue_size = load.queue_size;
+            stats.queued_input_size = load.queued_input_size;
+            stats.num_running_queries = load.num_running_queries;
+            stats.total_query_input_size = load.total_query_input_size;
+            stats.input_processing_queries = load.input_processing_queries;
+            stats.output_generation_queries = load.output_generation_queries;
+            stats.max_engine_concurrency = load.max_engine_concurrency;
+            stats
+                .stats_sources
+                .push(DYNAMO_RELAY_LOAD_STATS_SOURCE.to_string());
+            stats
+                .stats_capabilities
+                .push("model.load.dynamo_relay".to_string());
+        }
+        if let Some(kv) = self.relay_kv {
+            stats.kv_cache_capacity_tokens = kv.capacity_tokens;
+            stats.kv_cache_used_tokens = kv.used_tokens;
+            stats.kv_cache_free_tokens = kv.capacity_tokens.saturating_sub(kv.used_tokens);
+            stats
+                .stats_sources
+                .push("dynamo_relay_kv_usage".to_string());
+            stats
+                .stats_capabilities
+                .push("machine.kv_cache.dynamo_relay".to_string());
+        }
+        stats.max_engine_concurrency = stats
+            .max_engine_concurrency
+            .or(fallback_max_engine_concurrency.map(NonZeroU64::get));
+        stats
+    }
+
     // The maximum follows the published smoothed mean rather than raw samples,
     // so the mean dilutes a single outlier sample before it can raise the weight.
     // Callers pass update_max = false for a fallback window that may count cached

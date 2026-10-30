@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod dynamo_relay;
 mod forwarding_integration;
 mod grpc_bind_failure;
 mod grpc_forwarding;

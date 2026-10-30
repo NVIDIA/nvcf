@@ -62,20 +62,33 @@ pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 
 pub(crate) mod dynamo {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    use stargate_protocol::tunnel_contract::{HEADER_MODEL, HEADER_PRIORITY, HEADER_ROUTING_KEY};
 
     /// Engine priority headers pylon derives; the names stay out of the
     /// shared tunnel contract because only pylon speaks them.
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
 
-    /// Denylist of engine headers pylon owns: inbound values are stripped in
-    /// every backend mode so pylon stays their only writer. Scoped to the
-    /// priority headers for now; other engine headers are tracked separately.
-    const STRIPPED_REQUEST_HEADERS: [&str; 2] =
+    /// Engine headers owned by pylon are never accepted from callers.
+    const STRIPPED_ENGINE_HEADERS: [&str; 2] =
         [HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY];
 
+    /// Platform metadata is consumed by pylon and never becomes part of a
+    /// Dynamo request. Priority is translated below; request state is local.
+    const PLATFORM_METADATA_HEADERS: [&str; 5] = [
+        "request-id",
+        "x-dynamo-request-id",
+        HEADER_MODEL,
+        HEADER_ROUTING_KEY,
+        HEADER_PRIORITY,
+    ];
+
     pub(crate) fn is_stripped_engine_header(name: &HeaderName) -> bool {
-        STRIPPED_REQUEST_HEADERS.contains(&name.as_str())
+        STRIPPED_ENGINE_HEADERS.contains(&name.as_str())
+    }
+
+    pub(crate) fn is_platform_metadata_header(name: &HeaderName) -> bool {
+        PLATFORM_METADATA_HEADERS.contains(&name.as_str())
     }
 
     /// Map the platform rank (lower wins, absent = unconfigured) to the

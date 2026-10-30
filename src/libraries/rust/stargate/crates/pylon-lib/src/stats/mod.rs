@@ -38,6 +38,11 @@ mod collector;
 mod engine_stats_stream;
 mod metrics;
 mod projection;
+#[cfg(test)]
+mod relay_contract_tests;
+mod relay_stream;
+mod relay_translate;
+mod relay_update;
 pub(crate) mod token_metrics;
 
 pub(crate) use collector::{ModelStatsInitialization, StatsCollectorControl};
@@ -52,3 +57,4 @@ pub use engine_stats_stream::{
 };
 pub(crate) use metrics::{CalibrationOutcome, CanaryPhase, CanaryResult};
 pub use metrics::{MetricsServerHandle, PylonMetrics, start_metrics_server};
+pub use relay_stream::{DynamoRelayConfig, DynamoRelayHandle, start_dynamo_relay};

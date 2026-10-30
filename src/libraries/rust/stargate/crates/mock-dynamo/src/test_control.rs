@@ -252,6 +252,20 @@ pub(crate) async fn test_control_snapshot(
     Json(state.test_control.snapshot().await)
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RelayTestControlUpdate {
+    pub(crate) enabled: bool,
+}
+
+/// Disabling the mock Relay ends its open streams and refuses new ones.
+pub(crate) async fn update_relay_test_control(
+    State(state): State<AppState>,
+    Json(update): Json<RelayTestControlUpdate>,
+) -> axum::http::StatusCode {
+    state.relay.set_enabled(update.enabled);
+    axum::http::StatusCode::NO_CONTENT
+}
+
 pub(crate) fn request_class(headers: &HeaderMap) -> TestRequestClass {
     match headers
         .get("x-request-id")
