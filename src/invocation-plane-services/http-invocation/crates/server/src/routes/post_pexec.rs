@@ -499,7 +499,7 @@ pub(crate) async fn handle_streaming_response(
     start_time: SystemTime,
     region: Option<&str>,
     attach_response_rx: tokio::sync::oneshot::Receiver<http::Response<Body>>,
-) -> Result<Response, AppError> {
+) -> anyhow::Result<Response> {
     // try to read from the response stream
     // the worker may be trying to send an intermediate poll response exactly at the time
     // user supplied time runs out so give it an extra 2s.
@@ -516,8 +516,6 @@ pub(crate) async fn handle_streaming_response(
     // Legacy polls must neither adopt the polling caller nor extend the old
     // record's expiry; otherwise a rolling upgrade cannot age out old records.
     if let (StatusCode::ACCEPTED, Some(owner)) = (response.status(), owner.as_ref()) {
-        // A worker already accepted this request, so a failure here stays a 500
-        // rather than a 503 that would invite the client to submit it again.
         nats_service
             .record_polling_request(
                 region,
