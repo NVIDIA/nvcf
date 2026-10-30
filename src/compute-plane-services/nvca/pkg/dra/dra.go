@@ -36,8 +36,11 @@ import (
 
 const (
 	RequiredNVLinkDomainIndexAnnotation = draFQDNprefix + "/required-nvlink-domain-index"
-	NVLinkDomainPartitionLabel          = draFQDNprefix + "/nvlink-domain-partition"
-	GPUCliqueNodeLabel                  = "nvidia.com/gpu.clique"
+	// DisableComputeDomainAnnotation set to "true" on a Pod skips the function's NVLink
+	// ComputeDomain claim and NVLink domain scheduling for that Pod only.
+	DisableComputeDomainAnnotation = draFQDNprefix + "/disable-compute-domain"
+	NVLinkDomainPartitionLabel     = draFQDNprefix + "/nvlink-domain-partition"
+	GPUCliqueNodeLabel             = "nvidia.com/gpu.clique"
 
 	GPUDeviceClassName = "gpu.nvidia.com"
 

@@ -95,12 +95,29 @@ NVCA will create a
 to connect GPU workload Pods through IMEX.
 
 <Note>
-Each GPU-enabled Pod must request a full node of GPUs.
+Each GPU-enabled Pod that uses the `ComputeDomain` must request a full node of GPUs.
 </Note>
 
 A function that does not need cross-node NVLink memory sharing can opt out of
 `ComputeDomain` allocation with the `DisableNVLinkComputeDomain` workload
 feature flag. See [Workload configuration](#workload-configuration).
+
+To opt out only some of a function's Pods, set this annotation on their Pod
+template:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        dra.nvcf.nvidia.io/disable-compute-domain: "true"
+```
+
+NVCA skips all the NVLink mutations described below for an annotated Pod. The
+Pod gets no IMEX channel, so it cannot use cross-node NVLink, but it does not
+need a full node and is not drawn to the function's GPU clique. The function's
+other Pods keep the `ComputeDomain`. For example, prefill workers that use part
+of a node can share nodes while decode workers span nodes over NVLink.
 
 #### Legacy NVCA NVLink partition annotation
 
@@ -140,7 +157,8 @@ rack or clique:
   require the groups to use different GPU cliques.
 - Pods without the annotation share a default logical group.
 
-On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
+On an NVLink-optimized cluster, NVCA mutates each admitted Pod that has not
+opted out of the `ComputeDomain` as follows:
 
 - It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
   Do not set this label in the chart.

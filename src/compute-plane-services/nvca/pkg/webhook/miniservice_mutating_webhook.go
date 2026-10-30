@@ -337,20 +337,27 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		// Pod spec mutations must only be applied on creation events.
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling. Skipped when the function has opted
-			// out via DisableNVLinkComputeDomain, since it does not need cross-node NVLink.
+			// out via DisableNVLinkComputeDomain, or the Pod via DisableComputeDomainAnnotation,
+			// since it does not need cross-node NVLink.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-				disableComputeDomain := meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain)
-				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && disableComputeDomain {
+				var optOut string
+				switch {
+				case meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain):
+					optOut = featureflag.DisableNVLinkComputeDomain
+				case t.GetAnnotations()[nvcfdra.DisableComputeDomainAnnotation] == "true":
+					optOut = nvcfdra.DisableComputeDomainAnnotation
+				}
+				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && optOut != "" {
 					core.GetLogger(ctx).WithFields(logrus.Fields{
 						"pod":                          t.Name,
 						"namespace":                    obj.GetNamespace(),
 						nvcatypes.FunctionIDKey:        meta.Labels[nvcatypes.FunctionIDKey],
 						nvcatypes.FunctionVersionIDKey: meta.Labels[nvcatypes.FunctionVersionIDKey],
 						nvcatypes.NCAIDKey:             meta.Annotations[nvcatypes.NCAIDKey],
-					}).Warnf("pod sets %s but %s is also enabled; skipping ComputeDomain allocation despite the annotation",
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation, featureflag.DisableNVLinkComputeDomain)
+					}).Warnf("pod sets %s but %s is also set; skipping ComputeDomain allocation despite the annotation",
+						nvcfdra.RequiredNVLinkDomainIndexAnnotation, optOut)
 				}
-				if !disableComputeDomain {
+				if optOut == "" {
 					w.mutateNVLinkDRA(obj.GetNamespace(), t)
 				}
 			}
