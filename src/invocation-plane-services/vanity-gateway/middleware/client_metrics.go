@@ -29,16 +29,17 @@ import (
 
 // Bounded values of the gateway_call_kind client metric label.
 const (
-	CallKindInference = "inference"
-	CallKindPoll      = "poll"
-	CallKindHealth    = "health"
+	CallKindInference   = "inference"
+	CallKindPoll        = "poll"
+	CallKindHealth      = "health"
+	CallKindModelAccess = "model_access"
 )
 
 type callKindContextKey struct{}
 
 // ContextWithCallKind marks an outbound call for client metrics. Only
-// CallKindPoll and CallKindHealth change the label; any other value is
-// recorded as CallKindInference.
+// CallKindPoll, CallKindHealth, and CallKindModelAccess change the label; any
+// other value is recorded as CallKindInference.
 func ContextWithCallKind(ctx context.Context, kind string) context.Context {
 	return context.WithValue(ctx, callKindContextKey{}, kind)
 }
@@ -53,7 +54,7 @@ func clientMetricContext(ctx context.Context) context.Context {
 	}
 	kind := CallKindInference
 	switch marked, _ := ctx.Value(callKindContextKey{}).(string); marked {
-	case CallKindPoll, CallKindHealth:
+	case CallKindPoll, CallKindHealth, CallKindModelAccess:
 		kind = marked
 	}
 	labeler.Add(attribute.String("gateway_call_kind", kind))

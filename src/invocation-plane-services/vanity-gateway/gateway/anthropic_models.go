@@ -20,6 +20,7 @@ package gateway
 import (
 	"ai-api-gateway-service/middleware"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -59,8 +60,9 @@ func toAnthropicModelInfo(info ModelInfo) AnthropicModelInfo {
 
 // listAnthropicModels lists the Messages models with Anthropic cursor paging.
 // Models are ordered by ID, so a cursor keeps its position even when the model
-// it names is removed between pages.
-func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request *http.Request) {
+// it names is removed between pages. privateModels are the authorized private
+// models to list alongside the public ones.
+func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request *http.Request, privateModels []ModelInfo) {
 	query := request.URL.Query()
 	limit := anthropicModelsDefaultLimit
 	if raw := query.Get("limit"); raw != "" {
@@ -79,9 +81,14 @@ func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request 
 		return
 	}
 
+	candidates := d.allPublicModels
+	if len(privateModels) > 0 {
+		candidates = sortModels(append(slices.Clone(d.allPublicModels), privateModels...))
+	}
+
 	// Expiry follows the Messages entry, as model lookup and /v1/messages do.
 	models := make([]ModelInfo, 0, len(d.messages.modelNameToModelInfo))
-	for _, info := range d.allPublicModels {
+	for _, info := range candidates {
 		funcInfo, ok := d.messages.modelNameToNVCFUrl[info.Id]
 		if ok && !isModelExpired(funcInfo.eol) {
 			models = append(models, info)
@@ -116,6 +123,9 @@ func (d *ModelDirector) listAnthropicModels(writer http.ResponseWriter, request 
 // models served on Messages exist for these clients.
 func (d *ModelDirector) getAnthropicModel(writer http.ResponseWriter, request *http.Request, modelName string) {
 	info, ok := d.messages.modelNameToModelInfo[modelName]
+	if !ok {
+		info, ok = d.authorizedPrivateModel(writer, request, modelName, d.messages)
+	}
 	if !ok {
 		markGatewayRejected(writer, request)
 		writeAnthropicError(writer, http.StatusNotFound, "model not found")

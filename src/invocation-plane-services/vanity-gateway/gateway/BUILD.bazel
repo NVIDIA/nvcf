@@ -9,6 +9,7 @@ go_library(
         "health.go",
         "llm_gateway_director.go",
         "openai_director.go",
+        "private_models.go",
         "shadow.go",
         "shadow_metrics.go",
         "shadow_sampling.go",
@@ -48,6 +49,7 @@ go_library(
         "@org_golang_x_net//http2",
         "@org_golang_x_net//http2/h2c",
         "@org_golang_x_sync//semaphore",
+        "@org_golang_x_sync//singleflight",
         "@org_uber_go_zap//:zap",
     ],
 )
@@ -70,6 +72,7 @@ go_test(
         "model_info_test.go",
         "models_protocol_test.go",
         "openai_director_test.go",
+        "private_models_test.go",
         "processing_test.go",
         "request_id_test.go",
         "shadow_metrics_test.go",

@@ -84,6 +84,11 @@ type ModelDirector struct {
 	shadowRandomBucket func() int
 	shadowBodyRewriter func(body []byte, modelName string) ([]byte, error)
 
+	// Private models are listed only for callers whose API key may access their
+	// function. privateModels is nil when private model listing is disabled.
+	privateModelsByFunction map[string][]ModelInfo
+	privateModels           *privateModelAccess
+
 	// Cache for filtered models
 	filteredModelsCache        []ModelInfo
 	filteredModelsLastComputed time.Time
@@ -140,8 +145,9 @@ type shadowConfig struct {
 }
 
 type ModelMapping struct {
-	modelNameToNVCFUrl   map[string]FunctionInfo
-	modelNameToModelInfo map[string]ModelInfo // only contains public models
+	modelNameToNVCFUrl          map[string]FunctionInfo
+	modelNameToModelInfo        map[string]ModelInfo // only contains public models
+	privateModelNameToModelInfo map[string]ModelInfo
 }
 
 type ModelInfo struct {
@@ -282,6 +288,7 @@ func buildModelMapping(
 	privateModelMatcher *regexp.Regexp) (ModelMapping, error) {
 
 	modelNameToModelInfo := make(map[string]ModelInfo, len(modelNameToFunctionIdVersionId))
+	privateModelNameToModelInfo := make(map[string]ModelInfo)
 	modelNameToNVCFUrl := make(map[string]FunctionInfo, len(modelNameToFunctionIdVersionId))
 	// build the mapping for models to nvcf pexec url
 	for modelName, entry := range modelNameToFunctionIdVersionId {
@@ -311,17 +318,68 @@ func buildModelMapping(
 		}
 
 		// build the modelInfo list and modelName to modelInfo map
-		if !privateModelMatcher.MatchString(modelName) {
-			modelInfo := ModelInfo{
-				Id:      modelName,
-				Object:  "model",
-				Created: 735790403, // filler (year NVIDIA was founded)
-				OwnedBy: strings.Split(modelName, "/")[0],
-			}
+		modelInfo := ModelInfo{
+			Id:      modelName,
+			Object:  "model",
+			Created: 735790403, // filler (year NVIDIA was founded)
+			OwnedBy: strings.Split(modelName, "/")[0],
+		}
+		if publicModelName != "" {
 			modelNameToModelInfo[modelName] = modelInfo
+		} else {
+			privateModelNameToModelInfo[modelName] = modelInfo
 		}
 	}
-	return ModelMapping{modelNameToNVCFUrl, modelNameToModelInfo}, nil
+	return ModelMapping{
+		modelNameToNVCFUrl:          modelNameToNVCFUrl,
+		modelNameToModelInfo:        modelNameToModelInfo,
+		privateModelNameToModelInfo: privateModelNameToModelInfo,
+	}, nil
+}
+
+type endpointModelMapping struct {
+	path    string
+	mapping ModelMapping
+}
+
+// listModelInfos merges one model list across all endpoint sections, dedups by
+// model ID, attaches configured metadata, and sorts alphabetically. Aliases
+// that support Messages are annotated so shared discovery does not imply that
+// a Messages-only model accepts OpenAI requests. Each endpoint map gets the
+// merged entry back so single-model lookups match the list.
+func listModelInfos(endpoints []endpointModelMapping, messages ModelMapping, metadata map[string]map[string]stdjson.RawMessage, models func(ModelMapping) map[string]ModelInfo) []ModelInfo {
+	seen := make(map[string]ModelInfo)
+	for _, endpoint := range endpoints {
+		for id, info := range models(endpoint.mapping) {
+			seen[id] = info
+		}
+	}
+	for id := range models(messages) {
+		info := seen[id]
+		for _, endpoint := range endpoints {
+			if _, ok := models(endpoint.mapping)[id]; ok {
+				info.SupportedEndpoints = append(info.SupportedEndpoints, endpoint.path)
+			}
+		}
+		seen[id] = info
+	}
+	for id, info := range seen {
+		info.modelInfoFields = metadata[id]
+		seen[id] = info
+		for _, endpoint := range endpoints {
+			if _, ok := models(endpoint.mapping)[id]; ok {
+				models(endpoint.mapping)[id] = info
+			}
+		}
+	}
+	return sortModels(maps.Values(seen))
+}
+
+func sortModels(models []ModelInfo) []ModelInfo {
+	slices.SortFunc(models, func(a, b ModelInfo) int {
+		return cmp.Compare(a.Id, b.Id)
+	})
+	return models
 }
 
 func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*ModelDirector, error) {
@@ -365,71 +423,21 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		return nil, err
 	}
 
-	// Merge model lists across all endpoint sections, dedup by model ID, sort alphabetically
-	seen := make(map[string]ModelInfo)
-	for _, models := range []map[string]ModelInfo{
-		chatCompletions.modelNameToModelInfo,
-		completions.modelNameToModelInfo,
-		embeddings.modelNameToModelInfo,
-		responses.modelNameToModelInfo,
-		messages.modelNameToModelInfo,
-		imageGenerations.modelNameToModelInfo,
-		imageEdits.modelNameToModelInfo,
-		imageVariations.modelNameToModelInfo,
-	} {
-		for id, info := range models {
-			seen[id] = info
-		}
-	}
-	// Annotate aliases that support Messages so shared discovery does not
-	// imply that a Messages-only model accepts OpenAI requests.
-	for id := range messages.modelNameToModelInfo {
-		info := seen[id]
-		for _, endpoint := range []struct {
-			path   string
-			models map[string]ModelInfo
-		}{
-			{"/v1/chat/completions", chatCompletions.modelNameToModelInfo},
-			{"/v1/completions", completions.modelNameToModelInfo},
-			{"/v1/embeddings", embeddings.modelNameToModelInfo},
-			{"/v1/responses", responses.modelNameToModelInfo},
-			{"/v1/messages", messages.modelNameToModelInfo},
-			{"/v1/images/generations", imageGenerations.modelNameToModelInfo},
-			{"/v1/images/edits", imageEdits.modelNameToModelInfo},
-			{"/v1/images/variations", imageVariations.modelNameToModelInfo},
-		} {
-			if _, ok := endpoint.models[id]; ok {
-				info.SupportedEndpoints = append(info.SupportedEndpoints, endpoint.path)
-			}
-		}
-		seen[id] = info
-		for _, models := range []map[string]ModelInfo{chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo, embeddings.modelNameToModelInfo, responses.modelNameToModelInfo, messages.modelNameToModelInfo, imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo, imageVariations.modelNameToModelInfo} {
-			if _, ok := models[id]; ok {
-				models[id] = info
-			}
-		}
+	endpoints := []endpointModelMapping{
+		{"/v1/chat/completions", chatCompletions},
+		{"/v1/completions", completions},
+		{"/v1/embeddings", embeddings},
+		{"/v1/responses", responses},
+		{"/v1/messages", messages},
+		{"/v1/images/generations", imageGenerations},
+		{"/v1/images/edits", imageEdits},
+		{"/v1/images/variations", imageVariations},
 	}
 	metadata := mapping.ModelInfoFieldsByName()
-	for id, info := range seen {
-		info.modelInfoFields = metadata[id]
-		seen[id] = info
-		for _, models := range []map[string]ModelInfo{
-			chatCompletions.modelNameToModelInfo, completions.modelNameToModelInfo,
-			embeddings.modelNameToModelInfo, responses.modelNameToModelInfo,
-			imageGenerations.modelNameToModelInfo, imageEdits.modelNameToModelInfo,
-			imageVariations.modelNameToModelInfo, messages.modelNameToModelInfo,
-		} {
-			if _, ok := models[id]; ok {
-				models[id] = info
-			}
-		}
-	}
-	allModels := maps.Values(seen)
-	slices.SortFunc(allModels, func(a, b ModelInfo) int {
-		return cmp.Compare(a.Id, b.Id)
-	})
+	allModels := listModelInfos(endpoints, messages, metadata, func(m ModelMapping) map[string]ModelInfo { return m.modelNameToModelInfo })
+	allPrivateModels := listModelInfos(endpoints, messages, metadata, func(m ModelMapping) map[string]ModelInfo { return m.privateModelNameToModelInfo })
 
-	return &ModelDirector{
+	d := &ModelDirector{
 		chatCompletions:    chatCompletions,
 		completions:        completions,
 		embeddings:         embeddings,
@@ -442,7 +450,9 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		vanityDirector:     vanityDirector,
 		llmGatewayDirector: llmGatewayDirector,
 		shadower:           shadower,
-	}, nil
+	}
+	d.privateModelsByFunction = indexPrivateModels(allPrivateModels, d.allMappings()...)
+	return d, nil
 }
 
 // filterExpiredModels returns a new slice with expired models removed
@@ -489,8 +499,15 @@ func (d *ModelDirector) getFilteredModels() []ModelInfo {
 	}
 
 	// Compute filtered models
-	d.filteredModelsCache = filterExpiredModels(
-		d.allPublicModels,
+	d.filteredModelsCache = filterExpiredModels(d.allPublicModels, d.allMappings()...)
+	d.filteredModelsLastComputed = time.Now()
+
+	return d.filteredModelsCache
+}
+
+// allMappings returns the model routes of every endpoint section.
+func (d *ModelDirector) allMappings() []map[string]FunctionInfo {
+	return []map[string]FunctionInfo{
 		d.chatCompletions.modelNameToNVCFUrl,
 		d.completions.modelNameToNVCFUrl,
 		d.embeddings.modelNameToNVCFUrl,
@@ -499,10 +516,7 @@ func (d *ModelDirector) getFilteredModels() []ModelInfo {
 		d.imageGenerations.modelNameToNVCFUrl,
 		d.imageEdits.modelNameToNVCFUrl,
 		d.imageVariations.modelNameToNVCFUrl,
-	)
-	d.filteredModelsLastComputed = time.Now()
-
-	return d.filteredModelsCache
+	}
 }
 
 func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]config.ModelFunctionDetails, sectionName string) map[string]ModelNameToFunctionIdVersionId {
@@ -602,15 +616,25 @@ func (d *ModelDirector) ServeImageVariations(writer http.ResponseWriter, request
 }
 
 // ListModels answers in the caller's API: Anthropic clients get the Messages
-// models in the Anthropic shape, everyone else the shared OpenAI list.
+// models in the Anthropic shape, everyone else the shared OpenAI list. A
+// request with a bearer API key also gets the private models that key may
+// access.
 func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Request) {
+	// A keyed request can also list private models, so shared caches must keep
+	// responses for different keys apart.
+	writer.Header().Add("Vary", "Authorization")
+	privateModels := d.authorizedPrivateModels(writer, request)
 	if middleware.IsAnthropicRequest(request) {
-		d.listAnthropicModels(writer, request)
+		d.listAnthropicModels(writer, request, privateModels)
 		return
 	}
 
 	// Get filtered models with lazy caching
 	activeModels := d.getFilteredModels()
+	if len(privateModels) > 0 {
+		privateModels = filterExpiredModels(privateModels, d.allMappings()...)
+		activeModels = sortModels(append(slices.Clone(activeModels), privateModels...))
+	}
 
 	m := ModelListResponse{
 		Object: "list",
@@ -626,12 +650,16 @@ func (d *ModelDirector) ListModels(writer http.ResponseWriter, request *http.Req
 }
 
 func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Request) {
-	// support "/" in model name to follow pre established format
+	// support "/" in model name to follow pre established format. Private
+	// names often carry a prefix, as in private/company/model.
+	prefix := chi.URLParam(request, "prefix")
 	company := chi.URLParam(request, "company")
 	model := chi.URLParam(request, "model")
 
 	var modelName string
-	if company != "" && model != "" {
+	if prefix != "" && company != "" && model != "" {
+		modelName = prefix + "/" + company + "/" + model
+	} else if company != "" && model != "" {
 		modelName = company + "/" + model
 	} else if model != "" {
 		modelName = model
@@ -655,6 +683,11 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 		d.imageEdits.modelNameToModelInfo,
 		d.imageVariations.modelNameToModelInfo,
 	)
+	if !ok {
+		modelInfo, ok = d.authorizedPrivateModel(writer, request, modelName,
+			d.completions, d.embeddings, d.chatCompletions, d.responses,
+			d.messages, d.imageGenerations, d.imageEdits, d.imageVariations)
+	}
 	if !ok {
 		modelMissingError := "Model does not exist by the name of " + modelName
 		markGatewayRejected(writer, request)

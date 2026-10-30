@@ -42,6 +42,7 @@ Configuration is passed through environment variables.
 | `MAPPING_PATH` | Yes | None | Path to the rendered mapping config file. |
 | `MAPPING_LOAD_TIMEOUT` | No | `15s` | Maximum time to wait at startup for `MAPPING_PATH` to appear. Increase this when a ConfigMap projection or remote-config sidecar materializes the file after the main container starts. Duration strings require a unit, such as `2m` or `90s`. A value without a unit is rejected when configuration is loaded, and a negative value is rejected at startup. |
 | `NVCF_API_ENDPOINT` | No | Service default | Upstream invocation service endpoint. In cluster deployments, this usually points to the in-cluster invocation service. |
+| `NVCF_CONTROL_PLANE_ENDPOINT` | No | Empty | NVCF API base URL used to list the private models a caller's API key may access. Empty disables private model listing. See [Private Models](#private-models). |
 | `LLM_GATEWAY_ENDPOINT` | No | Empty | Upstream LLM Gateway endpoint. Required only when a model sets `functionType: LLM`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Empty | OTLP endpoint for tracing. Empty disables OTLP export. |
 | `TRACING_ACCESS_TOKEN` | No | Empty | Access token for OTLP tracing. Also configurable in the secrets file under `$.tracingAccessToken`. |
@@ -519,6 +520,53 @@ snapshot. Metadata advertises configured values only; it adds no upstream
 lookup or limit enforcement. Anthropic-shaped discovery keeps its existing
 schema, including for aliases shared with OpenAI sections.
 
+### Private Models
+
+`GET /v1/models` lists public model names. When the request carries an NVCF
+API key in `Authorization: Bearer`, the list also includes the private models
+that key may access:
+
+```shell
+curl -s -H "Host: api.example.com" \
+  -H "Authorization: Bearer ${API_TOKEN}" \
+  http://localhost:10081/v1/models
+```
+
+The gateway does not validate the key. It sends the caller's `Authorization`
+header to `GET /v2/nvcf/functions/ids?visibility=authorized,private` on
+`NVCF_CONTROL_PLANE_ENDPOINT`, and the NVCF API applies the same account and
+API key resource checks as invocation. A model whose name matches
+`PRIVATE_MODEL_NAME_REGEX_PATTERN` is listed when the NVCF API returns its
+function ID. Expiry, `supported_endpoints`, and metadata follow the
+public-model rules, and Anthropic clients get the same models in the Anthropic
+shape.
+
+`GET /v1/models/{model}` follows the same rule, including three-part names
+such as `private/acme/model`. A private name returns its model only when the
+key may access its function. Otherwise the response is the same 404 as for an
+unknown name.
+
+The lookup never fails a request:
+
+| Case | Response |
+| --- | --- |
+| No bearer key | Public list, no NVCF API call |
+| Key accepted | Public list plus the private models the key may access |
+| NVCF API rejects the key (`401`) | Public list |
+| Key has no `list_functions` or `list_functions_details` scope (`403`) | Public list |
+| NVCF API error or timeout | The key's last successful result if it is under 15 minutes old, otherwise the public list |
+| `NVCF_CONTROL_PLANE_ENDPOINT` not set | Public list, no NVCF API call |
+
+Keyed responses carry `Cache-Control: private, no-store` and
+`NVCF-Private-Models`, which reports the lookup result: `authorized`,
+`unauthenticated`, `forbidden`, or `unavailable`. The NVCF API can answer
+`403` for an unrecognized `nvapi-` key, so that key reports `forbidden`. Model
+list responses carry `Vary: Authorization`.
+
+Results are cached per key for one minute, for up to 4096 keys, and survive
+mapping reloads. Concurrent requests with the same key share one lookup. Each
+pod runs at most 16 lookups at once, each with a 5 second timeout.
+
 ## Invoking the Anthropic Messages Endpoint
 
 `v2config.anthropicMessages` maps public model names to functions for native
@@ -662,6 +710,14 @@ combinations are emitted at zero on startup. The primary request span records
 the deciding methods in the `shadow.sampling_methods` attribute. Neither
 records cache keys, credentials, or message content.
 
+`nvcf_ai_api_gateway_private_model_lookups_total` counts private model access
+lookups. The `result` label is `authorized`, `unauthenticated`, `forbidden`, or
+`unavailable`. The `cached` label is `true` for cache hits. A failed lookup
+counts as `unavailable` even when the key's last successful result is served.
+Requests that share an in-flight lookup are not counted again. All label
+combinations are emitted at zero on startup. The request span records
+`private_models.cached` and `private_models.result`.
+
 Every response on the model API host (`openai.host`) carries one
 `X-Request-Id`. The gateway keeps the caller's value or creates a UUID and sends
 the same value upstream, so the LLM Gateway logs the request under the same ID.
@@ -700,7 +756,8 @@ labels to distinguish calls and failures:
 
 - `gateway_call_kind` is `inference` for proxied requests (including shadows),
   `poll` for status polls on `/v1/status/{requestId}`, which can long-poll for
-  minutes, and `health` for upstream readiness checks.
+  minutes, `health` for upstream readiness checks, and `model_access` for
+  private model access lookups to the NVCF API.
 - `error_source` is present on non-2xx responses. It accepts
   `invocation_service` or `worker` from the upstream `NVCF-Error-Source`
   response header. Missing or unrecognized values become `unknown`.
