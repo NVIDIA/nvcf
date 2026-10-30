@@ -75,6 +75,10 @@ public abstract class BootMvcExceptionHandler extends ResponseEntityExceptionHan
         return super.handleException(new UnauthorizedException(message, ex), request);
     }
 
+    /**
+     * The detail is fixed: an unmapped exception's message can carry internals such as a CQL
+     * statement. The exception itself is still recorded.
+     */
     @ExceptionHandler(Exception.class)
     protected ResponseEntity<Object> handleUnmapped(
             Exception ex,
@@ -84,8 +88,7 @@ public abstract class BootMvcExceptionHandler extends ResponseEntityExceptionHan
                 new ErrorResponseException(INTERNAL_SERVER_ERROR,
                                            ProblemDetail.forStatusAndDetail(
                                                    INTERNAL_SERVER_ERROR,
-                                                   ex.getMessage() != null ? ex.getMessage() :
-                                                           "Internal server error"),
+                                                   "Internal server error"),
                                            ex);
         return super.handleException(wrapped, request);
     }

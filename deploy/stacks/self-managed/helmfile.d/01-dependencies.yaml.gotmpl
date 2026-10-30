@@ -172,7 +172,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.23.0
+    version: 0.23.2
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template
