@@ -58,14 +58,33 @@ workspace, and regenerates vendored dependencies before offline compilation.
 The client reports a dirty source tree to identify that dependency patch.
 Build checks verify its source, toolchain, architecture, and runtime identity.
 
-The client version aligns with the Kubernetes toolbox. Upstream supports
-`kubectl` within one minor of `kube-apiserver`, so a 1.37 client covers servers
-1.36 through 1.38. This does not change NVCF's cluster support policy. Kubernetes
-1.35 remains in the current latest-and-N-2 window, but is outside that client
-skew; deployments on 1.35 need a qualified compatible migration image before
-this default can replace their existing image. Do not treat a toolbox version
-as a requirement to upgrade the cluster. See the
-[Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+The default client aligns with the Kubernetes toolbox at 1.37.2. The same
+image includes a patched 1.36.6 client for Kubernetes 1.35 clusters. Both clients
+use Go 1.26.10, x/net 0.60.0 and aligned stable OTel modules at 1.44.0.
+The OTel floor prevents the compatible client from retaining the affected
+1.41.0 baggage parser described in
+[GO-2026-5158](https://pkg.go.dev/vuln/GO-2026-5158). Set `NVCF_KUBECTL_MINOR=1.36`
+in the migration Job environment when the target API server is Kubernetes 1.35.
+Unset selects 1.37; explicit `1.37` also selects the default. Empty or other
+values fail with exit status 64 before contacting a cluster. The selector does
+not detect server versions or fall back automatically.
+
+Both PATH lookup and `/usr/local/bin/kubectl` or `/usr/bin/kubectl` use the
+selector. The wrapper preserves arguments and the client exit status. Apply the
+same setting to OpenBao migration Jobs and each enabled SIS HMAC rotation,
+UI and LLM PKI hook. Chart and stack consumers must propagate that environment
+value when selecting the new image; the image does not configure those Jobs.
+
+Upstream supports `kubectl` within one minor of `kube-apiserver`: client 1.37
+covers servers 1.36-1.38, and client 1.36 covers servers 1.35-1.37. This preserves
+NVCF's current latest-and-N-2 cluster policy without requiring a cluster upgrade.
+See the [Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+Qualify the selected client and every enabled hook on the target cluster
+version before release.
+
+Run `sh tests/verify-kubectl-build-test.sh` for source, selector and metadata
+checks. Set `RUNTIME_IMAGE` when running `tests/kubectl-selection-test.sh` to
+execute both clients and an invalid selection in a built image.
 
 The final Alpine stage requires `brotli-libs>=1.2.1-r0`. Changing that
 requirement invalidates the previous Docker package layer. Run

@@ -11,6 +11,11 @@ ARG KUBECTL_SOURCE_COMMIT=c50e5395f1ae2d4a2c05f28fdcc38c0916cc1a32
 ARG KUBECTL_SOURCE_SHA256=d4c61f7fd7adeb0bdfcc58add0ec929646b19314c316a524b2e3c7d3d4c4ff3f
 ARG KUBECTL_BUILD_DATE=2026-10-27T12:01:04Z
 ARG KUBECTL_SOURCE_DATE_EPOCH=1793102464
+ARG KUBECTL_COMPAT_VERSION=v1.36.6
+ARG KUBECTL_COMPAT_SOURCE_COMMIT=1b2171b110bb2a2542e1322035c6583ec86eb976
+ARG KUBECTL_COMPAT_SOURCE_SHA256=26e00690ead876ad5d2022c1e63d6b6ec0fbd59727e04f2d87ac0c58a734527c
+ARG KUBECTL_COMPAT_BUILD_DATE=2026-10-27T12:02:52Z
+ARG KUBECTL_COMPAT_SOURCE_DATE_EPOCH=1793102572
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS bao-builder
 
@@ -53,7 +58,12 @@ RUN apk add --no-cache curl tar && \
         -o /out/jwker ./cmd/jwker && \
     /usr/local/bin/verify-go-security.sh /out/jwker
 
-FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-builder
+FROM --platform=$BUILDPLATFORM ${KUBECTL_GO_IMAGE} AS kubectl-build-base
+
+RUN apk add --no-cache curl
+COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
+
+FROM kubectl-build-base AS kubectl-builder
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION
@@ -63,16 +73,34 @@ ARG KUBECTL_SOURCE_SHA256
 ARG KUBECTL_BUILD_DATE
 ARG KUBECTL_SOURCE_DATE_EPOCH
 
-# Align the client with the Kubernetes toolbox while retaining the HTTP/2 fix.
-# kubectl 1.37 supports API servers within one minor; see README for skew limits.
-RUN apk add --no-cache curl
-COPY scripts/build-kubectl.sh scripts/verify-kubectl.sh scripts/verify-go-security.sh /usr/local/bin/
+# Both clients retain the HTTP/2 fix and use the same verified build recipe.
 RUN KUBECTL_VERSION="${KUBECTL_VERSION}" \
-    KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
     KUBECTL_SOURCE_COMMIT="${KUBECTL_SOURCE_COMMIT}" \
     KUBECTL_SOURCE_SHA256="${KUBECTL_SOURCE_SHA256}" \
     KUBECTL_BUILD_DATE="${KUBECTL_BUILD_DATE}" \
     KUBECTL_SOURCE_DATE_EPOCH="${KUBECTL_SOURCE_DATE_EPOCH}" \
+    TARGETARCH="${TARGETARCH}" \
+    OUTPUT_DIR=/out \
+    /usr/local/bin/build-kubectl.sh && \
+    KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
+    TARGETARCH="${TARGETARCH}" \
+    /usr/local/bin/verify-kubectl.sh
+
+FROM kubectl-build-base AS kubectl-compat-builder
+
+ARG TARGETARCH
+ARG KUBECTL_GO_VERSION
+ARG KUBECTL_COMPAT_VERSION
+ARG KUBECTL_COMPAT_SOURCE_COMMIT
+ARG KUBECTL_COMPAT_SOURCE_SHA256
+ARG KUBECTL_COMPAT_BUILD_DATE
+ARG KUBECTL_COMPAT_SOURCE_DATE_EPOCH
+
+RUN KUBECTL_VERSION="${KUBECTL_COMPAT_VERSION}" \
+    KUBECTL_SOURCE_COMMIT="${KUBECTL_COMPAT_SOURCE_COMMIT}" \
+    KUBECTL_SOURCE_SHA256="${KUBECTL_COMPAT_SOURCE_SHA256}" \
+    KUBECTL_BUILD_DATE="${KUBECTL_COMPAT_BUILD_DATE}" \
+    KUBECTL_SOURCE_DATE_EPOCH="${KUBECTL_COMPAT_SOURCE_DATE_EPOCH}" \
     TARGETARCH="${TARGETARCH}" \
     OUTPUT_DIR=/out \
     /usr/local/bin/build-kubectl.sh && \
@@ -87,18 +115,29 @@ ARG KUBECTL_VERSION
 ARG KUBECTL_GO_VERSION
 ARG KUBECTL_SOURCE_COMMIT
 ARG KUBECTL_BUILD_DATE
+ARG KUBECTL_COMPAT_VERSION
+ARG KUBECTL_COMPAT_SOURCE_COMMIT
+ARG KUBECTL_COMPAT_BUILD_DATE
 
-COPY --from=kubectl-builder /out/kubectl /out/kubectl
+COPY --from=kubectl-builder /out/kubectl /out/kubectl-1.37
+COPY --from=kubectl-compat-builder /out/kubectl /out/kubectl-1.36
+COPY scripts/verify-kubectl-runtime.sh /usr/local/bin/verify-kubectl-runtime.sh
 
-# Execute each target binary and verify the public client identity before it is
-# copied into the final image.
-RUN KUBECTL_METADATA="$(/out/kubectl version --client -o json)" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"gitVersion\": \"${KUBECTL_VERSION}\"" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"gitCommit\": \"${KUBECTL_SOURCE_COMMIT}\"" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq '"gitTreeState": "dirty"' && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"buildDate\": \"${KUBECTL_BUILD_DATE}\"" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"goVersion\": \"${KUBECTL_GO_VERSION}\"" && \
-    printf '%s\n' "${KUBECTL_METADATA}" | grep -Fq "\"platform\": \"linux/${TARGETARCH}\""
+# Execute each target client before either binary enters the final image.
+RUN KUBECTL_BINARY=/out/kubectl-1.37 \
+    KUBECTL_VERSION="${KUBECTL_VERSION}" \
+    KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
+    KUBECTL_SOURCE_COMMIT="${KUBECTL_SOURCE_COMMIT}" \
+    KUBECTL_BUILD_DATE="${KUBECTL_BUILD_DATE}" \
+    TARGETARCH="${TARGETARCH}" \
+    /usr/local/bin/verify-kubectl-runtime.sh && \
+    KUBECTL_BINARY=/out/kubectl-1.36 \
+    KUBECTL_VERSION="${KUBECTL_COMPAT_VERSION}" \
+    KUBECTL_GO_VERSION="${KUBECTL_GO_VERSION}" \
+    KUBECTL_SOURCE_COMMIT="${KUBECTL_COMPAT_SOURCE_COMMIT}" \
+    KUBECTL_BUILD_DATE="${KUBECTL_COMPAT_BUILD_DATE}" \
+    TARGETARCH="${TARGETARCH}" \
+    /usr/local/bin/verify-kubectl-runtime.sh
 
 FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
 ARG TARGETARCH
@@ -115,7 +154,10 @@ RUN apk upgrade --no-cache && \
 
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
-COPY --from=kubectl-runtime-verifier /out/kubectl /usr/local/bin/kubectl
+COPY --from=kubectl-runtime-verifier /out/kubectl-1.37 /usr/local/bin/kubectl-1.37
+COPY --from=kubectl-runtime-verifier /out/kubectl-1.36 /usr/local/bin/kubectl-1.36
+COPY --chmod=0555 scripts/kubectl.sh /usr/local/bin/kubectl
+RUN ln -s /usr/local/bin/kubectl /usr/bin/kubectl
 
 WORKDIR /app
 
