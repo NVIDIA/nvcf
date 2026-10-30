@@ -28,7 +28,7 @@ nvcaImage:
   pullPolicy: IfNotPresent
 ## @section OTel Collector Configuration
 ## @param otelCollector.enabled Enable OTel collector sidecar for K8s event collection
-## @param otelCollector.imageRepository (OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).
+## @param otelCollector.imageRepository (OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).
 ## @param otelCollector.imageTag Image tag of OpenTelemetry Collector sidecar.
 ## @param otelCollector.resources.limits.cpu CPU limit for the OTel collector container
 ## @param otelCollector.resources.limits.memory Memory limit for the OTel collector container
@@ -80,7 +80,7 @@ logLevel: info
 ncaID: ""
 ## @param clusterID ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is "self-managed")
 clusterID: ""
-## @param clusterGroupID Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is "self-managed"; for "helm-managed" prefer helmManaged.clusterGroupID — this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)
+## @param clusterGroupID Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is "self-managed"; for "helm-managed" prefer helmManaged.clusterGroupID; this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)
 clusterGroupID: ""
 ## @param clusterName for metrics & telemetry (REQUIRED when ngcConfig.clusterSource is "helm-managed")
 clusterName: ""
@@ -418,13 +418,13 @@ helmManaged:
   gpuManualInstanceConfigB64: ""
   ## @param helmManaged.clusterAttributes (Optional) List of attributes for the cluster. Defaults to an empty array.
   clusterAttributes: []
-  ## @param helmManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
+  ## @param helmManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it is nvcf-image-credential-helper under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).
   ## @param helmManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
     imageTag: 0.11.1
   ## @param helmManaged.otelCollector.enabled Enable OTel collector sidecar for helm-managed clusters
-  ## @param helmManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
+  ## @param helmManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).
   ## @param helmManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
   otelCollector:
     enabled: false
@@ -444,13 +444,13 @@ selfManaged:
   clusterAttributes: []
   ## @param selfManaged.region Region reported for a self-managed cluster.
   region: us-west-1
-  ## @param selfManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
+  ## @param selfManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it is nvcf-image-credential-helper under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).
   ## @param selfManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
     imageTag: 0.11.1
   ## @param selfManaged.otelCollector.enabled Enable OTel collector sidecar for self-managed clusters
-  ## @param selfManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
+  ## @param selfManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it is nvcf-otel-collector under the registry path of image.repository (nvcr.io/nvidia/nvcf-byoc when image.repository has none).
   ## @param selfManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
   otelCollector:
     enabled: false
@@ -515,7 +515,7 @@ networkPolicy:
   ## @param networkPolicy.operator.apiServerCIDRs CIDR list containing the kube-apiserver. Empty = no apiserver allow (operator loses K8s API access). Pin to your cluster's apiserver range.
   ## @param networkPolicy.operator.apiServerPort kube-apiserver port
   ## @param networkPolicy.operator.ingressFrom Optional NetworkPolicyPeer list for ingress (Prometheus, kubelet probes). Empty = allow from anywhere.
-  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, …)
+  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, ...)
   operator:
     enabled: false
     nvsnapServerNamespace: "nvsnap-system"
@@ -628,11 +628,11 @@ clusterValidator:
   ## customize the endpoints, network policy pairs, and enforcement settings.
   ##
   ## Sections:
-  ##   reachability.endpoints — connectivity checks (HTTPS/TCP/TLS).
+  ##   reachability.endpoints: connectivity checks (HTTPS/TCP/TLS).
   ##     Set critical: true to make a failure block cluster readiness.
-  ##   networkPolicies.pairs — bidirectional NetworkPolicy coverage checks.
+  ##   networkPolicies.pairs: bidirectional NetworkPolicy coverage checks.
   ##     Set critical: true per pair to make a failure block readiness.
-  ##   enforcement — active testing with ephemeral pods to verify the CNI
+  ##   enforcement: active testing with ephemeral pods to verify the CNI
   ##     enforces policies. Set critical: true to block readiness on failure.
   ##
   ## Example:

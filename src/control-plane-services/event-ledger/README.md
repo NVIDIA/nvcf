@@ -22,11 +22,16 @@ Each cluster runs an NVIDIA Cluster Agent (NVCA), and several services observe
 different parts of the [function lifecycle](https://docs.nvidia.com/nvcf/function-lifecycle).
 
 Event Ledger brings those observations together. It accepts Kubernetes events
-and service events, stores the history for each workload context, and tracks the
-latest event so callers can follow a deployment across service and cluster
-boundaries. It records what happened; it does not schedule workloads or drive
-deployment. See the [NVCF architecture overview](https://docs.nvidia.com/nvcf/architecture-overview)
+and service events and stores the latest occurrence of each event name for each
+workload context. Callers can follow a deployment across service and cluster
+boundaries. Event Ledger records what happened; it does not schedule workloads
+or drive deployment. See the
+[NVCF architecture overview](https://docs.nvidia.com/nvcf/architecture-overview)
 for where it fits.
+
+For customer workflows, context and storage semantics, and self-managed
+operations, see the [Event Ledger guide](../../../docs/overview/event-ledger.md)
+and [self-managed operations guide](../../../docs/self-managed/event-ledger.md).
 
 ## V3 API
 
@@ -172,8 +177,8 @@ In self-managed deployments using the policy provider with
 `auth.introspection.enabled`, NVCA can use a projected service account token
 (PSAT) for the v3 `k8s-events` and `cloudevents` write endpoints. A PSAT does
 not authorize read or admin operations.
-**Each event's cluster ID must match the cluster returned by introspection**; if
-the event omits it, the introspected cluster ID is used.
+Each event's cluster ID must match the cluster returned by introspection. If the
+event omits it, the introspected cluster ID is used.
 
 For local development, authentication can be disabled with
 `--disable-authentication`. Do not disable it in production.
