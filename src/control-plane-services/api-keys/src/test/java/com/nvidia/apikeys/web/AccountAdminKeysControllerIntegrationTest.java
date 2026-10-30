@@ -31,6 +31,7 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtensi
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerStatusResponse;
 import com.nvidia.apikeys.dto.keysV2.KeyOwnerStatusesResponse;
 import com.nvidia.apikeys.dto.keysV2.KeyResponse;
+import com.nvidia.apikeys.dto.keysV2.KeyStatusV2;
 import com.nvidia.apikeys.dto.keysV2.ListKeysResponse;
 import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
@@ -145,6 +146,21 @@ class AccountAdminKeysControllerIntegrationTest extends BaseIntegrationTest {
                 "/v2/api-keys/account-admin/users/" + USER_KEY_OWNER_ID_1 + "/statuses",
                 HttpMethod.GET, new HttpEntity<String>((HttpHeaders) null), String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void keyStatusUpdateWithoutStatusIsRejectedAndKeepsTheKeyStatus() {
+        var createBody = """
+                {"description":"%s","expiresAt":"%s","authorizations":%s}
+                """.formatted(KEY_DESCRIPTION_1, KEY_EXPIRES_AT_1_STRING, KEY_AUTHZ_1);
+        var created = exchange(HttpMethod.POST, CREATE_PATH, createBody, KeyResponse.class);
+        var keyPath = CREATE_PATH + "/" + created.getBody().getId();
+
+        var rejected = exchange(HttpMethod.PUT, keyPath + "/status", "{}", String.class);
+        assertThat(rejected.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var fetched = exchange(HttpMethod.GET, keyPath, null, KeyResponse.class);
+        assertThat(fetched.getBody().getStatus()).isEqualTo(KeyStatusV2.ACTIVE);
     }
 
     private <T> ResponseEntity<T> exchange(

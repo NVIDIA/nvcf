@@ -150,6 +150,21 @@ class KeyOwnerKeysControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(response.getBody().getOwnerId()).isEqualTo(USER_KEY_OWNER_ID_1);
     }
 
+    @Test
+    void keyStatusUpdateWithoutStatusIsRejectedAndKeepsTheKeyStatus() {
+        var createBody = """
+                {"description":"%s","expiresAt":"%s","authorizations":%s}
+                """.formatted(KEY_DESCRIPTION_1, KEY_EXPIRES_AT_1_STRING, KEY_AUTHZ_1);
+        var created = exchange(HttpMethod.POST, CREATE_PATH, createBody, KeyResponse.class);
+        var keyPath = CREATE_PATH + "/" + created.getBody().getId();
+
+        var rejected = exchange(HttpMethod.PUT, keyPath + "/status", "{}", String.class);
+        assertThat(rejected.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var fetched = exchange(HttpMethod.GET, keyPath, null, KeyResponse.class);
+        assertThat(fetched.getBody().getStatus()).isEqualTo(KeyStatusV2.ACTIVE);
+    }
+
     private <T> ResponseEntity<T> exchange(
             HttpMethod method, String path, String body, Class<T> type) {
         var headers = new HttpHeaders();

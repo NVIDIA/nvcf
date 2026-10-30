@@ -30,6 +30,7 @@ import com.nvidia.apikeys.facade.KeyManagementFacade;
 import com.nvidia.apikeys.vo.KeyStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -144,7 +145,7 @@ public class KeyOwnerKeysController {
             @PathVariable(USER_ID) String userId,
             @Parameter(name = KEY_ID, required = true, description = "Unique identifier of the key.")
             @PathVariable(KEY_ID) String keyId,
-            @RequestBody UpdateKeyStatusRequest request) {
+            @Valid @RequestBody UpdateKeyStatusRequest request) {
         return facade.updateKeyStatus(
                 KEY_OWNER, ncaId, serviceId, userId, keyId, request.getStatus());
     }

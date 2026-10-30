@@ -147,7 +147,7 @@ public class AccountAdminKeysController {
             @PathVariable(USER_ID) String userId,
             @Parameter(name = KEY_ID, required = true, description = "Unique identifier of the key.")
             @PathVariable(KEY_ID) String keyId,
-            @RequestBody UpdateKeyStatusRequest request) {
+            @Valid @RequestBody UpdateKeyStatusRequest request) {
         return facade.updateKeyStatus(
                 ACCOUNT_ADMIN, ncaId, serviceId, userId, keyId, request.getStatus());
     }
