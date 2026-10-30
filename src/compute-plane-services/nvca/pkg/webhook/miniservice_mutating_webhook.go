@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -416,6 +417,49 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 
 	if meta.TerminationGracePeriodSeconds != nil {
 		ps.TerminationGracePeriodSeconds = meta.TerminationGracePeriodSeconds
+	}
+
+	if w.fff.IsFeatureFlagEnabled(featureflag.NodeCordonSignal) {
+		addNodeStateVolume(ps)
+	}
+}
+
+// addNodeStateVolume projects the node-cordoned pod annotation into every container as a file, so a worker
+// can tell that its node was cordoned. NVCA sets the annotation, and the kubelet refreshes the file. The
+// whole directory is mounted: the kubelet never refreshes subPath mounts. It does nothing when the pod
+// already has a volume of that name, and skips a container that already mounts the path, so a pod the
+// user wrote is never made invalid.
+func addNodeStateVolume(ps *corev1.PodSpec) {
+	for i := range ps.Volumes {
+		if ps.Volumes[i].Name == nvcatypes.NodeStateVolumeName {
+			return
+		}
+	}
+	ps.Volumes = append(ps.Volumes, corev1.Volume{
+		Name: nvcatypes.NodeStateVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			DownwardAPI: &corev1.DownwardAPIVolumeSource{
+				Items: []corev1.DownwardAPIVolumeFile{{
+					Path: nvcatypes.NodeCordonedFileName,
+					FieldRef: &corev1.ObjectFieldSelector{
+						FieldPath: fmt.Sprintf("metadata.annotations['%s']", nvcatypes.NodeCordonedAnnotationKey),
+					},
+				}},
+			},
+		},
+	})
+	for i := range ps.Containers {
+		c := &ps.Containers[i]
+		if slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+			return m.MountPath == nvcatypes.NodeStateMountPath
+		}) {
+			continue
+		}
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+			Name:      nvcatypes.NodeStateVolumeName,
+			MountPath: nvcatypes.NodeStateMountPath,
+			ReadOnly:  true,
+		})
 	}
 }
 

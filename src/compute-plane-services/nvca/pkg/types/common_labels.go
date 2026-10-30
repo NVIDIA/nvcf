@@ -55,6 +55,15 @@ const (
 	NVCAFunctionIDKey                   = labelFQDNPrefix + "/function-id"
 	NVCATaskIDKey                       = labelFQDNPrefix + "/task-id"
 	NVCAFunctionVersionIDKey            = labelFQDNPrefix + "/function-version-id"
+	// NodeCordonedAnnotationKey is set by NVCA on a worker pod while its node is cordoned. The value is the
+	// RFC 3339 time at which NVCA first saw the cordon. The pod reads it from the downward API file
+	// NodeStateMountPath/NodeCordonedFileName, which is empty while the node is schedulable.
+	NodeCordonedAnnotationKey = labelFQDNPrefix + "/node-cordoned"
+	// NodeStateVolumeName, NodeStateMountPath and NodeCordonedFileName describe the downward API volume that
+	// projects NodeCordonedAnnotationKey into worker pods.
+	NodeStateVolumeName  = "nvcf-node-state"
+	NodeStateMountPath   = "/etc/nvcf/node-state"
+	NodeCordonedFileName = "node-cordoned"
 	// Infra objects should have this annotation to differentiate from user-owned objects.
 	// This should be wiped from user-owned objects if set.
 	InfraObjectAnnotationKey = labelFQDNPrefix + "/nvca-infra-object"
