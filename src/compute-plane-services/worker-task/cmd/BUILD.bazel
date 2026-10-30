@@ -28,6 +28,10 @@ go_binary(
     name = "worker-task",
     embed = [":cmd_lib"],
     visibility = ["//visibility:public"],
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
 )
 
 go_oci_image(
