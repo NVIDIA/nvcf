@@ -35,7 +35,15 @@ same namespace: Secret `grpc-proxy-worker-tls`, key `ca.crt`, and SAN
 `*.grpc-headless.<namespace>.svc.<clusterDomain>`.
 
 Envoy reads the CA through file-based SDS and watches the mounted Secret
-directory, so a rotated CA is applied without a restart.
+directory, so a rotated CA is applied without a restart. The new CA applies to
+new upstream connections. An open connection to a pod whose certificate chains
+only to a removed CA keeps working until it is idle for 35s or closes, so
+reissue the grpc-proxy certificates before removing their old CA.
+
+To move grpc-proxy to a new issuing CA, first point `grpcProxy.caSecret` at a
+Secret that holds both the old and the new CA, then reissue. Envoy and the
+grpc-proxy pods pick up Secret changes at different times, so switching the
+CA in one step can fail callbacks with an unknown CA error for up to a minute.
 
 ## invocation-service TLS
 
@@ -175,7 +183,10 @@ Standalone installs that run more than one replica should set them.
 
 The preStop hook asks Envoy to drain its listeners gradually over
 `drainTimeSeconds`, then waits `preStopSleepSeconds` before Kubernetes sends
-SIGTERM. Envoy exits on SIGTERM. Render fails unless
+SIGTERM. Envoy exits on SIGTERM, and any stream still open is cut. A callback
+that lasts longer than `preStopSleepSeconds` through a terminating Envoy pod
+fails, and invocation callbacks can last up to an hour. Workers reconnect
+through the remaining replicas for new requests. Render fails unless
 `drainTimeSeconds <= preStopSleepSeconds < terminationGracePeriodSeconds`.
 
 ## Usage
