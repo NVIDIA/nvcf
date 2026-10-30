@@ -109,6 +109,19 @@ docker buildx build \
   --push .
 ```
 
+## Runtime package verification
+
+The final Alpine stage requires `brotli-libs>=1.2.1-r0`. This package
+requirement also invalidates the earlier Docker package layer. The engine
+and plugin source pins are unchanged; a source rebuild can still change
+embedded metadata and the plugin hash stored in an existing catalog.
+
+Run `sh scripts/test-runtime-packages.sh` for the source check. Set
+`RUNTIME_IMAGE` to test a built image, and optionally `BASELINE_IMAGE` to
+require identical server and plugin executable bytes. Repeat for both
+architectures. Persistent-state rollout and rollback qualification remain
+required before consuming a published image.
+
 ## Image contents
 
 At runtime the image provides:
