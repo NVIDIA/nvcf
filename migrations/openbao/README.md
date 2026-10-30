@@ -50,7 +50,28 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/net v0.60.0, x/crypto v0.57.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
-The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2. It rebuilds Kubernetes v1.36.5 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.9 toolchain. The build updates `golang.org/x/net` to v0.60.0, synchronizes the Kubernetes workspace, and regenerates vendored dependencies before offline compilation. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform. The client reports a dirty source tree to identify the dependency patch. Every Go binary is checked against the HTTP/2 security baseline before it enters the runtime image.
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2.
+It rebuilds Kubernetes v1.37.2 `kubectl` from the checksum-pinned official source
+archive with a digest-pinned Go 1.26.10 toolchain. The build retains the
+`golang.org/x/net` v0.60.0 HTTP/2 security floor, synchronizes the Kubernetes
+workspace, and regenerates vendored dependencies before offline compilation.
+The client reports a dirty source tree to identify that dependency patch.
+Build checks verify its source, toolchain, architecture, and runtime identity.
+
+The client version aligns with the Kubernetes toolbox. Upstream supports
+`kubectl` within one minor of `kube-apiserver`, so a 1.37 client covers servers
+1.36 through 1.38. This does not change NVCF's cluster support policy. Kubernetes
+1.35 remains in the current latest-and-N-2 window, but is outside that client
+skew; deployments on 1.35 need a qualified compatible migration image before
+this default can replace their existing image. Do not treat a toolbox version
+as a requirement to upgrade the cluster. See the
+[Kubernetes version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+
+The final Alpine stage requires `brotli-libs>=1.2.1-r0`. Changing that
+requirement invalidates the previous Docker package layer. Run
+`sh tests/runtime-packages-test.sh` for the source check; set `RUNTIME_IMAGE`
+to verify installed packages and non-root identity in a built image.
+Repeat image validation for both architectures before publication.
 
 The image does not include the Helm CLI. The core migrations and LLS, LLM, and
 UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image

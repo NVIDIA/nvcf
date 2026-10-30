@@ -4,11 +4,11 @@
 
 set -eu
 
-kubectl_version=${KUBECTL_VERSION:-v1.36.5}
-kubectl_source_commit=${KUBECTL_SOURCE_COMMIT:-ad950d1cc78b0183c476bd4d3f1934c104229727}
-kubectl_source_sha256=${KUBECTL_SOURCE_SHA256:-168162db6254cf3c453798de09a3a65f3d11673e0d3e1705fe061d960b05d137}
-kubectl_build_date=${KUBECTL_BUILD_DATE:-2026-09-23T17:07:00Z}
-kubectl_source_date_epoch=${KUBECTL_SOURCE_DATE_EPOCH:-1790183220}
+kubectl_version=${KUBECTL_VERSION:-v1.37.2}
+kubectl_source_commit=${KUBECTL_SOURCE_COMMIT:-c50e5395f1ae2d4a2c05f28fdcc38c0916cc1a32}
+kubectl_source_sha256=${KUBECTL_SOURCE_SHA256:-d4c61f7fd7adeb0bdfcc58add0ec929646b19314c316a524b2e3c7d3d4c4ff3f}
+kubectl_build_date=${KUBECTL_BUILD_DATE:-2026-10-27T12:01:04Z}
+kubectl_source_date_epoch=${KUBECTL_SOURCE_DATE_EPOCH:-1793102464}
 x_net_version=${X_NET_VERSION:-v0.60.0}
 target_arch=${TARGETARCH:?TARGETARCH must be set}
 output_dir=${OUTPUT_DIR:-/out}
@@ -36,14 +36,18 @@ curl --fail --location --silent --show-error "$source_url" --output "$archive"
 printf '%s  %s\n' "$kubectl_source_sha256" "$archive" | sha256sum -c -
 tar -xzf "$archive" -C "$source_dir"
 
+version=${kubectl_version#v}
+major=${version%%.*}
+minor_patch=${version#*.}
+minor=${minor_patch%%.*}
 version_ldflags=""
 for package in k8s.io/client-go/pkg/version k8s.io/component-base/version; do
   version_ldflags="$version_ldflags -X ${package}.gitVersion=${kubectl_version}"
   version_ldflags="$version_ldflags -X ${package}.gitCommit=${kubectl_source_commit}"
   version_ldflags="$version_ldflags -X ${package}.gitTreeState=dirty"
   version_ldflags="$version_ldflags -X ${package}.buildDate=${kubectl_build_date}"
-  version_ldflags="$version_ldflags -X ${package}.gitMajor=1"
-  version_ldflags="$version_ldflags -X ${package}.gitMinor=36"
+  version_ldflags="$version_ldflags -X ${package}.gitMajor=${major}"
+  version_ldflags="$version_ldflags -X ${package}.gitMinor=${minor}"
 done
 
 (
