@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# The credential helper and the OTel collector are published next to the
-# operator image. The chart derives their repositories from
-# image.repository, so a cluster that pulls the operator from another org
-# pulls the sibling images from that org too, and an explicit
+# The chart derives the credential helper and OTel collector repositories
+# from image.repository, so a cluster that pulls the operator from another
+# org pulls the sibling images from that org too. A repository with no
+# registry path falls back to the public org, and an explicit
 # imageRepository still wins.
 
 set -euo pipefail
@@ -83,12 +83,20 @@ render "stg.nvcr.io/nvidia/nvcf-byoc/nvca-operator" > "${manifest}"
 expect "staging credential helper" "$(cred_helper_repository "${manifest}")" "stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper"
 expect "staging collector" "$(collector_repository "${manifest}")" "stg.nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
 
-# An operator image from another org (a managed cluster's release org): the
-# siblings follow it instead of falling back to the public org.
-manifest="${tmp_dir}/sbom-org.yaml"
+# An operator image from another org: the siblings follow it instead of
+# falling back to the public org.
+manifest="${tmp_dir}/other-org.yaml"
 render "nvcr.io/example-org/example-team/nvca-operator" > "${manifest}"
 expect "other-org credential helper" "$(cred_helper_repository "${manifest}")" "nvcr.io/example-org/example-team/nvcf-image-credential-helper"
 expect "other-org collector" "$(collector_repository "${manifest}")" "nvcr.io/example-org/example-team/nvcf-otel-collector"
+
+# A repository with no registry path: the siblings fall back to the public
+# org instead of a bare name, which a container runtime would resolve on
+# Docker Hub.
+manifest="${tmp_dir}/slash-less.yaml"
+render "nvca-operator" > "${manifest}"
+expect "slash-less credential helper" "$(cred_helper_repository "${manifest}")" "nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper"
+expect "slash-less collector" "$(collector_repository "${manifest}")" "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
 
 # An explicit repository still wins.
 manifest="${tmp_dir}/override.yaml"
