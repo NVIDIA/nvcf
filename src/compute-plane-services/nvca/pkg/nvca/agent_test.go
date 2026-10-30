@@ -959,6 +959,47 @@ func TestRegisterWithICMSRetryingStopsWithoutRetryWarningOnShutdown(t *testing.T
 	}
 }
 
+func TestRetryICMSRegistrationRetriesOnlyErrorsThatCanClear(t *testing.T) {
+	oldInitial, oldMax := initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval
+	initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval = time.Millisecond, time.Millisecond
+	t.Cleanup(func() {
+		initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval = oldInitial, oldMax
+	})
+
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantRetry bool
+	}{
+		{name: "bad request", err: nvcaerrors.HTTPStatusError(http.StatusBadRequest, fmt.Errorf("malformed request"))},
+		{name: "unauthorized", err: nvcaerrors.HTTPStatusError(http.StatusUnauthorized, fmt.Errorf("bad credentials"))},
+		{name: "conflict", err: nvcaerrors.HTTPStatusError(http.StatusConflict, fmt.Errorf("active instances")), wantRetry: true},
+		{name: "too many requests", err: nvcaerrors.HTTPStatusError(http.StatusTooManyRequests, fmt.Errorf("rate limited")), wantRetry: true},
+		{name: "server error", err: nvcaerrors.HTTPStatusError(http.StatusServiceUnavailable, fmt.Errorf("unavailable")), wantRetry: true},
+		{name: "no HTTP status", err: fmt.Errorf("dial tcp: connection refused"), wantRetry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered := &types.ICMSRegistrationResponse{ClusterID: "registered-cluster-id"}
+			attempts := 0
+			res, err := retryICMSRegistration(newTestContext(), func(context.Context) (*types.ICMSRegistrationResponse, error) {
+				attempts++
+				if attempts == 1 {
+					return nil, fmt.Errorf("register with ICMS: %w", tc.err)
+				}
+				return registered, nil
+			})
+			if !tc.wantRetry {
+				require.ErrorIs(t, err, tc.err)
+				assert.Equal(t, 1, attempts)
+				return
+			}
+			require.NoError(t, err)
+			assert.Same(t, registered, res)
+			assert.Equal(t, 2, attempts)
+		})
+	}
+}
+
 func TestAgent_getTelemetryAttributes(t *testing.T) {
 	ctx := context.Background()
 	agentOpts := AgentOptions{

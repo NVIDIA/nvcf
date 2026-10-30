@@ -933,28 +933,44 @@ func (a *Agent) RegisterWithICMS(ctx context.Context) (*types.ICMSRegistrationRe
 	return res, nil
 }
 
-// Delays between attempts of the initial ICMS registration.
+// Delays between attempts of the initial ICMS registration. The cap matches the 60s
+// registration sync.
 var (
 	initialICMSRegistrationRetryInterval = 10 * time.Second
-	maxICMSRegistrationRetryInterval     = 5 * time.Minute
+	maxICMSRegistrationRetryInterval     = time.Minute
 )
 
-// registerWithICMSRetrying calls RegisterWithICMS until it succeeds or ctx is done.
-// A failed initial registration, such as an ICMS 409 for an instance type that still
-// has active instances, fails the same way after a restart, so exiting would only
-// crash-loop. Start arms readiness after registration, so the replica stays NotReady
-// while it retries.
+// registerWithICMSRetrying calls RegisterWithICMS until it succeeds, fails with an
+// error that retrying cannot fix, or ctx is done. A failed initial registration, such
+// as an ICMS 409 for an instance type that still has active instances, fails the same
+// way after a restart, so exiting would only crash-loop. Start arms readiness after
+// registration, so the replica stays NotReady while it retries. With the Recreate
+// strategy (GracefulNoGPU) no previous replica keeps serving meanwhile; the operator
+// rejects configuration changes that would cause the 409 before the rollout.
 func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegistrationResponse, error) {
+	return retryICMSRegistration(ctx, a.RegisterWithICMS)
+}
+
+func retryICMSRegistration(
+	ctx context.Context,
+	register func(context.Context) (*types.ICMSRegistrationResponse, error),
+) (*types.ICMSRegistrationResponse, error) {
 	log := core.GetLogger(ctx)
 	backoff := newGPURegistrationRetryBackoff(initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval)
 	for {
-		res, err := a.RegisterWithICMS(ctx)
+		res, err := register(ctx)
 		if err == nil {
 			return res, nil
 		}
 		// An attempt cut short by shutdown is not worth a retry warning.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		// Other client errors, such as bad credentials or a malformed request,
+		// fail the same way on every attempt.
+		if code := nvcaerrors.GetHTTPStatusCode(err); code >= 400 && code < 500 &&
+			code != http.StatusConflict && code != http.StatusTooManyRequests {
+			return nil, err
 		}
 		delay := backoff.next()
 		log.WithError(err).Warnf("Failed to register with ICMS, retrying in %s", delay)
@@ -1336,8 +1352,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		}
 	} else {
 		// Register with ICMS after health. This blocks until registration
-		// succeeds or ctx is done; readiness is armed only afterwards, so a
-		// rolling update does not cut over to this replica while it retries.
+		// succeeds, fails with an error retrying cannot fix, or ctx is done;
+		// readiness is armed only afterwards, so a rolling update does not cut
+		// over to this replica while it retries.
 		log.Info("Registering with ICMS")
 		var regErr error
 		res, regErr = a.registerWithICMSRetrying(ctx)
