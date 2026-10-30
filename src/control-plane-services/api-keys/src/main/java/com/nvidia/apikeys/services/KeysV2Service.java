@@ -42,15 +42,21 @@ import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyV2Vo;
+import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByScopeFilterVo;
+import com.nvidia.apikeys.vo.OwnerAccountStatusVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.exceptions.TooManyRequestsException;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
@@ -71,13 +77,16 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class KeysV2Service {
 
-    static final String MESG_KEY_NOT_FOUND = "Key not found";
+    public static final String MESG_KEY_NOT_FOUND = "Key not found";
     static final String MESG_KEY_ALREADY_EXISTS = "Key already exists";
     static final String MESG_KEY_NOT_ACTIVE = "Key is not active";
     static final String MESG_KEY_STATUS_FINAL = "Key status cannot change from %s";
     static final String MESG_OWNER_SUSPENDED = "Key owner suspended.";
+    static final String MESG_OWNER_STATUS_REQUIRED = "Owner status is required";
     static final String MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED =
             "Owner status for account and service is not supported for account '%s'";
+
+    private static final int ACCOUNT_SCAN_PAGE_SIZE = 100;
 
     private static final Set<KeyStatus> FINAL_KEY_STATUSES =
             Set.of(KeyStatus.EXPIRED, KeyStatus.REVOKED);
@@ -98,8 +107,19 @@ public class KeysV2Service {
      * authorization update cannot run until minAuthzUpdateIntervalSeconds has passed.
      */
     public KeyV2Vo createKey(KeyV2Vo key, int minAuthzUpdateIntervalSeconds) {
-        assertOwnerActive(getEffectiveOwnerStatus(
-                key.getNcaId(), key.getOwnerType(), key.getOwnerId(), key.getIssuerServiceId()));
+        return createKey(key, minAuthzUpdateIntervalSeconds, true);
+    }
+
+    /**
+     * Administrators create keys for suspended owners, so they pass false for
+     * requireActiveOwner. The new key stays unusable until the owner is active again.
+     */
+    public KeyV2Vo createKey(
+            KeyV2Vo key, int minAuthzUpdateIntervalSeconds, boolean requireActiveOwner) {
+        if (requireActiveOwner) {
+            assertOwnerActive(key.getNcaId(), key.getOwnerType(), key.getOwnerId(),
+                              key.getIssuerServiceId());
+        }
         if (getKeyByHash(key.getKeyHash()).isPresent()) {
             throw new ConflictException(MESG_KEY_ALREADY_EXISTS);
         }
@@ -150,6 +170,14 @@ public class KeysV2Service {
                 .filter(key -> !v2KeyIds.contains(key.getKeyId()))
                 .map(legacyAccount::fromLegacy);
         return Stream.concat(keys.stream(), legacyKeys).toList();
+    }
+
+    /**
+     * Pages keys_v2 keys matching every non-null filter field. Legacy keys are not included,
+     * use {@link #listKeys(String, KeyOwnerType, String, String)} for a fully scoped list.
+     */
+    public KeysByAccountSliceVo listKeys(KeysByScopeFilterVo filter, int limit, String cursor) {
+        return keysV2Dao.list(filter, limit, cursor);
     }
 
     /**
@@ -230,6 +258,63 @@ public class KeysV2Service {
     }
 
     /**
+     * The owner's status in every account known to API Keys, ordered by account ID. An account
+     * is known when the owner has a key or a stored status in it. An account without a stored
+     * account-scoped status is ACTIVE.
+     */
+    public List<OwnerAccountStatusVo> listOwnerAccountStatuses(
+            KeyOwnerType ownerType, String ownerId) {
+        var accountStatuses = ownerStatusDao.listOwnerStatusByAccount(ownerType, ownerId).stream()
+                .collect(Collectors.toMap(OwnerStatusByAccountModel::getNcaId, s -> s));
+        var issuerStatuses = ownerStatusDao.listOwnerStatusByAccountAndService(ownerType, ownerId)
+                .stream()
+                .collect(Collectors.groupingBy(OwnerStatusByAccountAndServiceModel::getNcaId));
+
+        var ncaIds = new TreeSet<String>();
+        ncaIds.addAll(accountStatuses.keySet());
+        ncaIds.addAll(issuerStatuses.keySet());
+        ncaIds.addAll(listKeyAccountIds(ownerType, ownerId));
+        if (keysDao.getKeyOwner(ownerType, ownerId).isPresent()) {
+            ncaIds.add(legacyAccount.legacyNcaId());
+        }
+
+        return ncaIds.stream()
+                .map(ncaId -> OwnerAccountStatusVo.builder()
+                        .ncaId(ncaId)
+                        .status(accountStatus(ncaId, ownerType, ownerId, accountStatuses))
+                        .issuerServices(issuerStatuses.getOrDefault(ncaId, List.of()).stream()
+                                                .map(KeysV2Service::toIssuerStatus)
+                                                .sorted(Comparator.comparing(
+                                                        OwnerAccountStatusVo.IssuerStatus::issuerServiceId))
+                                                .toList())
+                        .build())
+                .toList();
+    }
+
+    /**
+     * The owner's status in one account, ACTIVE when nothing is stored. Reads only the owner's
+     * status records, never keys or other accounts' keys. The legacy account has no
+     * account-and-service records.
+     */
+    public OwnerAccountStatusVo getOwnerAccountStatus(
+            String ncaId, KeyOwnerType ownerType, String ownerId) {
+        var issuerStatuses = legacyAccount.isLegacy(ncaId)
+                ? List.<OwnerStatusByAccountAndServiceModel>of()
+                : ownerStatusDao.listOwnerStatusByAccountAndService(ncaId, ownerType, ownerId);
+        return OwnerAccountStatusVo.builder()
+                .ncaId(ncaId)
+                .status(getOwnerStatusByAccount(ncaId, ownerType, ownerId)
+                                .map(OwnerStatusByAccountModel::getOwnerStatus)
+                                .orElse(KeyOwnerStatus.ACTIVE))
+                .issuerServices(issuerStatuses.stream()
+                                        .map(KeysV2Service::toIssuerStatus)
+                                        .sorted(Comparator.comparing(
+                                                OwnerAccountStatusVo.IssuerStatus::issuerServiceId))
+                                        .toList())
+                .build();
+    }
+
+    /**
      * Owner status for the account and issuer service. The legacy account has no
      * account-and-service records.
      */
@@ -244,6 +329,7 @@ public class KeysV2Service {
 
     public OwnerStatusByAccountModel updateOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
+        requireOwnerStatus(status);
         if (legacyAccount.isLegacy(ncaId)) {
             var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
             var saved = keyOwnerService.updateKeyOwner(owner, status, clock.instant());
@@ -257,6 +343,7 @@ public class KeysV2Service {
     public OwnerStatusByAccountAndServiceModel updateOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
+        requireOwnerStatus(status);
         if (legacyAccount.isLegacy(ncaId)) {
             throw new BadRequestException(
                     MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED.formatted(ncaId));
@@ -308,6 +395,45 @@ public class KeysV2Service {
         }
     }
 
+    private Set<String> listKeyAccountIds(KeyOwnerType ownerType, String ownerId) {
+        var filter = KeysByScopeFilterVo.builder().ownerType(ownerType).ownerId(ownerId).build();
+        var ncaIds = new TreeSet<String>();
+        String cursor = null;
+        do {
+            var slice = keysV2Dao.list(filter, ACCOUNT_SCAN_PAGE_SIZE, cursor);
+            slice.keys().forEach(key -> ncaIds.add(key.getNcaId()));
+            cursor = slice.cursor();
+        } while (cursor != null);
+        return ncaIds;
+    }
+
+    private KeyOwnerStatus accountStatus(
+            String ncaId, KeyOwnerType ownerType, String ownerId,
+            Map<String, OwnerStatusByAccountModel> storedStatuses) {
+        if (legacyAccount.isLegacy(ncaId)) {
+            return getOwnerStatusByAccount(ncaId, ownerType, ownerId)
+                    .map(OwnerStatusByAccountModel::getOwnerStatus)
+                    .orElse(KeyOwnerStatus.ACTIVE);
+        }
+        return Optional.ofNullable(storedStatuses.get(ncaId))
+                .map(OwnerStatusByAccountModel::getOwnerStatus)
+                .orElse(KeyOwnerStatus.ACTIVE);
+    }
+
+    private static OwnerAccountStatusVo.IssuerStatus toIssuerStatus(
+            OwnerStatusByAccountAndServiceModel model) {
+        return new OwnerAccountStatusVo.IssuerStatus(
+                model.getIssuerServiceId(), model.getOwnerStatus(), model.getUpdatedAt());
+    }
+
+    /**
+     * Denies the operation when the owner is suspended for the account or the issuer service.
+     */
+    public void assertOwnerActive(
+            String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
+        assertOwnerActive(getEffectiveOwnerStatus(ncaId, ownerType, ownerId, issuerServiceId));
+    }
+
     /**
      * The legacy account keeps owner status with the owner's legacy keys.
      */
@@ -328,6 +454,12 @@ public class KeysV2Service {
                 minAuthzUpdateIntervalSeconds);
         if (!lockAcquired) {
             throw new TooManyRequestsException(ERROR_SLOW_DOWN);
+        }
+    }
+
+    private static void requireOwnerStatus(KeyOwnerStatus status) {
+        if (status == null) {
+            throw new BadRequestException(MESG_OWNER_STATUS_REQUIRED);
         }
     }
 

@@ -19,6 +19,7 @@ package com.nvidia.apikeys.persistance.repositories;
 
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.vo.KeyOwnerType;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.cassandra.repository.MapIdCassandraRepository;
 import org.springframework.stereotype.Repository;
@@ -30,4 +31,7 @@ public interface OwnerStatusByAccountAndServiceRepository extends
     Optional<OwnerStatusByAccountAndServiceModel>
             findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId);
+
+    // served by the owner_id storage-attached index, not by the partition key
+    List<OwnerStatusByAccountAndServiceModel> findByOwnerId(String ownerId);
 }
