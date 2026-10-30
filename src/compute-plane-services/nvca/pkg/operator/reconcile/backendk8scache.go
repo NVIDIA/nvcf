@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -954,7 +955,7 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	// also check if the number of replicas is as expected.
 	// Otherwise the agent's health is unhealthy or unknown.
 	evType := corev1.EventTypeNormal
-	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy {
+	if isAgentHealthy(nvcaHealthResp.Status) {
 		dep, err := bc.clients.K8s.AppsV1().Deployments(getSystemNamespace(nb)).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
 		if err != nil {
 			log.WithError(err).Error("Get NVCA deployment")
@@ -975,7 +976,7 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	// A healthy agent may still be the previous replica kept alive because the
 	// operator refused to roll out an invalid configuration. Keep reporting
 	// Unhealthy until the configuration is corrected.
-	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy {
+	if isAgentHealthy(nvcaHealthResp.Status) {
 		mergeCfg, _, configErr := bc.getRawAgentConfigToMerge(ctx)
 		if configErr == nil {
 			configErr = validateMergedAgentConfig(nb, mergeCfg)
@@ -1064,6 +1065,12 @@ func (bc *BackendK8sCache) getNVCAHealth(ctx context.Context, svcURL string) nvc
 	}
 
 	return nvcaHealthResp
+}
+
+// isAgentHealthy reports whether status from the agent's /healthz is healthy. The
+// agent reports "healthy", while AgentStatusHealthy is "Healthy".
+func isAgentHealthy(status nvidiaiov1.AgentStatus) bool {
+	return strings.EqualFold(string(status), string(nvidiaiov1.AgentStatusHealthy))
 }
 
 // agentRolloutStalled reports whether the agent rollout stopped progressing, for

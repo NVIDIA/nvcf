@@ -398,7 +398,9 @@ func TestSyncAllNVCFBackends_HeldOverheadChangeStaysUnhealthy(t *testing.T) {
 	// The previous agent keeps serving: /healthz reports healthy and the
 	// Deployment has a ready replica.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		assert.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{Status: nvidiaiov1.AgentStatusHealthy}))
+		assert.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+			Status: nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy),
+		}))
 	}))
 	t.Cleanup(server.Close)
 	previousHealthzURL := makeNVCAHealthzURL

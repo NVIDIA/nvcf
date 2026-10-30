@@ -70,6 +70,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -2184,7 +2185,7 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 			ctx := newTestContext()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
-					Status: nvidiaiov1.AgentStatusHealthy,
+					Status: nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy),
 				}))
 			}))
 			t.Cleanup(server.Close)
@@ -2234,7 +2235,7 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 			require.NoError(t, bc.SyncNVCFBackendHealth(ctx, got))
 			got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+			assert.Equal(t, nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy), got.Status.AgentStatus)
 		})
 	}
 }
@@ -2293,6 +2294,8 @@ func TestSyncNVCFBackendHealthIgnoresRejectedHeartbeatInterval(t *testing.T) {
 // past its progress deadline makes the NVCFBackend Unhealthy even though the
 // previous replica still serves and reports healthy.
 func TestSyncNVCFBackendHealthReportsStalledAgentRollout(t *testing.T) {
+	// What the agent's /healthz reports, which differs from AgentStatusHealthy in case.
+	agentHealthy := nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy)
 	tests := []struct {
 		name      string
 		condition appsv1.DeploymentCondition
@@ -2303,14 +2306,14 @@ func TestSyncNVCFBackendHealthReportsStalledAgentRollout(t *testing.T) {
 			condition: appsv1.DeploymentCondition{
 				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "ReplicaSetUpdated",
 			},
-			want: nvidiaiov1.AgentStatusHealthy,
+			want: agentHealthy,
 		},
 		{
 			name: "rollout complete",
 			condition: appsv1.DeploymentCondition{
 				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "NewReplicaSetAvailable",
 			},
-			want: nvidiaiov1.AgentStatusHealthy,
+			want: agentHealthy,
 		},
 		{
 			name: "progress deadline exceeded",
@@ -2325,7 +2328,7 @@ func TestSyncNVCFBackendHealthReportsStalledAgentRollout(t *testing.T) {
 			ctx := newTestContext()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
-					Status: nvidiaiov1.AgentStatusHealthy,
+					Status: nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy),
 				}))
 			}))
 			t.Cleanup(server.Close)
