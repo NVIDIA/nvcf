@@ -46,15 +46,24 @@ func createHttp2Server(director *StreamDirector, addr string, healthManager *hea
 	mux := newProxyMux(director, healthManager)
 	corsMux := middleware.Cors(mux)
 	tracedMux := middleware.ApplyMiddleware(corsMux, "http/2 listener")
-	return &InterceptedHttpServer{http.Server{
-		Addr: addr,
-		Handler: h2c.NewHandler(tracedMux, &http2.Server{
-			MaxConcurrentStreams: math.MaxInt32,
-		}),
+	h2s := &http2.Server{
+		MaxConcurrentStreams: math.MaxInt32,
+	}
+	s := &InterceptedHttpServer{http.Server{
+		Addr:    addr,
+		Handler: h2c.NewHandler(tracedMux, h2s),
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return worker.CtxWithConn(ctx, c.(*worker.ConnectionTrackingConn))
 		},
 	}}
+	// h2c hijacks every connection, so http.Server.Shutdown neither waits for
+	// nor closes them, and the gateway keeps sending new calls to a pod that is
+	// shutting down. Registering h2s makes Shutdown send each connection a
+	// graceful GOAWAY: calls already running finish, new ones go elsewhere.
+	if err := http2.ConfigureServer(&s.Server, h2s); err != nil {
+		zap.L().Warn("http/2 graceful shutdown not configured", zap.Error(err))
+	}
+	return s
 }
 
 type InterceptedHttpServer struct {

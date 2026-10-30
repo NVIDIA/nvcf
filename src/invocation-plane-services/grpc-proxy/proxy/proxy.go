@@ -90,7 +90,18 @@ type NVCFProxy struct {
 	eventLedger *eventledger.Publisher
 }
 
+// workerDrainTimeout bounds how long shutdown waits for requests already
+// waiting on a worker. Workers normally attach within about a second; the
+// bound leaves room for the HTTP/3 drain and the purge in the grace period.
+const workerDrainTimeout = 10 * time.Second
+
 func (n *NVCFProxy) Close() error {
+	// The worker listeners keep serving until the HTTP/3 shutdown below, so
+	// this has to come first for a waiting request's worker to still attach.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), workerDrainTimeout)
+	n.director.AwaitWorkers(drainCtx)
+	cancelDrain()
+
 	zap.L().Info("http3 server shutting down")
 	ctx, cancel := context.WithTimeout(context.Background(), consts.Timeout)
 	defer cancel()
