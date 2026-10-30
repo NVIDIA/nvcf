@@ -166,10 +166,13 @@ management:
           include:
             - readinessState
             - cassandra
+        # Liveness must not fail during a Cassandra outage: every replica shares
+        # it, so a failing check would restart all replicas. cassandraSession
+        # restarts only a pod whose session stays broken after Cassandra recovers.
         liveness:
           include:
             - livenessState
-            - cassandra
+            - cassandraSession
   health:
     livenessState:
       enabled: true
