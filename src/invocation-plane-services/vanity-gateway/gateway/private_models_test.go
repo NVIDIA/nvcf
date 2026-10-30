@@ -394,6 +394,18 @@ func TestPrivateModelLookupSharesConcurrentRequests(t *testing.T) {
 	require.EqualValues(t, 1, nvcf.calls.Load())
 }
 
+// Spellings of one Authorization header share one cache entry, and the NVCF API
+// sees a single canonical form. The fake answers only "Bearer good".
+func TestPrivateModelLookupKeysOnBearerCredential(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	mux := privateModelsMux(t, endpoint)
+	for _, authorization := range []string{"bearer good", "Bearer good", "BEARER \t good"} {
+		rec := listModels(t, mux, "/v1/models", map[string]string{"Authorization": authorization})
+		require.Equal(t, privateModelsAuthorized, rec.Header().Get(PrivateModelsHeader), authorization)
+	}
+	require.EqualValues(t, 1, nvcf.calls.Load())
+}
+
 // A mapping reload builds a new router but keeps the cached lookups.
 func TestPrivateModelLookupCacheSurvivesMappingReload(t *testing.T) {
 	nvcf, endpoint := newFakeFunctionIDs(t)
@@ -416,7 +428,7 @@ func TestPrivateModelAccessCacheExpiresAndStaysBounded(t *testing.T) {
 	lookup := func() (map[string]struct{}, string) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		req.Header.Set("Authorization", "Bearer good")
-		return access.authorizedFunctionIDs(req, map[string][]ModelInfo{allowed: nil})
+		return access.authorizedFunctionIDs(req, []byte("good"), map[string][]ModelInfo{allowed: nil})
 	}
 
 	// Only function IDs behind private aliases are kept.

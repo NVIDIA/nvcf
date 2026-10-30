@@ -139,9 +139,11 @@ func newPrivateModelAccess(endpoint string, transport http.RoundTripper) (*priva
 // authorizedFunctionIDs returns which privateFunctions the caller's bearer key
 // may access, and the lookup result. A failed lookup is not cached. It falls
 // back to the key's last good result while that is within the stale window.
-func (a *privateModelAccess) authorizedFunctionIDs(request *http.Request, privateFunctions map[string][]ModelInfo) (map[string]struct{}, string) {
-	authorization := request.Header.Get("Authorization")
-	digest := sha256.Sum256([]byte(authorization))
+// The cache key and the upstream header both come from the parsed credential,
+// so every spelling of one Authorization header shares one entry and one answer.
+func (a *privateModelAccess) authorizedFunctionIDs(request *http.Request, credential []byte, privateFunctions map[string][]ModelInfo) (map[string]struct{}, string) {
+	authorization := "Bearer " + string(credential)
+	digest := sha256.Sum256(credential)
 	key := hex.EncodeToString(digest[:])
 	span := trace.SpanFromContext(request.Context())
 
@@ -278,11 +280,12 @@ func (d *ModelDirector) authorizedPrivateFunctionIDs(writer http.ResponseWriter,
 	if d.privateModels == nil {
 		return nil
 	}
-	if _, ok := bearerCredential(request); !ok {
+	credential, ok := bearerCredential(request)
+	if !ok {
 		return nil
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
-	functionIDs, result := d.privateModels.authorizedFunctionIDs(request, d.privateModelsByFunction)
+	functionIDs, result := d.privateModels.authorizedFunctionIDs(request, credential, d.privateModelsByFunction)
 	writer.Header().Set(PrivateModelsHeader, result)
 	return functionIDs
 }
