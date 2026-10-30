@@ -183,7 +183,7 @@ public class CapacityGatingPropertiesTest extends IntegrationTest {
         assertTrue(emptyGpus.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
         assertTrue(emptyGpus.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", "anything"));
 
-        // A gpus-only policy leaves every cluster reachable and skips the owned-cluster lookup.
+        // A gpus-only policy leaves every cluster reachable, so cluster filtering is skipped.
         CapacityGatingProperties gpusOnly =
                 gatedWithGpus("gated-nca", Map.of("DUMMY_GPU_1", List.of("dummy_gpu_1.large")));
         assertFalse(gpusOnly.hasClusterRestriction("gated-nca"));

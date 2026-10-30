@@ -150,8 +150,7 @@ public class CapacityGatingProperties {
 
     /**
      * Whether the account is denied all capacity, either because {@code clusters} is an empty
-     * list (the deliberate kill switch) or because its entry could not be understood. Callers
-     * must not apply the owned-cluster exemption to these accounts.
+     * list (the deliberate kill switch) or because its entry could not be understood.
      */
     public boolean isOrgDenied(@Nullable String ncaId) {
         return ncaId != null && denyAllNcaIds.contains(ncaId);
@@ -159,8 +158,8 @@ public class CapacityGatingProperties {
 
     /**
      * Whether this NCA ID has a cluster allow list, as opposed to being restricted only by GPU.
-     * Lets callers skip the owned-cluster lookup, which is a database read, for accounts whose
-     * policy never consults cluster identity.
+     * Lets callers skip the nested walk down to cluster level for accounts whose policy never
+     * consults cluster identity.
      */
     public boolean hasClusterRestriction(@Nullable String ncaId) {
         GatingPolicy policy = policyFor(ncaId);
@@ -304,6 +303,12 @@ public class CapacityGatingProperties {
                 // An entry with neither key cannot be read as an allow list or as a kill switch.
                 // Guessing either way risks silently widening access, so the account is denied
                 // until an operator resolves it. An empty cluster list is the explicit switch.
+                //
+                // Reached by an NCA ID written with nothing under it, which binds to a policy
+                // with both fields unset. It is not reached by an entry whose keys are all
+                // unrecognized, such as the old gpu-gating shape copied under this key: unknown
+                // properties are ignored, so the binder yields no entry and the account is left
+                // ungated and undiagnosed. See CapacityGatingBindingTest for both.
                 if (policy == null || (policy.getClusters() == null && policy.getGpus() == null)
                         || (policy.getClusters() != null && policy.getClusters().isEmpty())) {
                     deniedNcaIds.add(ncaId);
@@ -407,9 +412,11 @@ public class CapacityGatingProperties {
     public static class GatingPolicy {
 
         /**
-         * Clusters this account may use. Absent means every cluster. The wildcard {@code "*"}
-         * also means every cluster. An empty list is the account kill switch: it denies
-         * everything and overrides the owned-cluster exemption.
+         * Clusters this account may use, and the whole answer to where it may run: a cluster the
+         * account registered itself is filtered on the same terms as any other, so it has to be
+         * named here to be usable. Absent means every cluster, as does the wildcard {@code "*"}.
+         * An empty list is the account kill switch and denies everything, owned clusters
+         * included.
          */
         private List<String> clusters;
 

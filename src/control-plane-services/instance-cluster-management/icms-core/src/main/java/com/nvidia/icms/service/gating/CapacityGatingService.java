@@ -33,8 +33,6 @@ import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse;
 import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.GpuResponseSchema;
 import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.InstanceTypeResponseSchema;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
-import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.service.createInstances.RequestInstanceDestination;
 import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
 import com.nvidia.icms.uec.IcmsUnifiedError;
@@ -43,7 +41,6 @@ import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -66,7 +63,6 @@ public class CapacityGatingService {
 
     private final CapacityGatingProperties capacityGatingProperties;
     private final UnifiedErrorReporter unifiedErrorReporter;
-    private final ClusterRepository clusterRepository;
 
     /**
      * Removes GPUs, instance types and clusters withheld from this NCA ID from an account-info
@@ -80,7 +76,6 @@ public class CapacityGatingService {
         }
 
         boolean filterClusters = restrictsClusters(ncaId);
-        Set<String> ownedClusterIds = ownedClusterIds(ncaId);
 
         result.getGpus().removeIf(gpu -> {
             if (!capacityGatingProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
@@ -92,8 +87,7 @@ public class CapacityGatingService {
                         !capacityGatingProperties.isInstanceTypeAllowedForNca(
                                 ncaId, gpu.getGpuName(), instanceType.getInstanceName())
                                 || (filterClusters
-                                && isInstanceTypeEmptyAfterGating(instanceType, ncaId,
-                                                                  ownedClusterIds)));
+                                && isInstanceTypeEmptyAfterGating(instanceType, ncaId)));
             }
 
             boolean noInstanceTypesLeft = isSetEmptyOrNull(gpu.getInstanceTypes());
@@ -118,8 +112,6 @@ public class CapacityGatingService {
             return;
         }
 
-        Set<String> ownedClusterIds = ownedClusterIds(ncaId);
-
         clusterGroupsSet.removeIf(clusterGroup -> {
             clusterGroup.setGpus(retainAllowedGpus(clusterGroup.getGpus(), ncaId));
 
@@ -136,7 +128,8 @@ public class CapacityGatingService {
             }
 
             clusterGroup.getClusters().removeIf(
-                    cluster -> !isClusterAllowed(ncaId, cluster.getId(), ownedClusterIds));
+                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
+                            ncaId, cluster.getId()));
 
             boolean noClustersLeft = isSetEmptyOrNull(clusterGroup.getClusters());
             if (noClustersLeft) {
@@ -151,9 +144,9 @@ public class CapacityGatingService {
 
     /**
      * Removes GPUs, instance types and clusters withheld from this NCA ID from the authorized
-     * cluster listing. Clusters the NCA ID owns are left untouched unless the account is denied
-     * outright: gating controls what an org may borrow from others, not whether it can still see
-     * and manage the clusters it registered itself.
+     * cluster listing. A cluster the NCA ID registered itself is filtered on the same terms as
+     * any other: the configured list is the whole answer to where an account may run, so an
+     * account that needs one of its own clusters has to name it, or use {@code "*"}.
      */
     public void removeGatedAuthorizedClusters(@NotNull List<GetClusterResponse> clusters,
                                               @NotNull String ncaId) {
@@ -161,15 +154,7 @@ public class CapacityGatingService {
             return;
         }
 
-        boolean orgDenied = capacityGatingProperties.isOrgDenied(ncaId);
-
-        // The response carries the owning NCA ID per cluster, so ownership is settled inline and
-        // this path never needs the owned-cluster lookup.
         clusters.removeIf(cluster -> {
-            if (!orgDenied && Objects.equals(cluster.getNcaId(), ncaId)) {
-                return false;
-            }
-
             if (!capacityGatingProperties.isClusterAllowedForNca(ncaId,
                                                                     cluster.getClusterId())) {
                 log.trace("NcaId {}: cluster {} removed from authorized cluster listing by "
@@ -205,7 +190,6 @@ public class CapacityGatingService {
         }
 
         boolean filterClusters = restrictsClusters(ncaId);
-        Set<String> ownedClusterIds = ownedClusterIds(ncaId);
 
         gpus.removeIf(gpu -> {
             if (!capacityGatingProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
@@ -217,8 +201,7 @@ public class CapacityGatingService {
                         !capacityGatingProperties.isInstanceTypeAllowedForNca(
                                 ncaId, gpu.getGpuName(), instance.getInstanceName())
                                 || (filterClusters
-                                && isUsageInstanceEmptyAfterGating(instance, ncaId,
-                                                                   ownedClusterIds)));
+                                && isUsageInstanceEmptyAfterGating(instance, ncaId)));
             }
 
             boolean noInstancesLeft = isListEmptyOrNull(gpu.getInstances());
@@ -275,10 +258,8 @@ public class CapacityGatingService {
             }
             anyInstanceTypeAllowed = true;
 
-            // Destinations carry the owning NCA ID, so ownership is settled inline here too.
-            if (!Objects.equals(destination.getNcaId(), ncaId)
-                    && !capacityGatingProperties.isClusterAllowedForNca(
-                            ncaId, destination.getClusterId())) {
+            if (!capacityGatingProperties.isClusterAllowedForNca(
+                    ncaId, destination.getClusterId())) {
                 gatedOut.add(destination);
             }
         }
@@ -407,12 +388,10 @@ public class CapacityGatingService {
      * Prunes the regions of an availability instance type and reports whether nothing is left.
      */
     private boolean isInstanceTypeEmptyAfterGating(
-            InstanceTypeAvailabilityResponse.InstanceType instanceType, String ncaId,
-            Set<String> ownedClusterIds) {
+            InstanceTypeAvailabilityResponse.InstanceType instanceType, String ncaId) {
         if (instanceType.getRegions() != null) {
             instanceType.getRegions().removeIf(
-                    region -> isAvailabilityRegionEmptyAfterGating(region, ncaId,
-                                                                   ownedClusterIds));
+                    region -> isAvailabilityRegionEmptyAfterGating(region, ncaId));
         }
         return isSetEmptyOrNull(instanceType.getRegions());
     }
@@ -421,11 +400,11 @@ public class CapacityGatingService {
      * Prunes the clusters of an availability region and reports whether nothing is left.
      */
     private boolean isAvailabilityRegionEmptyAfterGating(
-            InstanceTypeAvailabilityResponse.Region region, String ncaId,
-            Set<String> ownedClusterIds) {
+            InstanceTypeAvailabilityResponse.Region region, String ncaId) {
         if (region.getClusters() != null) {
             region.getClusters().removeIf(
-                    cluster -> !isClusterAllowed(ncaId, cluster.getClusterId(), ownedClusterIds));
+                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
+                            ncaId, cluster.getClusterId()));
         }
         return isSetEmptyOrNull(region.getClusters());
     }
@@ -434,10 +413,10 @@ public class CapacityGatingService {
      * Prunes the regions of a usage instance and reports whether nothing is left.
      */
     private boolean isUsageInstanceEmptyAfterGating(GpuUsageResponse.Instance instance,
-                                                    String ncaId, Set<String> ownedClusterIds) {
+                                                    String ncaId) {
         if (instance.getRegions() != null) {
             instance.getRegions().removeIf(
-                    region -> isUsageRegionEmptyAfterGating(region, ncaId, ownedClusterIds));
+                    region -> isUsageRegionEmptyAfterGating(region, ncaId));
         }
         return isListEmptyOrNull(instance.getRegions());
     }
@@ -445,27 +424,13 @@ public class CapacityGatingService {
     /**
      * Prunes the clusters of a usage region and reports whether nothing is left.
      */
-    private boolean isUsageRegionEmptyAfterGating(GpuUsageResponse.Region region, String ncaId,
-                                                  Set<String> ownedClusterIds) {
+    private boolean isUsageRegionEmptyAfterGating(GpuUsageResponse.Region region, String ncaId) {
         if (region.getClusters() != null) {
             region.getClusters().removeIf(
-                    cluster -> !isClusterAllowed(ncaId, cluster.getClusterId(), ownedClusterIds));
+                    cluster -> !capacityGatingProperties.isClusterAllowedForNca(
+                            ncaId, cluster.getClusterId()));
         }
         return isListEmptyOrNull(region.getClusters());
-    }
-
-    /**
-     * A cluster is allowed when the policy names it or when the NCA ID owns it. A denied account
-     * gets neither: {@code clusters: []} is a deliberate kill switch, so it has to outrank the
-     * ownership exemption or the switch would not hold for an org that registered its own
-     * clusters.
-     */
-    private boolean isClusterAllowed(String ncaId, String clusterId, Set<String> ownedClusterIds) {
-        if (capacityGatingProperties.isOrgDenied(ncaId)) {
-            return false;
-        }
-        return capacityGatingProperties.isClusterAllowedForNca(ncaId, clusterId)
-                || ownedClusterIds.contains(clusterId);
     }
 
     /**
@@ -477,21 +442,6 @@ public class CapacityGatingService {
     private boolean restrictsClusters(String ncaId) {
         return capacityGatingProperties.isOrgDenied(ncaId)
                 || capacityGatingProperties.hasClusterRestriction(ncaId);
-    }
-
-    /**
-     * The clusters this NCA ID registered itself, used to exempt them from gating on the
-     * responses that carry no per-cluster owner. Only read for an account whose policy actually
-     * restricts clusters, so neither ungated nor GPU-only accounts pay for this query.
-     */
-    private Set<String> ownedClusterIds(String ncaId) {
-        if (!capacityGatingProperties.hasClusterRestriction(ncaId)) {
-            return Set.of();
-        }
-        return clusterRepository.getAllClustersInAnAccount(ncaId).stream()
-                .map(ClusterEntity::getClusterId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(HashSet::new));
     }
 
     private void throwGatingError(@NotNull IcmsUnifiedError icmsUnifiedError,

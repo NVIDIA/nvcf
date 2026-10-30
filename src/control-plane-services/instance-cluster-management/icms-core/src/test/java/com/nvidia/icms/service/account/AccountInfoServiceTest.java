@@ -69,7 +69,7 @@ class AccountInfoServiceTest {
     void setUp() {
         accountInfoService = new AccountInfoService(null, null, clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new CapacityGatingService(new CapacityGatingProperties(), null, null));
+                new CapacityGatingService(new CapacityGatingProperties(), null));
     }
 
     @Test
@@ -244,7 +244,7 @@ class AccountInfoServiceTest {
         accountInfoService = new AccountInfoService(clusterTargetingHelper,
                 new IcmsConfigurationProperties(),
                 clusterGpuInfoHelper, ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new CapacityGatingService(properties, null, null));
+                new CapacityGatingService(properties, null));
     }
 
     private static InstanceTypeV5Udt instanceType(String name) {

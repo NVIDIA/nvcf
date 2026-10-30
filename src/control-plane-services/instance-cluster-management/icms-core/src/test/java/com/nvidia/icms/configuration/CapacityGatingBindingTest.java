@@ -21,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +31,12 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.ByteArrayResource;
 
 /**
  * Pins how {@code icms.capacity-gating} merges across property sources, which is what the rollout
@@ -63,6 +71,27 @@ class CapacityGatingBindingTest {
             properties.put(PREFIX + ncaId + ".gpus." + gpu + "[" + i + "]", instanceTypes[i]);
         }
         return properties;
+    }
+
+    /**
+     * Binds from real YAML rather than from pre-flattened property names. How YAML renders an
+     * empty map, an empty list and an absent value is exactly what decides the cases below, so
+     * hand-writing the flattened form would assume away the thing under test.
+     */
+    private static CapacityGatingProperties bindYaml(String yaml) {
+        List<PropertySource<?>> loaded;
+        try {
+            loaded = new YamlPropertySourceLoader().load(
+                    "capacity-gating",
+                    new ByteArrayResource(yaml.getBytes(StandardCharsets.UTF_8)));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        MutablePropertySources sources = new MutablePropertySources();
+        loaded.forEach(sources::addLast);
+        return new Binder(ConfigurationPropertySources.from(sources))
+                .bind("icms", Bindable.of(CapacityGatingProperties.class))
+                .orElseGet(CapacityGatingProperties::new);
     }
 
     /**
@@ -183,5 +212,112 @@ class CapacityGatingBindingTest {
         assertFalse(props.isNcaAllowedForGpu("B40", "other-nca"));
         // A GPU the key does not name stays unrestricted.
         assertTrue(props.isNcaAllowedForGpu("L40S", "other-nca"));
+    }
+
+    /**
+     * An NCA ID written with nothing under it. YAML renders the absent value as an empty string,
+     * which still counts as a property at that name, so the entry exists with both fields unset
+     * and the fail-closed branch denies the account.
+     */
+    @Test
+    void ncaIdWithNothingUnderItIsDenied() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                """);
+
+        assertTrue(props.isOrgDenied(JAR_NCA_ID));
+        assertTrue(props.hasCapacityGating(JAR_NCA_ID));
+        assertFalse(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-a"));
+        assertFalse(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
+    }
+
+    /**
+     * An empty {@code gpus} map binds to an empty map, not to null, so the entry survives and the
+     * account is not denied. An empty GPU map places no GPU restriction, so the account receives
+     * every GPU and every cluster.
+     *
+     * <p>Worth pinning because it reads like a restriction and behaves like its opposite, and
+     * because it points the other way from {@code clusters: []}, which denies everything.
+     */
+    @Test
+    void emptyGpusMapRestrictsNothing() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                      gpus: {}
+                """);
+
+        assertEquals(Map.of(), props.getCapacityGating().get(JAR_NCA_ID).getGpus());
+        assertFalse(props.isOrgDenied(JAR_NCA_ID));
+        assertTrue(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
+        assertTrue(props.isInstanceTypeAllowedForNca(JAR_NCA_ID, "B40", "gb40_1.br30_2xlarge"));
+        assertTrue(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-a"));
+    }
+
+    /**
+     * An empty {@code clusters} list is the deliberate kill switch. YAML renders it as an empty
+     * string, which binds to an empty list, so unlike the empty gpus map it does reach the
+     * compile step and denies the account everything.
+     */
+    @Test
+    void emptyClustersListDeniesTheAccount() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                      clusters: []
+                """);
+
+        assertEquals(List.of(), props.getCapacityGating().get(JAR_NCA_ID).getClusters());
+        assertTrue(props.isOrgDenied(JAR_NCA_ID));
+        assertFalse(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-a"));
+        assertFalse(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
+    }
+
+    /**
+     * A GPU mapped to an empty instance-type list denies that GPU rather than permitting all of
+     * them, so a truncated entry cannot widen access. The account itself stays gated, not denied.
+     */
+    @Test
+    void emptyInstanceTypeListDeniesThatGpuOnly() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                      gpus:
+                        B40: []
+                        L40S:
+                          - gl40s_1.br25_2xlarge
+                """);
+
+        assertFalse(props.isOrgDenied(JAR_NCA_ID));
+        assertFalse(props.isGpuAllowedForNca(JAR_NCA_ID, "B40"));
+        assertTrue(props.isGpuAllowedForNca(JAR_NCA_ID, "L40S"));
+    }
+
+    /**
+     * The wildcard wins over the cluster IDs listed beside it. An operator who adds {@code "*"}
+     * to an existing list opens every cluster rather than the ones still named, so the extra
+     * entries become dead weight instead of a narrowing.
+     */
+    @Test
+    void wildcardMixedWithClusterIdsAllowsEveryCluster() {
+        CapacityGatingProperties props = bindYaml("""
+                icms:
+                  capacity-gating:
+                    jar-nca:
+                      clusters:
+                        - "*"
+                        - cluster-a
+                """);
+
+        assertEquals(List.of("*", "cluster-a"),
+                     props.getCapacityGating().get(JAR_NCA_ID).getClusters());
+        assertFalse(props.isOrgDenied(JAR_NCA_ID));
+        assertTrue(props.isClusterAllowedForNca(JAR_NCA_ID, "cluster-a"));
+        assertTrue(props.isClusterAllowedForNca(JAR_NCA_ID, "some-other-cluster"));
     }
 }

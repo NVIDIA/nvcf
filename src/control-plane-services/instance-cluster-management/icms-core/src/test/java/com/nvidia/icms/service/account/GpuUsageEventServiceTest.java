@@ -117,7 +117,7 @@ class GpuUsageEventServiceTest {
                 icmsConfigurationProperties,
                 clusterGpuInfoHelper,
                 ComputePlatformTestFixtures.nonByocComputePlatformService(),
-                new CapacityGatingService(capacityGatingProperties, null, null));
+                new CapacityGatingService(capacityGatingProperties, null));
     }
 
     @Test

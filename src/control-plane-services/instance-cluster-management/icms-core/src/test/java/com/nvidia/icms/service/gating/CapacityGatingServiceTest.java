@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.configuration.bean.CapacityGatingProperties;
@@ -37,8 +36,6 @@ import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse;
 import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.GpuResponseSchema;
 import com.nvidia.icms.inbound.rest.model.nvca.GetClusterResponse.InstanceTypeResponseSchema;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
-import com.nvidia.icms.outbound.cassandra.byoc.ClusterRepository;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.service.createInstances.RequestInstanceDestination;
 import com.nvidia.icms.uec.IcmsHttpUnifiedErrorException;
@@ -58,7 +55,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Covers {@code icms.capacity-gating} on all five surfaces it is wired into. The opening block of
  * no-op tests is the backward-compatibility contract: an account without a gating entry must come
- * back untouched and must not trigger the owned-cluster lookup.
+ * back untouched.
  */
 class CapacityGatingServiceTest {
 
@@ -67,6 +64,7 @@ class CapacityGatingServiceTest {
 
     private static final String CLUSTER_ALLOWED = "cluster-allowed";
     private static final String CLUSTER_DENIED = "cluster-denied";
+    // Registered by the gated account itself and not named in its policy, so it is gated out.
     private static final String CLUSTER_OWNED = "cluster-owned";
 
     private static final String GPU = "L40";
@@ -75,50 +73,34 @@ class CapacityGatingServiceTest {
     private static final String INSTANCE_TYPE_DENIED = "DGX-CLOUD.GPU.L40_8x";
     private static final String REGION = "us-west-2";
 
-    private ClusterRepository clusterRepository;
-
-    /**
-     * Builds a service applying {@code policy} to {@code ncaId}, with the repository reporting
-     * {@code ownedClusterIds} as clusters the caller registered itself.
-     */
-    private CapacityGatingService gatingFor(String ncaId, GatingPolicy policy,
-                                            String... ownedClusterIds) {
+    private static CapacityGatingProperties propertiesFor(String ncaId, GatingPolicy policy) {
         CapacityGatingProperties properties = new CapacityGatingProperties();
         Map<String, GatingPolicy> entries = new HashMap<>();
         entries.put(ncaId, policy);
         properties.setCapacityGating(entries);
-        return gatingFor(properties, ownedClusterIds);
+        return properties;
     }
 
-    private CapacityGatingService gatingFor(CapacityGatingProperties properties,
-                                            String... ownedClusterIds) {
-        clusterRepository = mock(ClusterRepository.class);
-        // Stubbed only when the test actually owns clusters, so the no-op tests can assert the
-        // repository was never touched without a stubbing call muddying the verification.
-        if (ownedClusterIds.length > 0) {
-            when(clusterRepository.getAllClustersInAnAccount(any()))
-                    .thenReturn(Arrays.stream(ownedClusterIds)
-                                        .map(clusterId -> ClusterEntity.builder()
-                                                .clusterId(clusterId)
-                                                .build())
-                                        .collect(Collectors.toList()));
-        }
-        return new CapacityGatingService(properties, null, clusterRepository);
+    /** Builds a service applying {@code policy} to {@code ncaId}. */
+    private CapacityGatingService gatingFor(String ncaId, GatingPolicy policy) {
+        return gatingFor(propertiesFor(ncaId, policy));
+    }
+
+    private CapacityGatingService gatingFor(CapacityGatingProperties properties) {
+        return new CapacityGatingService(properties, null);
     }
 
     /** Builds a service whose reporter rethrows, so the error it chose is observable. */
     private CapacityGatingService gatingWithReporter(CapacityGatingProperties properties) {
-        return new CapacityGatingService(
-                properties, rethrowingReporter(), mock(ClusterRepository.class));
+        return new CapacityGatingService(properties, rethrowingReporter());
     }
 
 
 
     /** Gates clusters only, leaving every GPU and instance type available. */
-    private CapacityGatingService gatingForAllowedCluster(String... ownedClusterIds) {
+    private CapacityGatingService gatingForAllowedCluster() {
         return gatingFor(GATED_NCA_ID,
-                         GatingPolicy.builder().clusters(List.of(CLUSTER_ALLOWED)).build(),
-                         ownedClusterIds);
+                         GatingPolicy.builder().clusters(List.of(CLUSTER_ALLOWED)).build());
     }
 
     /** Gates GPUs only, leaving every cluster available. */
@@ -307,7 +289,6 @@ class CapacityGatingServiceTest {
         gatingForAllowedCluster().removeGatedFromAccountInfo(result, OTHER_NCA_ID);
 
         assertEquals(Set.of(CLUSTER_ALLOWED, CLUSTER_DENIED), availabilityClusterIds(result));
-        verifyNoInteractions(clusterRepository);
     }
 
     /**
@@ -323,12 +304,11 @@ class CapacityGatingServiceTest {
         gatingFor(properties).removeGatedFromAccountInfo(result, GATED_NCA_ID);
 
         assertEquals(Set.of(CLUSTER_ALLOWED, CLUSTER_DENIED), availabilityClusterIds(result));
-        verifyNoInteractions(clusterRepository);
     }
 
     /**
      * A policy that only names GPUs says nothing about clusters, so every cluster stays and the
-     * owned-cluster lookup is never needed.
+     * walk down to cluster level is skipped.
      */
     @Test
     void removeGatedFromAccountInfo_whenPolicyOmitsClusters_keepsEveryCluster() {
@@ -337,7 +317,6 @@ class CapacityGatingServiceTest {
         gatingForAllowedTypes().removeGatedFromAccountInfo(result, GATED_NCA_ID);
 
         assertEquals(Set.of(CLUSTER_ALLOWED, CLUSTER_DENIED), availabilityClusterIds(result));
-        verifyNoInteractions(clusterRepository);
     }
 
     /**
@@ -353,7 +332,6 @@ class CapacityGatingServiceTest {
         gatingForAllowedCluster().removeGatedFromAccountInfo(result, GATED_NCA_ID);
 
         assertNull(result.getGpus());
-        verifyNoInteractions(clusterRepository);
     }
 
     @Test
@@ -412,17 +390,17 @@ class CapacityGatingServiceTest {
     }
 
     /**
-     * The org's own clusters are exempt. This response carries no per-cluster owner, so the
-     * exemption has to come from the owned-cluster lookup.
+     * A cluster the org registered itself is filtered like any other. The configured list is the
+     * only thing that decides, so reading the config is enough to know where an account can run.
      */
     @Test
-    void removeGatedFromAccountInfo_whenClusterIsOwnedByCaller_keepsIt() {
+    void removeGatedFromAccountInfo_whenClusterIsOwnedByCaller_stillRemovesIt() {
         InstanceTypeAvailabilityResponse result =
                 availability(CLUSTER_ALLOWED, CLUSTER_DENIED, CLUSTER_OWNED);
 
-        gatingForAllowedCluster(CLUSTER_OWNED).removeGatedFromAccountInfo(result, GATED_NCA_ID);
+        gatingForAllowedCluster().removeGatedFromAccountInfo(result, GATED_NCA_ID);
 
-        assertEquals(Set.of(CLUSTER_ALLOWED, CLUSTER_OWNED), availabilityClusterIds(result));
+        assertEquals(Set.of(CLUSTER_ALLOWED), availabilityClusterIds(result));
     }
 
     /** A wildcard cluster list admits clusters the policy never names. */
@@ -488,19 +466,30 @@ class CapacityGatingServiceTest {
     }
 
     /**
-     * Gating controls what an org may borrow from others, so a cluster it registered itself stays
-     * visible. The response carries the owner, so this must not need the repository at all.
+     * Ownership buys nothing on the listing either: an account that needs its own cluster has to
+     * name it in {@code clusters}, or use the wildcard.
      */
     @Test
-    void removeGatedAuthorizedClusters_whenClusterIsOwnedByCaller_keepsItWithoutLookup() {
-        CapacityGatingService gatingService = gatingForAllowedCluster();
+    void removeGatedAuthorizedClusters_whenClusterIsOwnedByCaller_stillRemovesIt() {
         List<GetClusterResponse> clusters = new ArrayList<>(List.of(
-                cluster(CLUSTER_OWNED, GATED_NCA_ID)));
+                cluster(CLUSTER_OWNED, GATED_NCA_ID, gpu(GPU, INSTANCE_TYPE))));
+
+        gatingForAllowedCluster().removeGatedAuthorizedClusters(clusters, GATED_NCA_ID);
+
+        assertTrue(clusters.isEmpty());
+    }
+
+    /** Naming the owned cluster in the policy is what makes it visible. */
+    @Test
+    void removeGatedAuthorizedClusters_whenOwnedClusterIsNamedInPolicy_keepsIt() {
+        CapacityGatingService gatingService = gatingFor(
+                GATED_NCA_ID, GatingPolicy.builder().clusters(List.of(CLUSTER_OWNED)).build());
+        List<GetClusterResponse> clusters = new ArrayList<>(List.of(
+                cluster(CLUSTER_OWNED, GATED_NCA_ID, gpu(GPU, INSTANCE_TYPE))));
 
         gatingService.removeGatedAuthorizedClusters(clusters, GATED_NCA_ID);
 
         assertEquals(1, clusters.size());
-        verifyNoInteractions(clusterRepository);
     }
 
     @Test
@@ -533,16 +522,22 @@ class CapacityGatingServiceTest {
         assertEquals(CLUSTER_ALLOWED, destinations.iterator().next().getClusterId());
     }
 
+    /**
+     * Instance create applies the same rule, so an account cannot reach a cluster through
+     * ownership that the listing would not have shown it.
+     */
     @Test
-    void removeGatedDestinations_whenDestinationIsOwnedByCaller_keepsItWithoutLookup() {
-        CapacityGatingService gatingService = gatingForAllowedCluster();
+    void removeGatedDestinations_whenDestinationIsOwnedByCaller_stillRemovesIt() {
+        CapacityGatingService gatingService = gatingWithReporter(
+                propertiesFor(GATED_NCA_ID,
+                              GatingPolicy.builder().clusters(List.of(CLUSTER_ALLOWED)).build()));
         Set<RequestInstanceDestination> destinations = new HashSet<>(Set.of(
                 destination(CLUSTER_OWNED, GATED_NCA_ID)));
 
-        gatingService.removeGatedDestinations(destinations, request());
+        assertThrows(IcmsHttpUnifiedErrorException.class,
+                     () -> gatingService.removeGatedDestinations(destinations, request()));
 
-        assertEquals(1, destinations.size());
-        verifyNoInteractions(clusterRepository);
+        assertTrue(destinations.isEmpty());
     }
 
     /**
@@ -619,18 +614,18 @@ class CapacityGatingServiceTest {
     }
 
     /**
-     * Gating governs what an org may borrow from others. Hiding a cluster the org registered
-     * itself would leave it unable to see or manage its own cluster.
+     * The GPU rules reach an owned cluster too, so a cluster left with nothing permitted is
+     * dropped whoever registered it. Previously ownership kept it visible unfiltered, which made
+     * a cluster's contents depend on who owned it rather than on the policy.
      */
     @Test
-    void removeGatedAuthorizedClusters_whenOwnClusterHasOnlyGatedGpus_keepsItUnfiltered() {
+    void removeGatedAuthorizedClusters_whenOwnClusterHasOnlyGatedGpus_dropsIt() {
         List<GetClusterResponse> clusters = new ArrayList<>(List.of(
                 cluster("own-cluster", GATED_NCA_ID, gpu(GPU_DENIED, "some-b200-type"))));
 
         gatingForAllowedTypes().removeGatedAuthorizedClusters(clusters, GATED_NCA_ID);
 
-        assertEquals(1, clusters.size());
-        assertEquals(Set.of(GPU_DENIED), gpuNames(clusters.getFirst()));
+        assertTrue(clusters.isEmpty());
     }
 
     @Test
@@ -770,9 +765,8 @@ class CapacityGatingServiceTest {
     }
 
     /**
-     * {@code clusters: []} is the deliberate account kill switch. It has to outrank the ownership
-     * exemption, or an org that registered its own clusters would keep allocating through them
-     * after being switched off.
+     * {@code clusters: []} is the deliberate account kill switch, and it reaches the clusters the
+     * org registered itself as well as the ones it borrows.
      */
     @Test
     void whenOrgIsDenied_everySurfaceIsEmptiedIncludingOwnClusters() {
@@ -783,18 +777,18 @@ class CapacityGatingServiceTest {
 
         InstanceTypeAvailabilityResponse availability =
                 availability(CLUSTER_ALLOWED, CLUSTER_OWNED);
-        gatingFor(GATED_NCA_ID, killSwitch, CLUSTER_OWNED)
+        gatingFor(GATED_NCA_ID, killSwitch)
                 .removeGatedFromAccountInfo(availability, GATED_NCA_ID);
         assertTrue(availability.getGpus().isEmpty());
 
         List<GpuUsageResponse.Gpu> gpuUsage = usage(CLUSTER_ALLOWED, CLUSTER_OWNED);
-        gatingFor(GATED_NCA_ID, killSwitch, CLUSTER_OWNED)
+        gatingFor(GATED_NCA_ID, killSwitch)
                 .removeGatedFromGpuUsage(gpuUsage, GATED_NCA_ID);
         assertTrue(gpuUsage.isEmpty());
 
         Set<ClusterGroups> groups = new LinkedHashSet<>(Set.of(
                 clusterGroup("group-1", CLUSTER_ALLOWED, CLUSTER_OWNED)));
-        gatingFor(GATED_NCA_ID, killSwitch, CLUSTER_OWNED)
+        gatingFor(GATED_NCA_ID, killSwitch)
                 .removeGatedClusterGroups(groups, GATED_NCA_ID);
         assertTrue(groups.isEmpty());
 

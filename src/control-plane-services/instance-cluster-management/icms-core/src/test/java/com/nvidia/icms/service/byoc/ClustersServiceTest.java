@@ -108,7 +108,7 @@ class ClustersServiceTest {
                 clusterTargetingHelper,
                 computePlatformService,
                 clusterAuthorizationService,
-                new CapacityGatingService(capacityGatingProperties, null, clusterRepository));
+                new CapacityGatingService(capacityGatingProperties, null));
 
         // BART (legacy) flow, not detailed targeting.
         when(clusterAuthorizationService.isDetailedTargetingFlowEnabled()).thenReturn(false);

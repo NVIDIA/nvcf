@@ -244,7 +244,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 reservationProcessor,
                 computePlatformService,
                 instanceValidationService,
-                new CapacityGatingService(capacityGatingProperties, unifiedErrorReporter, null));
+                new CapacityGatingService(capacityGatingProperties, unifiedErrorReporter));
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
@@ -1749,6 +1749,10 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 .thenReturn(true);
         when(capacityGatingProperties.isInstanceTypeAllowedForNca(
                 DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
+        // The destination's own cluster is judged by the policy like any other, so a GPU-only
+        // policy has to admit it explicitly here.
+        when(capacityGatingProperties.isClusterAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID))
+                .thenReturn(true);
 
         // Act
         CreateSpotInstancesResponse response = createInstanceService.processInstanceRequest(
@@ -1881,7 +1885,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     }
 
     /**
-     * gpu-allowed-nca-ids and gpu-gating are independent gates that both run on the same request.
+     * gpu-allowed-nca-ids and capacity-gating are independent gates that both run on the same
+     * request.
      * The older gate only drops compute-platform destinations, so a BYOC destination survives it
      * even for a non-allowlisted org and is then judged by gating alone.
      */
@@ -1900,6 +1905,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 .thenReturn(true);
         when(capacityGatingProperties.isInstanceTypeAllowedForNca(
                 DUMMY_BYOC_NCA_ID, DUMMY_GPU, "instance-type")).thenReturn(true);
+        when(capacityGatingProperties.isClusterAllowedForNca(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID))
+                .thenReturn(true);
 
         // Act
         CreateSpotInstancesResponse response = createInstanceService.processInstanceRequest(
