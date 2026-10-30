@@ -17,7 +17,6 @@
 package com.nvidia.icms.outbound.cassandra.byoc;
 
 import com.nvidia.icms.errors.IcmsInternalServerException;
-import com.nvidia.icms.inbound.rest.model.byoc.InstanceTypeUsageEnum;
 import com.nvidia.icms.inbound.rest.model.byoc.NodeTypeEnum;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
@@ -27,8 +26,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountEnti
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAccountKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAccountEntity;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAccountKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClustersByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
@@ -38,7 +35,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV3Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.NonNull;
@@ -65,46 +61,6 @@ public class NvcaConverter {
                 .clusterSource(entity.getClusterSource())
                 .k8sVersion(entity.getK8sVersion())
                 .clusterGroupName(entity.getClusterGroupName())
-                .creationQueueUrl(entity.getCreationQueueUrl())
-                .creationQueueType(entity.getCreationQueueType())
-                .gpus(entity.getGpus())
-                .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .requestDump(entity.getRequestDump())
-                .gpusV4(entity.getGpusV4())
-                .gpusV5(getGpusV5(entity))
-                .capabilities(entity.getCapabilities())
-                .attributes(entity.getAttributes())
-                .nvcaVersion(entity.getNvcaVersion())
-                .authClientId(entity.getAuthClientId())
-                .region(entity.getRegion())
-                .nvcaLastConnected(entity.getNvcaLastConnected())
-                .creationQueues(entity.getCreationQueues())
-                .customAttributes(entity.getCustomAttributes())
-                .allowClusterTargeting(entity.getAllowClusterTargeting())
-                .clusterCreationQueues(entity.getClusterCreationQueues())
-                .clusterCreationQueuesForTasks(entity.getClusterCreationQueueForTasks())
-                .allowTaskClusterCreationQueues(entity.getAllowTaskClusterCreationQueues())
-                .clusterKeyId(entity.getClusterKeyId())
-                .build();
-    }
-
-    public static ClustersByAccountEntity toClustersByAccountEntity(ClusterEntity entity) {
-        return ClustersByAccountEntity.builder()
-                .key(ClustersByAccountKey.builder()
-                             .clusterName(entity.getClusterName())
-                             .ncaId(entity.getNcaId())
-                             .build())
-                .registrationTime(entity.getRegistrationTime())
-                .clusterId(entity.getClusterId())
-                .terminationQueueUrl(entity.getTerminationQueueUrl())
-                .terminationQueueType(entity.getTerminationQueueType())
-                .clusterDescription(entity.getClusterDescription())
-                .clusterProvider(entity.getClusterProvider())
-                .clusterStatus(entity.getClusterStatus())
-                .clusterSource(entity.getClusterSource())
-                .k8sVersion(entity.getK8sVersion())
-                .clusterGroupName(entity.getClusterGroupName())
-                .clusterGroupId(entity.getClusterGroupId())
                 .creationQueueUrl(entity.getCreationQueueUrl())
                 .creationQueueType(entity.getCreationQueueType())
                 .gpus(entity.getGpus())
@@ -191,85 +147,6 @@ public class NvcaConverter {
                 .ncaId(entity.getNcaId())
                 .authorizedNcaIds(entity.getAuthorizedNcaIds())
                 .build();
-    }
-
-    public static ClusterEntity toClusterEntity(ClusterByGroupIdAndIdEntity entity) {
-        return ClusterEntity.builder()
-                .clusterName(entity.getClusterName())
-                .clusterId(entity.getKey().getClusterId())
-                .ncaId(entity.getNcaId())
-                .terminationQueueUrl(entity.getTerminationQueueUrl())
-                .terminationQueueType(entity.getTerminationQueueType())
-                .clusterDescription(entity.getClusterDescription())
-                .clusterProvider(entity.getClusterProvider())
-                .clusterStatus(entity.getClusterStatus())
-                .clusterSource(entity.getClusterSource())
-                .k8sVersion(entity.getK8sVersion())
-                .clusterGroupName(entity.getClusterGroupName())
-                .clusterGroupId(entity.getKey().getClusterGroupId())
-                .creationQueueUrl(entity.getCreationQueueUrl())
-                .creationQueueType(entity.getCreationQueueType())
-                .gpus(entity.getGpus())
-                .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .requestDump(entity.getRequestDump())
-                .capabilities(entity.getCapabilities())
-                .attributes(entity.getAttributes())
-                .gpusV4(entity.getGpusV4())
-                .gpusV5(getGpusV5(entity))
-                .nvcaVersion(entity.getNvcaVersion())
-                .authClientId(entity.getAuthClientId())
-                .region(entity.getRegion())
-                .creationQueues(entity.getCreationQueues())
-                .nvcaLastConnected(entity.getNvcaLastConnected())
-                .customAttributes(entity.getCustomAttributes())
-                .allowClusterTargeting(entity.getAllowClusterTargeting())
-                .clusterCreationQueues(entity.getClusterCreationQueues())
-                .clusterCreationQueuesForTasks(entity.getClusterCreationQueueForTasks())
-                .allowTaskClusterCreationQueues(entity.getAllowTaskClusterCreationQueues())
-                .clusterKeyId(entity.getClusterKeyId())
-                .build();
-    }
-
-    public static ClusterEntity toClusterEntity(ClustersByAccountEntity entity) {
-        return ClusterEntity.builder()
-                .clusterName(entity.getKey().getClusterName())
-                .clusterId(entity.getClusterId())
-                .ncaId(entity.getKey().getNcaId())
-                .terminationQueueUrl(entity.getTerminationQueueUrl())
-                .terminationQueueType(entity.getTerminationQueueType())
-                .clusterDescription(entity.getClusterDescription())
-                .clusterProvider(entity.getClusterProvider())
-                .clusterStatus(entity.getClusterStatus())
-                .clusterSource(entity.getClusterSource())
-                .k8sVersion(entity.getK8sVersion())
-                .clusterGroupName(entity.getClusterGroupName())
-                .clusterGroupId(entity.getClusterGroupId())
-                .creationQueueUrl(entity.getCreationQueueUrl())
-                .creationQueueType(entity.getCreationQueueType())
-                .gpus(entity.getGpus())
-                .authorizedNcaIds(entity.getAuthorizedNcaIds())
-                .requestDump(entity.getRequestDump())
-                .capabilities(entity.getCapabilities())
-                .attributes(entity.getAttributes())
-                .gpusV4(entity.getGpusV4())
-                .gpusV5(getGpusV5(entity))
-                .nvcaVersion(entity.getNvcaVersion())
-                .authClientId(entity.getAuthClientId())
-                .region(entity.getRegion())
-                .creationQueues(entity.getCreationQueues())
-                .nvcaLastConnected(entity.getNvcaLastConnected())
-                .customAttributes(entity.getCustomAttributes())
-                .allowClusterTargeting(entity.getAllowClusterTargeting())
-                .clusterCreationQueues(entity.getClusterCreationQueues())
-                .clusterCreationQueuesForTasks(entity.getClusterCreationQueueForTasks())
-                .allowTaskClusterCreationQueues(entity.getAllowTaskClusterCreationQueues())
-                .clusterKeyId(entity.getClusterKeyId())
-                .build();
-    }
-
-
-    public static Set<GpuV5Udt> getGpusV5(ClustersByAccountEntity entity) {
-        return getGpusV5(entity.getGpusV5(), entity.getGpusV4());
     }
 
     public static Set<GpuV5Udt> getGpusV5(ClusterEntity entity) {

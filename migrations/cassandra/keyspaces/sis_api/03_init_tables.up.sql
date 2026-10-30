@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cloud_health (
     PRIMARY KEY ((cloud_provider, zone))
 );
 
--- Full cluster state, keyed by (group, cluster) for group-scoped queries.
+-- Deprecated: cluster_by_group_id_and_cluster_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
     cluster_name                       text,
     cluster_id                         text,
@@ -425,7 +425,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_configuration_by_cluster_id (
     PRIMARY KEY (cluster_id)
 );
 
--- Cluster group metadata, keyed by group id.
+-- Deprecated: cluster_group_by_cluster_group_id is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_group_by_cluster_group_id (
     cluster_group_name text,
     cluster_group_id   text,
@@ -444,7 +444,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_health (
     PRIMARY KEY (cluster_id)
 );
 
--- Clusters visible to an account (primary lookup path for account-scoped queries).
+-- Deprecated: clusters_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.clusters_by_account (
     cluster_name                       text,
     registration_time                  timestamp,
@@ -498,7 +498,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_groups_by_authorized_accounts (
     PRIMARY KEY ((nca_id_key), cluster_group_name, cluster_group_id)
 ) WITH CLUSTERING ORDER BY (cluster_group_name ASC, cluster_group_id ASC);
 
--- Clusters accessible to authorized (non-owner) accounts.
+-- Deprecated: clusters_by_authorized_accounts is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.clusters_by_authorized_accounts (
     nca_id_key                         text,
     cluster_name                       text,
@@ -519,7 +519,7 @@ CREATE TABLE IF NOT EXISTS sis_api.clusters_by_authorized_accounts (
     PRIMARY KEY ((nca_id_key), cluster_id)
 ) WITH CLUSTERING ORDER BY (cluster_id ASC);
 
--- Cluster groups owned by an account.
+-- Deprecated: cluster_groups_by_account is no longer used by ICMS; retained for existing databases.
 CREATE TABLE IF NOT EXISTS sis_api.cluster_groups_by_account (
     cluster_group_name  text,
     cluster_group_id    text,
