@@ -46,8 +46,9 @@ session to the invocation-service pod on `invocation.port`, 8443 by default,
 which is the pod's worker TLS listener (`invocation.workerTls` in the
 http-invocation chart). Envoy does not terminate that inner session.
 
-Workers use `https://<name>.<workerDomain>:10084` as the proxy address and must
-trust the CA that issued both certificates. Set `invocation.tls.enabled: false`
+Workers use `https://<name>.<workerDomain>:10084` as the proxy address. They
+check the frontend certificate and the pod certificate separately, so they must
+trust the CA of each one; the two CAs can differ. Set `invocation.tls.enabled: false`
 and `invocation.port: 8080` only for a plaintext test setup.
 
 ## Destination trust boundary
