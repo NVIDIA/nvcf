@@ -182,13 +182,12 @@ System logs are available at standard UNIX locations and from the systemd journa
 
 ### Tracing (Available in GA)
 
-Distributed tracing support via OpenTelemetry Protocol (OTLP) is planned for a future release:
-
-- Key flows will be instrumented with OpenTelemetry SDK
-- Traces will be exportable via OTLP (HTTP or gRPC)
-- Configurable sampling strategies
-- Support for any OTLP-compatible backend (Jaeger, Tempo, Zipkin, etc.)
-- Tracing is configurable via Helm values under `global.observability.tracing`
+Control-plane services and worker sidecars export spans over OTLP gRPC to the
+collector configured under `global.observability.tracing`. W3C `traceparent`
+context propagates end to end.
+The `nvcf-reqid` value is stored as `request_id` on invocation-service spans
+and `requestId` on worker spans. Any OTLP-compatible backend can receive the
+traces.
 
 ## Configuration
 
@@ -310,9 +309,15 @@ Configuration fields:
   such as `<service>.<namespace>.svc.cluster.local` when the collector runs
   in-cluster.
 - `collectorPort`: Port on which the collector accepts OTLP traffic (e.g.,
-  4317 for gRPC, 4318 for HTTP depending on your collector setup).
+  4317 for gRPC).
 - `collectorProtocol`: URI scheme used to build the collector endpoint
   (`http` or `https`). This value does not select the OTLP transport.
+
+All services use OTLP over gRPC. Set `collectorPort` to the collector's gRPC
+port, which is 4317 by default.
+
+Worker sidecars receive the collector endpoint from nvcf-api when a function
+is deployed. Redeploy functions that were deployed before tracing was enabled.
 
 Ensure your collector is deployed and reachable from the NVCF control-plane
 namespace, and that it forwards traces to your backend (Jaeger, Tempo, Zipkin,
