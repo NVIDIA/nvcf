@@ -6,6 +6,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -77,6 +79,49 @@ func TestRunPassesTheSameChangeWithAMajorBump(t *testing.T) {
 	}
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0\nstderr:\n%s", code, errOut.String())
+	}
+}
+
+func TestRunMaintenanceIgnoresSiblingReleaseButStillRejectsMigrationDeletion(t *testing.T) {
+	dir := fullFixture(t)
+	git(t, dir, "branch", "maintenance")
+	write(t, dir, "migrations/cassandra/keyspaces/nvcf_api/04_add_column.up.sql",
+		"ALTER TABLE nvcf_api.functions_v3 ADD name text;")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-qm", "new minor migration")
+	git(t, dir, "tag", "deploy/stacks/self-managed/v1.1.2")
+	git(t, dir, "checkout", "-q", "maintenance")
+
+	var out, errOut bytes.Buffer
+	code, err := run(dir, "nvcf-self-managed-stack", "fix", true, &out, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("maintenance exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, &out, &errOut)
+	}
+	var rep report
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.BaseTag != "deploy/stacks/self-managed/v1.0.0" || len(rep.Changes) != 0 {
+		t.Fatalf("maintenance report = %+v, want unchanged released baseline", rep)
+	}
+
+	path := "migrations/cassandra/keyspaces/nvcf_api/03_init_tables.up.sql"
+	if err := os.Remove(filepath.Join(dir, path)); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "-qm", "delete a released migration")
+	out.Reset()
+	errOut.Reset()
+	code, err = run(dir, "nvcf-self-managed-stack", "fix", false, &out, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 1 || !strings.Contains(errOut.String(), path) {
+		t.Fatalf("deletion exit = %d, want 1 naming %s\nstderr:\n%s", code, path, &errOut)
 	}
 }
 
