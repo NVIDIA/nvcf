@@ -19,14 +19,12 @@ func runGit(root string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// LatestReleaseTag returns the highest published tag in the candidate's history
-// for a stack, for example deploy/stacks/self-managed/v1.0.0. Releases from a
-// different branch cannot be its baseline: migrations introduced there would
-// appear deleted in an older maintenance candidate. Prereleases are skipped:
-// they are not a version any customer was told to install, so they are not the
-// baseline a release candidate is measured against.
+// LatestReleaseTag returns the highest published tag for a stack, for example
+// deploy/stacks/self-managed/v1.0.0. Prereleases are skipped: they are not a
+// version any customer was told to install, so they are not the baseline a
+// release candidate is measured against.
 func LatestReleaseTag(root, stackPath string) (string, error) {
-	out, err := runGit(root, "tag", "--merged", "HEAD", "--list", stackPath+"/v*", "--sort=-v:refname")
+	out, err := runGit(root, "tag", "--list", stackPath+"/v*", "--sort=-v:refname")
 	if err != nil {
 		return "", err
 	}
@@ -40,7 +38,7 @@ func LatestReleaseTag(root, stackPath string) (string, error) {
 		}
 		return tag, nil
 	}
-	return "", fmt.Errorf("no published release tag under %s in the candidate's history", stackPath)
+	return "", fmt.Errorf("no published release tag under %s", stackPath)
 }
 
 // GatherEvidence reports every migration file that changed between a stack's
