@@ -163,6 +163,11 @@ public class IcmsConfigurationProperties {
     // cluster_groups_by_authorized_accounts). Writes are unaffected.
     private boolean clusterByIdReadsEnabled;
 
+    // Feature flag: serve period reads of requests and instances from the indexed creation_bucket
+    // column (storage-attached index) instead of the requests_by_day and instances_by_day lookup
+    // tables. Writes to the by-day tables are unaffected.
+    private boolean creationBucketReadsEnabled = true;
+
     private Map<String, List<String>> supportedGpuDetails = new HashMap<>();
     private Map<String, String> gpusToQueueUrlGpuNameMap = new HashMap<>();
 
