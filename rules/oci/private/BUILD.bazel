@@ -43,6 +43,7 @@ py_test(
         "java_runtime_contract.py",
         "java_runtime_contract_test.py",
     ],
+    imports = ["."],
 )
 
 # The shared Java image contract test script, referenced by the
