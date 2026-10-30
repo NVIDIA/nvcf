@@ -58,6 +58,12 @@ if grep -F -- 'root/sign-intermediate`' "${OUT_FILE}" | grep -F -q 'trunc_by_ca_
 fi
 # Init and sidecar agents share template.hcl, so one rendered call covers both.
 assert_has 'config-init.hcl'
+
+echo "Checking the template renders issuance-specific output so the exec hook fires..."
+# Vault Agent runs a template's exec command only when the rendered destination
+# changes. writeToFile output is empty, so without this line every render was
+# identical and the bundle rewrite plus nginx reload never ran.
+assert_has 'serial={{ .Data.serial_number }} expiration={{ .Data.expiration }}'
 assert_has '"source" = "/vault/configs/template.hcl"'
 
 echo "Checking the TTL is overridable (short values are used for rotation tests)..."

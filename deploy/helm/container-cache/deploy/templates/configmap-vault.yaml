@@ -91,6 +91,14 @@ data:
       "address" = "{{ .Values.vault.vaultAddress }}"
     }
 
+  # The exec hook on both agents runs only when the rendered destination file
+  # changes. Everything this template produces goes through writeToFile, so
+  # the rendered output used to be identical on every run and the hook never
+  # fired: the bundle nginx serves was never rewritten after init and the
+  # intermediate expired in place. The serial and expiration line below is
+  # the only rendered output and changes on every issuance, which is what
+  # makes the hook run.
+  #
   # The sign-intermediate call must carry an explicit ttl. Without one Vault
   # applies the mount default, and when that default is longer than the
   # signing CA's remaining life the request fails with "ttl must be set to
@@ -105,6 +113,7 @@ data:
     {{ "{{" }}  with $arg := printf "csr=%s" $csrContents {{ "}}" }}
     {{ "{{" }}  with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/root/sign-intermediate` $arg "ttl={{ required "vault.intermediateCertTTL is required when vault.enabled=true" .Values.vault.intermediateCertTTL }}" {{ "}}" }}
     {{ "{{"}}  .Data.certificate |  writeToFile "/vault/secrets/certs/nginx-intermediate.pem" "" "" "0644" {{ "}}" }}
+    serial={{ "{{" }} .Data.serial_number {{ "}}" }} expiration={{ "{{" }} .Data.expiration {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}
     {{ "{{" }} end {{ "}}" }}
