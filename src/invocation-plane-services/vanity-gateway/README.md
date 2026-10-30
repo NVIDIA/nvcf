@@ -637,14 +637,11 @@ curl -v localhost:10083/metrics
 `llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
 LLM Gateway does not serve `/health`.
 
-The chart wires this `/health` to the readiness probe only. The liveness probe
-uses `/health` on the admin port (`10083`), which checks only the process, so an
-`nvcf api` outage takes pods out of the Service but does not restart them.
-
 The two checks differ in what a failure does. A failing `nvcf api` check returns
 `503`, because that upstream serves every route. A failing `llm api gateway`
-check is reported in the response body but still returns `200`, so an LLM
-Gateway outage does not drop invocation-service routing.
+check is reported in the response body but still returns `200`: deployments wire
+`/health` to both the readiness and liveness probes, so failing it would restart
+every pod and drop invocation-service routing when only the LLM Gateway is down.
 Requests for an LLM-routed model return `502` for as long as that upstream is
 unreachable, and everything else keeps serving.
 

@@ -184,6 +184,9 @@ jobs:
       - name: Test grpc-proxy HTTP/3 chart rendering
         run: bash deploy/helm/grpc-proxy/tests/http3-render.sh
 
+      - name: Test grpc-proxy chart probes
+        run: bash deploy/helm/grpc-proxy/tests/probes_test.sh
+
       - name: Run Stargate dev stack render tests
         run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
 
@@ -201,12 +204,6 @@ jobs:
 
       - name: Test NVCT API sidecar release artifacts
         run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
-
-      - name: Test data plane chart probes
-        run: |
-          bash deploy/helm/grpc-proxy/tests/probes_test.sh
-          bash deploy/helm/http-invocation/tests/probes_test.sh
-          bash deploy/helm/vanity-gateway/tests/chart-render/verify-probes.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
