@@ -33,6 +33,7 @@ import com.nvidia.apikeys.facade.KeyManagementFacade;
 import com.nvidia.apikeys.vo.KeyStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -232,7 +233,7 @@ public class PlatformAdminKeysController {
             @Parameter(name = USER_ID, required = true,
                     description = "Unique identifier of the user.")
             @PathVariable(USER_ID) String userId,
-            @RequestBody UpdateOwnerStatusForAccountRequest request) {
+            @Valid @RequestBody UpdateOwnerStatusForAccountRequest request) {
         return facade.updateAccountStatus(PLATFORM_ADMIN, ncaId, userId, request);
     }
 
@@ -253,7 +254,7 @@ public class PlatformAdminKeysController {
             @Parameter(name = USER_ID, required = true,
                     description = "Unique identifier of the user.")
             @PathVariable(USER_ID) String userId,
-            @RequestBody UpdateOwnerStatusForAccountAndIssuerServiceRequest request) {
+            @Valid @RequestBody UpdateOwnerStatusForAccountAndIssuerServiceRequest request) {
         return facade.updateIssuerServiceStatus(
                 PLATFORM_ADMIN, ncaId, serviceId, userId, request);
     }

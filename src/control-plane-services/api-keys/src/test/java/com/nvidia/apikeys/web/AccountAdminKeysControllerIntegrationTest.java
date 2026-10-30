@@ -120,6 +120,26 @@ class AccountAdminKeysControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void statusUpdateWithoutStatusIsRejectedAndKeepsTheStoredStatus() {
+        var statusPath =
+                "/v2/api-keys/account-admin/accounts/" + NCA_ID + "/users/" + USER_KEY_OWNER_ID_1
+                        + "/status";
+        exchange(HttpMethod.PUT, statusPath, "{\"status\":\"SUSPENDED\"}",
+                 KeyOwnerStatusResponse.class);
+
+        var rejected = exchange(HttpMethod.PUT, statusPath, "{}", String.class);
+        assertThat(rejected.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var statuses = exchange(
+                HttpMethod.GET,
+                "/v2/api-keys/account-admin/accounts/" + NCA_ID + "/users/"
+                        + USER_KEY_OWNER_ID_1 + "/statuses",
+                null, KeyOwnerStatusesResponse.class);
+        assertThat(statuses.getBody().getAccounts()).singleElement().satisfies(
+                account -> assertThat(account.getStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED));
+    }
+
+    @Test
     void accountAdminHasNoCrossAccountStatusesRoute() {
         var response = restTemplate.exchange(
                 "/v2/api-keys/account-admin/users/" + USER_KEY_OWNER_ID_1 + "/statuses",

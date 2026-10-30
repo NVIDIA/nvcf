@@ -102,6 +102,20 @@ class PlatformAdminKeysControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void statusUpdatesWithoutStatusAreRejected() {
+        var accountPath = "/v2/api-keys/platform-admin/accounts/" + NCA_ID + "/users/"
+                + USER_KEY_OWNER_ID_1 + "/status";
+        var issuerPath = "/v2/api-keys/platform-admin/accounts/" + NCA_ID + "/services/"
+                + SERVICE_ID_1 + "/users/" + USER_KEY_OWNER_ID_1 + "/status";
+
+        for (var path : new String[] {accountPath, issuerPath}) {
+            var response = restTemplate.exchange(
+                    path, HttpMethod.PUT, new HttpEntity<>("{}", jsonHeaders()), String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @Test
     void accountAdminHasNoIssuerServiceStatusRoute() {
         var path = "/v2/api-keys/account-admin/accounts/" + NCA_ID + "/services/"
                 + SERVICE_ID_1 + "/users/" + USER_KEY_OWNER_ID_1 + "/status";
