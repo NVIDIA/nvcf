@@ -25,7 +25,8 @@ trap 'rm -rf "$smoke_tmp"' EXIT INT TERM
 
 export BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:8200}"
 export BAO_TOKEN="${BAO_TOKEN:-root}"
-PLUGIN_PATH="${PLUGIN_PATH:-/openbao/plugins/vault-plugin-secrets-jwt}"
+. "${JWT_VERSIONS_FILE:-/openbao/jwt-plugin-versions.env}"
+PLUGIN_PATH="${PLUGIN_PATH:-/openbao/plugins/vault-plugin-secrets-jwt-${JWT_PLUGIN_TARGET_VERSION}}"
 EXPECTED_PLUGIN_SHA="${EXPECTED_PLUGIN_SHA:-}"
 JWTVERIFY="${JWTVERIFY:-}"
 
@@ -51,7 +52,7 @@ decode_or_verify_jwt() {
 }
 
 printf "%s\n" "plugin_directory = \"/openbao/plugins\"" > "$smoke_tmp/openbao-dev.hcl"
-bao server -dev -dev-root-token-id="${BAO_TOKEN}" -dev-listen-address=127.0.0.1:8200 -config="$smoke_tmp/openbao-dev.hcl" >"$smoke_tmp/openbao.log" 2>&1 &
+bao server -dev -dev-root-token-id="${BAO_TOKEN}" -dev-listen-address=127.0.0.1:8200 -config="$smoke_tmp/openbao-dev.hcl" -config=/openbao/plugin-config >"$smoke_tmp/openbao.log" 2>&1 &
 server_pid=$!
 trap 'kill "${server_pid}" >/dev/null 2>&1 || true' EXIT
 
@@ -76,8 +77,9 @@ if [ -n "${EXPECTED_PLUGIN_SHA}" ] && [ "${actual_sha}" != "${EXPECTED_PLUGIN_SH
   exit 1
 fi
 
-bao plugin register -sha256="${actual_sha}" secret vault-plugin-secrets-jwt
-bao secrets enable -path=jwt vault-plugin-secrets-jwt
+catalog_sha=$(bao plugin info -field=sha256 -version="${JWT_PLUGIN_TARGET_VERSION}" secret vault-plugin-secrets-jwt)
+test "$catalog_sha" = "$actual_sha"
+bao secrets enable -path=jwt -plugin-version="${JWT_PLUGIN_TARGET_VERSION}" vault-plugin-secrets-jwt
 bao write jwt/config key_ttl=3s jwt_ttl=30s "subject_pattern=^[A-Z][a-z]+ [A-Z][a-z]+$"
 
 printf "%s\n" "{\"claims\":{\"sub\":\"Zapp Brannigan\"}}" > /tmp/claims.json

@@ -7,6 +7,10 @@ Use it only with a published stack release that includes the target server,
 agent, and migrations images. It does not announce a stack release or apply
 to upgrades from earlier OpenBao minor versions or a different plugin binary.
 
+When the target image introduces versioned JWT plugin commands, use the
+[JWT plugin upgrade procedure](openbao-jwt-plugin-upgrade.md). That procedure
+has separate bridge, tune, rollback, and later cleanup gates.
+
 The default NVCF configuration needs no policy, JWT role, secret schema, or
 agent-template changes for this patch. Review the upstream changes separately
 if you customize plugin registration, authorization, PKI, or agent listeners.

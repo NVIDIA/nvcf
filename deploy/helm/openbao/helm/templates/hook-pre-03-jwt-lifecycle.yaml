@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $mode := include "nvcf-openbao.jwtLifecycleMode" . }}
+{{- if and .Release.IsInstall (eq $mode "bridge") }}
+{{- fail "JWT bridge mode is for existing releases; use versioned mode for a fresh install" }}
+{{- end }}
+{{- $name := include "nvcf-openbao.serverFullname" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-jwt-lifecycle-preflight
+  namespace: {{ include "nvcf-openbao.namespace" . }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "2"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: {{ $name }}-initialize-cluster
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+      {{- with .Values.openbao.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if ne $mode "legacy" }}
+      initContainers:
+        - name: check-server-image
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.server.image "name" "openbao.server.image") }}"
+          imagePullPolicy: {{ .Values.openbao.server.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              jwt-plugin-lifecycle image-check
+              . /openbao/jwt-plugin-versions.env
+              {{- include "nvcf-openbao.copyJWTManifest" . | nindent 14 }}
+              sha256sum "/openbao/plugins/vault-plugin-secrets-jwt-${JWT_PLUGIN_TARGET_VERSION}" | awk '{print $1}' > /versions/target.sha
+          volumeMounts:
+            - name: versions
+              mountPath: /versions
+          resources:
+            {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}
+        {{- if eq $mode "versioned" }}
+        - name: check-migrations-and-members
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
+          imagePullPolicy: {{ .Values.openbao.migrations.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              test -r /app/migrations/utils/jwt_plugin_version.sh
+              {{- if .Release.IsUpgrade }}
+              JWT_SERVER_NAMESPACE={{ include "nvcf-openbao.namespace" . | quote }}
+              JWT_SERVER_STATEFULSET={{ $name | quote }}
+              {{- .Files.Get "scripts/check-jwt-members.sh" | nindent 14 }}
+              {{- end }}
+          volumeMounts:
+            - name: versions
+              mountPath: /versions
+              readOnly: true
+          resources:
+            {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: preflight
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.server.image "name" "openbao.server.image") }}"
+          imagePullPolicy: {{ .Values.openbao.server.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              {{- if eq $mode "legacy" }}
+              if test -r /openbao/jwt-plugin-versions.env; then
+                echo 'Versioned OpenBao images require bridge or versioned lifecycle mode' >&2
+                exit 1
+              fi
+              {{- else }}
+              jwt-plugin-lifecycle image-check
+              {{- if .Release.IsUpgrade }}
+              {{- include "nvcf-openbao.adminEnvironment" . | nindent 14 }}
+              {{- if eq $mode "bridge" }}
+              jwt-plugin-lifecycle bridge-preflight
+              {{- else }}
+              jwt-plugin-lifecycle wait-ready
+              jwt-plugin-lifecycle deployment-preflight
+              {{- end }}
+              {{- end }}
+              {{- end }}
+          {{- if and .Release.IsUpgrade (ne $mode "legacy") }}
+          volumeMounts:
+            - name: root-token
+              mountPath: /secrets/root_token
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}
+      {{- if ne $mode "legacy" }}
+      volumes:
+        - name: versions
+          emptyDir: {}
+        {{- if .Release.IsUpgrade }}
+        - name: root-token
+          secret:
+            secretName: {{ $name }}-root-token
+        {{- end }}
+      {{- end }}
