@@ -47,7 +47,8 @@ pod that holds the request. A fixed worker callback URL
 (global.workerEndpoints.invocationServiceURL, grpcProxyWorkerConnectURL, or
 grpcproxy.workerConnectBaseURL) is shared by every replica, so the affected
 service stays single-replica (placement still applied, no-op at 1 replica, no
-PDB).
+PDB). grpc-proxy under HTTP/3 (grpcproxy.http3.enabled or workerCallbackProxy)
+is the exception: each pod prefixes the base URL with its own IP.
 
 Quorum services (Cassandra, NATS, OpenBao) get 3 replicas, anti-affinity, zone
 spread, and a PDB tolerating one disruption at any replica count.
@@ -138,13 +139,13 @@ merge:
 {{- end -}}
 
 {{/* OpenBao service PKI role allowed_domains: addons.llm.pki.allowedDomains plus
-     the worker callback proxy's frontend and grpc-proxy pod domains when they
-     are not already covered. Only called with the proxy enabled, so the LLM
-     value renders unchanged otherwise. Keep in sync with
+     the worker callback proxy's frontend, grpc-proxy pod and invocation-service
+     pod domains when they are not already covered. Only called with the proxy
+     enabled, so the LLM value renders unchanged otherwise. Keep in sync with
      openbao-migrations-env.yaml.gotmpl. */}}
 {{- define "nvcf.servicePki.allowedDomains" -}}
 {{- $domains := dig "addons" "llm" "pki" "allowedDomains" "" . | toString | trim -}}
-{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" -}}
+{{- $required := list (dig "workerCallbackProxy" "workerDomain" "" . | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" "invocation.nvcf.svc.cluster.local" -}}
 {{- range $need := $required -}}
 {{- $covered := false -}}
 {{- range $allowed := splitList "," $domains -}}
@@ -808,6 +809,27 @@ natsAuthCalloutService:
 {{- end }}
 {{- $_ := set $sizingValues $component $merged }}
 {{- end }}
+{{- $workerCallbackProxyEnabled := dig "workerCallbackProxy" "enabled" false .Values }}
+{{- if not (kindIs "bool" $workerCallbackProxyEnabled) }}
+{{- fail "workerCallbackProxy.enabled must be a YAML boolean, true or false" }}
+{{- end }}
+{{- $workerCallbackProxyDomain := "" }}
+{{- if $workerCallbackProxyEnabled }}
+{{- $workerCallbackProxyDomain = dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower }}
+{{- if not $workerCallbackProxyDomain }}
+{{- fail "workerCallbackProxy.workerDomain is required when workerCallbackProxy.enabled is true, for example grpc-worker.example.com" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$" $workerCallbackProxyDomain) }}
+{{- fail (printf "workerCallbackProxy.workerDomain must be a DNS name without a scheme or wildcard, got %q" $workerCallbackProxyDomain) }}
+{{- end }}
+{{- if or $invocationWorkerBaseURL $grpcProxyWorkerConnectBaseURL (dig "env" "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" "" $sizingValues.invocation) }}
+{{- fail "workerCallbackProxy.enabled cannot be combined with global.workerEndpoints.invocationServiceURL, global.workerEndpoints.grpcProxyWorkerConnectURL, grpcproxy.workerConnectBaseURL, or invocation.env.WORKER_STREAM_PROPERTIES__SELF_ADDRESS; workers reach both services through the proxy" }}
+{{- end }}
+{{- $grpcProxyWorkerConnectBaseURL = printf "https://%s" $workerCallbackProxyDomain }}
+{{- end }}
+{{- /* Under HTTP/3 each grpc-proxy pod prefixes workerConnectBaseURL with its
+       own dashed IP, so a set base URL is still a per-pod address. */}}
+{{- $grpcProxyHttp3 := or $workerCallbackProxyEnabled (eq (dig "http3" "enabled" false $sizingValues.grpcproxy | toString) "true") }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $backendRouterGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
@@ -1123,6 +1145,9 @@ invocation:
   {{- with include "nvcf.natsStreamReplicas" .Values }}
   {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" . }}
   {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__PROXY_ADDRESS" (dig "invocationProxyURL" "" $workerEndpoints | default (printf "https://invocation.%s:10084" $workerCallbackProxyDomain)) }}
+  {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   {{- $invocationSelfAddress := index $secretsInvocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" | default (index $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS") }}
   {{- $invocationScaled := and $haEnabled (not $invocationSelfAddress) }}
@@ -1150,6 +1175,22 @@ invocation:
   replicaCount: 1
   autoscaling:
     enabled: false
+  {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- /* Envoy tunnels workers to this TLS listener, and the worker verifies
+         the pod as <dashed-pod-ip>.invocation.nvcf.svc.cluster.local. */}}
+  workerTls:
+    enabled: true
+    advertise: true
+    tls:
+      certificate:
+        enabled: true
+        issuerRef:
+          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          group: cert-manager.io
+        dnsNames:
+          - "*.invocation.nvcf.svc.cluster.local"
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -1280,7 +1321,7 @@ eventLedger:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}
 
-{{- $grpcProxyScaled := and $haEnabled (not $grpcProxyWorkerConnectBaseURL) }}
+{{- $grpcProxyScaled := and $haEnabled (or $grpcProxyHttp3 (not $grpcProxyWorkerConnectBaseURL)) }}
 grpcproxy:
   fullnameOverride: grpc-proxy
   {{- $grpcProxySizing := $sizingValues.grpcproxy }}
@@ -1334,6 +1375,28 @@ grpcproxy:
   {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
   {{- end }}
+  {{- if $workerCallbackProxyEnabled }}
+  {{- /* Workers reach the pod through Envoy as <dashed-pod-ip>.<workerDomain>;
+         Envoy re-encrypts to the pod and checks the grpc-headless name. */}}
+  http3:
+    enabled: true
+    tls:
+      certificate:
+        enabled: true
+        issuerRef:
+          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          group: cert-manager.io
+        dnsNames:
+          - {{ printf "*.%s" $workerCallbackProxyDomain | quote }}
+          - "*.grpc-headless.nvcf.svc.cluster.local"
+  {{- else }}
+  {{- /* The replica decision above reads this block, so the chart must get it. */}}
+  {{- with dig "grpcproxy" "http3" dict .Values }}
+  http3:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
 
   env:
     # Observability
@@ -1367,6 +1430,48 @@ grpcproxy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- end }}
+
+{{- if $workerCallbackProxyEnabled }}
+
+workerCallbackProxy:
+  workerDomain: {{ $workerCallbackProxyDomain | quote }}
+  {{- with dig "workerCallbackProxy" "replicaCount" nil .Values }}
+  replicaCount: {{ if $haEnabled }}{{ max 2 (. | int) }}{{ else }}{{ . | int }}{{ end }}
+  {{- end }}
+  {{- with dig "workerCallbackProxy" "image" dict .Values }}
+  image:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "workerCallbackProxy" "service" dict .Values }}
+  service:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  tls:
+    frontend:
+      certificate:
+        issuerRef:
+          kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          group: cert-manager.io
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "worker-callback-proxy" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "worker-callback-proxy" "class" "controlplane") }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- end }}
+{{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}

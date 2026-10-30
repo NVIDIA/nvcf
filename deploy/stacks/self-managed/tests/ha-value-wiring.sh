@@ -361,6 +361,26 @@ EOF
     fail "invocation-service: a fixed $fixed must not hold invocation-service at one replica"
 done
 
+# Under HTTP/3 each grpc-proxy pod puts its own IP in front of the base URL,
+# so a set workerConnectBaseURL no longer pins grpc-proxy to one pod.
+write_env <<'EOF'
+highAvailability:
+  mode: preferred
+grpcproxy:
+  workerConnectBaseURL: https://grpc-worker.example.com
+  http3:
+    enabled: true
+EOF
+render_chart_values grpc-proxy "$work_dir/grpcproxy-http3.yaml" "$core" ||
+  fail "render grpc-proxy (HTTP/3 with workerConnectBaseURL)"
+grpcproxy_http3="$(awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-http3.yaml")"
+grep -Eq "^  replicaCount:[[:space:]]*2$" <<<"$grpcproxy_http3" ||
+  fail "grpc-proxy: expected replicaCount 2 under HTTP/3 with a workerConnectBaseURL"
+grep -A3 "^  podDisruptionBudget:" <<<"$grpcproxy_http3" | grep -q "enabled: true" ||
+  fail "grpc-proxy: expected the HA PDB under HTTP/3 with a workerConnectBaseURL"
+test "$(yq -r '.grpcproxy.http3.enabled' "$work_dir/grpcproxy-http3.yaml")" = "true" ||
+  fail "grpc-proxy: grpcproxy.http3 must reach the chart when it decides the replica count"
+
 echo "== secrets file overrides: decisions use the fully merged values =="
 # The service releases layer secrets/<env>-secrets.yaml after global.yaml.gotmpl.
 # write-values emits the merged release values, so these assert what the chart gets.

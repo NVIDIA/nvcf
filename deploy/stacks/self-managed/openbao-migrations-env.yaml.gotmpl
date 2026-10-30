@@ -4,11 +4,12 @@
 {{- $workerCallbackProxyEnabled := eq (dig "workerCallbackProxy" "enabled" false .Values | toString) "true" -}}
 {{- $allowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values -}}
 {{- /* Same rule as nvcf.servicePki.allowedDomains in global.yaml.gotmpl, which
-     this file cannot include: add the worker callback proxy's frontend and
-     grpc-proxy pod domains when the list does not already cover them. */ -}}
+     this file cannot include: add the worker callback proxy's frontend,
+     grpc-proxy pod and invocation-service pod domains when the list does not
+     already cover them. */ -}}
 {{- if $workerCallbackProxyEnabled }}
 {{- $domains := $allowedDomains | toString | trim }}
-{{- range $need := list (dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" }}
+{{- range $need := list (dig "workerCallbackProxy" "workerDomain" "" .Values | toString | trim | lower) "grpc-headless.nvcf.svc.cluster.local" "invocation.nvcf.svc.cluster.local" }}
 {{- $covered := false }}
 {{- range $allowed := splitList "," $domains }}
 {{- $allowed = trim $allowed | lower }}
