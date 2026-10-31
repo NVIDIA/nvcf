@@ -18,10 +18,11 @@ mod mocks;
 use bytes::Bytes;
 use mocks::{nats, nats_properties};
 use nvcf_invocation_service::{
-    nats::{Error, NatsService},
-    nvcf_api::nvcf::WorkerInvokeFunctionRequest,
+    nats::{Error, NatsService, PollingRequestOwner},
+    nvcf_api::nvcf::{WorkerInvokeFunctionRequest, WorkerResultTracking},
     request_id::RequestId,
 };
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 fn create_test_payload() -> WorkerInvokeFunctionRequest {
@@ -214,4 +215,157 @@ async fn test_request_stream_full_vs_duplicate_subject_behavior() {
     );
 
     println!("Stream full test completed - differentiating stream full vs duplicate subject");
+}
+
+#[tokio::test]
+async fn test_request_fails_fast_when_jetstream_does_not_ack() {
+    let nats_container = nats().await;
+    let mut nats_properties = nats_properties(&nats_container, None).await.unwrap();
+    nats_properties.retry_strategy.publish_timeout_ms = 1000;
+    nats_properties.retry_strategy.attempt_timeout_ms = 300;
+
+    let nats_service = NatsService::new(
+        &nats_properties,
+        "http://dummy.localhost",
+        None,
+        &nvcf_invocation_service::settings::GrpcClientConfig::default(),
+    )
+    .await
+    .expect("Should create NATS service");
+    let function_version_id = Uuid::new_v4();
+    nats_service
+        .create_request_stream(function_version_id)
+        .await
+        .expect("Should create request stream");
+
+    // A paused server keeps the connection open but never acks, like a stream without quorum.
+    nats_container.pause().await.unwrap();
+    let start = Instant::now();
+    let result = nats_service
+        .request(RequestId::new(), function_version_id, create_test_payload())
+        .await;
+    let elapsed = start.elapsed();
+    nats_container.unpause().await.unwrap();
+
+    assert!(matches!(result, Err(Error::Unavailable(_))), "{result:?}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "publish should stop at the 1 s deadline, took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_polling_record_fails_fast_when_jetstream_does_not_ack() {
+    let nats_container = nats().await;
+    let mut nats_properties = nats_properties(&nats_container, None).await.unwrap();
+    nats_properties.retry_strategy.attempt_timeout_ms = 300;
+
+    // NatsService::new creates the request tracking stream.
+    let nats_service = NatsService::new(
+        &nats_properties,
+        "http://dummy.localhost",
+        None,
+        &nvcf_invocation_service::settings::GrpcClientConfig::default(),
+    )
+    .await
+    .expect("Should create NATS service");
+    let owner = PollingRequestOwner {
+        nca_id: "nca".into(),
+        subject: "subject".into(),
+    };
+
+    nats_container.pause().await.unwrap();
+    let start = Instant::now();
+    let result = nats_service
+        .record_polling_request(
+            None,
+            RequestId::new(),
+            &WorkerResultTracking::default(),
+            &owner,
+        )
+        .await;
+    let elapsed = start.elapsed();
+    nats_container.unpause().await.unwrap();
+
+    assert!(matches!(result, Err(Error::Unavailable(_))), "{result:?}");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "polling record should stop after one 300 ms ack wait, took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_polling_record_recreates_missing_tracking_stream() {
+    let nats_container = nats().await;
+    let nats_properties = nats_properties(&nats_container, None).await.unwrap();
+
+    let nats_service = NatsService::new(
+        &nats_properties,
+        "http://dummy.localhost",
+        None,
+        &nvcf_invocation_service::settings::GrpcClientConfig::default(),
+    )
+    .await
+    .expect("Should create NATS service");
+    let tracking_stream = format!("requestToFunctionVersion_{}", nats_properties.region);
+    nats_service
+        .jetstream()
+        .delete_stream(&tracking_stream)
+        .await
+        .expect("Should delete tracking stream");
+    let owner = PollingRequestOwner {
+        nca_id: "nca".into(),
+        subject: "subject".into(),
+    };
+
+    let result = nats_service
+        .record_polling_request(
+            None,
+            RequestId::new(),
+            &WorkerResultTracking::default(),
+            &owner,
+        )
+        .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    nats_service
+        .jetstream()
+        .get_stream(&tracking_stream)
+        .await
+        .expect("tracking stream should be recreated");
+}
+
+#[tokio::test]
+async fn test_cancel_request_gives_up_when_jetstream_does_not_answer() {
+    let nats_container = nats().await;
+    let mut nats_properties = nats_properties(&nats_container, None).await.unwrap();
+    nats_properties.retry_strategy.attempt_timeout_ms = 300;
+
+    let nats_service = NatsService::new(
+        &nats_properties,
+        "http://dummy.localhost",
+        None,
+        &nvcf_invocation_service::settings::GrpcClientConfig::default(),
+    )
+    .await
+    .expect("Should create NATS service");
+    let function_version_id = Uuid::new_v4();
+    nats_service
+        .create_request_stream(function_version_id)
+        .await
+        .expect("Should create request stream");
+
+    nats_container.pause().await.unwrap();
+    let start = Instant::now();
+    let result = nats_service
+        .cancel_request(RequestId::new(), function_version_id)
+        .await;
+    let elapsed = start.elapsed();
+    nats_container.unpause().await.unwrap();
+
+    assert!(result.is_err(), "purge should fail while NATS is paused");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "purge should stop after one 300 ms wait, took {elapsed:?}"
+    );
 }
