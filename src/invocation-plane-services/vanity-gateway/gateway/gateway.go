@@ -45,6 +45,7 @@ type Config struct {
 	MappingPath                  string        `mapstructure:"MAPPING_PATH"`
 	MappingLoadTimeout           time.Duration `mapstructure:"MAPPING_LOAD_TIMEOUT"`
 	NvcfApiEndpoint              string        `mapstructure:"NVCF_API_ENDPOINT"`
+	NvcfControlPlaneEndpoint     string        `mapstructure:"NVCF_CONTROL_PLANE_ENDPOINT"`
 	LLMGatewayEndpoint           string        `mapstructure:"LLM_GATEWAY_ENDPOINT"`
 	PrivateModelNameRegexPattern string        `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
 	PodIP                        string        `mapstructure:"POD_IP"`
@@ -112,6 +113,12 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	}
 	if err := setupShadowMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
+	}
+	if err := setupPrivateModelMetrics(); err != nil {
+		return nil, fmt.Errorf("failed to setup private model metrics: %w", err)
+	}
+	if config.NvcfControlPlaneEndpoint == "" {
+		zap.L().Info("Private model listing is disabled because NVCF_CONTROL_PLANE_ENDPOINT is not set")
 	}
 
 	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, config.MappingLoadTimeout)

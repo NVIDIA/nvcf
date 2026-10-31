@@ -182,6 +182,7 @@ func TestClientMetricCallKind(t *testing.T) {
 		{name: "unmarked", want: CallKindInference},
 		{name: "poll", kind: CallKindPoll, want: CallKindPoll, mark: true},
 		{name: "health", kind: CallKindHealth, want: CallKindHealth, mark: true},
+		{name: "model access", kind: CallKindModelAccess, want: CallKindModelAccess, mark: true},
 		{name: "unrecognized", kind: "arbitrary", want: CallKindInference, mark: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
