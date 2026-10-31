@@ -7,7 +7,8 @@ require (
 	github.com/MadAppGang/httplog/zap v1.2.1
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512163547-58c4eaa29232
 	github.com/carlmjohnson/versioninfo v0.22.5
-	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v4 v4.1.1
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
