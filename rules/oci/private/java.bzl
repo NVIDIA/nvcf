@@ -177,6 +177,7 @@ def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workd
             "$(location {}_index)".format(image),
             jar_path,
             workdir,
+            "$(location //rules/oci/private:java_runtime_contract)",
         ],
         # Env expectations travel as environment variables, not args. sh_test
         # args are shell-word-split, so a value containing spaces such as
@@ -192,6 +193,7 @@ def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workd
         data = [
             image + ".tar",
             image + "_index",
+            "//rules/oci/private:java_runtime_contract",
         ],
         visibility = visibility,
         **kwargs
@@ -204,6 +206,7 @@ java_image_contract_test = macro(
     whited out, that the entrypoint keeps the base's shelless_ulimit shim,
     that every declared env entry is present as a complete entry, and that
     the working directory matches. When user is set, checks that identity too.
+    Checks the merged runtime files, Java trust store and Brotli security floor.
     Runs against the host tar and each platform in the image index, so an
     index that is missing or mislabels an architecture fails.
 
