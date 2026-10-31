@@ -50,7 +50,8 @@ Each request is normalized into a function-scoped request context.
   downstream model is forwarded through headers.
 - `Authorization: Bearer ...` is treated as the caller principal for telemetry
   and is forwarded to NVCF gRPC auth when that adapter is configured.
-- `X-Request-ID` is accepted if present, otherwise the gateway generates one.
+- `X-Request-ID` is kept when it is at most 128 characters and uses `A-Z`,
+  `a-z`, `0-9`, `.`, `_`, `:`, or `-`. Otherwise the gateway generates one.
 - `X-NVCF-Target-Region` is forwarded into the request context.
 - `X-Priority` is reserved for the gateway and derived from the caller's
   resolved priority; a client-supplied `X-Priority` on the LLM endpoints is
