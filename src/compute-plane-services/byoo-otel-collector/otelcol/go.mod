@@ -5,49 +5,49 @@ module github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/ote
 go 1.26.0
 
 require (
-	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/bearertokenauthextension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/cgroupruntimeextension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/oauth2clientauthextension v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.160.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/bearertokenauthextension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/cgroupruntimeextension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckv2extension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/oauth2clientauthextension v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.164.1
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.160.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.160.0
-	go.opentelemetry.io/collector/component v1.66.0
-	go.opentelemetry.io/collector/confmap v1.66.0
-	go.opentelemetry.io/collector/confmap/provider/envprovider v1.66.0
-	go.opentelemetry.io/collector/confmap/provider/fileprovider v1.66.0
-	go.opentelemetry.io/collector/confmap/provider/httpprovider v1.66.0
-	go.opentelemetry.io/collector/confmap/provider/httpsprovider v1.66.0
-	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.66.0
-	go.opentelemetry.io/collector/connector v0.160.0
-	go.opentelemetry.io/collector/exporter v1.66.0
-	go.opentelemetry.io/collector/exporter/debugexporter v0.160.0
-	go.opentelemetry.io/collector/exporter/otlpexporter v0.160.0
-	go.opentelemetry.io/collector/exporter/otlphttpexporter v0.160.0
-	go.opentelemetry.io/collector/extension v1.66.0
-	go.opentelemetry.io/collector/otelcol v0.160.0
-	go.opentelemetry.io/collector/processor v1.66.0
-	go.opentelemetry.io/collector/processor/batchprocessor v0.160.0
-	go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.160.0
-	go.opentelemetry.io/collector/receiver v1.66.0
-	go.opentelemetry.io/collector/receiver/otlpreceiver v0.160.0
-	go.opentelemetry.io/collector/service v0.160.0
-	golang.org/x/sys v0.48.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.164.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.164.1
+	go.opentelemetry.io/collector/component v1.70.0
+	go.opentelemetry.io/collector/confmap v1.70.0
+	go.opentelemetry.io/collector/confmap/provider/envprovider v1.70.0
+	go.opentelemetry.io/collector/confmap/provider/fileprovider v1.70.0
+	go.opentelemetry.io/collector/confmap/provider/httpprovider v1.70.0
+	go.opentelemetry.io/collector/confmap/provider/httpsprovider v1.70.0
+	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.70.0
+	go.opentelemetry.io/collector/connector v0.164.0
+	go.opentelemetry.io/collector/exporter v1.70.0
+	go.opentelemetry.io/collector/exporter/debugexporter v0.164.0
+	go.opentelemetry.io/collector/exporter/otlpexporter v0.164.0
+	go.opentelemetry.io/collector/exporter/otlphttpexporter v0.164.0
+	go.opentelemetry.io/collector/extension v1.70.0
+	go.opentelemetry.io/collector/otelcol v0.164.0
+	go.opentelemetry.io/collector/processor v1.70.0
+	go.opentelemetry.io/collector/processor/batchprocessor v0.164.0
+	go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.164.0
+	go.opentelemetry.io/collector/receiver v1.70.0
+	go.opentelemetry.io/collector/receiver/otlpreceiver v0.164.0
+	go.opentelemetry.io/collector/service v0.164.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -576,8 +576,8 @@ replace github.com/DataDog/datadog-agent/comp/core/delegatedauth => github.com/D
 
 replace github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws => github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws v0.79.0-devel.0.20260402163801-bfa4eff6c991
 
-replace golang.org/x/crypto => golang.org/x/crypto v0.57.0
+replace golang.org/x/crypto => golang.org/x/crypto v0.58.0
 
-replace golang.org/x/net => golang.org/x/net v0.60.0
+replace golang.org/x/net => golang.org/x/net v0.62.0
 
-replace google.golang.org/grpc => google.golang.org/grpc v1.83.2
+replace google.golang.org/grpc => google.golang.org/grpc v1.85.0
