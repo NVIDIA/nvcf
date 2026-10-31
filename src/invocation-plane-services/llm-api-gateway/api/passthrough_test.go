@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -349,6 +350,126 @@ func TestResponsesForwardsExtensionFieldsAndReturnsUnknownOutputUnchanged(t *tes
 	require.JSONEq(t, terminal, rec.Body.String())
 }
 
+func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing.T) {
+	t.Parallel()
+
+	created := "event: response.created\n" +
+		`data: {"type":"response.created","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
+
+	tests := []struct {
+		name           string
+		upstreamBody   string
+		dropMidway     bool
+		wantResponseID string
+		wantSequence   int
+	}{
+		{name: "empty stream", upstreamBody: "", wantSequence: 0},
+		{name: "ends after non terminal event", upstreamBody: created, wantResponseID: "resp_1", wantSequence: 5},
+		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true, wantResponseID: "resp_1", wantSequence: 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set(echo.HeaderContentType, "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, tt.upstreamBody)
+				if tt.dropMidway {
+					w.(http.Flusher).Flush()
+					panic(http.ErrAbortHandler)
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			e := newPassthroughAPI(t, upstream.URL)
+
+			clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
+			rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			body := rec.Body.String()
+			require.True(t, strings.HasPrefix(body, tt.upstreamBody), body)
+			failedEvent := strings.TrimPrefix(body, tt.upstreamBody)
+			require.True(t, strings.HasPrefix(failedEvent, "event: response.failed\ndata: "), body)
+			require.True(t, strings.HasSuffix(failedEvent, "\n\n"), body)
+
+			var event struct {
+				Type           string `json:"type"`
+				SequenceNumber int    `json:"sequence_number"`
+				Response       struct {
+					ID     string `json:"id"`
+					Object string `json:"object"`
+					Model  string `json:"model"`
+					Status string `json:"status"`
+					Error  struct {
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				} `json:"response"`
+			}
+			data := strings.TrimSuffix(strings.TrimPrefix(failedEvent, "event: response.failed\ndata: "), "\n\n")
+			require.NoError(t, json.Unmarshal([]byte(data), &event), data)
+			require.Equal(t, "response.failed", event.Type)
+			require.Equal(t, tt.wantSequence, event.SequenceNumber)
+			require.Equal(t, "response", event.Response.Object)
+			require.Equal(t, "company-name/model-name", event.Response.Model)
+			require.Equal(t, "failed", event.Response.Status)
+			require.Equal(t, "server_error", event.Response.Error.Code)
+			require.Equal(t, "responses proxy stream ended without a terminal response event", event.Response.Error.Message)
+			if tt.wantResponseID != "" {
+				require.Equal(t, tt.wantResponseID, event.Response.ID)
+			} else {
+				require.True(t, strings.HasPrefix(event.Response.ID, "resp_"), event.Response.ID)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamSendsNoFailureEventWhenClientGoesAway(t *testing.T) {
+	t.Parallel()
+
+	created := "event: response.created\n" +
+		`data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"in_progress"}}` + "\n\n"
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// The upstream holds the stream open until the gateway cancels it, which
+	// happens when the client goes away after the first relayed event.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		_, _ = io.WriteString(w, created)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(upstream.Close)
+	e := newPassthroughAPI(t, upstream.URL)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/responses", strings.NewReader(clientBody))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := &cancelOnWriteRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, created, rec.Body.String())
+}
+
+// cancelOnWriteRecorder cancels the client request after the first body
+// write, as a client that disconnects mid-stream would.
+type cancelOnWriteRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnWriteRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseRecorder.Write(b)
+	r.cancel()
+	return n, err
+}
+
 func TestConsumeNativeResponsesSSEKeepsUsageForUnknownOutputItems(t *testing.T) {
 	t.Parallel()
 
@@ -357,9 +478,10 @@ func TestConsumeNativeResponsesSSEKeepsUsageForUnknownOutputItems(t *testing.T) 
 		`data: {"type":"response.completed","response":` + terminal + "}\n\n"
 
 	var relayed strings.Builder
-	got, err := consumeNativeResponsesSSE(strings.NewReader(sse), &relayed)
+	stream, err := consumeNativeResponsesSSE(strings.NewReader(sse), &relayed)
 	require.NoError(t, err)
 	require.Equal(t, sse, relayed.String())
+	got := stream.terminal
 	require.NotNil(t, got)
 	require.JSONEq(t, terminal, string(got.body))
 
