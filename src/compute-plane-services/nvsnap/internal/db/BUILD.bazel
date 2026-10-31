@@ -22,6 +22,7 @@ go_library(
 go_test(
     name = "db_test",
     srcs = [
+        "concurrency_test.go",
         "db_test.go",
         "dedup_hash_test.go",
         "dedupe_test.go",

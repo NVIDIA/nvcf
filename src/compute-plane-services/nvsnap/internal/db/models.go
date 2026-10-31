@@ -69,14 +69,14 @@ type Checkpoint struct {
 	// L2 per-capture PVC (nvsnap#63). Driven by the
 	// PerCapturePVCBackend's Put state machine; the agent's register
 	// call never sets these. See migration 5 for the column semantics
-	// and docs/L2-PVC-CRIU-DESIGN.md for the lifecycle.
+	// and docs/ARCHITECTURE.md §6 for the lifecycle.
 	PVCName         string `json:"pvcName,omitempty"`
 	PVCPromoteState string `json:"pvcPromoteState,omitempty"`
 }
 
 // PVC promote-state values. Restore-side polls these via
 // /api/v1/checkpoints/lookup; the nvsnap-init container blocks until it
-// sees "ready" or "failed" before exec'ing restore-entrypoint. Exact
+// sees "ready" or "failed" before the restore proceeds. Exact
 // strings are part of the wire contract — don't rename without bumping
 // the migration.
 const (

@@ -40,7 +40,7 @@ limitations under the License.
 // the caller (agent CRIU path) treats L2 promote as best-effort with
 // a fall-through to L3/L4 — see internal/agent/checkpoint.go.
 //
-// Design: docs/L2-PVC-CRIU-DESIGN.md.
+// Design: docs/ARCHITECTURE.md §6.
 
 package checkpointstore
 
@@ -48,6 +48,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -61,6 +62,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 )
 
 // CatalogStateWriter is the minimal interface PerCapturePVCBackend
@@ -139,6 +141,14 @@ type PerCapturePVCBackend struct {
 	// "csi-gce-pd-snapshot-class".
 	SnapshotClass string
 
+	// TenantOf names a namespace's tenant (internal/tenant); nil makes
+	// every namespace its own. A claim to a capture is minted only in
+	// namespaces of the capture's tenant (ownership.go). IsFollower
+	// reports whether a pod was admitted as an election follower of hash;
+	// nil accepts any pod carrying the hash label.
+	TenantOf   func(ctx context.Context, ns string) string
+	IsFollower func(pod *corev1.Pod, hash string) bool
+
 	// Promoter owns the storage-specific rwx→durable-artifact transition
 	// and the restore-side MountSpec (nvsnap#171). nil ⇒ applyDefaults
 	// constructs a SnapshotClonePromoter from StorageClass/SnapshotClass
@@ -193,8 +203,10 @@ type PerCapturePVCBackend struct {
 	SizeBytesFor func(hash string, m Manifest) int64
 
 	// LeaseDuration is how long a Put holds the hash-keyed lease.
-	// Should be bounded by 2× estimated writer-Job duration. Default
-	// 15 min. A lost holder (Put goroutine crashed) frees the lease
+	// It must outlast the promote (l2PromoteTimeout): the lease is not
+	// renewed, and a 1.1 TB checkpoint copies for about 10 minutes at
+	// NVMesh rates, so 15 minutes left a slow copy open to a second
+	// agent. Default 100 min. A lost holder (Put goroutine crashed) frees the lease
 	// after this elapses, allowing a fresh attempt.
 	LeaseDuration time.Duration
 
@@ -261,7 +273,7 @@ func (b *PerCapturePVCBackend) targetNamespace(m Manifest) string {
 // applyDefaults fills in unset timing knobs.
 func (b *PerCapturePVCBackend) applyDefaults() {
 	if b.LeaseDuration == 0 {
-		b.LeaseDuration = 15 * time.Minute
+		b.LeaseDuration = 100 * time.Minute
 	}
 	if b.PollInterval == 0 {
 		b.PollInterval = 2 * time.Second
@@ -369,6 +381,11 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	// deadlock.
 	if existing, getErr := b.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); getErr == nil && existing != nil {
 		log.WithField("pvc", roxName).WithField("phase", existing.Status.Phase).Info("rox PVC already exists; treating as idempotent success")
+		b.recordOwner(ctx, hash, ns)
+		if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
+			_ = b.setState(hash, pvcStateFailed, "")
+			return Manifest{}, fmt.Errorf("claims for stamped followers: %w", err)
+		}
 		_ = b.setState(hash, pvcStateReady, roxName)
 		m.Hash = hash
 		return m, nil
@@ -424,6 +441,13 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	publishName := res.SharedClaimName
 	if publishName == "" {
 		publishName = roxName
+	}
+	b.recordOwner(ctx, hash, ns)
+	// Gated followers in other namespaces were admitted against
+	// rox-<hash> in their own namespace; make it exist before ready.
+	if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
+		_ = b.setState(hash, pvcStateFailed, "")
+		return Manifest{}, fmt.Errorf("claims for stamped followers: %w", err)
 	}
 	if err := b.setState(hash, pvcStateReady, publishName); err != nil {
 		return Manifest{}, fmt.Errorf("publish ready: %w", err)
@@ -681,7 +705,7 @@ func (b *PerCapturePVCBackend) createRWXPVC(ctx context.Context, ns, name string
 }
 
 // runMountHolderCopy implements the v0.0.51 single-copy L2 writer
-// (docs/design/ROOTFS-EVERYWHERE.md). Replaces the legacy writer Job
+// (docs/ARCHITECTURE.md §2). Replaces the legacy writer Job
 // which couldn't run privileged in Kyverno-enforced source namespaces.
 //
 // Flow:
@@ -845,6 +869,32 @@ func (b *PerCapturePVCBackend) Get(ctx context.Context, hash, _ string) (Manifes
 	return b.Stat(ctx, hash)
 }
 
+// PendingMountSpec names the shared ReadOnlyMany claim for hash without
+// requiring it to exist. Only ROX-capable strategies (shared-volume, or
+// snapshot-clone with readOnlyMany) have a single deterministic claim;
+// per-pod clones are minted at mount time and cannot be named early.
+func (b *PerCapturePVCBackend) PendingMountSpec(hash string, vol VolumeMeta) (PodMount, bool) {
+	b.applyDefaults()
+	caps := b.Promoter.Caps()
+	if !caps.ReadOnlyMany && !caps.SharedVolume {
+		return PodMount{}, false
+	}
+	volName := "nvsnap-checkpoint"
+	if vol.Name != "" {
+		volName = vol.Name
+	}
+	claim := "rox-" + ShortHash(hash)
+	return PodMount{
+		Volume: corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true},
+			},
+		},
+		VolumeMount: corev1.VolumeMount{Name: volName, MountPath: vol.MountPath, ReadOnly: true},
+	}, true
+}
+
 // Mount returns the pod-spec fragments needed to mount the rox-<hash>
 // PVC ReadOnly at vol.MountPath. Called by the admission webhook
 // when stamping a restore-from pod.
@@ -871,7 +921,88 @@ func (b *PerCapturePVCBackend) Mount(ctx context.Context, hash string, vol Volum
 	}
 	// Storage-specific: shared-ROX returns the one rox-<hash> claim;
 	// per-pod clones a fresh RWO PVC; shared-volume binds a static PV.
+	pm, err := b.Promoter.MountSpec(ctx, hash, vol)
+	if !errors.Is(err, ErrNotFound) {
+		return pm, err
+	}
+	// No claim in this namespace. NVCF runs each chart in its own
+	// namespace, so a restore usually lands where the capture never was:
+	// mint the namespace-local claim from the promoted artifact and try
+	// again. ErrNotFound from EnsureClaim means nothing is promoted yet;
+	// ErrUnsupported means per-pod-clone storage, which has no shared
+	// claim to bind; both leave the caller on its cold path.
+	if !b.mayClaim(ctx, hash, vol.Namespace) {
+		return PodMount{}, ErrNotFound
+	}
+	if eerr := b.Promoter.EnsureClaim(ctx, hash, vol.Namespace); eerr != nil {
+		if errors.Is(eerr, ErrNotFound) || errors.Is(eerr, ErrUnsupported) {
+			return PodMount{}, ErrNotFound
+		}
+		return PodMount{}, fmt.Errorf("ensure claim in %s: %w", vol.Namespace, eerr)
+	}
+	b.log().WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": vol.Namespace}).
+		Info("L2 claim minted in restore namespace")
 	return b.Promoter.MountSpec(ctx, hash, vol)
+}
+
+// claimRetryBackoff bounds the retries of a follower namespace's claim
+// before the promote gives up on publishing ready.
+var claimRetryBackoff = wait.Backoff{Steps: 5, Duration: 500 * time.Millisecond, Factor: 2, Jitter: 0.1}
+
+// ensureClaimsForStampedPods mints the namespace-local claim in every
+// namespace that already holds pods stamped with hash (election
+// followers waiting on their gate, admitted before the promote existed),
+// so they find rox-<hash> when nvsnap-server releases them. Existence is
+// the bar, not Bound: under WaitForFirstConsumer the claim binds only
+// once a released pod consumes it.
+//
+// It must succeed before ready is published. Ready ungates those
+// followers, and an existing Pending pod is never admitted again, so no
+// later Mount would mint a missing claim: the pod would stay Pending.
+// Transient errors are retried; what still fails is returned, and the
+// caller publishes failed instead, which evicts the followers so their
+// controller recreates them through a fresh admission.
+func (b *PerCapturePVCBackend) ensureClaimsForStampedPods(ctx context.Context, hash, captureNS string) error {
+	var pods *corev1.PodList
+	err := retry.OnError(claimRetryBackoff, func(error) bool { return ctx.Err() == nil }, func() error {
+		var lerr error
+		pods, lerr = b.KubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: "nvsnap.io/hash=" + ShortHash(hash)})
+		return lerr
+	})
+	if err != nil {
+		return fmt.Errorf("list stamped pods for cross-namespace claims: %w", err)
+	}
+	seen := map[string]bool{captureNS: true}
+	var errs []error
+	for i := range pods.Items {
+		ns := pods.Items[i].Namespace
+		if seen[ns] {
+			continue
+		}
+		// Any pod author can set the hash label: only election followers
+		// of this hash, in the capture's tenant, get a claim.
+		if b.IsFollower != nil && !b.IsFollower(&pods.Items[i], hash) {
+			continue
+		}
+		seen[ns] = true
+		if !b.mayClaim(ctx, hash, ns) {
+			continue
+		}
+		err := retry.OnError(claimRetryBackoff, func(err error) bool {
+			return ctx.Err() == nil && !errors.Is(err, ErrUnsupported)
+		}, func() error { return b.Promoter.EnsureClaim(ctx, hash, ns) })
+		if errors.Is(err, ErrUnsupported) {
+			continue
+		}
+		if err != nil {
+			b.log().WithError(err).WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).
+				Error("cross-namespace claim for stamped pods failed after retries")
+			errs = append(errs, fmt.Errorf("claim in %s: %w", ns, err))
+			continue
+		}
+		b.log().WithFields(logrus.Fields{"hash": ShortHash(hash), "namespace": ns}).Info("L2 claim minted for stamped pods")
+	}
+	return errors.Join(errs...)
 }
 
 // Delete removes the rox PVC + any leftover rwx PVC + snapshot from
@@ -912,3 +1043,13 @@ func (b *PerCapturePVCBackend) Delete(ctx context.Context, hash string) error {
 // with any in-flight Jobs from the legacy code path; that subcommand
 // is no longer reachable from production callers and is scheduled
 // for removal in a follow-up cleanup commit.
+
+// log returns the backend logger, or a discard logger when none is set.
+func (b *PerCapturePVCBackend) log() logrus.FieldLogger {
+	if b.Log != nil {
+		return b.Log
+	}
+	l := logrus.New()
+	l.SetOutput(io.Discard)
+	return l
+}

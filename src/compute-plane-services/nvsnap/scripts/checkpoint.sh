@@ -24,6 +24,11 @@ source "${SCRIPT_DIR}/lib/agent-auth.sh"
 
 # Agent API port - IMPORTANT: Agent listens on 8081, not 8080!
 AGENT_PORT="${AGENT_PORT:-8081}"
+# Removes every checkpoint under the agent's checkpoint root but keeps
+# gpushare-pods/: it holds the gpushare chunk stores of running pods (each
+# mounted into its pod), and deleting one leaves that pod's store mount
+# pointing at an unlinked directory, so its next capture cannot write.
+WIPE_CHECKPOINTS='find /var/lib/nvsnap/checkpoints -mindepth 1 -maxdepth 1 ! -name gpushare-pods -exec rm -rf {} + 2>/dev/null'
 NAMESPACE="${NAMESPACE:-nvsnap-system}"
 
 usage() {
@@ -140,14 +145,14 @@ except Exception:
     # The cascade DELETE above handles the catalog+blobstore side; this
     # catches the edge cases the catalog never knew about.
     if kubectl exec -n "$namespace" "$agent" -c agent -- \
-        sh -c 'rm -rf /var/lib/nvsnap/checkpoints/* 2>/dev/null' >/dev/null 2>&1; then
+        sh -c "$WIPE_CHECKPOINTS" >/dev/null 2>&1; then
         echo "  Cleared local hostPath residue on $agent"
         return 0
     fi
 
     local debug_pod="node-debugger-${node}"
     kubectl debug "node/${node}" -n "$namespace" --image=busybox -- \
-        chroot /host sh -c 'rm -rf /var/lib/nvsnap/checkpoints/*' >/dev/null 2>&1 || true
+        chroot /host sh -c "$(echo "$WIPE_CHECKPOINTS" | sed 's#/var/lib/nvsnap/checkpoints#/var/lib/containerd/nvsnap-checkpoints#')" >/dev/null 2>&1 || true
     kubectl delete pod "$debug_pod" -n "$namespace" >/dev/null 2>&1 || true
     echo "  Cleared local hostPath residue via node debug on $node"
 }
@@ -327,7 +332,7 @@ cmd_cleanup() {
     for agent in $agents; do
         echo "Cleaning $agent..."
         kubectl exec -n "$namespace" "$agent" -- \
-            sh -c 'rm -rf /var/lib/nvsnap/checkpoints/* 2>/dev/null; echo "Cleaned"' \
+            sh -c "$WIPE_CHECKPOINTS; echo Cleaned" \
             2>&1 || echo "  Failed (disk may be full)"
     done
     

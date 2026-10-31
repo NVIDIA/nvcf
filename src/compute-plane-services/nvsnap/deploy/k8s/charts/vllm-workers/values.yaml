@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# A plain vLLM chart, deliberately free of nvsnap labels and annotations:
+# the election has to work on what customers deploy. Every worker is
+# identical; the webhook decides per pod who downloads.
+replicas: 2
+image: vllm/vllm-openai:v0.20.0
+imagePullSecret: ""            # e.g. nvsnap-pull-secret
+model: Qwen/Qwen2.5-32B-Instruct
+tensorParallel: 4              # also the GPU request per worker
+maxModelLen: 4096
+gpuMemoryUtilization: 0.85
+extraArgs: ""                  # appended to vllm serve, e.g. "--enforce-eager"
+env: []                        # extra env, e.g. [{name: HF_TOKEN, valueFrom: {secretKeyRef: {name: hf-token, key: token}}}]
+shmSize: 32Gi
+readinessFailureThreshold: 400 # x 5 s; cold starts of large models take minutes
+excludeNodes: []               # hostnames to keep the workers off

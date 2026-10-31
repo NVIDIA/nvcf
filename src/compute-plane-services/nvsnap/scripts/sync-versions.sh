@@ -12,9 +12,7 @@
 #   deploy/               — legacy standalone manifests (kept in sync
 #                           defensively in case anyone still applies them)
 #
-# Handles 8 deployable image names: 4 main components (agent, server,
-# init, blobstore) and 4 dependency builders (uvloop, libuv, libzmq,
-# pyzmq) consumed by init container manifests.
+# Handles the image names in IMAGES below.
 #
 # Rewrites the REGISTRY PREFIX (everything before the image name) too —
 # not just the tag — so the 2026-05-21 migration to
@@ -63,12 +61,7 @@ set_chart_tag() {
 declare -A IMAGES=(
     [nvsnap-agent]="$NVSNAP_APP_VERSION"
     [nvsnap-server]="$NVSNAP_SERVER_VERSION"
-    [nvsnap-init]="$NVSNAP_INIT_VERSION"
     [nvsnap-blobstore]="$NVSNAP_BLOBSTORE_VERSION"
-    [uvloop-builder]="$NVSNAP_UVLOOP_VERSION"
-    [libuv-builder]="$NVSNAP_LIBUV_VERSION"
-    [libzmq-builder]="$NVSNAP_LIBZMQ_VERSION"
-    [pyzmq-builder]="$NVSNAP_PYZMQ_VERSION"
 )
 
 for name in "${!IMAGES[@]}"; do

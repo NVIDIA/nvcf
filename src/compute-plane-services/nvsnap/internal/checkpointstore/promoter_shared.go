@@ -43,13 +43,18 @@ package checkpointstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -89,6 +94,31 @@ func LookupVolumeHandleTransform(name string) (VolumeHandleTransform, error) {
 		return nil, fmt.Errorf("unknown volumeHandleTransform %q", name)
 	}
 	return t, nil
+}
+
+// viewCapacity is the capacity a view of primary declares: the byte count
+// recorded on the primary at completion, rounded up to whole GiB, when
+// present.
+func viewCapacity(primary *corev1.PersistentVolume) (resource.Quantity, bool) {
+	n, err := strconv.ParseInt(primary.Annotations["nvsnap.io/volume-bytes"], 10, 64)
+	if err != nil || n <= 0 {
+		return resource.Quantity{}, false
+	}
+	const gib = int64(1) << 30
+	gibs := (n + gib - 1) / gib
+	if gibs < 1 {
+		gibs = 1
+	}
+	return *resource.NewQuantity(gibs*gib, resource.BinarySI), true
+}
+
+// viewRequest is the claim request matching viewCapacity, else the
+// primary's own capacity.
+func viewRequest(primary *corev1.PersistentVolume) resource.Quantity {
+	if q, ok := viewCapacity(primary); ok {
+		return q
+	}
+	return primary.Spec.Capacity[corev1.ResourceStorage]
 }
 
 // SharedVolumePromoter implements Promoter via static RO PVs over a
@@ -190,7 +220,15 @@ func (p *SharedVolumePromoter) Promote(ctx context.Context, in PromoteInput) (Pr
 	return PromoteResult{SharedClaimName: roxName, ReusedWriterVolume: true}, nil
 }
 
-func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string) error {
+func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, extraLabels ...map[string]string) error {
+	return p.ensureViewPV(ctx, primary, secName, roxName, ns, true, extraLabels...)
+}
+
+// ensureViewPV creates the static PV that exposes primary in ns: read-only
+// (ReadOnlyMany, csi.readOnly, the read-only mount options) for readers,
+// or read-write (ReadWriteMany, the primary's own mount options) for a
+// download Job on a filesystem that is shared while written.
+func (p *SharedVolumePromoter) ensureViewPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string, readOnly bool, extraLabels ...map[string]string) error {
 	if existing, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
 		return p.releaseStaleBinding(ctx, existing, roxName, ns)
 	} else if !apierrors.IsNotFound(err) {
@@ -201,23 +239,39 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 		return fmt.Errorf("transform volumeHandle: %w", err)
 	}
 	sec := primary.DeepCopy()
+	role, access := "reader-shared", corev1.ReadOnlyMany
+	if !readOnly {
+		role, access = "writer-shared", corev1.ReadWriteMany
+	}
 	sec.ObjectMeta = metav1.ObjectMeta{
 		Name: secName,
 		Labels: map[string]string{
 			"app.kubernetes.io/managed-by": "nvsnap",
 			"nvsnap.io/per-capture":        "true",
-			"nvsnap.io/role":               "reader-shared",
+			"nvsnap.io/role":               role,
 		},
 	}
-	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
+	for _, extra := range extraLabels {
+		for k, v := range extra {
+			sec.Labels[k] = v
+		}
+	}
+	sec.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{access}
 	sec.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	// A primary on a shared filesystem carries a nominal capacity; the
+	// bytes recorded at completion (modelvolume.BytesAnnotation) are what
+	// the view should declare, so quotas and operators see the real size.
+	if q, ok := viewCapacity(primary); ok {
+		sec.Spec.Capacity = corev1.ResourceList{corev1.ResourceStorage: q}
+	}
 	sec.Spec.CSI = primary.Spec.CSI.DeepCopy()
 	sec.Spec.CSI.VolumeHandle = newHandle
-	sec.Spec.CSI.ReadOnly = true
+	sec.Spec.CSI.ReadOnly = readOnly
 	// Read-only mount options for the shared fan-out. NVMesh xfs needs
 	// "ro,norecovery,nouuid" — without nouuid the 2nd pod mounting the
-	// same filesystem UUID fails ("Filesystem has duplicate UUID").
-	if len(p.MountOptions) > 0 {
+	// same filesystem UUID fails ("Filesystem has duplicate UUID"). A
+	// read-write view keeps the primary's own options.
+	if readOnly && len(p.MountOptions) > 0 {
 		sec.Spec.MountOptions = append([]string(nil), p.MountOptions...)
 	}
 	// Pre-bind to the shared ro PVC so it binds statically (no dynamic
@@ -376,13 +430,16 @@ func (p *SharedVolumePromoter) Delete(ctx context.Context, hash, ns string) erro
 	if err := p.deletePV(ctx, secName); err != nil {
 		errs = append(errs, fmt.Sprintf("secondary PV %s: %v", secName, err))
 	}
-	// Delete the Retain'd primary PV last — this releases the backing
-	// CSI volume (its reclaim is Retain, so it would otherwise orphan).
+	// The primary last. It is Retain, and deleting a Retain PV object
+	// leaves its volume on the storage for good: hand the volume back to
+	// the provisioner instead, which deletes it with the PV once the PV
+	// is released.
 	if primaryPVName != "" {
-		if err := p.deletePV(ctx, primaryPVName); err != nil {
+		if err := p.reclaimPV(ctx, primaryPVName); err != nil {
 			errs = append(errs, fmt.Sprintf("primary PV %s: %v", primaryPVName, err))
 		}
 	}
+	errs = append(errs, p.deleteNamespacedClaims(ctx, hash)...)
 	if len(errs) > 0 {
 		return fmt.Errorf("shared-volume delete: %s", strings.Join(errs, "; "))
 	}
@@ -430,6 +487,210 @@ func (p *SharedVolumePromoter) deletePV(ctx context.Context, name string) error 
 	err := p.KubeClient.CoreV1().PersistentVolumes().Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
+	}
+	return nil
+}
+
+// reclaimPV sets the PV's reclaim policy to Delete, so its provisioner
+// deletes the volume (and the PV) once it is released.
+func (p *SharedVolumePromoter) reclaimPV(ctx context.Context, name string) error {
+	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}`)
+	_, err := p.KubeClient.CoreV1().PersistentVolumes().Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// Namespace-local claims. The capture namespace gets nvsnap-ro-pv-<hash>
+// bound to rox-<hash> at promote. Any other namespace gets its own
+// secondary PV, nvsnap-ro-pv-<hash>-<ns8>, with the handle rewritten for
+// that namespace and a rox-<hash> claim bound to it: the same static-PV
+// pattern NVCA uses for one model volume across tenant namespaces. Both
+// carry nvsnap.io/hash-short and nvsnap.io/namespace so Delete can find
+// every one of them.
+
+const (
+	labelHashShort = "nvsnap.io/hash-short"
+	labelNamespace = "nvsnap.io/namespace"
+)
+
+// nsSuffix is a short stable token for a namespace name, safe in an
+// object name regardless of the namespace's length.
+func nsSuffix(ns string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return hex.EncodeToString(sum[:4])
+}
+
+func namespacedSecondaryPVName(hash, ns string) string {
+	return secondaryPVName(hash) + "-" + nsSuffix(ns)
+}
+
+// EnsureClaim mints rox-<hash> in ns from the promoted secondary PV.
+func (p *SharedVolumePromoter) EnsureClaim(ctx context.Context, hash, ns string) error {
+	p.applyDefaults()
+	roxName := sharedROXName(hash)
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get rox PVC %s/%s: %w", ns, roxName, err)
+	}
+	// The promote's own secondary PV is the proof the artifact exists and
+	// the source of the CSI handle to rewrite.
+	promoted, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secondaryPVName(hash), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get promoted PV %s: %w", secondaryPVName(hash), err)
+	}
+	if promoted.Spec.CSI == nil || promoted.Spec.CSI.VolumeHandle == "" {
+		return fmt.Errorf("promoted PV %s has no CSI volumeHandle", promoted.Name)
+	}
+	primaryName := p.primaryPVForHandle(ctx, promoted.Spec.CSI.VolumeHandle)
+	if primaryName == "" {
+		return fmt.Errorf("no primary PV found for promoted handle %q", promoted.Spec.CSI.VolumeHandle)
+	}
+	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get primary PV %s: %w", primaryName, err)
+	}
+	// Labels go on at create: N pods of one chart are admitted in the same
+	// second and each runs this, so a create-then-update would race on the
+	// PV's resourceVersion (seen on dev1: "the object has been modified").
+	// Create is idempotent through AlreadyExists; nothing here updates.
+	secName := namespacedSecondaryPVName(hash, ns)
+	if err := p.ensureSecondaryPV(ctx, primary, secName, roxName, ns, map[string]string{labelHashShort: ShortHash(hash), labelNamespace: ns}); err != nil {
+		return err
+	}
+	return p.ensureSharedROXPVC(ctx, ns, hash, roxName, secName, primary)
+}
+
+// deleteNamespacedClaims removes every rox claim and per-namespace
+// secondary PV minted by EnsureClaim for hash.
+func (p *SharedVolumePromoter) deleteNamespacedClaims(ctx context.Context, hash string) []string {
+	var errs []string
+	sel := labelHashShort + "=" + ShortHash(hash)
+	if pvcs, err := p.KubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range pvcs.Items {
+			c := &pvcs.Items[i]
+			if c.Name != sharedROXName(hash) {
+				continue
+			}
+			if derr := p.deletePVC(ctx, c.Namespace, c.Name); derr != nil {
+				errs = append(errs, fmt.Sprintf("rox %s/%s: %v", c.Namespace, c.Name, derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list rox claims: %v", err))
+	}
+	if pvs, err := p.KubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{LabelSelector: sel}); err == nil {
+		for i := range pvs.Items {
+			if derr := p.deletePV(ctx, pvs.Items[i].Name); derr != nil {
+				errs = append(errs, fmt.Sprintf("secondary PV %s: %v", pvs.Items[i].Name, derr))
+			}
+		}
+	} else {
+		errs = append(errs, fmt.Sprintf("list secondary PVs: %v", err))
+	}
+	return errs
+}
+
+// MintReadOnly exposes the write-once model volume (a writer claim that
+// has finished downloading) as a read-only claim in ns, for
+// docs/design/helm-shared-model-volume.md on block storage. Same
+// mechanics as the promote: the primary PV is kept (Retain), a secondary
+// static PV with the namespace-rewritten handle is pre-bound to roClaim
+// in ns. Unlike the promote the writer claim is kept: the writer pod is
+// still running on it and later writers of the same identity must find
+// it complete. Idempotent.
+func (p *SharedVolumePromoter) MintReadOnly(ctx context.Context, writerNS, writerClaim, roPVName, roClaim, ns, labelKey string) error {
+	p.applyDefaults()
+	writer, err := p.KubeClient.CoreV1().PersistentVolumeClaims(writerNS).Get(ctx, writerClaim, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get writer claim %s/%s: %w", writerNS, writerClaim, err)
+	}
+	if writer.Spec.VolumeName == "" {
+		return fmt.Errorf("writer claim %s/%s has no bound PV yet", writerNS, writerClaim)
+	}
+	return p.MintReadOnlyFromPV(ctx, writer.Spec.VolumeName, roPVName, roClaim, ns, labelKey)
+}
+
+// MintReadOnlyFromPV is MintReadOnly for a retained primary PV whose claim
+// has already been released (the model volume after its download Job).
+func (p *SharedVolumePromoter) MintReadOnlyFromPV(ctx context.Context, primaryPV, roPVName, roClaim, ns, labelKey string) error {
+	extra := map[string]string{}
+	if labelKey != "" {
+		extra["nvsnap.io/model"] = labelKey
+	}
+	return p.MintReadOnlyFromPVLabels(ctx, primaryPV, roPVName, roClaim, ns, extra)
+}
+
+// MintReadOnlyFromPVLabels is MintReadOnlyFromPV with caller-chosen
+// identity labels on the minted PV and claim (model or cache volumes).
+func (p *SharedVolumePromoter) MintReadOnlyFromPVLabels(ctx context.Context, primaryPV, roPVName, roClaim, ns string, extra map[string]string) error {
+	return p.MintViewFromPVLabels(ctx, primaryPV, roPVName, roClaim, ns, extra, true)
+}
+
+// MintViewFromPVLabels exposes primaryPV in ns as the claim named claim,
+// bound to a static view PV named pvName. readOnly selects a reader's
+// view (ReadOnlyMany, read-only mount) or a writer's view (ReadWriteMany,
+// read-write), the latter for a download Job on storage that is shared
+// while written. Idempotent.
+func (p *SharedVolumePromoter) MintViewFromPVLabels(ctx context.Context, primaryPV, pvName, claim, ns string, extra map[string]string, readOnly bool) error {
+	roPVName, roClaim := pvName, claim
+	p.applyDefaults()
+	primary, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, primaryPV, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get primary PV %s: %w", primaryPV, err)
+	}
+	if primary.Spec.CSI == nil || primary.Spec.CSI.VolumeHandle == "" {
+		return fmt.Errorf("primary PV %s has no CSI volumeHandle", primary.Name)
+	}
+	if primary.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		primary.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		if _, err := p.KubeClient.CoreV1().PersistentVolumes().Update(ctx, primary, metav1.UpdateOptions{}); err != nil && !apierrors.IsConflict(err) {
+			return fmt.Errorf("set primary PV %s reclaim=Retain: %w", primary.Name, err)
+		}
+	}
+	// nvsnap.io/source-pv (modelvolume.SourcePVLabel) names the primary a
+	// view was minted from, so the reaper judges generations of one set
+	// apart.
+	labels := map[string]string{labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
+	for k, v := range extra {
+		labels[k] = v
+	}
+	if err := p.ensureViewPV(ctx, primary, roPVName, roClaim, ns, readOnly, labels); err != nil {
+		return err
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roClaim, metav1.GetOptions{}); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get view claim %s/%s: %w", ns, roClaim, err)
+	}
+	sc := p.StorageClass
+	claimRole, access := "reader", corev1.ReadOnlyMany
+	if !readOnly {
+		claimRole, access = "writer", corev1.ReadWriteMany
+	}
+	pvcLabels := map[string]string{"app.kubernetes.io/managed-by": "nvsnap", "nvsnap.io/role": claimRole, labelNamespace: ns, "nvsnap.io/source-pv": primary.Name}
+	for k, v := range extra {
+		pvcLabels[k] = v
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: roClaim, Namespace: ns,
+			Labels: pvcLabels,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{access},
+			VolumeName:       roPVName,
+			StorageClassName: &sc,
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: viewRequest(primary)}},
+		},
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create view claim %s/%s: %w", ns, roClaim, err)
 	}
 	return nil
 }

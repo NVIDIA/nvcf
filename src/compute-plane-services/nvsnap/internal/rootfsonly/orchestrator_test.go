@@ -440,3 +440,39 @@ func TestCollectCacheEnv(t *testing.T) {
 		t.Error("expected nil for empty cacheDir / nil spec / bad index")
 	}
 }
+
+// The election webhook stamps the hash it composed at admission onto the
+// pod; the capture must land under that hash, not under a recomposition
+// from the live pod, or the gated followers mount a claim that never binds.
+func TestCapture_StampedHashOverridesComposition(t *testing.T) {
+	env := newOrchTestEnv(t)
+	env.addProc(t, env.upperdirMountinfo())
+	env.addUpperdirContent(t)
+
+	stamped := "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+	req := CaptureRequest{
+		Hash:          stamped,
+		PodUID:        env.podUID,
+		Namespace:     "ns",
+		Name:          "p",
+		Spec:          pod("vllm/x", nil, nil),
+		MainContainer: 0,
+		HashInput: checkpointstore.HashInput{
+			ImageDigest: "x", ModelID: "y", CUDADriverMajor: 1,
+			CaptureFormatVersion: checkpointstore.CaptureFormatVersion,
+		},
+	}
+	m, err := env.capturer().Capture(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Hash != stamped {
+		t.Fatalf("manifest hash = %s, want the stamped %s", m.Hash, stamped)
+	}
+	if _, err := env.backend.Stat(context.Background(), stamped); err != nil {
+		t.Errorf("capture not stored under the stamped hash: %v", err)
+	}
+	if _, err := env.backend.Stat(context.Background(), checkpointstore.ComputeHash(req.HashInput)); err == nil {
+		t.Error("capture must not also land under the recomposed hash")
+	}
+}
