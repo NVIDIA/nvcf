@@ -43,6 +43,15 @@ type HashInputComposer struct {
 	// compatible on a 555.x node because the rootfs upperdir contains
 	// driver-versioned firmware paths.
 	CUDADriverMajor int
+
+	// Salt is the cluster operator's counterpart of CacheSaltAnnotation:
+	// folded into every identity this composer produces, so bumping it
+	// (a Helm value) starts fresh captures cluster-wide. Needed when the
+	// cache contents must change for a reason the identity cannot see,
+	// such as a new cachedir env template whose effect only exists on a
+	// fresh capture (warm pods replay the env stamped at capture).
+	Salt string
+
 	// Tenant names the tenant of a namespace (tenant.Resolver.Scope); nil
 	// makes every namespace its own tenant. A capture is shared only
 	// within its tenant.
@@ -74,8 +83,24 @@ func (c *HashInputComposer) Compose(pod *corev1.Pod, mainContainer int) checkpoi
 	out.ImageDigest = resolvedImageDigest(pod, mainContainer)
 	out.ModelID = inferModelID(main)
 	out.EngineCompatFlags = composeEngineCompatFlags(main)
+	if c.Salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "cluster-salt:"+c.Salt)
+	}
+	if salt := pod.Annotations[CacheSaltAnnotation]; salt != "" {
+		out.EngineCompatFlags = append(out.EngineCompatFlags, "salt:"+salt)
+	}
 	return out
 }
+
+// CacheSaltAnnotation lets a chart or operator fold an arbitrary value
+// into the capture and cache identity. The identity already covers the
+// image reference, model, arguments, cache-relevant env, driver and GPU
+// class; it cannot see a change made inside an unchanged image, such as
+// a wheel installed at start-up from a mounted volume or a floating tag
+// re-pointed at a new build. Bumping the salt on such an upgrade starts a
+// fresh cache instead of seeding the old one. Absent, the identity is
+// unchanged, so existing captures stay valid.
+const CacheSaltAnnotation = "nvsnap.io/cache-salt"
 
 // resolvedImageDigest prefers status.containerStatuses[].imageID (the
 // post-pull resolved digest like "nvcr.io/nim/...@sha256:abc..." or
@@ -106,7 +131,7 @@ func resolvedImageDigest(pod *corev1.Pod, mainContainer int) string {
 // slice but we keep the per-namespace order via the prefix sort.
 func composeEngineCompatFlags(c corev1.Container) []string {
 	flags := make([]string, 0, len(c.Command)+len(c.Args))
-	for i, cmd := range c.Command {
+	for i, cmd := range stripRoleFlags(c.Command) {
 		flags = append(flags, "cmd["+itoa(i)+"]:"+cmd)
 	}
 	for i, a := range stripRoleFlags(c.Args) {
@@ -287,6 +312,7 @@ var (
 	roleFlagsNoValue = map[string]bool{
 		"--is-prefill-worker": true, // dynamo.vllm
 		"--is-decode-worker":  true,
+		"--headless":          true, // vLLM: the ranks of a multi-node engine other than the first
 	}
 	roleFlagsWithValue = map[string]bool{
 		"--disaggregation-mode":             true, // dynamo.sglang, dynamo.trtllm
@@ -295,17 +321,31 @@ var (
 		"--disaggregation-transfer-backend": true,
 		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
 		"--kv-events-config":                true, // KV event publishing, prefill side only
+		// The rank of a pod in a multi-node engine: every rank shares
+		// the configuration, and the instance's ranks share its caches.
+		"--node-rank":                true, // vLLM, SGLang
+		"--node_rank":                true,
+		"--data-parallel-start-rank": true,
+		"--data-parallel-rank":       true,
 	}
 	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
 	// the component name and the pod index in it.
 	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
-	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL"}
+	// The rank and instance placement a controller injects: a pod's index
+	// in its instance (LeaderWorkerSet, indexed Job, torchrun) and the
+	// address of its instance's leader.
+	// ETCD_LEASE_TTL is wiring too, and the webhook sets it on Dynamo
+	// components (webhook/dynamo.go): a companion is hashed from its running
+	// spec and its replacement from the one admission sees, so anything the
+	// webhook adds must not be in the identity.
+	roleEnvExact = []string{"ETCD_ENDPOINTS", "ETCD_LEASE_TTL", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
+		"LOCAL_RANK", "LWS_WORKER_INDEX", "LWS_LEADER_ADDRESS", "JOB_COMPLETION_INDEX"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
 	// bash -lc "vllm serve ..." convention), value quoted or bare.
 	roleFlagInString = regexp.MustCompile(
-		`\s--(?:is-prefill-worker|is-decode-worker)\b` +
-			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+		`\s--(?:is-prefill-worker|is-decode-worker|headless)\b` +
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config|node-rank|node_rank|data-parallel-start-rank|data-parallel-rank)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
 )
 
 // stripRoleFlags returns args without the role flags, in both the

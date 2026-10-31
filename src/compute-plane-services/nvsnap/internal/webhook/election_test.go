@@ -162,8 +162,8 @@ func TestElection_NotAModelWorkloadIsIgnored(t *testing.T) {
 	frontend.Spec.Containers[0].Args = []string{"--router-mode", "kv"}
 	frontend.Spec.Containers[0].Resources = corev1.ResourceRequirements{}
 	patches, err := m.Mutate(context.Background(), frontend)
-	if err != nil || len(patches) != 0 {
-		t.Fatalf("frontend must be admitted unchanged, got %d patches err=%v", len(patches), err)
+	if err != nil || len(withoutStamp(patches)) != 0 {
+		t.Fatalf("frontend must be admitted unchanged, got %d patches err=%v", len(withoutStamp(patches)), err)
 	}
 	if el.called != 0 {
 		t.Error("election must not run for a pod without GPU and model")
@@ -245,8 +245,8 @@ func TestElection_FollowerOnPerPodCloneStorageStartsCold(t *testing.T) {
 	el := &fakeElector{role: election.RoleFollower}
 	m := electionMutator(t, el, &pendingStub{pendingOK: false})
 	patches, err := m.Mutate(context.Background(), dynamoWorker())
-	if err != nil || len(patches) != 0 {
-		t.Fatalf("follower without a nameable claim must be admitted unchanged, got %d patches err=%v", len(patches), err)
+	if err != nil || len(withoutStamp(patches)) != 0 {
+		t.Fatalf("follower without a nameable claim must be admitted unchanged, got %d patches err=%v", len(withoutStamp(patches)), err)
 	}
 }
 
@@ -254,8 +254,8 @@ func TestElection_ErrorAdmitsUnchanged(t *testing.T) {
 	el := &fakeElector{err: errors.New("apiserver down")}
 	m := electionMutator(t, el, &pendingStub{pendingOK: true})
 	patches, err := m.Mutate(context.Background(), dynamoWorker())
-	if err != nil || len(patches) != 0 {
-		t.Fatalf("election error must fail open, got %d patches err=%v", len(patches), err)
+	if err != nil || len(withoutStamp(patches)) != 0 {
+		t.Fatalf("election error must fail open, got %d patches err=%v", len(withoutStamp(patches)), err)
 	}
 }
 
@@ -299,8 +299,8 @@ func TestElection_CaptureWithoutBoundClaimIsLeftAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	patches, err := m.Mutate(context.Background(), pod)
-	if err != nil || len(patches) != 0 || el.called != 0 {
-		t.Fatalf("manifest present but rox unbound: want unchanged and no election, got %d patches err=%v elected=%d", len(patches), err, el.called)
+	if err != nil || len(withoutStamp(patches)) != 0 || el.called != 0 {
+		t.Fatalf("manifest present but rox unbound: want unchanged and no election, got %d patches err=%v elected=%d", len(withoutStamp(patches)), err, el.called)
 	}
 }
 

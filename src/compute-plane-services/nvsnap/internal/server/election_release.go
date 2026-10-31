@@ -26,7 +26,7 @@ import (
 )
 
 // Election release: the webhook gates follower pods of a hash until the
-// leader's capture is promoted (docs/proposals/helm-chart-cache-election.md).
+// leader's capture is promoted (docs/design/helm-chart-cache-election.md).
 // nvsnap-server is the one component that learns about the promote (the
 // agent posts pvc-state), so it removes the gates on ready and, when the
 // leader fails or overruns its deadline, evicts the followers so their

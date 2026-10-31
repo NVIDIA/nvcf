@@ -18,7 +18,7 @@ import (
 )
 
 // electionPatches is the admission decision for a model workload that
-// carries no explicit restore-from (docs/proposals/helm-chart-cache-election.md):
+// carries no explicit restore-from (docs/design/helm-chart-cache-election.md):
 //
 //   - a promoted cachedir capture exists for the composed hash: restore.
 //   - otherwise elect. The leader gets the capture decoration and the
@@ -37,7 +37,9 @@ import (
 // so the watcher captures under the same hash the followers were
 // decorated against.
 func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
-	if m.Elector == nil || m.ArchScope == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
+	// The election picks one pod to take a cachedir capture for the rest;
+	// with CRIU capture there is none to take.
+	if m.CRIUCapture || m.Elector == nil || m.ArchScope == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
 		return nil, nil
 	}
 	modelID, ok := rootfsonly.IsModelWorkload(pod, m.MainContainer)
@@ -113,7 +115,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		}
 		patches := mp.stamp(hash, election.RoleFollower, cc)
 		patches = append(patches, mp.label(election.GatedLabel, "true")...)
-		restore, err := m.cacheDirRestorePatches(pod, pm.Volume, m.cacheEnvVars(m.CacheDir))
+		restore, err := m.cacheDirRestorePatches(pod, pm.Volume, m.cacheEnvFor(m.CacheDir+"/cache", m.CacheDir+"/model"))
 		if err != nil {
 			return nil, err
 		}
@@ -124,10 +126,7 @@ func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]Patch
 		patches = append(patches, restore...)
 		patches = append(patches, gatePatch(pod))
 		if m.L2WaitImage != "" {
-			// The restore decoration created /spec/initContainers if it was
-			// missing, so an insert at index 0 is valid here.
-			waitC := buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout)
-			patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: waitC})
+			patches = prependInit(pod, patches, buildL2WaitContainer(m.L2WaitImage, m.NvSnapServerURL, hash, m.L2WaitTimeout))
 		}
 		log.WithField("claim", pm.Volume.PersistentVolumeClaim.ClaimName).Info("election: follower; gated until the capture is promoted")
 		return patches, nil

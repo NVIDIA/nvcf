@@ -43,21 +43,25 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
+    # patch: the model volume controller un-pends readers once their
+    # volume is bound (internal/agent/modelvolume_controller.go).
     # v0.0.51: create+delete needed for the mount-holder pod in the
     # source workload's namespace (see
     # internal/checkpointstore/mount_holder.go +
-    # docs/design/ROOTFS-EVERYWHERE.md). The holder is a Kyverno-
+    # docs/ARCHITECTURE.md §2). The holder is a Kyverno-
     # compliant pause pod owned by the rwx PVC; the agent creates it
     # to trigger kubelet to mount the PVC, then deletes it after the
     # in-process file-tree copy finishes.
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
-  # namespaces: read a namespace's tenant label (--tenant-label,
+  # namespaces (get): the model volume reaper checks whether the namespace
+  # a read-only model PV is bound in still exists before removing the PV,
+  # and the agent reads a namespace's tenant label (--tenant-label,
   # internal/tenant); without it every namespace is its own tenant.
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -70,8 +74,10 @@ rules:
   # nvsnap-system); we keep them ClusterRole for now so the agent can
   # operate in any namespace via flag.
   - apiGroups: [""]
+    # update/patch: the model volume controller labels the writer claim
+    # complete (internal/agent/modelvolume_controller.go).
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
   # persistentvolumes (cluster-scoped): the shared-volume promoter
   # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
   # Updates its reclaim policy to Retain, and Creates a secondary
@@ -84,6 +90,19 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # StatefulSet replicas give the webhook a group's size, so a cache set
+  # is only collected once every rank is ready.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
+  # An instance's companions (instance companion capture): the pods its
+  # GPU ranks hold connections to, directly or through a Service.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]

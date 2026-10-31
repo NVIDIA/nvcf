@@ -22,7 +22,7 @@ limitations under the License.
 // is decorated as the capture source, the losers as gated restore pods
 // that nvsnap-server releases once the capture is promoted.
 //
-// Design: docs/proposals/helm-chart-cache-election.md.
+// Design: docs/design/helm-chart-cache-election.md.
 package election
 
 import (

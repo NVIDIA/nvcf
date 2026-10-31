@@ -108,12 +108,19 @@ type cacheEnvEntry struct{ Name, Value string }
 //     share it (NIM writes ngc/, HF writes hub/ — no collision). Keeping
 //     them OUT of <root>/cache is what stops the seed-copy from dragging
 //     the whole model into the writable emptyDir every restore.
+//   - switches: VLLM_ENABLE_STARTUP_PLAN makes vLLM (0.27+) persist its
+//     KV-memory profiling result under VLLM_CACHE_ROOT/startup_plan, so
+//     a warm boot skips the memory measurement and the CUDA-graph memory
+//     estimation pass. Off by default upstream; a stale plan is ignored
+//     by fingerprint and free-memory checks, so it is safe to force on.
+//     Anything the engine can write to disk should land in the cache.
 func defaultCacheEnvTemplate() []cacheEnvEntry {
 	return []cacheEnvEntry{
 		{"HOME", "{cache}"},
 		{"TORCHINDUCTOR_CACHE_DIR", "{cache}/torchinductor"},
 		{"TRITON_CACHE_DIR", "{cache}/.triton/cache"},
 		{"VLLM_CACHE_ROOT", "{cache}/.cache/vllm"},
+		{"VLLM_ENABLE_STARTUP_PLAN", "1"},
 		{"CUDA_CACHE_PATH", "{cache}/.nv/ComputeCache"},
 		{"NIM_CACHE_PATH", "{model}"},
 		{"HF_HOME", "{model}"},
@@ -209,7 +216,8 @@ func (m *Mutator) cacheDirCapturePatches(pod *corev1.Pod) []PatchOp {
 // label check skipped for an elected leader, which is chosen by the
 // election rather than by the chart author.
 func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []PatchOp {
-	if m.CacheDir == "" {
+	// With CRIU capture a pod is captured whole; no cachedir capture runs.
+	if m.CacheDir == "" || m.CRIUCapture {
 		return nil
 	}
 	// Opt-in only: inject the cachedir capture plumbing into pods explicitly
@@ -222,6 +230,14 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	if m.MainContainer < 0 || m.MainContainer >= len(pod.Spec.Containers) {
 		return nil
 	}
+	// A model already served from a cluster model cache (NVCA rewrites the
+	// pod's model volume to its read-only claim) is left alone: the
+	// cachedir env would point the engine at a second download and the
+	// capture would hold a second copy of the model next to that claim.
+	if modelServedFromClusterCache(pod) {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).Info("cachedir: model served from a cluster model cache; not injecting the capture cachedir")
+		return nil
+	}
 	main := pod.Spec.Containers[m.MainContainer]
 
 	// Idempotency: if the cache volume/mount is already present (re-admit,
@@ -232,7 +248,8 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 		}
 	}
 
-	patches := make([]PatchOp, 0, 5+len(m.cacheEnvVars(m.CacheDir)))
+	envs := m.cacheEnvFor(m.CacheDir+"/cache", m.CacheDir+"/model")
+	patches := make([]PatchOp, 0, 5+len(envs))
 	if pod.Spec.Volumes == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/volumes", Value: []any{}})
 	}
@@ -263,8 +280,37 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 		Path:  fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
 		Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: m.CacheDir},
 	})
-	for _, e := range m.cacheEnvVars(m.CacheDir) {
+	for _, e := range envs {
 		patches = append(patches, appendEnv(m.MainContainer, e))
+	}
+	patches = append(patches, m.cacheDirSubdirMounts(&main)...)
+	return patches
+}
+
+// cacheDirSubdirMounts mounts <CacheDir>/cache and <CacheDir>/model of the
+// cachedir emptyDir into the main container as subPath mounts. An emptyDir
+// starts empty, and NIM refuses to start when NIM_CACHE_PATH does not exist
+// ("Unable to read from NIM_CACHE_PATH", dev1 2026-09-28). The kubelet
+// creates a subPath directory before the container starts, with the mode of
+// the volume's root: world-writable for an emptyDir, so an engine of any
+// user can write there.
+//
+// This replaces an init container that ran mkdir in the workload's image:
+// that borrowed the image's limits, and an image without a shell, or built
+// for another architecture, crash-looped in the init. A mount runs nothing.
+func (m *Mutator) cacheDirSubdirMounts(main *corev1.Container) []PatchOp {
+	var patches []PatchOp
+	for _, sub := range []string{cacheSubdir, "model"} {
+		path := filepath.Join(m.CacheDir, sub)
+		taken := false
+		for _, vm := range main.VolumeMounts {
+			taken = taken || filepath.Clean(vm.MountPath) == path
+		}
+		if taken {
+			continue // the pod mounts its own volume there
+		}
+		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
+			Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: path, SubPath: sub}})
 	}
 	return patches
 }
@@ -388,80 +434,23 @@ func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, 
 		})
 	}
 
-	// seed-cache init container: copy the rox's cache subtree into the
-	// writable emptyDir before the engine starts, so the compile caches
-	// are present at the SAME path (reuse) AND writable. The model is NOT
-	// copied — it stays RO-mounted (the big part). Uses the workload's
-	// own image (cp/sh present, already pulled). Tolerates an absent
-	// cache subtree (cold-ish: engine rebuilds, slower but correct).
-	if pod.Spec.InitContainers == nil {
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
+	// Two reader steps, shared with the model-volume branch (reader_steps.go):
+	// the seed copies the rox's cache subtree into the writable emptyDir so
+	// the compile caches are present at the same path and writable, and the
+	// sweep reads the rox tree, model included, into the page cache ahead of
+	// the engine. The model is never copied; it stays read-only from the rox.
+	// Both run as root: the rox files are root-owned (the engine wrote them at
+	// capture), so a non-root image user cannot even stat them; cp -a keeps
+	// that ownership and the chmod opens the per-pod scratch copy to whatever
+	// UID the engine runs as. Whether the sweep runs is a property of the
+	// volume (70B A/B in docs/results/BENCHMARK.md): the storage profile decides, and
+	// the pod's own NVSNAP_PREWARM=0/1 wins.
+	rox := volumeAt{Volume: cacheDirVolumeName, Path: cacheSeedSrcPath}
+	inits := []corev1.Container{seedStep("nvsnap-seed-cache", &main, rox, "cache", volumeAt{Volume: cacheRWVolumeName, Path: cacheSeedDstPath}, "", "restore cache", rootPosture, false)}
+	if sweep, ok := m.sweepStep("nvsnap-prewarm", &main, rox, rootPosture); ok {
+		inits = append(inits, sweep)
 	}
-	// Run as root: the rox cache files are root-owned (the engine wrote
-	// them at capture), so a non-root image USER can't even stat them
-	// (verified: "cp: cannot stat … Permission denied"). cp -a preserves
-	// the original ownership into the emptyDir, so the engine still
-	// reads/writes its own files afterward.
-	seedRoot := int64(0)
-	seedInit := corev1.Container{
-		Name:  "nvsnap-seed-cache",
-		Image: main.Image,
-		// cp -a preserves the capture's root-owned restrictive perms
-		// (cache/ is 0700 root, torchinductor 0755 root). The restored
-		// engine's Triton python stub runs NON-root, so it then can't
-		// traverse/write the cache (PermissionError [Errno 13] on
-		// /opt/nvsnap/cache/torchinductor, verified). chmod -R a+rwX opens
-		// the pod-local ephemeral cache so any UID the engine runs as can
-		// read + write it. Safe: it's a per-pod scratch copy, not shared.
-		Command: []string{"sh", "-c", fmt.Sprintf("if [ -d %s/cache ]; then cp -a %s/cache/. %s/ && chmod -R a+rwX %s; fi", cacheSeedSrcPath, cacheSeedSrcPath, cacheSeedDstPath, cacheSeedDstPath)},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
-			{Name: cacheRWVolumeName, MountPath: cacheSeedDstPath},
-		},
-		SecurityContext: &corev1.SecurityContext{RunAsUser: &seedRoot},
-	}
-	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: seedInit})
-
-	// Page-cache prewarm of the rox tree, model included, AHEAD of the engine.
-	// This is the one thing the retired entrypoint shim did that earns its
-	// keep: on network-attached rox storage (NVMesh, EBS) a large safetensors
-	// set is faulted in by mmap as small random reads, and a parallel
-	// sequential read-ahead beats that badly for large models on vLLM. The
-	// seed init above deliberately does not touch {model}, so without this the
-	// biggest part of the tree starts cold.
-	//
-	// An init container, not a shim: same node so same page cache, same pod
-	// cgroup so the same memory accounting, and the pod's own command runs
-	// untouched. Best-effort by construction: a read error must never fail a
-	// restore, so the pipeline ends in || true.
-	//
-	// Whether the sweep pays off is a property of the volume, not the
-	// model (70B A/B in docs/BENCHMARK.md), so the default and the reader
-	// count come from the L2 StorageClass's StorageProfile, editable per
-	// cluster through the nvsnap-storage-profiles ConfigMap. A pod's own
-	// NVSNAP_PREWARM=0/1 still wins, the same knob the shim honoured.
-	if want, gate := m.prewarmPolicy(main); want {
-		sweep := fmt.Sprintf(
-			"find %s -type f -print0 2>/dev/null | xargs -0 -r -P %d -n 16 cat > /dev/null 2>&1 || true",
-			cacheSeedSrcPath, m.prewarmWorkers())
-		prewarmInit := corev1.Container{
-			Name:    "nvsnap-prewarm",
-			Image:   main.Image,
-			Command: []string{"sh", "-c", sweep},
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: cacheDirVolumeName, MountPath: cacheSeedSrcPath, ReadOnly: true},
-			},
-			SecurityContext: &corev1.SecurityContext{RunAsUser: &seedRoot},
-		}
-		if gate != nil {
-			// NVSNAP_PREWARM comes from a ConfigMap or Secret the webhook
-			// cannot resolve at admission; hand the same reference to the
-			// init container and let it decide at run time.
-			prewarmInit.Env = []corev1.EnvVar{*gate}
-			prewarmInit.Command = []string{"sh", "-c", `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0; ` + sweep}
-		}
-		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/-", Value: prewarmInit})
-	}
+	patches = m.withHelperVolume(pod, appendInits(pod, patches, inits...))
 
 	// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
 	// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off
@@ -486,34 +475,24 @@ func (m *Mutator) cacheDirRestorePatches(pod *corev1.Pod, roxVol corev1.Volume, 
 	return patches, nil
 }
 
-// prewarmPolicy decides whether the cachedir restore gets the nvsnap-prewarm
-// init container. An explicit NVSNAP_PREWARM on the workload container wins
-// ("0" off, anything else on). When that variable is a ValueFrom reference
-// its value is only known inside the pod, so the init container is added
-// and the reference is returned for it to evaluate at run time. Otherwise
-// the storage profile decides, and with no profile the answer is on.
-func (m *Mutator) prewarmPolicy(main corev1.Container) (want bool, gate *corev1.EnvVar) {
-	for _, e := range main.Env {
-		if e.Name != "NVSNAP_PREWARM" {
-			continue
-		}
-		if e.ValueFrom != nil {
-			ref := e
-			return true, &ref
-		}
-		return e.Value != "0", nil
-	}
-	if m.StorageProfile == nil {
-		return true, nil
-	}
-	return m.StorageProfile.PrewarmEnabled(), nil
-}
+// prewarmChunkBytes is the read unit of the sweep: 256 MiB, 16 dd blocks
+// of 16 MiB, so a handful of multi-gigabyte safetensors still spread over
+// every reader.
+const prewarmChunkBytes = 256 << 20
 
-// prewarmWorkers is the sweep's reader count from the storage profile, or
-// the default without one.
-func (m *Mutator) prewarmWorkers() int {
-	if m.StorageProfile == nil {
-		return checkpointstore.DefaultPrewarmParallelism
+// nvcaModelVolumeName is the volume NVCA gives a container function's
+// model; when its source is a PersistentVolumeClaim the model comes from
+// the NVCA model cache.
+const nvcaModelVolumeName = "model-data"
+
+// modelServedFromClusterCache reports whether the pod's model volume is a
+// claim rather than pod-local storage.
+func modelServedFromClusterCache(pod *corev1.Pod) bool {
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name == nvcaModelVolumeName && v.PersistentVolumeClaim != nil {
+			return true
+		}
 	}
-	return m.StorageProfile.PrewarmWorkers()
+	return false
 }

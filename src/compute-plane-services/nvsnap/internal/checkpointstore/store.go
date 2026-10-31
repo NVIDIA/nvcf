@@ -23,7 +23,7 @@ limitations under the License.
 // to the store, every other pod reads from the store.
 //
 // Phase 1 ships Local (file-tree on a node-local NVMe path) and GCS
-// backends. See docs/MULTI-GPU-ROOTFS-FANOUT-DESIGN.md §3.
+// backends. See docs/ARCHITECTURE.md §6.
 package checkpointstore
 
 import (
@@ -77,7 +77,7 @@ const (
 	// filtering. Used by the PerCapturePVCBackend to promote a
 	// just-finished CRIU dump into the per-capture RWX PVC so multi-
 	// node restore can mount it ReadOnly in parallel (see
-	// docs/L2-PVC-CRIU-DESIGN.md).
+	// docs/ARCHITECTURE.md §6).
 	SourceKindCRIU SourceKind = "criu"
 )
 
@@ -114,6 +114,10 @@ type CaptureSource struct {
 	// for rootfs captures (mountinfo bind-mount paths). Paths are
 	// absolute as they appear inside SrcPath (e.g. "/etc/hostname").
 	Excludes []string `json:"excludes,omitempty"`
+
+	// Faithful copies keep every entry's owner and full mode (treecopy's
+	// faithful mode), for a tree a process reopens after a restore.
+	Faithful bool `json:"faithful,omitempty"`
 }
 
 // Store is the abstract content-addressed capture store.
@@ -192,7 +196,7 @@ type Manifest struct {
 	// manifest shape. Empty on pre-v0.0.56 manifests — callers fall
 	// back to the shape heuristic (RootfsExtractPaths / Volume Type)
 	// in that case. Prevents "crossing paths" (a rootfs capture sent
-	// to the CRIU restore-entrypoint, or vice versa).
+	// to the CRIU restore path, or vice versa).
 	CaptureMethod string `json:"capture_method,omitempty"`
 
 	// CacheDir is set only for CaptureMethod=="cachedir": the in-pod

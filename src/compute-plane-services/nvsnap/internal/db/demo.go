@@ -56,7 +56,7 @@ func (d *DB) LoadDemoState() (*DemoState, error) {
 func (d *DB) SaveDemoState(s *DemoState) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := d.db.Exec(`INSERT INTO demo_state
+	_, err := d.w.Exec(`INSERT INTO demo_state
 		(id, phase, workload_type, pod_name, node_name, message, error,
 		 deploy_duration, ckpt_duration, restore_duration,
 		 started_at, checkpoints_json, updated_at)

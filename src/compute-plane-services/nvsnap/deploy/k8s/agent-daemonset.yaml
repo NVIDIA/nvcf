@@ -121,7 +121,7 @@ spec:
             # Rootfs-only multi-GPU capture loop. Local backend post-5d:
             # captures land at --rootfs-cache-dir on this node; cross-node
             # fanout goes through nvsnap-server's peer catalog +
-            # nvsnap-blobstore (see docs/archive/PHASE5D-PEER-FANOUT-BLOB-STORE.md).
+            # nvsnap-blobstore.
             - --rootfs-capture
             - --rootfs-cache-dir=/var/lib/nvsnap/cache
             - --rootfs-cm-namespace=nvsnap-system
@@ -132,16 +132,6 @@ spec:
             - --webhook-listen=:8443
             - --webhook-cert=/etc/nvsnap/webhook/tls.crt
             - --webhook-key=/etc/nvsnap/webhook/tls.key
-            # BYOC auto-inject — when a pod carries
-            # nvsnap.io/auto-inject: "true", the webhook stamps in
-            # the sitecustomize plumbing using these images. All four
-            # must be set or the webhook fails open. Agent image MUST
-            # match this DaemonSet's container image so the
-            # libnvsnap_intercept.so build-ID lines up at restore time.
-            - nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-            - nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-            - nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-            - nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.70-rminject1
           securityContext:
             privileged: true  # Required for CRIU and containerd access
           env:

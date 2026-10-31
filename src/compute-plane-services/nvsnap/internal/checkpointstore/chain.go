@@ -23,7 +23,7 @@ limitations under the License.
 //   - PerCapturePVCBackend    — rwx → snapshot → rox PVC (cluster-wide fan-out
 //                               for N restored pods mounting one read-only disk)
 //
-// See docs/design/ROOTFS-EVERYWHERE.md.
+// See docs/ARCHITECTURE.md §2.
 
 package checkpointstore
 
@@ -54,6 +54,24 @@ type Chain struct {
 }
 
 var _ Backend = (*Chain)(nil)
+
+// RecordManifest records m with every member that keeps records without
+// data; it fails when none does.
+func (c *Chain) RecordManifest(ctx context.Context, hash string, m Manifest) error {
+	recorded := false
+	for _, b := range c.Members {
+		if r, ok := b.(ManifestRecorder); ok {
+			if err := r.RecordManifest(ctx, hash, m); err != nil {
+				return err
+			}
+			recorded = true
+		}
+	}
+	if !recorded {
+		return ErrUnsupported
+	}
+	return nil
+}
 
 // Put fans out across all members in order. Returns the manifest from the
 // first member that successfully populated SizeBytes / FileCount; rolls

@@ -107,13 +107,14 @@ func cacheDirPod() *corev1.Pod {
 // side re-emits (path consistency is the whole mechanism).
 func TestCacheDirEnvVars(t *testing.T) {
 	want := map[string]string{
-		"HOME":                    "/opt/nvsnap/cache",
-		"TORCHINDUCTOR_CACHE_DIR": "/opt/nvsnap/cache/torchinductor",
-		"NIM_CACHE_PATH":          "/opt/nvsnap/model",
-		"TRITON_CACHE_DIR":        "/opt/nvsnap/cache/.triton/cache",
-		"VLLM_CACHE_ROOT":         "/opt/nvsnap/cache/.cache/vllm",
-		"CUDA_CACHE_PATH":         "/opt/nvsnap/cache/.nv/ComputeCache",
-		"HF_HOME":                 "/opt/nvsnap/model",
+		"HOME":                     "/opt/nvsnap/cache",
+		"TORCHINDUCTOR_CACHE_DIR":  "/opt/nvsnap/cache/torchinductor",
+		"NIM_CACHE_PATH":           "/opt/nvsnap/model",
+		"TRITON_CACHE_DIR":         "/opt/nvsnap/cache/.triton/cache",
+		"VLLM_CACHE_ROOT":          "/opt/nvsnap/cache/.cache/vllm",
+		"VLLM_ENABLE_STARTUP_PLAN": "1",
+		"CUDA_CACHE_PATH":          "/opt/nvsnap/cache/.nv/ComputeCache",
+		"HF_HOME":                  "/opt/nvsnap/model",
 	}
 	got := map[string]string{}
 	for _, e := range cacheDirEnvVars("/opt/nvsnap") {
@@ -166,6 +167,30 @@ func TestCacheDirCapturePatches(t *testing.T) {
 	if !sawHome {
 		t.Error("missing HOME=/opt/nvsnap/cache env")
 	}
+	// The emptyDir starts empty; NIM refuses to start when NIM_CACHE_PATH
+	// does not exist. The kubelet creates both subtrees as subPath mounts,
+	// world-writable, before the engine starts: nothing runs in the
+	// workload's image.
+	subs := map[string]string{}
+	for _, p := range patches {
+		if c, ok := p.Value.(corev1.Container); ok {
+			t.Errorf("no init container is injected, got %s", c.Name)
+		}
+		if vm, ok := p.Value.(corev1.VolumeMount); ok && vm.SubPath != "" {
+			subs[vm.MountPath] = vm.SubPath
+		}
+	}
+	if subs["/opt/nvsnap/cache"] != "cache" || subs["/opt/nvsnap/model"] != "model" {
+		t.Errorf("cache and model must be subPath mounts of the cachedir: %v", subs)
+	}
+	// A path the pod already mounts is left to it.
+	pod := cacheDirPod()
+	pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "own", MountPath: "/opt/nvsnap/model"})
+	for _, p := range m.cacheDirSubdirMounts(&pod.Spec.Containers[0]) {
+		if vm := p.Value.(corev1.VolumeMount); vm.MountPath == "/opt/nvsnap/model" {
+			t.Error("mounted over the pod's own volume at /opt/nvsnap/model")
+		}
+	}
 }
 
 // Off by default: no CacheDir → no patches (standard rootfs path).
@@ -203,5 +228,27 @@ func TestCacheDirCapturePatches_Idempotent(t *testing.T) {
 	}
 	if p := m.cacheDirCapturePatches(pod); p != nil {
 		t.Errorf("expected no re-inject when cache mount present, got %d patches", len(p))
+	}
+}
+
+// A container function whose model is already on the NVCA model cache
+// claim keeps its pod untouched even when labelled for capture: the
+// cachedir env would make the engine download the model again and the
+// capture would duplicate it next to the cache claim.
+func TestCacheDir_ModelFromClusterCacheNotInjected(t *testing.T) {
+	m := &Mutator{Backend: newBackend(t), CacheDir: "/opt/nvsnap"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "fn", Name: "w-0", Labels: map[string]string{CaptureLabel: "true"}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "nim", Image: "nvcr.io/nim/x:1", VolumeMounts: []corev1.VolumeMount{{Name: "model-data", MountPath: "/model-store", ReadOnly: true}}}},
+			Volumes:    []corev1.Volume{{Name: "model-data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "abc-ro", ReadOnly: true}}}},
+		},
+	}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) != 0 {
+		t.Errorf("no cachedir injection for a cluster-cached model, got %d patches", len(patches))
+	}
+	pod.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	if patches := m.cacheDirCapturePatches(pod); len(patches) == 0 {
+		t.Error("an emptyDir model volume is still captured")
 	}
 }

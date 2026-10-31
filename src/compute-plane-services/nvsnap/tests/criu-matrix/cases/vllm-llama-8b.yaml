@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, Llama 3.1 8B FP8, one GPU, engine as pid 1 (as the container function vllm-llama-3-1-8b).
+kind: Deployment
+launch: exec
+model: nvidia/Llama-3.1-8B-Instruct-FP8
+servedModelName: llama-8b
+maxModelLen: 1024
+gpuMemoryUtilization: 0.85
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

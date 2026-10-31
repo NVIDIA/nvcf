@@ -57,7 +57,13 @@ spec:
     - port: 443
       targetPort: 8443
       protocol: TCP
+{{- if .Values.webhook.inject }}
 ---
+# Master switch: webhook.inject=false drops only this registration, so
+# pods admitted afterwards carry no nvsnap content and no agent rolls.
+# Pods or namespaces labelled nvsnap.io/inject=false are never sent here.
+# With webhook.injectScope=optIn, only namespaces labelled
+# nvsnap.io/inject=true are.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -78,8 +84,26 @@ webhooks:
         resources: ["pods"]
         operations: ["CREATE"]
         scope: Namespaced
+    namespaceSelector:
+      matchExpressions:
+        - key: nvsnap.io/inject
+          {{- if eq .Values.webhook.injectScope "optIn" }}
+          operator: In
+          values: ["true"]
+          {{- else if eq .Values.webhook.injectScope "all" }}
+          operator: NotIn
+          values: ["false"]
+          {{- else }}
+          {{- fail "webhook.injectScope must be all or optIn" }}
+          {{- end }}
+    objectSelector:
+      matchExpressions:
+        - key: nvsnap.io/inject
+          operator: NotIn
+          values: ["false"]
     failurePolicy: {{ .Values.webhook.failurePolicy }}
     sideEffects: None
     admissionReviewVersions: ["v1"]
     timeoutSeconds: 5
+{{- end }}
 {{- end }}
