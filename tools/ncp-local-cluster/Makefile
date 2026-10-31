@@ -153,13 +153,22 @@ stop:
 	@echo "Cluster $(CLUSTER_NAME) stopped."
 
 destroy:
-	@if k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
-		echo "Destroying k3d cluster $(CLUSTER_NAME)..."; \
-		k3d cluster delete $(CLUSTER_NAME); \
-		echo "Cluster $(CLUSTER_NAME) destroyed."; \
-	else \
-		echo "Cluster $(CLUSTER_NAME) absent; skipping."; \
-	fi
+	@command -v jq >/dev/null 2>&1 || { \
+		echo "destroy requires jq; install it and retry." >&2; exit 1; \
+	}; \
+	CLUSTERS_JSON=$$(k3d cluster list -o json) || exit $$?; \
+	NAME=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r --arg name "$(CLUSTER_NAME)" '.[] | select(.name == $$name) | .name') || exit $$?; \
+	if [ -z "$$NAME" ]; then \
+		echo "Cluster $(CLUSTER_NAME) absent; skipping."; exit 0; \
+	fi; \
+	echo "Destroying k3d cluster $(CLUSTER_NAME)..."; \
+	k3d cluster delete "$(CLUSTER_NAME)" || exit $$?; \
+	CLUSTERS_JSON=$$(k3d cluster list -o json) || exit $$?; \
+	NAME=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r --arg name "$(CLUSTER_NAME)" '.[] | select(.name == $$name) | .name') || exit $$?; \
+	if [ -n "$$NAME" ]; then \
+		echo "ERROR Cluster $(CLUSTER_NAME) remains after deletion." >&2; exit 1; \
+	fi; \
+	echo "Cluster $(CLUSTER_NAME) destroyed."
 
 destroy-all-ncp-local: ## Discover and destroy every ncp-local* k3d cluster on the host
 	@command -v jq >/dev/null 2>&1 || { \
@@ -173,8 +182,7 @@ destroy-all-ncp-local: ## Discover and destroy every ncp-local* k3d cluster on t
 		exit 0; \
 	fi; \
 	for name in $$NAMES; do \
-		echo "Destroying k3d cluster $$name..."; \
-		k3d cluster delete "$$name"; \
+		$(MAKE) --no-print-directory CLUSTER_NAME="$$name" destroy || exit $$?; \
 	done
 
 status:
@@ -299,10 +307,10 @@ build-and-deploy-multicluster: ensure-docker-config validate-compute-clusters cl
 	done
 
 destroy-multicluster: validate-compute-clusters ## Destroy the default control-plane cluster and resolved compute-plane clusters
-	@$(MAKE) CLUSTER_NAME=$(CONTROL_PLANE_CLUSTER_NAME) destroy || true
+	@$(MAKE) CLUSTER_NAME=$(CONTROL_PLANE_CLUSTER_NAME) destroy
 	@clusters="$$( $(MAKE) --no-print-directory -s print-compute-clusters )"; \
 	for cluster in $$clusters; do \
-		$(MAKE) CLUSTER_NAME="$$cluster" destroy || true; \
+		$(MAKE) CLUSTER_NAME="$$cluster" destroy || exit $$?; \
 	done
 
 test-cluster-lifecycle-make: ## Run dry Makefile tests for cluster lifecycle behavior
