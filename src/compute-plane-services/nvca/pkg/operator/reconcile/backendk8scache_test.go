@@ -70,6 +70,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -2184,7 +2185,7 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 			ctx := newTestContext()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
-					Status: nvidiaiov1.AgentStatusHealthy,
+					Status: nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy),
 				}))
 			}))
 			t.Cleanup(server.Close)
@@ -2234,7 +2235,7 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 			require.NoError(t, bc.SyncNVCFBackendHealth(ctx, got))
 			got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+			assert.Equal(t, nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy), got.Status.AgentStatus)
 		})
 	}
 }
@@ -2287,6 +2288,82 @@ func TestSyncNVCFBackendHealthIgnoresRejectedHeartbeatInterval(t *testing.T) {
 	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+}
+
+// TestSyncNVCFBackendHealthReportsStalledAgentRollout checks that an agent rollout
+// past its progress deadline makes the NVCFBackend Unhealthy even though the
+// previous replica still serves and reports healthy.
+func TestSyncNVCFBackendHealthReportsStalledAgentRollout(t *testing.T) {
+	// What the agent's /healthz reports, which differs from AgentStatusHealthy in case.
+	agentHealthy := nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy)
+	tests := []struct {
+		name      string
+		condition appsv1.DeploymentCondition
+		want      nvidiaiov1.AgentStatus
+	}{
+		{
+			name: "rollout in progress",
+			condition: appsv1.DeploymentCondition{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "ReplicaSetUpdated",
+			},
+			want: agentHealthy,
+		},
+		{
+			name: "rollout complete",
+			condition: appsv1.DeploymentCondition{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "NewReplicaSetAvailable",
+			},
+			want: agentHealthy,
+		},
+		{
+			name: "progress deadline exceeded",
+			condition: appsv1.DeploymentCondition{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+			},
+			want: nvidiaiov1.AgentStatusUnhealthy,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+					Status: nvidiaiov1.AgentStatus(nvcatypes.HealthStatusHealthy),
+				}))
+			}))
+			t.Cleanup(server.Close)
+			previousHealthzURL := makeNVCAHealthzURL
+			makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) {
+				return server.URL, nil
+			}
+			t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+
+			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+			nb.Name = "backend"
+			nb.Namespace = NVCAOperatorNamespace
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name: nvcaoptypes.NVCAModuleName, Namespace: getSystemNamespace(nb),
+			}}
+			dep.Status.ReadyReplicas = 1
+			dep.Status.Conditions = []appsv1.DeploymentCondition{tt.condition}
+			recorder := record.NewFakeRecorder(0)
+			recorder.Events = nil
+			bc := &BackendK8sCache{
+				clients: &kubeclients.KubeClients{
+					NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+					K8s:    fakek8sclient.NewSimpleClientset(dep),
+				},
+				httpClient:        server.Client(),
+				operatorNamespace: NVCAOperatorNamespace,
+				eventRecorder:     recorder,
+			}
+
+			require.NoError(t, bc.SyncNVCFBackendHealth(ctx, nb))
+			got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Status.AgentStatus)
+		})
+	}
 }
 
 type PatchedOSExit struct {

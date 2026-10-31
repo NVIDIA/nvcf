@@ -97,6 +97,31 @@ func (bs BackendGPUs) ToRegistration(
 	return rgs
 }
 
+// InstanceTypesRemovedByOverhead returns the instance types that ToRegistration leaves out
+// only because infraOverhead uses up at least one of their resources, sorted by name. Each
+// is returned as registered without overhead, so its resources are those before overhead.
+func (bs BackendGPUs) InstanceTypesRemovedByOverhead(
+	allowMultiNodeWorkloads bool,
+	infraOverhead corev1.ResourceList,
+) []RegistrationInstanceType {
+	kept := map[string]struct{}{}
+	for _, rg := range bs.ToRegistration(allowMultiNodeWorkloads, infraOverhead) {
+		for _, it := range rg.InstanceTypes {
+			kept[it.Name] = struct{}{}
+		}
+	}
+	var removed []RegistrationInstanceType
+	for _, rg := range bs.ToRegistration(allowMultiNodeWorkloads, nil) {
+		for _, it := range rg.InstanceTypes {
+			if _, ok := kept[it.Name]; !ok {
+				removed = append(removed, it)
+			}
+		}
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i].Name < removed[j].Name })
+	return removed
+}
+
 // AddInstanceCapacity computes per-instance-type capacity from live node state and returns the
 // updated gpus along with, per GPU family/machine combination, the count of GPU-bearing nodes
 // that could not be attributed to any instance type (missing or unrecognized
