@@ -21,7 +21,7 @@ limitations under the License.
 // kubelet sees the bind-mounted OverlayFS paths ready by the time
 // the main container starts.
 //
-// See docs/proposals/init-container-mount-prep.md (nvsnap#202) for
+// See docs/ARCHITECTURE.md §2 (nvsnap#202) for
 // the why. Short version: doing 355 OverlayFS mounts inside a K8s
 // mutating-admission webhook exceeded the 10–30 s timeout budget;
 // moving the work into pod lifecycle (here) lets it take however

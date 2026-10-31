@@ -72,7 +72,11 @@ func (r *LWSResolver) ResolveGroup(ctx context.Context, pod *corev1.Pod) (Result
 	}
 	// The worker's own landing volume is what it mounts; the leader's
 	// tells us only the identity and the path convention.
-	res.Landing = landingFor(pod, &pod.Spec.Containers[0], res.Landing.Path, res.Landing.Downloader, "")
+	if res.Landing.Downloader == DownloaderEngine {
+		res.Landing = engineLanding(pod, &pod.Spec.Containers[0], res.Landing.Path)
+	} else {
+		res.Landing = landingFor(pod, &pod.Spec.Containers[0], res.Landing.Path, res.Landing.Downloader, "")
+	}
 	res.Source = "lws leader template: " + res.Source
 	return res, true, nil
 }

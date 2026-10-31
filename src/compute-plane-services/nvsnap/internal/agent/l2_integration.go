@@ -153,6 +153,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	if err != nil {
 		return nil, fmt.Errorf("L2: in-cluster config: %w", err)
 	}
+	restCfg = withClientLimits(restCfg)
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("L2: kube client: %w", err)
@@ -188,7 +189,9 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// driver in the nvsnap-storage-profiles ConfigMap instead.
 	promoter, profile, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
 	a.l2Profile = profile
-	if a.config.Election.Enabled || a.config.ModelVolume.Enabled {
+	// The election picks one pod to take a cachedir capture for the rest
+	// of its configuration; CRIU captures every instance whole.
+	if (a.config.Election.Enabled || a.config.ModelVolume.Enabled) && !criuIsDefault() {
 		a.elector = &election.LeaseElector{KubeClient: kc, Namespace: cfg.Namespace, Deadline: a.config.Election.Deadline}
 		a.electionScope = &election.NodeArchScope{KubeClient: kc}
 		log.WithField("deadline", a.config.Election.Deadline).Info("admission election enabled (one downloader per hash)")
@@ -203,10 +206,14 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 			mv.Cfg.TenantLabel = a.modelVolumeTenantLabel()
 			a.modelVolume, a.modelMinter = mv, minter
 			// The compile-cache set is the model volume mechanism with
-			// another kind: same storage, same views, every mode.
-			ccfg := mv.Cfg
-			ccfg.Kind = modelvolume.KindCache
-			a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			// another kind: same storage, same views, every mode. A CRIU
+			// restore brings the caches back with the process, so under
+			// CRIU there is no set to collect or seed.
+			if !criuIsDefault() {
+				ccfg := mv.Cfg
+				ccfg.Kind = modelvolume.KindCache
+				a.cacheVolume = &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
+			}
 		}
 	}
 
@@ -291,6 +298,14 @@ func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 	if (m.CaptureMethod == "rootfs" || m.CaptureMethod == "cachedir") && m.TotalSizeBytes > 0 {
 		const floor = 2 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
+	}
+	// A CRIU capture measured on disk (the agent passes the checkpoint's
+	// allocated size): size from that. The vRAM estimate below asked
+	// 384 GiB (80 GiB x 4 GPUs x 1.2) for a 1.1 TB checkpoint of a model
+	// filling four 288 GB GPUs, and the copy ran out of space.
+	if m.CaptureMethod == "criu" && m.TotalSizeBytes > 0 {
+		const floor = 2 * oneGiB
+		return max(m.TotalSizeBytes*11/10, floor)
 	}
 
 	// CRIU/GPU-state path: dump ≈ vRAM. Manifest doesn't carry vRAM

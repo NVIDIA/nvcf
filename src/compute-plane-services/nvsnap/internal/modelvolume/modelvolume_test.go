@@ -149,6 +149,7 @@ func TestProvisioner_DownloadJobIdempotent(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc", Size: resource.MustParse("1Gi")}}
 	step := DownloadStep{
+		HelperVolume:     corev1.Volume{Name: HelperVolumeName, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/bundle/nvsnap"}}},
 		Container:        corev1.Container{Image: "vllm/vllm-openai", Command: []string{"/bin/sh", "-c"}, Args: []string{"hf download x && touch /m/.nvsnap-complete"}, VolumeMounts: []corev1.VolumeMount{{Name: "models", MountPath: "/m"}}},
 		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "pull"}},
 		Tolerations:      []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists}},
@@ -225,6 +226,7 @@ func TestProvisioner_StagingJob(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeBlock, StorageClass: "sc"}}
 	step := DownloadStep{
+		HelperVolume: corev1.Volume{Name: HelperVolumeName, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/bundle/nvsnap"}}},
 		Container: corev1.Container{Image: "img", Command: []string{"/bin/sh", "-c"}, Args: []string{"dl"},
 			VolumeMounts: []corev1.VolumeMount{{Name: "models", MountPath: "/m"}, {Name: "kube-api-access-abc", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount"}, {Name: "secrets", MountPath: "/var/secrets"}}},
 		VolumeName: "models",
@@ -270,7 +272,7 @@ func TestProvisioner_StagingJob(t *testing.T) {
 	for _, m := range ps.InitContainers[0].VolumeMounts {
 		mounts = append(mounts, m.Name)
 	}
-	if len(names) != 2 || names[1] != "secrets" || len(mounts) != 2 || mounts[1] != "secrets" {
+	if len(names) != 3 || names[1] != "secrets" || names[2] != HelperVolumeName || len(mounts) != 2 || mounts[1] != "secrets" {
 		t.Errorf("projected SA token dropped, credentials kept: volumes=%v mounts=%v", names, mounts)
 	}
 	if claims, _ := kc.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{}); len(claims.Items) != 0 {
@@ -403,7 +405,7 @@ func TestLookup_ServesNewestGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.Complete || st.PrimaryPV != "g3" || st.Generation != 3 || st.DeltaFingerprint != "fp-3" || st.RefreshStable {
+	if !st.Complete || st.PrimaryPV != "g3" || st.Generation != 3 || st.DeltaFingerprint != "fp-3" || st.RefreshStable || st.OwnersKept {
 		t.Errorf("newest generation served: %+v", st)
 	}
 	if err := p.MarkRefreshStable(ctx, "g3"); err != nil {

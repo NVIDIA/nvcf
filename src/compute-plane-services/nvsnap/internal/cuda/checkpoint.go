@@ -283,7 +283,7 @@ func (m *Manager) runCudaCheckpoint(ctx context.Context, targetPID int, action s
 		// workload's own /proc/<pid>/maps (works on any cluster regardless
 		// of where the driver-installer put libs) and fall back to a
 		// hardcoded probe of known paths if the workload hasn't dlopen'd
-		// libcuda yet. See docs/architecture/06-CUDA-CHECKPOINT-CALL-FLOW.md.
+		// libcuda yet. See docs/ARCHITECTURE.md §3.
 		var cudaLibsDir string
 		containerView, hostView, derr := DiscoverCudaLibDir("/host/proc", "/host", targetPID)
 		if derr == nil && hostView != "" {

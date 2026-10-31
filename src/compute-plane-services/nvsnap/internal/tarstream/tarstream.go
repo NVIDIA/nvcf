@@ -19,19 +19,38 @@ import (
 	"time"
 )
 
-// Write streams dir as a tar of relative paths. Names in skip (relative
-// to dir) are left out. Absolute symlinks and special files are skipped.
+// A stream is bracketed by two PAX global headers: Go's tar reader takes
+// a stream cut at an entry boundary for a complete one, so Extract fails a
+// stream that began with the first and lacks the second. Readers that
+// predate them skip both; streams that predate them extract as before.
+const markKey = "NVSNAP.tarstream"
+
+const (
+	markBegin = "begin"
+	markEnd   = "end"
+)
+
+func writeMark(tw *tar.Writer, mark string) error {
+	return tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Format: tar.FormatPAX, PAXRecords: map[string]string{markKey: mark}})
+}
+
+// Write streams dir as a tar of relative paths, dir itself first as "./".
+// Names in skip (relative to dir) are left out. Absolute symlinks and
+// special files are skipped. Each entry carries its owner and mode.
 func Write(w io.Writer, dir string, skip map[string]bool) error {
 	tw := tar.NewWriter(w)
+	if err := writeMark(tw, markBegin); err != nil {
+		return err
+	}
 	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		rel, rerr := filepath.Rel(dir, p)
-		if rerr != nil || rel == "." {
+		if rerr != nil {
 			return rerr
 		}
-		if skip[rel] {
+		if rel != "." && skip[rel] {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -80,13 +99,17 @@ func Write(w io.Writer, dir string, skip map[string]bool) error {
 	if err != nil {
 		return err
 	}
+	if err := writeMark(tw, markEnd); err != nil {
+		return err
+	}
 	return tw.Close()
 }
 
 // Extract unpacks a tar stream into dest. With worldWritable, directories
 // become 0777 and files 0666 (0777 when executable), for a cachedir read
-// and written by whichever user the engine runs as; otherwise the archive
-// modes are kept.
+// and written by whichever user the engine runs as; otherwise every entry,
+// dest itself included when the stream carries it ("./"), keeps the
+// archive's full mode and, when run as root, its owner.
 func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int64, err error) {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return 0, 0, err
@@ -99,9 +122,13 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 		at   time.Time
 	}
 	var dirs []dirTime
+	begun, ended := false, false
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			if begun && !ended {
+				return files, bytes, fmt.Errorf("tar stream ended before its end mark: %w", io.ErrUnexpectedEOF)
+			}
 			for i := len(dirs) - 1; i >= 0; i-- {
 				_ = os.Chtimes(dirs[i].path, dirs[i].at, dirs[i].at)
 			}
@@ -110,8 +137,28 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 		if err != nil {
 			return files, bytes, err
 		}
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			switch hdr.PAXRecords[markKey] {
+			case markBegin:
+				begun = true
+			case markEnd:
+				ended = true
+			}
+			continue
+		}
 		rel := filepath.Clean(hdr.Name)
-		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+		if rel == "." {
+			if hdr.Typeflag == tar.TypeDir && !worldWritable {
+				if err := keepOwnerAndMode(dest, hdr); err != nil {
+					return files, bytes, err
+				}
+				if !hdr.ModTime.IsZero() {
+					dirs = append(dirs, dirTime{dest, hdr.ModTime})
+				}
+			}
+			continue
+		}
+		if filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
 			continue
 		}
 		target := filepath.Join(dest, rel)
@@ -135,7 +182,11 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 			if err := os.MkdirAll(target, mode|0o700); err != nil {
 				return files, bytes, err
 			}
-			_ = os.Chmod(target, mode)
+			if worldWritable {
+				_ = os.Chmod(target, mode)
+			} else if err := keepOwnerAndMode(target, hdr); err != nil {
+				return files, bytes, err
+			}
 			if !hdr.ModTime.IsZero() {
 				dirs = append(dirs, dirTime{target, hdr.ModTime})
 			}
@@ -158,7 +209,11 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 			if cerr != nil {
 				return files, bytes, cerr
 			}
-			_ = os.Chmod(target, mode)
+			if worldWritable {
+				_ = os.Chmod(target, mode)
+			} else if err := keepOwnerAndMode(target, hdr); err != nil {
+				return files, bytes, err
+			}
 			if !hdr.ModTime.IsZero() {
 				_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 			}
@@ -175,8 +230,29 @@ func Extract(r io.Reader, dest string, worldWritable bool) (files int, bytes int
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return files, bytes, err
 			}
+			if !worldWritable {
+				if err := keepOwnerAndMode(target, hdr); err != nil {
+					return files, bytes, err
+				}
+			}
 		}
 	}
+}
+
+// keepOwnerAndMode gives target the owner and full mode (setuid, setgid
+// and sticky included) hdr records. Owners need root; without it target
+// keeps the extracting user's. A symlink takes only the owner.
+func keepOwnerAndMode(target string, hdr *tar.Header) error {
+	if os.Geteuid() == 0 {
+		if err := os.Lchown(target, hdr.Uid, hdr.Gid); err != nil {
+			return err
+		}
+	}
+	if hdr.Typeflag == tar.TypeSymlink {
+		return nil
+	}
+	// After the chown, which clears setuid and setgid.
+	return syscall.Chmod(target, uint32(hdr.Mode&0o7777))
 }
 
 // realParents fails when a directory component of rel below dest is a
@@ -228,13 +304,15 @@ func ExtractFresh(r io.Reader, dest string, worldWritable bool) (files int, byte
 		return 0, 0, err
 	}
 	defer os.RemoveAll(staging)
-	if files, bytes, err = Extract(r, staging, worldWritable); err != nil {
-		return files, bytes, err
-	}
+	// MkdirTemp makes staging 0700. A stream that carries its root ("./")
+	// sets it from there; one from a writer that does not keeps this.
 	if worldWritable {
 		_ = os.Chmod(staging, 0o777)
 	} else {
 		_ = os.Chmod(staging, 0o755)
+	}
+	if files, bytes, err = Extract(r, staging, worldWritable); err != nil {
+		return files, bytes, err
 	}
 	if err := os.RemoveAll(dest); err != nil {
 		return files, bytes, err

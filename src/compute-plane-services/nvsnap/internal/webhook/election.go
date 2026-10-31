@@ -18,7 +18,7 @@ import (
 )
 
 // electionPatches is the admission decision for a model workload that
-// carries no explicit restore-from (docs/proposals/helm-chart-cache-election.md):
+// carries no explicit restore-from (docs/design/helm-chart-cache-election.md):
 //
 //   - a promoted cachedir capture exists for the composed hash: restore.
 //   - otherwise elect. The leader gets the capture decoration and the
@@ -37,7 +37,9 @@ import (
 // so the watcher captures under the same hash the followers were
 // decorated against.
 func (m *Mutator) electionPatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
-	if m.Elector == nil || m.ArchScope == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
+	// The election picks one pod to take a cachedir capture for the rest;
+	// with CRIU capture there is none to take.
+	if m.CRIUCapture || m.Elector == nil || m.ArchScope == nil || m.Composer == nil || m.CacheDir == "" || m.L2Backend == nil {
 		return nil, nil
 	}
 	modelID, ok := rootfsonly.IsModelWorkload(pod, m.MainContainer)

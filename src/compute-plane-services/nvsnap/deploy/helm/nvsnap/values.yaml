@@ -36,7 +36,9 @@ cert-manager:
 gpu-operator:
   enabled: true
   # NVIDIA driver version. Pin per-cluster as customer hardware /
-  # CUDA stack demands. R555+ required for cuda-checkpoint.
+  # CUDA stack demands. CRIU capture needs the CUDA checkpoint driver API
+  # (cuCheckpointProcess*); multi-GPU capture under gpushare needs 610 or
+  # later (docs/design/GPUSHARE.md, Requirements and limits).
   driver:
     enabled: true
     version: "580.95.05"
@@ -84,7 +86,7 @@ nvsnap:
 
   # Pull-secret name(s) referenced by every Pod's spec.imagePullSecrets.
   # The secret itself must already exist in the target namespace — see
-  # docs/PULL-SECRET-SETUP.md for the setup walkthrough.
+  # docs/operate/PULL-SECRETS.md for the setup walkthrough.
   imagePullSecrets:
     - nvsnap-pull-secret
 
@@ -93,6 +95,12 @@ nvsnap:
 
 agent:
   enabled: true
+
+  # Largest deleted file, in bytes, a CRIU dump saves (criu --ghost-limit).
+  # Engines keep state in deleted shared-memory files: a vLLM CPU KV-cache
+  # tier (--kv-offloading-size 600) is one 600 GiB file in /dev/shm. A dump
+  # saves it whole, so the checkpoint grows by that much. Empty is 1 TiB.
+  criuGhostLimit: ""
 
   # Namespace label naming the tenant a namespace belongs to: a label your
   # platform stamps with the account or tenant id, one namespace users
@@ -105,25 +113,25 @@ agent:
   # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on
   # BOTH capture and restore, the agent captures ONLY this dir as the rox
   # root, and restore RO-mounts the rox back here directly (no overlayfs).
-  # Path consistency is what lets the engine reuse prebuilt kernels
-  # (graph capture 379s→38s).
+  # Path consistency is what lets the engine reuse prebuilt kernels.
   #
-  # Default ON ("/opt/nvsnap"): cachedir (ember) is the blessed production
-  # flow — captures the JIT/gemm caches + model into one redirected dir
-  # (small, not the whole 178GB rootfs) and restore page-cache-prewarms
-  # via nvsnap-rootfs-restore. Set to "" to fall back to whole-rootfs
-  # capture (no gemm capture, no prewarm).
+  # Default ON ("/opt/nvsnap"): captures the JIT/gemm caches + model into
+  # one redirected dir rather than the whole rootfs, and a restore adds a
+  # page-cache prewarm init container. Do not set it to "": the agent then
+  # refuses to start rootfs capture, since whole-rootfs capture needs the
+  # agent flag --allow-whole-rootfs, which the chart does not set
+  # (internal/agent/rootfsonly_integration.go).
   podCacheDir: "/opt/nvsnap"
 
   # One downloader per cache hash for chart-shaped model workloads
-  # (docs/proposals/helm-chart-cache-election.md). At admission the
+  # (docs/design/helm-chart-cache-election.md). At admission the
   # webhook composes the cache hash of every GPU pod that names a model;
   # if a promoted capture exists the pod restores from it, otherwise one
   # pod is elected to capture and the rest are held by a scheduling gate
   # (no node, no GPU) until nvsnap-server sees the promote and releases
   # them. Needs agent.l2. Off until qualified on a cluster.
   # Write-once model volume for Helm functions
-  # (docs/proposals/helm-shared-model-volume.md): the model is downloaded
+  # (docs/design/helm-shared-model-volume.md): the model is downloaded
   # once per cluster into a per-identity volume and every other pod that
   # names it attaches that volume; compile caches are shared the same way.
   # Mode comes from the storage profile: block on NVMesh (the L2 class),
@@ -158,7 +166,7 @@ agent:
     # captures and caches.
     tenantLabel: ""
 
-  # Compile cache set refresh (docs/proposals/helm-chart-cache-refresh.md),
+  # Compile cache set refresh (docs/design/helm-chart-cache-refresh.md),
   # off by default. When on, a warm rank whose cachedir gained files before
   # it reported Ready (what the next start pays for) proposes a refresh;
   # one agent collects a new generation of the set from the warm ranks and
@@ -166,8 +174,7 @@ agent:
   # refreshCooldown is the least time between generations of one set; a
   # superseded generation with no reader bound is retired about an hour
   # after it is replaced. Turn on per cluster when a measured case needs
-  # it; the mechanism has run on GB300 but is not yet proven across
-  # engines.
+  # it (docs/design/helm-chart-cache-refresh.md records its one run).
   cacheVolume:
     refresh: false
     refreshCooldown: 6h
@@ -222,12 +229,11 @@ agent:
   nodeSelector: {}
 
   # nodeAffinity with OR across known GPU-node label conventions:
-  # - nvidia.com/gpu.present     NVIDIA GPU Operator (bare-metal, EKS, AKS, KOps, etc.)
-  # - cloud.google.com/gke-gpu   GKE managed node pools
-  # - eks.amazonaws.com/nodegroup-image with gpu in name OR
-  #   nvidia.com/gpu resource at the kubelet (handled by the toleration only)
-  # Override completely by setting `nodeAffinityOverride` to a full
-  # affinity.nodeAffinity block.
+  # - nvidia.com/gpu.present                    NVIDIA GPU Operator
+  # - cloud.google.com/gke-gpu                  GKE managed node pools
+  # - feature.node.kubernetes.io/pci-10de.present  Node Feature Discovery
+  #                                             (an NVIDIA PCI device)
+  # Replace this block in your values to match other GPU nodes.
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       nodeSelectorTerms:
@@ -251,7 +257,7 @@ agent:
       operator: Exists
       effect: NoSchedule
 
-  # The agent runs privileged with hostPID/hostNetwork — required to
+  # The agent runs privileged.
   # hostPID is required: CRIU and cuda-checkpoint address target processes by
   # host PID, and the pre-checkpoint socket sweep opens /proc/<pid>/ns/net.
   hostPID: true
@@ -308,12 +314,11 @@ agent:
     # in the agent at the same path.
     nvsnapModels: /var/lib/containerd/nvsnap-models
     # Cache, staging and overlays sit under the containerd root on purpose.
-    # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
-    # a typical GPU node /var/lib is the boot volume (network-backed, ~125
-    # MB/s) while containerd lives on the instance-local NVMe array. Writing
-    # captures to the boot volume was both slow (~28 min for that 132 GB) and
-    # a node-stability risk, since filling the root disk triggers kubelet disk
-    # pressure. Keeping these on containerd's filesystem also puts source and
+    # They are the bulk writers (a 70B cachedir capture is about 130 GB), and
+    # on many GPU nodes /var/lib is a network-backed boot volume while
+    # containerd lives on instance-local NVMe. Writing captures to the boot
+    # volume is slow and a node-stability risk, since filling the root disk
+    # triggers kubelet disk pressure. Keeping these on containerd's filesystem also puts source and
     # destination on one filesystem, which is what makes reflink possible.
     # Override per-cluster if containerd is not on the fastest local disk.
     nvsnapCache: /var/lib/containerd/nvsnap-cache
@@ -333,17 +338,34 @@ agent:
       # Two consumers govern this limit:
       #  1. Agent-driven restore runs CRIU as a child of the agent; CRIU's
       #     peak RSS during page restore counts against the agent's cgroup.
-      #  2. Page-cache prewarm (prewarm.go): the agent sequentially reads
-      #     the captured model tree into the page cache; those reclaimable
+      #  2. Page-cache prewarm (prewarm.go): the agent reads the captured
+      #     model tree into the page cache with six readers; those reclaimable
       #     pages are charged to the agent cgroup. To keep the FULL warm
       #     set resident this limit must be >= the captured tree size,
       #     else the kernel LRU-evicts the early pages mid-read (prewarm
       #     degrades gracefully — you still warm the last `limit` bytes).
-      # 96Gi covers every model we restore except DeepSeek-V4 (~160 GB).
-      # Clusters that restore >96 GB trees should raise this (H100 nodes
-      # have ~1.9 TB RAM); it is a LIMIT not a request, so it does not
-      # reserve node memory. Set NVSNAP_PREWARM=0 to disable prewarm.
+      # Clusters that restore trees larger than this should raise it; it
+      # is a LIMIT not a request, so it does not reserve node memory. Set
+      # NVSNAP_PREWARM=0 to disable prewarm.
       memory: "96Gi"
+
+  # How workloads are captured and restored: "cachedir" (the engine's
+  # caches and model, restored into a fresh start) or "criu" (the whole
+  # process, restored in place of a fresh start). Applies to every capture
+  # on the cluster, including NVCA functions. With "criu" a restore brings
+  # the compile caches back with the process, so the cachedir machinery
+  # does not run: no cachedir volume or cache env on pods, no compile-cache
+  # set (modelVolume still shares the model), no cachedir capture watcher
+  # and no admission election. podCacheDir and election are then unused.
+  captureMethod: cachedir
+  # Multi-pod instances (a Helm StatefulSet, LeaderWorkerSet or Grove group)
+  # are captured only on request: their pods annotated
+  # nvsnap.io/criu-capture: "true", or matched here, for pods whose spec
+  # nvsnap does not own (NVCF functions):
+  #   criuCaptureOptIn:
+  #     - label: function-id
+  #       values: ["<function id>"]
+  criuCaptureOptIn: []
 
   # Extra env injected verbatim into the agent container. The chart
   # auto-wires OTEL_EXPORTER_OTLP_ENDPOINT when .Values.jaeger.enabled
@@ -354,29 +376,24 @@ agent:
 
   # ─── L2 per-capture PVC (nvsnap#63) ───
   #
-  # When agent.l2.storageClass is set, the agent provisions a
-  # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
-  # reader PVC after every successful CRIU dump. The mutating webhook
-  # mounts rox-<hash> ReadOnly on restored pods so multi-node fan-out
-  # reads at storage-tier speed in parallel.
+  # When agent.l2.storageClass is set, the agent copies every capture to
+  # a rwx-<hash> volume in the background and promotes it to a read-only
+  # rox-<hash> (internal/checkpointstore, promoter*.go). For a cachedir
+  # capture the webhook mounts rox-<hash> read-only on restored pods; a
+  # CRIU restore's agent copies the checkpoint from it to its node
+  # (internal/agent/cascade_fetch.go EnsureLocal).
   #
-  # Empty storageClass disables L2; CRIU dumps stay node-pinned on L1
-  # hostpath. Restore in that mode still works (peer cascade / L4
-  # object store) but fan-out doesn't scale across nodes.
+  # Empty storageClass disables L2; checkpoints stay on their nodes and
+  # a restore elsewhere fetches them from peer agents over HTTP.
   l2:
-    # StorageClass for L2 per-capture PVCs. The backend creates a
-    # writer PVC (rwx-<hash>, mounted ReadWriteOnce by a single
-    # writer Job — lease-serialized one-per-hash) and after
-    # snapshot+clone a reader PVC (rox-<hash>, mounted ReadOnlyMany
-    # by N restored pods). Any standard CSI works — including
-    # Hyperdisk ML on GKE (pd.csi.storage.gke.io), which supports
-    # exactly the RWO/ROX pair the backend needs.
-    #
-    # Recommended:
-    #   GKE:        "hyperdisk-ml"      (pd.csi.storage.gke.io)
-    #   AWS:        gp3 / io2           (ebs.csi.aws.com)
-    #   Azure:      managed-disk        (disk.csi.azure.com)
-    #   Bare metal: Longhorn / Rook-CephFS / Filestore
+    # StorageClass for L2 per-capture PVCs. The backend writes a writer
+    # PVC (rwx-<hash>, ReadWriteOnce, one writer per hash under a Lease)
+    # and promotes it to a reader PVC (rox-<hash>) with the strategy the
+    # storage profile picks for the class's provisioner: a snapshot and
+    # clone (one ReadOnlyMany claim, or a clone per pod where the class
+    # has no ReadOnlyMany), or a shared read-only attach of the same
+    # volume (NVMesh). See internal/checkpointstore/storage_profile.go
+    # and docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md.
     #
     # Empty disables L2; restore fan-out falls back to peer cascade.
     # The reference Hyperdisk ML SC is in
@@ -433,15 +450,12 @@ agent:
       tag: "v0.0.1"
       pullPolicy: IfNotPresent
 
-    # nvsnap#147 / nvsnap#184: on-host directory the nvsnap-agent
-    # DaemonSet stages the restore bundle into. Function pods
-    # mount {root}/nvsnap + {root}/nvsnap-lib via hostPath (injected
-    # by the mutating webhook on nvsnap.io/restore-from). Empty =
-    # default "/var/lib/nvsnap/bundle" — operators only override for
-    # tests or unusual node-FS layouts. Changing it here must be
-    # mirrored by the nvsnap-bundle-stage initContainer + the
-    # host-bundle hostPath volume in the DaemonSet template (Helm
-    # threads the same value into all three).
+    # On-host directory the nvsnap-agent DaemonSet stages the node bundle
+    # into; the webhook mounts it by hostPath into the pods it prepares.
+    # Empty = the agent's default "/var/lib/containerd/nvsnap-bundle"
+    # (internal/webhook/bundle_mount.go DefaultHostBundleRoot). Helm
+    # threads the value into the nvsnap-bundle-stage initContainer, the
+    # host-bundle volume and the agent's flag.
     # Restore-bundle staging. Same reasoning as agent.hostPaths above: this is
     # a bulk path on the restore side, so it belongs on containerd's local
     # disk rather than the boot volume. Set explicitly (not left empty) so the
@@ -449,8 +463,9 @@ agent:
     # mount and the webhook-injected function-pod mounts all agree on one path.
     hostBundleRoot: "/var/lib/containerd/nvsnap-bundle"
 
-  # Opt-in cross-cluster replication to a managed object store (provider:
-  # gcs today, s3 planned). Empty provider/homeBucket disables it entirely.
+  # Opt-in cross-cluster replication of cachedir captures to a managed
+  # object store (provider: gcs; s3 is not implemented). Empty
+  # provider/homeBucket disables it entirely.
   # See docs/design/cross-cluster-replication.md.
   replication:
     objectStore:
@@ -501,6 +516,22 @@ server:
 # ─── Admission webhook (mutating, in-agent) ────────────────────────────
 
 webhook:
+  # Debug variables for the GPU containers of pods whose label matches,
+  # for workloads whose spec nvsnap does not own (NVCF function pods):
+  #   debugEnv:
+  #     - label: function-id
+  #       values: ["<function id>"]
+  #       env: {NVSNAP_GPUSHARE_DEBUG: "1", NCCL_DEBUG: INFO}
+  # A variable the container already sets is left as it is.
+  debugEnv: []
+  # Keeps an ephemeral container (added after admission, which the webhook
+  # does not see) from mounting the nvsnap volumes the webhook placed:
+  # a ValidatingAdmissionPolicy. Requires Kubernetes 1.30+; on an older
+  # cluster the install fails. Turning it off there leaves the GPU stores
+  # and checkpoints reachable through pods/ephemeralcontainers to anyone
+  # allowed to add one.
+  ephemeralContainerPolicy:
+    enabled: true
   # The webhook is served BY the agent DaemonSet, not by a separate Pod.
   # This block controls only the Service + MutatingWebhookConfiguration +
   # cert-manager Certificate that point the apiserver at the agent's
@@ -522,9 +553,46 @@ webhook:
   #
   # Per-workload opt-out without touching the release: label the pod or
   # its namespace nvsnap.io/inject=false. The registration skips such
-  # pods and the agent admits them unchanged even if the registration
-  # is stale.
+  # pods, and the agent itself admits a pod labelled so unchanged even
+  # if the registration is stale (a namespace label is honoured by the
+  # registration only).
   inject: true
+
+  # Which namespaces the registration covers while inject is true.
+  # "all": every namespace not labelled nvsnap.io/inject=false.
+  # "optIn": only namespaces labelled nvsnap.io/inject=true, for a
+  # cluster that shares its GPUs with workloads nvsnap must not touch,
+  # or for a gradual rollout. The pod-level opt-out applies in both.
+  injectScope: all
+
+  # Fixed Dynamo namespace (DYN_NAMESPACE and DYN_NAMESPACE_PREFIX) for
+  # Dynamo components whose etcd and NATS are services of their own
+  # Kubernetes namespace. The operator derives the Dynamo namespace from the
+  # Kubernetes namespace, which is new for every instance; a restored
+  # component would keep the old one and the new instance's frontend would
+  # not find it. Components that reach a shared etcd or NATS keep the
+  # operator's name. Applied only with captureMethod criu, and only to pods
+  # a capture may take (GPU pods and companions of opted-in instances).
+  # Empty disables.
+  dynamoNamespace: nvcf-nvsnap
+  # etcd lease TTL in seconds (ETCD_LEASE_TTL) for those components, unless
+  # they set one. A capture stops the whole instance, its etcd included, so
+  # no lease runs out during it; this only covers the moments a restore's
+  # members come back one after another. Costs only a slower removal of a
+  # crashed component from routing. 0 keeps Dynamo's default (10 s).
+  dynamoLeaseTTL: 60
+  # Seconds of silence the liveness probes of a pod a CRIU capture may
+  # freeze are widened to tolerate (their failureThreshold raised, never
+  # lowered): GPU pods, and pods without GPUs whose namespace or own labels
+  # opt them into capture (criuCaptureOptIn, nvsnap.io/criu-capture=true),
+  # the companions of an instance. Other pods keep their probes; with
+  # captureMethod cachedir nothing is widened. A capture stops the instance
+  # while its GPU memory is saved and its pods are dumped: minutes for a
+  # large model. The kubelet keeps probing, and a probe that gives up first restarts a
+  # container being dumped. Costs only a slower restart of an engine that
+  # really hangs. An instance with a pod whose probe tolerates less is not
+  # captured. 0 leaves probes as they are and does not check.
+  captureLivenessBudget: 300
 
   # Operator salt folded into every cache identity the webhook composes.
   # The identity covers image, model, arguments, cache-relevant env, driver
@@ -553,8 +621,8 @@ webhook:
   # nvsnap#202: where the OverlayFS mount syscalls happen.
   #   "inline"         (default) — Mutate() does the mounts during
   #                    admission. Fine for captures with a handful of
-  #                    mounts; blows past the 10–30s webhook timeout
-  #                    for ones with hundreds (DeepSeek-V4-Flash has 355).
+  #                    mounts; can exceed the webhook timeout for ones
+  #                    with hundreds.
   #   "init-container" — the webhook emits a nvsnap-mount-prep init
   #                    container on the restored pod; it POSTs the
   #                    work to the agent's async prep manager and
@@ -637,9 +705,9 @@ jaeger:
 # Bundled Prometheus for showcase clusters. Off by default. Opt in
 # with `--set prometheus.enabled=true`. For production, point an
 # existing Prometheus at NVCA + nvsnap's `/metrics` endpoints and leave
-# this off — kube-prometheus-stack and Google Cloud Managed Prometheus
-# both scrape via the standard `prometheus.io/scrape` pod annotation
-# that the NvSnap workloads already carry.
+# this off. The chart's pods carry no prometheus.io/scrape annotation;
+# configure the scrape the way your Prometheus discovers targets (the
+# jobs below are an example).
 prometheus:
   enabled: false
 
@@ -715,8 +783,8 @@ prometheus:
               namespaces:
                 names: [nvca-system]
           relabel_configs:
-            # NVCA exports /metrics on the agent service; the cluster
-            # ships it on port 9402 in the standard NVCA chart.
+            # Keeps the NVCA metrics Service; check its name and port
+            # against your NVCA install.
             - source_labels: [__meta_kubernetes_service_name]
               action: keep
               regex: nvca-agent-metrics

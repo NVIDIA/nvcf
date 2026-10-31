@@ -8,7 +8,7 @@ If you believe you've found a security vulnerability in NvSnap, please **do not*
 
 Include:
 
-- Affected NvSnap component (nvsnap-agent, nvsnap-server, nvsnap-blobstore, webhook, etc.)
+- Affected NvSnap component (nvsnap-agent, nvsnap-server, webhook, etc.)
 - NvSnap image tag where the vulnerability was observed
 - Steps to reproduce, including a minimal manifest if applicable
 - The impact you've assessed (e.g. RCE, privilege escalation, information disclosure, denial of service)
@@ -22,7 +22,7 @@ We aim to acknowledge new reports within 3 business days and to triage them with
 - The NvSnap agent (privileged DaemonSet running on GPU nodes — high-impact surface)
 - The mutating admission webhook (if deployed)
 - The CRIU + cuda-checkpoint integration paths
-- The NvSnap HTTP APIs (nvsnap-server, nvsnap-blobstore peer endpoints)
+- The NvSnap HTTP APIs (nvsnap-server, the agent API and its peer endpoints)
 - Container images published to `nvcr.io/0651155215864979/ncp-dev/`
 
 ## What's out of scope

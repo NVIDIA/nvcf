@@ -18,7 +18,7 @@ limitations under the License.
 package webhook
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,7 +38,7 @@ import (
 //   - sweepStep reads the volume into the node's page cache with parallel
 //     byte-range readers before the engine starts, because the engine's own
 //     loader reads from one thread and a single stream over a network block
-//     device is latency-bound (docs/BENCHMARK.md, "Page-cache prewarm").
+//     device is latency-bound (docs/results/BENCHMARK.md, "Page-cache prewarm").
 //   - seedStep copies one directory of the volume into the pod's writable
 //     cache, because the engine must be able to write its cache and the
 //     volume is shared.
@@ -116,30 +116,31 @@ func (m *Mutator) sweepStep(name string, main *corev1.Container, src volumeAt, p
 	if !want {
 		return corev1.Container{}, false
 	}
-	cmd := prewarmCommand(src.Path, m.prewarmWorkers())
 	c := corev1.Container{
-		Name:         name,
-		Image:        main.Image,
-		Command:      []string{"sh", "-c", cmd},
-		VolumeMounts: []corev1.VolumeMount{{Name: src.Volume, MountPath: src.Path, ReadOnly: true}},
+		Name:  name,
+		Image: main.Image,
+		Command: []string{HelperBin, "prewarm", "--root", src.Path, "--workers", strconv.Itoa(m.prewarmWorkers()),
+			"--chunk", strconv.FormatInt(prewarmChunkBytes, 10)},
+		VolumeMounts: []corev1.VolumeMount{{Name: src.Volume, MountPath: src.Path, ReadOnly: true}, helperMount()},
 	}
 	if gate != nil {
 		// NVSNAP_PREWARM comes from a ConfigMap or Secret the webhook cannot
-		// resolve at admission; hand the same reference to the step and let
-		// it decide at run time.
+		// resolve at admission; hand the same reference to the step, which
+		// does nothing when it is "0".
 		c.Env = []corev1.EnvVar{*gate}
-		c.Command = []string{"sh", "-c", `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0; ` + cmd}
 	}
 	harden(&c, sweepResources, posture, main)
 	return c, true
 }
 
-// seedStep copies src.Path/srcSubdir into dst.Path/dstSubdir and opens the copy to any
-// user the engine runs as: the copy is a per-pod scratch, not the shared
-// volume. A missing or failed source leaves the cache empty and the engine
-// compiles as it would have anyway; the step always exits 0 and logs how
-// many files it placed.
-func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir string, dst volumeAt, dstSubdir string, label string, posture readerPosture) corev1.Container {
+// seedStep copies src.Path/srcSubdir into dst.Path/dstSubdir. With
+// keepOwners every entry keeps its owner and full mode, as the engine that
+// wrote it left it, which needs rootPosture; otherwise the copy is opened
+// to any user the engine runs as: the copy is a per-pod scratch, not the
+// shared volume. A missing or failed source leaves the cache empty and
+// the engine compiles as it would have anyway; the step always exits 0
+// and logs how many files it placed.
+func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir string, dst volumeAt, dstSubdir, label string, posture readerPosture, keepOwners bool) corev1.Container {
 	from, to := src.Path, dst.Path
 	if srcSubdir != "" {
 		from = src.Path + "/" + srcSubdir
@@ -148,17 +149,19 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 		to = dst.Path + "/" + dstSubdir
 	}
 	c := corev1.Container{
-		Name:    name,
-		Image:   main.Image,
-		Command: []string{"/bin/sh", "-c"},
+		Name:  name,
+		Image: main.Image,
 		// The index of seeded paths lets the agent tell what the engine
-		// adds later (docs/proposals/helm-chart-cache-refresh.md).
-		Args: []string{fmt.Sprintf("if [ -d %[1]s ]; then cp -a %[1]s/. %[2]s/ 2>/dev/null; chmod -R a+rwX %[2]s 2>/dev/null; fi; mkdir -p %[2]s && (cd %[2]s && find . -type f ! -name %[4]s | sed 's|^\\./||' | sort > %[4]s) 2>/dev/null; echo \"nvsnap: seeded %[3]s, $(find %[2]s -type f 2>/dev/null | wc -l) files\"; exit 0",
-			from, to, label, SeedIndexFile)},
+		// adds later (docs/design/helm-chart-cache-refresh.md).
+		Command: []string{HelperBin, "seed", "--from", from, "--to", to, "--label", label, "--index", SeedIndexFile},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: src.Volume, MountPath: src.Path, ReadOnly: true},
 			{Name: dst.Volume, MountPath: dst.Path},
+			helperMount(),
 		},
+	}
+	if keepOwners {
+		c.Command = append(c.Command, "--keep-owners")
 	}
 	harden(&c, copyResources, posture, main)
 	return c

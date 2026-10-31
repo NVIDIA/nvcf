@@ -168,29 +168,27 @@ func TestCacheDirCapturePatches(t *testing.T) {
 		t.Error("missing HOME=/opt/nvsnap/cache env")
 	}
 	// The emptyDir starts empty; NIM refuses to start when NIM_CACHE_PATH
-	// does not exist, so an init creates both subtrees before the engine.
-	var init *corev1.Container
+	// does not exist. The kubelet creates both subtrees as subPath mounts,
+	// world-writable, before the engine starts: nothing runs in the
+	// workload's image.
+	subs := map[string]string{}
 	for _, p := range patches {
-		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
-			cc := c
-			init = &cc
+		if c, ok := p.Value.(corev1.Container); ok {
+			t.Errorf("no init container is injected, got %s", c.Name)
+		}
+		if vm, ok := p.Value.(corev1.VolumeMount); ok && vm.SubPath != "" {
+			subs[vm.MountPath] = vm.SubPath
 		}
 	}
-	if init == nil {
-		t.Fatal("missing nvsnap-cachedir-init")
+	if subs["/opt/nvsnap/cache"] != "cache" || subs["/opt/nvsnap/model"] != "model" {
+		t.Errorf("cache and model must be subPath mounts of the cachedir: %v", subs)
 	}
-	if init.Image != cacheDirPod().Spec.Containers[0].Image || !strings.Contains(init.Args[0], "mkdir -p /opt/nvsnap/cache /opt/nvsnap/model") || !strings.Contains(init.Args[0], "chmod 1777") {
-		t.Errorf("init must mkdir cache and model on the workload image: %s %q", init.Image, init.Args)
-	}
-	if len(init.VolumeMounts) != 1 || init.VolumeMounts[0].MountPath != "/opt/nvsnap" || init.Resources.Limits.Memory().IsZero() || init.SecurityContext == nil || init.SecurityContext.Capabilities == nil {
-		t.Errorf("init mounts the cachedir and is hardened: %+v %+v", init.VolumeMounts, init.Resources)
-	}
-	// Re-admission with the init already present adds nothing.
+	// A path the pod already mounts is left to it.
 	pod := cacheDirPod()
-	pod.Spec.InitContainers = []corev1.Container{*init}
-	for _, p := range m.cacheDirCapturePatches(pod) {
-		if c, ok := p.Value.(corev1.Container); ok && c.Name == cacheDirInitName {
-			t.Error("cachedir init injected twice")
+	pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "own", MountPath: "/opt/nvsnap/model"})
+	for _, p := range m.cacheDirSubdirMounts(&pod.Spec.Containers[0]) {
+		if vm := p.Value.(corev1.VolumeMount); vm.MountPath == "/opt/nvsnap/model" {
+			t.Error("mounted over the pod's own volume at /opt/nvsnap/model")
 		}
 	}
 }

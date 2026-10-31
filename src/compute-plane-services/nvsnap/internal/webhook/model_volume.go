@@ -18,7 +18,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
-// Model volume decoration (docs/proposals/helm-shared-model-volume.md).
+// Model volume decoration (docs/design/helm-shared-model-volume.md).
 // For a pod that will download a model, the webhook turns the download
 // into a write-once step: one download Job per identity fills the primary
 // volume, every pod of that identity is a reader that references a
@@ -151,6 +151,58 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 		}
 	}
 	patches = append(patches, m.modelCacheEnvPatches(ctx, pod, main, land, uri)...)
+	return patches, nil
+}
+
+// placeholderModelPatches gives a CRIU group restore placeholder the model
+// landing its captured pod had, and nothing else. The restored engine
+// keeps the mounts it was dumped with (they are external to the dump and
+// bound from the placeholder at the same paths), so the landing must be
+// there; it does not load weights, compile or download, so no download
+// step, prewarm or cache environment comes with it. A hostPath landing is
+// bound after the pod starts, so the placeholder waits for it as a reader
+// does. (nil, nil): the captured pod had no model volume either. An error
+// (the volume lookup failed, or the model is not complete: the captured
+// pod read it complete) leaves the instance to start cold.
+func (m *Mutator) placeholderModelPatches(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error) {
+	if m.ModelVolume == nil || gpuRequest(pod) == 0 {
+		return nil, nil
+	}
+	res, ok, err := modelid.ResolveWithGroup(ctx, pod, m.MainContainer, m.Groups)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model identity: %w", err)
+	}
+	if !ok || res.Identity.Scheme == "path" || !res.Landing.Substitutable() {
+		return nil, nil
+	}
+	// The tenant's own volume, as at admission (modelVolumePatches): the
+	// captured pod read that one.
+	scope, err := m.ModelVolume.Scope(ctx, pod.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	uri := modelvolume.ScopedURI(scope, res.ShareKey())
+	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri, "source": res.Source})
+	st, err := m.ModelVolume.Lookup(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Complete {
+		return nil, fmt.Errorf("model volume %s is not complete", uri)
+	}
+	main := &pod.Spec.Containers[m.MainContainer]
+	mp := newMetaPatcher(pod)
+	patches := mp.annotation(modelvolume.IdentityAnnotation, uri)
+	patches = append(patches, mp.label(modelvolume.IdentityLabel, modelvolume.Key(uri))...)
+	patches = append(patches, mp.label(modelvolume.RoleLabel, "reader")...)
+	landing, err := m.readerLanding(ctx, pod, main, res.Landing, uri, st, log)
+	if err != nil {
+		return nil, err
+	}
+	patches = append(patches, landing...)
+	if m.ModelVolume.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		patches = append(patches, m.downloadStepPatches(pod, main, res.Landing, res.Identity, false)...)
+	}
 	return patches, nil
 }
 
@@ -324,7 +376,7 @@ func (m *Mutator) modelPrewarmPatches(pod *corev1.Pod, main *corev1.Container, l
 	if !ok {
 		return patches
 	}
-	return appendInits(pod, patches, sweep)
+	return m.withHelperVolume(pod, appendInits(pod, patches, sweep))
 }
 
 // downloadStep derives the Job's container from the pod: the chart's own
@@ -332,9 +384,13 @@ func (m *Mutator) modelPrewarmPatches(pod *corev1.Pod, main *corev1.Container, l
 // engine image when the engine fetches the model itself.
 func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land modelid.Landing, id modelid.Identity) (modelvolume.DownloadStep, bool) {
 	step := modelvolume.DownloadStep{
-		ImagePullSecrets: pod.Spec.ImagePullSecrets, Tolerations: pod.Spec.Tolerations, NodeSelector: pod.Spec.NodeSelector,
+		ImagePullSecrets: pod.Spec.ImagePullSecrets, Tolerations: pod.Spec.Tolerations,
 		PodSecurityContext: pod.Spec.SecurityContext, MainSecurityContext: main.SecurityContext,
+		HelperVolume: m.helperVolume(),
 	}
+	// The Job requests no GPU, so nothing else keeps it off nodes the agent
+	// does not run on, where it could neither run the helper nor be copied.
+	step.NodeSelector, step.Affinity = m.onAgentNodes(pod.Spec.NodeSelector)
 	if land.Downloader == modelid.DownloaderInit {
 		for i := range pod.Spec.InitContainers {
 			init := pod.Spec.InitContainers[i]
@@ -342,10 +398,10 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 				continue
 			}
 			mount := initMountFor(&init, land)
-			orig := shellJoin(append(append([]string{}, init.Command...), init.Args...))
 			c := *init.DeepCopy()
-			c.Command = []string{"/bin/sh", "-c"}
-			c.Args = []string{writerScript(orig, path.Join(mount, modelvolume.MarkerFile))}
+			c.Command = helperWrite(path.Join(mount, modelvolume.MarkerFile), path.Join(mount, modelvolume.FailedMarkerFile), mount, nil, containerArgv(&init))
+			c.Args = nil
+			c.VolumeMounts = append(c.VolumeMounts, helperMount())
 			// Keep every mount the init had; the landing one is redirected
 			// to the claim by name, the rest (secrets, scripts) come along.
 			step.VolumeName = landVolumeName(land)
@@ -372,11 +428,11 @@ func (m *Mutator) downloadStep(pod *corev1.Pod, main *corev1.Container, land mod
 	}
 	step.VolumeName = landVolumeName(land)
 	step.Container = corev1.Container{
-		Image:        main.Image,
-		Command:      []string{"/bin/sh", "-c"},
-		Args:         []string{writerScript(hfDownloadCommand(id), path.Join(downloadMount, modelvolume.MarkerFile))},
+		Image: main.Image,
+		Command: helperWrite(path.Join(downloadMount, modelvolume.MarkerFile), path.Join(downloadMount, modelvolume.FailedMarkerFile),
+			downloadMount, hfDownloaders, hfDownloadArgs(id)),
 		Env:          downloadEnv(main),
-		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: downloadMount}},
+		VolumeMounts: []corev1.VolumeMount{{Name: step.VolumeName, MountPath: downloadMount}, helperMount()},
 	}
 	return step, true
 }
@@ -542,16 +598,24 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 			if init.Name != land.InitContainer {
 				continue
 			}
-			imarker := path.Join(initMountFor(init, land), modelvolume.MarkerFile)
-			orig := shellJoin(append(append([]string{}, init.Command...), init.Args...))
-			script := writerScript(orig, imarker)
+			imount := initMountFor(init, land)
+			imarker, ifailed := path.Join(imount, modelvolume.MarkerFile), path.Join(imount, modelvolume.FailedMarkerFile)
+			argv := helperWrite(imarker, ifailed, imount, nil, containerArgv(init))
 			if !writer {
-				script = readerScript(orig, imarker, deadline, m.readerFallsBackInPlace())
+				argv = helperWait(imarker, ifailed, deadline, m.readerFallsBackInPlace(), nil, containerArgv(init))
 			}
-			return []PatchOp{
-				{Op: "replace", Path: fmt.Sprintf("/spec/initContainers/%d/command", i), Value: []string{"/bin/sh", "-c"}},
-				{Op: "replace", Path: fmt.Sprintf("/spec/initContainers/%d/args", i), Value: []string{script}},
+			patches := []PatchOp{
+				{Op: setOrAdd(init.Command != nil), Path: fmt.Sprintf("/spec/initContainers/%d/command", i), Value: argv},
 			}
+			if init.Args != nil {
+				patches = append(patches, PatchOp{Op: "remove", Path: fmt.Sprintf("/spec/initContainers/%d/args", i)})
+			}
+			if init.VolumeMounts == nil {
+				patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/initContainers/%d/volumeMounts", i), Value: []corev1.VolumeMount{helperMount()}})
+			} else {
+				patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/initContainers/%d/volumeMounts/-", i), Value: helperMount()})
+			}
+			return m.withHelperVolume(pod, patches)
 		}
 		return nil
 	}
@@ -562,25 +626,25 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 	if pod.Spec.InitContainers == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers", Value: []any{}})
 	}
-	download := ""
+	var try, args []string
 	if id.Scheme == "hf" {
-		download = hfDownloadCommand(id)
+		try, args = hfDownloaders, hfDownloadArgs(id)
 	}
 	// The injected init sees the landing at downloadMount (see there); the
 	// marker is the same file in the volume whatever path it is read at.
 	marker = path.Join(downloadMount, modelvolume.MarkerFile)
-	script := readerScript(download, marker, deadline, m.readerFallsBackInPlace())
+	failed := path.Join(downloadMount, modelvolume.FailedMarkerFile)
+	argv := helperWait(marker, failed, deadline, m.readerFallsBackInPlace(), try, args)
 	if writer {
-		if download == "" {
+		if try == nil {
 			return nil // engine writes; completion is Ready, marked by the agent
 		}
-		script = writerScript(download, marker)
+		argv = helperWrite(marker, failed, downloadMount, try, args)
 	}
 	init := corev1.Container{
 		Name:    injectedDownloadInit,
 		Image:   main.Image,
-		Command: []string{"/bin/sh", "-c"},
-		Args:    []string{script},
+		Command: argv,
 		Env:     downloadEnv(main),
 	}
 	// The init mostly waits; the fallback download is the one case that
@@ -599,8 +663,9 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 			break
 		}
 	}
-	init.VolumeMounts = []corev1.VolumeMount{{Name: landVol, MountPath: downloadMount, MountPropagation: prop}}
+	init.VolumeMounts = []corev1.VolumeMount{{Name: landVol, MountPath: downloadMount, MountPropagation: prop}, helperMount()}
 	patches = append(patches, PatchOp{Op: "add", Path: "/spec/initContainers/0", Value: init})
+	patches = m.withHelperVolume(pod, patches)
 	if id.Scheme == "hf" {
 		if main.Env == nil {
 			patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
@@ -609,6 +674,13 @@ func (m *Mutator) downloadStepPatches(pod *corev1.Pod, main *corev1.Container, l
 		patches = append(patches, appendEnv(m.MainContainer, readerHubCache(land)))
 	}
 	return patches
+}
+
+func setOrAdd(present bool) string {
+	if present {
+		return "replace"
+	}
+	return "add"
 }
 
 // initMountFor is the path the download init sees the landing volume at;
@@ -622,43 +694,10 @@ func initMountFor(init *corev1.Container, land modelid.Landing) string {
 	return landingMount(land)
 }
 
-// writerScript runs the download, then leaves the completion marker at
-// the volume root. The tree's byte count, when du can measure it, goes
-// into the marker and into the container's termination message: kubelet
-// unmounts a finished Job pod's volumes at once, so the agents read the
-// count from the pod status rather than from the volume, and size the
-// read-only views from it on storage whose claim size is nominal. Readers
-// only test that the marker exists.
-// writableWaitSeconds bounds the writer's wait for its landing to open.
+// writableWaitSeconds bounds the writer's wait for its landing to open: a
+// fresh shared filesystem is root-owned until the agent on the Job's node
+// opens it, and the Job runs as the function's user.
 const writableWaitSeconds = 600
-
-func writerScript(download, marker string) string {
-	dir := path.Dir(marker)
-	// A fresh shared filesystem is root-owned until the agent on this node
-	// opens it; the Job runs as the function's user and waits rather than
-	// crash into the Job's backoff.
-	wait := fmt.Sprintf("d=0\nwhile [ ! -w %[1]s ]; do if [ $d -ge %[2]d ]; then echo 'nvsnap: landing %[1]s is not writable' >&2; break; fi; sleep 2; d=$((d+2)); done\n", shellQuote(dir), writableWaitSeconds)
-	failed := shellQuote(path.Join(dir, modelvolume.FailedMarkerFile))
-	return fmt.Sprintf("set -e\nif [ -f %[1]s ]; then echo 'nvsnap: model already complete'; exit 0; fi\n%[4]srm -f %[5]s\n%[2]s\nsync\nn=$(du -sb %[3]s 2>/dev/null | cut -f1 || true)\nprintf '%%s' \"$n\" > %[1]s\nprintf '%%s' \"$n\" > /dev/termination-log 2>/dev/null || true\n", shellQuote(marker), download, shellQuote(dir), wait, failed)
-}
-
-// readerScript waits for the marker. With inPlace, past the deadline or
-// on a recorded failure it runs the download itself (decided: always fall
-// back, never deadlock). Without it the landing is the read-only view of
-// the shared primary, where nothing can be written: the init stops with
-// the reason, and the agent recreates the pod, which admission then
-// leaves on its own download.
-func readerScript(download, marker string, deadline int, inPlace bool) string {
-	fallback := "echo 'nvsnap: no download step to fall back to'; exit 0"
-	if download != "" {
-		fallback = download
-	}
-	if !inPlace {
-		fallback = "echo 'nvsnap: the shared model volume is read-only here; the pod is recreated on its own download'; exit 1"
-	}
-	failed := shellQuote(path.Join(path.Dir(marker), modelvolume.FailedMarkerFile))
-	return fmt.Sprintf("set -e\nd=0\nwhile [ ! -f %[1]s ]; do if [ -f %[4]s ]; then echo \"nvsnap: shared download failed: $(cat %[4]s 2>/dev/null)\"; %[3]s; exit 0; fi; if [ $d -ge %[2]d ]; then echo 'nvsnap: marker deadline passed; downloading locally'; %[3]s; exit 0; fi; sleep 5; d=$((d+5)); done\necho 'nvsnap: model complete, skipping download'\n", shellQuote(marker), deadline, fallback, failed)
-}
 
 // readerFallsBackInPlace reports whether a reader's landing can take its
 // own fallback download: a PVC reader's landing is the read-only view of
@@ -695,6 +734,9 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 // filesystem once put them there). The model entries of the template are
 // dropped: the model lives in the landing volume, not under the cachedir.
 func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
+	if m.CRIUCapture {
+		return m.criuModelEnvPatches(main, land)
+	}
 	if m.CacheDir == "" {
 		return nil
 	}
@@ -733,11 +775,43 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
 }
 
+// criuHFModulesCache is where transformers writes trust_remote_code module
+// sources under CRIU capture: the container's writable layer, which the
+// capture's rootfs diff carries to a restore. /tmp is writable by any user
+// in every engine image.
+const criuHFModulesCache = "/tmp/nvsnap/hf_modules"
+
+// criuModelEnvPatches is modelCacheEnvPatches under CRIU capture. A CRIU
+// restore brings the process back with its compile caches, so they stay
+// where the engine writes them (the writable layer, carried by the rootfs
+// diff): HOME does not move, and no cachedir or compile-cache set is
+// added. What stays is what the read-only model landing itself needs: an
+// engine reading the Hugging Face default cache finds the model where it
+// is mounted, and module sources are not written under it.
+func (m *Mutator) criuModelEnvPatches(main *corev1.Container, land modelid.Landing) []PatchOp {
+	var patches []PatchOp
+	pinned := pinsHFHome(main, land)
+	moduleCache := (pinned || hfHomeUnderLanding(main, land)) && !hasEnv(main, "HF_MODULES_CACHE")
+	if !pinned && !moduleCache {
+		return nil
+	}
+	if main.Env == nil {
+		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/env", m.MainContainer), Value: []any{}})
+	}
+	if pinned {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_HOME", Value: land.Path}))
+	}
+	if moduleCache {
+		patches = append(patches, appendEnv(m.MainContainer, corev1.EnvVar{Name: "HF_MODULES_CACHE", Value: criuHFModulesCache}))
+	}
+	return patches
+}
+
 // pinsHFHome reports whether the engine reads its model through the Hugging
 // Face default cache, which nvsnap mounted at the default path: the
 // container names no cache location of its own, by value or by reference.
 func pinsHFHome(main *corev1.Container, land modelid.Landing) bool {
-	if path.Clean(land.Path) != modelid.DefaultHFHome {
+	if p := path.Clean(land.Path); p != modelid.DefaultHFHome && p != modelid.NVSnapHFHome {
 		return false
 	}
 	return !hasEnv(main, "HF_HOME") && !hasEnv(main, "HF_HUB_CACHE")
@@ -792,7 +866,7 @@ func (m *Mutator) cacheDirVolumeOnly(pod *corev1.Pod, main *corev1.Container) []
 		PatchOp{Op: "add", Path: "/spec/volumes/-", Value: corev1.Volume{Name: cacheDirVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 		PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer), Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
 	)
-	return append(patches, m.cacheDirInitPatches(pod, main)...)
+	return append(patches, m.cacheDirSubdirMounts(main)...)
 }
 
 // shellJoin renders an exec argv as one shell command line.

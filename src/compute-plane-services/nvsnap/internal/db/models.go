@@ -69,7 +69,7 @@ type Checkpoint struct {
 	// L2 per-capture PVC (nvsnap#63). Driven by the
 	// PerCapturePVCBackend's Put state machine; the agent's register
 	// call never sets these. See migration 5 for the column semantics
-	// and docs/L2-PVC-CRIU-DESIGN.md for the lifecycle.
+	// and docs/ARCHITECTURE.md §6 for the lifecycle.
 	PVCName         string `json:"pvcName,omitempty"`
 	PVCPromoteState string `json:"pvcPromoteState,omitempty"`
 }

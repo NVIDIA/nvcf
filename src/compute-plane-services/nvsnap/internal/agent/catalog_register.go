@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // fallbackString returns a if non-empty, else b.
@@ -40,9 +42,9 @@ func fallbackString(a, b string) string {
 // land on the nvsnap-server row so NVCA's Hook A can find this
 // checkpoint via POST /api/v1/checkpoints/lookup across fvIDs.
 // Pass an empty CatalogInfo to skip (older agents, tests).
-func (a *Agent) registerCheckpointInCatalog(ctx context.Context, checkpointID, namespace, podName, containerName, containerImage string, size int64, duration float64, hasGPU bool, catalog CatalogInfo) error {
+func (a *Agent) registerCheckpointInCatalog(ctx context.Context, checkpointID, namespace, podName, containerName, containerImage string, size int64, duration float64, hasGPU bool, catalog CatalogInfo) (canonicalID string, err error) {
 	if a.config.CatalogURL == "" {
-		return errors.New("CatalogURL not configured")
+		return "", errors.New("CatalogURL not configured")
 	}
 	body, _ := json.Marshal(struct {
 		CheckpointID      string   `json:"checkpoint_id"`
@@ -67,6 +69,7 @@ func (a *Agent) registerCheckpointInCatalog(ctx context.Context, checkpointID, n
 		CPUArchitecture   string   `json:"cpu_architecture,omitempty"`
 		FunctionName      string   `json:"function_name,omitempty"`
 		FunctionVersionID string   `json:"function_version_id,omitempty"`
+		WorkloadType      string   `json:"workload_type,omitempty"`
 	}{
 		CheckpointID:   checkpointID,
 		Namespace:      namespace,
@@ -93,23 +96,34 @@ func (a *Agent) registerCheckpointInCatalog(ctx context.Context, checkpointID, n
 		CPUArchitecture:   catalog.CPUArchitecture,
 		FunctionName:      catalog.FunctionName,
 		FunctionVersionID: catalog.FunctionVersionID,
+		WorkloadType:      instanceWorkloadType(catalog),
 	})
 	u := fmt.Sprintf("%s/api/v1/checkpoints/register", a.config.CatalogURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytesReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("register: status %d: %s", resp.StatusCode, b)
+		return "", fmt.Errorf("register: status %d: %s", resp.StatusCode, b)
 	}
-	return nil
+	if id := resp.Header.Get(checkpointstore.CatalogCheckpointIDHeader); id != "" {
+		return id, nil
+	}
+	return checkpointID, nil // a server from before the header
+}
+
+func instanceWorkloadType(c CatalogInfo) string {
+	if c.InstanceCapture {
+		return checkpointstore.InstanceCaptureWorkloadType
+	}
+	return ""
 }
 
 // dumpFile is a per-file work item for the upload pool.

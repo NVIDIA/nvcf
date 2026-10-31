@@ -18,7 +18,7 @@ import (
 )
 
 // Compile-cache volume for Helm functions on block storage (mechanism 5 of
-// docs/proposals/helm-shared-model-volume.md). Each pod compiles into its
+// docs/design/helm-shared-model-volume.md). Each pod compiles into its
 // local cachedir emptyDir; the first pod of a given engine configuration
 // and ordinal that becomes Ready has its cache subtree captured by the
 // agent on its node into a sized read-only volume (the model-volume
@@ -51,13 +51,26 @@ const (
 	cacheSubdir         = "cache"
 	lwsWorkerIndexLabel = "leaderworkerset.sigs.k8s.io/worker-index"
 	lwsSizeAnnotation   = "leaderworkerset.sigs.k8s.io/size"
+	// A Grove scaling group replica is one multi-pod engine instance (a
+	// Dynamo multi-node worker: leader and workers); the pod index is its
+	// rank, and the template's pod count is in the pods' environment.
+	GroveScalingGroupLabel        = "grove.io/podcliquescalinggroup"
+	GroveScalingGroupReplicaLabel = "grove.io/podcliquescalinggroup-replica-index"
+	GroveScalingGroupPodLabel     = "grove.io/podcliquescalinggroup-pod-index"
+	groveScalingGroupSizeEnv      = "GROVE_PCSG_TEMPLATE_NUM_PODS"
 )
 
 var ordinalSuffix = regexp.MustCompile(`-(\d+)$`)
 
-// podOrdinal is the pod's index in its group: the LeaderWorkerSet worker
-// index, else a StatefulSet-style numeric name suffix, else 0.
+// podOrdinal is the pod's index in its group: the Grove scaling group pod
+// index, else the LeaderWorkerSet worker index, else a StatefulSet-style
+// numeric name suffix, else 0.
 func podOrdinal(pod *corev1.Pod) int {
+	if v, ok := pod.Labels[GroveScalingGroupPodLabel]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
 	if v, ok := pod.Labels[lwsWorkerIndexLabel]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
@@ -81,20 +94,42 @@ func (m *Mutator) cacheURI(pod *corev1.Pod) (string, bool) {
 	return "cache://" + key, true
 }
 
-// groupSize is how many ranks the pod's group has: the LeaderWorkerSet
-// size annotation, else the owning StatefulSet's replicas, else 1. A set
-// is only collected once every rank is ready, so this must not guess low.
+// SpecCacheURI is cacheURI of the pod's spec alone, as admission sees it:
+// a running pod's status names the resolved image digest, which admission
+// does not have. The agent hashes a companion this way to record the
+// configuration its replacement is admitted by.
+func (m *Mutator) SpecCacheURI(pod *corev1.Pod) (string, bool) {
+	spec := pod.DeepCopy()
+	spec.Status = corev1.PodStatus{}
+	return m.cacheURI(spec)
+}
+
+// groupSize is how many ranks the pod's group has: the Grove scaling
+// group's pod count, else the LeaderWorkerSet size annotation, else the
+// owning StatefulSet's replicas, else 1. A set is only collected once every
+// rank is ready, so this must not guess low.
 func (m *Mutator) groupSize(ctx context.Context, pod *corev1.Pod) int {
+	if _, ok := pod.Labels[GroveScalingGroupLabel]; ok {
+		for _, c := range pod.Spec.Containers {
+			for _, e := range c.Env {
+				if e.Name == groveScalingGroupSizeEnv {
+					if n, err := strconv.Atoi(e.Value); err == nil && n > 0 {
+						return n
+					}
+				}
+			}
+		}
+	}
 	if v, ok := pod.Annotations[lwsSizeAnnotation]; ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
 	for _, o := range pod.OwnerReferences {
-		if o.Kind != "StatefulSet" || m.CacheVolume == nil || m.CacheVolume.Kube == nil {
+		if o.Kind != "StatefulSet" || m.Kube == nil {
 			continue
 		}
-		sts, err := m.CacheVolume.Kube.AppsV1().StatefulSets(pod.Namespace).Get(ctx, o.Name, metav1.GetOptions{})
+		sts, err := m.Kube.AppsV1().StatefulSets(pod.Namespace).Get(ctx, o.Name, metav1.GetOptions{})
 		if err == nil && sts.Spec.Replicas != nil && *sts.Spec.Replicas > 0 {
 			return int(*sts.Spec.Replicas)
 		}
@@ -143,7 +178,7 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		patches = append(patches, mp.annotation(modelvolume.CacheOrdinalAnnotation, strconv.Itoa(ordinal))...)
 		// The same group identity a capture pod carries, so a warm rank can
 		// be measured, listed and streamed by the agents when the set is
-		// refreshed (docs/proposals/helm-chart-cache-refresh.md).
+		// refreshed (docs/design/helm-chart-cache-refresh.md).
 		patches = append(patches, mp.label(modelvolume.CacheKeyLabel, modelvolume.Key(uri))...)
 		patches = append(patches, mp.annotation(modelvolume.CacheGroupSizeAnnotation, strconv.Itoa(m.groupSize(ctx, pod)))...)
 		patches = append(patches, mp.annotation(modelvolume.CacheSeedGenerationAnnotation, strconv.Itoa(st.Generation))...)
@@ -153,10 +188,17 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim, ReadOnly: true}}}})
 		// The pod's own rank directory of the set lands in its cachedir
 		// (reader_steps.go): the engine then finds its compile caches at
-		// the same path, writable.
+		// the same path, writable. A set that kept the engine's owners
+		// and modes is seeded with them, as root, so the files are as a
+		// restored engine left them at its capture; an older set, whose
+		// copies were made root's, is opened to the engine's user instead.
+		posture := inheritPosture
+		if st.OwnersKept {
+			posture = rootPosture
+		}
 		seed := seedStep(cacheSeedInitName, main, volumeAt{Volume: cacheSeedVolumeName, Path: cacheSeedMount}, strconv.Itoa(ordinal),
-			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), inheritPosture)
-		patches = appendInits(pod, patches, seed)
+			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), posture, st.OwnersKept)
+		patches = m.withHelperVolume(pod, appendInits(pod, patches, seed))
 		log.WithField("claim", claim).Info("cache volume: complete; seeding the cachedir from the read-only claim")
 		return patches
 	case st.Failed:

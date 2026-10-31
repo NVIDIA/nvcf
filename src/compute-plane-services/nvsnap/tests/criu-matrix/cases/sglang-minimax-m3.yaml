@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# SGLang, MiniMax M3 MXFP8 (as bench-minimax-m3).
+# TP=8 as two pods of four GPUs (GB300 nodes have four), multi-pod capture opt-in.
+kind: StatefulSet
+launch: exec
+podsPerInstance: 2
+gpusPerPod: 4
+criuCapture: true
+engine: sglang
+image: docker.io/lmsysorg/sglang:v0.5.12.post1
+model: MiniMaxAI/MiniMax-M3-MXFP8
+servedModelName: MiniMaxAI/MiniMax-M3-MXFP8
+maxModelLen: 32768
+gpuMemoryUtilization: 0.85
+extraArgs: --trust-remote-code --moe-runner-backend deep_gemm
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]

@@ -22,6 +22,20 @@ RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
     strings /src/nvsnap-cuda-checkpoint | grep -q "nvsnap-cuda-checkpoint" \
         || (echo "provenance marker missing" && exit 1)
 
+# gpushare: libnvsnap_gpushare.so, an LD_PRELOAD shim that releases and
+# re-maps GPU memory shared between a workload's processes (NCCL P2P and NVLS,
+# CUDA IPC, page-locked host memory) around a CUDA checkpoint, and
+# nvsnap-gpu-suspend, which drives it. Both run inside workload containers,
+# so they are built against an old glibc (Rocky Linux 8): they then load in
+# any image with glibc 2.17 or later. They need only the CUDA 13 driver API
+# header (CUcheckpointGpuPair); libcuda is the workload's, at run time.
+FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS cuda-headers
+FROM rockylinux:8 AS gpushare-builder
+RUN dnf -y install gcc make && dnf clean all
+COPY --from=cuda-headers /usr/local/cuda/include/cuda.h /cuda/include/cuda.h
+COPY gpushare /src/gpushare
+RUN make -C /src/gpushare CUDA_INC=/cuda/include
+
 FROM ubuntu:22.04 AS criu-builder
 
 # Install build dependencies
@@ -44,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnftables-dev \
     libdrm-dev \
     uuid-dev \
+    zstd \
     asciidoctor \
     xmlto \
     libbsd-dev \
@@ -85,6 +100,20 @@ RUN mkdir -p /criu-bundle/lib /criu-bundle/plugins && \
     # bundle's loader/libs regardless of the surrounding container's libc.
     patchelf --set-interpreter "/criu-bundle/lib/$(cat /criu-bundle/lib/.ld-name)" \
              --set-rpath /criu-bundle/lib /criu-bundle/criu
+
+# CRIU saves and restores tmpfs contents by running tar with zstd (gzip for
+# images made without it) from PATH, and the agent's restore replay runs tar
+# and mkdir. At restore both run inside the placeholder, whose image may have
+# no tar (distroless) or a tar without GNU options (busybox). Bundle GNU tar,
+# zstd, gzip and mkdir, pinned to the bundle's loader and libraries like criu.
+RUN set -e; \
+    for bin in tar zstd gzip mkdir; do \
+        src="$(command -v $bin)"; \
+        cp "$src" /criu-bundle/$bin; \
+        ldd "$src" | awk '/=> \// {print $3}' | xargs -r -I {} cp -n {} /criu-bundle/lib/; \
+        patchelf --set-interpreter "/criu-bundle/lib/$(cat /criu-bundle/lib/.ld-name)" \
+                 --set-rpath /criu-bundle/lib /criu-bundle/$bin; \
+    done
 
 # Make the bundle fully self-contained via per-library RPATH. DT_RUNPATH on
 # the criu binary is NOT inherited by its libraries' own dependencies, so a
@@ -165,6 +194,9 @@ COPY --from=cuda-cli-builder /src/nvsnap-cuda-checkpoint /criu-bundle/cuda-check
 COPY cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
 RUN chmod +x /criu-bundle/cuda-checkpoint
 
+# gpushare (see gpushare-builder above).
+COPY --from=gpushare-builder /src/gpushare/libnvsnap_gpushare.so /src/gpushare/nvsnap-gpu-suspend /criu-bundle/
+
 # Make everything executable
 RUN chmod +x /criu-bundle/*
 
@@ -177,6 +209,9 @@ RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && \
 
 # Verify CRIU and crit work
 RUN echo "=== CRIU version ===" && /criu-bundle/criu --version && \
+    /criu-bundle/tar --version | head -1 && /criu-bundle/gzip --version | head -1 && \
+    /criu-bundle/zstd --version && \
+    /criu-bundle/mkdir --version | head -1 && \
     echo "=== crit version ===" && python3 -m crit --version
 
 # Labels

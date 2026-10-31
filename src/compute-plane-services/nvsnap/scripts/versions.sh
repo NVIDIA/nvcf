@@ -42,7 +42,7 @@ NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
 # Core images — reset to a v0.0.1 baseline on 2026-05-21 and bumped from
 # there per CLAUDE.md rule 19 (never reuse a tag on rebuild).
-NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.22}"
+NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.28}"
 NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.43}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
@@ -55,10 +55,12 @@ NVSNAP_L2WAIT_VERSION="${NVSNAP_L2WAIT_VERSION:-v0.0.1}"
 # Leave a ref blank if it is not yet pinned — ci/build-image.sh errors
 # with the var name rather than guessing a branch.
 NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
-# Pinned SHA on the io-uring-cr branch (upstream criu-dev + LZ4 compression
-# #2895 + the io_uring SQ-array identity-map restore fix that makes SQPOLL
-# rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
-# for reproducible OSS builds. Bump when the fork advances.
+# Pinned SHA on the timens-seize-clocks branch: the io-uring-cr branch
+# (upstream criu-dev + LZ4 compression #2895 + the io_uring SQ-array
+# identity-map restore fix that makes SQPOLL rings survive C/R, so
+# libuv/uvloop servers restore with UV_USE_IO_URING=1) + restored clocks
+# that count neither the dump nor the restore (--timens-budget), for
+# reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
 # Must be the full 40-character SHA. build-agent.sh reaches this ref with
 # `git fetch --depth 1 origin <ref>`, and fetch-by-object-id requires a
@@ -67,7 +69,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 #   fatal: couldn't find remote ref 169595fd8
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-fe550a78725f4ee1043af61c85f5e22d737b5799}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-1b4930f38b65a0519c4358b7f8bb0d7c7ad56091}"
 
 
 # vLLM base image

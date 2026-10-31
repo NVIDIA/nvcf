@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM, Nemotron 3 Nano 30B A3B FP8, TP=2 (as bench-nemotron-nano).
+kind: Deployment
+launch: exec
+gpusPerPod: 2
+model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8
+servedModelName: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8
+maxModelLen: 8192
+gpuMemoryUtilization: 0.90
+extraArgs: --trust-remote-code
+extraEnv:
+  - {name: VLLM_USE_FLASHINFER_MOE_FP8, value: "1"}
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]
