@@ -16,11 +16,15 @@
  */
 package com.nvidia.icms.outbound.cassandra.request;
 
+import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.springframework.data.cassandra.repository.CassandraRepository;
+import org.springframework.data.cassandra.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -31,4 +35,11 @@ public interface InstanceRequestV2Repo extends
     Stream<InstanceRequestV2Entity> findAllByDeploymentId(UUID deploymentId);
 
     Stream<InstanceRequestV2Entity> findAllByNcaId(String ncaId);
+
+    /**
+     * Backed by the {@code idx_requests_by_creation_day} storage-attached index.
+     * Used only when {@code icms.creation-bucket-reads-enabled} is on.
+     */
+    @Query("SELECT request_id FROM requests WHERE creation_bucket = :creationBucket")
+    ResultSet findRequestIdsByCreationBucket(@Param("creationBucket") Instant creationBucket);
 }

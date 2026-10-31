@@ -981,6 +981,42 @@ class InstanceV2RepositoryTest extends InstanceTestBase {
     }
 
     @Test
+    void findInstanceIdsPerPeriod_creationBucketReads_ok() {
+
+        //arrange
+        Mockito.when(icmsConfigurationProperties.isCreationBucketReadsEnabled()).thenReturn(true);
+
+        Instant createDateNow = Instant.now();
+        Instant createDateYesterday2 = createDateNow.minus(2, ChronoUnit.DAYS);
+        Instant createDateLastMonth = TimeUtils.getSameDateTimeOfPreviousMonth(1);
+
+        String requestId = RandomFactory.getRandomStringWithPrefix("requestId", 5);
+        List<String> instanceIds = RandomFactory.getRandomStringList(4, "instanceId");
+
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(0), requestId, createDateNow, null, null));
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(1), requestId, createDateYesterday2, null, null));
+        InstanceV2Entity toDelete = createDefaultInstanceV2(
+                instanceIds.get(2), requestId, createDateLastMonth, null, null);
+        instanceV2Repository.insert(toDelete);
+        instanceV2Repository.insert(createDefaultInstanceV2(
+                instanceIds.get(3), requestId, createDateLastMonth, null, null));
+        instanceV2Repository.delete(toDelete, false);
+
+        //act
+        List<String> entityIds = instanceV2Repository.findInstanceIdsPerPeriod(
+                createDateLastMonth, createDateYesterday2);
+        List<InstanceV2Entity> entities = instanceV2Repository.findInstancesPerPeriod(
+                createDateLastMonth, createDateYesterday2);
+
+        //assert
+        // now is out of range, instance 2 is deleted
+        assertEquals(Set.of(instanceIds.get(1), instanceIds.get(3)), new HashSet<>(entityIds));
+        assertEquals(2, entities.size());
+    }
+
+    @Test
     void findInstanceIdsPerPeriod_wrong_time_ok() {
 
         //arrange

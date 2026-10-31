@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test that notary.env threads from environments/<env>.yaml through
 # global.yaml.gotmpl into the notary release values, so a deployment can set or
-# override any notary environment variable. The stack also computes two
+# override any notary environment variable. The stack also computes
 # MANAGEMENT_* tracing keys, so the operator map is merged over those rather
 # than replacing them, and an unset notary.env renders byte-identical to before.
 set -euo pipefail
@@ -63,7 +63,7 @@ EOF
 
 default_values="$work_dir/notary-default-values.yaml"
 render_notary_values "$default_values" >/dev/null
-assert_yaml_value "$default_values" '.notary.env.MANAGEMENT_TRACING_ENABLED' false \
+assert_yaml_value "$default_values" '.notary.env.MANAGEMENT_TRACING_EXPORT_ENABLED' false \
   "default: the computed tracing key must still render when notary.env is unset"
 assert_yaml_value "$default_values" '.notary.env.ASSERTION_ISSUER_URL' null \
   "default: no issuer override must be emitted when notary.env is unset"
@@ -87,7 +87,7 @@ assert_yaml_value "$override_values" '.notary.env.ASSERTION_ISSUER_URL' https://
   "override: ASSERTION_ISSUER_URL must reach the notary release values"
 assert_yaml_value "$override_values" '.notary.env.CUSTOM_NOTARY_ENV' configured \
   "override: arbitrary notary env keys must reach the release values"
-assert_yaml_value "$override_values" '.notary.env.MANAGEMENT_TRACING_ENABLED' false \
+assert_yaml_value "$override_values" '.notary.env.MANAGEMENT_TRACING_EXPORT_ENABLED' false \
   "override: the computed tracing key must survive the merge"
 
 # 3. Precedence: an operator value for a computed key wins, so the merge order is
@@ -99,12 +99,12 @@ global:
     repository: nvidia/nvcf
 notary:
   env:
-    MANAGEMENT_TRACING_ENABLED: "true"
+    MANAGEMENT_TRACING_EXPORT_ENABLED: "true"
 EOF
 
 precedence_values="$work_dir/notary-precedence-values.yaml"
 render_notary_values "$precedence_values" >/dev/null
-assert_yaml_value "$precedence_values" '.notary.env.MANAGEMENT_TRACING_ENABLED' true \
+assert_yaml_value "$precedence_values" '.notary.env.MANAGEMENT_TRACING_EXPORT_ENABLED' true \
   "precedence: an operator value must override the computed key"
 
 echo "notary-env-wiring: OK"
