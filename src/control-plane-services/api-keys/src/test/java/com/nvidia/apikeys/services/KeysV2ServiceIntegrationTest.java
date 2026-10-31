@@ -426,6 +426,32 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
+    void ownerStatusUpdateRequiresAStatus() {
+        service.updateOwnerStatusByAccount(
+                NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
+
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class,
+                () -> service.updateOwnerStatusByAccount(
+                        NCA_ID_1, USER, USER_KEY_OWNER_ID_1, null),
+                "Owner status is required");
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class,
+                () -> service.updateOwnerStatusByAccount(
+                        LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, null),
+                "Owner status is required");
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class,
+                () -> service.updateOwnerStatusByAccountAndService(
+                        NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, null),
+                "Owner status is required");
+        assertThat(ownerStatusDao.getOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1))
+                .get()
+                .extracting(OwnerStatusByAccountModel::getOwnerStatus)
+                .isEqualTo(KeyOwnerStatus.SUSPENDED);
+    }
+
+    @Test
     void ownerStatusByAccountIsStoredWithLegacyOwner() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 

@@ -29,7 +29,9 @@ import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByScopeFilterVo;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -39,6 +41,9 @@ import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.query.CassandraPageRequest;
+import org.springframework.data.cassandra.core.query.Criteria;
+import org.springframework.data.cassandra.core.query.CriteriaDefinition;
+import org.springframework.data.cassandra.core.query.Query;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
@@ -128,6 +133,28 @@ public class KeysV2Dao {
                 limit, cursor);
     }
 
+    /**
+     * Pages keys matching every non-null filter field, served by the storage-attached indexes
+     * when the filter does not cover the whole partition key. An empty filter pages every key.
+     */
+    public KeysByAccountSliceVo list(KeysByScopeFilterVo filter, int limit, String cursor) {
+        var criteria = new ArrayList<CriteriaDefinition>();
+        addEquals(criteria, KeysByOwnerAndAccountAndServiceModel.COLUMN_NCA_ID, filter.ncaId());
+        addEquals(criteria, KeysByOwnerAndAccountAndServiceModel.COLUMN_OWNER_TYPE,
+                  filter.ownerType());
+        addEquals(criteria, KeysByOwnerAndAccountAndServiceModel.COLUMN_OWNER_ID,
+                  filter.ownerId());
+        addEquals(criteria, KeysByOwnerAndAccountAndServiceModel.COLUMN_ISSUER_SERVICE_ID,
+                  filter.issuerServiceId());
+        addEquals(criteria, KeysByOwnerAndAccountAndServiceModel.COLUMN_KEY_STATUS,
+                  filter.keyStatus());
+        var query = criteria.isEmpty() ? Query.empty() : Query.query(criteria);
+        return slice(
+                pageable -> cassandraTemplate.slice(
+                        query.pageRequest(pageable), KeysByOwnerAndAccountAndServiceModel.class),
+                limit, cursor);
+    }
+
     public void delete(KeysByOwnerAndAccountAndServiceVo key) {
         var keyModel = KeyV2Model.builder()
                 .keyHash(key.getKeyHash())
@@ -149,6 +176,12 @@ public class KeysV2Dao {
 
         if (!batchOperations.execute().wasApplied()) {
             throw new CassandraException("Failed to delete key.");
+        }
+    }
+
+    private static void addEquals(List<CriteriaDefinition> criteria, String column, Object value) {
+        if (value != null) {
+            criteria.add(Criteria.where(column).is(value));
         }
     }
 

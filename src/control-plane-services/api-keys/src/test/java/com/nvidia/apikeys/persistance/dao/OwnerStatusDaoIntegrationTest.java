@@ -21,6 +21,7 @@ import static com.nvidia.apikeys.vo.KeyOwnerStatus.ACTIVE;
 import static com.nvidia.apikeys.vo.KeyOwnerStatus.SUSPENDED;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.nvidia.apikeys.App;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration;
@@ -28,6 +29,7 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtensi
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -93,6 +95,55 @@ class OwnerStatusDaoIntegrationTest {
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(SUSPENDED);
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_B)).isEqualTo(ACTIVE);
+    }
+
+    @Test
+    void listOwnerStatusByAccountSpansAccountsForOneOwner() {
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+        dao.saveOwnerStatusByAccount(NCA_2, USER, OWNER, ACTIVE);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, "owner-2@example.com", SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+
+        assertThat(dao.listOwnerStatusByAccount(USER, OWNER))
+                .extracting(OwnerStatusByAccountModel::getNcaId,
+                            OwnerStatusByAccountModel::getOwnerStatus)
+                .containsExactlyInAnyOrder(
+                        tuple(NCA_1, SUSPENDED),
+                        tuple(NCA_2, ACTIVE));
+        assertThat(dao.listOwnerStatusByAccount(USER, "unknown-owner")).isEmpty();
+    }
+
+    @Test
+    void listOwnerStatusByAccountAndServiceSpansAccountsAndServices() {
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_B, ACTIVE);
+        dao.saveOwnerStatusByAccountAndService(NCA_2, USER, OWNER, SERVICE_A, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, "owner-2@example.com", SERVICE_A,
+                                               SUSPENDED);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+
+        List<OwnerStatusByAccountAndServiceModel> all =
+                dao.listOwnerStatusByAccountAndService(USER, OWNER);
+
+        assertThat(all)
+                .extracting(OwnerStatusByAccountAndServiceModel::getNcaId,
+                            OwnerStatusByAccountAndServiceModel::getIssuerServiceId)
+                .containsExactlyInAnyOrder(
+                        tuple(NCA_1, SERVICE_A),
+                        tuple(NCA_1, SERVICE_B),
+                        tuple(NCA_2, SERVICE_A));
+    }
+
+    @Test
+    void listOwnerStatusByAccountAndServiceCanBeScopedToOneAccount() {
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_B, ACTIVE);
+        dao.saveOwnerStatusByAccountAndService(NCA_2, USER, OWNER, SERVICE_A, SUSPENDED);
+
+        assertThat(dao.listOwnerStatusByAccountAndService(NCA_1, USER, OWNER))
+                .extracting(OwnerStatusByAccountAndServiceModel::getIssuerServiceId)
+                .containsExactlyInAnyOrder(SERVICE_A, SERVICE_B);
+        assertThat(dao.listOwnerStatusByAccountAndService("unknown-nca", USER, OWNER)).isEmpty();
     }
 
     @Test
