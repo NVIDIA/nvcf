@@ -59,17 +59,28 @@ const (
 	criuGroupStateComplete  = "complete"
 	// criuGroupStateVerifying is a capture whose instance was stopped for
 	// it and is being restored from it. Only that instance's namespace
-	// (data "sourceNamespace") restores from it; its first restore makes
-	// it complete, for every instance of the configuration.
+	// (data "sourceNamespace") restores from it. It becomes complete, for
+	// every instance of the configuration, once the pods of a restore of
+	// it have served (restored_verify.go); processes that restore but
+	// never serve do not verify it.
 	criuGroupStateVerifying = "verifying"
 	criuGroupStateFailed    = "failed"
 	// criuGroupStateRestoreFailed is a capture whose restore failed: its
-	// checkpoints are blocked and the next Ready instance captures anew.
+	// checkpoints are blocked and the next Ready instance captures anew. A
+	// capture being verified gets there on its first failed restore; a
+	// verified one only after criuGroupMaxRestoreFailures.
 	criuGroupStateRestoreFailed = "restore-failed"
 
 	// criuGroupMaxCaptures bounds the captures of one configuration, so a
 	// workload that cannot be captured or restored stops paying for it.
 	criuGroupMaxCaptures = 3
+	// groupAgentBundleKey is the node bundle version (the agent's release)
+	// a capture ran with. A failed capture is tried again only under
+	// another one: each attempt freezes the live instance, and the same
+	// code fails the same workload the same way (a NATS server's MPTCP
+	// socket failed three captures of one function in a row, each taking
+	// its worker down, 2026-10-26).
+	groupAgentBundleKey = "agentBundle"
 	// criuGroupMaxStalls bounds the restores of one capture that did not
 	// get to run (a rank never scheduled, a checkpoint never fetched).
 	// Past it the configuration starts cold, keeping its checkpoints.
@@ -78,6 +89,16 @@ const (
 	// restores replace for an address collision (see addressCollision).
 	// Past it the instance starts cold, keeping its checkpoints.
 	criuGroupMaxReplacements = 3
+	// criuGroupMaxRestoreFailures bounds the restores of a verified capture
+	// that ran and failed since one last served. A verified capture has
+	// served once; one failed restore may be the engine's own fault after
+	// it was handed back (a crash in a library thread), so the capture is
+	// kept and the instance restored again, until failures repeat.
+	criuGroupMaxRestoreFailures = 3
+	// groupRestoreFailuresKey counts those failures in a group record;
+	// groupLastRestoreFailureKey holds the last one's cause.
+	groupRestoreFailuresKey    = "restoreFailures"
+	groupLastRestoreFailureKey = "lastRestoreFailure"
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
 
@@ -247,7 +268,8 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (uri string, size int, ok bool) {
 
 // CaptureOptIn opts the pods whose Label has one of Values into the
 // multi-pod instance capture, for workloads whose pod spec nvsnap does not
-// own (an NVCF function's pods are built by NVCA).
+// own (an NVCF function's pods are built by NVCA). No Values opts in every
+// pod carrying Label, whatever its value: every function of a cluster.
 type CaptureOptIn struct {
 	Label  string   `json:"label"`
 	Values []string `json:"values"`
@@ -266,6 +288,9 @@ func (a *Agent) optInMatches(labels map[string]string) bool {
 		v, ok := labels[o.Label]
 		if !ok {
 			continue
+		}
+		if len(o.Values) == 0 {
+			return true
 		}
 		for _, want := range o.Values {
 			if v == want {
@@ -315,7 +340,7 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 	if size == 1 {
 		// One pod: its record is known now, so a captured configuration
 		// is not waited on again.
-		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
+		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
 			return
 		}
 	}
@@ -394,9 +419,11 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	key := criuGroupKey(instanceConfigURIOf(uris), scope)
 	log = log.WithField("criuGroup", key)
-	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
+	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
 		c.writeGroupAliases(ctx, key, scope, uris, len(ranks), log)
-		return false // captured, being captured, or out of attempts
+		log.WithFields(logrus.Fields{"state": prev.Data["state"], "captures": prev.Data["captures"], "source": prev.Data["source"]}).
+			Info("CRIU group capture: skipped; the configuration's record says it is captured, being captured, or out of attempts")
+		return false
 	}
 	for _, r := range ranks {
 		if !a.gpushareEnabledFor(r) {
@@ -464,7 +491,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	data := record.Data
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
-		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)
+		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), groupReasonMax)
 		if stopped || sourceMustBeReplacedText(err.Error()) {
 			// The instance was stopped for the capture: rather than resume
 			// a stopped instance, its controllers replace every pod of it,
@@ -513,6 +540,12 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(uerr).Error("CRIU group capture: cannot update the group record")
 	} else if data["state"] == criuGroupStateVerifying {
 		c.writeGroupAliases(context.WithoutCancel(ctx), key, scope, uris, len(ranks), log)
+		nodes := make([]string, len(members))
+		for i, m := range members {
+			nodes[i] = m.Spec.NodeName
+		}
+		// Off the capture's path: the replacements' restore starts now.
+		go c.a.spreadSmallCheckpoints(context.WithoutCancel(ctx), results, nodes, log)
 	}
 	if err == nil && data["state"] == criuGroupStateVerifying {
 		// Its pods were dumped and are gone; their replacements are
@@ -630,12 +663,16 @@ func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope str
 }
 
 // criuGroupRecaptures reports whether a group record lets its
-// configuration be captured again: its capture failed or its restore did,
-// and attempts remain, or its capture stopped without finishing.
-func criuGroupRecaptures(data map[string]string, now time.Time) bool {
+// configuration be captured again by an agent running node bundle
+// version bundle: its capture failed under another bundle version, or its
+// restore failed, and attempts remain; or its capture stopped without
+// finishing.
+func criuGroupRecaptures(data map[string]string, now time.Time, bundle string) bool {
 	n, _ := strconv.Atoi(data["captures"])
 	switch data["state"] {
-	case criuGroupStateFailed, criuGroupStateRestoreFailed:
+	case criuGroupStateFailed:
+		return n < criuGroupMaxCaptures && data[groupAgentBundleKey] != bundle
+	case criuGroupStateRestoreFailed:
 		return n < criuGroupMaxCaptures
 	case criuGroupStateVerifying:
 		// Its own instance never got to restore from it.
@@ -654,7 +691,8 @@ func criuGroupRecaptures(data map[string]string, now time.Time) bool {
 func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, leader *corev1.Pod, size int) (*corev1.ConfigMap, error) {
 	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
 	data := map[string]string{"state": criuGroupStateCapturing, "size": strconv.Itoa(size), "captures": "1",
-		"source": leader.Namespace + "/" + leader.Name, "startedAt": time.Now().UTC().Format(time.RFC3339)}
+		"source": leader.Namespace + "/" + leader.Name, "startedAt": time.Now().UTC().Format(time.RFC3339),
+		groupAgentBundleKey: c.a.currentBundle()}
 	record := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
 		Data:       data,
@@ -670,13 +708,13 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 	if err != nil {
 		return nil, err
 	}
-	if !criuGroupRecaptures(prev.Data, time.Now()) {
+	if !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
 		return nil, nil
 	}
 	n, _ := strconv.Atoi(prev.Data["captures"])
 	data["captures"] = strconv.Itoa(n + 1)
 	if prev.Data["reason"] != "" {
-		data["previousReason"] = truncate(prev.Data["reason"], 1024)
+		data["previousReason"] = truncate(prev.Data["reason"], groupReasonMax)
 	}
 	prev.Data = data
 	// The resource version makes the takeover a compare-and-swap: of two
@@ -907,13 +945,9 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		id := leader.Annotations[webhook.CRIURestoreAnnotation]
 		if uerr := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
-			changed := recordRestored(d, id)
 			// The pods this restore made: the restored-pod watch acts on a
 			// rank only when its group record names it.
-			if pods := strings.Join(uids, ","); d[groupRestoredPodsKey] != pods {
-				d[groupRestoredPodsKey], changed = pods, true
-			}
-			return changed
+			return recordRestored(d, id, strings.Join(uids, ","))
 		}); uerr != nil && !apierrors.IsNotFound(uerr) {
 			log.WithError(uerr).Warn("CRIU group restore: cannot record the restored pods; their engines are not watched")
 		}
@@ -1046,7 +1080,29 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 		}
 		ids[id] = true
 	}
-	if restoreFailed {
+	// The record and the checkpoint are named by the pod's annotations:
+	// record the failure only for a pod that may act under that record and
+	// restore that checkpoint (restore_trust.go), or a pod could add
+	// failures to another tenant's capture and have its restores start cold.
+	why, rerr := c.groupRecordRefusal(ctx, leader, key)
+	mayRecord := rerr == nil && why == "" && ids[leaderID]
+	if !mayRecord {
+		log.WithError(rerr).WithField("reason", why).Warn("CRIU group restore: not recording the failure on a group record the pod may not act under")
+	}
+	switch {
+	case !restoreFailed:
+		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
+		if !mayRecord {
+			break
+		}
+		if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+			return recordFailure(d, leaderID, false, cause)
+		}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).Warn("CRIU group restore: cannot update the group record")
+		}
+	case !mayRecord || c.failedRestoreBlocks(ctx, key, leaderID, cause, log):
+		// Without a record it may act under, a failed restore blocks the
+		// pods' own checkpoints, as when the record cannot be read.
 		log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")
 		for id := range ids {
 			if id == "" {
@@ -1056,19 +1112,8 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 				log.WithError(err).WithField("checkpoint", id).Error("CRIU group restore: could not block the checkpoint")
 			}
 		}
-	} else {
-		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
-	}
-	// The record and the checkpoint are named by the pod's annotations:
-	// record the failure only for a pod that may act under that record and
-	// restore that checkpoint (restore_trust.go), or a pod could add
-	// failures to another tenant's capture and have its restores start cold.
-	if why, rerr := c.groupRecordRefusal(ctx, leader, key); rerr != nil || why != "" || !ids[leaderID] {
-		log.WithError(rerr).WithField("reason", why).Warn("CRIU group restore: not recording the failure on a group record the pod may not act under")
-	} else if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
-		return recordFailure(d, leaderID, restoreFailed, cause)
-	}); err != nil && !apierrors.IsNotFound(err) {
-		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
+	default:
+		log.WithError(cause).Error("CRIU group restore failed; its capture was verified, so it is kept and the replacements restore from it again")
 	}
 	for _, p := range members {
 		if err := c.a.deletePodRetrying(ctx, p.Namespace, p.Name, p.UID); err != nil {
@@ -1077,34 +1122,70 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 	}
 }
 
+// failedRestoreBlocks records on group record key that a restore of
+// checkpoint id ran and failed, and reports whether its checkpoints are to
+// be blocked: always but for a verified capture of this record that has
+// failures to spare. When the record cannot be read or updated, they are.
+func (c *criuAutoRestorer) failedRestoreBlocks(ctx context.Context, key, id string, cause error, log *logrus.Entry) bool {
+	if key == "" {
+		return true
+	}
+	blocked := true
+	err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		blocked = true
+		if !recordFailure(d, id, true, cause) {
+			return false
+		}
+		blocked = d["state"] == criuGroupStateRestoreFailed
+		return true
+	})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.WithError(err).Warn("CRIU restore: cannot update the group record")
+		}
+		return true
+	}
+	return blocked
+}
+
 // recordFailure records on group record d a restore of checkpoint id that
-// failed (restoreFailed) or did not get to run. A record of another
-// capture is left as it is.
+// failed (restoreFailed) or did not get to run. A restore that failed ends
+// a capture being verified, and a verified one once it has failed
+// criuGroupMaxRestoreFailures times since a restore of it last served. A
+// record of another capture is left as it is.
 func recordFailure(d map[string]string, id string, restoreFailed bool, cause error) bool {
 	if !recordUsable(d) || !recordOf(d, id) {
 		return false
 	}
 	if restoreFailed {
-		d["state"], d["reason"] = criuGroupStateRestoreFailed, truncate(cause.Error(), 1024)
+		if d["state"] == criuGroupStateComplete {
+			n, _ := strconv.Atoi(d[groupRestoreFailuresKey])
+			if n+1 < criuGroupMaxRestoreFailures {
+				d[groupRestoreFailuresKey], d[groupLastRestoreFailureKey] = strconv.Itoa(n+1), truncate(cause.Error(), groupReasonMax)
+				return true
+			}
+		}
+		delete(d, groupRestoreFailuresKey)
+		delete(d, groupLastRestoreFailureKey)
+		d["state"], d["reason"] = criuGroupStateRestoreFailed, truncate(cause.Error(), groupReasonMax)
 		return true
 	}
 	n, _ := strconv.Atoi(d["stalls"])
-	d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), 1024)
+	d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), groupReasonMax)
 	return true
 }
 
 // recordRestored records a restore of the capture checkpoint id belongs
-// to: a capture being verified is verified, for every instance of its
-// configuration, and its stalls are cleared, as its restores run.
-func recordRestored(d map[string]string, id string) bool {
+// to, which made pods (groupRestoredPodsKey entries, uid/container): its
+// stalls are cleared as its restores run. A capture being verified stays
+// so until those pods serve (restored_verify.go).
+func recordRestored(d map[string]string, id, pods string) bool {
 	if !recordOf(d, id) {
 		return false
 	}
 	changed := false
-	if d["state"] == criuGroupStateVerifying {
-		d["state"], d["verifiedAt"] = criuGroupStateComplete, time.Now().UTC().Format(time.RFC3339)
-		delete(d, "sourceNamespace")
-		changed = true
+	if d[groupRestoredPodsKey] != pods {
+		d[groupRestoredPodsKey], changed = pods, true
 	}
 	if d["stalls"] != "" || d["replacements"] != "" {
 		delete(d, "stalls")
@@ -1127,6 +1208,27 @@ func groupPlaceholders(pods []corev1.Pod, leader *corev1.Pod, key string, includ
 		}
 	}
 	return out
+}
+
+// groupMemberErrorMax bounds one member's error in a group's failure, and
+// groupReasonMax a failure recorded in a group record: every member's
+// error is kept, not the first member's alone. One member's own failure
+// (a NATS server's MPTCP socket) was hidden behind another's abort, which
+// filled the record's whole reason (2026-10-26).
+const (
+	groupMemberErrorMax = 768
+	groupReasonMax      = 16 << 10
+)
+
+// memberFailure is one member's part of a group's failure.
+func memberFailure(name, err string) string {
+	return name + ": " + truncate(err, groupMemberErrorMax)
+}
+
+// membersFailed is the failure of a group operation (what, in session)
+// that failed members of total failed, each named with its own error.
+func membersFailed(what, session string, total int, failed []string) error {
+	return fmt.Errorf("%s %s: %d of %d members failed: %s", what, session, len(failed), total, strings.Join(failed, "; "))
 }
 
 func truncate(s string, n int) string {

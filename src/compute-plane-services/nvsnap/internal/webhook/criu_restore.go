@@ -30,6 +30,13 @@ const (
 	CRIURestoreAnnotation          = "nvsnap.io/criu-restore"
 	CRIURestoreContainerAnnotation = "nvsnap.io/criu-restore-container"
 
+	// CRIURestoredCondition gates a restore placeholder's readiness: the
+	// agent sets it True once the restore is done. The pod's own readiness
+	// probe cannot tell: a process of the restored tree that holds no GPU
+	// (a health server) runs, and answers, while the GPU processes still
+	// load their memory.
+	CRIURestoredCondition corev1.PodConditionType = "nvsnap.io/restored"
+
 	criuCheckpointsVolume = "nvsnap-criu-checkpoints"
 	// criuCheckpointsMount is where the restore reads the images
 	// (/checkpoints/<id>), the same path the agent's placeholder uses.
@@ -140,7 +147,8 @@ func CRIUNamespaceScope(ns string) string { return "namespace/" + ns }
 // criuRestorePatches turns the pod into the restore placeholder for
 // checkpointID. The liveness and startup probes go: they would kill the
 // container before the restored process answers them. The readiness probe
-// stays, so the pod becomes Ready when the restored engine serves.
+// stays, so the pod becomes Ready when the restored engine serves, and
+// not before the restore is done (CRIURestoredCondition).
 func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest) ([]PatchOp, error) {
 	// The capture checkpoints the first container with GPUs, or the
 	// container the record names (a companion's, captured by its
@@ -252,7 +260,31 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		PatchOp{Op: "add", Path: "/metadata/annotations/" + jsonPointerEscape(CRIURestoreContainerAnnotation), Value: c.Name},
 	)
 	patches = append(patches, criuNodePreference(pod, man.CapturedOnNodes)...)
+	patches = append(patches, restoredGatePatches(pod)...)
 	return patches, nil
+}
+
+// restoredGatePatches adds the CRIURestoredCondition readiness gate.
+func restoredGatePatches(pod *corev1.Pod) []PatchOp {
+	gate := corev1.PodReadinessGate{ConditionType: CRIURestoredCondition}
+	if HasRestoredGate(pod) {
+		return nil
+	}
+	if len(pod.Spec.ReadinessGates) == 0 {
+		return []PatchOp{{Op: "add", Path: "/spec/readinessGates", Value: []corev1.PodReadinessGate{gate}}}
+	}
+	return []PatchOp{{Op: "add", Path: "/spec/readinessGates/-", Value: gate}}
+}
+
+// HasRestoredGate reports whether pod's readiness waits on
+// CRIURestoredCondition.
+func HasRestoredGate(pod *corev1.Pod) bool {
+	for _, g := range pod.Spec.ReadinessGates {
+		if g.ConditionType == CRIURestoredCondition {
+			return true
+		}
+	}
+	return false
 }
 
 // gpuContainerIndex is the index of the first container with GPUs, else

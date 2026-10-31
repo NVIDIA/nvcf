@@ -147,6 +147,8 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerGroupCapture(ctx, pod)
 	c.considerCompanionPlaceholder(ctx, pod)
 	c.considerRestored(ctx, pod)
+	c.considerRestoredCondition(ctx, pod)
+	c.considerRestoredStacks(ctx, pod)
 	if !c.admitted(ctx, pod) {
 		return
 	}
@@ -162,7 +164,7 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	if _, done := c.attempted.LoadOrStore(pod.UID, struct{}{}); done {
 		return
 	}
-	go c.restore(ctx, pod.Namespace, pod.Name, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
+	go c.restore(ctx, pod.Namespace, pod.Name, pod.UID, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
 }
 
 // admitted reports whether the restorer may act on pod's restore
@@ -222,7 +224,7 @@ func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
 	}()
 }
 
-func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, groupKey string) {
+func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod string, uid types.UID, id, container, groupKey string) {
 	a := c.a
 	log := a.log.WithFields(logrus.Fields{"pod": ns + "/" + pod, "checkpoint": id, "container": container})
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
@@ -249,7 +251,7 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, 
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
 		c.recordLoneRestore(ctx, ns, pod, id, container, log)
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
-		record(func(d map[string]string) bool { return recordRestored(d, id) })
+		record(func(d map[string]string) bool { return recordRestored(d, id, string(uid)+"/"+container) })
 		return
 	}
 	if ctx.Err() != nil {
@@ -262,15 +264,17 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, 
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
 	}
-	if errors.Is(err, errCheckpointUnavailable) {
+	switch {
+	case errors.Is(err, errCheckpointUnavailable):
 		log.WithError(err).Warn("CRIU auto-restore did not run; deleting the pod so its replacement tries again")
 		record(func(d map[string]string) bool { return recordFailure(d, id, false, err) })
-	} else {
+	case c.failedRestoreBlocks(context.WithoutCancel(ctx), groupKey, id, err, log):
 		log.WithError(err).Error("CRIU auto-restore failed; blocking the checkpoint and deleting the pod so its replacement starts fresh")
 		if merr := c.markFailed(context.WithoutCancel(ctx), id, err); merr != nil {
 			log.WithError(merr).Error("CRIU auto-restore: could not record the failed checkpoint; its next pods will try it again")
 		}
-		record(func(d map[string]string) bool { return recordFailure(d, id, true, err) })
+	default:
+		log.WithError(err).Error("CRIU auto-restore failed; its capture was verified, so it is kept and the replacement restores from it again")
 	}
 	if derr := a.deletePodRetrying(context.WithoutCancel(ctx), ns, pod, ""); derr != nil {
 		log.WithError(derr).Error("CRIU auto-restore: could not delete the failed pod")
@@ -410,8 +414,12 @@ func (c *criuAutoRestorer) recordLoneRestore(ctx context.Context, ns, pod, id, c
 }
 
 // markRestored annotates a restored placeholder so a restarted agent does
-// not restore into it again (and, refused, delete it).
+// not restore into it again (and, refused, delete it), and lets its
+// readiness pass (restored_condition.go).
 func (a *Agent) markRestored(ctx context.Context, ns, pod string, log *logrus.Entry) {
+	if err := a.setRestoredCondition(ctx, ns, pod); err != nil {
+		log.WithError(err).Warn("CRIU restore: could not set the pod's restored condition; the agent sets it on the pod's next event")
+	}
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, webhook.CRIURestoredAnnotation, time.Now().UTC().Format(time.RFC3339))
 	if _, err := a.kubeClient.CoreV1().Pods(ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU restore: could not mark the pod restored; an agent restart may try it again")

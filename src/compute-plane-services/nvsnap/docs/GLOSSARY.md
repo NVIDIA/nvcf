@@ -51,7 +51,8 @@ are listed in the generated [reference](REFERENCE.md).
 ## Where bytes live: the tiers
 
 A restore looks for a checkpoint in L1, L2 and L3, in that order, and takes
-the first copy it finds (`internal/agent/cascade_fetch.go` `EnsureLocal`). L4
+the first copy it finds (`internal/agent/cascade_fetch.go` `EnsureLocal`).
+When the rails tier is on, it runs between L1 and L2. L4
 is not in that order: replication fills it and pulls from it in the
 background.
 
@@ -62,6 +63,7 @@ background.
 | volume pair | The `rwx-<hash>` volume a capture is written to and the `rox-<hash>` read-only volume restores mount, made from it by promotion. |
 | promotion | Turning a written `rwx-` volume into its read-only `rox-` twin (by snapshot or by a shared read-only attach, depending on storage). |
 | L3 | Peer fetch: another agent that holds the checkpoint sends it over HTTP; every node that restores becomes a peer. |
+| rails tier | Opt-in fetch between L1 and L2: bedrock-peer copies the checkpoint from nodes that hold it over the nodes' RDMA NICs, in pods that claim the NICs through DRA only for the copy. |
 | L4 | An object-store bucket shared between clusters (cross-cluster replication of cachedir captures, `internal/agent/replication.go`). |
 
 ## Models and caches
