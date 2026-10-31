@@ -33,3 +33,9 @@ pub use types::{ClientError, InferenceServerRegistrationConfig};
 use urls::normalize_addr;
 
 const REVERSE_TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+// Routers keep sending requests until they see the registration close, so a
+// stopping reverse tunnel keeps accepting streams this long after the close.
+const REVERSE_TUNNEL_ACCEPT_WINDOW: Duration = Duration::from_secs(2);
+// Bounds the wait for in-flight requests when Pylon shuts down. It must fit
+// in the worker pod termination grace period.
+const REGISTRATION_DRAIN_TIMEOUT: Duration = Duration::from_secs(90);

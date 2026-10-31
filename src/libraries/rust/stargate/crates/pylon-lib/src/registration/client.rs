@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
+use super::REGISTRATION_DRAIN_TIMEOUT;
 use super::discovery::run_watch_stargate_discovery;
 use super::grpc_endpoint::StargateGrpcEndpoint;
 use super::router_stream::run_router_registration_stream;
@@ -50,7 +51,7 @@ async fn run_registration_session(config: RegistrationSessionConfig, stop: Cance
     let tasks = vec![watch_task, registration_task];
 
     stop.cancelled().await;
-    OwnedTask::shutdown_all(tasks, TASK_SHUTDOWN_TIMEOUT).await;
+    OwnedTask::shutdown_all(tasks, REGISTRATION_DRAIN_TIMEOUT).await;
 }
 
 async fn run_registration_supervisor(
@@ -73,8 +74,7 @@ async fn run_registration_supervisor(
         let retired_tasks = per_router_tasks
             .extract_if(|router, _| !desired_routers.contains(router))
             .map(|(_, task)| task)
-            .collect();
-        OwnedTask::shutdown_all(retired_tasks, TASK_SHUTDOWN_TIMEOUT).await;
+            .collect::<Vec<_>>();
 
         for router in &desired_routers {
             if !per_router_tasks.contains_key(router) {
@@ -90,6 +90,9 @@ async fn run_registration_supervisor(
                 per_router_tasks.insert(router.clone(), task);
             }
         }
+        // Retired streams drain their reverse tunnels, so register with new
+        // routers first.
+        OwnedTask::shutdown_all(retired_tasks, TASK_SHUTDOWN_TIMEOUT).await;
 
         let finished = tokio::select! {
             _ = stop.cancelled() => true,
@@ -102,7 +105,7 @@ async fn run_registration_supervisor(
 
     OwnedTask::shutdown_all(
         per_router_tasks.into_values().collect(),
-        TASK_SHUTDOWN_TIMEOUT,
+        REGISTRATION_DRAIN_TIMEOUT,
     )
     .await;
 }
@@ -119,7 +122,7 @@ impl InferenceServerRegistrationClient {
 
     pub async fn shutdown(&mut self) {
         if let Some(running) = self.running.take() {
-            running.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
+            running.shutdown(REGISTRATION_DRAIN_TIMEOUT).await;
         }
     }
 

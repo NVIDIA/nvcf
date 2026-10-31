@@ -29,6 +29,7 @@ use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClien
 use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, InferenceServerStatus};
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
+use super::REGISTRATION_DRAIN_TIMEOUT;
 use super::grpc_endpoint::{
     StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure,
     connect_stargate_grpc_channel, grpc_error_chain, log_stargate_grpc_certificate_failure,
@@ -95,6 +96,7 @@ pub(super) async fn run_router_registration_stream(
             let reverse_task_state_tx = reverse_state_tx.clone();
             let reverse_router_addr = router_addr.clone();
             let reverse_config = config.clone();
+            let registration_stop = stop.clone();
             Some(OwnedTask::spawn_child(
                 "reverse tunnel registration worker",
                 &stop,
@@ -103,6 +105,7 @@ pub(super) async fn run_router_registration_stream(
                         reverse_router_addr,
                         reverse_config,
                         reverse_task_state_tx,
+                        registration_stop,
                         reverse_stop,
                     )
                 },
@@ -245,9 +248,17 @@ pub(super) async fn run_router_registration_stream(
             last_send = Instant::now();
         };
 
+        // Close the registration before the reverse tunnel stops accepting, so
+        // the router stops picking this server first.
+        drop(update_tx);
         drop(advertised_status);
         if let Some(task) = reverse_task {
-            task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
+            let timeout = if stopped {
+                REGISTRATION_DRAIN_TIMEOUT
+            } else {
+                TASK_SHUTDOWN_TIMEOUT
+            };
+            task.shutdown(timeout).await;
         }
         if stopped
             || stop
