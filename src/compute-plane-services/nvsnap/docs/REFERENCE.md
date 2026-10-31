@@ -77,6 +77,8 @@ where the files column says.
 | `nvsnap.io/last-used` | `LastUsedAnnotation` (internal/modelvolume/modelvolume.go) | On a primary PV is the RFC 3339 time a pod last admitted against it (or it completed). |
 | `nvsnap.io/leader-id` | `LeaderIDAnnotation` (internal/election/election.go) |  |
 | `nvsnap.io/leader-namespace` | `LeaderNamespaceAnnotation` (internal/election/election.go) | And LeaderIDAnnotation on the Lease name the leader pod (namespace + election id) so its liveness can be checked. |
+| `nvsnap.io/leader-spec` | `LeaderSpecAnnotation` (internal/election/election.go) | On the Lease is the SpecIdentity of the leader as admitted: what it runs, which a capture under the election's hash must match. |
+| `nvsnap.io/leader-uid` | `LeaderUIDAnnotation` (internal/election/election.go) | On the Lease is the UID of the leader pod, bound once the pod exists (see ResolveLeader). |
 | `nvsnap.io/lease-kind` | inline: internal/agent/replication_poll.go, internal/checkpointstore/percapture_pvc.go |  |
 | `nvsnap.io/model` | `IdentityLabel` (internal/modelvolume/modelvolume.go)<br>`annModel` (internal/server/manifests.go) | Is the short identity key on claims, PVs and pods. |
 | `nvsnap.io/model-capture` | `CaptureLabel` (internal/modelvolume/modelvolume.go) | Is "true" on a pod whose engine downloads an artifact nvsnap has no download recipe for (a chart script pulling an NGC model) into a pod volume. |
@@ -136,7 +138,6 @@ binary.
 | `NVSNAP_CHECKPOINT_HOST_PATH` |  | internal/cuda/checkpoint.go |
 | `NVSNAP_CRIU_CAPTURE_OPT_IN` | yes | cmd/agent/main.go |
 | `NVSNAP_CRIU_V2` |  | internal/agent/checkpoint_v2.go |
-| `NVSNAP_CRIU_V2_COMPRESS` |  | internal/agent/checkpoint_v2.go |
 | `NVSNAP_DEFAULT_CAPTURE_PATH` | yes | internal/agent/checkpoint.go, internal/agent/nim_backend.go |
 | `NVSNAP_DISABLE_CUDA` |  | internal/agent/checkpoint.go |
 | `NVSNAP_FSSTORE_PATH` |  | cmd/agent/main.go |
@@ -151,7 +152,7 @@ binary.
 | `NVSNAP_ORIG_COMMAND` |  | cmd/nvsnap-rootfs-restore/main.go |
 | `NVSNAP_ORIG_CWD` |  | cmd/nvsnap-rootfs-restore/main.go |
 | `NVSNAP_PEER_FETCH_CONCURRENCY` |  | internal/agent/cascade_fetch.go |
-| `NVSNAP_PIDNS_STDIO` |  | cmd/agent/pidns_exec.go |
+| `NVSNAP_PIDNS_FDS` |  | cmd/agent/pidns_exec.go |
 | `NVSNAP_PIDNS_UNIX_LISTENERS` |  | cmd/agent/pidns_exec.go |
 | `NVSNAP_POD_CACHE_DIR` |  | cmd/agent/main.go |
 | `NVSNAP_POD_UID` |  | cmd/nvsnap-mount-prep/main.go |
