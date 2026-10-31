@@ -332,7 +332,7 @@ func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, 
 	// Keep the upstream response.created fields as sent so the failed
 	// response matches the one the client already saw.
 	var created map[string]json.RawMessage
-	if err := json.Unmarshal(stream.created, &created); err != nil || created["id"] == nil {
+	if err := json.Unmarshal(stream.createdResponse, &created); err != nil || created["id"] == nil {
 		created = nil
 	}
 	response := make(map[string]any, len(created)+2)
@@ -349,20 +349,23 @@ func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, 
 		}
 	}
 	response["status"] = "failed"
-	response["error"] = map[string]string{
-		"code":    "server_error",
-		"message": msgNativeResponsesNoTerminal,
+	response["error"] = openairesponses.ResponseError{
+		Code:    "server_error",
+		Message: msgNativeResponsesNoTerminal,
 	}
 
-	sequenceNumber := 0
-	if stream.sequenceNumber != nil {
-		sequenceNumber = *stream.sequenceNumber + 1
+	event := struct {
+		Type           string         `json:"type"`
+		SequenceNumber int            `json:"sequence_number"`
+		Response       map[string]any `json:"response"`
+	}{
+		Type:     openairesponses.EventTypeResponseFailed,
+		Response: response,
 	}
-	data, err := json.Marshal(map[string]any{
-		"type":            openairesponses.EventTypeResponseFailed,
-		"sequence_number": sequenceNumber,
-		"response":        response,
-	})
+	if stream.sequenceNumber != nil {
+		event.SequenceNumber = *stream.sequenceNumber + 1
+	}
+	data, err := json.Marshal(event)
 	if err != nil {
 		return failure.SetInternal(errors.Join(cause, fmt.Errorf("marshal response.failed event: %w", err)))
 	}
@@ -428,9 +431,9 @@ type nativeResponsesTerminal struct {
 // stream: its terminal response, and the last response.created payload and
 // sequence_number so a failed stream can be ended with a matching event.
 type nativeResponsesStream struct {
-	terminal       *nativeResponsesTerminal
-	created        json.RawMessage
-	sequenceNumber *int
+	terminal        *nativeResponsesTerminal
+	createdResponse json.RawMessage
+	sequenceNumber  *int
 }
 
 func (s *nativeResponsesStream) observe(block []byte) {
@@ -438,11 +441,11 @@ func (s *nativeResponsesStream) observe(block []byte) {
 	if !ok {
 		return
 	}
-	if event.SequenceNumber != nil {
-		s.sequenceNumber = event.SequenceNumber
+	if sequenceNumber, err := strconv.Atoi(string(event.SequenceNumber)); err == nil {
+		s.sequenceNumber = &sequenceNumber
 	}
-	if eventType == openairesponses.EventTypeResponseCreated {
-		s.created = event.Response
+	if eventType == openairesponses.EventTypeResponseCreated && len(event.Response) > 0 {
+		s.createdResponse = event.Response
 	}
 	if terminal := nativeResponsesTerminalFromEvent(eventType, event); terminal != nil {
 		s.terminal = terminal
@@ -498,19 +501,12 @@ func isSSEBlankLine(line []byte) bool {
 }
 
 // nativeResponsesEvent is the part of a Responses stream event the gateway
-// reads.
+// reads. SequenceNumber stays raw so an unexpected value cannot hide a
+// terminal event.
 type nativeResponsesEvent struct {
 	Type           string          `json:"type"`
-	SequenceNumber *int            `json:"sequence_number"`
+	SequenceNumber json.RawMessage `json:"sequence_number"`
 	Response       json.RawMessage `json:"response"`
-}
-
-func parseNativeResponsesSSEBlock(block []byte) *nativeResponsesTerminal {
-	eventType, event, ok := decodeNativeResponsesSSEBlock(block)
-	if !ok {
-		return nil
-	}
-	return nativeResponsesTerminalFromEvent(eventType, event)
 }
 
 // decodeNativeResponsesSSEBlock returns the event type and data of one SSE

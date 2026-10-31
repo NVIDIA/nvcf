@@ -355,6 +355,8 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 
 	created := "event: response.created\n" +
 		`data: {"type":"response.created","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
+	createdNoSequence := "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"model":"company-name/model-name","status":"in_progress","output":[]}}` + "\n\n"
 
 	tests := []struct {
 		name           string
@@ -366,6 +368,7 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		{name: "empty stream", upstreamBody: "", wantSequence: 0},
 		{name: "ends after non terminal event", upstreamBody: created, wantResponseID: "resp_1", wantSequence: 5},
 		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true, wantResponseID: "resp_1", wantSequence: 5},
+		{name: "no sequence numbers", upstreamBody: createdNoSequence, wantResponseID: "resp_1", wantSequence: 0},
 	}
 
 	for _, tt := range tests {
@@ -425,6 +428,28 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 			}
 		})
 	}
+}
+
+func TestResponsesStreamKeepsTerminalStreamWhenConnectionDropsAfterIt(t *testing.T) {
+	t.Parallel()
+
+	completed := "event: response.completed\n" +
+		`data: {"type":"response.completed","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"completed","output":[]}}` + "\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(echo.HeaderContentType, "text/event-stream")
+		_, _ = io.WriteString(w, completed)
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(upstream.Close)
+	e := newPassthroughAPI(t, upstream.URL)
+
+	clientBody := `{"model":"fn-alpha/company-name/model-name","input":"hi","stream":true}`
+	rec := servePassthroughRequest(t, e, "/v1/responses", clientBody)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, completed, rec.Body.String())
 }
 
 func TestResponsesStreamSendsNoFailureEventWhenClientGoesAway(t *testing.T) {
@@ -492,12 +517,13 @@ func TestConsumeNativeResponsesSSEKeepsUsageForUnknownOutputItems(t *testing.T) 
 	require.Equal(t, uint32(9), usage.TotalTokens)
 }
 
-func TestParseNativeResponsesSSEBlockIgnoresNonTerminalAndEmptyResponses(t *testing.T) {
+func TestNativeResponsesStreamObserveFindsOnlyTerminalResponses(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		block string
+		name         string
+		block        string
+		wantTerminal bool
 	}{
 		{
 			name:  "non terminal event",
@@ -515,12 +541,19 @@ func TestParseNativeResponsesSSEBlockIgnoresNonTerminalAndEmptyResponses(t *test
 			name:  "done marker",
 			block: "data: [DONE]\n\n",
 		},
+		{
+			name:         "non integer sequence number",
+			block:        "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":5.0,\"response\":{\"id\":\"resp_1\"}}\n\n",
+			wantTerminal: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Nil(t, parseNativeResponsesSSEBlock([]byte(tt.block)))
+			var stream nativeResponsesStream
+			stream.observe([]byte(tt.block))
+			require.Equal(t, tt.wantTerminal, stream.terminal != nil)
 		})
 	}
 }
