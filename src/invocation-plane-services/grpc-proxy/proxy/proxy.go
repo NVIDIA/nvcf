@@ -234,7 +234,7 @@ func NewNVCFProxy(logger *logs.ZapLogger, config Config) (*NVCFProxy, error) {
 		},
 	}
 
-	healthManager, err := healthManager(config.NVCFFqdn, nc)
+	healthManager, err := healthManager(nc)
 	if err != nil {
 		return nil, err
 	}

@@ -56,7 +56,20 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, oauth2Fqdn, secretsPath 
 		}
 	}
 
-	nc, err := nats.Connect(natsFqdn, nats.PingInterval(10*time.Second), natsAuthOption,
+	nc, err := nats.Connect(natsFqdn, connectOptions(serviceName, natsAuthOption)...)
+	if err != nil {
+		recordNatsStartupFailure("nats initial connection failed", err)
+		return nil, err
+	}
+	metrics.SetNatsStatsConnection(nc)
+	return nc, nil
+}
+
+func connectOptions(serviceName string, authOption nats.Option) []nats.Option {
+	return []nats.Option{nats.PingInterval(10 * time.Second), authOption,
+		// Nothing replaces a closed connection, and readiness stays down while it is
+		// closed, so keep reconnecting through long outages.
+		nats.MaxReconnects(-1),
 		nats.LameDuckModeHandler(func(conn *nats.Conn) {
 			metrics.NatsLameDuckCounter.Inc()
 			go func() {
@@ -78,13 +91,7 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, oauth2Fqdn, secretsPath 
 			recordNatsDisconnect(err)
 		}), nats.ConnectHandler(func(conn *nats.Conn) {
 			zap.L().Info("connected to nats", zap.String("server", conn.ConnectedServerName()), zap.String("cluster", conn.ConnectedClusterName()))
-		}))
-	if err != nil {
-		recordNatsStartupFailure("nats initial connection failed", err)
-		return nil, err
-	}
-	metrics.SetNatsStatsConnection(nc)
-	return nc, nil
+		})}
 }
 
 func recordNatsDisconnect(err error) {
