@@ -20,7 +20,7 @@ kind: ClusterRole
 metadata:
   name: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.37.2
+    helm.sh/chart: helm-nvca-operator-1.37.3
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.16.1"
