@@ -202,6 +202,9 @@ jobs:
       - name: Test NVCT API sidecar release artifacts
         run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
 
+      - name: Test vanity-gateway chart probes
+        run: bash deploy/helm/vanity-gateway/tests/chart-render/verify-probes.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail
