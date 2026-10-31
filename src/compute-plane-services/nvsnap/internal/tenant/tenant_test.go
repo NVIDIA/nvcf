@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -81,5 +84,25 @@ func TestScopeCaches(t *testing.T) {
 	fail = false
 	if s := r.Scope(ctx, "sr-a"); s != "tenant:nca-id=acct-1" {
 		t.Errorf("a failed read was remembered: %q", s)
+	}
+}
+
+// Without namespace read access the resolver falls back to the namespace
+// and says so once, not on every lookup.
+func TestScopeForbiddenLogsOnce(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset(ns("sr-a", map[string]string{"nca-id": "acct-1"}))
+	kc.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, "sr-a", errors.New("rbac"))
+	})
+	log, hook := logrustest.NewNullLogger()
+	r := &Resolver{Kube: kc, Label: "nca-id", Log: log}
+	for i := 0; i < 3; i++ {
+		if s := r.Scope(ctx, "sr-a"); s != "namespace:sr-a" {
+			t.Fatalf("forbidden read: %q", s)
+		}
+	}
+	if n := len(hook.AllEntries()); n != 1 {
+		t.Errorf("%d warnings for 3 forbidden lookups, want 1", n)
 	}
 }

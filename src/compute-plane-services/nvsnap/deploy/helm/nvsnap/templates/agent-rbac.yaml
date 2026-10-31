@@ -57,6 +57,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  # namespaces: read a namespace's tenant label (--tenant-label,
+  # internal/tenant); without it every namespace is its own tenant.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
   # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
   # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
   # reader PVC after every successful CRIU dump. Lease is the
