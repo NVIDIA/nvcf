@@ -532,19 +532,20 @@ curl -s -H "Host: api.example.com" \
   http://localhost:10081/v1/models
 ```
 
-The gateway does not validate the key. It sends the caller's `Authorization`
-header to `GET /v2/nvcf/functions/ids?visibility=authorized,private` on
+The gateway does not validate the key. It sends the key to
+`GET /v2/nvcf/functions?visibility=authorized,private` on
 `NVCF_CONTROL_PLANE_ENDPOINT`, and the NVCF API applies the same account and
-API key resource checks as invocation. A model whose name matches
-`PRIVATE_MODEL_NAME_REGEX_PATTERN` is listed when the NVCF API returns its
-function ID. Expiry, `supported_endpoints`, and metadata follow the
-public-model rules, and Anthropic clients get the same models in the Anthropic
-shape.
+API key resource checks as invocation, version by version. A model whose name
+matches `PRIVATE_MODEL_NAME_REGEX_PATTERN` is listed when the NVCF API returns
+the function version it routes to. An entry without `functionVersionID` is
+listed when any version of its function is returned. Expiry,
+`supported_endpoints`, and metadata follow the public-model rules, and
+Anthropic clients get the same models in the Anthropic shape.
 
 `GET /v1/models/{model}` follows the same rule, including three-part names
 such as `private/acme/model`. A private name returns its model only when the
-key may access its function. Otherwise the response is the same 404 as for an
-unknown name.
+key may access the function version it routes to. Otherwise the response is
+the same 404 as for an unknown name.
 
 The lookup never fails a request:
 
@@ -554,7 +555,7 @@ The lookup never fails a request:
 | Key accepted | Public list plus the private models the key may access |
 | NVCF API rejects the key (`401`) | Public list |
 | Key has no `list_functions` or `list_functions_details` scope (`403`) | Public list |
-| NVCF API error or timeout | The key's last successful result if it is under 15 minutes old, otherwise the public list |
+| NVCF API error, timeout, or redirect | The key's last successful result if it is under 15 minutes old, otherwise the public list |
 | `NVCF_CONTROL_PLANE_ENDPOINT` not set | Public list, no NVCF API call |
 
 Keyed responses carry `Cache-Control: private, no-store` and
@@ -564,8 +565,11 @@ Keyed responses carry `Cache-Control: private, no-store` and
 list responses carry `Vary: Authorization`.
 
 Results are cached per key for one minute, for up to 4096 keys, and survive
-mapping reloads. Concurrent requests with the same key share one lookup. Each
-pod runs at most 16 lookups at once, each with a 5 second timeout.
+mapping reloads. A reload that changes the set of private functions refreshes
+each key on its next request. Concurrent requests with the same key share one
+lookup. Each pod runs at most 16 lookups at once, each with a 5 second
+timeout. The lookup never follows a redirect, so the key goes only to
+`NVCF_CONTROL_PLANE_ENDPOINT`.
 
 ## Invoking the Anthropic Messages Endpoint
 

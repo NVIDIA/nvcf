@@ -22,16 +22,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -48,8 +49,8 @@ const PrivateModelsHeader = "NVCF-Private-Models"
 
 const (
 	// The NVCF API applies the same account and API key resource checks here
-	// as it does to invocation.
-	privateModelLookupPath       = "/v2/nvcf/functions/ids"
+	// as it does to invocation, and lists each function version it allows.
+	privateModelLookupPath       = "/v2/nvcf/functions"
 	privateModelLookupVisibility = "authorized,private"
 
 	privateModelLookupTimeout     = 5 * time.Second
@@ -57,7 +58,7 @@ const (
 	privateModelLookupStaleTTL    = 15 * time.Minute
 	privateModelLookupCacheSize   = 4096
 	privateModelLookupConcurrency = 16
-	privateModelLookupMaxBody     = 8 << 20
+	privateModelLookupMaxBody     = 64 << 20
 
 	privateModelLookupsMetricName = "nvcf_ai_api_gateway_private_model_lookups"
 	privateModelLookupResultLabel = "result"
@@ -78,15 +79,49 @@ var privateModelLookupsCounter otelmetric.Int64Counter = metricnoop.Int64Counter
 // the life of the process, so mapping reloads keep cached results.
 var privateModelAccessByEndpoint sync.Map
 
-type privateModelAccessEntry struct {
-	functionIDs map[string]struct{}
-	result      string
-	fetched     time.Time
+// privateModelIndex maps each function behind a private alias to the aliases
+// it serves, for one mapping snapshot.
+type privateModelIndex struct {
+	routes map[string][]privateModelRoute // keyed by lowercase function ID
+	// fingerprint identifies the function set. A cached lookup made for another
+	// set is refreshed rather than reused.
+	fingerprint string
 }
 
-// privateModelAccess asks the NVCF API which private functions a caller's API
-// key may access. Results are cached per key. Each entry keeps only function IDs
-// that back private aliases, which bounds its size.
+type privateModelRoute struct {
+	model     ModelInfo
+	versionID string // lowercase; empty when the alias does not pin a version
+}
+
+// authorizedVersions maps each accessible function behind a private alias to
+// its accessible versions.
+type authorizedVersions map[string]map[string]struct{}
+
+// allows reports whether a route to functionID and versionID is accessible. A
+// route without a version is accessible when any version is, as invocation
+// then picks among the versions the caller may use.
+func (v authorizedVersions) allows(functionID, versionID string) bool {
+	versions, ok := v[strings.ToLower(functionID)]
+	if !ok {
+		return false
+	}
+	if versionID == "" {
+		return true
+	}
+	_, ok = versions[strings.ToLower(versionID)]
+	return ok
+}
+
+type privateModelAccessEntry struct {
+	versions    authorizedVersions
+	result      string
+	fetched     time.Time
+	fingerprint string
+}
+
+// privateModelAccess asks the NVCF API which private function versions a
+// caller's API key may access. Results are cached per key. Each entry keeps
+// only functions that back private aliases, which bounds its size.
 type privateModelAccess struct {
 	lookupURL string
 	client    *http.Client
@@ -129,35 +164,41 @@ func newPrivateModelAccess(endpoint string, transport http.RoundTripper) (*priva
 	lookupURL.RawQuery = url.Values{"visibility": {privateModelLookupVisibility}}.Encode()
 	return &privateModelAccess{
 		lookupURL: lookupURL.String(),
-		client:    &http.Client{Transport: transport},
-		slots:     semaphore.NewWeighted(privateModelLookupConcurrency),
-		now:       time.Now,
-		cache:     make(map[string]privateModelAccessEntry),
+		client: &http.Client{
+			Transport: transport,
+			// The request carries the caller's API key, so a redirect is a
+			// failed lookup rather than a request to another URL.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		slots: semaphore.NewWeighted(privateModelLookupConcurrency),
+		now:   time.Now,
+		cache: make(map[string]privateModelAccessEntry),
 	}, nil
 }
 
-// authorizedFunctionIDs returns which privateFunctions the caller's bearer key
-// may access, and the lookup result. A failed lookup is not cached. It falls
-// back to the key's last good result while that is within the stale window.
-// The cache key and the upstream header both come from the parsed credential,
-// so every spelling of one Authorization header shares one entry and one answer.
-func (a *privateModelAccess) authorizedFunctionIDs(request *http.Request, credential []byte, privateFunctions map[string][]ModelInfo) (map[string]struct{}, string) {
+// authorizedVersions returns which function versions in index the caller's
+// bearer key may access, and the lookup result. A failed lookup is not cached.
+// It falls back to the key's last good result while that is within the stale
+// window. The cache key and the upstream header both come from the parsed
+// credential, so every spelling of one Authorization header shares one entry
+// and one answer.
+func (a *privateModelAccess) authorizedVersions(request *http.Request, credential []byte, index privateModelIndex) (authorizedVersions, string) {
 	authorization := "Bearer " + string(credential)
 	digest := sha256.Sum256(credential)
 	key := hex.EncodeToString(digest[:])
 	span := trace.SpanFromContext(request.Context())
 
-	if entry, ok := a.cached(key, privateModelLookupCacheTTL); ok {
+	if entry, ok := a.fresh(key, index); ok {
 		recordPrivateModelLookup(request.Context(), entry.result, true)
 		span.SetAttributes(traceAttrPrivateModelsCached.Bool(true), traceAttrPrivateModelsResult.String(entry.result))
-		return entry.functionIDs, entry.result
+		return entry.versions, entry.result
 	}
-	value, _, _ := a.lookups.Do(key, func() (any, error) {
-		if entry, ok := a.cached(key, privateModelLookupCacheTTL); ok {
+	value, _, _ := a.lookups.Do(key+":"+index.fingerprint, func() (any, error) {
+		if entry, ok := a.fresh(key, index); ok {
 			recordPrivateModelLookup(request.Context(), entry.result, true)
 			return entry, nil
 		}
-		entry, err := a.lookup(request, authorization, privateFunctions)
+		entry, err := a.lookup(request, authorization, index)
 		recordPrivateModelLookup(request.Context(), entry.result, false)
 		if err == nil {
 			a.store(key, entry)
@@ -174,13 +215,13 @@ func (a *privateModelAccess) authorizedFunctionIDs(request *http.Request, creden
 	})
 	entry := value.(privateModelAccessEntry)
 	span.SetAttributes(traceAttrPrivateModelsCached.Bool(false), traceAttrPrivateModelsResult.String(entry.result))
-	return entry.functionIDs, entry.result
+	return entry.versions, entry.result
 }
 
 // lookup runs detached from the caller's cancellation because concurrent
 // requests with the same key share its result. 401 and 403 are results, not
 // errors: the key is invalid or cannot list functions.
-func (a *privateModelAccess) lookup(request *http.Request, authorization string, privateFunctions map[string][]ModelInfo) (privateModelAccessEntry, error) {
+func (a *privateModelAccess) lookup(request *http.Request, authorization string, index privateModelIndex) (privateModelAccessEntry, error) {
 	unavailable := privateModelAccessEntry{result: privateModelsUnavailable}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), privateModelLookupTimeout)
 	defer cancel()
@@ -219,20 +260,80 @@ func (a *privateModelAccess) lookup(request *http.Request, authorization string,
 		return unavailable, fmt.Errorf("NVCF API returned status %d", resp.StatusCode)
 	}
 
-	var body struct {
-		FunctionIDs []string `json:"functionIds"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, privateModelLookupMaxBody)).Decode(&body); err != nil {
+	versions, err := decodeAuthorizedVersions(io.LimitReader(resp.Body, privateModelLookupMaxBody), index.routes)
+	if err != nil {
 		return unavailable, fmt.Errorf("decode NVCF API response: %w", err)
 	}
-	authorized := make(map[string]struct{})
-	for _, id := range body.FunctionIDs {
-		id = strings.ToLower(id)
-		if _, ok := privateFunctions[id]; ok {
-			authorized[id] = struct{}{}
+	return privateModelAccessEntry{versions: versions, result: privateModelsAuthorized, fetched: now, fingerprint: index.fingerprint}, nil
+}
+
+// decodeAuthorizedVersions reads the function list one entry at a time and
+// keeps the versions of functions in routes. An account can own many
+// functions, so the response is never held in memory whole.
+func decodeAuthorizedVersions(body io.Reader, routes map[string][]privateModelRoute) (authorizedVersions, error) {
+	decoder := stdjson.NewDecoder(body)
+	if err := expectJSONDelim(decoder, '{'); err != nil {
+		return nil, err
+	}
+	versions := make(authorizedVersions)
+	for decoder.More() {
+		field, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		if field != "functions" {
+			var skipped stdjson.RawMessage
+			if err := decoder.Decode(&skipped); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := expectJSONDelim(decoder, '['); err != nil {
+			return nil, err
+		}
+		for decoder.More() {
+			var function struct {
+				ID        string `json:"id"`
+				VersionID string `json:"versionId"`
+			}
+			if err := decoder.Decode(&function); err != nil {
+				return nil, err
+			}
+			id := strings.ToLower(function.ID)
+			if _, ok := routes[id]; !ok {
+				continue
+			}
+			if versions[id] == nil {
+				versions[id] = make(map[string]struct{})
+			}
+			versions[id][strings.ToLower(function.VersionID)] = struct{}{}
+		}
+		if err := expectJSONDelim(decoder, ']'); err != nil {
+			return nil, err
 		}
 	}
-	return privateModelAccessEntry{functionIDs: authorized, result: privateModelsAuthorized, fetched: now}, nil
+	return versions, expectJSONDelim(decoder, '}')
+}
+
+func expectJSONDelim(decoder *stdjson.Decoder, want stdjson.Delim) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != want {
+		return fmt.Errorf("unexpected JSON token %v, want %v", token, want)
+	}
+	return nil
+}
+
+// fresh returns the key's entry if it is within the cache TTL and, for an
+// authorized result, was computed for the same private function set.
+func (a *privateModelAccess) fresh(key string, index privateModelIndex) (privateModelAccessEntry, bool) {
+	entry, ok := a.cached(key, privateModelLookupCacheTTL)
+	if !ok || (entry.result == privateModelsAuthorized && entry.fingerprint != index.fingerprint) {
+		return privateModelAccessEntry{}, false
+	}
+	return entry, true
 }
 
 // cached returns the key's entry if it was fetched within maxAge.
@@ -272,11 +373,11 @@ func (a *privateModelAccess) store(key string, entry privateModelAccessEntry) {
 	a.cache[key] = entry
 }
 
-// authorizedPrivateFunctionIDs looks up the private functions the caller's
-// bearer key may access. It returns nil without a lookup when private models
-// are off or the request has no bearer key. Keyed responses are marked private
-// and report the lookup result.
-func (d *ModelDirector) authorizedPrivateFunctionIDs(writer http.ResponseWriter, request *http.Request) map[string]struct{} {
+// authorizedPrivateVersions looks up the private function versions the
+// caller's bearer key may access. It returns nil without a lookup when private
+// models are off or the request has no bearer key. Keyed responses are marked
+// private and report the lookup result.
+func (d *ModelDirector) authorizedPrivateVersions(writer http.ResponseWriter, request *http.Request) authorizedVersions {
 	if d.privateModels == nil {
 		return nil
 	}
@@ -285,67 +386,78 @@ func (d *ModelDirector) authorizedPrivateFunctionIDs(writer http.ResponseWriter,
 		return nil
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
-	functionIDs, result := d.privateModels.authorizedFunctionIDs(request, credential, d.privateModelsByFunction)
+	versions, result := d.privateModels.authorizedVersions(request, credential, d.privateIndex)
 	writer.Header().Set(PrivateModelsHeader, result)
-	return functionIDs
+	return versions
 }
 
 // authorizedPrivateModels returns the private models the caller's key may
-// access, before expiry filtering.
+// access, before expiry filtering. An alias that pins a version needs access
+// to that version.
 func (d *ModelDirector) authorizedPrivateModels(writer http.ResponseWriter, request *http.Request) []ModelInfo {
 	var models []ModelInfo
 	seen := make(map[string]struct{})
-	for id := range d.authorizedPrivateFunctionIDs(writer, request) {
-		for _, model := range d.privateModelsByFunction[id] {
-			if _, ok := seen[model.Id]; !ok {
-				seen[model.Id] = struct{}{}
-				models = append(models, model)
+	versions := d.authorizedPrivateVersions(writer, request)
+	for id := range versions {
+		for _, route := range d.privateIndex.routes[id] {
+			if _, ok := seen[route.model.Id]; ok || !versions.allows(id, route.versionID) {
+				continue
 			}
+			seen[route.model.Id] = struct{}{}
+			models = append(models, route.model)
 		}
 	}
 	return models
 }
 
 // authorizedPrivateModel returns the private model with this name in mappings
-// when the caller's key may access its function. Any name that is not public
-// takes this path, so a caller without access gets the same answer for a
-// private name as for an unknown one.
+// when the caller's key may access the function version it routes to. Any
+// name that is not public takes this path, so a caller without access gets
+// the same answer for a private name as for an unknown one.
 func (d *ModelDirector) authorizedPrivateModel(writer http.ResponseWriter, request *http.Request, name string, mappings ...ModelMapping) (ModelInfo, bool) {
 	if d.privateModels != nil {
 		writer.Header().Add("Vary", "Authorization")
 	}
-	functionIDs := d.authorizedPrivateFunctionIDs(writer, request)
+	versions := d.authorizedPrivateVersions(writer, request)
 	for _, mapping := range mappings {
 		info, ok := mapping.privateModelNameToModelInfo[name]
 		if !ok {
 			continue
 		}
-		if _, ok := functionIDs[strings.ToLower(mapping.modelNameToNVCFUrl[name].functionId)]; ok {
+		route := mapping.modelNameToNVCFUrl[name]
+		if versions.allows(route.functionId, route.functionVersionId) {
 			return info, true
 		}
 	}
 	return ModelInfo{}, false
 }
 
-// indexPrivateModels maps each function ID behind a private name to the
-// private models it serves.
-func indexPrivateModels(models []ModelInfo, mappings ...map[string]FunctionInfo) map[string][]ModelInfo {
-	index := make(map[string][]ModelInfo)
+// indexPrivateModels maps each function behind a private name to the private
+// models it serves and the version each one routes to.
+func indexPrivateModels(models []ModelInfo, mappings ...map[string]FunctionInfo) privateModelIndex {
+	type target struct{ functionID, versionID string }
+	routes := make(map[string][]privateModelRoute)
 	for _, model := range models {
-		indexed := make(map[string]struct{})
+		indexed := make(map[target]struct{})
 		for _, mapping := range mappings {
 			info, ok := mapping[model.Id]
 			if !ok {
 				continue
 			}
-			id := strings.ToLower(info.functionId)
-			if _, ok := indexed[id]; !ok {
-				indexed[id] = struct{}{}
-				index[id] = append(index[id], model)
+			t := target{strings.ToLower(info.functionId), strings.ToLower(info.functionVersionId)}
+			if _, ok := indexed[t]; !ok {
+				indexed[t] = struct{}{}
+				routes[t.functionID] = append(routes[t.functionID], privateModelRoute{model: model, versionID: t.versionID})
 			}
 		}
 	}
-	return index
+	ids := make([]string, 0, len(routes))
+	for id := range routes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	digest := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return privateModelIndex{routes: routes, fingerprint: hex.EncodeToString(digest[:])}
 }
 
 func setupPrivateModelMetrics() error {

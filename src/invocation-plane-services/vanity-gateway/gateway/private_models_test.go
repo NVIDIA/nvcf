@@ -46,11 +46,15 @@ const (
 	stagingFunctionID        = "6a1f0c2e-0000-4000-8000-000000000004"
 	publicFunctionID         = "6a1f0c2e-0000-4000-8000-000000000005"
 	unmappedFunctionID       = "6a1f0c2e-0000-4000-8000-000000000006"
+
+	// The NVCF API returns lowercase IDs; mappings may use either case.
+	allowedVersionID = "6A1F0C2E-0000-4000-8000-000000000101"
+	otherVersionID   = "6a1f0c2e-0000-4000-8000-000000000102"
 )
 
-// fakeFunctionIDs serves the NVCF function ID list for fixed test keys. When
-// gate is set, each response waits until it is closed. While failing is set,
-// every response is a server error.
+// fakeFunctionIDs serves the NVCF function list for fixed test keys: one entry
+// per accessible function version. When gate is set, each response waits until
+// it is closed. While failing is set, every response is a server error.
 type fakeFunctionIDs struct {
 	t       *testing.T
 	calls   atomic.Int32
@@ -70,17 +74,20 @@ func (f *fakeFunctionIDs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	version := func(functionID, versionID string) map[string]string {
+		return map[string]string{"id": strings.ToLower(functionID), "versionId": strings.ToLower(versionID), "name": "fn"}
+	}
 	switch r.Header.Get("Authorization") {
 	case "Bearer good":
-		_ = json.NewEncoder(w).Encode(map[string][]string{"functionIds": {
-			strings.ToLower(allowedPrivateFunctionID),
-			expiredPrivateFunctionID,
-			stagingFunctionID,
-			publicFunctionID,
-			unmappedFunctionID,
+		_ = json.NewEncoder(w).Encode(map[string]any{"functions": []map[string]string{
+			version(allowedPrivateFunctionID, allowedVersionID),
+			version(expiredPrivateFunctionID, allowedVersionID),
+			version(stagingFunctionID, allowedVersionID),
+			version(publicFunctionID, allowedVersionID),
+			version(unmappedFunctionID, allowedVersionID),
 		}})
 	case "Bearer other":
-		_ = json.NewEncoder(w).Encode(map[string][]string{"functionIds": {}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"functions": []map[string]string{}})
 	case "Bearer bad":
 		w.WriteHeader(http.StatusUnauthorized)
 	case "Bearer noscope":
@@ -99,8 +106,9 @@ func newFakeFunctionIDs(t *testing.T) (*fakeFunctionIDs, string) {
 }
 
 // privateModelsMux serves one public model, private models the test keys may
-// or may not access, an expired private model, and a staging alias.
-func privateModelsMux(t *testing.T, controlPlaneEndpoint string) http.Handler {
+// or may not access, an expired private model, a staging alias, and any extra
+// chat completion aliases.
+func privateModelsMux(t *testing.T, controlPlaneEndpoint string, extra ...config.ModelFunctionDetails) http.Handler {
 	t.Helper()
 	entry := func(name, functionID string) config.ModelFunctionDetails {
 		return config.ModelFunctionDetails{ModelName: name, FunctionID: functionID}
@@ -115,6 +123,9 @@ func privateModelsMux(t *testing.T, controlPlaneEndpoint string) http.Handler {
 		"denied":  entry("private/team/denied", deniedPrivateFunctionID),
 		"expired": expired,
 		"staging": entry("stg/acme/model", stagingFunctionID),
+	}
+	for _, details := range extra {
+		mappings.OpenAI.ChatCompletions[details.ModelName] = details
 	}
 	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{
 		"allowed": entry("private/team/allowed", allowedPrivateFunctionID),
@@ -406,6 +417,59 @@ func TestPrivateModelLookupKeysOnBearerCredential(t *testing.T) {
 	require.EqualValues(t, 1, nvcf.calls.Load())
 }
 
+// Access to one version of a function does not expose aliases pinned to its
+// other versions, in the list or in model lookup.
+func TestPrivateModelsRequireAccessToThePinnedVersion(t *testing.T) {
+	_, endpoint := newFakeFunctionIDs(t)
+	pinned := func(name, versionID string) config.ModelFunctionDetails {
+		return config.ModelFunctionDetails{ModelName: name, FunctionID: allowedPrivateFunctionID, FunctionVersionID: versionID}
+	}
+	mux := privateModelsMux(t, endpoint, pinned("private/team/v1", allowedVersionID), pinned("private/team/v2", otherVersionID))
+
+	rec := listModels(t, mux, "/v1/models", keyHeaders("good"))
+	require.Equal(t, []string{"acme/public", "private/team/allowed", "private/team/v1", "stg/acme/model"}, listedModelIDs(t, rec))
+
+	require.Equal(t, http.StatusOK, listModels(t, mux, "/v1/models/private/team/v1", keyHeaders("good")).Code)
+	rec = listModels(t, mux, "/v1/models/private/team/v2", keyHeaders("good"))
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	require.Equal(t, "Model does not exist by the name of private/team/v2\n", rec.Body.String())
+}
+
+// The lookup carries the caller's API key, so it must not follow a redirect.
+func TestPrivateModelLookupDoesNotFollowRedirects(t *testing.T) {
+	var redirected atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == privateModelLookupPath {
+			http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		redirected.Add(1)
+	}))
+	t.Cleanup(server.Close)
+
+	rec := listModels(t, privateModelsMux(t, server.URL), "/v1/models", keyHeaders("good"))
+	require.Equal(t, []string{"acme/public"}, listedModelIDs(t, rec))
+	require.Equal(t, privateModelsUnavailable, rec.Header().Get(PrivateModelsHeader))
+	require.Zero(t, redirected.Load())
+}
+
+// A reload that adds a private function refreshes each key on its next request
+// instead of serving a lookup made for the old function set.
+func TestPrivateModelLookupRefreshesWhenPrivateFunctionsChange(t *testing.T) {
+	nvcf, endpoint := newFakeFunctionIDs(t)
+	before := privateModelsMux(t, endpoint)
+	require.Equal(t, privateModelsAuthorized, listModels(t, before, "/v1/models", keyHeaders("good")).Header().Get(PrivateModelsHeader))
+	require.EqualValues(t, 1, nvcf.calls.Load())
+
+	added := config.ModelFunctionDetails{ModelName: "private/team/new", FunctionID: unmappedFunctionID}
+	after := privateModelsMux(t, endpoint, added)
+	for range 2 {
+		rec := listModels(t, after, "/v1/models", keyHeaders("good"))
+		require.Contains(t, listedModelIDs(t, rec), "private/team/new")
+	}
+	require.EqualValues(t, 2, nvcf.calls.Load())
+}
+
 // A mapping reload builds a new router but keeps the cached lookups.
 func TestPrivateModelLookupCacheSurvivesMappingReload(t *testing.T) {
 	nvcf, endpoint := newFakeFunctionIDs(t)
@@ -425,16 +489,16 @@ func TestPrivateModelAccessCacheExpiresAndStaysBounded(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Unix(1_800_000_000, 0)
 	access.now = func() time.Time { return now }
-	lookup := func() (map[string]struct{}, string) {
+	index := privateModelIndex{routes: map[string][]privateModelRoute{allowed: nil}, fingerprint: "test"}
+	lookup := func() (authorizedVersions, string) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-		req.Header.Set("Authorization", "Bearer good")
-		return access.authorizedFunctionIDs(req, []byte("good"), map[string][]ModelInfo{allowed: nil})
+		return access.authorizedVersions(req, []byte("good"), index)
 	}
 
-	// Only function IDs behind private aliases are kept.
-	ids, result := lookup()
+	// Only functions behind private aliases are kept, with their versions.
+	versions, result := lookup()
 	require.Equal(t, privateModelsAuthorized, result)
-	require.Equal(t, map[string]struct{}{allowed: {}}, ids)
+	require.Equal(t, authorizedVersions{allowed: {strings.ToLower(allowedVersionID): {}}}, versions)
 	lookup()
 	require.EqualValues(t, 1, nvcf.calls.Load())
 

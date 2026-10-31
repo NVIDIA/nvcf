@@ -84,10 +84,11 @@ type ModelDirector struct {
 	shadowRandomBucket func() int
 	shadowBodyRewriter func(body []byte, modelName string) ([]byte, error)
 
-	// Private models are listed only for callers whose API key may access their
-	// function. privateModels is nil when private model listing is disabled.
-	privateModelsByFunction map[string][]ModelInfo
-	privateModels           *privateModelAccess
+	// Private models are listed only for callers whose API key may access the
+	// function version they route to. privateModels is nil when private model
+	// listing is disabled.
+	privateIndex  privateModelIndex
+	privateModels *privateModelAccess
 
 	// Cache for filtered models
 	filteredModelsCache        []ModelInfo
@@ -451,7 +452,7 @@ func NewModelDirector(mapping *config.GatewayConfig, privateModelMatcher *regexp
 		llmGatewayDirector: llmGatewayDirector,
 		shadower:           shadower,
 	}
-	d.privateModelsByFunction = indexPrivateModels(allPrivateModels, d.allMappings()...)
+	d.privateIndex = indexPrivateModels(allPrivateModels, d.allMappings()...)
 	return d, nil
 }
 
