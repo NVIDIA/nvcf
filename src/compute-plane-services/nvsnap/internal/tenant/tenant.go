@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -23,14 +25,18 @@ import (
 type Resolver struct {
 	Kube  kubernetes.Interface
 	Label string
+	// Log, if set, says once when namespaces cannot be read at all
+	// (missing RBAC): the tenant label then has no effect.
+	Log logrus.FieldLogger
 	// TTL is how long a namespace's tenant is remembered; 0 is a minute.
 	// An instance of tens of pods resolves its namespace once, not per pod.
 	TTL time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]entry
+	mu        sync.Mutex
+	cache     map[string]entry
+	forbidden sync.Once
 }
 
 type entry struct {
@@ -59,6 +65,12 @@ func (r *Resolver) Scope(ctx context.Context, ns string) string {
 	scope := own
 	n, err := r.Kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsForbidden(err) && r.Log != nil {
+			r.forbidden.Do(func() {
+				r.Log.WithError(err).WithField("label", r.Label).
+					Warn("tenant: cannot read namespaces (RBAC); every namespace is its own tenant and the tenant label has no effect")
+			})
+		}
 		// Not remembered: the next lookup tries again.
 		return own
 	}

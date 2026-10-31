@@ -141,6 +141,14 @@ type PerCapturePVCBackend struct {
 	// "csi-gce-pd-snapshot-class".
 	SnapshotClass string
 
+	// TenantOf names a namespace's tenant (internal/tenant); nil makes
+	// every namespace its own. A claim to a capture is minted only in
+	// namespaces of the capture's tenant (ownership.go). IsFollower
+	// reports whether a pod was admitted as an election follower of hash;
+	// nil accepts any pod carrying the hash label.
+	TenantOf   func(ctx context.Context, ns string) string
+	IsFollower func(pod *corev1.Pod, hash string) bool
+
 	// Promoter owns the storage-specific rwx→durable-artifact transition
 	// and the restore-side MountSpec (nvsnap#171). nil ⇒ applyDefaults
 	// constructs a SnapshotClonePromoter from StorageClass/SnapshotClass
@@ -373,6 +381,7 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	// deadlock.
 	if existing, getErr := b.KubeClient.CoreV1().PersistentVolumeClaims(ns).Get(ctx, roxName, metav1.GetOptions{}); getErr == nil && existing != nil {
 		log.WithField("pvc", roxName).WithField("phase", existing.Status.Phase).Info("rox PVC already exists; treating as idempotent success")
+		b.recordOwner(ctx, hash, ns)
 		if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
 			_ = b.setState(hash, pvcStateFailed, "")
 			return Manifest{}, fmt.Errorf("claims for stamped followers: %w", err)
@@ -433,6 +442,7 @@ func (b *PerCapturePVCBackend) Put(ctx context.Context, hash string, sources []C
 	if publishName == "" {
 		publishName = roxName
 	}
+	b.recordOwner(ctx, hash, ns)
 	// Gated followers in other namespaces were admitted against
 	// rox-<hash> in their own namespace; make it exist before ready.
 	if err := b.ensureClaimsForStampedPods(ctx, hash, ns); err != nil {
@@ -921,6 +931,9 @@ func (b *PerCapturePVCBackend) Mount(ctx context.Context, hash string, vol Volum
 	// again. ErrNotFound from EnsureClaim means nothing is promoted yet;
 	// ErrUnsupported means per-pod-clone storage, which has no shared
 	// claim to bind; both leave the caller on its cold path.
+	if !b.mayClaim(ctx, hash, vol.Namespace) {
+		return PodMount{}, ErrNotFound
+	}
 	if eerr := b.Promoter.EnsureClaim(ctx, hash, vol.Namespace); eerr != nil {
 		if errors.Is(eerr, ErrNotFound) || errors.Is(eerr, ErrUnsupported) {
 			return PodMount{}, ErrNotFound
@@ -966,7 +979,15 @@ func (b *PerCapturePVCBackend) ensureClaimsForStampedPods(ctx context.Context, h
 		if seen[ns] {
 			continue
 		}
+		// Any pod author can set the hash label: only election followers
+		// of this hash, in the capture's tenant, get a claim.
+		if b.IsFollower != nil && !b.IsFollower(&pods.Items[i], hash) {
+			continue
+		}
 		seen[ns] = true
+		if !b.mayClaim(ctx, hash, ns) {
+			continue
+		}
 		err := retry.OnError(claimRetryBackoff, func(err error) bool {
 			return ctx.Err() == nil && !errors.Is(err, ErrUnsupported)
 		}, func() error { return b.Promoter.EnsureClaim(ctx, hash, ns) })
