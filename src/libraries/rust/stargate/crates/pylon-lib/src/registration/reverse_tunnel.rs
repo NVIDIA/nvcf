@@ -27,8 +27,8 @@ use crate::quic_http_tunnel::{
     ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, TunnelError, start_reverse_quic_tunnel,
 };
 
-use super::REVERSE_TUNNEL_CONNECT_TIMEOUT;
 use super::types::RegistrationSessionConfig;
+use super::{REVERSE_TUNNEL_ACCEPT_WINDOW, REVERSE_TUNNEL_CONNECT_TIMEOUT};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReverseTunnelEndpoint {
@@ -226,6 +226,10 @@ pub(super) async fn run_reverse_tunnel_loop(
 
                 tokio::select! {
                     _ = stop.cancelled() => {
+                        // Accept the streams the router sent before it saw the
+                        // registration close. Stop early if the router closes the tunnel.
+                        let _ = tokio::time::timeout(REVERSE_TUNNEL_ACCEPT_WINDOW, handle.closed())
+                            .await;
                         handle.shutdown().await;
                         state_tx.send_if_modified(|state| state.mark_disconnected(&endpoint));
                         return;

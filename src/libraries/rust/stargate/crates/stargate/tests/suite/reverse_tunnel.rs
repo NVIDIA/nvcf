@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::common::sse::{
@@ -740,4 +740,174 @@ async fn dropped_handle_does_not_block_reconnection() {
     // End the gRPC stream before tonic's graceful shutdown.
     drop(tx);
     stargate.shutdown().await;
+}
+
+/// Chat backend that, once `hold` is set, reports each request on `entered`
+/// and answers only after `release`. Health probes answer at once.
+struct HeldBackend {
+    addr: SocketAddr,
+    hold: Arc<AtomicBool>,
+    entered: tokio::sync::mpsc::UnboundedReceiver<()>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+async fn start_held_backend(model: &str) -> HeldBackend {
+    let hold = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered) = tokio::sync::mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let model = model.to_string();
+    let handler_hold = hold.clone();
+    let handler_release = release.clone();
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(
+                move |axum::Json(req): axum::Json<crate::common::ChatRequest>| {
+                    let held = handler_hold.load(Ordering::SeqCst);
+                    let entered_tx = entered_tx.clone();
+                    let release = handler_release.clone();
+                    let model = model.clone();
+                    async move {
+                        if held {
+                            let _ = entered_tx.send(());
+                            release.notified().await;
+                        }
+                        crate::common::dummy_chat(
+                            State(crate::common::DummyState { model }),
+                            axum::Json(req),
+                        )
+                        .await
+                    }
+                },
+            ),
+        )
+        .route("/health", get(|| async { "ok" }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    HeldBackend {
+        addr,
+        hold,
+        entered,
+        release,
+    }
+}
+
+/// Regression: Pylon stopped accepting tunnel streams before it closed its
+/// registration, so requests the router sent in that gap failed with 502.
+#[tokio::test]
+async fn reverse_backend_shutdown_under_load_fails_no_requests() {
+    let mut tmp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
+    write!(tmp_file, r#"{{"default": "round-robin", "models": {{}}}}"#)
+        .expect("failed to write config");
+    let config_path = tmp_file.path().to_str().unwrap().to_string();
+    let stargate =
+        Arc::new(ReverseStargate::start_with_lb("test-sg-rt-drain-load", Some(config_path)).await);
+    let backend_addr_a = start_dummy_backend("rt-drain-load-model").await;
+    let backend_addr_b = start_dummy_backend("rt-drain-load-model").await;
+    let mut reg_a =
+        stargate.register_backend("rt-drain-load-a", backend_addr_a, "rt-drain-load-model");
+    let mut reg_b =
+        stargate.register_backend("rt-drain-load-b", backend_addr_b, "rt-drain-load-model");
+    let seen = wait_for_inference_server_ids(
+        stargate.http_addr,
+        "rt-drain-load-model",
+        "req-rt-drain-load-wait",
+        2,
+        Duration::from_secs(20),
+        Duration::from_millis(200),
+    )
+    .await;
+    assert_eq!(
+        seen.len(),
+        2,
+        "expected both instances to register, saw: {seen:?}"
+    );
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let workers: Vec<_> = (0..16)
+        .map(|worker| {
+            let stargate = stargate.clone();
+            let stop = stop.clone();
+            tokio::spawn(async move {
+                let mut failures = Vec::new();
+                let mut sent = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let request_id = format!("req-rt-drain-load-{worker}-{sent}");
+                    sent += 1;
+                    let resp = stargate
+                        .post_streaming_chat("rt-drain-load-model", &request_id)
+                        .await;
+                    let status = resp.status();
+                    if status != StatusCode::OK {
+                        failures.push((request_id, status, resp.text().await.unwrap_or_default()));
+                    }
+                }
+                (sent, failures)
+            })
+        })
+        .collect();
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    reg_b.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    stop.store(true, Ordering::Relaxed);
+
+    let mut sent = 0;
+    let mut failures = Vec::new();
+    for worker in workers {
+        let (worker_sent, worker_failures) = worker.await.unwrap();
+        sent += worker_sent;
+        failures.extend(worker_failures);
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {sent} requests failed while one backend shut down: {:?}",
+        failures.len(),
+        &failures[..failures.len().min(5)]
+    );
+    reg_a.stop();
+    Arc::into_inner(stargate).unwrap().shutdown().await;
+}
+
+/// Regression: Pylon aborted in-flight requests 5 s into shutdown.
+#[tokio::test]
+async fn reverse_backend_shutdown_lets_long_in_flight_request_finish() {
+    let stargate = Arc::new(ReverseStargate::start("test-sg-rt-drain-inflight").await);
+    let mut backend = start_held_backend("rt-drain-inflight-model").await;
+    let mut reg = stargate.register_backend(
+        "rt-drain-inflight-inst",
+        backend.addr,
+        "rt-drain-inflight-model",
+    );
+    stargate.wait_for_routing("rt-drain-inflight-model").await;
+    backend.hold.store(true, Ordering::SeqCst);
+
+    let request = tokio::spawn({
+        let stargate = stargate.clone();
+        async move {
+            let resp = stargate
+                .post_streaming_chat("rt-drain-inflight-model", "req-rt-drain-inflight")
+                .await;
+            (resp.status(), resp.text().await)
+        }
+    });
+    backend
+        .entered
+        .recv()
+        .await
+        .expect("backend should receive the request");
+    let shutdown = tokio::spawn(async move { reg.shutdown().await });
+    // Longer than the 5 s task shutdown timeout that used to cut the request.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    backend.release.notify_one();
+
+    let (status, body) = request.await.unwrap();
+    shutdown.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let body = body.expect("in-flight response body should complete");
+    assert_sse_done(&parse_sse_events(&body).expect("in-flight response should be valid SSE"));
+    Arc::into_inner(stargate).unwrap().shutdown().await;
 }
