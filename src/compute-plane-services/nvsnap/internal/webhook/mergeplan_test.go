@@ -17,7 +17,10 @@ limitations under the License.
 
 package webhook
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // vol/mount/env element helpers (map shape, like auto-inject emits).
 func vol(name string) map[string]any {
@@ -118,5 +121,38 @@ func TestMergePatchPlan_PassThrough(t *testing.T) {
 	}
 	if out[0].Path != "/spec/containers/0/command" || len(out[0].Value.([]any)) != 2 {
 		t.Error("command (slice-valued, non-array) must pass through unchanged")
+	}
+}
+
+// One volume mounted at several paths keeps every mount, and two
+// builders' mounts of one volume keep their own flags: only an identical
+// mount is a duplicate.
+func TestMergePatchPlan_MountsAreWholeMounts(t *testing.T) {
+	ps := mergePatchPlan([]PatchOp{
+		{Op: "add", Path: "/spec/containers/0/volumeMounts", Value: []any{
+			map[string]any{"name": "nvsnap-cachedir", "mountPath": "/opt/nvsnap"},
+			map[string]any{"name": "nvsnap-cachedir", "mountPath": "/opt/nvsnap/cache", "subPath": "cache"},
+		}},
+		{Op: "add", Path: "/spec/containers/0/volumeMounts", Value: []any{
+			map[string]any{"name": "nvsnap-cachedir", "mountPath": "/opt/nvsnap/model", "subPath": "model"},
+			map[string]any{"name": "nvsnap-cachedir", "mountPath": "/opt/nvsnap"},
+		}},
+		{Op: "add", Path: "/spec/containers/0/volumeMounts/-", Value: map[string]any{"name": "lib", "mountPath": "/nvsnap", "readOnly": true}},
+		{Op: "add", Path: "/spec/containers/0/volumeMounts/-", Value: map[string]any{"name": "lib", "mountPath": "/nvsnap", "readOnly": true}},
+	})
+	var paths []string
+	for _, p := range ps {
+		switch v := p.Value.(type) {
+		case []any:
+			for _, e := range v {
+				paths = append(paths, e.(map[string]any)["mountPath"].(string))
+			}
+		case map[string]any:
+			paths = append(paths, v["mountPath"].(string))
+		}
+	}
+	want := "/opt/nvsnap /opt/nvsnap/cache /opt/nvsnap/model /nvsnap"
+	if got := strings.Join(paths, " "); got != want {
+		t.Errorf("mounts after merge = %q, want %q", got, want)
 	}
 }

@@ -42,6 +42,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 )
@@ -102,8 +103,11 @@ func newTestBackend(t *testing.T, opts ...func(*PerCapturePVCBackend)) *PerCaptu
 	t.Helper()
 	scheme := runtime.NewScheme()
 	b := &PerCapturePVCBackend{
-		KubeClient:    kubefake.NewSimpleClientset(),
-		DynClient:     dynamicfake.NewSimpleDynamicClient(scheme),
+		KubeClient: kubefake.NewSimpleClientset(),
+		DynClient: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+			volumeSnapshotGVR:        "VolumeSnapshotList",
+			volumeSnapshotContentGVR: "VolumeSnapshotContentList",
+		}),
 		Catalog:       &stubCatalog{},
 		Namespace:     "nvsnap-system",
 		StorageClass:  "hyperdisk-ml",

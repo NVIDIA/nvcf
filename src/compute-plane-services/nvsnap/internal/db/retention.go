@@ -26,7 +26,7 @@ import (
 // CreateRetentionPolicy inserts a new retention policy.
 func (d *DB) CreateRetentionPolicy(p *RetentionPolicy) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := d.db.Exec(`INSERT INTO retention_policies
+	result, err := d.w.Exec(`INSERT INTO retention_policies
 		(name, namespace, workload_type, max_count, max_age_hours, max_total_bytes, enabled, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Name, p.Namespace, p.WorkloadType, p.MaxCount, p.MaxAgeHours, p.MaxTotalBytes,
@@ -43,7 +43,7 @@ func (d *DB) CreateRetentionPolicy(p *RetentionPolicy) error {
 // UpdateRetentionPolicy updates an existing retention policy.
 func (d *DB) UpdateRetentionPolicy(p *RetentionPolicy) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := d.db.Exec(`UPDATE retention_policies
+	_, err := d.w.Exec(`UPDATE retention_policies
 		SET namespace = ?, workload_type = ?, max_count = ?, max_age_hours = ?,
 		    max_total_bytes = ?, enabled = ?, updated_at = ?
 		WHERE id = ?`,
@@ -90,7 +90,7 @@ func (d *DB) ListRetentionPolicies() ([]RetentionPolicy, error) {
 
 // DeleteRetentionPolicy removes a retention policy by ID.
 func (d *DB) DeleteRetentionPolicy(id int64) error {
-	_, err := d.db.Exec("DELETE FROM retention_policies WHERE id = ?", id)
+	_, err := d.w.Exec("DELETE FROM retention_policies WHERE id = ?", id)
 	return err
 }
 

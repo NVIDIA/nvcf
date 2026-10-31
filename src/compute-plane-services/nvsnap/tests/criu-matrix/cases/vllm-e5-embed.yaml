@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM pooling runner, e5-mistral-7b embeddings (as the container function bench-e5-mistral-7b-instruct).
+kind: Deployment
+launch: exec
+model: intfloat/e5-mistral-7b-instruct
+extraArgs: --runner pooling --convert embed
+gpuMemoryUtilization: 0.85
+function:
+  inferenceUrl: /v1/embeddings

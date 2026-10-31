@@ -72,6 +72,7 @@ type restoreParams struct {
 	PrepDirs         []string
 	CarryEnv         []envVar
 	PullSecrets      []string
+	GPUShare         bool
 }
 
 type envVar struct{ Name, Value string }
@@ -188,6 +189,7 @@ func RenderRestore(src []byte) ([]byte, error) {
 		PrepDirs:         prep,
 		CarryEnv:         carried,
 		PullSecrets:      pullSecrets,
+		GPUShare:         p.Metadata.Annotations["nvsnap.io/gpushare"] == "true",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", p.Metadata.Name, err)
@@ -275,6 +277,12 @@ spec:
       volumeMounts:
         - { name: checkpoints, mountPath: /checkpoints }
         - { name: dev-shm, mountPath: /dev/shm }
+{{- if .GPUShare }}
+        # gpushare: the shim at the path the processes mapped it from, and
+        # the checkpoint's chunk store where they saved their GPU memory.
+        - { name: nvsnap-gpushare-lib, mountPath: /nvsnap, readOnly: true }
+        - { name: nvsnap-gpushare-store, mountPath: /nvsnap-gpushare }
+{{- end }}
 
   volumes:
     - name: checkpoints
@@ -285,6 +293,16 @@ spec:
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
+{{- if .GPUShare }}
+    - name: nvsnap-gpushare-lib
+      hostPath:
+        path: /var/lib/containerd/nvsnap-bundle/nvsnap
+        type: Directory
+    - name: nvsnap-gpushare-store
+      hostPath:
+        path: /var/lib/containerd/nvsnap-checkpoints/__CHECKPOINT_ID__/gpushare
+        type: Directory
+{{- end }}
 
   restartPolicy: Never
 `))
