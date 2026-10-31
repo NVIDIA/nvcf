@@ -9,6 +9,7 @@ go_library(
         "local.go",
         "mount_holder.go",
         "mounter.go",
+        "ownership.go",
         "percapture_pvc.go",
         "promoter.go",
         "promoter_shared.go",

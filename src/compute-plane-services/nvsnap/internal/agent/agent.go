@@ -1219,6 +1219,9 @@ func (a *Agent) modelVolumeTenantLabel() string {
 func (a *Agent) tenantScope(ns string) string {
 	a.tenantsOnce.Do(func() {
 		a.tenants = &tenant.Resolver{Kube: a.kubeClient, Label: a.config.TenantLabel}
+		if a.log != nil {
+			a.tenants.Log = a.log.WithField("subsys", "tenant")
+		}
 	})
 	return a.tenants.Scope(context.Background(), ns)
 }

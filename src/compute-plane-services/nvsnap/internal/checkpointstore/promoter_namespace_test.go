@@ -43,7 +43,28 @@ func promotedSharedFixture() *fake.Clientset {
 		ObjectMeta: metav1.ObjectMeta{Name: sharedROXName(xnsHash), Namespace: "capture-ns", Labels: map[string]string{labelHashShort: ShortHash(xnsHash)}},
 		Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: sec.Name, StorageClassName: &sc},
 	}
-	return fake.NewSimpleClientset(primary, sec, rox)
+	owner := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: ownerRecordName(xnsHash), Namespace: "nvsnap-system"},
+		Data:       map[string]string{"hash": xnsHash, "tenant": "tenant:nca-id=a", "namespace": "capture-ns"},
+	}
+	return fake.NewSimpleClientset(primary, sec, rox, owner)
+}
+
+// testTenants: capture-ns and fn-ns belong to tenant a, other-ns to b.
+func testTenants(_ context.Context, ns string) string {
+	switch ns {
+	case "capture-ns", "fn-ns":
+		return "tenant:nca-id=a"
+	case "other-ns":
+		return "tenant:nca-id=b"
+	}
+	return "namespace:" + ns
+}
+
+// sharedBackend is the backend over promotedSharedFixture's capture,
+// with its tenants.
+func sharedBackend(kc *fake.Clientset) *PerCapturePVCBackend {
+	return &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New(), TenantOf: testTenants}
 }
 
 func sharedPromoter(kc *fake.Clientset) *SharedVolumePromoter {
@@ -157,7 +178,7 @@ func TestSharedVolume_DeleteReapsNamespacedClaims(t *testing.T) {
 // chart in its own namespace restores from a capture made elsewhere.
 func TestPerCapturePVCBackend_MountMintsClaimInRestoreNamespace(t *testing.T) {
 	kc := promotedSharedFixture()
-	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New()}
+	b := sharedBackend(kc)
 	pm, err := b.Mount(context.Background(), xnsHash, VolumeMeta{Name: "nvsnap-cachedir", MountPath: "/opt/nvsnap", Namespace: "fn-ns"})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +260,75 @@ func TestSnapshotClone_EnsureClaimPreProvisionsSnapshot(t *testing.T) {
 // promote existed: it carries the hash label and names rox-<hash> in its
 // own namespace.
 func stampedFollower(ns string) *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "follower", Namespace: ns, Labels: map[string]string{"nvsnap.io/hash": ShortHash(xnsHash)}}}
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "follower", Namespace: ns, Labels: map[string]string{"nvsnap.io/hash": ShortHash(xnsHash)},
+		Annotations: map[string]string{"nvsnap.io/hash": xnsHash, "nvsnap.io/role": "follower"}}}
+}
+
+func followerOf(p *corev1.Pod, hash string) bool {
+	return p.Annotations["nvsnap.io/hash"] == hash && p.Annotations["nvsnap.io/role"] == "follower"
+}
+
+// A restore names a capture of another tenant (an explicit restore-from,
+// or a hash that leaked): no claim is minted in its namespace, and Mount
+// reports nothing to mount, so the pod starts cold. A capture with no owner
+// record is refused the same way. Its own tenant's namespace still gets one.
+func TestPerCapturePVCBackend_MountRefusesAnotherTenant(t *testing.T) {
+	ctx := context.Background()
+	kc := promotedSharedFixture()
+	b := sharedBackend(kc)
+	if _, err := b.Mount(ctx, xnsHash, VolumeMeta{Name: "c", MountPath: "/c", Namespace: "other-ns"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another tenant's restore: err %v, want ErrNotFound", err)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("other-ns").Get(ctx, sharedROXName(xnsHash), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("a claim was minted in another tenant's namespace: %v", err)
+	}
+	if _, err := b.Mount(ctx, xnsHash, VolumeMeta{Name: "c", MountPath: "/c", Namespace: "fn-ns"}); err != nil {
+		t.Errorf("the capture's own tenant: %v", err)
+	}
+
+	_ = kc.CoreV1().ConfigMaps("nvsnap-system").Delete(ctx, ownerRecordName(xnsHash), metav1.DeleteOptions{})
+	if _, err := b.Mount(ctx, xnsHash, VolumeMeta{Name: "c", MountPath: "/c", Namespace: "third-ns"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a capture with no owner record: err %v, want ErrNotFound", err)
+	}
+}
+
+// Claims for stamped pods go only to election followers of the capture in
+// its tenant: a pod that sets the hash label itself, or a follower-looking
+// pod of another tenant, gets none.
+func TestPerCapturePVCBackend_StampedClaimsOnlyForTenantFollowers(t *testing.T) {
+	ctx := context.Background()
+	kc := promotedSharedFixture()
+	labelOnly := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "squatter", Namespace: "third-ns", Labels: map[string]string{"nvsnap.io/hash": ShortHash(xnsHash)}}}
+	for _, p := range []*corev1.Pod{stampedFollower("fn-ns"), stampedFollower("other-ns"), labelOnly} {
+		if _, err := kc.CoreV1().Pods(p.Namespace).Create(ctx, p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := sharedBackend(kc)
+	b.IsFollower = followerOf
+	if err := b.ensureClaimsForStampedPods(ctx, xnsHash, "capture-ns"); err != nil {
+		t.Fatal(err)
+	}
+	for ns, want := range map[string]bool{"fn-ns": true, "other-ns": false, "third-ns": false} {
+		_, err := kc.CoreV1().PersistentVolumeClaims(ns).Get(ctx, sharedROXName(xnsHash), metav1.GetOptions{})
+		if (err == nil) != want {
+			t.Errorf("%s: claim exists %v, want %v", ns, err == nil, want)
+		}
+	}
+}
+
+// A promote records its tenant once; a later promote of the same hash from
+// another tenant's namespace does not take the record over.
+func TestRecordOwnerKeepsTheFirst(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", Log: logrus.New(), TenantOf: testTenants}
+	b.recordOwner(ctx, xnsHash, "capture-ns")
+	b.recordOwner(ctx, xnsHash, "other-ns")
+	cm, err := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, ownerRecordName(xnsHash), metav1.GetOptions{})
+	if err != nil || cm.Data["tenant"] != "tenant:nca-id=a" || cm.Data["namespace"] != "capture-ns" || cm.Data["hash"] != xnsHash {
+		t.Fatalf("owner record %v, %v", cm, err)
+	}
 }
 
 // A transient API error creating a follower namespace's claim must not
@@ -262,7 +351,7 @@ func TestPerCapturePVCBackend_StampedClaimRetriesTransientErrors(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New()}
+	b := sharedBackend(kc)
 	b.ensureClaimsForStampedPods(context.Background(), xnsHash, "capture-ns")
 	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-ns").Get(context.Background(), sharedROXName(xnsHash), metav1.GetOptions{}); err != nil {
 		t.Fatalf("follower namespace must hold its claim after a transient create error: %v", err)
@@ -287,7 +376,7 @@ func TestPerCapturePVCBackend_StampedClaimFailureIsReturned(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New()}
+	b := sharedBackend(kc)
 	if err := b.ensureClaimsForStampedPods(context.Background(), xnsHash, "capture-ns"); err == nil {
 		t.Fatal("a claim that never got made must be reported, so ready is not published")
 	}

@@ -6,6 +6,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tenant",
     visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
+        "@com_github_sirupsen_logrus//:logrus",
+        "@io_k8s_apimachinery//pkg/api/errors",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_client_go//kubernetes",
     ],
@@ -16,9 +18,12 @@ go_test(
     srcs = ["tenant_test.go"],
     embed = [":tenant"],
     deps = [
+        "@com_github_sirupsen_logrus//hooks/test",
         "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
         "@io_k8s_client_go//kubernetes/fake",
         "@io_k8s_client_go//testing",
     ],
