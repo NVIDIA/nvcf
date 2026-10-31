@@ -1,8 +1,8 @@
 # NVIDIA Cloud Architecture Diagrams Style Guide
 
-Authoritative source: [Cloud Architecture Diagrams Style Guide v1.1, January 17, 2024](https://docs.google.com/presentation/d/1qdcZMpXhuvlmIZg7DffTkdKauqHUQWk6/edit)
+Based on the NVIDIA Cloud Architecture Diagrams Style Guide v1.1 (January 17, 2024).
 
-This is a maintained working summary of the rules that affect NVAF repository figures. Consult the source deck when a design decision is not covered here.
+This is a maintained working summary of the rules that affect NVAF repository figures.
 
 ## Scope
 
@@ -78,4 +78,4 @@ Architecture diagrams are always presented on white. On a dark slide or applicat
 
 The guide's PowerPoint export settings are 200% zoom, zero border, page size, light appearance, no shadow, and no grid. It recommends a transparent PNG for placement on a white panel. For NVAF documentation that explicitly requires a white-background PNG, flatten the export onto solid white without changing the diagram.
 
-The source deck assumes draw.io. This repository tracks manually maintained SVG figures, so preserve the guide's visual semantics while following the repository's SVG workflow and validation rules.
+The style guide assumes draw.io. This repository tracks manually maintained SVG figures, so preserve the guide's visual semantics while following the repository's SVG workflow and validation rules.

@@ -243,7 +243,7 @@ func TestPathVarGuardRouteVarsByName(t *testing.T) {
 		ok         bool
 	}{
 		{"pod", long, true},
-		{"pod", "k3-prd19-mxhard-0-vllmworker-0-vllmworker-ldr-mcp2g", true},
+		{"pod", "example-model-012-vllmworker-0-vllmworker-ldr-abcde", true},
 		{"pod", "Upper", false},
 		{"namespace", "sr-7183ceba-1809-4298-aa69-17111f6a7b0f", true},
 		{"namespace", "a.b", false},
