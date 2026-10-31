@@ -34,7 +34,25 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 )
 
-const mvURI = "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+// mvURI is a model identity as the webhook stamps it: scoped to the tenant
+// of the pod's namespace (modelvolume.ScopedURI).
+const mvURI = "tenant:" + testTenantLabel + "=t1/ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+
+const testTenantLabel = "nca-id"
+
+// oneTenant puts every namespace of the fixture in tenant t1 and makes
+// sr-fn the namespace that downloads mvURI (admission claimed it).
+func oneTenant(t *testing.T, kc *fake.Clientset, p *modelvolume.Provisioner) {
+	t.Helper()
+	kc.PrependReactor("get", "namespaces", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		name := a.(k8stesting.GetAction).GetName()
+		return true, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{testTenantLabel: "t1"}}}, nil
+	})
+	p.Cfg.TenantLabel = testTenantLabel
+	if owner, err := p.ClaimDownload(context.Background(), mvURI, "sr-fn"); err != nil || owner != "sr-fn" {
+		t.Fatalf("claim download: %q %v", owner, err)
+	}
+}
 
 // writerFixture: the writer claim bound to an NVMesh PV, as after the
 // webhook created it and the CSI provisioner bound it.
@@ -51,6 +69,7 @@ func writerFixture(t *testing.T) (*fake.Clientset, *modelvolume.Provisioner) {
 	}
 	kc := fake.NewSimpleClientset(pv)
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: sc, Size: resource.MustParse("512Gi"), Reader: modelvolume.ReaderHostPath}}
+	oneTenant(t, kc, p)
 	// The primary claim lives in the nvsnap namespace, bound to the volume
 	// the Job wrote.
 	sysNS := p.Cfg.SystemNamespace()
@@ -332,7 +351,7 @@ func stagingFixture(t *testing.T, node string) (*fake.Clientset, *modelvolume.Pr
 		ObjectMeta: metav1.ObjectMeta{Name: job.Name + "-x1", Namespace: "sr-fn", UID: "pod-uid-1",
 			Labels:      map[string]string{"job-name": job.Name, "batch.kubernetes.io/job-name": job.Name, modelvolume.IdentityLabel: modelvolume.Key(mvURI)},
 			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, modelvolume.StagingAnnotation: "ngc-models"}},
-		Spec: corev1.PodSpec{NodeName: node},
+		Spec: corev1.PodSpec{NodeName: node, Volumes: []corev1.Volume{{Name: "ngc-models", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, InitContainerStatuses: []corev1.ContainerStatus{{Name: modelvolume.DownloadContainer,
 			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}},
 	}
@@ -360,6 +379,7 @@ func stagingFixture(t *testing.T, node string) (*fake.Clientset, *modelvolume.Pr
 		return true, pvc, nil
 	})
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, StorageClass: "nvcf-sc", Namespace: "nvsnap-system"}}
+	oneTenant(t, kc, p)
 	return kc, p, pod
 }
 
@@ -548,6 +568,7 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
 	kc := fake.NewSimpleClientset(primary)
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	oneTenant(t, kc, p)
 	sysNS := p.Cfg.SystemNamespace()
 	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
 		t.Fatal(err)
@@ -576,6 +597,11 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := p.RecordFailure(ctx, mvURI, "an earlier attempt"); err != nil {
+		t.Fatal(err)
+	}
+	// The failure released the download; the retry's admission claimed it
+	// again for its namespace.
+	if _, err := p.ClaimDownload(ctx, mvURI, "sr-fn"); err != nil {
 		t.Fatal(err)
 	}
 	c := &ModelVolumeController{Kube: kc, Provisioner: p, Minter: minter, NodeName: "node-a", Log: logrus.New()}
@@ -616,6 +642,9 @@ func TestModelVolumeController_SharedFilesystemJobCompletesPrimary(t *testing.T)
 	}
 }
 
+// cacheDirVolumes is the compile-cache emptyDir the webhook adds.
+var cacheDirVolumes = []corev1.Volume{{Name: "nvsnap-cachedir", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+
 // cacheFixture is a Ready capture candidate: rank `ordinal` of a group
 // of `group` on `node`, created in the fake cluster so the agent can
 // annotate and list it.
@@ -626,7 +655,7 @@ func cacheFixture(t *testing.T, kc *fake.Clientset, cache *modelvolume.Provision
 			Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "reader", cacheCaptureLabel: "true", modelvolume.CacheKeyLabel: modelvolume.Key("cache://abc123")},
 			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, cacheURIAnnotation: "cache://abc123", cacheVolumeAnnotation: "nvsnap-cachedir", cacheSubpathAnnotation: "cache",
 				modelvolume.CacheOrdinalAnnotation: strconv.Itoa(ordinal), modelvolume.CacheGroupSizeAnnotation: strconv.Itoa(group)}},
-		Spec: corev1.PodSpec{NodeName: node},
+		Spec: corev1.PodSpec{NodeName: node, Volumes: cacheDirVolumes},
 	}
 	if ready {
 		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
@@ -643,7 +672,7 @@ func cacheController(t *testing.T, node string) (*fake.Clientset, *modelvolume.P
 	ccfg := model.Cfg
 	ccfg.Kind = modelvolume.KindCache
 	cache := &modelvolume.Provisioner{Kube: kc, Cfg: ccfg}
-	c := &ModelVolumeController{Kube: kc, Provisioner: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock}}, Cache: cache, NodeName: node, CacheWarmup: time.Millisecond, CacheSettle: time.Millisecond, Log: logrus.New()}
+	c := &ModelVolumeController{Kube: kc, Provisioner: &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeBlock, TenantLabel: testTenantLabel}}, Cache: cache, NodeName: node, CacheWarmup: time.Millisecond, CacheSettle: time.Millisecond, Log: logrus.New()}
 	return kc, cache, c
 }
 
@@ -881,7 +910,7 @@ func TestModelVolumeController_ServeRank(t *testing.T) {
 func TestModelVolumeController_CapturesEngineLandingFromReadyPod(t *testing.T) {
 	ctx := context.Background()
 	kc, p, _ := stagingFixture(t, "node-a")
-	uri := "ngc://org/llm_nim/kimi-k3:hf"
+	uri := "tenant:" + testTenantLabel + "=t1/ngc://org/llm_nim/kimi-k3:hf"
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "ngc-models-mini-service-kimi-k3-0", Namespace: "sr-fn"},
 		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pvc-kimi-replica-0"}}
 	if err := kc.Tracker().Add(pvc); err != nil {
@@ -981,6 +1010,7 @@ func TestModelVolumeController_SharedFilesystemMintsViewsOnceBound(t *testing.T)
 	ctx := context.Background()
 	kc := fake.NewSimpleClientset()
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	oneTenant(t, kc, p)
 	sysNS := p.Cfg.SystemNamespace()
 	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
 		t.Fatal(err)
@@ -1045,6 +1075,7 @@ func sharedFilesystemFixture(t *testing.T) (*fake.Clientset, *modelvolume.Provis
 		PersistentVolumeSource:        corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "fss.csi.oraclecloud.com", VolumeHandle: "fs:ip:/export"}}}}
 	kc := fake.NewSimpleClientset(primary)
 	p := &modelvolume.Provisioner{Kube: kc, Cfg: modelvolume.Config{Mode: modelvolume.ModeRWX, StorageClass: "fs", Size: resource.MustParse("4Ti")}}
+	oneTenant(t, kc, p)
 	sysNS := p.Cfg.SystemNamespace()
 	if _, err := p.EnsureWriterClaim(ctx, mvURI, sysNS); err != nil {
 		t.Fatal(err)

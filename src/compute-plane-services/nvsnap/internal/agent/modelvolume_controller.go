@@ -148,6 +148,8 @@ type ModelVolumeController struct {
 	holders  map[string]*checkpointstore.MountHolder
 	inflight map[string]bool
 	attempts map[string]int
+	scopes   map[string]scopeEntry
+	checked  map[string]time.Time
 }
 
 // stagingBindTimeout bounds the wait for a freshly created primary
@@ -249,6 +251,9 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 	if uri == "" {
 		return
 	}
+	if !c.inScope(ctx, pod.Namespace, uri, "pod "+pod.Namespace+"/"+pod.Name) {
+		return
+	}
 	if staging := pod.Annotations[modelvolume.StagingAnnotation]; staging != "" {
 		// A Block-mode staging pod: its download init finished and the
 		// hold container keeps the emptyDir alive for this node's agent.
@@ -261,10 +266,12 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 			// example an amd64-only engine image on an arm64 node). Do
 			// not sit out the Job's deadline: give up now so the readers
 			// are released and the pod's owner sees the real error.
-			c.giveUpOnce(ctx, uri, pod.Namespace, reason, log.WithField("reason", reason))
+			if c.ownsDownload(ctx, uri, pod.Namespace, nil, log) {
+				c.giveUpOnce(ctx, uri, pod.Namespace, reason, log.WithField("reason", reason))
+			}
 			return
 		}
-		if modelvolume.StagingReady(pod) {
+		if modelvolume.StagingReady(pod) && c.ownsDownload(ctx, uri, pod.Namespace, complete, log) {
 			c.promoteStaging(ctx, pod, uri, staging, log)
 		}
 		return
@@ -306,7 +313,8 @@ func (c *ModelVolumeController) handle(ctx context.Context, obj any) {
 		// landing claim is the writer view, minted here once the primary is
 		// bound (the webhook mints it at admission when the primary already
 		// was; a brand-new filesystem can take longer than admission allows).
-		if c.Provisioner.Cfg.SharedWhileWriting() && pod.DeletionTimestamp == nil {
+		log := c.log().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "model": uri, "node": c.NodeName})
+		if c.Provisioner.Cfg.SharedWhileWriting() && pod.DeletionTimestamp == nil && c.ownsDownload(ctx, uri, pod.Namespace, nil, log) {
 			c.ensureWriterView(ctx, pod, uri)
 			c.openWriterRoot(ctx, pod, uri)
 		}
@@ -345,15 +353,31 @@ func (c *ModelVolumeController) handleJob(ctx context.Context, obj any) {
 	if uri == "" {
 		return
 	}
+	if !c.inScope(ctx, job.Namespace, uri, "job "+job.Namespace+"/"+job.Name) {
+		return
+	}
 	log := c.log().WithFields(logrus.Fields{"job": job.Namespace + "/" + job.Name, "model": uri})
 	if job.Annotations[modelvolume.StagingAnnotation] != "" {
-		return // block storage: the staging pod event drives the copy
+		// Block storage: the staging pod event drives the copy. A Job that
+		// failed without the pod showing it (deadline exceeded, evicted
+		// past its backoff limit) is given up here, or the readers pending
+		// on the claim it never produces would wait forever.
+		if cond := jobFailedCondition(job); cond != nil && c.ownsDownload(ctx, uri, job.Namespace, nil, log) {
+			reason := strings.TrimSpace(cond.Reason + ": " + cond.Message)
+			c.giveUpOnce(ctx, uri, job.Namespace, reason, log.WithField("reason", reason))
+		}
+		return
 	}
 	if cond := jobFailedCondition(job); cond != nil {
-		c.failJob(ctx, job, uri, cond, log)
+		if c.ownsDownload(ctx, uri, job.Namespace, failed, log) {
+			c.failJob(ctx, job, uri, cond, log)
+		}
 		return
 	}
 	if job.Status.Succeeded == 0 {
+		return
+	}
+	if !c.ownsDownload(ctx, uri, job.Namespace, complete, log) {
 		return
 	}
 	// The Job wrote through its namespace's read-write view into the
@@ -599,8 +623,11 @@ func (c *ModelVolumeController) promoteStaging(ctx context.Context, pod *corev1.
 			delete(c.inflight, uri)
 			c.mu.Unlock()
 		}()
-		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", staging)
-		if cerr := c.copyStaged(ctx, uri, src, log); cerr != nil {
+		src, cerr := c.emptyDirTree(pod, staging, "")
+		if cerr == nil {
+			cerr = c.copyStaged(ctx, uri, src, log)
+		}
+		if cerr != nil {
 			c.mu.Lock()
 			c.attempts[uri]++
 			n := c.attempts[uri]
@@ -885,7 +912,11 @@ func (c *ModelVolumeController) captureCache(ctx context.Context, pod *corev1.Po
 		if st.Complete || st.Failed {
 			return
 		}
-		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", vol, sub)
+		src, err := c.emptyDirTree(pod, vol, sub)
+		if err != nil {
+			log.WithError(err).Warn("cache volume: cache tree not in the pod's volumes; not captured")
+			return
+		}
 		bytes, files, err := c.treeStat(filepath.Join(c.HostFSRoot, src))
 		if err != nil || bytes <= 0 {
 			log.WithError(err).WithField("bytes", bytes).Info("cache volume: nothing to capture yet")
@@ -956,8 +987,11 @@ func (c *ModelVolumeController) groupRanksWhere(ctx context.Context, uri string,
 		if _, dup := byOrdinal[ord]; dup {
 			continue // two pods of one ordinal (a rolling group); first wins
 		}
-		byOrdinal[ord] = rankSource{ordinal: ord, pod: p, bytes: bytes,
-			src: filepath.Join(c.KubeletPodsDir, string(p.UID), "volumes", "kubernetes.io~empty-dir", p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])}
+		src, err := c.emptyDirTree(p, p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])
+		if err != nil {
+			continue // not a rank this group can be collected from
+		}
+		byOrdinal[ord] = rankSource{ordinal: ord, pod: p, bytes: bytes, src: src}
 	}
 	if size == 0 {
 		size = 1
@@ -1222,7 +1256,12 @@ func (c *ModelVolumeController) ServeRank(w http.ResponseWriter, r *http.Request
 		if p.Annotations[modelvolume.CacheOrdinalAnnotation] != ordinal || p.Annotations[modelvolume.CacheRankReadyAnnotation] != "true" {
 			continue
 		}
-		src := filepath.Join(c.HostFSRoot, c.KubeletPodsDir, string(p.UID), "volumes", "kubernetes.io~empty-dir", p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])
+		tree, err := c.emptyDirTree(p, p.Annotations[cacheVolumeAnnotation], p.Annotations[cacheSubpathAnnotation])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		src := filepath.Join(c.HostFSRoot, tree)
 		if r.URL.Query().Get("stat") == "1" {
 			// The collector sizes the set from what the ranks hold now,
 			// not from the stamp made when the rank first reported Ready.
@@ -1380,7 +1419,9 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		if c.Provisioner.Cfg.SharedWhileWriting() && st.InFlightPV != "" && c.Minter != nil {
 			st.PrimaryPV = st.InFlightPV
 			c.servePVCReader(ctx, pod, uri, st, log)
+			return
 		}
+		c.releaseIfStranded(ctx, pod, uri, st, log)
 		return
 	}
 	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderPVC {
@@ -1646,7 +1687,11 @@ func (c *ModelVolumeController) scanWarmRank(ctx context.Context, pod *corev1.Po
 		case <-ctx.Done():
 			return
 		}
-		src := filepath.Join(c.KubeletPodsDir, string(pod.UID), "volumes", "kubernetes.io~empty-dir", vol, sub)
+		src, err := c.emptyDirTree(pod, vol, sub)
+		if err != nil {
+			log.WithError(err).Warn("cache volume: cache tree not in the pod's volumes; not scanned")
+			return
+		}
 		bytes, files, err := c.treeStat(filepath.Join(c.HostFSRoot, src))
 		if err != nil || bytes <= 0 {
 			log.WithError(err).Info("cache volume: warm rank not measurable yet")

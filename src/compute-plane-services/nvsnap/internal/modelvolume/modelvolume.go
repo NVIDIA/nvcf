@@ -999,6 +999,41 @@ func (p *Provisioner) downloadOwnerStale(ctx context.Context, uri, owner string,
 	}
 }
 
+// DownloadOwner is the namespace the download-owner Lease of uri names,
+// "" when no download is claimed.
+func (p *Provisioner) DownloadOwner(ctx context.Context, uri string) (string, error) {
+	l, err := p.Kube.CoordinationV1().Leases(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.DownloadOwnerName(uri), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read download owner of %s: %w", uri, err)
+	}
+	if l.Spec.HolderIdentity == nil {
+		return "", nil
+	}
+	return *l.Spec.HolderIdentity, nil
+}
+
+// DownloadStranded reports whether nothing is producing uri any more: no
+// owner Lease, or an owner whose download Job has been gone past
+// DownloadOwnerGrace (failed and removed by its TTL, or deleted by hand).
+// A reader pending on such an identity waits for a volume nobody makes.
+func (p *Provisioner) DownloadStranded(ctx context.Context, uri string) (bool, error) {
+	l, err := p.Kube.CoordinationV1().Leases(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.DownloadOwnerName(uri), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read download owner of %s: %w", uri, err)
+	}
+	owner := ""
+	if l.Spec.HolderIdentity != nil {
+		owner = *l.Spec.HolderIdentity
+	}
+	return p.downloadOwnerStale(ctx, uri, owner, l)
+}
+
 // ReleaseDownload drops the owner record of uri, after completion or a
 // recorded failure. Idempotent.
 func (p *Provisioner) ReleaseDownload(ctx context.Context, uri string) error {

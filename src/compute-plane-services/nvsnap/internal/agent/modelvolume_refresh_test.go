@@ -52,7 +52,7 @@ func warmFixtureGen(t *testing.T, c *ModelVolumeController, node string, ordinal
 			Labels: map[string]string{modelvolume.IdentityLabel: modelvolume.Key(mvURI), modelvolume.RoleLabel: "reader", modelvolume.CacheKeyLabel: modelvolume.Key("cache://abc123")},
 			Annotations: map[string]string{modelvolume.IdentityAnnotation: mvURI, cacheURIAnnotation: "cache://abc123", cacheVolumeAnnotation: "nvsnap-cachedir", cacheSubpathAnnotation: "cache",
 				modelvolume.CacheOrdinalAnnotation: strconv.Itoa(ordinal), modelvolume.CacheGroupSizeAnnotation: strconv.Itoa(group), modelvolume.CacheSeedGenerationAnnotation: seedGen}},
-		Spec:   corev1.PodSpec{NodeName: node},
+		Spec:   corev1.PodSpec{NodeName: node, Volumes: cacheDirVolumes},
 		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
 	}
 	if _, err := c.Kube.CoreV1().Pods("sr-warm").Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
