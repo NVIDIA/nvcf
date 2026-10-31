@@ -82,9 +82,11 @@ invocation:
       memory: 512Mi
 
   # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  # Liveness uses /info, which checks only this process (image 0.13.0 or later).
+  # Readiness uses /health, which checks the NATS connection.
   livenessProbe:
     httpGet:
-      path: /health
+      path: /info
       port: http
   readinessProbe:
     httpGet:

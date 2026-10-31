@@ -30,11 +30,7 @@ use oauth2::Scope;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::transport::Channel;
 use tonic::Code;
-use tonic_health::pb::health_check_response::ServingStatus;
-use tonic_health::pb::health_client::HealthClient;
-use tonic_health::pb::HealthCheckRequest;
 use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
 use tracing::Level;
 use uuid::Uuid;
@@ -56,21 +52,17 @@ pub struct NVCFService {
     client: InvocationClient<OtelGrpcService<AuthSvc>>,
     auth_cache:
         moka::future::Cache<InvocationCacheKey, AllowedFunctionInvocations, ahash::RandomState>,
-    health_cache: moka::future::Cache<(), (), ahash::RandomState>,
-    health_client: HealthClient<OtelGrpcService<Channel>>,
     nvcf_api_address: String, // for metrics
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct NVCFApiProperties {
-    pub health_cache_ttl: Duration,
     pub auth_cache_ttl: Duration,
 }
 
 impl Default for NVCFApiProperties {
     fn default() -> Self {
         Self {
-            health_cache_ttl: Duration::from_secs(20),
             auth_cache_ttl: Duration::from_secs(60),
         }
     }
@@ -139,50 +131,22 @@ impl NVCFService {
         tracing::info!("connecting to nvcf api {}", nvcf_address);
 
         let channel = grpc_config.build_grpc_channel(nvcf_address).await?;
-        let health_channel = tower::ServiceBuilder::new()
-            .layer(OtelGrpcLayer)
-            .service(channel.clone());
         let channel = tower::ServiceBuilder::new()
             .layer(OtelGrpcLayer)
             .layer(AuthLayer::new(token_provider))
             .service(channel);
         let client = InvocationClient::new(channel);
-        let health_client = HealthClient::new(health_channel);
         tracing::info!("connected to nvcf api {}", nvcf_address);
         let props = nvcf_api_properties.clone().unwrap_or_default();
 
         Ok(Self {
             client,
-            health_client,
             auth_cache: CacheBuilder::new(1024)
                 .name("nvcf_auth_cache")
                 .time_to_live(props.auth_cache_ttl)
                 .build_with_hasher(ahash::RandomState::default()),
-            health_cache: CacheBuilder::new(1)
-                .name("nvcf_health_cache")
-                .time_to_live(props.health_cache_ttl)
-                .build_with_hasher(ahash::RandomState::default()),
             nvcf_api_address: nvcf_address.to_string(),
         })
-    }
-
-    #[tracing::instrument(level = Level::TRACE, skip(self), err)]
-    pub async fn health(&self) -> anyhow::Result<()> {
-        self.health_cache
-            .try_get_with((), async {
-                let health_check_response = self
-                    .health_client
-                    .clone()
-                    .check(HealthCheckRequest::default())
-                    .await?
-                    .into_inner();
-                match health_check_response.status() {
-                    ServingStatus::Serving => Ok(()),
-                    _ => Err(anyhow::anyhow!("nvcf api is not healthy")),
-                }
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!(err.to_string()))
     }
 
     #[tracing::instrument(level = Level::DEBUG, skip(self, user_auth), err)]

@@ -55,7 +55,6 @@ pub struct ApiClient {
     pub owner_nca_id: String,
 }
 
-pub const HEALTH_CACHE_TTL: u16 = 1;
 pub const AUTH_CACHE_TTL: u16 = 1;
 
 impl ApiMock {
@@ -184,8 +183,7 @@ impl ApiMockServer {
     }
     pub fn properties(&self) -> NVCFApiProperties {
         NVCFApiProperties {
-            // For testing purpose, set lowered expiration times for health & auth caches
-            health_cache_ttl: Duration::from_secs(HEALTH_CACHE_TTL.into()),
+            // For testing purpose, set a lowered expiration time for the auth cache
             auth_cache_ttl: Duration::from_secs(AUTH_CACHE_TTL.into()),
         }
     }

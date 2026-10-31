@@ -100,7 +100,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 tokio-stream = "0.1"
 tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
-tonic-health = "0.14"
 tonic-prost = "0.14"
 tonic-tracing-opentelemetry = "0.32"
 tower = { version = "0.5", features = ["full"] }
@@ -124,4 +123,5 @@ rstest = "0.25"
 scopeguard = "1"
 tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["watchdog", "nats", "localstack"] }
+tonic-health = "0.14"
 tokio-stream = { version = "0.1", features = ["net"] }
