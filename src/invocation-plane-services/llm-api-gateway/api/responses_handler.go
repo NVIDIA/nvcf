@@ -370,8 +370,12 @@ func failNativeResponsesStream(c *GatewayContext, stream nativeResponsesStream, 
 		return failure.SetInternal(errors.Join(cause, fmt.Errorf("marshal response.failed event: %w", err)))
 	}
 
+	separator := ""
+	if stream.endedMidEvent {
+		separator = "\n\n"
+	}
 	writer := c.Response().Writer
-	_, writeErr := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", openairesponses.EventTypeResponseFailed, data)
+	_, writeErr := fmt.Fprintf(writer, "%sevent: %s\ndata: %s\n\n", separator, openairesponses.EventTypeResponseFailed, data)
 	if flusher, ok := writer.(http.Flusher); ok && writeErr == nil {
 		flusher.Flush()
 	}
@@ -434,6 +438,9 @@ type nativeResponsesStream struct {
 	terminal        *nativeResponsesTerminal
 	createdResponse json.RawMessage
 	sequenceNumber  *int
+	// endedMidEvent means the relayed bytes stop inside an event, so the
+	// client needs a blank line before any further event.
+	endedMidEvent bool
 }
 
 func (s *nativeResponsesStream) observe(block []byte) {
@@ -487,11 +494,13 @@ func consumeNativeResponsesSSE(
 		if errors.Is(err, io.EOF) {
 			break
 		}
+		stream.endedMidEvent = eventBlock.Len() > 0
 		return stream, err
 	}
 
 	if eventBlock.Len() > 0 {
 		stream.observe(eventBlock.Bytes())
+		stream.endedMidEvent = true
 	}
 	return stream, nil
 }

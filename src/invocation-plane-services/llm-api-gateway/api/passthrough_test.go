@@ -362,6 +362,7 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		name           string
 		upstreamBody   string
 		dropMidway     bool
+		wantSeparator  string
 		wantResponseID string
 		wantSequence   int
 	}{
@@ -369,6 +370,14 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 		{name: "ends after non terminal event", upstreamBody: created, wantResponseID: "resp_1", wantSequence: 5},
 		{name: "connection drops mid stream", upstreamBody: created, dropMidway: true, wantResponseID: "resp_1", wantSequence: 5},
 		{name: "no sequence numbers", upstreamBody: createdNoSequence, wantResponseID: "resp_1", wantSequence: 0},
+		{
+			name:           "connection drops mid line",
+			upstreamBody:   created + "event: response.in_progress\ndata: {\"type\":\"resp",
+			dropMidway:     true,
+			wantSeparator:  "\n\n",
+			wantResponseID: "resp_1",
+			wantSequence:   5,
+		},
 	}
 
 	for _, tt := range tests {
@@ -394,7 +403,7 @@ func TestResponsesStreamEndsWithResponseFailedWhenUpstreamStreamFails(t *testing
 
 			body := rec.Body.String()
 			require.True(t, strings.HasPrefix(body, tt.upstreamBody), body)
-			failedEvent := strings.TrimPrefix(body, tt.upstreamBody)
+			failedEvent := strings.TrimPrefix(body, tt.upstreamBody+tt.wantSeparator)
 			require.True(t, strings.HasPrefix(failedEvent, "event: response.failed\ndata: "), body)
 			require.True(t, strings.HasSuffix(failedEvent, "\n\n"), body)
 
