@@ -60,7 +60,7 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.9.1
+    version: 1.9.2
     namespace: api-keys
     inherit:
       - template: service
@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.33.0
+    version: 1.33.2
     namespace: nvcf
     inherit:
       - template: service
@@ -121,7 +121,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.9.0
+    version: 1.9.1
     namespace: nvcf
     inherit:
       - template: service
@@ -271,7 +271,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.11.0
+    version: 0.11.1
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
