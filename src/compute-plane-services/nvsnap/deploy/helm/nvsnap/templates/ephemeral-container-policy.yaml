@@ -12,12 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-{{- if and .Values.webhook.enabled .Values.webhook.ephemeralContainerPolicy.enabled (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+{{- if and .Values.webhook.enabled .Values.webhook.ephemeralContainerPolicy.enabled }}
 # The webhook places nvsnap volumes (node-wide directories: the node
 # bundle, checkpoints, GPU stores) in pods at creation, and checks every
 # mount the pod declares then. An ephemeral container is added later,
 # through pods/ephemeralcontainers, which the webhook does not see: this
-# policy keeps it from mounting an nvsnap volume.
+# policy keeps it from mounting an nvsnap volume. Rendered whenever it is
+# enabled, so a cluster without the API (before Kubernetes 1.30) fails the
+# install instead of silently going without it.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

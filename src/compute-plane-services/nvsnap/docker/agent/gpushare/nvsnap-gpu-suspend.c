@@ -685,7 +685,7 @@ static int remap_all(const int *pids, int n)
     char load[512] = "load", remap[600] = "remap";
     send_numa(pids, n);
     if (cache_dir) snprintf(load, sizeof(load), "load %s", cache_dir);
-    if (fabric_dir) {  /* a previous cycle's lists */
+    if (fabric_dir) {  /* a previous cycle's lists (unlink never follows a symlink) */
         char p[512];
         snprintf(p, sizeof(p), "%s/in", fabric_dir);
         unlink(p);
@@ -705,23 +705,40 @@ static int remap_all(const int *pids, int n)
  * drives the nodes, and pass it to "remap". */
 static int fabric_exchange(const int *pids, int n, char *remap, size_t len)
 {
-    char in[512], out[512], tmp[512], part[600], cmd[700], line[300];
+    char in[512], out[512], part[600], name[32], cmd[700], line[300];
     snprintf(in, sizeof(in), "%s/in", fabric_dir);
     snprintf(out, sizeof(out), "%s/out", fabric_dir);
-    snprintf(tmp, sizeof(tmp), "%s/out.tmp", fabric_dir);
-    FILE *o = fopen(tmp, "we");
-    if (!o) { fprintf(stderr, "%s: %s\n", tmp, strerror(errno)); return -1; }
+    /* The session directory belongs to the workload's user, and this tool
+     * is often root: every name in it is opened relative to the directory
+     * and never through a symlink the workload planted. */
+    int dfd = open(fabric_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0) { fprintf(stderr, "%s: %s\n", fabric_dir, strerror(errno)); return -1; }
+    unlinkat(dfd, "out.tmp", 0);
+    int ofd = openat(dfd, "out.tmp", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    FILE *o = ofd < 0 ? NULL : fdopen(ofd, "w");
+    if (!o) {
+        fprintf(stderr, "%s/out.tmp: %s\n", fabric_dir, strerror(errno));
+        if (ofd >= 0) close(ofd);
+        close(dfd);
+        return -1;
+    }
     int nh = 0;
     for (int i = 0; i < n; i++) {
-        snprintf(part, sizeof(part), "%s/out.%d", fabric_dir, pids[i]);
+        snprintf(name, sizeof(name), "out.%d", pids[i]);
+        snprintf(part, sizeof(part), "%s/%s", fabric_dir, name);
         snprintf(cmd, sizeof(cmd), "fabmap %s", part);
-        if (ctl(pids[i], cmd) < 0) { fclose(o); return -1; }
-        FILE *f = fopen(part, "re");
+        if (ctl(pids[i], cmd) < 0) { fclose(o); close(dfd); return -1; }
+        int pfd = openat(dfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        FILE *f = pfd < 0 ? NULL : fdopen(pfd, "r");
+        if (!f && pfd >= 0) close(pfd);
         while (f && fgets(line, sizeof(line), f)) { fputs(line, o); nh++; }
         if (f) fclose(f);
-        unlink(part);
+        unlinkat(dfd, name, 0);
     }
-    if (fclose(o) != 0 || rename(tmp, out) != 0) { fprintf(stderr, "%s: %s\n", out, strerror(errno)); return -1; }
+    int r = fclose(o) != 0 || renameat(dfd, "out.tmp", dfd, "out") != 0 ? -1 : 0;
+    if (r < 0) fprintf(stderr, "%s: %s\n", out, strerror(errno));
+    close(dfd);
+    if (r < 0) return -1;
     printf("fabric map: %d handle(s) in %s; waiting for %s\n", nh, out, in);
     for (int t = 0; access(in, R_OK) != 0; t++) {
         if (t >= 6000) { fprintf(stderr, "no %s after 600 s\n", in); return -1; }

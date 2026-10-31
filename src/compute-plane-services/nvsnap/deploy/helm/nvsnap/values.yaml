@@ -526,7 +526,10 @@ webhook:
   debugEnv: []
   # Keeps an ephemeral container (added after admission, which the webhook
   # does not see) from mounting the nvsnap volumes the webhook placed:
-  # a ValidatingAdmissionPolicy, on clusters that have the API (1.30+).
+  # a ValidatingAdmissionPolicy. Requires Kubernetes 1.30+; on an older
+  # cluster the install fails. Turning it off there leaves the GPU stores
+  # and checkpoints reachable through pods/ephemeralcontainers to anyone
+  # allowed to add one.
   ephemeralContainerPolicy:
     enabled: true
   # The webhook is served BY the agent DaemonSet, not by a separate Pod.
@@ -568,7 +571,9 @@ webhook:
   # Kubernetes namespace, which is new for every instance; a restored
   # component would keep the old one and the new instance's frontend would
   # not find it. Components that reach a shared etcd or NATS keep the
-  # operator's name. Empty disables.
+  # operator's name. Applied only with captureMethod criu, and only to pods
+  # a capture may take (GPU pods and companions of opted-in instances).
+  # Empty disables.
   dynamoNamespace: nvcf-nvsnap
   # etcd lease TTL in seconds (ETCD_LEASE_TTL) for those components, unless
   # they set one. A capture stops the whole instance, its etcd included, so

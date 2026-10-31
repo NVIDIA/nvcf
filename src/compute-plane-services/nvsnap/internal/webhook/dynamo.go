@@ -14,6 +14,7 @@ package webhook
 // are the instance's own, so the profile applies only then.
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"strconv"
@@ -96,9 +97,17 @@ func localHost(endpoint string) bool {
 
 // dynamoNamespacePatches sets the fixed Dynamo namespace on every
 // container that names one, and the namespace prefix the frontend filters
-// models by to match.
-func (m *Mutator) dynamoNamespacePatches(pod *corev1.Pod) []PatchOp {
-	if m.DynamoNamespace == "" || !dynamoComponent(pod) || !instanceLocalEndpoints(pod) {
+// models by to match. Only for a pod a CRIU capture may take (the same
+// candidates whose liveness probes are widened): the name exists for a
+// restored component, and two graphs in one namespace that each had their
+// own Dynamo namespace would otherwise register under one name and route
+// to each other's workers. A cluster that does not capture with CRIU
+// (CaptureCandidate nil) never sees the rewrite.
+func (m *Mutator) dynamoNamespacePatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
+	if m.DynamoNamespace == "" || m.CaptureCandidate == nil || !dynamoComponent(pod) || !instanceLocalEndpoints(pod) {
+		return nil
+	}
+	if gpuRequest(pod) == 0 && !m.CaptureCandidate(ctx, pod) {
 		return nil
 	}
 	var patches []PatchOp

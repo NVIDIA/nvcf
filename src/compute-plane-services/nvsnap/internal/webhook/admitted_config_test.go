@@ -45,13 +45,13 @@ func TestAdmittedConfigSurvivesTheWebhooksOwnPatches(t *testing.T) {
 		admitted, _ := m.cacheURI(pod)
 		var patches []PatchOp
 		patches = append(patches, m.admittedConfigPatches(pod)...)
-		patches = append(patches, m.dynamoNamespacePatches(pod)...)
+		patches = append(patches, m.dynamoNamespacePatches(context.Background(), pod)...)
 		patches = append(patches, m.livenessBudgetPatches(context.Background(), pod)...)
 		got := applyPatches(t, pod, mergePatchPlan(patches))
 		if got.Annotations[AdmittedConfigAnnotation] != admitted {
 			t.Errorf("%s: stamped %q, want the admitted identity %q", name, got.Annotations[AdmittedConfigAnnotation], admitted)
 		}
-		if len(m.dynamoNamespacePatches(pod))+len(m.livenessBudgetPatches(context.Background(), pod)) == 0 {
+		if len(m.dynamoNamespacePatches(context.Background(), pod))+len(m.livenessBudgetPatches(context.Background(), pod)) == 0 {
 			t.Errorf("%s: the test pod got no webhook patches; it does not test anything", name)
 		}
 		// A stamped pod is not stamped again.

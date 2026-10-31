@@ -4,9 +4,11 @@
 package webhook
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -17,8 +19,12 @@ func dynamoPod(env ...corev1.EnvVar) *corev1.Pod {
 	}
 }
 
+// criuCandidates is a CRIU cluster on which every pod is opted into capture.
+func criuCandidates(context.Context, *corev1.Pod) bool { return true }
+
 func TestDynamoNamespacePatches(t *testing.T) {
-	m := &Mutator{DynamoNamespace: "nvcf-nvsnap"}
+	ctx := context.Background()
+	m := &Mutator{DynamoNamespace: "nvcf-nvsnap", CaptureCandidate: criuCandidates}
 	local := []corev1.EnvVar{
 		{Name: "DYN_NAMESPACE", Value: "sr-1-graph"},
 		{Name: "DYN_NAMESPACE_PREFIX", Value: "sr-1-graph"},
@@ -27,7 +33,7 @@ func TestDynamoNamespacePatches(t *testing.T) {
 		{Name: "OTHER", Value: "x"},
 	}
 	pod := dynamoPod(local...)
-	got := applyPatches(t, pod, m.dynamoNamespacePatches(pod))
+	got := applyPatches(t, pod, m.dynamoNamespacePatches(ctx, pod))
 	vals := map[string]string{}
 	for _, e := range got.Spec.Containers[0].Env {
 		vals[e.Name] = e.Value
@@ -46,12 +52,39 @@ func TestDynamoNamespacePatches(t *testing.T) {
 		"not dynamo":  {{Name: "ETCD_ENDPOINTS", Value: "mini-service-etcd:2379"}},
 	} {
 		p := dynamoPod(env...)
-		if patches := m.dynamoNamespacePatches(p); patches != nil {
+		if patches := m.dynamoNamespacePatches(ctx, p); patches != nil {
 			t.Errorf("%s: patched %v", name, patches)
 		}
 	}
-	if p := (&Mutator{}).dynamoNamespacePatches(dynamoPod(local...)); p != nil {
+	if p := (&Mutator{CaptureCandidate: criuCandidates}).dynamoNamespacePatches(ctx, dynamoPod(local...)); p != nil {
 		t.Errorf("profile off: patched %v", p)
+	}
+}
+
+// The rewrite is for CRIU restores only: a cluster that does not capture
+// with CRIU leaves Dynamo alone, and so does a CRIU cluster for a pod it
+// will not capture. Otherwise two graphs in one namespace with their own
+// Dynamo namespaces would register under one name and route to each
+// other's workers.
+func TestDynamoNamespaceOnlyForCRIUCandidates(t *testing.T) {
+	ctx := context.Background()
+	env := []corev1.EnvVar{
+		{Name: "DYN_NAMESPACE", Value: "graph-a"},
+		{Name: "ETCD_ENDPOINTS", Value: "etcd:2379"},
+		{Name: "NATS_SERVER", Value: "nats://nats:4222"},
+	}
+	if p := (&Mutator{DynamoNamespace: "nvcf-nvsnap", DynamoLeaseTTL: 60}).dynamoNamespacePatches(ctx, dynamoPod(env...)); p != nil {
+		t.Errorf("no CRIU capture: patched %v", p)
+	}
+	none := func(context.Context, *corev1.Pod) bool { return false }
+	m := &Mutator{DynamoNamespace: "nvcf-nvsnap", CaptureCandidate: none}
+	if p := m.dynamoNamespacePatches(ctx, dynamoPod(env...)); p != nil {
+		t.Errorf("a pod without GPUs that is not a capture candidate: patched %v", p)
+	}
+	gpu := dynamoPod(env...)
+	gpu.Spec.Containers[0].Resources.Limits = corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+	if p := m.dynamoNamespacePatches(ctx, gpu); p == nil {
+		t.Error("a GPU pod on a CRIU cluster is a candidate and gets the fixed namespace")
 	}
 }
 
@@ -67,7 +100,8 @@ func TestDynamoDiscovery(t *testing.T) {
 // The profile gives its components a lease that outlasts a capture, unless
 // they set their own.
 func TestDynamoLeaseTTL(t *testing.T) {
-	m := &Mutator{DynamoNamespace: "nvcf-nvsnap", DynamoLeaseTTL: 60}
+	ctx := context.Background()
+	m := &Mutator{DynamoNamespace: "nvcf-nvsnap", DynamoLeaseTTL: 60, CaptureCandidate: criuCandidates}
 	base := []corev1.EnvVar{
 		{Name: "DYN_NAMESPACE", Value: "sr-1-graph"},
 		{Name: "ETCD_ENDPOINTS", Value: "mini-service-etcd:2379"},
@@ -81,16 +115,16 @@ func TestDynamoLeaseTTL(t *testing.T) {
 		return out
 	}
 	pod := dynamoPod(base...)
-	if got := env(applyPatches(t, pod, m.dynamoNamespacePatches(pod))); got["ETCD_LEASE_TTL"] != "60" {
+	if got := env(applyPatches(t, pod, m.dynamoNamespacePatches(ctx, pod))); got["ETCD_LEASE_TTL"] != "60" {
 		t.Errorf("ETCD_LEASE_TTL = %q, want 60", got["ETCD_LEASE_TTL"])
 	}
 	own := dynamoPod(append(append([]corev1.EnvVar{}, base...), corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "20"})...)
-	if got := env(applyPatches(t, own, m.dynamoNamespacePatches(own))); got["ETCD_LEASE_TTL"] != "20" {
+	if got := env(applyPatches(t, own, m.dynamoNamespacePatches(ctx, own))); got["ETCD_LEASE_TTL"] != "20" {
 		t.Errorf("a workload's own ETCD_LEASE_TTL was replaced: %q", got["ETCD_LEASE_TTL"])
 	}
 	shared := dynamoPod(corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "a"}, corev1.EnvVar{Name: "ETCD_ENDPOINTS", Value: "etcd.dynamo-system:2379"},
 		corev1.EnvVar{Name: "NATS_SERVER", Value: "nats://mini-service-nats:4222"})
-	if p := m.dynamoNamespacePatches(shared); p != nil {
+	if p := m.dynamoNamespacePatches(ctx, shared); p != nil {
 		t.Errorf("outside the profile (shared etcd): patched %v", p)
 	}
 }
