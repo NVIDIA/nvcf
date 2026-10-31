@@ -74,8 +74,7 @@ async fn run_registration_supervisor(
         let retired_tasks = per_router_tasks
             .extract_if(|router, _| !desired_routers.contains(router))
             .map(|(_, task)| task)
-            .collect();
-        OwnedTask::shutdown_all(retired_tasks, TASK_SHUTDOWN_TIMEOUT).await;
+            .collect::<Vec<_>>();
 
         for router in &desired_routers {
             if !per_router_tasks.contains_key(router) {
@@ -91,6 +90,9 @@ async fn run_registration_supervisor(
                 per_router_tasks.insert(router.clone(), task);
             }
         }
+        // Retired streams drain their reverse tunnels, so register with new
+        // routers first.
+        OwnedTask::shutdown_all(retired_tasks, TASK_SHUTDOWN_TIMEOUT).await;
 
         let finished = tokio::select! {
             _ = stop.cancelled() => true,

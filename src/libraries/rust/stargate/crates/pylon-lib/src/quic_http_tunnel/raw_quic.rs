@@ -131,8 +131,10 @@ pub(super) async fn handle_stream(
     if result.is_ok() {
         // This stream can hold the last reference to the connection, and
         // dropping that reference discards response bytes the router has not
-        // acknowledged. A failed wait leaves nothing to recover.
-        let _ = transport.send_stream.stopped().await;
+        // acknowledged.
+        if let Err(error) = transport.send_stream.stopped().await {
+            tracing::debug!(%error, "raw QUIC response delivery not confirmed");
+        }
     }
     result
 }

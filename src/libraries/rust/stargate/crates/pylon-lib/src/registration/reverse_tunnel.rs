@@ -165,10 +165,13 @@ pub(super) fn reverse_quic_tunnel_config(
 }
 
 /// Maintains a single reverse QUIC tunnel connection to a stargate router.
+/// `registration_stop` is the token of the registration stream that owns this
+/// loop; when it is cancelled, the tunnel drains before it closes.
 pub(super) async fn run_reverse_tunnel_loop(
     router_addr: String,
     config: Arc<RegistrationSessionConfig>,
     state_tx: watch::Sender<ReverseTunnelState>,
+    registration_stop: CancellationToken,
     stop: CancellationToken,
 ) {
     let mut state_rx = state_tx.subscribe();
@@ -226,10 +229,19 @@ pub(super) async fn run_reverse_tunnel_loop(
 
                 tokio::select! {
                     _ = stop.cancelled() => {
-                        // Accept the streams the router sent before it saw the
-                        // registration close. Stop early if the router closes the tunnel.
-                        let _ = tokio::time::timeout(REVERSE_TUNNEL_ACCEPT_WINDOW, handle.closed())
-                            .await;
+                        if registration_stop.is_cancelled() {
+                            tracing::info!(
+                                router_addr = %router_addr,
+                                inference_server_id = %config.inference_server_id,
+                                accept_window_ms = REVERSE_TUNNEL_ACCEPT_WINDOW.as_millis(),
+                                "reverse tunnel draining"
+                            );
+                            // Accept the streams the router sent before it saw the
+                            // registration close. A timeout is the normal outcome.
+                            let _ =
+                                tokio::time::timeout(REVERSE_TUNNEL_ACCEPT_WINDOW, handle.closed())
+                                    .await;
+                        }
                         handle.shutdown().await;
                         state_tx.send_if_modified(|state| state.mark_disconnected(&endpoint));
                         return;

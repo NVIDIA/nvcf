@@ -841,8 +841,14 @@ async fn reverse_backend_shutdown_under_load_fails_no_requests() {
                         .post_streaming_chat("rt-drain-load-model", &request_id)
                         .await;
                     let status = resp.status();
-                    if status != StatusCode::OK {
-                        failures.push((request_id, status, resp.text().await.unwrap_or_default()));
+                    let body = resp.text().await.unwrap_or_default();
+                    let completed = parse_sse_events(&body).is_ok_and(|events| {
+                        events
+                            .last()
+                            .is_some_and(|event| event.data.trim() == "[DONE]")
+                    });
+                    if status != StatusCode::OK || !completed {
+                        failures.push((request_id, status, body));
                     }
                 }
                 (sent, failures)
@@ -900,7 +906,7 @@ async fn reverse_backend_shutdown_lets_long_in_flight_request_finish() {
         .await
         .expect("backend should receive the request");
     let shutdown = tokio::spawn(async move { reg.shutdown().await });
-    // Longer than the 5 s task shutdown timeout that used to cut the request.
+    // Hold the request past the 5 s task shutdown timeout.
     tokio::time::sleep(Duration::from_secs(6)).await;
     backend.release.notify_one();
 
