@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -227,6 +228,10 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 		Copier:            NewAgentCopier("/host", log),
 		SizeBytesFor:      defaultL2Size,
 		Log:               log,
+		// Claims to a capture only in its tenant's namespaces, and only for
+		// the election's followers of that capture.
+		TenantOf:   func(_ context.Context, ns string) string { return a.tenantScope(ns) },
+		IsFollower: isElectionFollower,
 	}
 	log.WithFields(logrus.Fields{
 		"storage_class":  cfg.StorageClass,
@@ -364,4 +369,11 @@ func vramGBFromGPUType(gpuType string) string {
 		}
 	}
 	return ""
+}
+
+// isElectionFollower reports whether pod was admitted as an election
+// follower of hash: the stamps admission writes (internal/webhook/election.go).
+func isElectionFollower(pod *corev1.Pod, hash string) bool {
+	return pod.Annotations[election.HashAnnotation] == hash &&
+		pod.Annotations[election.RoleAnnotation] == string(election.RoleFollower)
 }
