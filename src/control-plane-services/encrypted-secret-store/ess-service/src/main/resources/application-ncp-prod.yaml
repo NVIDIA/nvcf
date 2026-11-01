@@ -49,12 +49,6 @@ encryption:
     validationEnabled: true
 
 management:
-  endpoint:
-    health:
-      group:
-       liveness:
-          include:
-            - customcassandra
   tracing:
     enabled: false
   health:

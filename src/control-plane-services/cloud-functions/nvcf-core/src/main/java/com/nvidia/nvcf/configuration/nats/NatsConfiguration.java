@@ -78,6 +78,11 @@ public class NatsConfiguration {
             Optional<NatsTokenAuthProvider> natsTokenAuthProvider,
             Tracer tracer)
             throws IOException, InterruptedException {
+        return connect(options(natsProperties, natsTokenAuthProvider), tracer);
+    }
+
+    static Options options(NatsProperties natsProperties,
+                           Optional<NatsTokenAuthProvider> natsTokenAuthProvider) {
         var optionsBuilder = Options.builder()
                 .server(natsProperties.getUrl().toString());
         if (natsTokenAuthProvider.isPresent()) {
@@ -91,10 +96,13 @@ public class NatsConfiguration {
                     "Either OAuth2 properties or apiUserSeed must be provided");
         }
 
-        var options = optionsBuilder
+        return optionsBuilder
                 .pingInterval(Duration.ofSeconds(5))
                 .useDispatcherWithExecutor()
                 .reconnectWait(Duration.ofMillis(100))
+                // The pool never replaces a closed connection, and readiness stays down
+                // while it is closed, so keep reconnecting through long outages.
+                .maxReconnects(-1)
                 .errorListener(new LoggingNatsErrorListener())
                 .connectionListener(
                         (conn, type) -> {
@@ -129,7 +137,6 @@ public class NatsConfiguration {
                             }
                         })
                 .build();
-        return connect(options, tracer);
     }
 
     @Data

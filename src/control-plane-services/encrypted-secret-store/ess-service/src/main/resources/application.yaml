@@ -159,6 +159,7 @@ management:
         liveness:
           include:
             - livenessState
+            - cassandraSession
         readiness:
           include:
             - cassandra
