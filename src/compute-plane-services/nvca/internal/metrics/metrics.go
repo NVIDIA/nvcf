@@ -55,6 +55,7 @@ const (
 	ImagePullIssueTotalMetricName              = "nvca_image_pull_issue_total"
 	K8sAPISuccessTotalMetricName               = "nvca_k8s_api_success_total"
 	K8sAPIFailureTotalMetricName               = "nvca_k8s_api_failure_total"
+	InstancePodReadsTotalMetricName            = "nvca_instance_pod_reads_total"
 	StorageRequestDurationMetricName           = "nvca_storage_controller_request_duration"
 	MiniServiceReconcilePhaseTotalMetricName   = "nvca_miniservice_controller_reconcile_phase_total"
 	MiniServicePhaseTransitionsTotalMetricName = "nvca_miniservice_controller_phase_transitions_total"
@@ -177,6 +178,10 @@ const (
 	// BYOO platform metrics federation check label
 	BYOOPlatformMetricsFederationStateLabel = "state"
 
+	// Instance status loop Pod read labels
+	InstancePodReadSourceLabel = "source"
+	InstancePodReadResultLabel = "result"
+
 	// UpstreamOperation values for use with RecordUpstreamRequest.
 	UpstreamOperationHeartbeat   = "heartbeat"
 	UpstreamOperationRegister    = "register"
@@ -191,6 +196,41 @@ var AllUpstreamOperations = []string{
 	UpstreamOperationCredentials,
 	UpstreamOperationJWKSPush,
 }
+
+// Label values of nvca_instance_pod_reads_total, for use with RecordInstancePodRead.
+const (
+	// InstancePodReadSourceCache is a read of the Pod informer cache.
+	InstancePodReadSourceCache = "cache"
+	// InstancePodReadSourceMiss is a live read of a Pod that was not in the cache.
+	InstancePodReadSourceMiss = "miss"
+	// InstancePodReadSourceConfirm is a live read that confirms a change or a purge decided from the cache.
+	InstancePodReadSourceConfirm = "confirm"
+	// InstancePodReadSourceHeartbeat is a live read before the periodic report of an unchanged state.
+	InstancePodReadSourceHeartbeat = "heartbeat"
+	// InstancePodReadSourceRefresh is the periodic live read of a Pod otherwise served from the cache.
+	InstancePodReadSourceRefresh = "refresh"
+
+	InstancePodReadResultFound    = "found"
+	InstancePodReadResultNotFound = "notfound"
+	InstancePodReadResultError    = "error"
+)
+
+// AllInstancePodReadSources and AllInstancePodReadResults are the complete sets of
+// nvca_instance_pod_reads_total label values.
+var (
+	AllInstancePodReadSources = []string{
+		InstancePodReadSourceCache,
+		InstancePodReadSourceMiss,
+		InstancePodReadSourceConfirm,
+		InstancePodReadSourceHeartbeat,
+		InstancePodReadSourceRefresh,
+	}
+	AllInstancePodReadResults = []string{
+		InstancePodReadResultFound,
+		InstancePodReadResultNotFound,
+		InstancePodReadResultError,
+	}
+)
 
 // storageRequestDurationBucketsSeconds are the explicit histogram buckets (in
 // seconds) for nvca_storage_controller_request_duration. Storage provisioning
@@ -265,6 +305,12 @@ type Metrics struct {
 	// K8s API server interaction metrics
 	K8sAPISuccessTotal *prometheus.CounterVec
 	K8sAPIFailureTotal *prometheus.CounterVec
+
+	// Pod reads of the instance status loop, by source and result
+	InstancePodReadsTotal *prometheus.CounterVec
+	// instancePodReads holds every InstancePodReadsTotal series, keyed by {source, result}, so that
+	// recording a read does not build label values.
+	instancePodReads map[[2]string]prometheus.Counter
 
 	// instance type metrics
 	InstanceTypeAllocatable   *prometheus.GaugeVec // node must be schedulable to be allocatable
@@ -368,6 +414,7 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.ImagePullIssueTotal)
 	prometheus.Unregister(m.K8sAPISuccessTotal)
 	prometheus.Unregister(m.K8sAPIFailureTotal)
+	prometheus.Unregister(m.InstancePodReadsTotal)
 	prometheus.Unregister(m.InstanceTypeCapacity)
 	prometheus.Unregister(m.InstanceTypeAllocatable)
 	prometheus.Unregister(m.InstanceTypeUnschedulable)
@@ -579,6 +626,22 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	} {
 		m.K8sAPISuccessTotal.WithLabelValues(m.WithDefaultLabelValues(resource)...)
 		m.K8sAPIFailureTotal.WithLabelValues(m.WithDefaultLabelValues(resource)...)
+	}
+
+	m.InstancePodReadsTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: InstancePodReadsTotalMetricName,
+		Help: "Total number of Pod instance reads by the instance status loop. source is cache " +
+			"(informer cache), miss (live read after a cache miss), confirm (live read before acting " +
+			"on a change or purge seen in the cache), heartbeat (live read before a periodic status report) " +
+			"or refresh (periodic live read); result is found, notfound or error.",
+	}, withDefaultLabels(InstancePodReadSourceLabel, InstancePodReadResultLabel))
+	// Initialize every series to zero so it appears on the first Prometheus scrape.
+	m.instancePodReads = make(map[[2]string]prometheus.Counter, len(AllInstancePodReadSources)*len(AllInstancePodReadResults))
+	for _, source := range AllInstancePodReadSources {
+		for _, result := range AllInstancePodReadResults {
+			m.instancePodReads[[2]string{source, result}] =
+				m.InstancePodReadsTotal.WithLabelValues(m.WithDefaultLabelValues(source, result)...)
+		}
 	}
 
 	// instance type metric setup
@@ -1050,6 +1113,24 @@ func (m *Metrics) TrackK8sAPICall(resource string, err error) {
 		// NotFound errors are still considered "successful" API calls
 		// since the API server responded correctly, just the resource doesn't exist
 		m.RecordK8sAPISuccess(resource)
+	}
+}
+
+// RecordInstancePodRead counts one Pod read by the instance status loop. source is one of
+// AllInstancePodReadSources; err is the read's result.
+func (m *Metrics) RecordInstancePodRead(source string, err error) {
+	if m == nil {
+		return
+	}
+	result := InstancePodReadResultFound
+	if err != nil {
+		result = InstancePodReadResultError
+		if k8serrors.IsNotFound(err) {
+			result = InstancePodReadResultNotFound
+		}
+	}
+	if c, ok := m.instancePodReads[[2]string{source, result}]; ok {
+		c.Inc()
 	}
 }
 

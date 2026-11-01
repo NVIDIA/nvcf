@@ -3226,7 +3226,8 @@ func newInstanceStatusLoop(t *testing.T, icmsClient ICMSClientInterface, req *nv
 	srIndexer := newIndexer()
 	require.NoError(t, srIndexer.Add(req.DeepCopy()))
 
-	ff := &featureflagmock.Fetcher{}
+	// Pod instances are read from the informer cache, as they are by default.
+	ff := &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{featureflag.InstancePodCacheReads}}
 	bc := &BackendK8sCache{
 		clients:                              clients,
 		featureFlagFetcher:                   ff,
@@ -3647,18 +3648,15 @@ func TestPostICMSInstanceRequestStatusUpdates_RequestOutlivesOneTerminatedInstan
 }
 
 func TestPostICMSInstanceRequestStatusUpdates_GoneInstanceLogsAndCountsOnce(t *testing.T) {
-	realNow := time.Now().UTC()
-	// The heartbeat gate reads the real clock, and reports are stamped with the context clock. Running
-	// the context clock 10 minutes behind makes each report due a heartbeat on the next pass.
-	clock := realNow.Add(-10 * time.Minute)
+	clock := &podReadsClock{now: time.Now().UTC()}
 	logCtx, logHook := core.WithTestingLogger(newTestContext())
-	ctx := core.WithClock(logCtx, func() time.Time { return clock })
-	recent := metav1.NewTime(realNow.Add(-time.Minute))
+	ctx := core.WithClock(logCtx, clock.Now)
+	reportedAt := metav1.NewTime(clock.now.Add(-time.Minute))
 	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
 		// Its Pod is gone, so the first pass reports it terminated, and the later passes repeat that.
-		instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &recent),
-		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &recent),
-		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &recent),
+		instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &reportedAt),
 	)
 	icms := &instanceStatusICMSClient{}
 	loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
@@ -3669,11 +3667,21 @@ func TestPostICMSInstanceRequestStatusUpdates_GoneInstanceLogsAndCountsOnce(t *t
 	for range 3 {
 		sr = loop.pass(ctx, t)
 		loop.syncCache(t)
+		// The next pass is due the periodic reports.
+		clock.now = clock.now.Add(6 * time.Minute)
 	}
 
-	assert.Equal(t, []string{"0-sr", "0-sr", "0-sr"}, icms.posted)
-	assert.Equal(t, 1, eventCount(drainEvents(recorder), "0-sr is terminated"), "only the first report records an event")
+	goneReports := 0
+	for _, id := range icms.posted {
+		if id == "0-sr" {
+			goneReports++
+		}
+	}
+	assert.Equal(t, 3, goneReports, "the gone instance is reported on every pass")
 	assert.ElementsMatch(t, []string{"0-sr", "1-sr", "2-sr"}, sr.Status.GetInstanceIDs())
+	events := drainEvents(recorder)
+	assert.Equal(t, 1, eventCount(events, "0-sr is terminated"), "only the first report records an event")
+	assert.Equal(t, 2, eventCount(events, "1-sr is running"), "periodic reports of a running instance record events")
 	m := nvcametrics.FromContext(ctx)
 	notFound := m.WorkloadResultTotal.WithLabelValues(m.WithDefaultLabelValues(
 		string(workloadtypes.WorkloadTypeContainer),
@@ -3689,6 +3697,61 @@ func TestPostICMSInstanceRequestStatusUpdates_GoneInstanceLogsAndCountsOnce(t *t
 		}
 	}
 	assert.Equal(t, 1, warns, "only the first report logs the missing Pod")
+}
+
+// A CLI kill deletes the Pods of a request's instances and marks them terminated in
+// lastReportedStatus alone, without telling ICMS. When it fails for another instance, the request
+// stays, and the status loop reports the killed instance at its periodic reports, without logging
+// or counting a failure, whether or not Pods are read from the informer cache.
+func TestPostICMSInstanceRequestStatusUpdates_InstanceMarkedTerminatedByCLIIsReported(t *testing.T) {
+	for _, cacheReads := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cache reads %v", cacheReads), func(t *testing.T) {
+			clock := &podReadsClock{now: time.Now().UTC()}
+			logCtx, logHook := core.WithTestingLogger(newTestContext())
+			ctx := core.WithClock(logCtx, clock.Now)
+			reportedAt := metav1.NewTime(clock.now.Add(-time.Minute))
+			killed := instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &reportedAt)
+			killed.LastReportedStatus = string(types.ICMSInstanceTerminated)
+			req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged, killed,
+				instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+			)
+			icms := &instanceStatusICMSClient{}
+			loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("1-sr"))
+			if !cacheReads {
+				loop.ff.EnabledFFs = nil
+			}
+			recorder := record.NewFakeRecorder(100)
+			loop.ag.backendk8scache.eventRecorder = recorder
+
+			loop.pass(ctx, t)
+			loop.syncCache(t)
+			assert.Empty(t, icms.posted, "no periodic report is due yet")
+			// The next pass is due the periodic reports.
+			clock.now = clock.now.Add(6 * time.Minute)
+			sr := loop.pass(ctx, t)
+
+			assert.ElementsMatch(t, []string{"0-sr", "1-sr"}, icms.posted)
+			assert.Equal(t, 1, eventCount(drainEvents(recorder), "0-sr is terminated"),
+				"the first report of a killed instance records an event")
+			assert.Equal(t, instanceStatusInstance("0-sr", types.ICMSInstanceTerminated, &metav1.Time{Time: clock.now}),
+				sr.Status.Instances["0-sr"])
+			m := nvcametrics.FromContext(ctx)
+			notFound := m.WorkloadResultTotal.WithLabelValues(m.WithDefaultLabelValues(
+				string(workloadtypes.WorkloadTypeContainer),
+				string(nvcametrics.ActionToWorkloadKind(common.FunctionCreationAction)),
+				string(workloadtypes.WorkloadStatusFailure),
+				string(nvcametrics.ICMSInstanceStateToFailureCategory(types.ICMSInstanceFailedNotFound)),
+			)...)
+			assert.Zero(t, promtestutil.ToFloat64(notFound), "a killed instance is not a failure")
+			warns := 0
+			for _, e := range logHook.AllEntries() {
+				if e.Message == "Pod is not running, report it as killed, if not reported before" {
+					warns++
+				}
+			}
+			assert.Zero(t, warns, "a killed instance is not logged as missing")
+		})
+	}
 }
 
 func TestPostICMSInstanceRequestStatusUpdates_TerminationKeepsInstancesReportedEarlier(t *testing.T) {
@@ -3783,6 +3846,33 @@ func TestPostICMSInstanceRequestStatusUpdates_FirstTerminatedReportRecordsEvent(
 			assert.Equal(t, tt.wantEvents, eventCount(drainEvents(recorder), "0-sr is terminated"))
 		})
 	}
+}
+
+// A Pod instance whose periodic report is due is read live first. When that read fails, the pass
+// reports the other instances and keeps the unread one as it was, for a later pass to report.
+func TestPostICMSInstanceRequestStatusUpdates_HeartbeatReadFailureKeepsInstance(t *testing.T) {
+	clock := &podReadsClock{now: time.Now().UTC()}
+	ctx := core.WithClock(newTestContext(), clock.Now)
+	reportedAt := metav1.NewTime(clock.now.Add(-6 * time.Minute))
+	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+		instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+	)
+	icms := &instanceStatusICMSClient{}
+	loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("0-sr"), instanceStatusPod("1-sr"))
+	loop.k8s.PrependReactor("get", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.(ktesting.GetAction).GetName() == "1-sr" {
+			return true, nil, errors.NewInternalError(fmt.Errorf("request timed out"))
+		}
+		return false, nil, nil
+	})
+
+	sr := loop.pass(ctx, t)
+
+	assert.Equal(t, []string{"0-sr"}, icms.posted)
+	assert.Equal(t, instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &metav1.Time{Time: clock.now}),
+		sr.Status.Instances["0-sr"])
+	assert.Equal(t, req.Status.Instances["1-sr"], sr.Status.Instances["1-sr"], "the unread instance keeps its status")
 }
 
 // creationMessageDeletes counts the creation message deletes sent to the queue.
