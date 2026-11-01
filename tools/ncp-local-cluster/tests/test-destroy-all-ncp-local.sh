@@ -19,103 +19,112 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAKE_SHELL="${MAKE_SHELL:-/bin/sh}"
 TEST_DIR="$(mktemp -d)"
-FAKE_BIN_DIR="$TEST_DIR/bin"
-DELETE_LOG="$TEST_DIR/deleted-clusters"
-OUTPUT_FILE="$TEST_DIR/output"
+trap 'rm -rf "$TEST_DIR"' EXIT
+export CLUSTER_STATE="$TEST_DIR/clusters.json"
+export DELETE_LOG="$TEST_DIR/deleted"
+export LIST_COUNT="$TEST_DIR/list-count"
+mkdir "$TEST_DIR/bin"
 
-cleanup() {
-  rm -rf "$TEST_DIR"
+fail() { echo "FAIL: $*" >&2; exit 1; }
+assert_eq() { [ "$1" = "$2" ] || fail "$3: expected '$1', got '$2'"; }
+
+# Keep jq real: malformed inventory must fail before any deletion.
+cat >"$TEST_DIR/bin/k3d" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  'cluster list -o json')
+    count=$(cat "$LIST_COUNT")
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$LIST_COUNT"
+    [ "$count" != "${FAIL_LIST_AT:-0}" ] || exit 23
+    cat "$CLUSTER_STATE"
+    ;;
+  cluster\ get\ *)
+    jq -e --arg name "$3" 'any(.[]; .name == $name)' "$CLUSTER_STATE" >/dev/null
+    ;;
+  cluster\ delete\ *)
+    printf '%s\n' "$3" >>"$DELETE_LOG"
+    [ "$3" != "${FAIL_DELETE:-}" ] || exit 24
+    [ "$3" != "${LEAVE_CLUSTER:-}" ] || exit 0
+    jq --arg name "$3" 'map(select(.name != $name))' "$CLUSTER_STATE" >"$CLUSTER_STATE.next"
+    mv "$CLUSTER_STATE.next" "$CLUSTER_STATE"
+    ;;
+  *) echo "unexpected k3d arguments: $*" >&2; exit 64 ;;
+esac
+EOF
+chmod +x "$TEST_DIR/bin/k3d"
+export PATH="$TEST_DIR/bin:$PATH"
+
+reset_state() {
+  printf '%s\n' "$1" >"$CLUSTER_STATE"
+  printf '0\n' >"$LIST_COUNT"
+  : >"$DELETE_LOG"
+  unset FAIL_LIST_AT FAIL_DELETE LEAVE_CLUSTER
 }
-trap cleanup EXIT
-
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
+run_make() {
+  make --no-print-directory -s -C "$ROOT_DIR" SHELL="$MAKE_SHELL" "$@" >"$TEST_DIR/output" 2>&1
 }
-
-assert_eq() {
-  local expected="$1"
-  local actual="$2"
-  local label="$3"
-
-  if [ "$actual" != "$expected" ]; then
-    fail "${label}: expected '${expected}', got '${actual}'"
+expect_failure() {
+  if run_make "$@"; then cat "$TEST_DIR/output" >&2; fail "$* should fail"; fi
+  if grep -q 'Cluster .* destroyed.' "$TEST_DIR/output"; then
+    cat "$TEST_DIR/output" >&2; fail "failure must not report successful deletion"
   fi
 }
 
-mkdir -p "$FAKE_BIN_DIR"
+reset_state '[]'
+run_make destroy CLUSTER_NAME=ncp-local
+assert_eq '' "$(cat "$DELETE_LOG")" 'absent exact cluster'
+run_make destroy-all-ncp-local
+assert_eq 'No ncp-local* clusters present.' "$(cat "$TEST_DIR/output")" 'empty inventory'
 
-cat >"$FAKE_BIN_DIR/k3d" <<'EOF'
-#!/bin/sh
-if [ "$#" -eq 4 ] && [ "$1" = "cluster" ] && [ "$2" = "list" ] && [ "$3" = "-o" ] && [ "$4" = "json" ]; then
-  printf '%s\n' "${FAKE_K3D_JSON:-[]}"
-  exit "${FAKE_K3D_LIST_EXIT:-0}"
-fi
-if [ "$#" -eq 3 ] && [ "$1" = "cluster" ] && [ "$2" = "delete" ]; then
-  printf '%s\n' "$3" >>"$DELETE_LOG"
-  exit 0
-fi
-echo "unexpected k3d arguments: $*" >&2
-exit 64
-EOF
+inventory='[{"name":"ncp-local"},{"name":"unrelated"},{"name":"ncp-local-cp"}]'
+reset_state "$inventory"
+run_make destroy CLUSTER_NAME=ncp-local
+assert_eq 'ncp-local' "$(cat "$DELETE_LOG")" 'exact deletion'
+assert_eq $'unrelated\nncp-local-cp' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'exact match preserves other clusters'
 
-cat >"$FAKE_BIN_DIR/jq" <<'EOF'
-#!/bin/sh
-input="$(cat)"
-if [ "$#" -ne 2 ] || [ "$1" != "-r" ] || [ "$2" != '.[] | select(.name|startswith("ncp-local")) | .name' ]; then
-  echo "unexpected jq arguments: $*" >&2
-  exit 64
-fi
-if [ "$input" != "${FAKE_JQ_EXPECT_INPUT:-[]}" ]; then
-  echo "unexpected jq input: $input" >&2
-  exit 65
-fi
-if [ "${FAKE_JQ_EXIT:-0}" -ne 0 ]; then
-  exit "$FAKE_JQ_EXIT"
-fi
-printf '%b' "${FAKE_JQ_OUTPUT:-}"
-EOF
+reset_state "$inventory"
+run_make destroy-all-ncp-local
+assert_eq $'ncp-local-cp\nncp-local' "$(cat "$DELETE_LOG")" 'control plane deleted before shared compute networks'
+assert_eq 'unrelated' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'unrelated cluster preserved'
 
-chmod +x "$FAKE_BIN_DIR/k3d" "$FAKE_BIN_DIR/jq"
+reset_state '[{"name":"ncp-local-compute-1"},{"name":"unrelated"},{"name":"ncp-local-custom-cp"}]'
+run_make destroy-all-ncp-local CONTROL_PLANE_CLUSTER_NAME=ncp-local-custom-cp
+assert_eq $'ncp-local-custom-cp\nncp-local-compute-1' "$(cat "$DELETE_LOG")" 'configured control plane deleted first'
+assert_eq 'unrelated' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'custom topology preserves unrelated cluster'
 
-run_make() {
-  PATH="$FAKE_BIN_DIR:$PATH" \
-    DELETE_LOG="$DELETE_LOG" \
-    make --no-print-directory -s -C "$ROOT_DIR" \
-      SHELL="$MAKE_SHELL" destroy-all-ncp-local
-}
+inventory='[{"name":"ncp-local"},{"name":"unrelated"}]'
+for target in destroy destroy-all-ncp-local; do
+  reset_state "$inventory"
+  export FAIL_LIST_AT=1
+  expect_failure "$target" CLUSTER_NAME=ncp-local
+  assert_eq '' "$(cat "$DELETE_LOG")" 'inventory failure prevents deletion'
 
-: >"$DELETE_LOG"
-if ! FAKE_K3D_JSON='[]' FAKE_JQ_EXPECT_INPUT='[]' run_make >"$OUTPUT_FILE" 2>&1; then
-  cat "$OUTPUT_FILE" >&2
-  fail "empty cluster inventory should succeed under $MAKE_SHELL"
-fi
-assert_eq "No ncp-local* clusters present." "$(cat "$OUTPUT_FILE")" "empty inventory output"
-assert_eq "" "$(cat "$DELETE_LOG")" "empty inventory deletion log"
+  reset_state 'invalid-json'
+  expect_failure "$target" CLUSTER_NAME=ncp-local
+  assert_eq '' "$(cat "$DELETE_LOG")" 'invalid JSON prevents deletion'
 
-: >"$DELETE_LOG"
-cluster_json='[{"name":"ncp-local"},{"name":"unrelated"},{"name":"ncp-local-cp"}]'
-FAKE_K3D_JSON="$cluster_json" \
-  FAKE_JQ_EXPECT_INPUT="$cluster_json" \
-  FAKE_JQ_OUTPUT='ncp-local\nncp-local-cp\n' \
-  run_make >"$OUTPUT_FILE" 2>&1 || {
-    cat "$OUTPUT_FILE" >&2
-    fail "matching cluster inventory should succeed"
-  }
-assert_eq $'ncp-local\nncp-local-cp' "$(cat "$DELETE_LOG")" "deleted cluster names"
+  reset_state "$inventory"
+  export FAIL_DELETE=ncp-local
+  expect_failure "$target" CLUSTER_NAME=ncp-local
+  assert_eq 'ncp-local' "$(cat "$DELETE_LOG")" 'delete failure stops cleanup'
 
-: >"$DELETE_LOG"
-if FAKE_K3D_LIST_EXIT=23 FAKE_JQ_EXPECT_INPUT='[]' run_make >"$OUTPUT_FILE" 2>&1; then
-  cat "$OUTPUT_FILE" >&2
-  fail "k3d cluster list failure should propagate"
-fi
-assert_eq "" "$(cat "$DELETE_LOG")" "k3d failure deletion log"
+  reset_state "$inventory"
+  export LEAVE_CLUSTER=ncp-local
+  expect_failure "$target" CLUSTER_NAME=ncp-local
+  grep -q 'ERROR Cluster ncp-local remains after deletion.' "$TEST_DIR/output" || fail 'missing remaining-cluster error'
+  assert_eq 'ncp-local' "$(cat "$DELETE_LOG")" 'incomplete deletion stops cleanup'
+done
 
-: >"$DELETE_LOG"
-if FAKE_K3D_JSON='[]' FAKE_JQ_EXPECT_INPUT='[]' FAKE_JQ_EXIT=24 run_make >"$OUTPUT_FILE" 2>&1; then
-  cat "$OUTPUT_FILE" >&2
-  fail "jq failure should propagate"
-fi
-assert_eq "" "$(cat "$DELETE_LOG")" "jq failure deletion log"
+reset_state "$inventory"
+export FAIL_LIST_AT=2
+expect_failure destroy CLUSTER_NAME=ncp-local
+assert_eq 'ncp-local' "$(cat "$DELETE_LOG")" 'post-delete inventory failure'
 
-echo "PASS: destroy-all-ncp-local Makefile tests"
+reset_state '[{"name":"ncp-local-cp"},{"name":"ncp-local-compute-1"}]'
+export FAIL_DELETE=ncp-local-cp
+expect_failure destroy-multicluster
+assert_eq 'ncp-local-cp' "$(cat "$DELETE_LOG")" 'multi-cluster failure propagation'
+
+echo "PASS: verified cluster cleanup Makefile tests ($MAKE_SHELL)"
