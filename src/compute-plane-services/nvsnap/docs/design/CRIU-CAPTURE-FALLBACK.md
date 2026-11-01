@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # When a CRIU capture fails: one attempt, then the caches
 
-Status: proposal. Scope: `internal/agent/criu_group.go` (capture attempts and the group record),
+Status: partly built (§3). Scope: `internal/agent/criu_group.go` (capture attempts and the group record),
 `internal/webhook/mutate.go` and `cachedir.go` (capture method per configuration), `internal/agent/gpushare.go`
 (resume after a failed dump).
 
@@ -46,7 +46,7 @@ record showed only the first member's abort: its reason was cut at 1024 bytes.
 ### 2.1 One CRIU attempt per configuration and agent version
 
 A configuration's CRIU capture is attempted once per agent bundle version (the `bundle.<n>` the record already
-keeps). A failure is recorded as `state=criu-failed` with every member's first error (§2.3). It is retried only when
+keeps). A failure is recorded as `state=failed` with every member's first error (§2.3). It is retried only when
 something that could change the outcome changes: the agent bundle version (a fix shipped), or the configuration
 itself (a new image or arguments, which is a new configuration key anyway). A stall the code already classifies as
 transient (the instance not ready, agents settling) is not a failure and does not count.
@@ -56,7 +56,7 @@ transient (the instance not ready, agents settling) is not a failure and does no
 The webhook asks, per configuration, which method applies:
 
 - a complete CRIU group record → restore with CRIU (as today);
-- a `criu-failed` record for the current agent version → **cachedir**: the pod gets the cachedir capture mutations
+- a `failed` record for the current agent version → **cachedir**: the pod gets the cachedir capture mutations
   (model volume, compile-cache set, capture at Ready) exactly as on a cluster with `captureMethod: cachedir`, and its
   later pods restore from those caches;
 - otherwise → as today (`CRIUCapture`: a CRIU capture will be attempted).
@@ -96,7 +96,7 @@ and 2.4 (why the worker's resume failed after the others' abort).
   plus etcd and NATS, opted in by function id; capture it, find the post-dump action's failure, and check the
   workload resumes.
 - Conformance gate: a scenario whose CRIU capture is made to fail (a post-dump action that exits 1): the workload
-  keeps serving without being replaced, the record says `criu-failed` with every member's error, and the next pod is
+  keeps serving without being replaced, the record says `failed` with every member's error, and the next pod is
   admitted with the cachedir capture.
 
 ## 5. Not in this proposal

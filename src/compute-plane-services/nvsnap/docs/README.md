@@ -71,6 +71,11 @@ the column below is that status, corrected where the code disagrees.
 |---|---|---|
 | [GPUSHARE.md](design/GPUSHARE.md) | How multi-GPU workloads are checkpointed: the gpushare shim, its chunk store, limits, validation | Integration section checked 2026-10-21; predates the rootfs-diff archive and placeholder model landings |
 | [STOP-THE-WORLD-CAPTURE.md](design/STOP-THE-WORLD-CAPTURE.md) | Why an instance is frozen as a whole for a capture, and how | Built (`internal/agent/group_freeze.go`) |
+| [CRIU-CAPTURE-FALLBACK.md](design/CRIU-CAPTURE-FALLBACK.md) | What happens when a CRIU capture fails: one attempt per agent release, every member's error kept, MPTCP refused before the freeze | Partly built (§3 of the note) |
+| [RAILS-FETCH-CONCURRENCY.md](design/RAILS-FETCH-CONCURRENCY.md) | How rails transfers run concurrently: one rails pod per node that serves and fetches, source ranking, small checkpoints over HTTP | Built (`internal/agent/rails_fetch.go`, `rails_serve.go`, `rails_jobs.go`) |
+| [RESTORE-POD-ADDRESS.md](design/RESTORE-POD-ADDRESS.md) | How a restored pod keeps its captured address, and the guards against an address another pod holds | Built, behind `agent.restoreCapturedAddress` (`internal/agent/restore_address.go`) |
+| [RESTORE-CLOCK-GPU-RELOAD.md](design/RESTORE-CLOCK-GPU-RELOAD.md) | How a restored process's clocks are kept consistent across the GPU reload | In use; §6 proposed |
+| [RESTORE-FETCH-LOAD-OVERLAP.md](design/RESTORE-FETCH-LOAD-OVERLAP.md) | How fetching a checkpoint could overlap with loading it during a restore | Proposed |
 | [VERSIONED-NODE-BUNDLE.md](design/VERSIONED-NODE-BUNDLE.md) | How the node bundle (CRIU, gpushare, helper) is versioned so upgrades do not break running pods | Built (`internal/webhook/bundle_mount.go` `BundleVersionsDir`) |
 | [helm-shared-model-volume.md](design/helm-shared-model-volume.md) | One model volume per model per cluster, and the cache set | Built and verified (as the doc states) |
 | [helm-chart-cache-election.md](design/helm-chart-cache-election.md) | One downloader per hash when a chart starts many workers | Built and verified (as the doc states) |
