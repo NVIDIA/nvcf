@@ -155,6 +155,10 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	localDir := filepath.Join(a.config.CheckpointDir, checkpointID)
 	// One fetch per checkpoint: the others wait for it and find it local.
 	defer lockLocalFetch(checkpointID)()
+	// Nor while a cancelled rails fetch of it may still write there.
+	if a.railsFetchStillRunning(ctx, checkpointID) {
+		return fmt.Errorf("checkpoint %s: %w", checkpointID, errRailsFetchRunning)
+	}
 
 	// Tier 1: same-node short-circuit: the capture node, or a finished
 	// earlier fetch.
@@ -175,7 +179,13 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 		return fmt.Errorf("prepare %s for the fetch: %w", localDir, err)
 	}
 	fetched := false
+	// stillWriting: a cancelled rails fetch may still write into the
+	// directory; it is left as it is.
+	stillWriting := false
 	defer func() {
+		if stillWriting {
+			return
+		}
 		if err := endLocalFetch(a.config.CheckpointDir, checkpointID, fetched); err != nil {
 			a.log.WithError(err).WithField("checkpoint_id", checkpointID).Error("EnsureLocal: cannot mark the fetch done; the next restore fetches again")
 		}
@@ -202,6 +212,10 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 				a.log.WithError(err).Warn("peer-add to catalog failed (non-fatal)")
 			}
 			return nil
+		} else if errors.Is(err, errRailsFetchRunning) {
+			stillWriting = true
+			a.log.WithError(err).WithField("checkpoint_id", checkpointID).Error("EnsureLocal: the rails fetch was cancelled and may still be writing; not trying another tier into the same directory")
+			return err
 		} else {
 			entry := a.log.WithError(err).WithField("checkpoint_id", checkpointID)
 			small = errors.Is(err, errRailsSmall)

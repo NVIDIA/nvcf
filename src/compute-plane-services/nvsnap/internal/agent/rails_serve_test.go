@@ -311,6 +311,49 @@ func TestRailsSources_Ranking(t *testing.T) {
 	}
 }
 
+// A node whose serve pod runs fetches of its own (they run in that pod,
+// with no fetch pod) is ranked like a fetching node: after an idle one.
+func TestRailsSources_RankingSharedPod(t *testing.T) {
+	has, id, _ := newPeerAgent(t)
+	fetching := servePodOn("node-fetching", time.Now().Add(time.Hour), "1")
+	fetching.Annotations[railsAnnoFetching] = "true"
+	c := newRailsCluster(t, fetching)
+	a, _ := railsAgent(t, "", c)
+	a.config.Rails.MaxSources = 2
+	got, _ := a.railsSources(t.Context(), id, []peerInfo{{NodeName: "node-fetching", AgentURL: has}, {NodeName: "node-idle", AgentURL: has}}, a.log.WithField("t", "shared"))
+	if strings.Join(got, ",") != "node-idle" {
+		t.Errorf("sources %v, want only the idle node", got)
+	}
+}
+
+// The serve pod is marked while any fetch of its node runs, and unmarked
+// once the last ends.
+func TestRailsFetchStartedMarksThePod(t *testing.T) {
+	pod := servePodOn("node-A", time.Now().Add(time.Hour), "1")
+	c := newRailsCluster(t, pod)
+	a, _ := railsAgent(t, "", c)
+	marked := func() string {
+		p, err := c.kube.CoreV1().Pods("nvsnap-system").Get(t.Context(), pod.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Annotations[railsAnnoFetching]
+	}
+	end1 := a.railsFetchStarted(t.Context(), pod.Name)
+	end2 := a.railsFetchStarted(t.Context(), pod.Name)
+	if marked() != "true" {
+		t.Fatal("not marked while fetching")
+	}
+	end1()
+	if marked() != "true" {
+		t.Fatal("unmarked while a fetch still runs")
+	}
+	end2()
+	if marked() != "" {
+		t.Fatal("still marked with no fetch running")
+	}
+}
+
 // A checkpoint under the rails minimum starts no pod.
 func TestFetchOverRails_UnderMinSize(t *testing.T) {
 	peerURL, id, total := newPeerAgent(t)

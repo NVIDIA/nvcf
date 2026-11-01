@@ -419,7 +419,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	key := criuGroupKey(instanceConfigURIOf(uris), scope)
 	log = log.WithField("criuGroup", key)
-	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !c.groupRecaptures(ctx, prev.Data) {
+	if prev, gerr := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); gerr == nil && !c.groupRecaptures(ctx, prev.Data) {
 		c.writeGroupAliases(ctx, key, scope, uris, len(ranks), log)
 		log.WithFields(logrus.Fields{"state": prev.Data["state"], "captures": prev.Data["captures"], "source": prev.Data["source"]}).
 			Info("CRIU group capture: skipped; the configuration's record says it is captured, being captured, or out of attempts")

@@ -331,6 +331,13 @@ type Agent struct {
 	// webhook's SpecCacheURI); nil when the webhook is off.
 	specCacheURI    func(*corev1.Pod) (string, bool)
 	criuRestoreOnce sync.Once
+	// railsRunning holds the cancelled rails fetches that may still write
+	// into their checkpoint directories, by checkpoint (rails_fetch.go).
+	railsRunning sync.Map
+	// railsFetches counts the fetches this node's rails pod runs
+	// (railsFetchStarted).
+	railsFetchMu sync.Mutex
+	railsFetches int
 	// checkpointing holds the pods being checkpointed (namespace/pod).
 	checkpointing sync.Map
 

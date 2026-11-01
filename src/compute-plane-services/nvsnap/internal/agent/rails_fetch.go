@@ -233,7 +233,7 @@ type railsFetchResult struct {
 
 // fetchOverRails copies checkpointID into localDir from the peers that
 // hold it. localDir is empty of files and under the fetch marker.
-func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir string, peers []peerInfo) error {
+func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir string, peers []peerInfo) (err error) {
 	cfg := a.config.Rails
 	log := a.log.WithField("checkpoint_id", checkpointID)
 
@@ -293,7 +293,16 @@ func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir strin
 	if err != nil {
 		return fmt.Errorf("%w: hand the fetch to %s: %w", errRailsUnavailable, self, err)
 	}
-	defer job.remove()
+	// A fetch that may still run keeps its files: the pod stops it by
+	// the pid it recorded.
+	defer func() {
+		if errors.Is(err, errRailsFetchRunning) {
+			a.railsRunning.Store(checkpointID, railsRunningJob{pod: self, job: job})
+			return
+		}
+		job.remove()
+	}()
+	defer a.railsFetchStarted(ctx, self)()
 	log.WithFields(map[string]interface{}{"sources": addrs, "source_nodes": servingNodes, "bytes": size, "pod": self, "job": job.id}).Info("rails: fetch started")
 
 	res, err := a.waitRailsJob(ctx, self, job, timeout)
@@ -310,6 +319,32 @@ func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir strin
 		return fmt.Errorf("rails fetch reported success but %s has no inventory.img", localDir)
 	}
 	return nil
+}
+
+// railsRunningJob is a cancelled fetch that may still be writing into its
+// checkpoint directory.
+type railsRunningJob struct {
+	pod string
+	job railsJob
+}
+
+// railsFetchStillRunning reports a cancelled fetch of checkpointID that
+// may still write into its directory; one that has ended is forgotten and
+// its files removed.
+func (a *Agent) railsFetchStillRunning(ctx context.Context, checkpointID string) bool {
+	v, ok := a.railsRunning.Load(checkpointID)
+	if !ok {
+		return false
+	}
+	r := v.(railsRunningJob)
+	once, cancel := context.WithTimeout(ctx, railsJobPoll)
+	defer cancel()
+	if !a.waitRailsJobGone(once, r.pod, r.job) {
+		return true
+	}
+	r.job.remove()
+	a.railsRunning.Delete(checkpointID)
+	return false
 }
 
 // checkpointHostDir is the host path behind CheckpointDir: the pods mount
