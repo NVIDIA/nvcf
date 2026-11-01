@@ -609,7 +609,7 @@ static int ctl(int pid, const char *cmd)
     int slow = !strncmp(cmd, "release", 7) || !strncmp(cmd, "load", 4);
     struct timeval tv = { slow ? 3600 : !strcmp(cmd, "open") ? 10 : 120, 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    char rep[256] = "err no reply (timeout)";
+    char rep[GPUSHARE_REPLY_MAX] = "err no reply (timeout)";
     if (send(s, cmd, strlen(cmd) + 1, MSG_NOSIGNAL) < 0) snprintf(rep, sizeof(rep), "err send: %s", strerror(errno));
     else {
         ssize_t r = recv(s, rep, sizeof(rep) - 1, 0);

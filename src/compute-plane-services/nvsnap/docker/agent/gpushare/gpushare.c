@@ -1919,9 +1919,11 @@ static void do_ipcget(unsigned long long base, int s)
     msg_send(s, rep, -1);
 }
 
+/* A reply's longest form ("ok remapped ...", do_remap) fits: the tool
+ * reads at most GPUSHARE_REPLY_MAX bytes of it (nvsnap-gpu-suspend.c). */
 static void serve(int s)
 {
-    char buf[256], rep[256];
+    char buf[256], rep[GPUSHARE_REPLY_MAX];
     int fd = -1;
     if (msg_recv(s, buf, sizeof(buf), &fd) < 0) return;
     if (!strcmp(buf, "quiesce")) { do_quiesce(rep, sizeof(rep)); msg_send(s, rep, -1); }

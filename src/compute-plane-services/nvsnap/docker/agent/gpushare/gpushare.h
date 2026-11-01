@@ -85,6 +85,9 @@ SPDX-License-Identifier: Apache-2.0
 
 /* Abstract socket name (without the leading NUL), per pid. */
 #define GPUSHARE_SOCK_FMT "nvsnap-gpushare.%d"
+/* Largest reply on the control socket, with its NUL. A shorter receive
+ * buffer (an older tool) gets the reply cut, never overrun (SOCK_SEQPACKET). */
+#define GPUSHARE_REPLY_MAX 4096
 /* Control thread name (/proc/<pid>/task/<tid>/comm): must not be frozen. */
 #define GPUSHARE_THREAD "nvsnap-gpushare"
 
