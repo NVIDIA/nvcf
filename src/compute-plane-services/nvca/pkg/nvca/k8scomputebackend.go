@@ -2106,7 +2106,8 @@ func (c K8sComputeBackend) AggregateInstanceStatuses(ctx context.Context, req *n
 	// deleted cannot complete a request that is waiting to be cleaned up.
 	leaveOutTerminated := false
 	for _, inst := range req.Status.Instances {
-		if inst.Type == nvcav2beta1.InstanceTypePod && inst.LastReportedStatus != string(types.ICMSInstanceTerminated) {
+		if inst.Type == nvcav2beta1.InstanceTypePod &&
+			!strings.EqualFold(inst.LastReportedStatus, string(types.ICMSInstanceTerminated)) {
 			leaveOutTerminated = true
 			break
 		}
@@ -2115,7 +2116,8 @@ func (c K8sComputeBackend) AggregateInstanceStatuses(ctx context.Context, req *n
 	for id, inst := range req.Status.Instances {
 		switch inst.Type {
 		case nvcav2beta1.InstanceTypePod:
-			if inst.LastReportedStatus == string(types.ICMSInstanceTerminated) && !c.podInstanceExists(ctx, id) {
+			if strings.EqualFold(inst.LastReportedStatus, string(types.ICMSInstanceTerminated)) &&
+				!c.podInstanceExists(ctx, id) {
 				log.Debugf("Instance %v is reported terminated and its Pod is gone", id)
 				if !leaveOutTerminated {
 					aggStatuses = append(aggStatuses, AggregatedInstanceStatusUnknown)

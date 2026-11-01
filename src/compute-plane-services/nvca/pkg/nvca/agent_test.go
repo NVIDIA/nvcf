@@ -3981,6 +3981,14 @@ func TestSyncICMSRequest_InstancesReportedTerminated(t *testing.T) {
 			want:      nvcav2beta1.ICMSRequestStatusCompleted,
 		},
 		{
+			name: "terminated in another case and gone while the others run",
+			instances: []nvcav2beta1.InstanceStatus{
+				instanceStatusInstance("0-sr", "TERMINATED", &reportedAt), running("1-sr"), running("2-sr"),
+			},
+			pods: []*v1.Pod{instanceStatusPod("1-sr"), instanceStatusPod("2-sr")},
+			want: nvcav2beta1.ICMSRequestStatusCompleted,
+		},
+		{
 			name:      "gone before it is reported terminated",
 			instances: []nvcav2beta1.InstanceStatus{running("0-sr"), running("1-sr"), running("2-sr")},
 			pods:      []*v1.Pod{instanceStatusPod("1-sr"), instanceStatusPod("2-sr")},
