@@ -109,6 +109,13 @@ agent:
   # when another pod has that address. docs/design/RESTORE-POD-ADDRESS.md.
   restoreCapturedAddress: false
 
+  # Run the GPU tool, which suspends and resumes a workload's GPU state
+  # around a CRIU capture and restore, with the workload's uid and gid and
+  # only CAP_SYS_PTRACE instead of as root: the tool loads the workload's
+  # libcuda and libraries from the workload's image.
+  # docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md, "The GPU tool as the workload".
+  gpushareToolAsWorkload: false
+
   # Namespace label naming the tenant a namespace belongs to: a label your
   # platform stamps with the account or tenant id, one namespace users
   # cannot edit (NVCF: nca-id). Captures and caches are shared only between

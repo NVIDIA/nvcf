@@ -69,6 +69,11 @@ type Config struct {
 	// on its loopback, translated at its edge, when no other pod uses it
 	// (restore_address.go).
 	RestoreCapturedAddress bool
+	// GPUShareToolAsWorkload runs the GPU tool (nvsnap-gpu-suspend) with
+	// the workload's ids and only CAP_SYS_PTRACE, through the launcher in
+	// the agent's image, instead of as root (gpushare.go,
+	// docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md).
+	GPUShareToolAsWorkload bool
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -534,6 +539,14 @@ func New(cfg Config) (*Agent, error) {
 	// behavior change for clusters that haven't switched the
 	// webhook to init-container mode yet).
 	agent.prepJobs = NewPrepJobManager(agent, log)
+
+	if cfg.GPUShareToolAsWorkload {
+		if err := gpushareLauncherUsable(gpushareLauncher); err != nil {
+			return nil, fmt.Errorf("--gpushare-tool-as-workload: %w", err)
+		}
+		gpushareAsWorkload = agent.bundleVersionsDir()
+		log.WithField("launcher", gpushareLauncher).Info("gpushare: the GPU tool runs as the workload")
+	}
 
 	return agent, nil
 }

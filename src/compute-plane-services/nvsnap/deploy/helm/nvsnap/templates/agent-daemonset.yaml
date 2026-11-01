@@ -168,6 +168,9 @@ spec:
             {{- if .Values.agent.restoreCapturedAddress }}
             - --restore-captured-address
             {{- end }}
+            {{- if .Values.agent.gpushareToolAsWorkload }}
+            - --gpushare-tool-as-workload
+            {{- end }}
             {{- with .Values.agent.tenantLabel }}
             - --tenant-label={{ . }}
             {{- end }}

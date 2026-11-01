@@ -199,6 +199,9 @@ RUN chmod +x /criu-bundle/cuda-checkpoint
 
 # gpushare (see gpushare-builder above).
 COPY --from=gpushare-builder /src/gpushare/libnvsnap_gpushare.so /src/gpushare/nvsnap-gpu-suspend /criu-bundle/
+# The launcher that runs nvsnap-gpu-suspend as the workload: the agent's
+# own, run before it enters the workload's namespaces, not in the bundle.
+COPY --from=gpushare-builder /src/gpushare/nvsnap-workload-exec /usr/local/bin/
 
 # Make everything executable
 RUN chmod +x /criu-bundle/*

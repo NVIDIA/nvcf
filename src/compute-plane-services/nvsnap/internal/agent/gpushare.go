@@ -217,17 +217,82 @@ func gpushareTool(ctx context.Context, hostPID int, timeout time.Duration, args 
 	return gpushareToolEnv(ctx, hostPID, nil, timeout, args...)
 }
 
+// gpushareNamespaces are the namespaces the GPU tool runs in (gpushareTool).
+var gpushareNamespaces = []string{"mnt", "pid", "net", "ipc", "uts"}
+
+// gpushareLauncher runs the GPU tool as the workload: the workload's ids,
+// no capability but CAP_SYS_PTRACE, no_new_privs
+// (docker/agent/gpushare/nvsnap-workload-exec.c). It is in the agent's
+// image, not the node bundle: it runs before entering any namespace.
+const gpushareLauncher = "/usr/local/bin/nvsnap-workload-exec"
+
+// gpushareAsWorkload, set when the agent starts with
+// Config.GPUShareToolAsWorkload, is the node's bundle versions directory
+// the launcher takes the tool from; "" runs the tool as root.
+var gpushareAsWorkload string
+
+// gpushareLauncherUsable checks that the launcher is an executable file.
+func gpushareLauncherUsable(path string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("the launcher is not in the agent's image: %w", err)
+	}
+	if !st.Mode().IsRegular() || st.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("the launcher %s is not an executable file", path)
+	}
+	return nil
+}
+
+// gpushareToolCommand is the command that runs the GPU tool with args in
+// the namespaces of hostPID, and the descriptors it is passed (from 3).
+// With versionsDir empty, nsenter runs the tool as root from the bundle
+// mounted in the workload. Otherwise the launcher runs it as the workload,
+// from the agent's copy of the same bundle version, opened here: nothing
+// of the workload's is resolved or loaded before the privileges are gone.
+func gpushareToolCommand(ctx context.Context, procBase string, hostPID int, versionsDir string, args []string) (*exec.Cmd, []*os.File, error) {
+	if versionsDir == "" {
+		nsArgs, files, err := nsenterByFD(procBase, hostPID, gpushareNamespaces, true, 3)
+		if err != nil {
+			return nil, nil, fmt.Errorf("enter the workload's namespaces: %w", err)
+		}
+		nsArgs = append(append(nsArgs, "--", v2BinDirInContainer+"/"+gpushareToolName), args...)
+		return exec.CommandContext(ctx, "nsenter", nsArgs...), files, nil //nolint:gosec // fixed binary; args are descriptors and tool verbs built here
+	}
+	tools, err := bundleToolsOf(procBase, hostPID, versionsDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	uid, gid, err := procOwner(procBase, hostPID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the workload's user: %w", err)
+	}
+	_, files, err := nsenterByFD(procBase, hostPID, gpushareNamespaces, false, 3)
+	if err != nil {
+		return nil, nil, fmt.Errorf("enter the workload's namespaces: %w", err)
+	}
+	tool, err := os.Open(filepath.Join(tools.dir, gpushareToolName)) //nolint:gosec // the node's copy of a verified bundle version
+	if err != nil {
+		closeFiles(files)
+		return nil, nil, fmt.Errorf("open the tool of bundle %s: %w", tools.version, err)
+	}
+	files = append(files, tool)
+	argv := []string{"--uid", strconv.Itoa(uid), "--gid", strconv.Itoa(gid)}
+	for i, k := range gpushareNamespaces {
+		argv = append(argv, "--ns", k+"="+strconv.Itoa(3+i))
+	}
+	argv = append(argv, "--exec-fd", strconv.Itoa(3+len(files)-1), "--", tools.path(gpushareToolName))
+	return exec.CommandContext(ctx, gpushareLauncher, append(argv, args...)...), files, nil
+}
+
 // gpushareToolEnv is gpushareTool with extra environment for the tool.
 func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout time.Duration, args ...string) (string, error) {
-	nsArgs, files, err := nsenterByFD(hostProcBase(), hostPID, []string{"mnt", "pid", "net", "ipc", "uts"}, true, 3)
-	if err != nil {
-		return "", fmt.Errorf("%s: enter the workload's namespaces: %w", gpushareToolName, err)
-	}
-	defer closeFiles(files)
-	nsArgs = append(append(nsArgs, "--", v2BinDirInContainer+"/"+gpushareToolName), args...)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "nsenter", nsArgs...) //nolint:gosec // fixed binary; args are descriptors and tool verbs built here
+	cmd, files, err := gpushareToolCommand(cctx, hostProcBase(), hostPID, gpushareAsWorkload, args)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", gpushareToolName, err)
+	}
+	defer closeFiles(files)
 	cmd.ExtraFiles = files
 	cmd.Env = append([]string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}, env...)
 	// nsenter -p forks the tool: a deadline or a cancel must stop the tool

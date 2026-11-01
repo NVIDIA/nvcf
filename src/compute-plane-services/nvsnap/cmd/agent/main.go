@@ -226,6 +226,9 @@ func main() {
 	flag.BoolVar(&config.RestoreCapturedAddress, "restore-captured-address", false,
 		"Give a restored pod its captured pod address on its loopback, translated to its new address at its edge, when no other pod uses that address, so sockets opened after the restore can use it (docs/design/RESTORE-POD-ADDRESS.md).")
 
+	flag.BoolVar(&config.GPUShareToolAsWorkload, "gpushare-tool-as-workload", false,
+		"Run the GPU tool (nvsnap-gpu-suspend) with the workload's uid and gid and only CAP_SYS_PTRACE, through the launcher in the agent's image, instead of as root (docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md).")
+
 	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
 		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
 
