@@ -374,8 +374,10 @@ openbao:
     issuerDiscovery:
       enabled: false
   injector:
-    # Production default: 2 replicas with hard anti-affinity for HA.
-    # Override to 1 in single-node / minimal test pools to avoid Pending pods.
+    # Under highAvailability.mode preferred or enforced the stack raises this to
+    # at least 2. Unless global.affinity.vault or global.affinity.all overrides
+    # placement, preferred uses soft anti-affinity and enforced uses required
+    # anti-affinity. Under mode none the value is used as is.
     replicas: 2
     webhook:
       # Ignore admits pods when the injector webhook is unavailable.

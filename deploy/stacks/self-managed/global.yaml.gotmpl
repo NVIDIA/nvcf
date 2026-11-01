@@ -464,6 +464,11 @@ openbao:
     {{- . | nindent 4 }}
     {{- end }}
     replicas: {{ if $haEnabled }}{{ max 2 (.Values.openbao.injector.replicas | int) }}{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
+    {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault" "matchLabels" (dict "component" "webhook")) }}
+    # String form: OpenBao tpl-renders injector.affinity.
+    affinity: |
+      {{- . | nindent 6 }}
+    {{- end }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
