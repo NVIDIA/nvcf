@@ -375,8 +375,9 @@ openbao:
       enabled: false
   injector:
     # Under highAvailability.mode preferred or enforced the stack raises this to
-    # at least 2 and applies the mode's anti-affinity (soft or required). Under
-    # mode none the value is used as is.
+    # at least 2. Unless global.affinity.vault or global.affinity.all overrides
+    # placement, preferred uses soft anti-affinity and enforced uses required
+    # anti-affinity. Under mode none the value is used as is.
     replicas: 2
     webhook:
       # Ignore admits pods when the injector webhook is unavailable.
