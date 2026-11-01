@@ -321,6 +321,11 @@ func (a *Agent) captureCandidate(ctx context.Context, pod *corev1.Pod) bool {
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
+	if pod.Annotations[webhook.FallbackReasonAnnotation] != "" {
+		// Admitted to fall back (criu_fallback.go): its cachedir is
+		// captured instead, and a CRIU placeholder would not have it.
+		return
+	}
 	if name := c.a.identityBlocksCapture(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
 		if _, seen := c.attempted.LoadOrStore("identity/"+string(pod.UID), struct{}{}); !seen {
 			c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "env": name}).
@@ -670,7 +675,7 @@ func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope str
 func criuGroupRecaptures(data map[string]string, now time.Time, bundle string) bool {
 	n, _ := strconv.Atoi(data["captures"])
 	switch data["state"] {
-	case criuGroupStateFailed:
+	case criuGroupStateFailed, criuGroupStateGPUShareFailed:
 		return n < criuGroupMaxCaptures && data[groupAgentBundleKey] != bundle
 	case criuGroupStateRestoreFailed:
 		return n < criuGroupMaxCaptures

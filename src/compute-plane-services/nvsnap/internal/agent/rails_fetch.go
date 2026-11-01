@@ -306,8 +306,8 @@ func (a *Agent) fetchOverRails(ctx context.Context, checkpointID, localDir strin
 		"failovers": res.Failovers, "source": res.Source, "bedrock_peer": res.Version + " " + res.Commit,
 	}).Info("rails: fetch complete")
 	// localDir is CheckpointDir joined with an id EnsureLocal validated.
-	if fi, err := os.Stat(filepath.Join(localDir, "inventory.img")); err != nil || fi.Size() == 0 { //nolint:gosec // see above
-		return fmt.Errorf("rails fetch reported success but %s has no inventory.img", localDir)
+	if fi, err := os.Stat(filepath.Join(localDir, "inventory.img")); (err != nil || fi.Size() == 0) && !cachedirCaptureComplete(localDir) { //nolint:gosec // see above
+		return fmt.Errorf("rails fetch reported success but %s has no inventory.img nor cachedir manifest", localDir)
 	}
 	return nil
 }

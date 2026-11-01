@@ -733,8 +733,14 @@ func tokenEnv(main *corev1.Container) []corev1.EnvVar {
 // file system: /model/.nvsnap", OCI FSS 2026-10-02, when a shared
 // filesystem once put them there). The model entries of the template are
 // dropped: the model lives in the landing volume, not under the cachedir.
+//
+// Under CRIU capture the caches stay in the writable layer
+// (criuModelEnvPatches), unless the configuration falls back
+// (criu_fallback.go): then the pod gets the cachedir as without CRIU, and
+// the fallback's capture and seed in place of the compile-cache set.
 func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, main *corev1.Container, land modelid.Landing, uri string) []PatchOp {
-	if m.CRIUCapture {
+	fb, fallback := criuFallbackOf(ctx)
+	if m.CRIUCapture && !fallback {
 		return m.criuModelEnvPatches(main, land)
 	}
 	if m.CacheDir == "" {
@@ -772,6 +778,12 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 	// The local cachedir the capture reads, and the per-key cache set
 	// that shares the compile caches between pods of one configuration.
 	patches = append(patches, m.cacheDirVolumeOnly(pod, main)...)
+	if fallback {
+		if !podHasVolume(pod, cacheDirVolumeName) && !patchesAddVolume(patches, cacheDirVolumeName) {
+			return patches // the pod brought its own volume there; nothing to seed into
+		}
+		return append(patches, m.fallbackPatches(pod, main, fb)...)
+	}
 	return m.cacheVolumePatches(ctx, pod, main, m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "model": uri}), patches)
 }
 
