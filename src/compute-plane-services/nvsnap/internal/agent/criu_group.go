@@ -340,7 +340,7 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 	if size == 1 {
 		// One pod: its record is known now, so a captured configuration
 		// is not waited on again.
-		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
+		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !c.groupRecaptures(ctx, prev.Data) {
 			return
 		}
 	}
@@ -419,7 +419,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	}
 	key := criuGroupKey(instanceConfigURIOf(uris), scope)
 	log = log.WithField("criuGroup", key)
-	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
+	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !c.groupRecaptures(ctx, prev.Data) {
 		c.writeGroupAliases(ctx, key, scope, uris, len(ranks), log)
 		log.WithFields(logrus.Fields{"state": prev.Data["state"], "captures": prev.Data["captures"], "source": prev.Data["source"]}).
 			Info("CRIU group capture: skipped; the configuration's record says it is captured, being captured, or out of attempts")
@@ -685,6 +685,37 @@ func criuGroupRecaptures(data map[string]string, now time.Time, bundle string) b
 	return false
 }
 
+// groupRecaptures is criuGroupRecaptures with the one fact the record
+// cannot hold: whether the namespace of a capture being verified still
+// exists. Only that namespace restores from such a capture, so once it is
+// gone (the function undeployed, or scaled to zero, before a restore of
+// it had served) the capture can never be verified or retried there, and
+// the configuration would start cold for good. The next Ready instance
+// captures it anew instead.
+func (c *criuAutoRestorer) groupRecaptures(ctx context.Context, data map[string]string) bool {
+	if criuGroupRecaptures(data, time.Now(), c.a.currentBundle()) {
+		return true
+	}
+	if data["state"] != criuGroupStateVerifying || data["sourceNamespace"] == "" {
+		return false
+	}
+	if n, _ := strconv.Atoi(data["captures"]); n >= criuGroupMaxCaptures {
+		return false
+	}
+	return c.namespaceGone(ctx, data["sourceNamespace"])
+}
+
+// namespaceGone reports a namespace that no longer exists or is being
+// deleted. Any other error reads as present: a record is only given up on
+// what is known.
+func (c *criuAutoRestorer) namespaceGone(ctx context.Context, name string) bool {
+	ns, err := c.a.kubeClient.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true
+	}
+	return err == nil && ns.DeletionTimestamp != nil
+}
+
 // claimGroupRecord makes the agent the capturer of key: it creates the
 // record, or takes over one that may be captured again. It returns nil
 // when another agent holds it.
@@ -708,7 +739,7 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 	if err != nil {
 		return nil, err
 	}
-	if !criuGroupRecaptures(prev.Data, time.Now(), c.a.currentBundle()) {
+	if !c.groupRecaptures(ctx, prev.Data) {
 		return nil, nil
 	}
 	n, _ := strconv.Atoi(prev.Data["captures"])

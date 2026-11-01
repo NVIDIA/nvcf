@@ -19,6 +19,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -625,5 +626,73 @@ func TestMembersFailedKeepsEveryMember(t *testing.T) {
 	}
 	if len(reason) > groupReasonMax || len(reason) > 3*(groupMemberErrorMax+16)+64 {
 		t.Errorf("reason of %d bytes, want each member bounded", len(reason))
+	}
+}
+
+// A capture being verified restores only into its own namespace. Once that
+// namespace is gone (the function undeployed, or scaled to zero, before a
+// restore of it served), the configuration is captured again by the next
+// Ready instance instead of starting cold for good. While the namespace
+// exists, or the attempts are spent, the record stands.
+func TestGroupRecaptures_VerifyingWithoutItsNamespace(t *testing.T) {
+	ctx := context.Background()
+	terminating := metav1.Now()
+	kc := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fn"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "leaving", DeletionTimestamp: &terminating, Finalizers: []string{"kubernetes"}}},
+	)
+	c := (&Agent{kubeClient: kc, log: logrus.New()}).criuRestorer()
+	verifying := func(ns, captures string) map[string]string {
+		return map[string]string{"state": criuGroupStateVerifying, "captures": captures, "sourceNamespace": ns}
+	}
+	for _, tc := range []struct {
+		name string
+		data map[string]string
+		want bool
+	}{
+		{"its namespace exists", verifying("fn", "1"), false},
+		{"its namespace is gone", verifying("gone", "1"), true},
+		{"its namespace is being deleted", verifying("leaving", "1"), true},
+		{"its namespace is gone, attempts spent", verifying("gone", strconv.Itoa(criuGroupMaxCaptures)), false},
+		{"complete, whatever the namespace", map[string]string{"state": criuGroupStateComplete, "captures": "1", "sourceNamespace": "gone"}, false},
+		{"capturing, whatever the namespace", map[string]string{"state": criuGroupStateCapturing, "captures": "1", "startedAt": time.Now().UTC().Format(time.RFC3339), "sourceNamespace": "gone"}, false},
+	} {
+		if got := c.groupRecaptures(ctx, tc.data); got != tc.want {
+			t.Errorf("%s: recaptures = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A namespace that cannot be read is not taken for gone.
+func TestGroupRecaptures_UnreadableNamespaceKeepsTheRecord(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	kc.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("namespaces"), "fn", errors.New("no"))
+	})
+	c := (&Agent{kubeClient: kc, log: logrus.New()}).criuRestorer()
+	data := map[string]string{"state": criuGroupStateVerifying, "captures": "1", "sourceNamespace": "fn"}
+	if c.groupRecaptures(context.Background(), data) {
+		t.Error("a namespace the agent cannot read must not release the record")
+	}
+}
+
+// The next Ready instance of the configuration, in another namespace,
+// takes over a record whose verification lost its namespace.
+func TestClaimGroupRecord_TakesOverVerifyingWithoutItsNamespace(t *testing.T) {
+	c, kc, _ := groupFixture(t)
+	ctx := context.Background()
+	setRecord(t, kc, map[string]string{"state": criuGroupStateVerifying, "sourceNamespace": "undeployed"})
+	p := stsRank("kimi-0", "0", "2", "sts-c", true)
+	p.Namespace = "fn"
+	claimed, err := c.claimGroupRecord(ctx, "k1", &p, 2)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim = %v, %v; want the record taken over", claimed, err)
+	}
+	if claimed.Data["state"] != criuGroupStateCapturing || claimed.Data["captures"] != "2" {
+		t.Errorf("record = %v, want a second capture under way", claimed.Data)
+	}
+	setRecord(t, kc, map[string]string{"state": criuGroupStateVerifying, "sourceNamespace": "fn"})
+	if again, err := c.claimGroupRecord(ctx, "k1", &p, 2); err != nil || again != nil {
+		t.Errorf("claim = %v, %v; a record still verified in its namespace is not taken over", again, err)
 	}
 }
