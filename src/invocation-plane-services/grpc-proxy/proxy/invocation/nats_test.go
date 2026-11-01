@@ -296,3 +296,12 @@ func TestNewNatsConnectionRecordsNkeySetupFailure(t *testing.T) {
 	// The connect is never attempted, so no connection failure should be logged.
 	assert.Empty(t, logs.FilterMessage("nats initial connection failed").All())
 }
+
+func TestConnectOptionsReconnectWithoutLimit(t *testing.T) {
+	opts := nats.GetDefaultOptions()
+	for _, option := range connectOptions("test-service", nats.Token("unused")) {
+		require.NoError(t, option(&opts))
+	}
+
+	assert.Equal(t, -1, opts.MaxReconnect)
+}

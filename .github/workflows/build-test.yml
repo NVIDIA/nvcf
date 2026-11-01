@@ -184,6 +184,9 @@ jobs:
       - name: Test grpc-proxy HTTP/3 chart rendering
         run: bash deploy/helm/grpc-proxy/tests/http3-render.sh
 
+      - name: Test grpc-proxy chart probes
+        run: bash deploy/helm/grpc-proxy/tests/probes_test.sh
+
       - name: Run Stargate dev stack render tests
         run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
 
