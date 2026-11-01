@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	nvcffndstypes "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types"
@@ -1163,4 +1164,86 @@ func TestProcessFnDSStageTransitionEventWithMissingInstanceTypeName(t *testing.T
 			details.EventLogMessage == "Pod scheduled successfully" &&
 			details.EventErrorMessage == ""
 	}))
+}
+
+// cachedPodWithSpareContainerCapacity returns a Pod whose Spec.Containers has room to grow, as a
+// decoded informer object can, together with that backing array.
+func cachedPodWithSpareContainerCapacity() (*corev1.Pod, []corev1.Container) {
+	containers := make([]corev1.Container, 1, 3)
+	containers[0] = corev1.Container{Name: "main", Image: "main-image"}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: "test-namespace",
+			Labels:    map[string]string{nvcatypes.ICMSRequestIDKey: "test-icms-request-id"},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:       "test-node",
+			Containers:     containers,
+			InitContainers: []corev1.Container{{Name: "init", Image: "init-image"}},
+		},
+	}, containers
+}
+
+// processEventForCachedPod handles a Scheduled event for pod, served as the informer cache serves
+// it: the same object on every lister read. It returns the images reported to FnDS.
+func processEventForCachedPod(t *testing.T, pod *corev1.Pod) map[string]ImageMetadata {
+	podNSLister := new(mockPodNamespaceLister)
+	podNSLister.On("Get", pod.Name).Return(pod, nil)
+	podLister := new(mockPodLister)
+	podLister.On("Pods", pod.Namespace).Return(podNSLister)
+	nodeGetter := new(mockNodeGetter)
+	nodeGetter.On("Get", pod.Spec.NodeName).Return(&corev1.Node{}, nil)
+	reqLister := new(mockICMSRequestLister)
+	reqLister.On("List", mock.Anything).Return([]*nvcav2beta1.ICMSRequest{{
+		Spec: nvcav2beta1.ICMSRequestSpec{FunctionDetails: function.Details{
+			FunctionID:        uuid.NewString(),
+			FunctionVersionID: uuid.NewString(),
+		}},
+	}}, nil)
+	fndsClient := new(mockFndsClient)
+	fndsClient.On("GetNcaId").Return("test-nca-id")
+	fndsClient.On("NewStageTransitionEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return(nvcffndstypes.StageTransitionEvent{}, nil)
+	event := &corev1.Event{
+		InvolvedObject: corev1.ObjectReference{Name: pod.Name, Namespace: pod.Namespace},
+		Reason:         K8sReasonContainerScheduled,
+		Message:        "Pod scheduled successfully",
+	}
+
+	err := ProcessFnDSStageTransitionEvent(context.Background(), event, podLister, nodeGetter.Get, reqLister, fndsClient, nil)
+	assert.NoError(t, err)
+
+	var details EventDetails
+	for _, call := range fndsClient.Calls {
+		if call.Method == "NewStageTransitionEvent" {
+			assert.NoError(t, json.Unmarshal(call.Arguments.Get(6).([]byte), &details))
+		}
+	}
+	return details.ContainerImages
+}
+
+func TestProcessFnDSStageTransitionEvent_DoesNotWriteIntoCachedPodSpec(t *testing.T) {
+	pod, containers := cachedPodWithSpareContainerCapacity()
+
+	images := processEventForCachedPod(t, pod)
+
+	assert.Equal(t, map[string]ImageMetadata{"main-image": {}, "init-image": {}}, images)
+	assert.Equal(t, make([]corev1.Container, 2), containers[1:cap(containers)],
+		"the spare capacity of Spec.Containers must stay untouched")
+}
+
+// Events for one Pod are handled concurrently against one cached object. Run with -race.
+func TestProcessFnDSStageTransitionEvent_ConcurrentEventsForOneCachedPod(t *testing.T) {
+	pod, _ := cachedPodWithSpareContainerCapacity()
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.Len(t, processEventForCachedPod(t, pod), 2)
+		}()
+	}
+	wg.Wait()
 }

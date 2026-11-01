@@ -2027,17 +2027,33 @@ func getPostedInstanceStatus(ctx context.Context, isu types.ICMSRequestUpdateInf
 	}
 }
 
+// getUpdatedInstanceStatusMap returns a copy of currentStatus in which each instance posted to ICMS
+// records the posted state. Instances that were not posted are kept as they are, and posted
+// instances that are no longer in currentStatus are not added back.
 func getUpdatedInstanceStatusMap(currentStatus, postedStatus map[string]nvcav2beta1.InstanceStatus) map[string]nvcav2beta1.InstanceStatus {
-	updatedStatus := make(map[string]nvcav2beta1.InstanceStatus)
-	for id, cis := range currentStatus {
-		if _, ok := postedStatus[id]; ok {
-			cis.Status = postedStatus[id].LastReportedStatus
-			cis.LastReportedStatus = postedStatus[id].LastReportedStatus
-			cis.LastReportedTimestamp = postedStatus[id].LastReportedTimestamp
-			updatedStatus[id] = cis
+	updatedStatus := maps.Clone(currentStatus)
+	for id, pis := range postedStatus {
+		cis, ok := updatedStatus[id]
+		if !ok {
+			continue
 		}
+		cis.Status = pis.LastReportedStatus
+		cis.LastReportedStatus = pis.LastReportedStatus
+		cis.LastReportedTimestamp = pis.LastReportedTimestamp
+		updatedStatus[id] = cis
 	}
 	return updatedStatus
+}
+
+// isRepeatedTerminatedReport reports whether a report of state for the instance st repeats a
+// terminated report that the status loop has already recorded. Only the loop records a report,
+// which sets the status, the last reported status and its time. A purge by a termination request
+// or by maintenance eviction sets only the status, and a kill by nvcf-cli only the last reported
+// status, so the loop's first terminated report after either is not a repeat.
+func isRepeatedTerminatedReport(st nvcav2beta1.InstanceStatus, state types.ICMSInstanceState) bool {
+	terminated := string(types.ICMSInstanceTerminated)
+	return state == types.ICMSInstanceTerminated && st.LastReportedTimestamp != nil &&
+		strings.EqualFold(st.Status, terminated) && strings.EqualFold(st.LastReportedStatus, terminated)
 }
 
 func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error {
@@ -2126,19 +2142,17 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
-					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
+				// A repeated terminated report only corrects ICMS. Its event, which carries the cause of the
+				// repeat, would replace the one recorded for the first report.
+				if !isRepeatedTerminatedReport(req.Status.Instances[ru.InstanceID], ruPayload.InstanceState) {
+					a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
+						string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
+				}
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
 			}
-			var instanceStatusMap map[string]nvcav2beta1.InstanceStatus
 			var nrs nvcav2beta1.RequestStatus
 			crs := req.Status.RequestStatus
-			if len(postedInstanceStatus) != 0 {
-				instanceStatusMap = getUpdatedInstanceStatusMap(req.Status.Instances, postedInstanceStatus)
-			} else {
-				instanceStatusMap = req.Status.Instances
-			}
 			switch crs {
 			case nvcav2beta1.ICMSRequestStatusCompleted:
 				nrs = nvcav2beta1.ICMSRequestStatusCompletionAcknowledged
@@ -2148,9 +2162,14 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 				nrs = crs
 			}
 			if crs != nrs || len(postedInstanceStatus) != 0 {
+				// Apply the posted statuses to the latest instances, which may have changed since req was listed.
+				// Change the request status only while it is still the listed one: a status another writer
+				// stored since then, such as Failed, is kept for the next pass to list and handle.
 				modify := func(_ context.Context, sr *nvcav2beta1.ICMSRequest) {
-					sr.Status.Instances = instanceStatusMap
-					sr.Status.RequestStatus = nrs
+					sr.Status.Instances = getUpdatedInstanceStatusMap(sr.Status.Instances, postedInstanceStatus)
+					if sr.Status.RequestStatus == crs {
+						sr.Status.RequestStatus = nrs
+					}
 				}
 				if !a.backendk8scache.applyICMSRequestStatusChange(ctx, req, modify) {
 					log.Errorf("Error updating Status for ICMSRequest '%s' from %v to %v status", req.Name, crs, nrs)

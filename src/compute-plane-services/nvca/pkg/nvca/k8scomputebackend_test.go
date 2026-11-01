@@ -1937,6 +1937,60 @@ func TestPurgeInstanceID_StillPresentAfterDelete(t *testing.T) {
 	})
 }
 
+// cachedPodWithSpareStatusCapacity returns a scheduled Pod, started 10 minutes ago, whose main
+// container waits with the given state and whose InitContainerStatuses has room to grow, as a
+// decoded informer object can. It also returns that backing array.
+func cachedPodWithSpareStatusCapacity(waiting corev1.ContainerStateWaiting) (*corev1.Pod, []corev1.ContainerStatus) {
+	initStatuses := make([]corev1.ContainerStatus, 1, 3)
+	initStatuses[0] = corev1.ContainerStatus{
+		Name:  "init",
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed"}},
+	}
+	start := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	return &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase:                 corev1.PodPending,
+			StartTime:             &start,
+			Conditions:            []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+			InitContainerStatuses: initStatuses,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "main", State: corev1.ContainerState{Waiting: &waiting}},
+			},
+		},
+	}, initStatuses
+}
+
+func TestPodHasCreateContainerError_DoesNotWriteIntoStatusSlices(t *testing.T) {
+	pod, initStatuses := cachedPodWithSpareStatusCapacity(corev1.ContainerStateWaiting{
+		Reason: "CreateContainerError", Message: "container create failed",
+	})
+
+	msg, ok := podHasCreateContainerError(pod)
+
+	assert.True(t, ok)
+	assert.Equal(t, "container create failed", msg)
+	assert.Equal(t, make([]corev1.ContainerStatus, 2), initStatuses[1:cap(initStatuses)],
+		"the spare capacity of InitContainerStatuses must stay untouched")
+}
+
+// The status loop and the informer handlers classify the same cached Pod concurrently, so
+// podPhaseToInstanceState and the helpers it calls must only read it. Run with -race.
+func TestPodPhaseToInstanceState_ConcurrentReadersOfOnePod(t *testing.T) {
+	pod, _ := cachedPodWithSpareStatusCapacity(corev1.ContainerStateWaiting{Reason: k8sutil.ImagePullIssueAlternateReason})
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			is, _ := podPhaseToInstanceState(pod, timeConfig)
+			assert.Equal(t, types.ICMSInstanceFailedImagePullIssues, is)
+		}()
+	}
+	wg.Wait()
+}
+
 func TestGetICMSRequestUpdatesForCreatePodRequest_CreateContainerError_EventLogInHealthInfo(t *testing.T) {
 	ctx := newTestContext()
 	clients := mockKubeClients()

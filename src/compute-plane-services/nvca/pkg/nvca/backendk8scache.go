@@ -218,6 +218,10 @@ type BackendK8sCache struct {
 	periodicInstanceStatusUpdateInterval time.Duration
 	csiVolumeMountOptions                []string
 
+	// Live reads of Pod instances by the instance status loop, which bound how long an instance is
+	// served from the informer cache.
+	instancePodLiveReads instancePodLiveReads
+
 	// Node features client, for retrieving instance type data.
 	nfClient nodefeatures.Client
 	// Registration instance type cache, since computing may be expensive.
@@ -2194,8 +2198,14 @@ func (c *BackendK8sCache) applyICMSRequestStatusChange(ctx context.Context,
 		}
 
 		// Update ICMS request
+		storedReqStatus := srLat.Status.RequestStatus
 		modify(ctx, srLat)
 		newReqStatus = srLat.Status.RequestStatus
+		if newReqStatus == storedReqStatus {
+			// This write leaves the request status as stored, so it records no span transition and leaves
+			// the span bookkeeping to the write that changed the status.
+			newReqStatus = prevReqStatus
+		}
 
 		// set the lastUpdatedTimeStamp
 		lastUpdatedTime = metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -3083,13 +3093,20 @@ func (c *BackendK8sCache) shouldReportInstanceStatusHeartbeat(
 		return false
 	}
 
-	if time.Since(lastReportedTimeStamp.Time) >= c.periodicInstanceStatusUpdateInterval {
+	if c.instanceStatusHeartbeatDue(lastReportedTimeStamp, core.GetCurrentTime(ctx)) {
 		return true
 	}
 
 	log.Debugf("skip status for %v, currentStatus: %v, lastReportedStatus: %v, lastReportedTimeStamp: %v",
 		instanceID, currentStatus, lastReportedStatus, lastReportedTimeStamp)
 	return false
+}
+
+// instanceStatusHeartbeatDue reports whether the periodic report of an instance's unchanged state,
+// last reported at lastReported, is due at now.
+func (c *BackendK8sCache) instanceStatusHeartbeatDue(lastReported *metav1.Time, now time.Time) bool {
+	return c.enablePeriodicInstanceStatusUpdate && lastReported != nil &&
+		now.Sub(lastReported.Time) >= c.periodicInstanceStatusUpdateInterval
 }
 
 func (c *BackendK8sCache) ApplyICMSRequestStatusChange(ctx context.Context, req *nvcav2beta1new.ICMSRequest) error {

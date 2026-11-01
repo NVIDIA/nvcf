@@ -59,7 +59,6 @@ import (
 	helmutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/helm"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
-	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
@@ -1700,19 +1699,24 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 	fPL := ""
 	action := toLegacyAction(req.Spec.Action)
 	var instanceIPs []string
-	p, err := c.clients.K8s.CoreV1().Pods(c.bk8s.podInstanceNamespace).Get(ctx, id, metav1.GetOptions{})
-
-	// Track K8s API call metrics
-	if metrics := nvcametrics.FromContext(ctx); metrics != nil {
-		metrics.TrackK8sAPICall("pod", err)
-	}
-
+	// p may be the informer's cached object: it must not be modified, and only a live p is reported.
+	p, decision, live, err := c.readInstancePod(ctx, st, req)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return types.ICMSRequestUpdateInfo{}, err
 		}
+		if !live {
+			// The instance was reported terminated, and neither its refresh nor its periodic report is
+			// due, so readInstancePod did not read its Pod live.
+			return types.ICMSRequestUpdateInfo{}, nil
+		}
 
-		if !isStartupArgsMalformed(req.Status.LastReconcileError) {
+		// An instance reported terminated stays listed while the rest of its request runs. Once its last
+		// reported status says terminated, later passes neither log nor count the failure again, and repeat
+		// the report as a heartbeat. The repeat corrects ICMS when it did not record an earlier report,
+		// which the ICMS client can take as a success.
+		reportedTerminated := strings.EqualFold(st.LastReportedStatus, string(types.ICMSInstanceTerminated))
+		if !isStartupArgsMalformed(req.Status.LastReconcileError) && !reportedTerminated {
 			log.WithError(err).Warn("Pod is not running, report it as killed, if not reported before")
 		}
 
@@ -1741,7 +1745,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 			failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(srUpdateInfo.Payload.TerminationCause)
 			srUpdateInfo.Payload.FailureCategory = string(failureCategory)
 
-			if m := nvcametrics.FromContext(ctx); m != nil {
+			if m := nvcametrics.FromContext(ctx); m != nil && !reportedTerminated {
 				m.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeContainer,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
@@ -1762,36 +1766,15 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 		return types.ICMSRequestUpdateInfo{}, nil
 	}
 
-	needsPurge := false
-	var gracePeriodSeconds *int64
-	is, dReason := podPhaseToInstanceState(p, c.bk8s.k8sTimeConfig)
-	// NVCF-125 if InstanceStatus Failed, we mark the request closed
-	_, isBadState := badICMSInstanceStates[is]
-	if isBadState && req.Spec.Action != common.RequestICMSInstancesForTask && req.Spec.Action != common.TaskCreationAction {
-		if is == types.ICMSInstanceDegradedWorker && !c.bk8s.autoPurgeDegradedWorkers {
+	needsPurge, gracePeriodSeconds := decision.needsPurge, decision.gracePeriodSeconds
+	is, dReason, isBadState := decision.is, decision.reason, decision.isBadState
+	if isBadState && !isTaskCreationAction(req.Spec.Action) {
+		if needsPurge {
+			log.Warnf("pod %v is in state %v, it will be force-purged", id, is)
+		} else {
 			log.Warnf("pod %v is in state %v, reason: %v, skip purge since autoPurgeDegradedWorkers is disabled",
 				id, is, dReason)
-		} else {
-			needsPurge = true
-			log.Warnf("pod %v is in state %v, it will be force-purged", id, is)
 		}
-	} else if req.Spec.Action == common.RequestICMSInstancesForTask || req.Spec.Action == common.TaskCreationAction {
-		maxRuntimeDurationStr := req.Spec.CreationMsgInfo.TaskLaunchSpecification.MaxRuntimeDuration
-		maxQueuedDurationStr := req.Spec.CreationMsgInfo.TaskLaunchSpecification.MaxQueuedDuration
-		// Wait for the utils container to exit, or for a max duration to have passed.
-		mrd, err := nvcainternaltranslate.ParseMaxRuntimeDuration(maxRuntimeDurationStr)
-		if err != nil {
-			log.WithError(err).WithField("maxRuntimeDurationStr", maxRuntimeDurationStr).
-				Error("Error parsing max runtime duration for container task")
-			return types.ICMSRequestUpdateInfo{}, nvcaerrors.TerminalError(fmt.Errorf("parse max runtime duration: %w", err))
-		}
-		mqd, err := translateutil.ParseISO8601Duration(maxQueuedDurationStr)
-		if err != nil {
-			log.WithError(err).WithField("maxQueuedDurationStr", maxQueuedDurationStr).
-				Error("Error parsing max queued duration for container task")
-			return types.ICMSRequestUpdateInfo{}, nvcaerrors.TerminalError(fmt.Errorf("parse max queued duration: %w", err))
-		}
-		gracePeriodSeconds, needsPurge = c.reconcileContainerTaskPodState(ctx, p, is, mqd, mrd, time.Now())
 	}
 
 	var errSource string
@@ -1802,7 +1785,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 		action = common.TerminationAction
 		rs = types.ICMSInstanceRequestClosed
 		var prependLog string
-		if (req.Spec.Action == common.RequestICMSInstancesForTask || req.Spec.Action == common.TaskCreationAction) && !isBadState {
+		if isTaskCreationAction(req.Spec.Action) && !isBadState {
 			prependLog = fmt.Sprintf("pod terminated while in state %s due to unexpected task failure, check task logs for more information", is)
 		} else {
 			if dReason != "" {
@@ -1832,9 +1815,18 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 				fPL += "\n---\nContainer/init logs:\n" + podLogs
 			}
 		}
+		// Delete only the Pod this decision was taken from, unchanged since it was read: not a
+		// replacement with the same name, and not the Pod after it changed, for example by recovering.
+		uid, resourceVersion := p.UID, p.ResourceVersion
 		err := c.clients.K8s.CoreV1().Pods(c.bk8s.podInstanceNamespace).Delete(ctx, id, metav1.DeleteOptions{
 			GracePeriodSeconds: gracePeriodSeconds,
+			Preconditions:      &metav1.Preconditions{UID: &uid, ResourceVersion: &resourceVersion},
 		})
+		if apierrors.IsConflict(err) {
+			log.WithError(err).WithField("pod", id).
+				Warnf("pod changed after it was found in state %v, not purging it and re-evaluating it on the next pass", tc)
+			return types.ICMSRequestUpdateInfo{}, nil
+		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).WithField("pod", id).
 				Errorf("failed to delete pod stuck due to %v, status will still be reported to ICMS", tc)
@@ -1852,6 +1844,11 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 
 	if c.bk8s.shouldReportInstanceStatusHeartbeat(ctx, req, st.ID,
 		string(is), st.LastReportedStatus, st.LastReportedTimestamp) {
+		if !live {
+			// The periodic report fell due after readInstancePod served the Pod from the cache.
+			log.Debug("Instance status report is due but the Pod was read from the informer cache, reporting it on the next pass")
+			return types.ICMSRequestUpdateInfo{}, nil
+		}
 
 		// Only increment metric once.
 		if imagePullIssues, ok := k8sutil.ImagePullIssuesReported(p.Status); ok {
@@ -1932,15 +1929,19 @@ func podHasCreateContainerError(pod *corev1.Pod) (msg string, ok bool) {
 	if pod == nil {
 		return "", false
 	}
-	for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
-		if cs.State.Waiting == nil {
-			continue
-		}
-		// CreateContainerError is set when a container fails to be created on the node.
-		// CreateContainerConfigError is similar but indicates a configuration issue.
-		// Both are terminal for the current pod spec and should trigger instance termination.
-		if cs.State.Waiting.Reason == "CreateContainerError" || cs.State.Waiting.Reason == "CreateContainerConfigError" {
-			return cs.State.Waiting.Message, true
+	// Read both slices in place: appending one to the other writes into the spare capacity of
+	// the first, which belongs to the informer cache when pod is a cached Pod.
+	for _, statuses := range [...][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if cs.State.Waiting == nil {
+				continue
+			}
+			// CreateContainerError is set when a container fails to be created on the node.
+			// CreateContainerConfigError is similar but indicates a configuration issue.
+			// Both are terminal for the current pod spec and should trigger instance termination.
+			if cs.State.Waiting.Reason == "CreateContainerError" || cs.State.Waiting.Reason == "CreateContainerConfigError" {
+				return cs.State.Waiting.Message, true
+			}
 		}
 	}
 	return "", false
@@ -2099,10 +2100,30 @@ func (c K8sComputeBackend) GetICMSRequestStatusUpdatesForRequest(ctx context.Con
 
 func (c K8sComputeBackend) AggregateInstanceStatuses(ctx context.Context, req *nvcav2beta1.ICMSRequest) AggregatedInstanceStatus {
 	log := core.GetLogger(ctx)
+	// A Pod instance reported terminated whose Pod is gone has nothing left to wait for. While another
+	// Pod instance is not reported terminated, it is left out, so that it does not hold the request in
+	// progress as unknown. Once all are reported terminated it stays unknown, so that Pods still being
+	// deleted cannot complete a request that is waiting to be cleaned up.
+	leaveOutTerminated := false
+	for _, inst := range req.Status.Instances {
+		if inst.Type == nvcav2beta1.InstanceTypePod &&
+			!strings.EqualFold(inst.LastReportedStatus, string(types.ICMSInstanceTerminated)) {
+			leaveOutTerminated = true
+			break
+		}
+	}
 	var aggStatuses []AggregatedInstanceStatus
 	for id, inst := range req.Status.Instances {
 		switch inst.Type {
 		case nvcav2beta1.InstanceTypePod:
+			if strings.EqualFold(inst.LastReportedStatus, string(types.ICMSInstanceTerminated)) &&
+				!c.podInstanceExists(ctx, id) {
+				log.Debugf("Instance %v is reported terminated and its Pod is gone", id)
+				if !leaveOutTerminated {
+					aggStatuses = append(aggStatuses, AggregatedInstanceStatusUnknown)
+				}
+				continue
+			}
 			aggStatuses = append(aggStatuses, c.AggregatePodInstanceStatus(ctx, req, id))
 		case nvcav2beta1.InstanceTypeMiniService:
 			ms := &v1alpha1.MiniService{}
