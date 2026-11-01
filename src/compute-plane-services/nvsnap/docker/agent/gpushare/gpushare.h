@@ -41,6 +41,9 @@ SPDX-License-Identifier: Apache-2.0
  *            multicast objects and rejoin this process's devices.
  *   resume   (after remap of all pids)  bind multicast memory (blocks until
  *            every device rejoined) and map it; reopen the launch gate.
+ *   resume hold  the same, but the gate stays closed until "open": across
+ *            nodes, only once every node has bound its multicast memory.
+ *   open     (after "resume hold")  reopen the launch gate.
  *
  * Shared memory is tracked whether it is passed as a POSIX fd or, with an
  * IMEX channel, as a fabric handle (identified by "whosefab", hex). An
@@ -82,6 +85,9 @@ SPDX-License-Identifier: Apache-2.0
 
 /* Abstract socket name (without the leading NUL), per pid. */
 #define GPUSHARE_SOCK_FMT "nvsnap-gpushare.%d"
+/* Largest reply on the control socket, with its NUL. A shorter receive
+ * buffer (an older tool) gets the reply cut, never overrun (SOCK_SEQPACKET). */
+#define GPUSHARE_REPLY_MAX 4096
 /* Control thread name (/proc/<pid>/task/<tid>/comm): must not be frozen. */
 #define GPUSHARE_THREAD "nvsnap-gpushare"
 

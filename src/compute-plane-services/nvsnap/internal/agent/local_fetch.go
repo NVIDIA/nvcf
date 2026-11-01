@@ -37,13 +37,14 @@ func fetchMarker(checkpointDir, id string) string {
 }
 
 // localCheckpointComplete reports whether checkpoint id is whole on this
-// node.
+// node: a CRIU dump's inventory.img, or a cachedir capture's manifest
+// (criu_fallback.go), each written last.
 func localCheckpointComplete(checkpointDir, id string) bool {
 	if _, err := os.Stat(fetchMarker(checkpointDir, id)); err == nil {
 		return false
 	}
 	fi, err := os.Stat(filepath.Join(checkpointDir, id, "inventory.img"))
-	return err == nil && fi.Size() > 0
+	return (err == nil && fi.Size() > 0) || cachedirCaptureComplete(filepath.Join(checkpointDir, id))
 }
 
 // beginLocalFetch marks a fetch of id and empties what an earlier fetch

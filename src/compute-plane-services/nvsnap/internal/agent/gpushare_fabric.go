@@ -942,7 +942,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	replace := false
 	for _, m := range res.Members {
 		if m.Error != "" {
-			failed = append(failed, m.Namespace+"/"+m.PodName+": "+m.Error)
+			failed = append(failed, memberFailure(m.Namespace+"/"+m.PodName, m.Error))
 			replace = replace || sourceMustBeReplacedText(m.Error)
 		}
 	}
@@ -954,7 +954,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		a.deleteMembers(context.WithoutCancel(ctx), req.Members, uids, log)
 	}
 	if len(failed) > 0 {
-		return res, fmt.Errorf("group checkpoint %s: %d of %d members failed: %s", session, len(failed), len(res.Members), strings.Join(failed, "; "))
+		return res, membersFailed("group checkpoint", session, len(res.Members), failed)
 	}
 	return res, nil
 }

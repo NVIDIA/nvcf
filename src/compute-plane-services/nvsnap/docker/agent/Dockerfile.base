@@ -29,7 +29,10 @@ RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
 # so they are built against an old glibc (Rocky Linux 8): they then load in
 # any image with glibc 2.17 or later. They need only the CUDA 13 driver API
 # header (CUcheckpointGpuPair); libcuda is the workload's, at run time.
-FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS cuda-headers
+# The header is the same on every architecture: it is taken from the build
+# machine's image, whose include path resolves (the arm64 image's links point
+# at the x86_64 target and cannot be read when building for arm64).
+FROM --platform=$BUILDPLATFORM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS cuda-headers
 FROM rockylinux:8 AS gpushare-builder
 RUN dnf -y install gcc make && dnf clean all
 COPY --from=cuda-headers /usr/local/cuda/include/cuda.h /cuda/include/cuda.h
@@ -196,6 +199,9 @@ RUN chmod +x /criu-bundle/cuda-checkpoint
 
 # gpushare (see gpushare-builder above).
 COPY --from=gpushare-builder /src/gpushare/libnvsnap_gpushare.so /src/gpushare/nvsnap-gpu-suspend /criu-bundle/
+# The launcher that runs nvsnap-gpu-suspend as the workload: the agent's
+# own, run before it enters the workload's namespaces, not in the bundle.
+COPY --from=gpushare-builder /src/gpushare/nvsnap-workload-exec /usr/local/bin/
 
 # Make everything executable
 RUN chmod +x /criu-bundle/*

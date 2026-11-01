@@ -15,6 +15,7 @@ Status: proposed. Scope: the agent's capture and restore (`checkpoint_v2.go`, `p
 - [Proposal](#proposal)
   - [Pods that share one pid namespace](#pods-that-share-one-pid-namespace)
   - [The placeholder's root](#the-placeholders-root)
+  - [The GPU tool as the workload](#the-gpu-tool-as-the-workload)
 - [What it costs](#what-it-costs)
 - [Tests](#tests)
 <!-- /toc -->
@@ -80,12 +81,63 @@ static agent binary, run in the placeholder's mount namespace (as it already is 
 sockets), clones the placeholder's mount tree there (`open_tree`) and passes it back over a socket pair; the restore
 helper attaches it with `move_mount`.
 
+### The GPU tool as the workload
+
+How item 3 is done. Today the agent runs `nsenter --mount --pid --net --ipc --uts --root --wd -- /criu-bundle/nvsnap-gpu-suspend`
+as root with every capability: the tool's loader, libc, `/etc/ld.so.preload` and libcuda come from the workload's image,
+and `--root` is the process's chroot, which the workload can change.
+
+What the tool needs: `PTRACE_SEIZE`/`INTERRUPT`/`DETACH` and signals on the workload's processes, the driver's checkpoint
+calls on them (`cuCheckpointProcess*`), the processes' control sockets (abstract, in their network namespace), its state
+directory, the pod's GPU store and the fabric session directory. All of these belong to the workload's user. It mounts,
+creates devices and enters namespaces nowhere.
+
+The tool is linked dynamically: its loader and libc come from the workload's image and run before its `main`, so the
+tool cannot drop its own privileges. They are dropped before it is executed:
+
+1. The agent checks the bundle mount as for every tool (`bundleToolsOf`: read-only, one of the node's versions, a workload
+   without `CAP_SYS_ADMIN`), opens the process's namespaces by descriptor (item 4), reads its `Uid` and `Gid` from the
+   node's `/proc/<pid>/status`, and opens the tool from the agent's own copy of the same bundle version, not through the
+   workload's filesystem.
+2. It runs a small helper from the agent's image (`nvsnap-workload-exec`, C, single-threaded) with those descriptors. The
+   helper is linked with `-z now` and does no name lookups, so everything it loads comes from the agent's image, before it
+   enters any namespace.
+3. The helper enters the namespaces (`setns`; the mount namespace sets root and working directory to the namespace's own,
+   so no `--root`), forks for the pid namespace, and in the child: the bounding set reduced to `CAP_SYS_PTRACE`, no
+   supplementary groups, `setresgid`/`setresuid` to the workload's ids keeping capabilities, the effective, permitted,
+   inheritable and ambient sets reduced to `CAP_SYS_PTRACE`, `PR_SET_NO_NEW_PRIVS`, a check that the credentials are
+   exactly these, then `fexecve` of the tool's descriptor. The parent waits and returns the child's status, so cancel and
+   deadline still reach the tool (process group, as today).
+
+From the tool's loader on, the tool and everything it loads run with the workload's ids, no capability but
+`CAP_SYS_PTRACE`, and no way to gain more. NVCF's GPU workloads run as uid 0: they keep uid 0 but lose root's
+capabilities (no mounts, no `CAP_SYS_ADMIN`, no `CAP_DAC_OVERRIDE`), which is what an escape from the container needs.
+
+`CAP_SYS_PTRACE` is the least the tool runs with. Without it the driver's checkpoint calls fail
+(`CUDA_ERROR_OPERATING_SYSTEM`) on nodes that restrict ptrace to ancestors (Yama scope 1). It reaches only the processes
+the tool can name, those of the workload's pid namespace.
+
+The fabric session directory, which the tool writes during a multi-node suspend, is given to the workload's user at
+capture as it already is at restore.
+
+Checked on GB300 (kernel 6.17, Yama scope 1), single-GPU vLLM, uid 0: with only `CAP_SYS_PTRACE` and `no_new_privs`,
+`gpus`, `state`, `suspend` (27.9 GiB, driver checkpoint) and `resume` succeed and the engine answers after; with no
+capability, `suspend` fails at the driver's `get_state` and rolls back.
+
+Rollout: agent flag `--gpushare-tool-as-workload` (chart `agent.gpushareToolAsWorkload`), off by default. It is turned on
+per cluster after the gate below passes, then made the default, then the root path is removed with item 1's bundle mount.
+
+Open before the flag goes on in production:
+
+- Multi-GPU on one node, and multi-node NVLink (fabric re-import and multicast rejoin after a restore, with `--gpu-map`),
+  as the workload's user: the regression gate and a two-node Kimi-K3 instance with the flag on.
+
 ## What it costs
 
 - The in-namespace dump path goes. It is the default today; the pid-namespace path has been validated on single-pod
   and two-pod captures, not yet on every workload in the regression set.
-- The GPU tool needs a check from the GPU tool owners that it works with only `CAP_SYS_PTRACE` as the workload's user (the driver
-  checkpoint API on processes of the same user, the control socket's peer check).
+- The GPU tool as the workload is checked on one GPU with only `CAP_SYS_PTRACE`; multi-GPU and multi-node NVLink are
+  checked by the gate and a two-node instance with the flag on before it goes on in production.
 - Restore from the agent's side needs CRIU to restore into the placeholder's mount namespace with the binary outside
   it: CRIU supports `--root`; the pid-namespace restore helper changes accordingly.
 
@@ -95,5 +147,5 @@ helper attaches it with `move_mount`.
   through the pid-namespace path, and a pod that shares one pid namespace through the subtree path.
 - A placeholder whose image carries loader configuration or libraries of its own: the restore loads none of them
   (CRIU and the replays run from the agent's filesystem).
-- The GPU tool as the workload's user: suspend and resume of a TP=4 vLLM, and of a two-node fabric session.
+- The GPU tool as the workload's user: suspend and resume of a TP=4 vLLM, and of a two-node fabric session; the helper's credentials (uid, gid, no groups, only `CAP_SYS_PTRACE`, `no_new_privs`) checked before it runs the tool.
 - A namespace change between the check and the run is refused.

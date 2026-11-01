@@ -65,6 +65,15 @@ type Config struct {
 	// CRIUGhostLimit bounds, in bytes, the contents of one deleted file a
 	// dump saves (criu --ghost-limit); 0 is defaultGhostLimit.
 	CRIUGhostLimit int64
+	// RestoreCapturedAddress gives a restored pod the captured pod address
+	// on its loopback, translated at its edge, when no other pod uses it
+	// (restore_address.go).
+	RestoreCapturedAddress bool
+	// GPUShareToolAsWorkload runs the GPU tool (nvsnap-gpu-suspend) with
+	// the workload's ids and only CAP_SYS_PTRACE, through the launcher in
+	// the agent's image, instead of as root (gpushare.go,
+	// docs/design/TOOLS-OUTSIDE-THE-WORKLOAD.md).
+	GPUShareToolAsWorkload bool
 	// CheckpointHostDir is the host filesystem path that backs CheckpointDir
 	// inside the agent container. The capture-write writer Job consumes
 	// CaptureSource.SrcPath as a host path (joined with /host), so the
@@ -172,6 +181,11 @@ type Config struct {
 
 	// ModelVolume enables the write-once model volume for Helm functions.
 	ModelVolume ModelVolumeConfig
+
+	// Rails is the rails tier of EnsureLocal: checkpoint copies between
+	// nodes over their RDMA NICs with bedrock-peer (rails_fetch.go). Off
+	// unless Rails.Image is set.
+	Rails RailsConfig
 
 	// Replication is the opt-in cross-cluster replication config (the L4
 	// tier). See docs/design/cross-cluster-replication.md. When
@@ -526,6 +540,14 @@ func New(cfg Config) (*Agent, error) {
 	// webhook to init-container mode yet).
 	agent.prepJobs = NewPrepJobManager(agent, log)
 
+	if cfg.GPUShareToolAsWorkload {
+		if err := gpushareLauncherUsable(gpushareLauncher); err != nil {
+			return nil, fmt.Errorf("--gpushare-tool-as-workload: %w", err)
+		}
+		gpushareAsWorkload = agent.bundleVersionsDir()
+		log.WithField("launcher", gpushareLauncher).Info("gpushare: the GPU tool runs as the workload")
+	}
+
 	return agent, nil
 }
 
@@ -738,6 +760,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
 	}
 	a.startGPUShareStoreReaper(ctx)
+	a.sweepRailsPods(ctx)
+	a.startRailsServeReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/design/helm-shared-model-volume.md).
