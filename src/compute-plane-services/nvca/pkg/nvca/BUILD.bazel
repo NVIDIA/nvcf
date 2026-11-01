@@ -242,6 +242,7 @@ go_test(
         "//src/compute-plane-services/nvca/internal/kubeclients",
         "//src/compute-plane-services/nvca/internal/metrics",
         "//src/compute-plane-services/nvca/internal/metrics/clientmetrics",
+        "//src/compute-plane-services/nvca/internal/metrics/workloadtypes",
         "//src/compute-plane-services/nvca/internal/mock/icmsservice",
         "//src/compute-plane-services/nvca/internal/mock/queueservice",
         "//src/compute-plane-services/nvca/internal/mock/tokencache",

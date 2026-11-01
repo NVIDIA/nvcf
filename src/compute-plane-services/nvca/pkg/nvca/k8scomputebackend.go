@@ -1712,7 +1712,11 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 			return types.ICMSRequestUpdateInfo{}, err
 		}
 
-		if !isStartupArgsMalformed(req.Status.LastReconcileError) {
+		// An instance reported terminated stays listed while the rest of its request runs. Once its last
+		// reported status says terminated, later passes neither log nor count the failure again, and repeat
+		// the report as a heartbeat.
+		reportedTerminated := strings.EqualFold(st.LastReportedStatus, string(types.ICMSInstanceTerminated))
+		if !isStartupArgsMalformed(req.Status.LastReconcileError) && !reportedTerminated {
 			log.WithError(err).Warn("Pod is not running, report it as killed, if not reported before")
 		}
 
@@ -1741,7 +1745,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 			failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(srUpdateInfo.Payload.TerminationCause)
 			srUpdateInfo.Payload.FailureCategory = string(failureCategory)
 
-			if m := nvcametrics.FromContext(ctx); m != nil {
+			if m := nvcametrics.FromContext(ctx); m != nil && !reportedTerminated {
 				m.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeContainer,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
@@ -2103,10 +2107,28 @@ func (c K8sComputeBackend) GetICMSRequestStatusUpdatesForRequest(ctx context.Con
 
 func (c K8sComputeBackend) AggregateInstanceStatuses(ctx context.Context, req *nvcav2beta1.ICMSRequest) AggregatedInstanceStatus {
 	log := core.GetLogger(ctx)
+	// A Pod instance reported terminated whose Pod is gone has nothing left to wait for. While another
+	// Pod instance is not reported terminated, it is left out, so that it does not hold the request in
+	// progress as unknown. Once all are reported terminated it stays unknown, so that Pods still being
+	// deleted cannot complete a request that is waiting to be cleaned up.
+	leaveOutTerminated := false
+	for _, inst := range req.Status.Instances {
+		if inst.Type == nvcav2beta1.InstanceTypePod && inst.LastReportedStatus != string(types.ICMSInstanceTerminated) {
+			leaveOutTerminated = true
+			break
+		}
+	}
 	var aggStatuses []AggregatedInstanceStatus
 	for id, inst := range req.Status.Instances {
 		switch inst.Type {
 		case nvcav2beta1.InstanceTypePod:
+			if inst.LastReportedStatus == string(types.ICMSInstanceTerminated) && !c.podInstanceExists(ctx, id) {
+				log.Debugf("Instance %v is reported terminated and its Pod is gone", id)
+				if !leaveOutTerminated {
+					aggStatuses = append(aggStatuses, AggregatedInstanceStatusUnknown)
+				}
+				continue
+			}
 			aggStatuses = append(aggStatuses, c.AggregatePodInstanceStatus(ctx, req, id))
 		case nvcav2beta1.InstanceTypeMiniService:
 			ms := &v1alpha1.MiniService{}

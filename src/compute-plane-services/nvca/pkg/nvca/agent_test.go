@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,16 +37,25 @@ import (
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	otelattr "go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
+	listersv1 "k8s.io/client-go/listers/core/v1"
+	ktesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -54,6 +64,7 @@ import (
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
 	mockicmsservice "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/icmsservice"
 	mockqueueservice "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/queueservice"
 	mocktokencache "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache"
@@ -63,6 +74,8 @@ import (
 	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	fakebartclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+	nvcav2beta1listers "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
@@ -3013,4 +3026,930 @@ func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
 		return a.resourceEventWorkerQueues["Pod"].Len() != 1
 	}, 250*time.Millisecond, 10*time.Millisecond,
 		"a closed channel must not enqueue anything further")
+}
+
+func TestGetUpdatedInstanceStatusMap(t *testing.T) {
+	reportedAt := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	postedAt := metav1.NewTime(reportedAt.Add(time.Minute))
+	started, running := string(types.ICMSInstanceStarted), string(types.ICMSInstanceRunning)
+	terminated, noStatus := string(types.ICMSInstanceTerminated), string(types.ICMSInstanceStateNoStatus)
+	instance := func(id, status, lastReported string, at *metav1.Time) nvcav2beta1.InstanceStatus {
+		return nvcav2beta1.InstanceStatus{
+			ID:                    id,
+			Type:                  nvcav2beta1.InstanceTypePod,
+			Status:                status,
+			LastReportedStatus:    lastReported,
+			LastReportedTimestamp: at,
+			Attributes:            map[string]string{"instance": id},
+		}
+	}
+	// posted is what getPostedInstanceStatus records for a successful post.
+	posted := func(id, state string) nvcav2beta1.InstanceStatus {
+		return nvcav2beta1.InstanceStatus{ID: id, LastReportedStatus: state, LastReportedTimestamp: &postedAt}
+	}
+
+	tests := []struct {
+		name    string
+		current map[string]nvcav2beta1.InstanceStatus
+		posted  map[string]nvcav2beta1.InstanceStatus
+		want    map[string]nvcav2beta1.InstanceStatus
+	}{
+		{
+			name: "instances not posted are kept",
+			current: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", started, started, &reportedAt),
+				"b": instance("b", running, running, &reportedAt),
+				"c": instance("c", started, noStatus, nil),
+			},
+			posted: map[string]nvcav2beta1.InstanceStatus{"a": posted("a", running)},
+			want: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", running, running, &postedAt),
+				"b": instance("b", running, running, &reportedAt),
+				"c": instance("c", started, noStatus, nil),
+			},
+		},
+		{
+			name: "every instance posted",
+			current: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", started, noStatus, nil),
+				"b": instance("b", running, started, &reportedAt),
+			},
+			posted: map[string]nvcav2beta1.InstanceStatus{
+				"a": posted("a", running),
+				"b": posted("b", terminated),
+			},
+			want: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", running, running, &postedAt),
+				"b": instance("b", terminated, terminated, &postedAt),
+			},
+		},
+		{
+			name:    "posted instance that is gone is not added back",
+			current: map[string]nvcav2beta1.InstanceStatus{"b": instance("b", running, running, &reportedAt)},
+			posted:  map[string]nvcav2beta1.InstanceStatus{"a": posted("a", running)},
+			want:    map[string]nvcav2beta1.InstanceStatus{"b": instance("b", running, running, &reportedAt)},
+		},
+		{
+			name: "nothing posted",
+			current: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", started, started, &reportedAt),
+				"b": instance("b", running, running, &reportedAt),
+			},
+			want: map[string]nvcav2beta1.InstanceStatus{
+				"a": instance("a", started, started, &reportedAt),
+				"b": instance("b", running, running, &reportedAt),
+			},
+		},
+		{
+			name:   "no instances",
+			posted: map[string]nvcav2beta1.InstanceStatus{"a": posted("a", running)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := (&nvcav2beta1.ICMSRequestStatus{Instances: tt.current}).DeepCopy().Instances
+
+			got := getUpdatedInstanceStatusMap(tt.current, tt.posted)
+
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, before, tt.current, "the current status must not be modified")
+		})
+	}
+}
+
+// instanceStatusICMSClient records the instance status updates posted to ICMS, and fails the posts
+// for the instances in failPosts.
+type instanceStatusICMSClient struct {
+	mockICMSClient
+	failPosts map[string]bool
+
+	mu     sync.Mutex
+	posted []string
+}
+
+func (m *instanceStatusICMSClient) PostInstanceStatusUpdate(_ context.Context, _, instanceID string,
+	_ *types.ICMSInstanceStatusUpdateRequest,
+) error {
+	if m.failPosts[instanceID] {
+		return assert.AnError
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.posted = append(m.posted, instanceID)
+	return nil
+}
+
+func instanceStatusPod(name string) *v1.Pod {
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: RequestsNamespace},
+		Status: v1.PodStatus{
+			Phase: v1.PodRunning,
+			Conditions: []v1.PodCondition{
+				{Type: v1.PodScheduled, Status: v1.ConditionTrue},
+				{Type: v1.PodReady, Status: v1.ConditionTrue},
+			},
+		},
+	}
+}
+
+// instanceStatusFailingPod is a Pod whose container cannot be created, which the status loop purges.
+func instanceStatusFailingPod(name string) *v1.Pod {
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: RequestsNamespace},
+		Status: v1.PodStatus{
+			Phase:      v1.PodPending,
+			Conditions: []v1.PodCondition{{Type: v1.PodScheduled, Status: v1.ConditionTrue}},
+			ContainerStatuses: []v1.ContainerStatus{{
+				Name:  "inference",
+				State: v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "CreateContainerError"}},
+			}},
+		},
+	}
+}
+
+// instanceStatusInstance is a Pod instance last reported to ICMS in state at reportedAt.
+func instanceStatusInstance(id string, state types.ICMSInstanceState, reportedAt *metav1.Time) nvcav2beta1.InstanceStatus {
+	return nvcav2beta1.InstanceStatus{
+		ID:                    id,
+		Type:                  nvcav2beta1.InstanceTypePod,
+		Status:                string(state),
+		LastReportedStatus:    string(state),
+		LastReportedTimestamp: reportedAt,
+	}
+}
+
+func instanceStatusRequest(rs nvcav2beta1.RequestStatus, instances ...nvcav2beta1.InstanceStatus) *nvcav2beta1.ICMSRequest {
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-instance-status", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-instance-status", Action: common.FunctionCreationAction},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: rs,
+			Instances:     map[string]nvcav2beta1.InstanceStatus{},
+		},
+	}
+	for _, st := range instances {
+		req.Status.Instances[st.ID] = st
+	}
+	return req
+}
+
+// instanceStatusLoop runs the instance status loop of an agent that lists one request from a cache,
+// and reads and writes the request and its Pods through fake API servers.
+type instanceStatusLoop struct {
+	ag        *Agent
+	ff        *featureflagmock.Fetcher
+	bart      *fakebartclient.Clientset
+	k8s       *fakek8sclient.Clientset
+	srIndexer cache.Indexer
+	pods      cache.Indexer
+	name      string
+}
+
+// newInstanceStatusLoop returns an instanceStatusLoop whose cache keeps req as it is now.
+func newInstanceStatusLoop(t *testing.T, icmsClient ICMSClientInterface, req *nvcav2beta1.ICMSRequest,
+	pods ...*v1.Pod,
+) *instanceStatusLoop {
+	t.Helper()
+	newIndexer := func() cache.Indexer {
+		return cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	}
+	podIndexer := newIndexer()
+	objs := make([]runtime.Object, 0, len(pods))
+	for _, p := range pods {
+		require.NoError(t, podIndexer.Add(p))
+		objs = append(objs, p.DeepCopy())
+	}
+	clients := mockKubeClients(objs...)
+	bart := clients.BART.(*fakebartclient.Clientset)
+	_, err := bart.NvcaV2beta1().ICMSRequests(req.Namespace).Create(context.Background(), req, metav1.CreateOptions{})
+	require.NoError(t, err)
+	srIndexer := newIndexer()
+	require.NoError(t, srIndexer.Add(req.DeepCopy()))
+
+	ff := &featureflagmock.Fetcher{}
+	bc := &BackendK8sCache{
+		clients:                              clients,
+		featureFlagFetcher:                   ff,
+		icmsRequestLister:                    nvcav2beta1listers.NewICMSRequestLister(srIndexer),
+		storageRequestLister:                 nvcav2beta1listers.NewStorageRequestLister(newIndexer()),
+		requestsNamespace:                    RequestsNamespace,
+		podInstanceNamespace:                 RequestsNamespace,
+		podSpecLister:                        listersv1.NewPodLister(podIndexer).Pods(RequestsNamespace),
+		k8sTimeConfig:                        (&k8sutil.TimeConfig{}).Complete(),
+		tracer:                               noop.NewTracerProvider().Tracer("test"),
+		enablePeriodicInstanceStatusUpdate:   true,
+		periodicInstanceStatusUpdateInterval: 5 * time.Minute,
+	}
+	bc.icmsRequestHelper = K8sComputeBackend{clients: clients, bk8s: bc}
+	return &instanceStatusLoop{
+		ag: &Agent{
+			AgentOptions:    &AgentOptions{FeatureFlagFetcher: ff},
+			backendk8scache: bc,
+			icmsClient:      icmsClient,
+			// The loop purges the creation message of a function request in InstancesInProgress,
+			// CachingInProgress or Failed.
+			queueManager: &QueueManager{Client: &mockqueue.Client{}},
+		},
+		ff:        ff,
+		bart:      bart,
+		k8s:       clients.K8s.(*fakek8sclient.Clientset),
+		srIndexer: srIndexer,
+		pods:      podIndexer,
+		name:      req.Name,
+	}
+}
+
+// pass runs one pass of the instance status loop, waits for it, and returns the request as stored
+// after the pass.
+func (l *instanceStatusLoop) pass(ctx context.Context, t *testing.T) *nvcav2beta1.ICMSRequest {
+	t.Helper()
+	require.NoError(t, l.ag.PostICMSInstanceRequestStatusUpdates(ctx))
+	l.ag.instStatusThreadPool.Wait()
+	return l.stored(t)
+}
+
+// stored returns the request as stored in the API server.
+func (l *instanceStatusLoop) stored(t *testing.T) *nvcav2beta1.ICMSRequest {
+	t.Helper()
+	sr, err := l.bart.NvcaV2beta1().ICMSRequests(RequestsNamespace).Get(context.Background(), l.name, metav1.GetOptions{})
+	require.NoError(t, err)
+	return sr
+}
+
+// syncCache makes the cache return the request as stored, as the informer does after a write.
+func (l *instanceStatusLoop) syncCache(t *testing.T) {
+	t.Helper()
+	require.NoError(t, l.srIndexer.Update(l.stored(t)))
+}
+
+// podDeletes returns the number of Pod deletes sent to the API server.
+func (l *instanceStatusLoop) podDeletes() int {
+	n := 0
+	for _, a := range l.k8s.Actions() {
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
+			n++
+		}
+	}
+	return n
+}
+
+// changeBeforeStatusWrite applies change to the stored request when the status loop reads it back to
+// write its status, like another writer that lands after the loop listed the request. The returned
+// function reports whether the change was applied.
+func changeBeforeStatusWrite(bart *fakebartclient.Clientset, change func(*nvcav2beta1.ICMSRequest)) func() error {
+	gvr := nvcav2beta1.SchemeGroupVersion.WithResource("icmsrequests")
+	var once sync.Once
+	changeErr := fmt.Errorf("the status loop did not read the request back")
+	bart.PrependReactor("get", "icmsrequests", func(action ktesting.Action) (bool, runtime.Object, error) {
+		once.Do(func() {
+			get := action.(ktesting.GetAction)
+			obj, err := bart.Tracker().Get(gvr, get.GetNamespace(), get.GetName())
+			if err != nil {
+				changeErr = err
+				return
+			}
+			sr := obj.(*nvcav2beta1.ICMSRequest)
+			change(sr)
+			changeErr = bart.Tracker().Update(gvr, sr, get.GetNamespace())
+		})
+		return false, nil, nil
+	})
+	return func() error { return changeErr }
+}
+
+// conflictOnStatusWrite applies change to the stored request when the status loop first writes the
+// request status, and fails that write with a conflict, like another writer that lands between the
+// loop's read and its write. The loop then reads the request again and retries. The returned
+// function reports whether the change was applied.
+func conflictOnStatusWrite(bart *fakebartclient.Clientset, change func(*nvcav2beta1.ICMSRequest)) func() error {
+	gvr := nvcav2beta1.SchemeGroupVersion.WithResource("icmsrequests")
+	var once sync.Once
+	changeErr := fmt.Errorf("the status loop did not write the request status")
+	bart.PrependReactor("update", "icmsrequests", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "status" {
+			return false, nil, nil
+		}
+		var conflict error
+		once.Do(func() {
+			sr := action.(ktesting.UpdateAction).GetObject().(*nvcav2beta1.ICMSRequest)
+			obj, err := bart.Tracker().Get(gvr, sr.Namespace, sr.Name)
+			if err != nil {
+				changeErr = err
+				return
+			}
+			stored := obj.(*nvcav2beta1.ICMSRequest)
+			change(stored)
+			if changeErr = bart.Tracker().Update(gvr, stored, sr.Namespace); changeErr == nil {
+				conflict = errors.NewConflict(gvr.GroupResource(), sr.Name, fmt.Errorf("the object has been modified"))
+			}
+		})
+		return conflict != nil, nil, conflict
+	})
+	return func() error { return changeErr }
+}
+
+// drainEvents returns the events recorded since the last call.
+func drainEvents(rec *record.FakeRecorder) []string {
+	var events []string
+	for {
+		select {
+		case e := <-rec.Events:
+			events = append(events, e)
+		default:
+			return events
+		}
+	}
+}
+
+// eventCount returns how many of events have message. A recorded event is its type, reason and
+// message, followed by its annotations.
+func eventCount(events []string, message string) int {
+	n := 0
+	for _, e := range events {
+		if strings.Contains(e+" ", " "+message+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPostICMSInstanceRequestStatusUpdates_KeepsInstancesNotPosted(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+		// Became Running since it was last reported, so this pass posts it.
+		instanceStatusInstance("0-sr", types.ICMSInstanceStarted, &reportedAt),
+		// Also became Running, but its post fails.
+		instanceStatusInstance("1-sr", types.ICMSInstanceStarted, &reportedAt),
+		// Unchanged and not due a heartbeat, so this pass does not post it.
+		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &reportedAt),
+	)
+	icms := &instanceStatusICMSClient{failPosts: map[string]bool{"1-sr": true}}
+	loop := newInstanceStatusLoop(t, icms, req,
+		instanceStatusPod("0-sr"), instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
+
+	sr := loop.pass(ctx, t)
+
+	assert.Equal(t, []string{"0-sr"}, icms.posted)
+	want := req.DeepCopy().Status.Instances
+	want["0-sr"] = instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &metav1.Time{Time: now})
+	assert.Equal(t, want, sr.Status.Instances)
+}
+
+func TestPostICMSInstanceRequestStatusUpdates_AppliesPostsToLatestInstances(t *testing.T) {
+	now := time.Now().UTC()
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	// What maintenance eviction records for an instance it terminated.
+	evicted := nvcav2beta1.InstanceStatus{
+		ID:                 "2-sr",
+		Type:               nvcav2beta1.InstanceTypePod,
+		Status:             string(types.ICMSInstanceTerminated),
+		LastReportedStatus: string(types.ICMSInstanceStateNoStatus),
+	}
+	added := instanceStatusInstance("3-sr", types.ICMSInstanceStateNoStatus, nil)
+
+	tests := []struct {
+		name       string
+		rs         nvcav2beta1.RequestStatus
+		state      types.ICMSInstanceState
+		change     func(*nvcav2beta1.ICMSRequest)
+		wantPosted []string
+		wantRS     nvcav2beta1.RequestStatus
+		want       map[string]nvcav2beta1.InstanceStatus
+	}{
+		{
+			name:  "posted instances",
+			rs:    nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+			state: types.ICMSInstanceStarted,
+			change: func(sr *nvcav2beta1.ICMSRequest) {
+				delete(sr.Status.Instances, "1-sr")
+				sr.Status.Instances[evicted.ID] = evicted
+				sr.Status.Instances[added.ID] = added
+			},
+			wantPosted: []string{"0-sr", "1-sr"},
+			wantRS:     nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+			want: map[string]nvcav2beta1.InstanceStatus{
+				"0-sr":     instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &metav1.Time{Time: now}),
+				evicted.ID: evicted,
+				added.ID:   added,
+			},
+		},
+		{
+			name:  "acknowledgement without posts",
+			rs:    nvcav2beta1.ICMSRequestStatusCompleted,
+			state: types.ICMSInstanceRunning,
+			change: func(sr *nvcav2beta1.ICMSRequest) {
+				sr.Status.Instances[evicted.ID] = evicted
+			},
+			wantRS: nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+			want: map[string]nvcav2beta1.InstanceStatus{
+				"0-sr":     instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &reportedAt),
+				"1-sr":     instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+				evicted.ID: evicted,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+			req := instanceStatusRequest(tt.rs,
+				instanceStatusInstance("0-sr", tt.state, &reportedAt),
+				instanceStatusInstance("1-sr", tt.state, &reportedAt),
+				instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &reportedAt),
+			)
+			icms := &instanceStatusICMSClient{}
+			loop := newInstanceStatusLoop(t, icms, req,
+				instanceStatusPod("0-sr"), instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
+			changeErr := changeBeforeStatusWrite(loop.bart, tt.change)
+
+			sr := loop.pass(ctx, t)
+
+			require.NoError(t, changeErr())
+			assert.ElementsMatch(t, tt.wantPosted, icms.posted)
+			assert.Equal(t, tt.wantRS, sr.Status.RequestStatus)
+			assert.Equal(t, tt.want, sr.Status.Instances)
+		})
+	}
+}
+
+// The status loop acknowledges a completed or failed request only while its status is still the one
+// the loop listed. A status another writer stored after the listing is kept, whether it lands before
+// the loop reads the request back to write it, or between that read and the write, which then
+// conflicts and is retried. The next pass lists the kept status and handles it.
+func TestPostICMSInstanceRequestStatusUpdates_AcknowledgesOnlyTheListedRequestStatus(t *testing.T) {
+	now := time.Now().UTC()
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	tests := []struct {
+		name       string
+		rs         nvcav2beta1.RequestStatus
+		state      types.ICMSInstanceState
+		change     func(*nvcav2beta1.ICMSRequest)
+		wantPosted []string
+		wantRS     nvcav2beta1.RequestStatus
+		wantNextRS nvcav2beta1.RequestStatus
+	}{
+		{
+			name:       "completed request, ACK time stored",
+			rs:         nvcav2beta1.ICMSRequestStatusCompleted,
+			state:      types.ICMSInstanceStarted,
+			change:     func(sr *nvcav2beta1.ICMSRequest) { sr.Status.LastACKTimestamp = &reportedAt },
+			wantPosted: []string{"0-sr", "1-sr"},
+			wantRS:     nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+			wantNextRS: nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+		},
+		{
+			name:       "failed request, reconcile error stored",
+			rs:         nvcav2beta1.ICMSRequestStatusFailed,
+			state:      types.ICMSInstanceRunning,
+			change:     func(sr *nvcav2beta1.ICMSRequest) { sr.Status.LastReconcileError = "terminal error" },
+			wantRS:     nvcav2beta1.ICMSRequestStatusFailureAcknowledged,
+			wantNextRS: nvcav2beta1.ICMSRequestStatusFailureAcknowledged,
+		},
+		{
+			// The request sync found a failed instance while the loop posted the others.
+			name:  "request in progress, Failed stored",
+			rs:    nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+			state: types.ICMSInstanceStarted,
+			change: func(sr *nvcav2beta1.ICMSRequest) {
+				sr.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusFailed
+			},
+			wantPosted: []string{"0-sr", "1-sr"},
+			wantRS:     nvcav2beta1.ICMSRequestStatusFailed,
+			wantNextRS: nvcav2beta1.ICMSRequestStatusFailureAcknowledged,
+		},
+		{
+			// Maintenance eviction put the request back in progress.
+			name:  "completed request, InProgress stored",
+			rs:    nvcav2beta1.ICMSRequestStatusCompleted,
+			state: types.ICMSInstanceRunning,
+			change: func(sr *nvcav2beta1.ICMSRequest) {
+				sr.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusInProgress
+			},
+			wantRS:     nvcav2beta1.ICMSRequestStatusInProgress,
+			wantNextRS: nvcav2beta1.ICMSRequestStatusInProgress,
+		},
+	}
+	lands := []struct {
+		name string
+		land func(*fakebartclient.Clientset, func(*nvcav2beta1.ICMSRequest)) func() error
+	}{
+		{name: "before the read", land: changeBeforeStatusWrite},
+		{name: "before the write", land: conflictOnStatusWrite},
+	}
+	for _, tt := range tests {
+		for _, l := range lands {
+			t.Run(tt.name+" "+l.name, func(t *testing.T) {
+				ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+				req := instanceStatusRequest(tt.rs,
+					instanceStatusInstance("0-sr", tt.state, &reportedAt),
+					instanceStatusInstance("1-sr", tt.state, &reportedAt),
+				)
+				icms := &instanceStatusICMSClient{}
+				loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("0-sr"), instanceStatusPod("1-sr"))
+				changeErr := l.land(loop.bart, tt.change)
+
+				sr := loop.pass(ctx, t)
+
+				require.NoError(t, changeErr())
+				assert.ElementsMatch(t, tt.wantPosted, icms.posted)
+				assert.Equal(t, tt.wantRS, sr.Status.RequestStatus)
+				for _, id := range tt.wantPosted {
+					assert.Equal(t, string(types.ICMSInstanceRunning), sr.Status.Instances[id].LastReportedStatus, id)
+				}
+				// The fields the other writer stored are kept.
+				changed := req.DeepCopy()
+				tt.change(changed)
+				assert.Equal(t, changed.Status.LastACKTimestamp, sr.Status.LastACKTimestamp)
+				assert.Equal(t, changed.Status.LastReconcileError, sr.Status.LastReconcileError)
+
+				loop.syncCache(t)
+				assert.Equal(t, tt.wantNextRS, loop.pass(ctx, t).Status.RequestStatus, "after the next pass")
+			})
+		}
+	}
+}
+
+// A status another writer stored after the listing, which the status loop keeps, keeps the span the
+// other writer started for it, and the loop's write, which changes no request status, ends no span.
+func TestPostICMSInstanceRequestStatusUpdates_KeptRequestStatusKeepsItsSpan(t *testing.T) {
+	now := time.Now().UTC()
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	failedAt := metav1.NewTime(now.Add(-time.Hour))
+	lands := []struct {
+		name string
+		land func(*fakebartclient.Clientset, func(*nvcav2beta1.ICMSRequest)) func() error
+	}{
+		{name: "before the read", land: changeBeforeStatusWrite},
+		{name: "before the write", land: conflictOnStatusWrite},
+	}
+	for _, l := range lands {
+		t.Run(l.name, func(t *testing.T) {
+			ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+			req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+				instanceStatusInstance("0-sr", types.ICMSInstanceStarted, &reportedAt),
+				instanceStatusInstance("1-sr", types.ICMSInstanceStarted, &reportedAt),
+			)
+			req.Status.RequestStatusTraceContexts = map[nvcav2beta1.RequestStatus]nvcav2beta1.ICMSRequestSpanContextConfig{
+				nvcav2beta1.ICMSRequestStatusInstancesInProgress: {
+					SpanName:  "nvca.ICMSRequest.InstancesInProgress",
+					StartTime: metav1.NewTime(now.Add(-2 * time.Hour)),
+				},
+			}
+			icms := &instanceStatusICMSClient{}
+			loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("0-sr"), instanceStatusPod("1-sr"))
+			spans := tracetest.NewSpanRecorder()
+			loop.ag.backendk8scache.tracer = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)).Tracer("test")
+			// The request sync found a failed instance, and started its Failed span, while the loop posted
+			// the others.
+			changeErr := l.land(loop.bart, func(sr *nvcav2beta1.ICMSRequest) {
+				sr.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusFailed
+				sr.Status.RequestStatusTraceContexts[nvcav2beta1.ICMSRequestStatusFailed] = nvcav2beta1.ICMSRequestSpanContextConfig{
+					SpanName:  "nvca.ICMSRequest.Failed",
+					StartTime: failedAt,
+				}
+			})
+
+			sr := loop.pass(ctx, t)
+
+			require.NoError(t, changeErr())
+			assert.ElementsMatch(t, []string{"0-sr", "1-sr"}, icms.posted)
+			assert.Equal(t, nvcav2beta1.ICMSRequestStatusFailed, sr.Status.RequestStatus)
+			failedSpan := sr.Status.RequestStatusTraceContexts[nvcav2beta1.ICMSRequestStatusFailed]
+			assert.True(t, failedSpan.StartTime.Equal(&failedAt), "the Failed span keeps its start, got %v", failedSpan.StartTime)
+			for _, s := range spans.Ended() {
+				assert.False(t, strings.HasPrefix(s.Name(), "nvca.ICMSRequest."), "the loop's write ended span %s", s.Name())
+			}
+		})
+	}
+}
+
+func TestPostICMSInstanceRequestStatusUpdates_RequestOutlivesOneTerminatedInstance(t *testing.T) {
+	ctx := newTestContext()
+	reportedAt := metav1.NewTime(time.Now().UTC().Add(-time.Minute))
+	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+		instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &reportedAt),
+	)
+	icms := &instanceStatusICMSClient{}
+	// The Pod of 0-sr is gone, and the other two still run.
+	loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
+
+	sr := loop.pass(ctx, t)
+
+	assert.Equal(t, []string{"0-sr"}, icms.posted)
+	assert.ElementsMatch(t, []string{"0-sr", "1-sr", "2-sr"}, sr.Status.GetInstanceIDs())
+	assert.False(t, loop.ag.backendk8scache.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, sr))
+	require.NoError(t, loop.ag.backendk8scache.CleanupCreationRequestResources(ctx, sr))
+	_, err := loop.bart.NvcaV2beta1().ICMSRequests(RequestsNamespace).Get(ctx, req.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "the request must not be cleaned up while its other instances run")
+}
+
+func TestPostICMSInstanceRequestStatusUpdates_GoneInstanceLogsAndCountsOnce(t *testing.T) {
+	realNow := time.Now().UTC()
+	// The heartbeat gate reads the real clock, and reports are stamped with the context clock. Running
+	// the context clock 10 minutes behind makes each report due a heartbeat on the next pass.
+	clock := realNow.Add(-10 * time.Minute)
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx := core.WithClock(logCtx, func() time.Time { return clock })
+	recent := metav1.NewTime(realNow.Add(-time.Minute))
+	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged,
+		// Its Pod is gone, so the first pass reports it terminated, and the later passes repeat that.
+		instanceStatusInstance("0-sr", types.ICMSInstanceRunning, &recent),
+		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &recent),
+		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &recent),
+	)
+	icms := &instanceStatusICMSClient{}
+	loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
+	recorder := record.NewFakeRecorder(100)
+	loop.ag.backendk8scache.eventRecorder = recorder
+
+	var sr *nvcav2beta1.ICMSRequest
+	for range 3 {
+		sr = loop.pass(ctx, t)
+		loop.syncCache(t)
+	}
+
+	assert.Equal(t, []string{"0-sr", "0-sr", "0-sr"}, icms.posted)
+	assert.Equal(t, 1, eventCount(drainEvents(recorder), "0-sr is terminated"), "only the first report records an event")
+	assert.ElementsMatch(t, []string{"0-sr", "1-sr", "2-sr"}, sr.Status.GetInstanceIDs())
+	m := nvcametrics.FromContext(ctx)
+	notFound := m.WorkloadResultTotal.WithLabelValues(m.WithDefaultLabelValues(
+		string(workloadtypes.WorkloadTypeContainer),
+		string(nvcametrics.ActionToWorkloadKind(common.FunctionCreationAction)),
+		string(workloadtypes.WorkloadStatusFailure),
+		string(nvcametrics.ICMSInstanceStateToFailureCategory(types.ICMSInstanceFailedNotFound)),
+	)...)
+	assert.Equal(t, float64(1), promtestutil.ToFloat64(notFound), "only the first report counts the failure")
+	warns := 0
+	for _, e := range logHook.AllEntries() {
+		if e.Message == "Pod is not running, report it as killed, if not reported before" {
+			warns++
+		}
+	}
+	assert.Equal(t, 1, warns, "only the first report logs the missing Pod")
+}
+
+func TestPostICMSInstanceRequestStatusUpdates_TerminationKeepsInstancesReportedEarlier(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-terminate", Namespace: RequestsNamespace},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID:          "req-terminate",
+			Action:             common.TerminationAction,
+			TerminationMsgInfo: nvcav2beta1.ICMSTerminationMessageInfo{InstanceIds: []string{"a-sr", "b-sr"}},
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				// Reported terminated by an earlier pass.
+				"a-sr": instanceStatusInstance("a-sr", types.ICMSInstanceTerminated, &reportedAt),
+				// Terminated, and not reported yet.
+				"b-sr": {
+					ID:                 "b-sr",
+					Type:               nvcav2beta1.InstanceTypePod,
+					Status:             string(types.ICMSInstanceTerminated),
+					LastReportedStatus: string(types.ICMSInstanceStateNoStatus),
+				},
+			},
+		},
+	}
+	icms := &instanceStatusICMSClient{}
+	loop := newInstanceStatusLoop(t, icms, req)
+	recorder := record.NewFakeRecorder(100)
+	loop.ag.backendk8scache.eventRecorder = recorder
+
+	sr := loop.pass(ctx, t)
+	// The termination message treats the instances the request lists as already terminated.
+	require.NoError(t, loop.ag.backendk8scache.icmsRequestHelper.ApplyTerminationMessage(ctx, sr))
+	afterTermination := loop.stored(t).Status.RequestStatus
+	loop.syncCache(t)
+	loop.pass(ctx, t)
+
+	assert.Equal(t, nvcav2beta1.ICMSRequestStatusCompleted, afterTermination)
+	assert.Equal(t, []string{"b-sr"}, icms.posted, "an instance already reported terminated must not be reported again")
+	assert.Zero(t, loop.podDeletes(), "Pods already terminated must not be deleted again")
+	events := drainEvents(recorder)
+	assert.Equal(t, 1, eventCount(events, "b-sr is terminated"), "the first report of a purged instance records an event")
+	assert.Zero(t, eventCount(events, "a-sr is terminated"))
+}
+
+// A terminated report records an event unless it repeats a report the status loop recorded. A
+// purge by maintenance eviction records the status alone, and a kill by nvcf-cli the last reported
+// status alone, so the loop's first terminated report after either records an event.
+func TestPostICMSInstanceRequestStatusUpdates_FirstTerminatedReportRecordsEvent(t *testing.T) {
+	now := time.Now().UTC()
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	// What maintenance eviction records for an instance it terminated.
+	evicted := nvcav2beta1.InstanceStatus{
+		ID:                 "0-sr",
+		Type:               nvcav2beta1.InstanceTypePod,
+		Status:             string(types.ICMSInstanceTerminated),
+		LastReportedStatus: string(types.ICMSInstanceStateNoStatus),
+	}
+	killedAfterEviction := evicted
+	killedAfterEviction.LastReportedStatus = string(types.ICMSInstanceTerminated)
+	tests := []struct {
+		name       string
+		gone       nvcav2beta1.InstanceStatus
+		wantEvents int
+	}{
+		{name: "evicted for maintenance", gone: evicted, wantEvents: 1},
+		{name: "killed by nvcf-cli after maintenance eviction", gone: killedAfterEviction, wantEvents: 1},
+		{
+			// Its periodic report is due.
+			name:       "reported terminated by the status loop",
+			gone:       instanceStatusInstance("0-sr", types.ICMSInstanceTerminated, &metav1.Time{Time: now.Add(-6 * time.Minute)}),
+			wantEvents: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := core.WithClock(newTestContext(), func() time.Time { return now })
+			req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusCompletionAcknowledged, tt.gone,
+				instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+			)
+			icms := &instanceStatusICMSClient{}
+			loop := newInstanceStatusLoop(t, icms, req, instanceStatusPod("1-sr"))
+			recorder := record.NewFakeRecorder(100)
+			loop.ag.backendk8scache.eventRecorder = recorder
+
+			loop.pass(ctx, t)
+
+			assert.Equal(t, []string{"0-sr"}, icms.posted)
+			assert.Equal(t, tt.wantEvents, eventCount(drainEvents(recorder), "0-sr is terminated"))
+		})
+	}
+}
+
+// creationMessageDeletes counts the creation message deletes sent to the queue.
+type creationMessageDeletes struct {
+	mockqueue.Client
+	n atomic.Int32
+}
+
+func (q *creationMessageDeletes) DeleteMessage(ctx context.Context, input queue.DeleteMessageInput) error {
+	q.n.Add(1)
+	return q.Client.DeleteMessage(ctx, input)
+}
+
+// requestStatusWrites returns the request statuses written to the stored request's status.
+func requestStatusWrites(bart *fakebartclient.Clientset) []nvcav2beta1.RequestStatus {
+	var written []nvcav2beta1.RequestStatus
+	for _, a := range bart.Actions() {
+		if update, ok := a.(ktesting.UpdateAction); ok && a.GetSubresource() == "status" {
+			written = append(written, update.GetObject().(*nvcav2beta1.ICMSRequest).Status.RequestStatus)
+		}
+	}
+	return written
+}
+
+// An instance purged while its request starts is reported terminated and stays listed while the
+// other instances run. The request still completes, so the status loop stops deleting its creation
+// message on every pass, and request syncs do not log the gone instance as not found.
+func TestPostICMSInstanceRequestStatusUpdates_RequestCompletesWithPurgedInstance(t *testing.T) {
+	now := time.Now().UTC()
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx := core.WithClock(logCtx, func() time.Time { return now })
+	reportedAt := metav1.NewTime(now.Add(-time.Minute))
+	req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+		instanceStatusInstance("0-sr", types.ICMSInstanceStarted, &reportedAt),
+		instanceStatusInstance("1-sr", types.ICMSInstanceRunning, &reportedAt),
+		instanceStatusInstance("2-sr", types.ICMSInstanceRunning, &reportedAt),
+	)
+	req.Finalizers = []string{NVCAFinalizer}
+	req.Spec.CreationMsgInfo.InstanceCount = 3
+	failing := instanceStatusFailingPod("0-sr")
+	icms := &instanceStatusICMSClient{}
+	loop := newInstanceStatusLoop(t, icms, req, failing, instanceStatusPod("1-sr"), instanceStatusPod("2-sr"))
+	deletes := &creationMessageDeletes{}
+	loop.ag.queueManager = &QueueManager{Client: deletes}
+
+	loop.pass(ctx, t)
+	require.Equal(t, []string{"0-sr"}, icms.posted, "the failing instance is purged and reported terminated")
+	require.NoError(t, loop.pods.Delete(failing))
+	loop.syncCache(t)
+	require.NoError(t, loop.ag.backendk8scache.syncICMSRequest(ctx, loop.stored(t)))
+	synced := loop.stored(t).Status.RequestStatus
+	loop.syncCache(t)
+	sr := loop.pass(ctx, t)
+
+	assert.Equal(t, nvcav2beta1.ICMSRequestStatusCompleted, synced)
+	assert.Equal(t, nvcav2beta1.ICMSRequestStatusCompletionAcknowledged, sr.Status.RequestStatus)
+	assert.Equal(t, int32(1), deletes.n.Load(), "only the pass before the request completed deletes its creation message")
+	for _, e := range logHook.AllEntries() {
+		assert.NotEqual(t, "Instance 0-sr not found", e.Message)
+	}
+}
+
+// A request sync leaves out an instance reported terminated whose Pod is gone only while another
+// instance of the request is not reported terminated. An instance that is gone but not reported yet,
+// or reported while its Pod is being deleted, counts as before, and a request whose instances are
+// all reported terminated is not completed: it is cleaned up once their Pods are gone. Only an
+// instance that is gone before it is reported terminated is logged as not found.
+func TestSyncICMSRequest_InstancesReportedTerminated(t *testing.T) {
+	reportedAt := metav1.NewTime(time.Now().Add(-time.Minute))
+	running := func(id string) nvcav2beta1.InstanceStatus {
+		return instanceStatusInstance(id, types.ICMSInstanceRunning, &reportedAt)
+	}
+	terminated := func(id string) nvcav2beta1.InstanceStatus {
+		return instanceStatusInstance(id, types.ICMSInstanceTerminated, &reportedAt)
+	}
+	deleting := func(p *v1.Pod) *v1.Pod {
+		p.DeletionTimestamp = &reportedAt
+		return p
+	}
+	// An evicted Pod counts as succeeded while it is being deleted.
+	evicted := deleting(&v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "2-sr", Namespace: RequestsNamespace},
+		Status:     v1.PodStatus{Phase: v1.PodFailed, Reason: "Evicted"},
+	})
+	// What maintenance eviction records for an instance it terminated, before it is reported.
+	evictedInstance := nvcav2beta1.InstanceStatus{
+		ID:                 "0-sr",
+		Type:               nvcav2beta1.InstanceTypePod,
+		Status:             string(types.ICMSInstanceTerminated),
+		LastReportedStatus: string(types.ICMSInstanceStateNoStatus),
+	}
+
+	tests := []struct {
+		name      string
+		instances []nvcav2beta1.InstanceStatus
+		pods      []*v1.Pod
+		// want is the request status after the sync, or empty when the sync cleans up the request.
+		want nvcav2beta1.RequestStatus
+		// notFound are the instances logged as not found.
+		notFound []string
+	}{
+		{
+			name:      "terminated and gone while the others run",
+			instances: []nvcav2beta1.InstanceStatus{terminated("0-sr"), running("1-sr"), running("2-sr")},
+			pods:      []*v1.Pod{instanceStatusPod("1-sr"), instanceStatusPod("2-sr")},
+			want:      nvcav2beta1.ICMSRequestStatusCompleted,
+		},
+		{
+			name:      "gone before it is reported terminated",
+			instances: []nvcav2beta1.InstanceStatus{running("0-sr"), running("1-sr"), running("2-sr")},
+			pods:      []*v1.Pod{instanceStatusPod("1-sr"), instanceStatusPod("2-sr")},
+			want:      nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+			notFound:  []string{"0-sr"},
+		},
+		{
+			name:      "evicted and gone before it is reported terminated",
+			instances: []nvcav2beta1.InstanceStatus{evictedInstance, running("1-sr"), running("2-sr")},
+			pods:      []*v1.Pod{instanceStatusPod("1-sr"), instanceStatusPod("2-sr")},
+			want:      nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+			notFound:  []string{"0-sr"},
+		},
+		{
+			name:      "terminated while its Pod is being deleted",
+			instances: []nvcav2beta1.InstanceStatus{terminated("0-sr"), running("1-sr"), running("2-sr")},
+			pods: []*v1.Pod{
+				deleting(instanceStatusFailingPod("0-sr")), instanceStatusPod("1-sr"), instanceStatusPod("2-sr"),
+			},
+			want: nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+		},
+		{
+			name:      "all terminated while one Pod is being deleted",
+			instances: []nvcav2beta1.InstanceStatus{terminated("0-sr"), terminated("1-sr"), terminated("2-sr")},
+			pods:      []*v1.Pod{evicted},
+			want:      nvcav2beta1.ICMSRequestStatusInstancesInProgress,
+		},
+		{
+			name:      "all terminated and gone",
+			instances: []nvcav2beta1.InstanceStatus{terminated("0-sr"), terminated("1-sr"), terminated("2-sr")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, logHook := core.WithTestingLogger(newTestContext())
+			req := instanceStatusRequest(nvcav2beta1.ICMSRequestStatusInstancesInProgress, tt.instances...)
+			req.Finalizers = []string{NVCAFinalizer}
+			loop := newInstanceStatusLoop(t, &instanceStatusICMSClient{}, req, tt.pods...)
+
+			require.NoError(t, loop.ag.backendk8scache.syncICMSRequest(ctx, req.DeepCopy()))
+
+			sr, err := loop.bart.NvcaV2beta1().ICMSRequests(RequestsNamespace).Get(ctx, req.Name, metav1.GetOptions{})
+			if tt.want == "" {
+				assert.True(t, errors.IsNotFound(err), "the request is cleaned up, got %v", err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, sr.Status.RequestStatus)
+			}
+			if tt.want != nvcav2beta1.ICMSRequestStatusCompleted {
+				assert.NotContains(t, requestStatusWrites(loop.bart), nvcav2beta1.ICMSRequestStatusCompleted)
+			}
+			var notFound []string
+			for _, e := range logHook.AllEntries() {
+				var id string
+				if _, err := fmt.Sscanf(e.Message, "Instance %s not found", &id); err == nil {
+					notFound = append(notFound, id)
+				}
+			}
+			assert.ElementsMatch(t, tt.notFound, notFound)
+		})
+	}
 }

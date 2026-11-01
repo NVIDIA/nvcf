@@ -2194,8 +2194,14 @@ func (c *BackendK8sCache) applyICMSRequestStatusChange(ctx context.Context,
 		}
 
 		// Update ICMS request
+		storedReqStatus := srLat.Status.RequestStatus
 		modify(ctx, srLat)
 		newReqStatus = srLat.Status.RequestStatus
+		if newReqStatus == storedReqStatus {
+			// This write leaves the request status as stored, so it records no span transition and leaves
+			// the span bookkeeping to the write that changed the status.
+			newReqStatus = prevReqStatus
+		}
 
 		// set the lastUpdatedTimeStamp
 		lastUpdatedTime = metav1.Time{Time: core.GetCurrentTime(ctx)}

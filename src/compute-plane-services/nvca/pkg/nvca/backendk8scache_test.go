@@ -3667,6 +3667,139 @@ func TestReconcileSpanRequestStatus(t *testing.T) {
 	}
 }
 
+// A write that changes the stored request status ends the span of the listed status and starts the
+// next one, also when it is retried after a conflict. A write that leaves the stored status as it is,
+// such as a status another writer stored after the request was listed, records no transition, so
+// the stored span keeps its start.
+func TestApplyICMSRequestStatusChangeSpans(t *testing.T) {
+	pending, caching := nvcav2beta1.ICMSRequestStatusPending, nvcav2beta1.ICMSRequestStatusCachingInProgress
+	listedAt := metav1.NewTime(time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC))
+	storedAt := metav1.NewTime(time.Date(2026, time.January, 1, 11, 0, 0, 0, time.UTC))
+	spanContexts := func(starts map[nvcav2beta1.RequestStatus]metav1.Time) map[nvcav2beta1.RequestStatus]nvcav2beta1.ICMSRequestSpanContextConfig {
+		contexts := map[nvcav2beta1.RequestStatus]nvcav2beta1.ICMSRequestSpanContextConfig{}
+		for rs, at := range starts {
+			contexts[rs] = nvcav2beta1.ICMSRequestSpanContextConfig{SpanName: "nvca.ICMSRequest." + string(rs), StartTime: at}
+		}
+		return contexts
+	}
+	setStatus := func(rs nvcav2beta1.RequestStatus) func(*nvcav2beta1.ICMSRequest) {
+		return func(sr *nvcav2beta1.ICMSRequest) { sr.Status.RequestStatus = rs }
+	}
+	tests := []struct {
+		name           string
+		listed, stored nvcav2beta1.RequestStatus
+		storedSpans    map[nvcav2beta1.RequestStatus]metav1.Time
+		modify         func(*nvcav2beta1.ICMSRequest)
+		// changeOnFirstWrite changes the stored request when the helper first writes it, and fails
+		// that write with a conflict.
+		changeOnFirstWrite func(*nvcav2beta1.ICMSRequest)
+		wantEnded          []string
+		// wantStarted is the status whose span the write starts, and wantKept one whose stored span
+		// keeps its start.
+		wantStarted, wantKept nvcav2beta1.RequestStatus
+	}{
+		{
+			name:        "the first status starts its span",
+			modify:      setStatus(pending),
+			wantStarted: pending,
+		},
+		{
+			name:        "a change ends the listed span and starts the next",
+			listed:      pending,
+			stored:      pending,
+			storedSpans: map[nvcav2beta1.RequestStatus]metav1.Time{pending: listedAt},
+			modify:      setStatus(caching),
+			wantEnded:   []string{"nvca.ICMSRequest.RequestPending"},
+			wantStarted: caching,
+		},
+		{
+			name:               "a change retried after a conflict is recorded",
+			listed:             pending,
+			stored:             pending,
+			storedSpans:        map[nvcav2beta1.RequestStatus]metav1.Time{pending: listedAt},
+			modify:             setStatus(caching),
+			changeOnFirstWrite: func(sr *nvcav2beta1.ICMSRequest) { sr.Status.LastACKTimestamp = &storedAt },
+			wantEnded:          []string{"nvca.ICMSRequest.RequestPending"},
+			wantStarted:        caching,
+		},
+		{
+			name:        "a status another writer stored keeps its span",
+			listed:      pending,
+			stored:      caching,
+			storedSpans: map[nvcav2beta1.RequestStatus]metav1.Time{pending: listedAt, caching: storedAt},
+			modify:      setStatus(caching),
+			wantKept:    caching,
+		},
+		{
+			name:        "a write that leaves the status keeps the stored span",
+			listed:      pending,
+			stored:      caching,
+			storedSpans: map[nvcav2beta1.RequestStatus]metav1.Time{pending: listedAt, caching: storedAt},
+			modify:      func(sr *nvcav2beta1.ICMSRequest) { sr.Status.LastACKTimestamp = &storedAt },
+			wantKept:    caching,
+		},
+		{
+			name:               "a change seen only on the retry is recorded",
+			listed:             pending,
+			stored:             caching,
+			storedSpans:        map[nvcav2beta1.RequestStatus]metav1.Time{pending: listedAt, caching: storedAt},
+			modify:             setStatus(caching),
+			changeOnFirstWrite: setStatus(nvcav2beta1.ICMSRequestStatusInProgress),
+			wantEnded:          []string{"nvca.ICMSRequest.RequestPending"},
+			wantStarted:        caching,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			stored := &nvcav2beta1.ICMSRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "sr-spans", Namespace: RequestsNamespace},
+				Status: nvcav2beta1.ICMSRequestStatus{
+					RequestStatus:              tt.stored,
+					RequestStatusTraceContexts: spanContexts(tt.storedSpans),
+				},
+			}
+			bart := fakebartclient.NewSimpleClientset(stored)
+			changeErr := func() error { return nil }
+			if tt.changeOnFirstWrite != nil {
+				changeErr = conflictOnStatusWrite(bart, tt.changeOnFirstWrite)
+			}
+			spans := tracetest.NewSpanRecorder()
+			bc := &BackendK8sCache{
+				clients: &kubeclients.KubeClients{BART: bart},
+				tracer:  sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)).Tracer("test"),
+			}
+			listed := stored.DeepCopy()
+			listed.Status.RequestStatus = tt.listed
+			listed.Status.RequestStatusTraceContexts = spanContexts(map[nvcav2beta1.RequestStatus]metav1.Time{})
+			if tt.listed != "" {
+				listed.Status.RequestStatusTraceContexts = spanContexts(map[nvcav2beta1.RequestStatus]metav1.Time{tt.listed: listedAt})
+			}
+
+			require.True(t, bc.applyICMSRequestStatusChange(ctx, listed,
+				func(_ context.Context, sr *nvcav2beta1.ICMSRequest) { tt.modify(sr) }))
+
+			require.NoError(t, changeErr())
+			var ended []string
+			for _, s := range spans.Ended() {
+				ended = append(ended, s.Name())
+			}
+			assert.ElementsMatch(t, tt.wantEnded, ended)
+			got, err := bart.NvcaV2beta1().ICMSRequests(RequestsNamespace).Get(ctx, stored.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			if tt.wantStarted != "" {
+				started, ok := got.Status.RequestStatusTraceContexts[tt.wantStarted]
+				require.True(t, ok, "the %s span is started", tt.wantStarted)
+				assert.False(t, started.StartTime.Equal(&storedAt), "the %s span starts with this write", tt.wantStarted)
+			}
+			if tt.wantKept != "" {
+				kept := got.Status.RequestStatusTraceContexts[tt.wantKept]
+				assert.True(t, kept.StartTime.Equal(&storedAt), "the %s span keeps its start, got %v", tt.wantKept, kept.StartTime)
+			}
+		})
+	}
+}
+
 func TestSecretInformerSetup(t *testing.T) {
 	ctx := newTestContext()
 
