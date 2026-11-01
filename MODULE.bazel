@@ -448,7 +448,7 @@ oci.pull(
 # JDK 25 matches --java_language_version=25 above.
 oci.pull(
     name = "distroless_java",
-    digest = "sha256:9ce84c3c50fb8070b8a922e57711a693b5839d75cb09fc0f95550e17b68ec812",
+    digest = "sha256:3160c01b86a90c2cf11cae052957ac5ce49951b3f668ced7665e12d63d5c6a83",
     image = "nvcr.io/nvidia/distroless/java",
     platforms = [
         "linux/amd64",
