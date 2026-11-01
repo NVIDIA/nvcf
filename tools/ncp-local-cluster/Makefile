@@ -170,13 +170,14 @@ destroy:
 	fi; \
 	echo "Cluster $(CLUSTER_NAME) destroyed."
 
+# Delete the control-plane load balancer before the compute networks it joins.
 destroy-all-ncp-local: ## Discover and destroy every ncp-local* k3d cluster on the host
 	@command -v jq >/dev/null 2>&1 || { \
 		echo "destroy-all-ncp-local requires jq; install it and retry." >&2; \
 		exit 1; \
 	}
 	@CLUSTERS_JSON=$$(k3d cluster list -o json) || exit $$?; \
-	NAMES=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r '.[] | select(.name|startswith("ncp-local")) | .name') || exit $$?; \
+	NAMES=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r --arg control_plane "$(CONTROL_PLANE_CLUSTER_NAME)" 'sort_by(if .name == $$control_plane then 0 else 1 end) | .[] | select(.name|startswith("ncp-local")) | .name') || exit $$?; \
 	if [ -z "$$NAMES" ]; then \
 		echo "No ncp-local* clusters present."; \
 		exit 0; \

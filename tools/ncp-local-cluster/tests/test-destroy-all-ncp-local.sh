@@ -86,9 +86,15 @@ assert_eq $'unrelated\nncp-local-cp' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'exa
 
 reset_state "$inventory"
 run_make destroy-all-ncp-local
-assert_eq $'ncp-local\nncp-local-cp' "$(cat "$DELETE_LOG")" 'prefix deletion'
+assert_eq $'ncp-local-cp\nncp-local' "$(cat "$DELETE_LOG")" 'control plane deleted before shared compute networks'
 assert_eq 'unrelated' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'unrelated cluster preserved'
 
+reset_state '[{"name":"ncp-local-compute-1"},{"name":"unrelated"},{"name":"ncp-local-custom-cp"}]'
+run_make destroy-all-ncp-local CONTROL_PLANE_CLUSTER_NAME=ncp-local-custom-cp
+assert_eq $'ncp-local-custom-cp\nncp-local-compute-1' "$(cat "$DELETE_LOG")" 'configured control plane deleted first'
+assert_eq 'unrelated' "$(jq -r '.[].name' "$CLUSTER_STATE")" 'custom topology preserves unrelated cluster'
+
+inventory='[{"name":"ncp-local"},{"name":"unrelated"}]'
 for target in destroy destroy-all-ncp-local; do
   reset_state "$inventory"
   export FAIL_LIST_AT=1
