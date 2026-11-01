@@ -17,10 +17,13 @@ SPDX-License-Identifier: Apache-2.0
 package controller
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	nvsnapreconciler "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler"
 )
@@ -104,6 +107,40 @@ func TestNewControllerDefaults(t *testing.T) {
 	c := NewController(nil, nil)
 	if c.Workers != 2 {
 		t.Errorf("Workers default = %d, want 2", c.Workers)
+	}
+}
+
+func TestRunAppliesTransform(t *testing.T) {
+	pod := podWithAnnotations(nil)
+	transformed := make(chan string, 1)
+	c := NewController(fake.NewSimpleClientset(pod), &nvsnapreconciler.Reconciler{})
+	c.Namespace = pod.Namespace
+	c.SweepInterval = -1
+	c.Transform = func(obj any) (any, error) {
+		if p, ok := obj.(*corev1.Pod); ok {
+			select {
+			case transformed <- p.Name:
+			default:
+			}
+		}
+		return obj, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case name := <-transformed:
+		if name != pod.Name {
+			t.Errorf("Transform got pod %q, want %q", name, pod.Name)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not apply Transform to the listed pod")
 	}
 }
 

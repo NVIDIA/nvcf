@@ -176,6 +176,7 @@ go_test(
     srcs = [
         "k8scomputebackend_modelcache_rwx_readonly_test.go",
         "agent_byoo_federation_test.go",
+        "agent_caches_test.go",
         "agent_http_debug_test.go",
         "agent_manager_test.go",
         "agent_metrics_test.go",
@@ -206,7 +207,8 @@ go_test(
         "workloadwatcher_test.go",
         "modelcache_storage_selection_test.go",
     ],
-    data = glob(["testdata/**"]),
+    # TestAgentCacheConstructorsStripManagedFields parses the package sources.
+    data = glob(["testdata/**"]) + glob(["*.go"], exclude = ["*_test.go"]),
     embed = [":nvca"],
     embedsrcs = [
         "testdata/creationmsg_L40_good.json",
@@ -238,6 +240,7 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvca/internal/auth",
         "//src/compute-plane-services/nvca/internal/clustervalidator",
+        "//src/compute-plane-services/nvca/internal/envtest",
         "//src/compute-plane-services/nvca/internal/icms",
         "//src/compute-plane-services/nvca/internal/kubeclients",
         "//src/compute-plane-services/nvca/internal/metrics",
@@ -301,6 +304,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/noop",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/batch/v1:batch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/coordination/v1:coordination",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/networking/v1:networking",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/rbac/v1:rbac",
@@ -327,10 +331,12 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/workqueue",
         "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/interceptor",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/envtest",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
     ],
