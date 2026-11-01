@@ -44,7 +44,8 @@ for platform in ${PLATFORMS:-linux/amd64 linux/arm64}; do
                 exit 1
             fi
             echo "$(basename "$bin"): needs glibc $need"
-        done'
+        done
+        /src/scripts/check-gpushare-entry.sh /tmp/gpushare/libnvsnap_gpushare.so'
     rm -rf "$hdr"
     docker run --rm --platform "$platform" -v "$root:/src:ro" "$cuda" bash -ceu '
         cp -r /src/tests/gpushare /tmp/tests
