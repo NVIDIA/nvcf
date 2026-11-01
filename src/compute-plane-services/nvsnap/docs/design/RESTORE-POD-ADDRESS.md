@@ -30,7 +30,7 @@ NCCL opens peer connections lazily, on first use (the default in recent NCCL). I
 and binds on the interface address it read at startup: the captured IP. Seen on an 8-rank tensor-parallel engine
 restored as a group, at its first request:
 
-```
+```text
 NCCL WARN Call to bind failed: Cannot assign requested address
 NCCL WARN Rank 0 has no transport for send peer 7 on channel 0/0
 EngineCore encountered a fatal error
