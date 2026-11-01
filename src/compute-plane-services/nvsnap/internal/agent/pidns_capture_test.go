@@ -52,6 +52,53 @@ func TestPIDNSExternalMounts(t *testing.T) {
 	}
 }
 
+// The mounts of a plain pod's container under CRI-O (GB300, CRI-O 1.34,
+// 2026-11-01), trimmed of super options: the pod sandbox's /dev/shm tmpfs
+// is bound in as a slave of a host mount (master:954), which no mount of
+// the container shares.
+const crioContainerMountinfo = `1250 1109 0:94 / / rw,nodev,relatime - overlay overlay rw
+1252 1250 0:110 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+1253 1250 0:111 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+1255 1253 0:91 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+1258 1253 0:90 / /dev/shm rw,relatime master:954 - tmpfs shm rw,size=65536k
+1264 1250 252:1 /pods/u/etc-hosts /etc/hosts rw,noatime - xfs /dev/mapper/data-kubelet rw
+`
+
+// CRI-O's /dev/shm is external: CRIU cannot rebuild its sharing ("has
+// unreachable sharing"). The dump snapshot carries its files, as for
+// every replay mount CRIU does not save.
+func TestPIDNSExternalMounts_CRIOShm(t *testing.T) {
+	entries := parseMountinfo(crioContainerMountinfo)
+	if e := entries[4]; e.MountPoint != "/dev/shm" || e.Master != 954 || e.Shared != 0 {
+		t.Fatalf("parsed %+v", e)
+	}
+	got, _ := pidNSExternalMounts(entries, nil)
+	if want := []string{"/dev/shm", "/etc/hosts"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("external mounts: got %v, want %v", got, want)
+	}
+	if saved := criuSavedTmpfs(entries, got, nil); saved["/dev/shm"] || !saved["/dev"] {
+		t.Errorf("CRIU-saved tmpfs %v: /dev/shm must be left to the snapshot, /dev stays CRIU's", saved)
+	}
+}
+
+// A slave of a peer group the container itself holds stays CRIU's: it can
+// rebuild that sharing. containerd's private /dev/shm is unchanged.
+func TestPIDNSExternalMounts_ReachableMaster(t *testing.T) {
+	mi := `1 0 0:1 / / rw - overlay overlay rw
+2 1 0:2 / /dev rw shared:7 - tmpfs tmpfs rw
+3 2 0:3 / /dev/shm rw master:7 - tmpfs shm rw
+`
+	if got, _ := pidNSExternalMounts(parseMountinfo(mi), nil); len(got) != 0 {
+		t.Errorf("external mounts %v, want none", got)
+	}
+	got, _ := pidNSExternalMounts(parseMountinfo(containerMountinfo), nil)
+	for _, mp := range got {
+		if mp == "/dev/shm" {
+			t.Error("containerd's private /dev/shm made external")
+		}
+	}
+}
+
 // A tmpfs kubelet keeps a volume in (the service account token) comes
 // from the pod restored into; the container's own tmpfs mounts stay CRIU's.
 func TestPIDNSExternalMounts_KubeletVolume(t *testing.T) {
