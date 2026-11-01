@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "common",
+    srcs = [
+        "cost.go",
+        "doc.go",
+        "error.go",
+        "errors.go",
+        "location.go",
+        "source.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+    importpath = "github.com/google/cel-go/common",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/runes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/expr/v1alpha1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":common",
+    visibility = ["//visibility:public"],
+)

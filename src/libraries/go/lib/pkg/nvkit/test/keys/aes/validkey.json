@@ -1,0 +1,1 @@
+{"activeKeyId":"active-key","keys":[{"kty":"oct","kid":"active-key","k":"WGDZU8t6wdgBW2IJ","alg":"A256GCM"},{"kty":"oct","kid":"another-key","k":"edzU6OY9OlF2E2VlO1OoaYrcF0z4P4rm","alg":"A256GCM"}]}

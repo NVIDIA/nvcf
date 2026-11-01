@@ -1,0 +1,130 @@
+# NVCF OpenBao Migrations Init Container
+
+Container image and bootstrap scripts that configure an OpenBao (or Vault) instance for NVCF deployments. The container runs as a Kubernetes Job and applies a sequence of numbered shell migrations against a freshly-installed OpenBao server, enabling auth methods, mounting secret engines, and onboarding each NVCF service.
+
+## Overview
+
+This repository ships:
+
+- A container image definition (`Dockerfile`)
+- The job entrypoint (`entrypoint.sh`)
+- Numbered shell migrations under `migrations/` that run in order against an OpenBao leader
+- Helper utilities under `migrations/utils/`
+- The `jwker` CLI used by the install pipeline to convert Kubernetes JWKS material to PEM
+- Reproducible `jwker` and `kubectl` source builds copied from verified build stages
+- Optional addons under `addons/` (e.g., LLS / TURN secret rotation)
+- An example Kubernetes Job manifest (`job.yaml`)
+- A Docker-based integration test for the helper functions (`tests/`)
+
+## Releases
+
+Release-worthy changes under `migrations/openbao` publish the
+`nvcf-openbao-migrations` image. GitHub source releases use tags in the
+`migrations/openbao/vX.Y.Z` stream. Each release rebuilds both supported
+architectures from the source and dependency pins in this directory.
+
+## Prerequisites
+
+- A reachable OpenBao or Vault deployment (the entrypoint waits for the service to become healthy and locates the leader before applying migrations)
+- Kubernetes cluster with a service account that has access to the OpenBao root token secret
+- A cluster JWT signing key available at `/secrets/jwt/cluster_jwt.pem` (this is typically provisioned by the OpenBao install pipeline)
+
+### Cluster JWT signing key
+
+The first migration enables JWT auth and binds it to the cluster's issuer. The public signing key must be mounted into the container at `/secrets/jwt/cluster_jwt.pem`.
+
+If you need to extract it manually:
+
+```bash
+JWK=$(kubectl get --raw "$(kubectl get --raw /.well-known/openid-configuration | jq -r '.jwks_uri' | sed -r 's/.*\.[^/]+(.*)/\1/')" | jq '.keys[0]' -r)
+echo "$JWK" | jwker
+```
+
+### Default Cassandra password
+
+Several services need a Cassandra username and password placed into OpenBao so that consumer pods can render credentials at runtime. The migration scripts populate `services/<service>/kv/cassandra/creds` from the `DEFAULT_CASSANDRA_PASSWORD` environment variable.
+
+The shipped `job.yaml` sets a default placeholder value for this variable so the migrations run end-to-end during a fresh install. This default must be overridden in any non-trivial deployment via your cluster's secret management (External Secrets Operator, Sealed Secrets, Helm `--set` from a sealed source, etc.). Leaving the default in production is a security risk.
+
+## Building the container
+
+The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/net v0.60.0, x/crypto v0.57.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.2. It rebuilds Kubernetes v1.36.5 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.9 toolchain. The build updates `golang.org/x/net` to v0.60.0, synchronizes the Kubernetes workspace, and regenerates vendored dependencies before offline compilation. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform. The client reports a dirty source tree to identify the dependency patch. Every Go binary is checked against the HTTP/2 security baseline before it enters the runtime image.
+
+The image does not include the Helm CLI. The core migrations and LLS, LLM, and
+UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image
+to create the hook Jobs. The image build checks that neither a Helm executable
+nor its Alpine package is installed on either supported architecture.
+
+Use an OpenBao chart whose initialization script checks for Helm only in
+standalone `script` mode. Older charts check for Helm even in the in-cluster
+`helm` hook mode and cannot initialize with this image. Publish and consume
+the chart prerequisite fix together with the migration image update, including
+for maintenance backports. Validate the packaged chart and exact image together
+on a fresh installation before release. An upgrade alone does not exercise the
+`post-install` initialization hook. Scan the published image and validate each
+enabled addon before updating downstream chart and stack pins.
+
+```bash
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" \
+  -t <your-registry>/<your-org>/openbao-migrations:<version> .
+```
+
+## Running the migrations
+
+The OpenBao 2.6.3 update changes the bundled CLI and runtime base, not the
+migration scripts or secret schema. Updating this image alone does not upgrade
+the running OpenBao servers or injected agents. Use the matching chart and
+stack release, then follow the
+[OpenBao patch upgrade runbook](../../docs/self-managed/runbooks/openbao-patch-upgrade.md).
+
+The container expects the following at runtime:
+
+| Path | Source | Purpose |
+|---|---|---|
+| `/secrets/root_token/root_token` | Kubernetes secret | OpenBao root token used by `bao` CLI inside the container |
+| `/secrets/jwt/cluster_jwt.pem` | Kubernetes secret | Cluster JWT signer's PEM, used to bind the JWT auth method |
+
+Environment variables consumed by the entrypoint:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BAO_SERVICE` | `openbao-server.vault-system.svc.cluster.local` | DNS name of the OpenBao Service |
+| `CORE_MIGRATIONS_ENABLED` | `true` | Run the numbered scripts under `migrations/` |
+| `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` (fail-hard when enabled, see [addons/lls/README.md](addons/lls/README.md)) |
+| `NVCF_SERVICE_PKI_ENABLED` | `false` | Run the service PKI addon under `addons/service-pki/setup_service_pki.sh` (fail-hard when enabled, see [addons/service-pki/README.md](addons/service-pki/README.md)) |
+| `ADDONS_LLM_ENABLED` | `false` | Same as `NVCF_SERVICE_PKI_ENABLED`; kept for the llm-request-router chart and existing installs |
+| `ADDONS_NVCF_UI_ENABLED` | `false` | Run the nvcf-ui addon under `addons/nvcf-ui/setup_nvcf-ui.sh` (fail-hard when enabled, see [addons/nvcf-ui/README.md](addons/nvcf-ui/README.md)) |
+| `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
+| `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
+| `ADMIN_ISSUER_PROXY_ENABLED` | `true` | Run `migrations/10_setup_admin-issuer.sh`. Set `false` alongside `adminIssuerProxy.enabled: false` so the admin signing role, policy and auth role are not created for a proxy that is not installed. Unlike the addon switches this defaults to `true`, so an existing install is unchanged |
+| `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
+| `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
+
+### Example Kubernetes Job
+
+`job.yaml` is a minimal example showing how to schedule the container. Update the image reference, override the password, and apply:
+
+```bash
+kubectl apply -f job.yaml
+```
+
+## Service onboarding
+
+Each NVCF service has its own `migrations/NN_setup_<service>.sh` script. A new service is onboarded by:
+
+1. Adding a `migrations/NN_setup_<service>.sh` file (where `NN` is the next available number).
+2. Using the helpers in `migrations/utils/functions.sh` to enable the service's JWT issuer mount, KV mount, and policies.
+3. Choosing a service name and DNS that match the chart deployment naming. The convention is `<namespace>-<service-type>` for the service account, with the service available at `<service-type>.<namespace>.svc.cluster.local`.
+
+The service-DNS values that the migrations configure are tied to NVCF's chart-default service naming. If you deploy the NVCF charts with non-default namespaces or service names, override the relevant issuer / JWKS URLs in the migration scripts before building your container.
+
+## JWT authentication
+
+The first migration enables a `jwt/` mount and binds it to the cluster issuer. Pods authenticate to OpenBao using their projected service account token, and the migration scripts create per-service roles and policies that grant the appropriate read paths.
+
+## Notes
+
+- The `migrations/*.sh` scripts include `# Issuer:` comment lines documenting the in-cluster service URLs each migration configures. These match NVCF's chart-default service DNS; override them if your deployment uses different names.
+- The example image reference in `job.yaml` is a placeholder. Set it to the registry and tag where you publish your built container.

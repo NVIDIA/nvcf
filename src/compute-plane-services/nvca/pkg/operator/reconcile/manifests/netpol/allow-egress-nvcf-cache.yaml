@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-nvcf-cache
+  labels:
+    app.kubernetes.io/name: {{ .AppName }}
+    app.kubernetes.io/instance: {{ .InstanceName }}
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: {{ .ManagedBy }}
+spec:
+  podSelector: {}
+  egress:
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 14128
+      protocol: TCP
+    - port: 14129
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: container-caching
+      podSelector:
+        matchLabels:
+          app: nvcf-proxy-cache
+  - ports:
+    - port: 53
+      protocol: TCP
+    - port: 53
+      protocol: UDP
+    - port: 14153
+      protocol: TCP
+    - port: 14153
+      protocol: UDP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: dns-proxy
+      podSelector:
+        matchLabels:
+          app: nvcf-unbound
+  policyTypes:
+  - Egress

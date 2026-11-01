@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# gRPC Proxy values for standalone installation
+# Replace <REGISTRY> and <REPOSITORY> with your container registry settings.
+
+grpcproxy:
+  fullnameOverride: grpc-proxy
+  image:
+    registry: "<REGISTRY>"
+    repository: "<REPOSITORY>/nvcf-grpc-proxy"
+
+  # Uncomment for node selectors
+  # nodeSelector:
+  #   nvcf.nvidia.com/workload: control-plane

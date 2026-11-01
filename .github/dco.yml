@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# DCO (Developer Certificate of Origin) enforcement configuration.
+# This file is used by the DCO GitHub App (https://github.com/apps/dco).
+#
+# All commits in pull requests must include a Signed-off-by line:
+#   Signed-off-by: Your Name <your.email@example.com>
+#
+# Contributors can sign off using: git commit -s
+
+require:
+  members: true
+  contributors: true

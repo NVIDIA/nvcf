@@ -1,0 +1,142 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14357"
+      http:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14358"
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: nvidia-dcgm-exporter
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          metrics_path: /metrics
+          static_configs:
+            - targets: [nvidia-dcgm-exporter.gpu-operator-resources.svc.cluster.local:9400]
+          metric_relabel_configs:
+            - source_labels: [pod]
+              regex: "(byoo-otel-collector|workload-0)"
+              action: drop
+            - source_labels: [container]
+              regex: "(byoo-otel-collector|utils|ess)"
+              action: drop
+            - source_labels: [__name__]
+              regex: "DCGM_FI_DEV_GPU_UTIL"
+              action: keep
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "nvidia-dcgm-exporter" }})"
+        - job_name: opentelemetry-collector
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+                - "${env:OTEL_POD_IP:-0.0.0.0}:18888"
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              action: keep
+              regex: "({{ metricAllowList "helm" "opentelemetry-collector" }})"
+        - job_name: kube-state-metrics
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          metrics_path: /metrics
+          static_configs:
+            - targets: [kube-state-metrics.monitoring.svc.cluster.local:8080]
+          metric_relabel_configs:
+            - source_labels: [namespace]
+              action: keep
+              regex: "mini-service"
+{{ dropLabelPatterns "helm" "vm" "kube-state-metrics" | indent 12 }}
+            - source_labels: [__name__]
+              action: keep
+              regex: "{{ metricAllowList "helm" "kube-state-metrics" }}"
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "kube-state-metrics" }})"
+        - job_name: 'kubernetes-cadvisor'
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_timestamps: false
+          scheme: https
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            insecure_skip_verify: false
+            server_name: kubernetes
+          kubernetes_sd_configs:
+            - role: node
+          relabel_configs:
+            - replacement: kubernetes.default.svc.cluster.local:443
+              target_label: __address__
+            - regex: (.+)
+              replacement: /api/v1/nodes/$${1}/proxy/metrics/cadvisor
+              source_labels:
+                - __meta_kubernetes_node_name
+              target_label: __metrics_path__
+          metric_relabel_configs:
+            - source_labels: [namespace]
+              action: keep
+              regex: "mini-service"
+{{ dropLabelPatterns "helm" "vm" "kubernetes-cadvisor" | indent 12 }}
+            - source_labels: [__name__]
+              regex: "{{ metricAllowList "helm" "kubernetes-cadvisor" }}"
+              action: keep
+            # for container_fs_.+ metrics
+            - source_labels: [device]
+              regex: '(^$|/dev/vda3)'
+              action: keep
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "kubernetes-cadvisor" }})"
+
+processors:
+  batch:
+    send_batch_size: 4096
+    timeout: 400ms
+    send_batch_max_size: 8192
+  filter/metrics:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - scrape_duration_seconds
+          - scrape_samples_post_metric_relabeling
+          - scrape_samples_scraped
+          - scrape_series_added
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 10
+  resource:
+    attributes:
+      - key: service.instance.id
+        action: delete
+  attributes/add-metadata:
+    actions:
+{{ attributes "gfn" . | indent 6 }}
+  metricstransform:
+    transforms:
+      - include: ^.*$
+        match_type: regexp
+        action: update
+        operations:
+{{ metricsTransform "gfn" . | indent 10 }}
+extensions:
+  cgroupruntime:
+    gomaxprocs:
+      enabled: true
+    gomemlimit:
+      enabled: true
+      ratio: 0.8
+  healthcheckv2:
+    use_v2: true
+    component_health:
+      include_permanent_errors: true
+      include_recoverable_errors: true
+      recovery_duration: 1m
+    http:
+      endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:13133"
+      status:
+        enabled: true
+        path: "/health"
+      config:
+        enabled: false

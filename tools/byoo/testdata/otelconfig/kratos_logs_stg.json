@@ -1,0 +1,15 @@
+{
+   "telemetries": {
+      "logsTelemetry": {
+         "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+         "name": "kratos-logs-stage",
+         "endpoint": "https://ingest.example.com:8443/v1/mtls/logs",
+         "protocol": "HTTP",
+         "provider": "KRATOS",
+         "types": [
+            "LOGS"
+         ],
+         "createdAt": "2025-04-16T17:41:34.013Z"
+      }
+   }
+}

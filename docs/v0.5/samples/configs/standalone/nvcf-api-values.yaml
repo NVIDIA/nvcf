@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVCF API values for standalone installation
+# Replace <REGISTRY>, <REPOSITORY>, and credential placeholders with your settings.
+
+api:
+  fullnameOverride: nvcf-api
+  image:
+    registry: "<REGISTRY>"
+    repository: "<REPOSITORY>/strap"
+
+  accountBootstrap:
+    image:
+      registry: "<REGISTRY>"
+      repository: "<REPOSITORY>/alpine-k8s"
+      tag: 1.30.12
+      pullPolicy: IfNotPresent
+
+    # Registry credentials for function container/chart deployments.
+    # NGC credentials are used by default. Additional registries (ECR, etc.)
+    # can be added post-install via the NVCF CLI or API.
+    registryCredentials:
+      - registryHostname: nvcr.io
+        secret:
+          name: nvcr-containers
+          value: "<REGISTRY_CREDENTIAL_B64>"  # base64 of $oauthtoken:<NGC_API_KEY>
+        artifactTypes: ["CONTAINER"]
+        tags: []
+        description: "NGC Container registry"
+      - registryHostname: helm.ngc.nvidia.com
+        secret:
+          name: nvcr-helmcharts
+          value: "<REGISTRY_CREDENTIAL_B64>"  # base64 of $oauthtoken:<NGC_API_KEY>
+        artifactTypes: ["HELM"]
+        tags: []
+        description: "NGC Helm chart registry"
+
+    limits:
+      maxFunctions: 10
+      maxTasks: 10
+      maxTelemetries: 10
+      maxRegistryCreds: 10
+
+  env:
+    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
+    NVCF_SIDECARS_HOSTNAME: "<REGISTRY>"
+    NVCF_SIDECARS_REPOSITORY: "<REPOSITORY>"
+
+  # Uncomment for node selectors
+  # nodeSelector:
+  #   nvcf.nvidia.com/workload: control-plane

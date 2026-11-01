@@ -1,0 +1,6 @@
+vault-secrets.json
+nvcr.io.txt
+
+bin/
+packaged-charts/
+.worktrees/

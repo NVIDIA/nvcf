@@ -1,0 +1,17 @@
+{"event":"schemaVersion","version":1}
+{"event":"snapshot","ts":"2026-04-29T03:45:12Z","cluster":"ncp-local","verdict":"healthy","reconcileAgeSec":18,"identity":{"clusterId":"cl-abc123","target":"https://nvcf.nvidia.com","stackVersion":"1.14.2","stackDigest":"sha256:deadbeef","installedAt":"2026-04-25T14:02:18Z"}}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"sis","ready":2,"total":2,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"nats","ready":3,"total":3,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"cassandra","ready":1,"total":1,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"openbao","ready":3,"total":3,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"api-keys","ready":1,"total":1,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"nvcf-api","ready":3,"total":3,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"reval","ready":2,"total":2,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"gateway","ready":1,"total":1,"uptimeSec":1209600,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"nvca-operator","ready":1,"total":1,"uptimeSec":604800,"healthy":true}
+{"event":"component_health","ts":"2026-04-29T03:45:12Z","name":"nvca-worker","cluster":"ncp-local","ready":2,"total":2,"uptimeSec":604800,"healthy":true}
+{"event":"cluster_row","ts":"2026-04-29T03:45:12Z","name":"ncp-local","gpu":"A100","gpuCount":4,"activeDeployments":2,"lastSeenAgeSec":45,"healthy":true}
+{"event":"cluster_row","ts":"2026-04-29T03:45:12Z","name":"yotta-east-1","gpu":"H100","gpuCount":8,"activeDeployments":0,"lastSeenAgeSec":120,"healthy":true}
+{"event":"recent_event","ts":"2026-04-29T03:45:12Z","ageSec":300,"kind":"function-deploy","status":"ACTIVE","name":"my-fn","version":"3"}
+{"event":"recent_event","ts":"2026-04-29T03:45:12Z","ageSec":3600,"kind":"cluster-registered","name":"yotta-east-1"}
+{"event":"recent_event","ts":"2026-04-29T03:45:12Z","ageSec":86400,"kind":"node-pressure","name":"ncp-local-worker-0"}

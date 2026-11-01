@@ -1,0 +1,1457 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package clustervalidator
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+)
+
+func testLog() *logrus.Entry {
+	l := logrus.New()
+	l.SetLevel(logrus.DebugLevel)
+	return logrus.NewEntry(l)
+}
+
+func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
+	// The summary-ConfigMap write is the metrics pipeline's entry point. It
+	// must happen only for in-cluster post-install runs (emitMetrics=true),
+	// not for one-shot preflight (emitMetrics=false): preflight has no agent
+	// to read it and no RBAC to write it. probeDNSFn/probeAPIServiceIPFn are
+	// stubbed package-wide by TestMain, so Run() needs no real network here.
+	// configName points at a ConfigMap that doesn't exist, so the configurable
+	// checks are skipped and the verdict is irrelevant — we assert only on the
+	// summary write.
+	const ns = "nvca-operator"
+
+	t.Run("preflight (emitMetrics=false) does not write the summary", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		_ = Run(context.Background(), client, nil, ns, "cluster-validator-network-checks", ns, false, "")
+		_, err := client.CoreV1().ConfigMaps(ns).Get(
+			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err),
+			"summary ConfigMap must NOT be written in preflight (emitMetrics=false)")
+	})
+
+	t.Run("post-install (emitMetrics=true) writes the summary", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		_ = Run(context.Background(), client, nil, ns, "cluster-validator-network-checks", ns, true, "")
+		cm, err := client.CoreV1().ConfigMaps(ns).Get(
+			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err, "summary ConfigMap must be written when emitMetrics=true")
+		assert.Contains(t, cm.Data[SummaryConfigMapKey], "schemaVersion",
+			"written ConfigMap must contain the summary payload")
+	})
+
+	t.Run("summary is written to summaryNamespace, not configNamespace", func(t *testing.T) {
+		// Guards the decoupling: a non-operator config namespace must NOT
+		// redirect the summary away from the namespace the agent watches.
+		client := fake.NewSimpleClientset()
+		_ = Run(context.Background(), client, nil, "some-config-ns", "cluster-validator-network-checks", ns, true, "")
+
+		_, err := client.CoreV1().ConfigMaps(ns).Get(
+			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err, "summary must be written to summaryNamespace")
+
+		_, err = client.CoreV1().ConfigMaps("some-config-ns").Get(
+			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err),
+			"summary must NOT be written to the (different) config namespace")
+	})
+}
+
+// runAndReadSummary drives the real Run dispatch for a role and reads back the
+// summary ConfigMap it publishes. Asserting on the published summary rather
+// than on the returned error is what makes the role dispatch observable: the
+// error string is the same constant for every role, so it cannot distinguish
+// them, and the ConfigMap is what the agent actually turns into metrics.
+func runAndReadSummary(t *testing.T, client kubernetes.Interface, role Role) *ValidatorSummary {
+	t.Helper()
+	const ns = "nvca-system"
+	_ = Run(context.Background(), client, nil, "", "", ns, true, role)
+
+	cm, err := client.CoreV1().ConfigMaps(ns).Get(
+		context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err, "Run must publish the summary ConfigMap")
+
+	var s ValidatorSummary
+	require.NoError(t, json.Unmarshal([]byte(cm.Data[SummaryConfigMapKey]), &s))
+	return &s
+}
+
+// Every check key belongs to exactly one dispatch group. The role tests below
+// assert whole groups, so a key added without a group, or moved between the
+// role branches of Run, fails them rather than going unasserted.
+var (
+	bothRoleCheckKeys = []string{
+		CheckKeyControlPlane, CheckKeyWorkerNodesAllReady, CheckKeyWebhooks, CheckKeyNetworkPoliciesSupport,
+	}
+	computePlaneCheckKeys = []string{CheckKeySMBCSI, CheckKeyGPUResources, CheckKeyGPUOperator}
+	// Published only when the network-checks ConfigMap configures them, which
+	// the role tests do not.
+	configuredCheckKeys = []string{CheckKeyEndpointReachability, CheckKeyConfigurableNetpol, CheckKeyNetpolEnforcement}
+	// controlPlaneCheckRows maps each control-plane key to the row label its
+	// warnings start with, so a key absent from a summary can be matched to the
+	// warning that says why.
+	controlPlaneCheckRows = map[string]string{
+		CheckKeyDefaultStorageClass: "Default StorageClass:",
+		CheckKeyGatewayAPICRDs:      "Gateway API CRDs:",
+		CheckKeyEnvoyGateway:        "Envoy Gateway:",
+		CheckKeyGatewayRoutes:       "Gateway Route CR Types:",
+		CheckKeyExternalLB:          "External Load Balancer:",
+		CheckKeyNodeToNode:          "Node-to-Node:",
+		CheckKeyTier1Deployments:    "Tier-1 Deployments:",
+		CheckKeyTier2StatefulSets:   "Tier-2 StatefulSets:",
+	}
+)
+
+func TestCheckKeyGroupsPartitionAllCheckKeys(t *testing.T) {
+	var grouped []string
+	grouped = append(grouped, bothRoleCheckKeys...)
+	grouped = append(grouped, computePlaneCheckKeys...)
+	grouped = append(grouped, configuredCheckKeys...)
+	for k := range controlPlaneCheckRows {
+		grouped = append(grouped, k)
+	}
+	assert.ElementsMatch(t, AllCheckKeys, grouped)
+}
+
+func hasWarningFor(s *ValidatorSummary, row string) bool {
+	for _, w := range s.Warnings {
+		if strings.HasPrefix(w, row) {
+			return true
+		}
+	}
+	return false
+}
+
+// The control-plane role publishes the shared and control-plane keys and none
+// of the compute-plane ones. A control-plane key may be absent only when a
+// warning on its row says why: the single node here makes node_to_node not
+// applicable, and every other row must be present.
+func TestRun_ControlPlaneRoleDispatch(t *testing.T) {
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+	s := runAndReadSummary(t, client, RoleControlPlane)
+
+	for _, k := range bothRoleCheckKeys {
+		assert.Contains(t, s.Checks, k, "shared check %q must be published under the control-plane role", k)
+	}
+	for k, row := range controlPlaneCheckRows {
+		if _, ok := s.Checks[k]; !ok {
+			assert.True(t, hasWarningFor(s, row),
+				"control-plane check %q is absent and no warning starting %q says why; warnings: %q",
+				k, row, s.Warnings)
+		}
+	}
+	assert.NotContains(t, s.Checks, CheckKeyNodeToNode, "one schedulable node has no cross-node path")
+	assert.True(t, hasWarningFor(s, controlPlaneCheckRows[CheckKeyNodeToNode]))
+	for _, k := range append(append([]string(nil), computePlaneCheckKeys...), configuredCheckKeys...) {
+		assert.NotContains(t, s.Checks, k, "check %q must not be published under the control-plane role", k)
+	}
+}
+
+// The compute-plane role publishes exactly the shared and compute-plane keys.
+func TestRun_ComputePlaneRoleDispatch(t *testing.T) {
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+	s := runAndReadSummary(t, client, RoleComputePlane)
+
+	want := append(append([]string(nil), bothRoleCheckKeys...), computePlaneCheckKeys...)
+	got := make([]string, 0, len(s.Checks))
+	for k := range s.Checks {
+		got = append(got, k)
+	}
+	assert.ElementsMatch(t, want, got)
+	for k := range controlPlaneCheckRows {
+		assert.NotContains(t, s.Checks, k, "control-plane check %q must not run under the compute-plane role", k)
+	}
+}
+
+// TestPrintSummary_ControlPlaneRole verifies that with Role=RoleControlPlane
+// the summary omits GPU rows and includes control-plane check rows.
+func TestPrintSummary_ControlPlaneRole(t *testing.T) {
+	t.Run("control-plane role excludes GPU rows", func(t *testing.T) {
+		ok := true
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			// Control-plane checks all pass
+			DefaultStorageClassOK: &ok,
+			GatewayAPICRDsOK:      &ok,
+			EnvoyGatewayOK:        &ok,
+			GatewayRoutesOK:       &ok,
+			ExternalLBOK:          &ok,
+			// The remaining critical control-plane rows have to be set too:
+			// leaving them nil is UNKNOWN, which is not "all checks passing".
+			NodeToNodeOK:        &ok,
+			Tier1DeploymentsOK:  &ok,
+			Tier2StatefulSetsOK: &ok,
+			K8sVersion:          "v1.30.0",
+			TotalNodes:          "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "all control-plane checks passing must yield NVCF-Ready")
+		out := buf.String()
+		assert.NotContains(t, out, "GPU Resources", "GPU row must not appear for control-plane role")
+		assert.NotContains(t, out, "GPU Operator", "GPU Operator row must not appear for control-plane role")
+		assert.Contains(t, out, "Default StorageClass", "StorageClass row must appear for control-plane role")
+		assert.Contains(t, out, "Gateway API CRDs", "Gateway CRD row must appear for control-plane role")
+		assert.Contains(t, out, "Envoy Gateway", "Envoy Gateway row must appear for control-plane role")
+	})
+
+	t.Run("control-plane role critical failure blocks readiness", func(t *testing.T) {
+		fail := false
+		ok := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &fail, // critical: no default StorageClass
+			GatewayAPICRDsOK:         &ok,
+			EnvoyGatewayOK:           &ok,
+			// Every other critical pointer must be set, or an unknown critical
+			// check blocks the verdict on its own and the subtest passes
+			// without the StorageClass failure doing any work.
+			GatewayRoutesOK:     &ok,
+			ExternalLBOK:        &ok,
+			NodeToNodeOK:        &ok,
+			Tier1DeploymentsOK:  &ok,
+			Tier2StatefulSetsOK: &ok,
+			K8sVersion:          "v1.30.0",
+			TotalNodes:          "2",
+		}
+		err := printSummary(state)
+		assert.Error(t, err, "missing default StorageClass must block control-plane readiness")
+	})
+
+	t.Run("unknown critical check blocks readiness", func(t *testing.T) {
+		// A critical check nothing could observe must not publish a green
+		// verdict: that exports a perfect SLI for a precondition that was
+		// never looked at, and the pruned metric leaves nothing to alert on.
+		ok := true
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &ok,
+			GatewayAPICRDsOK:         &ok,
+			EnvoyGatewayOK:           &ok,
+			GatewayRoutesOK:          &ok,
+			ExternalLBOK:             &ok,
+			NodeToNodeOK:             &ok,
+			Tier1DeploymentsOK:       &ok,
+			// Tier2StatefulSetsOK left nil: RBAC denied the StatefulSet list.
+			K8sVersion: "v1.30.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.Error(t, err, "an unobserved critical check cannot be certified ready")
+		assert.Contains(t, buf.String(), "could not be observed",
+			"the operator must be told this is unobserved, not broken")
+	})
+
+	t.Run("unknown non-critical check does not block readiness", func(t *testing.T) {
+		ok := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &ok,
+			GatewayAPICRDsOK:         &ok,
+			NodeToNodeOK:             &ok,
+			Tier1DeploymentsOK:       &ok,
+			Tier2StatefulSetsOK:      &ok,
+			// EnvoyGatewayOK / GatewayRoutesOK / ExternalLBOK nil: all
+			// non-critical, so they stay out of the verdict entirely.
+			K8sVersion: "v1.30.0",
+			TotalNodes: "2",
+		}
+		assert.NoError(t, printSummary(state))
+	})
+
+	t.Run("compute-plane role (default) still includes GPU rows", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     "",
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+		out := buf.String()
+		assert.Contains(t, out, "GPU Resources", "GPU row must appear for compute-plane role")
+		assert.NotContains(t, out, "Default StorageClass", "StorageClass row must not appear for compute-plane role")
+	})
+}
+
+func TestVersionGTE(t *testing.T) {
+	tests := []struct {
+		name string
+		v1   string
+		v2   string
+		want bool
+	}{
+		{"equal", "1.16.0", "1.16.0", true},
+		{"greater major", "2.0.0", "1.16.0", true},
+		{"greater minor", "1.17.0", "1.16.0", true},
+		{"greater patch", "1.16.1", "1.16.0", true},
+		{"less major", "0.16.0", "1.16.0", false},
+		{"less minor", "1.15.0", "1.16.0", false},
+		{"less patch", "1.16.0", "1.16.1", false},
+		{"with v prefix", "v1.16.0", "1.16.0", true},
+		{"with pre-release", "1.16.0-rc1", "1.16.0", true},
+		{"invalid v1", "abc", "1.16.0", false},
+		{"invalid v2", "1.16.0", "abc", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := versionGTE(tt.v1, tt.v2)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCheckPrerequisites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("healthy cluster", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			makeNode("node-1", true, 0),
+			makeNode("node-2", true, 0),
+		)
+		state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+		err := checkPrerequisites(ctx, client, state)
+		assert.NoError(t, err)
+		assert.Equal(t, "2", state.TotalNodes)
+	})
+}
+
+func TestCheckControlPlaneHealth(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("all healthy", func(t *testing.T) {
+		stubProbes(t, true, true)
+		client := fake.NewSimpleClientset(
+			makeNode("node-1", true, 0),
+			makePod("kube-apiserver-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-controller-manager-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-scheduler-node-1", "kube-system", corev1.PodRunning),
+			makePod("etcd-node-1", "kube-system", corev1.PodRunning),
+			makePod("coredns-abc123", "kube-system", corev1.PodRunning),
+			makePod("kube-proxy-xyz789", "kube-system", corev1.PodRunning),
+		)
+		state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+		checkControlPlaneHealth(ctx, client, state)
+		assert.True(t, state.ControlPlaneHealthy)
+	})
+
+	t.Run("not-ready node alone is non-blocking", func(t *testing.T) {
+		// NotReady worker nodes emit a Warning but do not flip the cluster
+		// verdict. With capability probes passing, the verdict stays healthy.
+		stubProbes(t, true, true)
+		client := fake.NewSimpleClientset(
+			makeNode("node-1", true, 0),
+			makeNode("node-2", false, 0),
+			makePod("kube-apiserver-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-controller-manager-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-scheduler-node-1", "kube-system", corev1.PodRunning),
+			makePod("etcd-node-1", "kube-system", corev1.PodRunning),
+			makePod("coredns-abc123", "kube-system", corev1.PodRunning),
+			makePod("kube-proxy-xyz789", "kube-system", corev1.PodRunning),
+		)
+		state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+		checkControlPlaneHealth(ctx, client, state)
+		assert.True(t, state.ControlPlaneHealthy,
+			"NotReady nodes alone should not flip the verdict")
+		assert.False(t, state.NodesAllReady, "NodesAllReady should be false when a node is NotReady")
+		assert.Equal(t, 1, state.NotReadyNodes)
+		assert.NotEmpty(t, state.Warnings, "Warning entry should be added")
+		assert.Empty(t, state.Recommendations,
+			"no recommendations expected when only nodes are NotReady")
+	})
+}
+
+func TestCheckWebhookSupport(t *testing.T) {
+	ctx := context.Background()
+
+	// The fake discovery client does not register API group resources, so
+	// discoverWebhookAPIs will return false. We test that the function runs
+	// without panics and that listing existing webhooks works.
+	t.Run("lists existing webhooks without panic", func(t *testing.T) {
+		sideEffect := admissionregistrationv1.SideEffectClassNone
+		client := fake.NewSimpleClientset(
+			&admissionregistrationv1.MutatingWebhookConfiguration{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-mutating"},
+				Webhooks: []admissionregistrationv1.MutatingWebhook{{
+					Name:                    "test.webhook.io",
+					SideEffects:             &sideEffect,
+					AdmissionReviewVersions: []string{"v1"},
+					ClientConfig:            admissionregistrationv1.WebhookClientConfig{URL: strPtr("https://localhost")},
+				}},
+			},
+		)
+		state := &ValidationState{Log: testLog()}
+		checkWebhookSupport(ctx, client, state)
+		// Fake discovery does not populate ServerResourcesForGroupVersion,
+		// so WebhooksSupported will be false. This is a limitation of the
+		// fake client, not of our code.
+		assert.False(t, state.WebhooksSupported)
+	})
+}
+
+func TestCheckSMBCSIDriver(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("driver installed with valid version", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			&storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{Name: "smb.csi.k8s.io"},
+			},
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "csi-smb-controller",
+					Namespace: "kube-system",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "csi-smb"}},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "csi-smb"}},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{
+								Name:  "smb",
+								Image: "registry.k8s.io/sig-storage/smbplugin:v1.16.0",
+							}},
+						},
+					},
+				},
+			},
+		)
+		state := &ValidationState{Log: testLog()}
+		checkSMBCSIDriver(ctx, client, state)
+		assert.True(t, state.SMBCSIDriverOK)
+	})
+
+	t.Run("driver not installed is non-blocking warning", func(t *testing.T) {
+		// SMB CSI is required only when HelmSharedStorage FF is enabled.
+		// Its absence must not flip the cluster verdict — append to Warnings
+		// (non-blocking) instead of Recommendations (which would be
+		// surfaced as a Critical action item).
+		client := fake.NewSimpleClientset()
+		state := &ValidationState{Log: testLog()}
+		checkSMBCSIDriver(ctx, client, state)
+		assert.False(t, state.SMBCSIDriverOK)
+		assert.Empty(t, state.Recommendations,
+			"missing SMB CSI must not add a hard Recommendation (it's feature-gated)")
+		assert.NotEmpty(t, state.Warnings,
+			"missing SMB CSI must surface as a Warning so the user sees it in the summary")
+	})
+}
+
+func TestCheckGPUResources(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("GPU nodes present", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			makeNode("gpu-node-1", true, 4),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkGPUResources(ctx, client, state)
+		assert.True(t, state.GPUAvailable)
+	})
+
+	t.Run("no GPU nodes", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			makeNode("cpu-node-1", true, 0),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkGPUResources(ctx, client, state)
+		assert.False(t, state.GPUAvailable)
+		assert.NotEmpty(t, state.Recommendations)
+	})
+}
+
+func TestCheckGPUOperator(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("operator installed", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "gpu-operator"}},
+			makePod("gpu-operator-abc123", "gpu-operator", corev1.PodRunning),
+		)
+		state := &ValidationState{Log: testLog()}
+		checkGPUOperator(ctx, client, state)
+		assert.True(t, state.GPUOperatorInstalled)
+	})
+
+	t.Run("operator not installed", func(t *testing.T) {
+		client := fake.NewSimpleClientset()
+		state := &ValidationState{Log: testLog()}
+		checkGPUOperator(ctx, client, state)
+		assert.False(t, state.GPUOperatorInstalled)
+		assert.NotEmpty(t, state.Recommendations)
+	})
+}
+
+func TestCheckNetworkPolicies(t *testing.T) {
+	ctx := context.Background()
+
+	// Fake discovery doesn't populate ServerResourcesForGroupVersion, so
+	// the check exits early. We verify it doesn't panic.
+	t.Run("runs without panic on fake client", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "calico-node-abc",
+					Namespace: "kube-system",
+					Labels:    map[string]string{"k8s-app": "calico-node"},
+				},
+				Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			},
+		)
+		state := &ValidationState{Log: testLog()}
+		checkNetworkPolicies(ctx, client, state)
+		// The fake discovery returns an error for ServerResourcesForGroupVersion,
+		// so the function exits early and NetworkPoliciesSupported stays false.
+		assert.False(t, state.NetworkPoliciesSupported)
+	})
+}
+
+func TestTestHTTPS(t *testing.T) {
+	t.Run("unreachable host returns false", func(t *testing.T) {
+		// RFC 5737 TEST-NET, guaranteed non-routable.
+		assert.False(t, testHTTPS(context.Background(), "https://192.0.2.1:1"))
+	})
+
+	t.Run("invalid URL returns false", func(t *testing.T) {
+		assert.False(t, testHTTPS(context.Background(), "://not-a-url"))
+	})
+}
+
+func TestTestTCP(t *testing.T) {
+	t.Run("reachable TCP port", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer ln.Close()
+
+		_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port := 0
+		fmt.Sscanf(portStr, "%d", &port)
+
+		assert.True(t, testTCP(context.Background(), "127.0.0.1", port, false))
+	})
+
+	t.Run("unreachable TCP port", func(t *testing.T) {
+		assert.False(t, testTCP(context.Background(), "192.0.2.1", 1, false))
+	})
+
+	t.Run("unreachable host", func(t *testing.T) {
+		assert.False(t, testTCP(context.Background(), "invalid.test.example", 443, false))
+	})
+
+	t.Run("TLS handshake error counts as reachable", func(t *testing.T) {
+		ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+			Certificates: []tls.Certificate{selfSignedCert(t)},
+		})
+		require.NoError(t, err)
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}()
+
+		_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port := 0
+		fmt.Sscanf(portStr, "%d", &port)
+
+		assert.True(t, testTCP(context.Background(), "127.0.0.1", port, true))
+	})
+
+	t.Run("unreachable TLS port", func(t *testing.T) {
+		assert.False(t, testTCP(context.Background(), "192.0.2.1", 443, true))
+	})
+}
+
+func TestTestEndpoint(t *testing.T) {
+	t.Run("unknown protocol", func(t *testing.T) {
+		ep := Endpoint{Protocol: "grpc", Host: "localhost", Port: 1234}
+		assert.False(t, TestEndpoint(context.Background(), ep))
+	})
+}
+
+func TestPrintSummary(t *testing.T) {
+	t.Run("cluster ready", func(t *testing.T) {
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+	})
+
+	t.Run("cluster not ready", func(t *testing.T) {
+		state := &ValidationState{
+			Log:                 testLog(),
+			ControlPlaneHealthy: false,
+			K8sVersion:          "v1.28.0",
+			TotalNodes:          "1",
+		}
+		err := printSummary(state)
+		assert.Error(t, err)
+	})
+
+	t.Run("Worker Nodes row reads 'status unknown' on listing failure", func(t *testing.T) {
+		// When checkControlPlaneHealth's Nodes().List() errors, the row is
+		// unobserved. The summary must say so, not the misleading
+		// "0 NotReady": the operator was never able to count nodes.
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			Unobserved:               map[string]bool{CheckKeyWorkerNodesAllReady: true},
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "0",
+		}
+		_ = printSummary(state)
+		out := buf.String()
+		assert.Contains(t, out, "Worker Nodes: Status Unknown (not observed)",
+			"summary must reflect that nodes were never queried")
+		assert.NotContains(t, out, "Worker Nodes: All Ready")
+		assert.NotContains(t, out, "Worker Nodes: 0 NotReady",
+			"the misleading zero-count message must not appear when listing failed")
+	})
+
+	t.Run("SMB CSI missing is non-blocking", func(t *testing.T) {
+		// Mirror of the GPU Operator scenario for the SMB CSI Driver:
+		// SMB CSI is feature-gated (HelmSharedStorage). Customers who don't
+		// use NVCA model caching shouldn't be blocked from installing the
+		// operator just because their cluster doesn't have SMB CSI.
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           false, // ← the scenario
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			Warnings: []string{
+				"SMB CSI Driver v1.16.0+ not installed. Required only when the " +
+					"HelmSharedStorage feature flag is enabled. Non-blocking.",
+			},
+			K8sVersion: "v1.33.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err,
+			"missing SMB CSI must not block helm install for customers who don't use model caching")
+	})
+
+	t.Run("GPU Operator missing with GPUs available is non-blocking", func(t *testing.T) {
+		// Manual Instance Configuration: GPU Operator is not installed but
+		// GPUs are discoverable. All other critical checks pass. printSummary
+		// must NOT return an error — the cluster is NVCF-Ready (with warnings).
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     false,
+			Warnings: []string{
+				"GPU Operator: not installed but GPUs are discoverable via alternative mechanism " +
+					"(e.g. Manual Instance Configuration). Non-blocking.",
+			},
+			K8sVersion: "v1.33.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err,
+			"missing GPU Operator with available GPUs must not block helm install")
+	})
+
+	t.Run("no reachability config is excluded", func(t *testing.T) {
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+	})
+
+	t.Run("reachability all pass", func(t *testing.T) {
+		ok := true
+		critOK := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &ok,
+			ReachabilityCriticalOK:   &critOK,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+	})
+
+	t.Run("reachability critical fail blocks readiness", func(t *testing.T) {
+		fail := false
+		critFail := false
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &fail,
+			ReachabilityCriticalOK:   &critFail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.Error(t, err, "critical endpoint failure must block readiness")
+	})
+
+	t.Run("reachability fail summary uses neutral 'one or more' wording", func(t *testing.T) {
+		// Summary must read correctly in both the "some endpoints failed"
+		// and "all endpoints failed" cases — the prior wording "Some
+		// Endpoints Not Reachable" was misleading when 100% of endpoints
+		// failed. Verify the neutral wording is in the printed output.
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		fail := false
+		critFail := false
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &fail,
+			ReachabilityCriticalOK:   &critFail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "2",
+		}
+		_ = printSummary(state)
+		out := buf.String()
+		assert.Contains(t, out, "Endpoint Reachability: One or more endpoints not reachable",
+			"summary must use neutral wording that's correct for both 'some' and 'all' cases")
+		assert.NotContains(t, out, "Some Endpoints Not Reachable",
+			"old misleading wording must be replaced")
+	})
+
+	t.Run("reachability non-critical fail is warning", func(t *testing.T) {
+		fail := false
+		critOK := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &fail,
+			ReachabilityCriticalOK:   &critOK,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "only non-critical failures should not block readiness")
+	})
+
+	t.Run("reachability no critical endpoints", func(t *testing.T) {
+		fail := false
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &fail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "no critical endpoints means failures are non-critical")
+	})
+
+	t.Run("configurable netpol fail is non-critical", func(t *testing.T) {
+		fail := false
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ConfigurableNetPolOK:     &fail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "configurable netpol failures are non-critical")
+	})
+
+	t.Run("enforcement pass", func(t *testing.T) {
+		ok := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			EnforcementOK:            &ok,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+	})
+
+	t.Run("enforcement fail is non-critical", func(t *testing.T) {
+		fail := false
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			EnforcementOK:            &fail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "3",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "enforcement failures are non-critical")
+	})
+}
+
+func TestIsTLSOrProtocolError(t *testing.T) {
+	t.Run("tls keyword in error", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(fmt.Errorf("tls: handshake failure")))
+	})
+
+	t.Run("certificate required in error", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(fmt.Errorf("remote error: certificate required")))
+	})
+
+	t.Run("bad status line", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(fmt.Errorf("bad status line from server")))
+	})
+
+	t.Run("malformed HTTP", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(fmt.Errorf("malformed HTTP response")))
+	})
+
+	t.Run("generic connection refused", func(t *testing.T) {
+		assert.False(t, isTLSOrProtocolError(fmt.Errorf("connection refused")))
+	})
+
+	t.Run("certificate verification error", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(&tls.CertificateVerificationError{}))
+	})
+
+	t.Run("OpError wrapping tls verification", func(t *testing.T) {
+		assert.True(t, isTLSOrProtocolError(&net.OpError{
+			Op:  "read",
+			Err: &tls.CertificateVerificationError{},
+		}))
+	})
+
+	t.Run("OpError with non-tls error", func(t *testing.T) {
+		assert.False(t, isTLSOrProtocolError(&net.OpError{
+			Op:  "read",
+			Err: fmt.Errorf("some other error"),
+		}))
+	})
+}
+
+func TestTestEndpoint_TCP(t *testing.T) {
+	ep := Endpoint{Protocol: "tcp", Host: "192.0.2.1", Port: 1}
+	assert.False(t, TestEndpoint(context.Background(), ep))
+}
+
+func TestTestEndpoint_TCPTLS(t *testing.T) {
+	ep := Endpoint{Protocol: "tcp+tls", Host: "192.0.2.1", Port: 1}
+	assert.False(t, TestEndpoint(context.Background(), ep))
+}
+
+func TestToEndpoint(t *testing.T) {
+	ep := toEndpoint(ReachabilityEndpoint{
+		URL:      "https://example.com",
+		Host:     "example.com",
+		Port:     443,
+		Protocol: "https",
+	})
+	assert.Equal(t, "https://example.com", ep.URL)
+	assert.Equal(t, "example.com", ep.Host)
+	assert.Equal(t, 443, ep.Port)
+	assert.Equal(t, "https", ep.Protocol)
+}
+
+// TestToEndpoint_HTTPSWithoutURLFallsBackToTCPTLS verifies that when the
+// user writes `protocol: https` with host+port and no url, the validator
+// probes successfully — the same host:port already works as
+// `protocol: tcp+tls`. The fix substitutes the probe protocol to tcp+tls
+// rather than calling testHTTPS(context.Background(), "") which silently returned false.
+func TestToEndpoint_HTTPSWithoutURLFallsBackToTCPTLS(t *testing.T) {
+	tests := []struct {
+		name         string
+		in           ReachabilityEndpoint
+		wantProtocol string
+		wantHost     string
+		wantPort     int
+		wantURL      string
+	}{
+		{
+			name:         "https + host + port 443 + no url → tcp+tls",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 443, Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + host + no port + no url → tcp+tls on 443",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + host + non-443 port + no url → tcp+tls on that port",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 8443, Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     8443,
+			wantURL:      "",
+		},
+		{
+			name:         "https with explicit URL → no substitution",
+			in:           ReachabilityEndpoint{URL: "https://api.example.com", Host: "api.example.com", Port: 443, Protocol: "https"},
+			wantProtocol: "https",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "https://api.example.com",
+		},
+		{
+			name:         "tcp protocol unchanged",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 443, Protocol: "tcp"},
+			wantProtocol: "tcp",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + no host + no url → unchanged (caught by unprobableReason)",
+			in:           ReachabilityEndpoint{Port: 443, Protocol: "https"},
+			wantProtocol: "https",
+			wantHost:     "",
+			wantPort:     443,
+			wantURL:      "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toEndpoint(tt.in)
+			assert.Equal(t, tt.wantProtocol, got.Protocol)
+			assert.Equal(t, tt.wantHost, got.Host)
+			assert.Equal(t, tt.wantPort, got.Port)
+			assert.Equal(t, tt.wantURL, got.URL)
+		})
+	}
+}
+
+// TestUnprobableReason verifies the pre-flight diagnostic helper that
+// distinguishes "endpoint config insufficient" from "endpoint unreachable".
+// Before this helper, both produced the same silent "Not Reachable" line.
+func TestUnprobableReason(t *testing.T) {
+	tests := []struct {
+		name      string
+		ep        Endpoint
+		wantEmpty bool
+		wantSub   string
+	}{
+		{"https with URL is probable", Endpoint{URL: "https://example.com", Protocol: "https"}, true, ""},
+		{"https without URL or host is unprobable", Endpoint{Protocol: "https"}, false, "missing 'url'"},
+		{"tcp with host+port is probable", Endpoint{Host: "example.com", Port: 443, Protocol: "tcp"}, true, ""},
+		{"tcp without port is unprobable", Endpoint{Host: "example.com", Protocol: "tcp"}, false, "missing 'host' or 'port'"},
+		{"tcp+tls without host is unprobable", Endpoint{Port: 443, Protocol: "tcp+tls"}, false, "missing 'host' or 'port'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := unprobableReason(tt.ep)
+			if tt.wantEmpty {
+				assert.Empty(t, got)
+			} else {
+				assert.Contains(t, got, tt.wantSub)
+			}
+		})
+	}
+}
+
+// TestCheckConfigurableReachability_UnprobableEndpointSurfacesReason verifies
+// that an https endpoint configured with no url AND no host produces a
+// clear diagnostic log line, not a silent "Not Reachable" that would be
+// indistinguishable from a real connectivity failure.
+func TestCheckConfigurableReachability_UnprobableEndpointSurfacesReason(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{Log: logrus.NewEntry(l)}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "bad-https", Protocol: "https", Critical: true},
+		},
+	}
+	checkConfigurableReachability(context.Background(), state, cfg)
+
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+	require.NotNil(t, state.ReachabilityCriticalOK)
+	assert.False(t, *state.ReachabilityCriticalOK)
+	out := buf.String()
+	assert.Contains(t, out, "missing 'url' (or 'host') for https probe",
+		"misconfigured endpoint must surface the config gap, not a silent 'Not Reachable'")
+	assert.Contains(t, out, "treated as unreachable",
+		"output must make clear the result was driven by config, not connectivity")
+}
+
+func TestCheckConfigurableReachability_AllUnreachable(t *testing.T) {
+	state := &ValidationState{Log: testLog()}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "bad-ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp"},
+		},
+	}
+	checkConfigurableReachability(context.Background(), state, cfg)
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+}
+
+func TestCheckConfigurableReachability_CriticalFail(t *testing.T) {
+	state := &ValidationState{Log: testLog()}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "critical-ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp", Critical: true},
+		},
+	}
+	checkConfigurableReachability(context.Background(), state, cfg)
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+	require.NotNil(t, state.ReachabilityCriticalOK)
+	assert.False(t, *state.ReachabilityCriticalOK)
+	require.NotEmpty(t, state.Recommendations)
+	// The recommendation must cover all three root causes — config typo,
+	// wrong environment, and egress — not assert "egress is the problem".
+	rec := state.Recommendations[0]
+	assert.Contains(t, rec, "hostname",
+		"recommendation should mention hostname (DNS-typo / wrong-env root cause)")
+	assert.Contains(t, rec, "egress",
+		"recommendation should still mention egress as one possible cause")
+	assert.NotContains(t, rec, "Ensure network egress is allowed",
+		"old egress-only recommendation must be replaced")
+}
+
+func TestCheckConfigurableReachability_Unreachable(t *testing.T) {
+	state := &ValidationState{Log: testLog()}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "ep", Host: "192.0.2.1", Port: 1, Protocol: "tcp"},
+		},
+	}
+	checkConfigurableReachability(context.Background(), state, cfg)
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+}
+
+func TestCheckConfigurableReachability_NonCriticalFailOnly(t *testing.T) {
+	state := &ValidationState{Log: testLog()}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "non-crit", Host: "192.0.2.1", Port: 1, Protocol: "tcp", Critical: false},
+		},
+	}
+	checkConfigurableReachability(context.Background(), state, cfg)
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+	assert.Nil(t, state.ReachabilityCriticalOK)
+	assert.NotEmpty(t, state.Warnings)
+}
+
+func TestEndpointDisplayAddr(t *testing.T) {
+	t.Run("URL endpoint", func(t *testing.T) {
+		ep := Endpoint{URL: "https://example.com", Protocol: "https"}
+		assert.Equal(t, "https://example.com", ep.DisplayAddr())
+	})
+
+	t.Run("TCP endpoint", func(t *testing.T) {
+		ep := Endpoint{Host: "example.com", Port: 4222, Protocol: "tcp"}
+		assert.Equal(t, "example.com:4222", ep.DisplayAddr())
+	})
+}
+
+// --- helpers ---
+
+func makeNode(name string, ready bool, gpus int) *corev1.Node {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+
+	capacity := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("8"),
+		corev1.ResourceMemory: resource.MustParse("32Gi"),
+	}
+	if gpus > 0 {
+		capacity["nvidia.com/gpu"] = *resource.NewQuantity(int64(gpus), resource.DecimalSI)
+	}
+
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{
+				Type:   corev1.NodeReady,
+				Status: status,
+			}},
+			Capacity:    capacity,
+			Allocatable: capacity.DeepCopy(),
+		},
+	}
+}
+
+func makePod(name, namespace string, phase corev1.PodPhase) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Status: corev1.PodStatus{Phase: phase},
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+func selfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{"localhost"},
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	return tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  key,
+	}
+}
+
+func init() {
+	// Register corev1 and other types with the fake client scheme.
+	_ = []runtime.Object{
+		&corev1.Node{},
+		&corev1.Pod{},
+		&corev1.Namespace{},
+	}
+}
+
+// A check the cluster shape cannot exercise is neither a pass nor a hidden
+// failure. It must not block the verdict, and it must not be rendered as
+// Verified or exported as a passing check.
+func TestPrintSummary_NotApplicableIsNeitherPassNorUnknown(t *testing.T) {
+	ok := true
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{
+		Log:                      logrus.NewEntry(l),
+		Role:                     RoleControlPlane,
+		ControlPlaneHealthy:      true,
+		NodesAllReady:            true,
+		WebhooksSupported:        true,
+		NetworkPoliciesSupported: true,
+		DefaultStorageClassOK:    &ok,
+		GatewayAPICRDsOK:         &ok,
+		EnvoyGatewayOK:           &ok,
+		GatewayRoutesOK:          &ok,
+		ExternalLBOK:             &ok,
+		Tier1DeploymentsOK:       &ok,
+		Tier2StatefulSetsOK:      &ok,
+		// NodeToNodeOK deliberately nil, with a not-applicable reason.
+		NodeToNodeNotApplicable: "single schedulable node, no cross-node path",
+		K8sVersion:              "v1.30.0",
+		TotalNodes:              "1",
+	}
+	assert.NoError(t, printSummary(state),
+		"a not-applicable check must not block readiness")
+
+	out := buf.String()
+	assert.Contains(t, out, "Node-to-Node Communication: Not Applicable")
+	assert.NotContains(t, out, "Node-to-Node Communication: Verified",
+		"nothing was probed, so it cannot be reported as Verified")
+	assert.NotContains(t, out, "Node-to-Node Communication: Status Unknown",
+		"the cluster shape is known; it is not an unobserved check")
+	assert.Contains(t, out, VerdictLinePrefix+VerdictReadyWithWarnings,
+		"a row that did not pass rules out the all-clear banner")
+	assert.NotContains(t, out, "meets all requirements for NVCF workloads")
+}
+
+// The banner follows the rows, not only the warnings: a non-critical row that
+// fails without adding a warning must not sit above "meets all requirements".
+func TestPrintSummary_NonCriticalFailureIsNotAllClear(t *testing.T) {
+	run := func(smbOK bool) (error, string) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log: logrus.NewEntry(l), ControlPlaneHealthy: true, NodesAllReady: true, WebhooksSupported: true,
+			NetworkPoliciesSupported: true, SMBCSIDriverOK: smbOK, GPUAvailable: true, GPUOperatorInstalled: true,
+			K8sVersion: "v1.30.0", TotalNodes: "1",
+		}
+		return printSummary(state), buf.String()
+	}
+	err, out := run(false)
+	require.NoError(t, err, "a non-critical failure does not block the verdict")
+	assert.Contains(t, out, VerdictLinePrefix+VerdictReadyWithWarnings)
+	assert.NotContains(t, out, "meets all requirements for NVCF workloads")
+
+	err, out = run(true)
+	require.NoError(t, err)
+	assert.Contains(t, out, "meets all requirements for NVCF workloads", "every row passed and nothing warned")
+	assert.NotContains(t, out, VerdictReadyWithWarnings)
+}
+
+// Control-plane rows say what was found: the cause of a StorageClass failure,
+// "not fully observed" for any row without a result, critical or not, and a
+// Tier-2 pass that judged no placement does not claim it.
+func TestPrintSummary_ControlPlaneRowsNameWhatWasChecked(t *testing.T) {
+	ok, failed := true, false
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{
+		Log: logrus.NewEntry(l), Role: RoleControlPlane, ControlPlaneHealthy: true, NodesAllReady: true,
+		WebhooksSupported: true, NetworkPoliciesSupported: true,
+		DefaultStorageClassOK: &failed, StorageClassFailure: "Multiple Defaults",
+		GatewayAPICRDsOK: &ok, GatewayRoutesOK: &ok, ExternalLBOK: &ok, NodeToNodeOK: &ok,
+		Tier2StatefulSetsOK: &ok, Tier2PlacementNotAssessed: 2,
+		K8sVersion: "v1.25.0", TotalNodes: "3",
+	}
+	require.Error(t, printSummary(state))
+	out := buf.String()
+	assert.Contains(t, out, "Default StorageClass: Multiple Defaults")
+	assert.Contains(t, out, "Tier-1 Deployments: Status Unknown (not fully observed; see warnings)")
+	assert.Contains(t, out, "Envoy Gateway: Status Unknown (not fully observed; see warnings)",
+		"a non-critical row without a result is shown, not dropped")
+	assert.Contains(t, out, "Tier-2 StatefulSets: Ready (placement not assessed for 2)")
+	assert.NotContains(t, out, "Quorum and Placement OK")
+	assert.NotContains(t, out, "check did not run")
+}
+
+// The metrics pipeline must not see a not-applicable check as a pass.
+func TestBuildSummary_OmitsNotApplicableCheck(t *testing.T) {
+	ok := true
+	state := &ValidationState{
+		Log:                     testLog(),
+		Role:                    RoleControlPlane,
+		DefaultStorageClassOK:   &ok,
+		NodeToNodeNotApplicable: "single schedulable node, no cross-node path",
+	}
+	s := buildSummary(state, time.Now(), true, "NVCF-Ready")
+	_, present := s.Checks[CheckKeyNodeToNode]
+	assert.False(t, present,
+		"an unexercised check must be absent, not exported as node_to_node=1")
+}
+
+// Run names its check set on a fixed line so a launcher can tell an image that
+// supports roles from one that predates them.
+func TestRun_PrintsTheRoleMarker(t *testing.T) {
+	for role, want := range map[Role]string{
+		RoleControlPlane: RoleMarker + "control-plane",
+		RoleComputePlane: RoleMarker + "compute-plane",
+		"":               RoleMarker + "compute-plane",
+	} {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		ctx := core.WithLogger(context.Background(), logrus.NewEntry(l))
+		_ = Run(ctx, fake.NewSimpleClientset(), nil, "", "", "", false, role)
+		assert.Contains(t, buf.String(), want, "role %q", role)
+	}
+}
+
+// The role line comes before anything that can end the run early, so a
+// launcher can still tell which check set it got when the cluster is not
+// reachable.
+func TestRun_PrintsTheRoleMarkerBeforeAnEarlyReturn(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	ctx := core.WithLogger(context.Background(), logrus.NewEntry(l))
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("get", "version", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("connection refused")
+	})
+	err := Run(ctx, client, nil, "", "", "", false, RoleControlPlane)
+	require.EqualError(t, err, "cluster not reachable", "the run must end at the prerequisites")
+	assert.Contains(t, buf.String(), RoleMarker+"control-plane")
+}
+
+// A critical enforcement check that ends without a result (its server pod
+// never got an IP, an API error cut it short) is UNKNOWN and blocks the
+// verdict, rather than being dropped from it. A non-critical one is not shown.
+func TestPrintSummary_CriticalEnforcementWithoutResultIsUnknown(t *testing.T) {
+	run := func(critical bool) (error, string) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			EnforcementCritical:      critical,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "1",
+		}
+		return printSummary(state), buf.String()
+	}
+	err, out := run(true)
+	assert.Error(t, err)
+	assert.Contains(t, out, "Network Policy Enforcement: Status Unknown")
+
+	err, out = run(false)
+	assert.NoError(t, err)
+	assert.NotContains(t, out, "Network Policy Enforcement")
+}

@@ -1,0 +1,65 @@
+flowchart TB
+    subgraph Image["NvSnap agent image (/criu-bundle)"]
+        BLib["libnvsnap_intercept.so"]
+        BSite["sitecustomize/sitecustomize.py"]
+    end
+
+    subgraph UvloopImg["uvloop-builder image (/wheels)"]
+        W10["uvloop-cp310.whl"]
+        W11["uvloop-cp311.whl"]
+        W12["uvloop-cp312.whl"]
+        W13["uvloop-cp313.whl"]
+    end
+
+    subgraph LibUvImg["libuv-builder image"]
+        LU["libuv.so.1"]
+    end
+    subgraph LibZmqImg["libzmq-builder image"]
+        LZ["libzmq.so.5 (patched)"]
+    end
+
+    subgraph EmptyDir["nvsnap-lib (emptyDir on workload pod)"]
+        ELib["libnvsnap_intercept.so"]
+        ESite["sitecustomize/sitecustomize.py"]
+        ELU["libuv.so.1"]
+        ELZ["libzmq.so.5"]
+        S10["site-packages-cp310/uvloop/"]
+        S11["site-packages-cp311/uvloop/"]
+        S12["site-packages-cp312/uvloop/"]
+        S13["site-packages-cp313/uvloop/"]
+    end
+
+    subgraph WL["Workload container (e.g. NIM, vLLM)"]
+        Env["env:<br/>PYTHONPATH=/nvsnap-lib/sitecustomize<br/>LD_LIBRARY_PATH=/nvsnap-lib:...<br/>LD_PRELOAD=/nvsnap-lib/libnvsnap_intercept.so"]
+        PyStart["Python interpreter starts<br/>(cp312 in NIM venv)"]
+        SiteRun["site.py imports sitecustomize"]
+        PathMut["sys.path.insert(0,<br/>/nvsnap-lib/site-packages-cp312)"]
+        Imp["import uvloop"]
+        Pick["resolves to patched uvloop<br/>(stock venv copy shadowed)"]
+    end
+
+    BLib -->|"init: cp"| ELib
+    BSite -->|"init: cp -r"| ESite
+    W10 -->|"init: zipfile -e"| S10
+    W11 -->|"init: zipfile -e"| S11
+    W12 -->|"init: zipfile -e"| S12
+    W13 -->|"init: zipfile -e"| S13
+    LU --> ELU
+    LZ --> ELZ
+
+    Env --> PyStart
+    PyStart --> SiteRun
+    ESite -.->|"PYTHONPATH find"| SiteRun
+    SiteRun --> PathMut
+    PathMut --> Imp
+    S12 -.->|"sys.path[0]"| Imp
+    Imp --> Pick
+
+    classDef image    fill:#F57C00,stroke:#E65100,stroke-width:3px,color:#FFFFFF
+    classDef volume   fill:#039BE5,stroke:#01579B,stroke-width:3px,color:#FFFFFF
+    classDef workload fill:#388E3C,stroke:#1B5E20,stroke-width:3px,color:#FFFFFF
+    classDef pick     fill:#C2185B,stroke:#880E4F,stroke-width:3px,color:#FFFFFF
+    class W10,W11,W12,W13,BLib,BSite,LU,LZ image
+    class ELib,ESite,ELU,ELZ,S10,S11,S12,S13 volume
+    class Env,PyStart,SiteRun,PathMut,Imp workload
+    class Pick pick

@@ -1,0 +1,13 @@
+{
+  "functionId": "your-function-id",
+  "versionId": "your-version-id",
+  "deploymentSpecifications": [{
+    "gpu": "L40S",
+    "instanceType": "NCP.GPU.L40S_1x",
+    "backend": "NCP",
+    "minInstances": 1,
+    "maxInstances": 1,
+    "maxRequestConcurrency": 1
+  }]
+}
+

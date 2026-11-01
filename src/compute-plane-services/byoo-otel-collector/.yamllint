@@ -1,0 +1,13 @@
+extends: "default"
+yaml-files:
+  - "*.yaml"
+  - "*.yml"
+ignore: |
+  validator/charts/
+rules:
+  line-length: disable
+  comments-indentation: disable
+  document-start:
+    present: false
+  comments:
+    min-spaces-from-content: 1

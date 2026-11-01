@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: icmsrequests.nvca.nvcf.nvidia.io
+spec:
+  group: nvca.nvcf.nvidia.io
+  names:
+    kind: ICMSRequest
+    listKind: ICMSRequestList
+    plural: icmsrequests
+    singular: icmsrequest
+    shortNames:
+    - ir
+  scope: Namespaced
+  versions:
+  - name: v2beta1
+    additionalPrinterColumns:
+    - name: action
+      jsonPath: .spec.action
+      type: string
+      description: Type of the ICMS Request
+    - name: status
+      jsonPath: .status.requestStatus
+      type: string
+      description: Status of the ICMSRequest CR on the backend
+    - name: nca_id
+      jsonPath: .spec.ncaId
+      type: string
+      description: NVIDIA CloudAccount ID of the ICMSRequest in NVCF
+    - name: Age
+      jsonPath: .metadata.creationTimestamp
+      type: date
+      description: Age of this resource
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

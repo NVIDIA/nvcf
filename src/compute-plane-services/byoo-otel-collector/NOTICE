@@ -1,0 +1,4 @@
+This project includes dependencies on the following open-source projects:
+
+- OpenTelemetry Helm Charts (https://github.com/open-telemetry/opentelemetry-helm-charts)
+  Licensed under the Apache License, Version 2.0

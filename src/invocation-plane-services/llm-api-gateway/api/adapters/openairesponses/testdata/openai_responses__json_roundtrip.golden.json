@@ -1,0 +1,54 @@
+{
+  "model": "gpt-4",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Hello, world!"
+        }
+      ]
+    }
+  ],
+  "previous_response_id": null,
+  "reasoning": null,
+  "background": null,
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "instructions": null,
+  "text": null,
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": null,
+      "parameters": {
+        "properties": {
+          "location": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "strict": null
+    }
+  ],
+  "tool_choice": "auto",
+  "prompt": null,
+  "truncation": null,
+  "metadata": null,
+  "top_logprobs": null,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "user": null,
+  "safety_identifier": null,
+  "prompt_cache_key": null,
+  "service_tier": null,
+  "include": null,
+  "parallel_tool_calls": null,
+  "store": null,
+  "stream": null,
+  "stream_options": null,
+  "conversation": null
+}

@@ -1,0 +1,82 @@
+.worktrees/
+
+# Bazel symlinks (point into ~/.cache/bazel)
+/bazel-*
+
+# IDE / editor
+.bazelbsp/
+.idea/
+.vscode/
+*.swp
+# Per-user IntelliJ Bazel plugin project view and its generated project dir
+.bazelproject
+.ijwb/
+
+# AI agent local config (per-user settings, ephemeral plans)
+.claude/settings.local.json
+.claude/plans/
+.claude/scheduled_tasks.lock
+.codex/settings.local.json
+.cursor/settings.local.json
+**/superpowers/plans/
+*.plan.md
+
+# Local overrides
+.secrets
+.env
+/go.work
+/go.work.sum
+# Per-user Bazel overrides imported via try-import in .bazelrc
+/user.bazelrc
+
+# Local CI/test artifacts.
+/public/
+/tests/bdd/out/
+
+# Maven build output. Bazel is the build path; target/ trees are transient.
+target/
+
+# Transient symlink created by root Makefile's link-secrets target;
+# points at ../../../../secrets/<env>-secrets.yaml (root-level user file).
+deploy/stacks/**/secrets/*-secrets.yaml
+
+# OS
+.DS_Store
+
+# Packaged Helm charts under examples/ (produced by `helm package`).
+examples/**/*.tgz
+
+# Subchart archives fetched by `helm dependency build` (tools/ci/check-helm-charts
+# cleans up after itself; this is the backstop against committing one by hand).
+deploy/helm/*/*/charts/*.tgz
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Checked-in BYOO otelconfig test binary output.
+/tools/byoo/testdata/otelconfig/create/main
+# Built from tools/collect-dependencies/
+/tools/collect-dependencies/collect-dependencies
+# Built from tools/generate-subproject-ci/
+/tools/generate-subproject-ci/generate-subproject-ci
+
+# Go vendor trees not committed in this repo (tracked vendor: helm-reval-service-go, image-credential-helper-go,
+# nvca-go, nvcf-function-deployment-stages-go/common, nvcf-go, nvcf-icms-translate-go).
+admin-token-issuer-proxy-go/vendor/
+byoo-otel-collector-go/vendor/
+ess-agent-go/vendor/
+ess-agent-go/api/auth/approle/vendor/
+ess-agent-go/api/auth/aws/vendor/
+ess-agent-go/api/auth/azure/vendor/
+ess-agent-go/api/auth/gcp/vendor/
+ess-agent-go/api/auth/kubernetes/vendor/
+ess-agent-go/api/auth/ldap/vendor/
+ess-agent-go/api/auth/userpass/vendor/
+ess-agent-go/sdk/vendor/
+nvcf-ai-api-gateway-service-go/vendor/
+nvcf-function-deployment-stages-go/vendor/
+nvcf-grpc-proxy-go/vendor/
+nvcf-nats-auth-callout-service-go/vendor/
+otelconfig-go/vendor/
+nvcf-ratelimiter-go/vendor/

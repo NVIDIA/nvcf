@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+run:
+  modules-download-mode: mod
+  issues-exit-code: 1
+  tests: false
+  allow-parallel-runners: false
+linters:
+  enable:
+    - dupl
+    - goconst
+    - gocritic
+    - gocyclo
+    - goheader
+    - gosec
+    - misspell
+    - nakedret
+    - revive
+    - unconvert
+    - whitespace
+  settings:
+    gosec:
+      config:
+        G306: "0644"
+      excludes:
+      - G601
+    goheader:
+      template-path: .goheader.tmpl
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: line-length-limit
+          arguments: [180]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Exclude goheader for generated files
+    - path: zz_generated\..*\.go
+      linters:
+        - goheader
+    - path: generated\..*\.go
+      linters:
+        - goheader
+    # Exclude goheader for vendor directory
+    - path: vendor/
+      linters:
+        - goheader
+  new: false
+  exclude-dirs:
+    - validator
+    - generator
+    - testdata
+formatters:
+  enable:
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

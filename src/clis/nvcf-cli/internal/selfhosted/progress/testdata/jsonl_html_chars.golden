@@ -1,0 +1,2 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_failed","ts":"2026-04-29T01:32:00Z","phaseNum":4,"phase":"apply-cp","durationSec":90,"errCategory":"helm_apply","errMessage":"kubectl: <unknown> error & timeout","retryClass":"after_remediation","raw":{"subprocess":"kubectl","exitCode":1,"stderrTail":"Error: <pod ready=false> & condition not met","httpStatus":503}}

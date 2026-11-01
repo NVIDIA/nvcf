@@ -1,0 +1,2 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_failed","ts":"2026-04-29T03:50:00Z","phaseNum":4,"phase":"apply-cp","durationSec":180,"errCategory":"helm_apply","errMessage":"helmfile apply failed","retryClass":"after_remediation","remediation":["kubectl describe pod -n nvcf-system","kubectl logs -n nvcf-system deploy/nvcf-api --previous","Check disk pressure on nodes","Re-run after resolving pod issues"],"raw":{"subprocess":"helmfile","exitCode":1,"stderrTail":"Error: timed out waiting for the condition\n","kubernetesReason":"FailedScheduling"}}

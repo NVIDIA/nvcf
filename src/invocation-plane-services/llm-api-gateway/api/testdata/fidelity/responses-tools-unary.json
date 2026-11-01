@@ -1,0 +1,386 @@
+{
+  "description": "Unary Responses uses the complete terminal response object, retaining usage details, tool calls and extensions.",
+  "path": "/v1/responses",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Weather in Paris?"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "weather",
+        "description": "Read the weather.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "name": "weather"
+    },
+    "parallel_tool_calls": true,
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "city",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "max_output_tokens": 256,
+    "top_logprobs": 2,
+    "temperature": 0.12345678901234567890123456789,
+    "include": [
+      "message.output_text.logprobs"
+    ],
+    "metadata": {
+      "session": "fixture-session"
+    },
+    "store": false,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "vendor_options": {
+      "empty": null,
+      "revision": 9007199254740993
+    },
+    "stream": false
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Weather in Paris?"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "weather",
+        "description": "Read the weather.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "name": "weather"
+    },
+    "parallel_tool_calls": true,
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "city",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "reasoning": {
+      "effort": "high",
+      "summary": "auto"
+    },
+    "max_output_tokens": 256,
+    "top_logprobs": 2,
+    "temperature": 0.12345678901234567890123456789,
+    "include": [
+      "message.output_text.logprobs"
+    ],
+    "metadata": {
+      "session": "fixture-session"
+    },
+    "store": false,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "vendor_options": {
+      "empty": null,
+      "revision": 9007199254740993
+    },
+    "stream": true
+  },
+  "upstream_input_tokens": "150",
+  "upstream_affinity_key": "mt:v1:payload:5c23b03d9dd97330d64c38874d27b452b2bd90141b17ccd744a89e4046d8f3e4",
+  "upstream_response": {
+    "sse": [
+      {
+        "event": "response.created",
+        "data": {
+          "type": "response.created",
+          "sequence_number": 0,
+          "response": {
+            "id": "resp-fidelity",
+            "object": "response",
+            "status": "in_progress",
+            "model": "company/model",
+            "output": []
+          },
+          "vendor_event": {
+            "enabled": false
+          }
+        }
+      },
+      {
+        "event": "response.output_text.delta",
+        "data": {
+          "type": "response.output_text.delta",
+          "sequence_number": 1,
+          "item_id": "msg-fidelity",
+          "output_index": 1,
+          "content_index": 0,
+          "delta": "OK",
+          "logprobs": [
+            {
+              "token": "O",
+              "logprob": -0.1234567890123456,
+              "bytes": [
+                79
+              ],
+              "top_logprobs": [
+                {
+                  "token": "O",
+                  "logprob": -0.1
+                }
+              ],
+              "vendor_rank": 0
+            }
+          ]
+        }
+      },
+      {
+        "event": "response.completed",
+        "data": {
+          "type": "response.completed",
+          "sequence_number": 2,
+          "response": {
+            "id": "resp-fidelity",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "company/model",
+            "output": [
+              {
+                "type": "function_call",
+                "id": "fc-weather",
+                "call_id": "call-weather",
+                "name": "weather",
+                "arguments": "{\"city\":\"Paris\"}",
+                "status": "completed",
+                "vendor_tool": {
+                  "rank": 0
+                }
+              },
+              {
+                "type": "message",
+                "id": "msg-fidelity",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "OK",
+                    "annotations": [],
+                    "logprobs": [
+                      {
+                        "token": "O",
+                        "logprob": -0.1234567890123456,
+                        "bytes": [
+                          79
+                        ],
+                        "top_logprobs": [
+                          {
+                            "token": "O",
+                            "logprob": -0.1
+                          }
+                        ],
+                        "vendor_rank": 0
+                      }
+                    ],
+                    "vendor_content": null
+                  }
+                ]
+              },
+              {
+                "type": "future_item",
+                "payload": {
+                  "score": 0.12345678901234567890123456789,
+                  "active": false
+                }
+              }
+            ],
+            "usage": {
+              "input_tokens": 17,
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "vendor_cached": null
+              },
+              "output_tokens": 8,
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              },
+              "total_tokens": 25,
+              "vendor_usage": {
+                "revision": 9007199254740993
+              }
+            },
+            "metadata": {
+              "session": "fixture-session"
+            },
+            "store": false,
+            "system_fingerprint": "fp-responses",
+            "vendor_response": {
+              "empty": null,
+              "enabled": false
+            }
+          },
+          "vendor_event": null
+        }
+      }
+    ]
+  },
+  "response": {
+    "json": {
+      "id": "resp-fidelity",
+      "object": "response",
+      "created_at": 1700000000,
+      "status": "completed",
+      "model": "company/model",
+      "output": [
+        {
+          "type": "function_call",
+          "id": "fc-weather",
+          "call_id": "call-weather",
+          "name": "weather",
+          "arguments": "{\"city\":\"Paris\"}",
+          "status": "completed",
+          "vendor_tool": {
+            "rank": 0
+          }
+        },
+        {
+          "type": "message",
+          "id": "msg-fidelity",
+          "role": "assistant",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "OK",
+              "annotations": [],
+              "logprobs": [
+                {
+                  "token": "O",
+                  "logprob": -0.1234567890123456,
+                  "bytes": [
+                    79
+                  ],
+                  "top_logprobs": [
+                    {
+                      "token": "O",
+                      "logprob": -0.1
+                    }
+                  ],
+                  "vendor_rank": 0
+                }
+              ],
+              "vendor_content": null
+            }
+          ]
+        },
+        {
+          "type": "future_item",
+          "payload": {
+            "score": 0.12345678901234567890123456789,
+            "active": false
+          }
+        }
+      ],
+      "usage": {
+        "input_tokens": 17,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "vendor_cached": null
+        },
+        "output_tokens": 8,
+        "output_tokens_details": {
+          "reasoning_tokens": 4
+        },
+        "total_tokens": 25,
+        "vendor_usage": {
+          "revision": 9007199254740993
+        }
+      },
+      "metadata": {
+        "session": "fixture-session"
+      },
+      "store": false,
+      "system_fingerprint": "fp-responses",
+      "vendor_response": {
+        "empty": null,
+        "enabled": false
+      }
+    }
+  }
+}

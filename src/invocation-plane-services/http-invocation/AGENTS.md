@@ -1,0 +1,52 @@
+# AGENTS.md - http-invocation
+
+Native Rust image-source subtree for the NVCF invocation service.
+
+## Build and Test
+
+Bazel is the canonical CI path. The retired standalone Rust CI template from
+`cds/cicd-pipelines` is not used here.
+
+```bash
+bazel build //...
+bazel test //... --flaky_test_attempts=3
+bazel build //crates/server:image_index
+bazel run //crates/server:image_load
+```
+
+After `Cargo.lock` changes, repin crate metadata:
+
+```bash
+CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
+```
+
+CI subproject id: `http-invocation`. Follow the root `RELEASE.md` and
+`docs/dev/github-release-process.md` for source versioning and publication
+handoffs. Inspect `.github/workflows/` for current public validation.
+
+## Cargo Development
+
+Cargo remains useful for local service iteration:
+
+```bash
+cargo run --package nvcf-invocation-service --bin server --release -- \
+  -c crates/server/resources/settings-stg-local.yaml
+```
+
+The staging-local config connects to staging NVCF. Keep secrets and bearer
+tokens out of committed config and examples.
+
+`crates/server` depends on `//src/libraries/rust/nvcf-info` as a Bazel target
+only, so plain cargo builds of that crate do not resolve it. Use `bazel build`
+and `bazel test` for it instead.
+
+## Local Gotchas
+
+- `MODULE.bazel` owns the Rust toolchain, `rules_rust`, `crate_universe`,
+  `rules_oci`, and the distroless base image.
+- OSS mirror builds may need a public replacement for the `nvcr.io` distroless
+  base image before `bazel build //...` works without NGC credentials.
+- Changes to request/response API shape may need follow-up changes in
+  `src/clis/nvcf-cli` so the CLI keeps parity with the service. The
+  CLI is hand-written against the public types in
+  `crates/server/src/nvcf_api`.

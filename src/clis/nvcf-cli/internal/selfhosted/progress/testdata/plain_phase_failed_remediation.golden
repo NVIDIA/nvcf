@@ -1,0 +1,5 @@
+2026-04-29T03:50:00Z [04/8] apply-cp: failed [helm_apply after_remediation] helmfile apply failed
+2026-04-29T03:50:00Z [04/8] apply-cp: → kubectl describe pod -n nvcf-system
+2026-04-29T03:50:00Z [04/8] apply-cp: → kubectl logs -n nvcf-system deploy/nvcf-api --previous
+2026-04-29T03:50:00Z [04/8] apply-cp: → Check disk pressure on nodes
+2026-04-29T03:50:00Z [04/8] apply-cp: → Re-run after resolving pod issues

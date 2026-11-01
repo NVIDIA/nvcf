@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal stub to satisfy AppVeyor CI
+version: 1.0.{build}
+platform: x64
+shallow_clone: true
+
+branches:
+  only:
+    - master
+    - main
+
+build_script:
+  - echo "No-op build to satisfy AppVeyor CI"

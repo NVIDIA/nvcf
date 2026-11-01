@@ -1,0 +1,39 @@
+{
+  "namespace": "my-ns",
+  "objectNameBase": "fake-object-name",
+  "commonLabels": {
+    "lk": "lv"
+  },
+  "commonAnnotations": {
+    "ak": "av"
+  },
+  "serviceAccountName": "my-sa",
+  "nodeAffinity": {
+    "requiredDuringSchedulingIgnoredDuringExecution": {
+      "nodeSelectorTerms": [
+        {
+          "matchExpressions": [
+            {
+              "key": "my-ns/foo",
+              "operator": "DoesNotExist"
+            }
+          ]
+        },
+        {
+          "matchExpressions": [
+            {
+              "key": "my-ns/bar",
+              "operator": "In",
+              "values": [
+                "baz"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "instanceTypeLabelSelectorKey": "nvca.nvcf.nvidia.io/instance-type",
+  "clusterRegion": "us-west",
+  "clusterName": "my-cluster"
+}

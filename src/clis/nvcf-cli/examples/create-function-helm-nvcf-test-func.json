@@ -1,0 +1,18 @@
+{
+    "name": "nvcf-test-func-helm",
+    "tags": [],
+    "health": {
+      "uri": "/v2/health/ready",
+      "port": 8000,
+      "protocol": "HTTP",
+      "expectedStatusCode": 200,
+      "timeout": "PT10S"
+    },
+    "functionType": "DEFAULT",
+    "apiBodyFormat": "CUSTOM",
+    "inferenceUrl": "/v1/chat/completions",
+    "inferencePort": 8000,
+    "helmChart": "https://helm.ngc.nvidia.com/0651155215864979/ncp-dev/charts/nvcf-test-func-0.0.1.tgz",
+    "helmChartServiceName": "nvcf-test-func"
+}
+

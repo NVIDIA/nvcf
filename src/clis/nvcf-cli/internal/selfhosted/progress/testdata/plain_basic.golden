@@ -1,0 +1,4 @@
+2026-04-29T01:23:45Z [01/8] preflight: starting
+2026-04-29T01:23:53Z [01/8] preflight: complete (8s)
+2026-04-29T01:23:53Z [02/8] resolve-stack: starting
+2026-04-29T01:23:56Z [02/8] resolve-stack: complete (3s)

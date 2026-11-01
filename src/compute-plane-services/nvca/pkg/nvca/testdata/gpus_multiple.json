@@ -1,0 +1,50 @@
+[
+    {
+        "name": "A100",
+        "instanceTypes": [
+            {
+                "name": "DGX-CLOUD.GPU.A100_1x",
+                "value": "DGX-CLOUD.GPU.A100",
+                "description": "One Nvidia ampere GPU",
+                "default": true,
+                "cpuCores": 4,
+                "systemMemory": "28G",
+                "gpuMemory": "40G",
+                "gpuCount": 1,
+                "storage": "512Gi"
+            }
+        ]
+    },
+    {
+        "name": "A10G",
+        "instanceTypes": [
+            {
+                "name": "DGX-CLOUD.GPU.A10G_1x",
+                "value": "DGX-CLOUD.GPU.A10G",
+                "description": "One Nvidia Ampere GPU",
+                "default": true,
+                "cpuCores": 8,
+                "systemMemory": "28G",
+                "gpuMemory": "24G",
+                "gpuCount": 1,
+                "storage": "512Gi"
+            }
+        ]
+    },
+    {
+        "name": "L40G",
+        "instanceTypes": [
+            {
+                "name": "DGX-CLOUD.GPU.L40G_1x",
+                "value": "DGX-CLOUD.GPU.L40G",
+                "description": "One Nvidia Ada GPU",
+                "default": true,
+                "cpuCores": 8,
+                "systemMemory": "28G",
+                "gpuMemory": "24G",
+                "gpuCount": 1,
+                "storage": "512Gi"
+            }
+        ]
+    }
+]

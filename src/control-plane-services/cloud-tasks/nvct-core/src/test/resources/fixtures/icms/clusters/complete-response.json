@@ -1,0 +1,1146 @@
+[
+  {
+    "clusterName": "dgxc-k8saas-forge-az24-ct1",
+    "clusterGroupName": "dgxc-k8saas-forge-az24-ct1",
+    "clusterDescription": "",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "DGX-CLOUD",
+    "region": "eu-west-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [
+      "KataRuntimeIsolation"
+    ],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "AD102GL",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "1073741824M",
+            "gpuCount": 2,
+            "name": "DGX-CLOUD.GPU.AD102GL_2x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "24.5Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "4294967296M",
+            "gpuCount": 8,
+            "name": "DGX-CLOUD.GPU.AD102GL_8x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "97.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "2147483648M",
+            "gpuCount": 4,
+            "name": "DGX-CLOUD.GPU.AD102GL_4x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "48.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "536870912M",
+            "gpuCount": 1,
+            "name": "DGX-CLOUD.GPU.AD102GL_1x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "12.2Gi",
+            "default": true
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.37.0",
+    "ssaClientId": "nvssa-stg-dS7iY1dsI_5qXequTVZL0Zpij-xyFILuxPHs5d7ImdA",
+    "clusterId": "5942e544-11f9-3d89-9882-a31b959ae54e",
+    "clusterGroupId": "d6b30d7f-110a-455f-9d37-e7a3d9bfb44a",
+    "status": "READY",
+    "nvcaLastConnected": "2024-10-29T18:34:42.413Z",
+    "k8sVersion": "v1.29.5",
+    "gpuUsage": null,
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "dgxc-k8saas-forge-az24-ct1_unhealthy",
+    "clusterGroupName": "dgxc-k8saas-forge-az24-ct1_unhealthy",
+    "clusterDescription": "",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "DGX-CLOUD",
+    "region": "eu-west-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [
+      "KataRuntimeIsolation"
+    ],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "AD102GL",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "1073741824M",
+            "gpuCount": 2,
+            "name": "DGX-CLOUD.GPU.AD102GL_2x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "24.5Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "4294967296M",
+            "gpuCount": 8,
+            "name": "DGX-CLOUD.GPU.AD102GL_8x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "97.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "2147483648M",
+            "gpuCount": 4,
+            "name": "DGX-CLOUD.GPU.AD102GL_4x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "48.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451716Ki",
+            "gpuMemory": "536870912M",
+            "gpuCount": 1,
+            "name": "DGX-CLOUD.GPU.AD102GL_1x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "12.2Gi",
+            "default": true
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.37.0",
+    "ssaClientId": "nvssa-stg-dS7iY1dsI_5qXequTVZL0Zpij-xyFILuxPHs5d7ImdA",
+    "clusterId": "5942e544-11f9-3d89-9882-a31b959ae64e",
+    "clusterGroupId": "d6b30d7f-110a-455f-9d37-e7a3d9bfb74a",
+    "status": "UNHEALTHY",
+    "nvcaLastConnected": "2024-10-29T18:34:42.413Z",
+    "k8sVersion": "v1.29.5",
+    "gpuUsage": null,
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "dgxc-k8saas-forge-dev2-az24",
+    "clusterGroupName": "dgxc-k8saas-forge-dev2-az24",
+    "clusterDescription": "dgxc-k8saas-forge-dev2-az24",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [
+      "*"
+    ],
+    "cloudProvider": "DGX-CLOUD",
+    "region": "us-west-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [
+      "KataRuntimeIsolation"
+    ],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "AD102GL",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056429496Ki",
+            "gpuMemory": "536870912M",
+            "gpuCount": 1,
+            "name": "DGX-CLOUD.GPU.AD102GL_1x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "879.8Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056429496Ki",
+            "gpuMemory": "4294967296M",
+            "gpuCount": 8,
+            "name": "DGX-CLOUD.GPU.AD102GL_8x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "6.9Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056429496Ki",
+            "gpuMemory": "1073741824M",
+            "gpuCount": 2,
+            "name": "DGX-CLOUD.GPU.AD102GL_2x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "1.7Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056429496Ki",
+            "gpuMemory": "2147483648M",
+            "gpuCount": 4,
+            "name": "DGX-CLOUD.GPU.AD102GL_4x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "3.4Ti",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.38.1",
+    "ssaClientId": "nvssa-stg-UQAYrnW3GDxCOdpk8TCuJO_pbdsufZn9ZRrWqW1gN00",
+    "clusterId": "fed25eef-ef38-30f5-8059-9872f31b71ab",
+    "clusterGroupId": "607d4661-2935-4c8f-958e-b25285e787df",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-25T21:49:56.379Z",
+    "k8sVersion": "v1.29.5",
+    "gpuUsage": {
+      "AD102GL": {
+        "capacity": 16,
+        "allocated": 0,
+        "available": 16
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "mcamp-test-1",
+    "clusterGroupName": "mcamp-test-1",
+    "clusterDescription": "mcamp-test-1",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [
+      "foo-bar"
+    ],
+    "cloudProvider": "ON-PREM",
+    "region": "us-west-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [],
+    "nvcaVersion": "2.31.9",
+    "clusterId": "a2325818-2596-3ee6-9dc1-220740871fd1",
+    "clusterGroupId": "8f931aa1-5531-4f50-af9e-9aae20ee72c3",
+    "status": "NOT_READY",
+    "nvcaLastConnected": null,
+    "k8sVersion": null,
+    "gpuUsage": null,
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-aws-use1-dev1",
+    "clusterGroupName": "nvcf-dgxc-k8s-aws-use1-dev1",
+    "clusterDescription": "nvcf-dgxc-k8s-aws-use1-dev1",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "AWS",
+    "region": "us-east-1",
+    "capabilities": [
+      "CachingSupport",
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "H100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 192,
+            "systemMemory": "2097112576Ki",
+            "gpuMemory": "652472M",
+            "gpuCount": 8,
+            "name": "AWS.GPU.H100_8x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a p5.48xlarge machine",
+            "value": "AWS.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "484.4Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 192,
+            "systemMemory": "2097112576Ki",
+            "gpuMemory": "81559M",
+            "gpuCount": 1,
+            "name": "AWS.GPU.H100_1x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a p5.48xlarge machine",
+            "value": "AWS.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "60.6Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 192,
+            "systemMemory": "2097112576Ki",
+            "gpuMemory": "163118M",
+            "gpuCount": 2,
+            "name": "AWS.GPU.H100_2x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a p5.48xlarge machine",
+            "value": "AWS.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "121.1Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 192,
+            "systemMemory": "2097112576Ki",
+            "gpuMemory": "326236M",
+            "gpuCount": 4,
+            "name": "AWS.GPU.H100_4x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a p5.48xlarge machine",
+            "value": "AWS.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "242.2Gi",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.34.4",
+    "clusterId": "c8f1d4a1-c899-3531-ae93-ee9fdac60d03",
+    "clusterGroupId": "0051c6b3-cac6-486c-b4bd-50f9cfdd4fd1",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-20T01:50:31.330Z",
+    "k8sVersion": "v1.30.5-eks-ce1d5eb",
+    "gpuUsage": {
+      "H100": {
+        "capacity": 32,
+        "allocated": 1,
+        "available": 31
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-azr-scus-dev1",
+    "clusterGroupName": "nvcf-dgxc-k8s-azr-scus-dev1",
+    "clusterDescription": "nvcf-dgxc-k8s-azr-scus-dev1",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "AZURE",
+    "region": "us-east-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "A100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800200Ki",
+            "gpuMemory": "327680M",
+            "gpuCount": 4,
+            "name": "AZURE.GPU.A100_4x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "992.3Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800200Ki",
+            "gpuMemory": "81920M",
+            "gpuCount": 1,
+            "name": "AZURE.GPU.A100_1x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "248.1Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800200Ki",
+            "gpuMemory": "163840M",
+            "gpuCount": 2,
+            "name": "AZURE.GPU.A100_2x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "496.2Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800200Ki",
+            "gpuMemory": "655360M",
+            "gpuCount": 8,
+            "name": "AZURE.GPU.A100_8x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "1.9Ti",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.34.4",
+    "clusterId": "cfe4f376-db80-3f16-bbcc-61605903be63",
+    "clusterGroupId": "6c0fe500-20e0-4b9e-977e-2aa79af57b4a",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-20T01:50:16.144Z",
+    "k8sVersion": "v1.29.9",
+    "gpuUsage": {
+      "A100": {
+        "capacity": 32,
+        "allocated": 0,
+        "available": 32
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-forge-az24-dev5",
+    "clusterGroupName": "nvcf-dgxc-k8s-forge-az24-dev5",
+    "clusterDescription": "sensor rtx",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [
+      "*"
+    ],
+    "cloudProvider": "DGX-CLOUD",
+    "region": "eu-west-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "L40",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451744Ki",
+            "gpuMemory": "98280M",
+            "gpuCount": 2,
+            "name": "DGX-CLOUD.GPU.L40_2x",
+            "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+            "value": "DGX-CLOUD.GPU.L40",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.54.15",
+            "storage": "24.5Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451744Ki",
+            "gpuMemory": "393120M",
+            "gpuCount": 8,
+            "name": "DGX-CLOUD.GPU.L40_8x",
+            "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+            "value": "DGX-CLOUD.GPU.L40",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.54.15",
+            "storage": "97.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451744Ki",
+            "gpuMemory": "196560M",
+            "gpuCount": 4,
+            "name": "DGX-CLOUD.GPU.L40_4x",
+            "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+            "value": "DGX-CLOUD.GPU.L40",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.54.15",
+            "storage": "48.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451744Ki",
+            "gpuMemory": "49140M",
+            "gpuCount": 1,
+            "name": "DGX-CLOUD.GPU.L40_1x",
+            "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+            "value": "DGX-CLOUD.GPU.L40",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.54.15",
+            "storage": "12.2Gi",
+            "default": true
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.37.0",
+    "clusterId": "a2934dc7-acea-3416-8e20-25e090dcecd4",
+    "clusterGroupId": "56f0a210-4394-44e2-95ea-10cd1c755db4",
+    "status": "UNHEALTHY",
+    "nvcaLastConnected": "2024-11-19T11:23:43.241Z",
+    "k8sVersion": "v1.29.7",
+    "gpuUsage": null,
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-forge-az24-dev6",
+    "clusterGroupName": "nvcf-dgxc-k8s-forge-az24-dev6",
+    "clusterDescription": "nvcf-dgxc-k8s-forge-az24-dev6",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "DGX-CLOUD",
+    "region": "us-east-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [
+      "KataRuntimeIsolation"
+    ],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "AD102GL",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451708Ki",
+            "gpuMemory": "536870912M",
+            "gpuCount": 1,
+            "name": "DGX-CLOUD.GPU.AD102GL_1x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "12.2Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451708Ki",
+            "gpuMemory": "2147483648M",
+            "gpuCount": 4,
+            "name": "DGX-CLOUD.GPU.AD102GL_4x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "48.9Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451708Ki",
+            "gpuMemory": "1073741824M",
+            "gpuCount": 2,
+            "name": "DGX-CLOUD.GPU.AD102GL_2x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "24.5Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 128,
+            "systemMemory": "1056451708Ki",
+            "gpuMemory": "4294967296M",
+            "gpuCount": 8,
+            "name": "DGX-CLOUD.GPU.AD102GL_8x",
+            "description": "AD102GL-L40 (undefined family) on a ThinkSystem-SR670-V2 machine (Kata-enabled)",
+            "value": "DGX-CLOUD.GPU.AD102GL",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "unknown.unknown.unknown",
+            "storage": "97.9Gi",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.38.1",
+    "clusterId": "66c46ee9-e427-331b-ba38-168a7e0e1eb7",
+    "clusterGroupId": "4333d348-9d8e-4da1-ae71-c46b5780b312",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-25T22:20:00.291Z",
+    "k8sVersion": "v1.29.0",
+    "gpuUsage": {
+      "AD102GL": {
+        "capacity": 16,
+        "allocated": 1,
+        "available": 15
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-oci-iad-dev4",
+    "clusterGroupName": "nvcf-dgxc-k8s-oci-iad-dev4",
+    "clusterDescription": "",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "OCI",
+    "region": "us-east-1",
+    "capabilities": [
+      "CachingSupport",
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "A100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521412Ki",
+            "gpuMemory": "81920M",
+            "gpuCount": 1,
+            "name": "OCI.GPU.A100_1x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "251.8Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521412Ki",
+            "gpuMemory": "655360M",
+            "gpuCount": 8,
+            "name": "OCI.GPU.A100_8x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "2.0Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521412Ki",
+            "gpuMemory": "327680M",
+            "gpuCount": 4,
+            "name": "OCI.GPU.A100_4x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "1007.4Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521412Ki",
+            "gpuMemory": "163840M",
+            "gpuCount": 2,
+            "name": "OCI.GPU.A100_2x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "503.7Gi",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.34.4",
+    "clusterId": "25138fbc-cb6e-36df-afca-cc40f5a474d6",
+    "clusterGroupId": "500f216a-9a2a-4211-bac6-7527f94deebf",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-20T01:55:10.676Z",
+    "k8sVersion": "v1.29.1",
+    "gpuUsage": {
+      "A100": {
+        "capacity": 32,
+        "allocated": 1,
+        "available": 31
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-dgxc-k8s-oci-ord-dev6",
+    "clusterGroupName": "nvcf-dgxc-k8s-oci-ord-dev6",
+    "clusterDescription": "nvcf-dgxc-k8s-oci-ord-dev6",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [],
+    "cloudProvider": "OCI",
+    "region": "us-east-1",
+    "capabilities": [
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "A100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521420Ki",
+            "gpuMemory": "81920M",
+            "gpuCount": 1,
+            "name": "OCI.GPU.A100_1x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "251.8Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521420Ki",
+            "gpuMemory": "163840M",
+            "gpuCount": 2,
+            "name": "OCI.GPU.A100_2x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "503.7Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521420Ki",
+            "gpuMemory": "327680M",
+            "gpuCount": 4,
+            "name": "OCI.GPU.A100_4x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "1007.4Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 255,
+            "systemMemory": "2113521420Ki",
+            "gpuMemory": "655360M",
+            "gpuCount": 8,
+            "name": "OCI.GPU.A100_8x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a ORACLE-SERVER-E4-2c machine",
+            "value": "OCI.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.07",
+            "storage": "2.0Ti",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.34.4",
+    "clusterId": "cce4164d-a40c-3ff0-998a-0812e3eccf05",
+    "clusterGroupId": "f5e6b6bc-4adf-4276-ba67-d16234d9adff",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-20T01:51:03.418Z",
+    "k8sVersion": "v1.29.1",
+    "gpuUsage": {
+      "A100": {
+        "capacity": 8,
+        "allocated": 0,
+        "available": 8
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "nvcf-stage",
+    "clusterGroupName": "nvcf-stage",
+    "clusterDescription": "GCP Stage US Central",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [
+      "*"
+    ],
+    "cloudProvider": "GCP",
+    "region": "us-east-1",
+    "capabilities": [
+      "CachingSupport",
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "H100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 208,
+            "systemMemory": "1932077732Ki",
+            "gpuMemory": "163118M",
+            "gpuCount": 2,
+            "name": "GCP.GPU.H100_2x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a Google-Compute-Engine machine",
+            "value": "GCP.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.12",
+            "storage": "1.5Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 208,
+            "systemMemory": "1932077732Ki",
+            "gpuMemory": "326236M",
+            "gpuCount": 4,
+            "name": "GCP.GPU.H100_4x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a Google-Compute-Engine machine",
+            "value": "GCP.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.12",
+            "storage": "2.9Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 208,
+            "systemMemory": "1932077732Ki",
+            "gpuMemory": "652472M",
+            "gpuCount": 8,
+            "name": "GCP.GPU.H100_8x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a Google-Compute-Engine machine",
+            "value": "GCP.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.12",
+            "storage": "5.8Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 208,
+            "systemMemory": "1932077732Ki",
+            "gpuMemory": "81559M",
+            "gpuCount": 1,
+            "name": "GCP.GPU.H100_1x",
+            "description": "NVIDIA-H100-80GB-HBM3 (hopper family) on a Google-Compute-Engine machine",
+            "value": "GCP.GPU.H100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "550.90.12",
+            "storage": "743.7Gi",
+            "default": true
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.37.0",
+    "clusterId": "53566955-d7f9-37fb-a782-93560f577f3c",
+    "clusterGroupId": "98aec553-8b1e-4812-b568-35f5c5bbf01e",
+    "status": "UNHEALTHY",
+    "nvcaLastConnected": "2024-09-26T06:42:46.502Z",
+    "k8sVersion": "v1.29.7-gke.1104000",
+    "gpuUsage": null,
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  },
+  {
+    "clusterName": "picasso-edify-azure-stg",
+    "clusterGroupName": "AZURE",
+    "clusterDescription": "Stage cluster for edify Azure",
+    "ncaId": "CMYBKSNNjtg1TQmSke-gHNGgMlFvA-dCRAI8gcHOBcw",
+    "authorizedNCAIds": [
+      "*"
+    ],
+    "cloudProvider": "AZURE",
+    "region": "us-west-1",
+    "capabilities": [
+      "CachingSupport",
+      "DynamicGPUDiscovery",
+      "LogPosting"
+    ],
+    "attributes": [],
+    "customAttributes": [],
+    "gpus": [
+      {
+        "name": "A100",
+        "capacity": 0,
+        "instanceTypes": [
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800888Ki",
+            "gpuMemory": "81920M",
+            "gpuCount": 1,
+            "name": "AZURE.GPU.A100_1x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "535.54.03",
+            "storage": "248.1Gi",
+            "default": true
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800888Ki",
+            "gpuMemory": "655360M",
+            "gpuCount": 8,
+            "name": "AZURE.GPU.A100_8x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "535.54.03",
+            "storage": "1.9Ti",
+            "default": null
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800888Ki",
+            "gpuMemory": "163840M",
+            "gpuCount": 2,
+            "name": "AZURE.GPU.A100_2x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "535.54.03",
+            "storage": "496.2Gi",
+            "default": null
+          },
+          {
+            "cpuCores": 96,
+            "systemMemory": "1857800888Ki",
+            "gpuMemory": "327680M",
+            "gpuCount": 4,
+            "name": "AZURE.GPU.A100_4x",
+            "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+            "value": "AZURE.GPU.A100",
+            "cpuArch": "amd64",
+            "os": "linux",
+            "driverVersion": "535.54.03",
+            "storage": "992.3Gi",
+            "default": null
+          }
+        ]
+      }
+    ],
+    "nvcaVersion": "2.38.1",
+    "clusterId": "nvssa-stg-oP6_PUxnMVhYP2IRiPR_rbekw6hcmRpSCslV2BDiFvo",
+    "clusterGroupId": "1e7fb06a-6a24-4087-a071-35cc603892b6",
+    "status": "READY",
+    "nvcaLastConnected": "2024-11-25T21:33:50.149Z",
+    "k8sVersion": "v1.27.9",
+    "gpuUsage": {
+      "A100": {
+        "capacity": 24,
+        "allocated": 7,
+        "available": 17
+      }
+    },
+    "envoyConfig": {
+      "image": "envoy",
+      "repository": "docker.io/envoyproxy",
+      "tag": "v1.26.7"
+    },
+    "vaultConfig": {
+      "address": "https://stg.vault.nvidia.com:443"
+    },
+    "clusterUpgradeStatus": null
+  }
+]

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "env",
+    srcs = ["env.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/env",
+    importpath = "github.com/google/cel-go/common/env",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":env",
+    visibility = ["//visibility:public"],
+)

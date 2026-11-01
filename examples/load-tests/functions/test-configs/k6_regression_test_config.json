@@ -1,0 +1,46 @@
+{
+  "cloud": {
+    "projectID": 3700549,
+    "distribution": {
+      "ashburn": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 25
+      },
+      "palo_alto": {
+        "loadZone": "amazon:us:palo alto",
+        "percent": 25
+      },
+      "tokyo": {
+        "loadZone": "amazon:jp:tokyo",
+        "percent": 25
+      },
+      "dublin": {
+        "loadZone": "amazon:ie:dublin",
+        "percent": 25
+      }
+    }
+  },
+  "scenarios": {
+    "arrival_rate_scenario": {
+      "executor": "ramping-arrival-rate",
+      "preAllocatedVUs": 32,
+      "timeUnit": "1s",
+      "startTime": "0s",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "32",
+        "RESPONSE_COUNT": "128"
+      },
+      "stages": [
+        {
+          "duration": "1m",
+          "target": 100
+        },
+        {
+          "duration": "9m",
+          "target": 100
+        }
+      ]
+    }
+  }
+}

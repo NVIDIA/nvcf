@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Self-hosted: JWT validated against an OpenBao JWKS endpoint, with the
+# "scopes" claim checked per endpoint:
+#   /v1/validate → "helmreval:validate"
+#   /v1/render   → "helmreval:render"
+#
+# Run: go run ./cmd/reval-service --config examples/reval-config-self-hosted.yaml
+
+telemetry:
+  service-name: "nvcf-reval"
+  deployment-environment-name: "production"
+
+logging:
+  level: "info"
+  zap-configuration: "production"
+
+http:
+  api-port: 8080
+  metrics-port: 8081
+  management-port: 8082
+  local: false                    # bind to 0.0.0.0 in a cluster
+
+tracing:
+  enabled: true
+  endpoint: "otel-collector.example.com:4317"
+
+# Replace jwk-set-url and the scope values with your OpenBao / identity-provider settings.
+auth:
+  jwt:
+    enabled: true
+    jwk-set-url: "https://openbao.example.com/v1/identity/oidc/.well-known/jwks.json"
+    validate-required-scopes: "helmreval:validate"
+    render-required-scopes: "helmreval:render"

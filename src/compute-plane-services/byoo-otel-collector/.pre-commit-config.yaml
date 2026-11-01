@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+repos:
+  - repo: "https://github.com/adrienverge/yamllint.git"
+    rev: "v1.35.1"
+    hooks:
+      - id: "yamllint"
+        args:
+          - "-c=.yamllint"
+          - "-s"
+
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: "v0.19.1"
+    hooks:
+      - id: gitlint
+        args: [--contrib=CT1, --ignore=B6, --msg-filename]
+  - repo: local
+    hooks:
+      - id: unit-test
+        name: unit-test
+        entry: make test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: update-examples
+        name: update-examples
+        entry: make update-examples
+        language: system
+        pass_filenames: false
+        files: ^(cmd|internal)/.*$
+      - id: validate-otelconfig
+        name: validate-otelconfig
+        entry: make validate-otelconfig
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(cmd|internal)/.*$
+      - id: update-config-template
+        name: update-config-template
+        entry: make update-config-template
+        language: system
+        pass_filenames: false
+        files: ^(cmd|internal)/.*$

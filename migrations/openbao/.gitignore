@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Secrets
+*.pem
+*.jwk
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.log
+
+# Robot friends
+.claude/

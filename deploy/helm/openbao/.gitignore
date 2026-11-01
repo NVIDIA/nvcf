@@ -1,0 +1,15 @@
+k8s.pem
+k8s.jwk
+
+# helm
+**/charts/*.tgz
+!helm/charts/openbao-*.tgz
+helm/secrets/
+!helm/secrets/kustomization.yml
+!helm/secrets/ns.yml
+
+packaged-charts/
+
+# Test harness binaries
+tests/signing-key-harness/signing-key-harness
+tests/signing-key-harness/signing-key-harness-linux

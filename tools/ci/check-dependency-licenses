@@ -1,0 +1,750 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# check-dependency-licenses — verify vendored dependency licenses across the monorepo.
+#
+# Currently supports Go modules only.  Other ecosystems (Rust, Python, Java, Helm)
+# will be added as the tooling matures — search for "EXTEND:" comments for the
+# intended extension points.
+#
+# The script walks every Go module that has a vendor/ directory, runs
+# google/go-licenses against the shared allowlist (.allowed-licenses.txt at
+# repo root), and applies a per-module ratchet baseline stored under
+# tools/check-dependency-licenses-baselines/ so that only NEW violations
+# cause a failure without modifying imported upstream trees.
+#
+# Usage:
+#   ./tools/ci/check-dependency-licenses                  Run all checks
+#   ./tools/ci/check-dependency-licenses --update-baseline Regenerate per-module baselines
+#   ./tools/ci/check-dependency-licenses --list-modules    List discovered modules and exit
+#
+# Exit codes:
+#   0  no new violations
+#   1  new violations found beyond baseline(s)
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+effective_gowork="${GOWORK:-off}"
+
+UPDATE_BASELINE=false
+LIST_MODULES=false
+
+GO_LICENSES_VERSION="v2.0.1"
+WEAK_COPYLEFT="MPL-2.0|LGPL-2.0-only|LGPL-2.0-or-later|LGPL-2.1-only|LGPL-2.1-or-later|LGPL-3.0-only|LGPL-3.0-or-later|CDDL-1.0|EPL-1.0|EPL-2.0"
+
+ALLOWLIST_FILE="${REPO_ROOT}/.allowed-licenses.txt"
+BASELINE_FILENAME=".license-baseline.txt"
+BASELINE_ROOT_DIR="${REPO_ROOT}/tools/check-dependency-licenses-baselines"
+
+declare -Ag GO_DOWNLOAD_JSON_CACHE=()
+declare -Ag GITHUB_LICENSE_CACHE=()
+declare -Ag RESOLVED_GO_LICENSE_CACHE=()
+
+_GO_MOD_DOWNLOAD_FIELD_RESULT=""
+_GITHUB_REPO_LICENSE_SPDX_RESULT=""
+_RESOLVE_GO_IMPORT_LICENSE_RESULT=""
+_RENDER_MISSING_LICENSE_VIOLATION_RESULT=""
+_CHECK_GO_MODULE_RESULT=""
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+count_lines() { if [[ -z "$1" ]]; then echo 0; else echo "$1" | wc -l | tr -d ' '; fi; }
+
+# Strip quotes and trailing punctuation from library names in go-licenses output.
+strip_lib() { echo "$1" | sed "s/['\"]//g" | sed 's/[. ]*$//'; }
+
+parse_args() {
+    UPDATE_BASELINE=false
+    LIST_MODULES=false
+
+    local arg
+    for arg in "$@"; do
+        case "${arg}" in
+            --update-baseline) UPDATE_BASELINE=true ;;
+            --list-modules)    LIST_MODULES=true ;;
+            *) echo "Unknown flag: ${arg}"; exit 1 ;;
+        esac
+    done
+}
+
+baseline_file_for_module() {
+    local moddir="$1"
+    local rel_path="${moddir#"${REPO_ROOT}"/}"
+    echo "${BASELINE_ROOT_DIR}/${rel_path}/${BASELINE_FILENAME}"
+}
+
+repo_relative_path() {
+    local path="$1"
+    echo "${path#"${REPO_ROOT}"/}"
+}
+
+is_allowed_license() {
+    local allowed="$1"
+    local license="$2"
+
+    [[ -n "${license}" ]] || return 1
+    [[ ",${allowed}," == *",${license},"* ]]
+}
+
+sniff_license_text() {
+    local text="$1"
+    local chunk="${text:0:16000}"
+    local lower
+
+    if [[ "${chunk}" =~ SPDX-License-Identifier:[[:space:]]*([^[:space:]/\*]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+    fi
+
+    lower="$(printf '%s' "${chunk}" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "${lower}" == *"apache license"* && "${lower}" == *"version 2"* ]]; then
+        echo "Apache-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"permission is hereby granted, free of charge"* ]] && \
+        ([[ "${lower}" == *"substantial portions of the software"* ]] || [[ "${lower}" == *"all copies or substantial portions"* ]]); then
+        echo "MIT"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 4-clause"* || "${lower}" == *"bsd-4-clause"* || "${lower}" == *"all advertising materials mentioning features or use of this software"* ]]; then
+        echo "BSD-4-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 3-clause"* || "${lower}" == *"bsd-3-clause"* || "${lower}" == *"3-clause bsd"* ]]; then
+        echo "BSD-3-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 2-clause"* || "${lower}" == *"bsd-2-clause"* || "${lower}" == *"2-clause bsd"* ]]; then
+        echo "BSD-2-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"redistribution and use in source and binary forms"* ]]; then
+        if [[ "${lower}" == *"all advertising materials mentioning features or use of this software"* ]]; then
+            echo "BSD-4-Clause"
+            return
+        fi
+        if [[ "${lower}" == *"neither the name"* || "${lower}" == *"3-clause"* ]]; then
+            echo "BSD-3-Clause"
+            return
+        fi
+        if [[ "${lower}" == *"2-clause"* || "${lower}" == *"two clause"* ]]; then
+            echo "BSD-2-Clause"
+            return
+        fi
+        echo "BSD-3-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"mozilla public license"* || "${lower}" == *"mpl 2.0"* ]]; then
+        echo "MPL-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"isc license"* ]]; then
+        echo "ISC"
+        return
+    fi
+    if [[ "${lower}" == *"the unlicense"* || "${lower:0:800}" == *"unlicense"* ]]; then
+        echo "Unlicense"
+        return
+    fi
+    if [[ "${lower}" == *"creative commons zero"* || "${lower}" == *"cc0 1.0"* ]]; then
+        echo "CC0-1.0"
+        return
+    fi
+    if [[ "${lower}" == *"zlib license"* || "${lower}" == *"this software is provided 'as-is'"* ]]; then
+        echo "Zlib"
+        return
+    fi
+    if [[ "${lower}" == *"python software foundation license"* || "${lower}" == *"psf license agreement"* ]]; then
+        echo "PSF-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"blue oak model license"* || "${lower}" == *"blueoak-1.0.0"* ]]; then
+        echo "BlueOak-1.0.0"
+        return
+    fi
+}
+
+license_from_plain_dir() {
+    local base="$1"
+    local file text lic
+
+    [[ -d "${base}" ]] || return
+
+    while IFS= read -r file; do
+        text="$(LC_ALL=C sed -n '1,240p' "${file}" 2>/dev/null || true)"
+        [[ -n "${text}" ]] || continue
+        lic="$(sniff_license_text "${text}")"
+        if [[ -n "${lic}" ]]; then
+            echo "${lic}"
+            return
+        fi
+    done < <(find "${base}" -maxdepth 1 -type f \( -iname 'licen[sc]e*' -o -iname 'copying*' \) | sort)
+}
+
+path_is_within_module() {
+    local path="$1"
+    local module="$2"
+
+    [[ -n "${module}" ]] || return 1
+    [[ "${path}" == "${module}" || "${path}" == "${module}/"* ]]
+}
+
+parse_vendor_module_comment() {
+    local line="$1"
+    local body="${line#\# }"
+    local mod="${body%% *}"
+    local rest="${body#${mod}}"
+    local ver=""
+
+    rest="${rest# }"
+    if [[ -n "${rest}" && "${rest}" != "=>"* ]]; then
+        ver="${rest%% *}"
+        [[ "${ver}" == "=>" ]] && ver=""
+    fi
+
+    printf '%s\t%s\n' "${mod}" "${ver}"
+}
+
+module_root_and_version_for_import_path() {
+    local modules_txt="$1"
+    local import_path="$2"
+    local line current_mod current_ver best_mod="" best_ver=""
+
+    [[ -f "${modules_txt}" ]] || return
+
+    while IFS= read -r line; do
+        [[ "${line}" == \#* ]] || continue
+        IFS=$'\t' read -r current_mod current_ver < <(parse_vendor_module_comment "${line}")
+        if path_is_within_module "${import_path}" "${current_mod}" && [[ ${#current_mod} -gt ${#best_mod} ]]; then
+            best_mod="${current_mod}"
+            best_ver="${current_ver}"
+        fi
+    done < "${modules_txt}"
+
+    printf '%s\t%s\n' "${best_mod}" "${best_ver}"
+}
+
+go_mod_download_json() {
+    local moddir="$1"
+    local spec="$2"
+
+    (cd "${moddir}" && GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go mod download -json "${spec}" 2>/dev/null) || true
+}
+
+go_mod_download_field() {
+    local moddir="$1"
+    local spec="$2"
+    local field="$3"
+    local key="${moddir}|${spec}"
+    local json pattern
+
+    _GO_MOD_DOWNLOAD_FIELD_RESULT=""
+
+    if [[ ! -v GO_DOWNLOAD_JSON_CACHE["${key}"] ]]; then
+        GO_DOWNLOAD_JSON_CACHE["${key}"]="$(go_mod_download_json "${moddir}" "${spec}")"
+    fi
+    json="${GO_DOWNLOAD_JSON_CACHE["${key}"]}"
+    [[ -n "${json}" ]] || return 0
+
+    pattern="^[[:space:]]*\"${field}\":[[:space:]]*\"\\(.*\\)\"[,]\\{0,1\\}[[:space:]]*$"
+    _GO_MOD_DOWNLOAD_FIELD_RESULT="$(printf '%s\n' "${json}" | sed -n "s/${pattern}/\\1/p" | sed -n '1p')"
+}
+
+github_owner_repo_from_module() {
+    local module_path="$1"
+    local remainder owner repo
+
+    [[ "${module_path}" == github.com/* ]] || return
+    remainder="${module_path#github.com/}"
+    owner="${remainder%%/*}"
+    remainder="${remainder#*/}"
+    repo="${remainder%%/*}"
+    [[ -n "${owner}" && -n "${repo}" ]] || return
+
+    printf '%s\t%s\n' "${owner}" "${repo}"
+}
+
+github_owner_repo_from_url() {
+    local raw="$1"
+    local trimmed path owner repo
+
+    trimmed="${raw#git+}"
+    if [[ "${trimmed}" == git@github.com:* ]]; then
+        path="${trimmed#git@github.com:}"
+    elif [[ "${trimmed}" == https://github.com/* ]]; then
+        path="${trimmed#https://github.com/}"
+    elif [[ "${trimmed}" == http://github.com/* ]]; then
+        path="${trimmed#http://github.com/}"
+    else
+        return
+    fi
+
+    path="${path%.git}"
+    owner="${path%%/*}"
+    path="${path#*/}"
+    repo="${path%%/*}"
+    [[ -n "${owner}" && -n "${repo}" ]] || return
+
+    printf '%s\t%s\n' "${owner}" "${repo}"
+}
+
+github_repo_license_spdx() {
+    local owner="$1"
+    local repo="$2"
+    local key="${owner}/${repo}"
+    local body spdx download_url lic ref name raw_url
+
+    _GITHUB_REPO_LICENSE_SPDX_RESULT=""
+
+    if [[ -v GITHUB_LICENSE_CACHE["${key}"] ]]; then
+        [[ "${GITHUB_LICENSE_CACHE["${key}"]}" == "__MISS__" ]] || _GITHUB_REPO_LICENSE_SPDX_RESULT="${GITHUB_LICENSE_CACHE["${key}"]}"
+        return
+    fi
+    if ! command -v curl &>/dev/null; then
+        GITHUB_LICENSE_CACHE["${key}"]="__MISS__"
+        return
+    fi
+
+    body="$(curl -fsSL --max-time 20 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "https://api.github.com/repos/${owner}/${repo}/license" 2>/dev/null || true)"
+    if [[ -n "${body}" ]]; then
+        spdx="$(printf '%s' "${body}" | sed -n 's/.*"spdx_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+        if [[ -n "${spdx}" && "${spdx}" != "NOASSERTION" && "${spdx}" != "null" ]]; then
+            GITHUB_LICENSE_CACHE["${key}"]="${spdx}"
+            _GITHUB_REPO_LICENSE_SPDX_RESULT="${spdx}"
+            return
+        fi
+
+        download_url="$(printf '%s' "${body}" | sed -n 's/.*"download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+        if [[ -n "${download_url}" && "${download_url}" != "null" ]]; then
+            lic="$(curl -fsSL --max-time 20 "${download_url}" 2>/dev/null | sed -n '1,240p' || true)"
+            lic="$(sniff_license_text "${lic}")"
+            if [[ -n "${lic}" ]]; then
+                GITHUB_LICENSE_CACHE["${key}"]="${lic}"
+                _GITHUB_REPO_LICENSE_SPDX_RESULT="${lic}"
+                return
+            fi
+        fi
+    fi
+
+    for ref in main master; do
+        for name in LICENSE LICENSE.txt LICENSE.md COPYING COPYING.txt; do
+            raw_url="https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${name}"
+            lic="$(curl -fsSL --max-time 20 "${raw_url}" 2>/dev/null | sed -n '1,240p' || true)"
+            lic="$(sniff_license_text "${lic}")"
+            if [[ -n "${lic}" ]]; then
+                GITHUB_LICENSE_CACHE["${key}"]="${lic}"
+                _GITHUB_REPO_LICENSE_SPDX_RESULT="${lic}"
+                return
+            fi
+        done
+    done
+
+    GITHUB_LICENSE_CACHE["${key}"]="__MISS__"
+}
+
+resolve_go_import_license() {
+    local moddir="$1"
+    local import_path="$2"
+    local cache_key="${moddir}|${import_path}"
+    local modules_txt="${moddir}/vendor/modules.txt"
+    local vendordir check_dir lic module_root module_ver spec cache_dir origin_url owner repo
+
+    _RESOLVE_GO_IMPORT_LICENSE_RESULT=""
+
+    if [[ -v RESOLVED_GO_LICENSE_CACHE["${cache_key}"] ]]; then
+        [[ "${RESOLVED_GO_LICENSE_CACHE["${cache_key}"]}" == "__MISS__" ]] || _RESOLVE_GO_IMPORT_LICENSE_RESULT="${RESOLVED_GO_LICENSE_CACHE["${cache_key}"]}"
+        return
+    fi
+
+    vendordir="${moddir}/vendor/${import_path}"
+    if [[ -d "${vendordir}" ]]; then
+        check_dir="${vendordir}"
+        while [[ "${check_dir}" == "${moddir}/vendor"* && "${check_dir}" != "${moddir}/vendor" && "${check_dir}" != "." ]]; do
+            lic="$(license_from_plain_dir "${check_dir}")"
+            if [[ -n "${lic}" ]]; then
+                RESOLVED_GO_LICENSE_CACHE["${cache_key}"]="${lic}"
+                _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+                return
+            fi
+            check_dir="$(dirname "${check_dir}")"
+        done
+    fi
+
+    IFS=$'\t' read -r module_root module_ver < <(module_root_and_version_for_import_path "${modules_txt}" "${import_path}") || true
+    if [[ -z "${module_root}" ]]; then
+        module_root="${import_path}"
+    fi
+    if [[ -n "${module_ver}" ]]; then
+        spec="${module_root}@${module_ver}"
+        go_mod_download_field "${moddir}" "${spec}" "Dir"
+        cache_dir="${_GO_MOD_DOWNLOAD_FIELD_RESULT}"
+        if [[ -n "${cache_dir}" ]]; then
+            lic="$(license_from_plain_dir "${cache_dir}")"
+            if [[ -n "${lic}" ]]; then
+                RESOLVED_GO_LICENSE_CACHE["${cache_key}"]="${lic}"
+                _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+                return
+            fi
+        fi
+        go_mod_download_field "${moddir}" "${spec}" "URL"
+        origin_url="${_GO_MOD_DOWNLOAD_FIELD_RESULT}"
+    fi
+
+    IFS=$'\t' read -r owner repo < <(github_owner_repo_from_url "${origin_url}") || true
+    if [[ -z "${owner}" || -z "${repo}" ]]; then
+        IFS=$'\t' read -r owner repo < <(github_owner_repo_from_module "${module_root}") || true
+    fi
+    if [[ -n "${owner}" && -n "${repo}" ]]; then
+        github_repo_license_spdx "${owner}" "${repo}"
+        lic="${_GITHUB_REPO_LICENSE_SPDX_RESULT}"
+        if [[ -n "${lic}" ]]; then
+            RESOLVED_GO_LICENSE_CACHE["${cache_key}"]="${lic}"
+            _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+            return
+        fi
+    fi
+
+    RESOLVED_GO_LICENSE_CACHE["${cache_key}"]="__MISS__"
+}
+
+render_missing_license_violation() {
+    local moddir="$1"
+    local allowed="$2"
+    local import_path="$3"
+    local lic
+
+    _RENDER_MISSING_LICENSE_VIOLATION_RESULT=""
+
+    resolve_go_import_license "${moddir}" "${import_path}"
+    lic="${_RESOLVE_GO_IMPORT_LICENSE_RESULT}"
+    if [[ -z "${lic}" ]]; then
+        _RENDER_MISSING_LICENSE_VIOLATION_RESULT="[NO LICENSE] ${import_path}"
+        return
+    fi
+    if is_allowed_license "${allowed}" "${lic}"; then
+        return
+    fi
+    _RENDER_MISSING_LICENSE_VIOLATION_RESULT="[${lic}] ${import_path}"
+}
+
+# ---------------------------------------------------------------------------
+# Discover Go modules with vendor directories.
+# EXTEND: add discover_rust_crates, discover_python_packages, etc.
+# ---------------------------------------------------------------------------
+
+discover_go_modules() {
+    find "${REPO_ROOT}" -name go.mod \
+        -not -path "*/vendor/*" \
+        -not -path "*/.git/*" \
+        -print0 \
+    | while IFS= read -r -d '' gomod; do
+        moddir="$(dirname "${gomod}")"
+        if [[ -d "${moddir}/vendor" ]]; then
+            echo "${moddir}"
+        fi
+    done | sort
+}
+
+# ---------------------------------------------------------------------------
+# Install go-licenses if needed
+# ---------------------------------------------------------------------------
+
+ensure_go_licenses() {
+    export PATH="$(GOWORK="${effective_gowork}" go env GOPATH)/bin:${PATH}"
+    if ! command -v go-licenses &>/dev/null; then
+        echo "Installing go-licenses ${GO_LICENSES_VERSION}..."
+        GOWORK="${effective_gowork}" GOFLAGS="" go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Check a single Go module.
+# Stores violations as "[LICENSE] module/path" lines in _CHECK_GO_MODULE_RESULT.
+# EXTEND: add check_rust_crate, check_python_package, etc.
+# ---------------------------------------------------------------------------
+
+check_go_module() {
+    local moddir="$1"
+    local allowed="$2"
+    local module violations="" check_output modules_txt="${moddir}/vendor/modules.txt"
+
+    _CHECK_GO_MODULE_RESULT=""
+
+    # go list -m and go-licenses may fail for toolchain reasons — do not let
+    # set -e abort the whole script on a single module.
+    set +e
+    module=$(cd "${moddir}" && GOWORK="${effective_gowork}" go list -m 2>/dev/null)
+    if [[ -z "${module}" ]]; then
+        echo "[SKIP] ${moddir}: could not determine module path" >&2
+        set -e
+        return
+    fi
+
+    # --- go-licenses check ---------------------------------------------------
+    check_output=$(cd "${moddir}" && GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go-licenses check ./... \
+        --allowed_licenses="${allowed}" \
+        --ignore "${module}" 2>&1)
+    set -e
+
+    # Parse not-allowed licenses
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        local lib lic rendered
+        lib=$(strip_lib "$(echo "${line}" | sed 's/.*found for library //')")
+        lic=$(echo "${line}" | sed 's/Not allowed license \(.*\) found for library.*/\1/' | sed "s/['\"]//g" | xargs)
+        if [[ -z "${lic}" ]]; then
+            render_missing_license_violation "${moddir}" "${allowed}" "${lib}"
+            rendered="${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+            [[ -n "${rendered}" ]] && violations="${violations}${rendered}\n"
+        else
+            violations="${violations}[${lic}] ${lib}\n"
+        fi
+    done < <(echo "${check_output}" | grep -i "not allowed license" || true)
+
+    # Parse missing license files
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        local lib rendered
+        lib=$(strip_lib "$(echo "${line}" | sed 's/.*Failed to find license for \([^:]*\).*/\1/')" || true)
+        if [[ -n "${lib}" ]]; then
+            render_missing_license_violation "${moddir}" "${allowed}" "${lib}"
+            rendered="${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+            [[ -n "${rendered}" ]] && violations="${violations}${rendered}\n"
+        fi
+    done < <(echo "${check_output}" | grep "Failed to find license" || true)
+
+    # --- Independent vendor/ scan for missing LICENSE files -------------------
+    if [[ -d "${moddir}/vendor" && -f "${modules_txt}" ]]; then
+        while IFS= read -r modpath; do
+            local vendordir="${moddir}/vendor/${modpath}"
+            [[ ! -d "${vendordir}" ]] && continue
+            local check_dir="${vendordir}" found=false
+            while [[ "${check_dir}" != "${moddir}/vendor" && "${check_dir}" != "." ]]; do
+                if find "${check_dir}" -maxdepth 1 \( -iname "licen[sc]e*" -o -iname "copying*" \) 2>/dev/null | grep -q .; then
+                    found=true
+                    break
+                fi
+                check_dir=$(dirname "${check_dir}")
+            done
+            if [[ "${found}" == false ]]; then
+                local rendered
+                render_missing_license_violation "${moddir}" "${allowed}" "${modpath}"
+                rendered="${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+                [[ -n "${rendered}" ]] && violations="${violations}${rendered}\n"
+            fi
+        done < <(grep -E '^\#' "${modules_txt}" | sed 's/^# //' | awk '{print $1}' | sort -u)
+    fi
+
+    # Deduplicate and sort
+    _CHECK_GO_MODULE_RESULT="$(echo -e "${violations}" | grep -v '^$' | sort -u || true)"
+}
+
+# ---------------------------------------------------------------------------
+# Apply ratchet logic for one module.
+# Returns 0 if no new violations, 1 otherwise.
+# Prints a report section to stdout.
+# ---------------------------------------------------------------------------
+
+ratchet_module() {
+    local moddir="$1"
+    local current="$2"
+    local rel_path="${moddir#"${REPO_ROOT}"/}"
+    local baseline_file
+    baseline_file="$(baseline_file_for_module "${moddir}")"
+    local baseline_rel_path
+    baseline_rel_path="$(repo_relative_path "${baseline_file}")"
+
+    if [[ "${UPDATE_BASELINE}" == true ]]; then
+        mkdir -p "$(dirname "${baseline_file}")"
+        {
+            echo "# Known license check failures — ratchet baseline."
+            echo "# Auto-generated by: ./tools/ci/check-dependency-licenses --update-baseline"
+            echo "# New dependencies must NOT add entries to this file."
+            echo "# Remove entries as they are fixed (LICENSE files added or deps replaced)."
+            if [[ -n "${current}" ]]; then
+                echo "${current}"
+            fi
+        } > "${baseline_file}"
+        local n
+        n=$(count_lines "${current}")
+        echo "  ${rel_path}: baseline updated (${n} entries) -> ${baseline_rel_path}"
+        return 0
+    fi
+
+    # Load existing baseline
+    local baseline=""
+    if [[ -f "${baseline_file}" ]]; then
+        baseline=$(grep -v '^#' "${baseline_file}" | grep -v '^$' | sort -u)
+    fi
+
+    # Find new violations not in baseline
+    local new_violations=""
+    if [[ -n "${current}" ]]; then
+        new_violations=$(comm -23 <(echo "${current}") <(echo "${baseline}"))
+    fi
+
+    # Find resolved (in baseline but no longer failing)
+    local resolved=""
+    if [[ -n "${baseline}" ]]; then
+        resolved=$(comm -13 <(echo "${current}") <(echo "${baseline}"))
+    fi
+
+    local current_count baseline_count new_count resolved_count
+    current_count=$(count_lines "${current}")
+    baseline_count=$(count_lines "${baseline}")
+    new_count=$(count_lines "${new_violations}")
+    resolved_count=$(count_lines "${resolved}")
+
+    # Print module report
+    echo "  ${rel_path}:"
+    echo "    violations: ${current_count}  baseline: ${baseline_count}  new: ${new_count}  resolved: ${resolved_count}"
+
+    if [[ -n "${current}" ]]; then
+        while IFS= read -r v; do
+            if [[ -n "${baseline}" ]] && echo "${baseline}" | grep -qxF "${v}"; then
+                echo "      ${v}  (baseline)"
+            else
+                echo "      ${v}  ** NEW **"
+            fi
+        done <<< "${current}"
+    fi
+
+    if [[ -n "${resolved}" ]]; then
+        echo "    Resolved (remove from ${baseline_rel_path}):"
+        echo "${resolved}" | sed 's/^/      /'
+    fi
+
+    [[ ${new_count} -gt 0 ]] && return 1
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Weak copyleft report for a single Go module (informational only).
+# ---------------------------------------------------------------------------
+
+weak_copyleft_report() {
+    local moddir="$1"
+    local module csv
+
+    set +e
+    module=$(cd "${moddir}" && GOWORK="${effective_gowork}" go list -m 2>/dev/null)
+    if [[ -z "${module}" ]]; then
+        set -e
+        return
+    fi
+    csv=$(cd "${moddir}" && GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go-licenses csv ./... --ignore "${module}" 2>/dev/null \
+        | awk -F, -v pat="${WEAK_COPYLEFT}" '$3 ~ pat {print "      " $3 "\t" $1}' \
+        | sort)
+    set -e
+
+    if [[ -n "${csv}" ]]; then
+        echo "    Weak copyleft (review before shipping):"
+        echo "${csv}"
+    fi
+}
+
+main() {
+    parse_args "$@"
+
+    local modules
+    modules="$(discover_go_modules)"
+
+    if [[ -z "${modules}" ]]; then
+        echo "No Go modules with vendor/ directories found."
+        return 0
+    fi
+
+    if [[ "${LIST_MODULES}" == true ]]; then
+        echo "Go modules with vendor/ directories:"
+        echo "${modules}" | while IFS= read -r m; do
+            echo "  ${m#"${REPO_ROOT}"/}"
+        done
+        return 0
+    fi
+
+    if ! command -v go &>/dev/null; then
+        echo "ERROR: go is required but not found in PATH."
+        return 1
+    fi
+
+    ensure_go_licenses
+
+    if [[ ! -f "${ALLOWLIST_FILE}" ]]; then
+        echo "ERROR: ${ALLOWLIST_FILE} not found."
+        return 1
+    fi
+    local allowed
+    allowed=$(paste -sd, "${ALLOWLIST_FILE}")
+
+    local module_count=0
+    local fail_count=0
+    local moddir current
+
+    echo "=== Dependency License Check (Go) ==="
+    echo ""
+
+    if [[ "${UPDATE_BASELINE}" == true ]]; then
+        echo "Updating baselines..."
+        echo ""
+    fi
+
+    while IFS= read -r moddir; do
+        module_count=$((module_count + 1))
+
+        check_go_module "${moddir}" "${allowed}"
+        current="${_CHECK_GO_MODULE_RESULT}"
+
+        if ! ratchet_module "${moddir}" "${current}"; then
+            fail_count=$((fail_count + 1))
+        fi
+
+        if [[ "${UPDATE_BASELINE}" != true ]]; then
+            weak_copyleft_report "${moddir}"
+        fi
+
+        echo ""
+    done <<< "${modules}"
+
+    # EXTEND: add loops for Rust, Python, Java, Helm modules here.
+
+    echo "--- Dependency License Summary ---"
+    echo "  Modules checked:     ${module_count} (Go)"
+    echo "  Modules with new violations: ${fail_count}"
+    echo ""
+
+    if [[ ${fail_count} -gt 0 ]]; then
+        echo "FAIL: ${fail_count} module(s) have new license violations not in baseline."
+        echo "Fix the issues or run './tools/ci/check-dependency-licenses --update-baseline' with justification."
+        return 1
+    fi
+
+    if [[ "${UPDATE_BASELINE}" == true ]]; then
+        echo "All baselines updated."
+    else
+        echo "PASS: no new dependency license violations."
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

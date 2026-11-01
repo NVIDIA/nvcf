@@ -1,0 +1,45 @@
+#! /usr/bin/env bash
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Update feature flag and attributes doc.
+DOC_FILE=${repo_root}/docs/users/byoc/featureflags.md
+TMPL_FILE=${DOC_FILE}.tmpl
+ATTR_GO_FILE=${repo_root}/pkg/featureflag/attribute.go
+FF_GO_FILE=${repo_root}/pkg/featureflag/featureflag.go
+
+# TODO: emptiness check, emptiness indicates a bug
+ATTRS=$(sed -n -E 's/.+newAttribute\(\"([^\"]+)\",.+/\1/p' $ATTR_GO_FILE)
+FFS=$(sed -n -E 's/.+new.*FeatureFlag\(\"([^\"]+)\",.+/\1/p' $FF_GO_FILE)
+
+cp ${TMPL_FILE} ${DOC_FILE}
+
+for attr in $ATTRS; do
+    if ! grep --quiet $attr $TMPL_FILE; then
+        echo "Attribute ${attr} not found in ${TMPL_FILE}, please add"
+        exit 1
+    fi
+    DEFAULT=$(sed -n -E 's/.+"'${attr}'", (newBool\()?(\w+)(\))?.+/\2/p' $ATTR_GO_FILE)
+    sed -i 's/| '${attr}' | <default> |/| '${attr}' | '${DEFAULT}' |/' ${DOC_FILE}
+done
+
+for ff in $FFS; do
+    # Ignore certain feature flags.
+    case $ff in
+    "NVCA2.0"|"UniformInstanceLabels"|"HelmMiniService"|"HelmPostRender")
+    continue
+    ;;
+    *)
+    esac
+    DEFAULT=$(sed -n -E 's/.+"'${ff}'", (newBool\()?(\w+)(\))?.+/\2/p' $FF_GO_FILE)
+    if ! grep --quiet $ff $TMPL_FILE; then
+        echo "Feature flag ${ff} not found in ${TMPL_FILE}, please add"
+        exit 1
+    fi
+    sed -i 's/| '${ff}' | <default> |/| '${ff}' | '${DEFAULT}' |/' ${DOC_FILE}
+done
+
+if grep --quiet "<default>" ${DOC_FILE}; then
+    echo "Ignored attributes or feature flags found in ${TMPL_FILE}, please remove or un-ignore them."
+    exit 1
+fi

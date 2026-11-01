@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
+
+bad="$(find docs fern -type f \( -name '*.md' -o -name '*.mdx' \) -exec grep -nE '<img\b[^>]*[^/]>|<img>' {} \; || true)"
+if [ -n "$bad" ]; then
+  echo "Non-self-closing <img> tags found (MDX requires <img ... />):" >&2
+  echo "$bad" >&2
+  exit 1
+fi
+
+./tools/ci/check-doc-version-sync
+docs_mode="$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")"
+case "$docs_mode" in
+  umbrella|legacy) ;;
+  *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
+esac
+if [[ "$docs_mode" == umbrella ]]; then
+  staged="$(mktemp -d)"
+  trap 'rm -rf "$staged"' EXIT
+  go run -C tools/docs-version-sync . umbrella docs-stage --repo "$repo_root" --out "$staged/source"
+  cd "$staged/source"
+  "$repo_root/tools/ci/run-fern" check
+else
+  ./tools/ci/check-doc-editions
+  ./tools/ci/run-fern check
+fi

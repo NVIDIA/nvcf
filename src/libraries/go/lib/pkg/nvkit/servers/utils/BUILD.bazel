@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "utils",
+    srcs = [
+        "header.go",
+        "util.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_kit_kit//transport/grpc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_openzipkin_zipkin_go//propagation/b3",
+        "@org_golang_google_grpc//metadata",
+    ],
+)
+
+go_test(
+    name = "utils_test",
+    srcs = [
+        "header_test.go",
+        "request_test.go",
+        "util_test.go",
+    ],
+    embed = [":utils"],
+    deps = [
+        "@com_github_openzipkin_zipkin_go//propagation/b3",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//metadata",
+    ],
+)

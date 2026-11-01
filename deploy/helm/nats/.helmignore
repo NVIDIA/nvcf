@@ -1,0 +1,4 @@
+secrets/
+.DS_Store
+ci/
+.git/

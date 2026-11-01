@@ -1,0 +1,8 @@
+#! /usr/bin/env bash
+
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${repo_root}"
+make testdata-update
+git status
+git diff --ignore-space-at-eol --exit-code

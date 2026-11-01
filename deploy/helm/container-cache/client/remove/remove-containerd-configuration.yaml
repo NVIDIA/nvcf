@@ -1,0 +1,140 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: remove-containerd-configuration
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: remove-containerd-configuration
+  template:
+    metadata:
+      labels:
+        name: remove-containerd-configuration
+    spec:
+      hostPID: true
+      hostIPC: true
+      hostNetwork: true
+      initContainers:
+      - name: remove-configuration
+        image: nvcr.io/nvidia/cuda:12.3.2-base-ubuntu22.04
+        env:
+        - name: TARGET_HOST
+          value: "nvcr.io,stg.nvcr.io"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: etc-containerd
+          mountPath: /host/etc/containerd
+        - name: etc-containers
+          mountPath: /host/etc/containers
+        - name: etc-crio
+          mountPath: /host/etc/crio
+        - name: etc-ssl
+          mountPath: /host/etc/ssl
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -x
+          echo "=== Cleaning up container-cache configuration ==="
+          hosts=(${TARGET_HOST//,/ })
+
+          # --- containerd cleanup ---
+          if [ -d /host/etc/containerd ]; then
+            echo "Cleaning containerd configuration..."
+            for host in "${hosts[@]}"; do
+              rm -rf "/host/etc/containerd/certs.d/${host}"
+              echo "  Removed certs.d/${host}"
+            done
+
+            # Restore config.toml from backup if available
+            if [ -f /host/etc/containerd/config.toml.bak ]; then
+              cp /host/etc/containerd/config.toml.bak /host/etc/containerd/config.toml
+              echo "  Restored config.toml from backup"
+            fi
+
+            # Signal containerd to reload
+            if command -v nsenter >/dev/null 2>&1; then
+              nsenter -t 1 -m -u -i -n -p -- systemctl restart containerd 2>/dev/null || true
+              echo "  Restarted containerd"
+            fi
+          fi
+
+          # --- CRI-O cleanup ---
+          if [ -d /host/etc/containers ]; then
+            echo "Cleaning CRI-O configuration..."
+
+            # Remove nvcf registry mirror config
+            rm -f /host/etc/containers/registries.conf.d/nvcf-container-cache.conf
+            echo "  Removed registries.conf.d/nvcf-container-cache.conf"
+
+            # Remove nvcf cert directories
+            for dir in /host/etc/containers/certs.d/*; do
+              [ -d "$dir" ] || continue
+              if [ -f "$dir/ca.crt" ]; then
+                rm -rf "$dir"
+                echo "  Removed $(basename "$dir") certs"
+              fi
+            done
+
+            # Restore registries.conf if it was overwritten
+            # (re-create with just unqualified-search-registries)
+            if [ -f /host/etc/containers/registries.conf ]; then
+              unqualified=$(grep -m1 'unqualified-search-registries' /host/etc/containers/registries.conf 2>/dev/null || true)
+              if [ -n "$unqualified" ]; then
+                echo "$unqualified" > /host/etc/containers/registries.conf
+              else
+                : > /host/etc/containers/registries.conf
+              fi
+              echo "  Reset registries.conf"
+            fi
+
+            # Remove nvcf crio drop-in
+            rm -f /host/etc/crio/crio.conf.d/99-nvcf-registry.conf
+            echo "  Removed crio.conf.d/99-nvcf-registry.conf"
+
+            # Signal CRI-O to reload
+            if command -v nsenter >/dev/null 2>&1; then
+              nsenter -t 1 -m -u -i -n -p -- systemctl reload crio 2>/dev/null || true
+              echo "  Reloaded CRI-O"
+            fi
+          fi
+
+          # --- Common cleanup ---
+          rm -f /host/etc/ssl/nginx_container_cache.crt
+          echo "Removed nginx_container_cache.crt"
+
+          echo "=== Cleanup complete ==="
+      containers:
+      - name: pause
+        image: gcr.io/google_containers/pause
+      volumes:
+      - name: etc-containerd
+        hostPath:
+          path: /etc/containerd
+      - name: etc-containers
+        hostPath:
+          path: /etc/containers
+          type: DirectoryOrCreate
+      - name: etc-crio
+        hostPath:
+          path: /etc/crio
+          type: DirectoryOrCreate
+      - name: etc-ssl
+        hostPath:
+          path: /etc/ssl

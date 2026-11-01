@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: nvcf-pod-mutator
+    {{- include "nvcf-unbound.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+      name: https
+  selector:
+    app: nvcf-pod-mutator
+    {{- include "nvcf-unbound.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: nvcf-pod-mutator
+    {{- include "nvcf-unbound.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webhook.replicas | default 2 }}
+  selector:
+    matchLabels:
+      app: nvcf-pod-mutator
+      {{- include "nvcf-unbound.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: nvcf-pod-mutator
+        {{- include "nvcf-unbound.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-webhook
+      automountServiceAccountToken: true
+      {{- with .Values.images.secrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: webhook
+          image: {{ .Values.webhook.image | quote }}
+          imagePullPolicy: {{ .Values.webhook.imagePullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+            - containerPort: 9090
+              name: metrics
+              protocol: TCP
+          env:
+            - name: UNBOUND_IP
+              value: {{ .Values.unbound.cluster_ip | quote }}
+            - name: STUB_NAMESERVER
+              value: {{ .Values.unbound.stub_nameserver | quote }}
+            - name: CERTIFICATES_IMAGE
+              value: {{ .Values.webhook.certificatesImage | quote }}
+            - name: WEBHOOK_CONFIG_NAME
+              value: {{ .Release.Name }}-pod-mutator
+            - name: SERVICE_NAME
+              value: {{ .Release.Name }}-webhook
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CERT_SECRET_NAME
+              value: {{ .Release.Name }}-webhook-certs
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

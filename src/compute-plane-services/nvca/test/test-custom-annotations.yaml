@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+agent:
+  customAnnotations:
+    example.com/annotation1: value1
+    example.com/annotation2: value2
+    prometheus.io/scrape: "true"

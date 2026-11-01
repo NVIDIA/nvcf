@@ -1,0 +1,27 @@
+{
+  "name": "full-health-function",
+  "containerImage": "nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8",
+  "inferenceUrl": "/echo",
+  "inferencePort": 8000,
+  "description": "Function with complete health configuration",
+  "tags": ["complete", "health", "full-config"],
+  "functionType": "DEFAULT",
+  "apiBodyFormat": "CUSTOM",
+  "health": {
+    "protocol": "HTTP",
+    "uri": "/health",
+    "port": 8000,
+    "timeout": "PT30S",
+    "expectedStatusCode": 200
+  },
+  "containerEnvironment": [
+    {
+      "key": "MODEL_PATH",
+      "value": "/models"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "value": "INFO"
+    }
+  ]
+}

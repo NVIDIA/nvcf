@@ -1,0 +1,6 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","totalPhases":8,"startedAt":"2026-04-29T01:23:45Z"}
+{"event":"phase_completed","ts":"2026-04-29T01:23:53Z","phaseNum":1,"phase":"preflight","durationSec":8}
+{"event":"phase_started","ts":"2026-04-29T01:23:53Z","phaseNum":2,"phase":"resolve-stack","totalPhases":8,"startedAt":"2026-04-29T01:23:53Z"}
+{"event":"phase_completed","ts":"2026-04-29T01:23:56Z","phaseNum":2,"phase":"resolve-stack","durationSec":3}
+{"event":"final","ts":"2026-04-29T01:35:25Z","success":true,"clusterId":"abc","nvcfBackendHealth":"healthy","durationSec":700,"droppedProgressEvents":0}

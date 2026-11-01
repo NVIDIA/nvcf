@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: image-cred-updater
+spec:
+  schedule: "0 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata: {}
+    spec:
+      completions: 1
+      backoffLimit: 3
+      template:
+        metadata: {}
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: true
+          serviceAccountName: default
+          containers:
+          - name: updater
+            image: example.com/nvcf/image-credential-helper:0.1.0
+            imagePullPolicy: IfNotPresent
+            resources: {}
+            command:
+            - /usr/bin/image-credential-helper
+            args:
+            - -global
+            - -namespace-label-selector
+            - foo=bar
+status: {}

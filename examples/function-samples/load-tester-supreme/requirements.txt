@@ -1,0 +1,9 @@
+grpcio==1.59.3
+grpcio-tools==1.59.3
+grpcio-health-checking==1.59.3
+grpcio-reflection==1.59.3
+fastapi==0.110.0
+uvicorn==0.29.0
+opentelemetry-exporter-otlp==1.23.0
+opentelemetry-instrumentation-fastapi==0.44b0
+opentelemetry-instrumentation-grpc==0.44b0

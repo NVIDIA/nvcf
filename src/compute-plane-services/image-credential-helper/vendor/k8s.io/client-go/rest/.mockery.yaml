@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+dir: .
+pkgname: rest
+template: testify
+template-data:
+  boilerplate-file: ../../../../../hack/boilerplate/boilerplate.generatego.txt
+  unroll-variadic: true
+packages:
+  k8s.io/client-go/rest:
+    interfaces:
+      BackoffManager: {}

@@ -1,0 +1,17 @@
+NVCF self-hosted install: my-cluster
+Elapsed: 07m42s
+
+Progress
+
+    [✓]  1. Preflight checks                    08s
+    [✓]  2. Resolve stack bundle                03s
+    [✓]  3. Render control plane                11s
+    [▶]  4. Apply control plane                 07m20s running
+    [ ]  5. Check control plane health          -
+    [ ]  6. Register compute cluster            -
+    [ ]  7. Apply compute plane                 -
+    [ ]  8. Final health check                  -
+
+Current phase: Apply control plane
+
+press q to quit

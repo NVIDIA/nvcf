@@ -1,0 +1,13 @@
+{
+  "telemetries": {
+    "metricsTelemetry": {
+      "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+      "protocol": "HTTP",
+      "provider": "GRAFANA_CLOUD",
+      "endpoint": "https://otlp-gateway-prod-us-west-0.grafana.net/otlp",
+      "name": "Grafana_prd",
+      "types": ["METRICS"],
+      "createdAt": "2025-04-08T17:41:34.013Z"
+    }
+  }
+}

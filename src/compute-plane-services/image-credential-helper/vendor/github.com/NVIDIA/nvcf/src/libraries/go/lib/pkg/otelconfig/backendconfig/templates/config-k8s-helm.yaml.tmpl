@@ -1,0 +1,146 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14357"
+      http:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14358"
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "kubernetes-cadvisor"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          honor_timestamps: false
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # kubelet (container/cadvisor metrics); standard Prometheus ServiceMonitor scrape config for kubelet
+              - '{job=~"kubelet", namespace=~"{{ .Namespace }}", __name__=~"({{ metricAllowList "helm" "kubernetes-cadvisor" }})"}'
+          metric_relabel_configs:
+            # for container_fs_.+ metrics
+            - source_labels: [device]
+              regex: '(^$|/dev/root|/dev/shm|/run)'
+              action: keep
+            # rename the job to kubernetes-cadvisor
+            - source_labels: [job]
+              regex: "kubelet"
+              replacement: "kubernetes-cadvisor"
+              target_label: job
+{{ dropLabelPatterns "helm" "k8s" "kubernetes-cadvisor" | indent 12 }}
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "kubernetes-cadvisor" }})"
+        - job_name: "kube-state-metrics"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # kube-state-metrics; standard Prometheus ServiceMonitor scrape config for kube-state-metrics
+              - '{job=~"kube-state-metrics", namespace=~"{{ .Namespace }}", __name__=~"{{ metricAllowList "helm" "kube-state-metrics" }}"}'
+          metric_relabel_configs:
+            - source_labels: [pod]
+              regex: ".*kube-state-metrics.*"
+              replacement: ""
+              target_label: pod
+            - source_labels: [container]
+              regex: ".*kube-state-metrics.*"
+              replacement: ""
+              target_label: container
+            - source_labels: [service]
+              regex: ".*kube-state-metrics.*"
+              replacement: ""
+              target_label: service
+{{ dropLabelPatterns "helm" "k8s" "kube-state-metrics" | indent 12 }}
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "kube-state-metrics" }})"
+        - job_name: "nvidia-dcgm-exporter"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # nvidia-dcgm-exporter; standard Prometheus ServiceMonitor scrape config for DCGM GPU metrics
+              - '{job=~"nvidia-dcgm-exporter", exported_namespace=~"{{ .Namespace }}", __name__="{{ metricAllowList "helm" "nvidia-dcgm-exporter" }}"}'
+          metric_relabel_configs:
+            - action: labelmap
+              regex: exported_(.+)
+              replacement: $1
+            - action: labelkeep
+              regex: "({{ attrAllowList "helm" "nvidia-dcgm-exporter" }})"
+        - job_name: opentelemetry-collector
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+              - "${env:OTEL_POD_IP:-0.0.0.0}:18888"
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              action: keep
+              regex: "({{ metricAllowList "helm" "opentelemetry-collector" }})"
+
+processors:
+  batch:
+    send_batch_size: 4096
+    timeout: 400ms
+    send_batch_max_size: 8192
+  filter/metrics:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - scrape_duration_seconds
+          - scrape_samples_post_metric_relabeling
+          - scrape_samples_scraped
+          - scrape_series_added
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 10
+  resource: # rm service.instance.id so that instance is not in place
+    attributes:
+      - key: service.instance.id
+        action: delete
+  attributes/add-metadata:
+    actions:
+{{ attributes "non-gfn" . | indent 6 }}
+  metricstransform:
+    transforms:
+      - include: ^.*$
+        match_type: regexp
+        action: update
+        operations:
+{{ metricsTransform "non-gfn" . | indent 10 }}
+extensions:
+  cgroupruntime:
+    gomaxprocs:
+      enabled: true
+    gomemlimit:
+      enabled: true
+      ratio: 0.8
+  healthcheckv2:
+    use_v2: true
+    component_health:
+      include_permanent_errors: true
+      include_recoverable_errors: true
+      recovery_duration: 1m
+    http:
+      endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:13133"
+      status:
+        enabled: true
+        path: "/health"
+      config:
+        enabled: false

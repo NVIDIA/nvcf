@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<included>
+    <!-- Register the custom stack trace converter -->
+    <conversionRule conversionWord="bootEx"
+                    class="com.nvidia.boot.observability.logging.StackFilteringThrowableConverter"/>
+    <!-- Define a filtered exception pattern that can be used in appenders -->
+    <property name="BOOT_EXCEPTION_PATTERN" value="%bootEx"/>
+</included>

@@ -1,0 +1,2 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_failed","ts":"2026-04-29T01:32:00Z","phaseNum":4,"phase":"apply-cp","durationSec":120,"errCategory":"helm_apply","errMessage":"helm install api-keys: timed out","retryClass":"backoff","retryAfterSec":60,"remediation":["kubectl describe pod -n cassandra-system cassandra-0","Re-run with --debug"],"raw":{"subprocess":"helmfile","exitCode":1,"stderrTail":"Error: timeout reached","kubernetesReason":"FailedScheduling"}}
