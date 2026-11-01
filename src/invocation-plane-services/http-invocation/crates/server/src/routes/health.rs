@@ -14,32 +14,27 @@
 // limitations under the License.
 
 use crate::nats::NatsService;
-use crate::nvcf_api::NVCFService;
 use crate::routes::app_error::AppError;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Serialize;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::timeout;
 
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
 }
 
+/// Readiness: this pod can serve invocations when its own NATS connection is up.
+/// nvcf-api is deliberately not checked. Every replica shares it, so gating on
+/// it would remove all replicas during an nvcf-api outage and drop in-flight
+/// work whose results return through this Service.
 pub async fn get_health(
-    State(nvcf_service): State<Arc<NVCFService>>,
     State(nats_service): State<Arc<NatsService>>,
 ) -> Result<impl IntoResponse, AppError> {
     if let Err(e) = nats_service.health() {
         tracing::error!("Health check reported NATS connection unhealthy");
-        return Err(e.into());
-    }
-    // timeout for health in deployment configs is 3s
-    if let Err(e) = timeout(Duration::from_secs(2), nvcf_service.health()).await? {
-        tracing::error!("Health check could not connect to NVCF");
         return Err(e.into());
     }
 
