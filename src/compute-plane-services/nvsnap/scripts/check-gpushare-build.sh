@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Compile libnvsnap_gpushare.so and nvsnap-gpu-suspend with warnings as errors,
-# once per platform, the way the agent base image builds them (Dockerfile.base,
-# gpushare-builder stage: Rocky Linux 8 with the CUDA driver API header), and
-# fail if either needs a newer glibc than workload images are documented to
-# provide. Then compile the gpushare GPU tests in the CUDA image. Needs Docker,
+# Compile libnvsnap_gpushare.so and nvsnap-gpu-suspend
+# with warnings as errors, once per platform, the way the agent base image
+# builds them (Dockerfile.base, gpushare-builder stage: Rocky Linux 8 with the
+# CUDA driver API header), and fail if any needs a newer glibc than workload
+# images are documented to provide. Then compile the gpushare GPU tests in the CUDA image. Needs Docker,
 # and QEMU binfmt for a foreign platform; no GPU.
 #
 #   scripts/check-gpushare-build.sh                       # amd64 and arm64
@@ -15,8 +15,9 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 df="$root/docker/agent/Dockerfile.base"
-builder="$(awk '/^FROM .* AS gpushare-builder$/ { print $2 }' "$df")"
-cuda="$(awk '/^FROM .* AS cuda-headers$/ { print $2 }' "$df")"
+# The image is the word before AS: a FROM line may carry --platform first.
+builder="$(awk '/^FROM .* AS gpushare-builder$/ { print $(NF-2) }' "$df")"
+cuda="$(awk '/^FROM .* AS cuda-headers$/ { print $(NF-2) }' "$df")"
 if [ -z "$builder" ] || [ -z "$cuda" ]; then
     echo "check-gpushare-build: no 'AS gpushare-builder' or 'AS cuda-headers' stage in Dockerfile.base" >&2
     exit 1
@@ -43,7 +44,8 @@ for platform in ${PLATFORMS:-linux/amd64 linux/arm64}; do
                 exit 1
             fi
             echo "$(basename "$bin"): needs glibc $need"
-        done'
+        done
+        /src/scripts/check-gpushare-entry.sh /tmp/gpushare/libnvsnap_gpushare.so'
     rm -rf "$hdr"
     docker run --rm --platform "$platform" -v "$root:/src:ro" "$cuda" bash -ceu '
         cp -r /src/tests/gpushare /tmp/tests

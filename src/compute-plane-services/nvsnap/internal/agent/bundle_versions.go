@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -252,9 +253,27 @@ func readBundleTar(r io.Reader, dir string) error {
 		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("bundle entry %q leaves the bundle", hdr.Name)
 		}
+		// os.Root keeps every entry inside dir, but follows a link the
+		// stream made inside it: a link "x -> ." and then a directory "x"
+		// would chmod the extraction root itself. No entry may go through
+		// a link: a directory entry is checked with its own name, any
+		// other with its parents.
+		through := filepath.Dir(name)
+		if hdr.Typeflag == tar.TypeDir {
+			through = name
+		}
+		if err := noLinkOnPath(root, through); err != nil {
+			return fmt.Errorf("bundle entry %q: %w", hdr.Name, err)
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			// Chmod after the create: the create's mode passes through the
+			// agent's umask, and a version must arrive with the modes its
+			// recorded digest covers.
 			if err := root.MkdirAll(name, tarPerm(hdr.Mode)|0o700); err != nil {
+				return err
+			}
+			if err := root.Chmod(name, tarPerm(hdr.Mode)|0o700); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -276,6 +295,9 @@ func readBundleTar(r io.Reader, dir string) error {
 				return err
 			}
 			_, err = io.CopyN(f, tr, hdr.Size)
+			if err == nil {
+				err = f.Chmod(tarPerm(hdr.Mode)) // past the umask, as for a directory
+			}
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
@@ -284,6 +306,29 @@ func readBundleTar(r io.Reader, dir string) error {
 			}
 		}
 	}
+}
+
+// noLinkOnPath fails when name, or a directory above it, is a symbolic
+// link under root. Components that do not exist yet are fine.
+func noLinkOnPath(root *os.Root, name string) error {
+	if name == "." || name == "" {
+		return nil
+	}
+	parts := strings.Split(name, string(filepath.Separator))
+	for i := range parts {
+		p := filepath.Join(parts[:i+1]...)
+		fi, err := root.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symbolic link", p)
+		}
+	}
+	return nil
 }
 
 // tarPerm is the permission bits of a tar header's mode.

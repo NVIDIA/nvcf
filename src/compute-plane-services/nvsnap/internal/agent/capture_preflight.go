@@ -12,8 +12,8 @@ package agent
 //
 // Spec checks read the pod (probes, sidecars, the pid namespace); host
 // checks run on the member's node and read its container's processes
-// (deleted files the dump must save, the memory it dumps, the node bundle
-// its tools run from). A finding that
+// (deleted files the dump must save, RDMA devices and MPTCP sockets it
+// cannot, the memory it dumps, the node bundle its tools run from). A finding that
 // blocks skips the capture before it is claimed; the others are logged.
 // GET /v1/capture-preflight/{namespace}/{pod} reports on the instance whose
 // rank 0 is pod, on demand.
@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -146,18 +148,176 @@ func (a *Agent) hostPreflight(ctx context.Context, ns, pod, container string) ([
 	if err != nil {
 		return nil, err
 	}
-	ghosts, anon := map[string]ghostFile{}, int64(0)
-	for _, pid := range pids {
-		deletedFiles(procBase, pid, ghosts)
-		anon += anonymousBytes(procBase, pid)
-	}
-	fs := ghostFindings(pod, container, ghosts, anon, a.ghostLimit())
+	fs := processFindings(procBase, pids, pod, container, a.ghostLimit())
 	// The capture runs its tools from the node bundle mounted in the
 	// container, and only there (bundle_tools.go).
 	if _, err := bundleToolsOf(procBase, int(info.PID), a.bundleVersionsDir()); err != nil {
 		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "bundle", Detail: err.Error()})
 	}
 	return fs, nil
+}
+
+// processFindings is the host checks of a container's processes pids.
+func processFindings(procBase string, pids []int, pod, container string, ghostLimit int64) []PreflightFinding {
+	ghosts, anon, rdma := map[string]ghostFile{}, int64(0), map[int][]string{}
+	var sockets socketScan
+	for _, pid := range pids {
+		deletedFiles(procBase, pid, ghosts)
+		anon += anonymousBytes(procBase, pid)
+		if devs := rdmaDevices(procBase, pid); len(devs) > 0 {
+			rdma[pid] = devs
+		}
+		sockets.scan(procBase, pid)
+	}
+	fs := append(rdmaFindings(procBase, pod, container, rdma), sockets.findings(procBase, pod, container)...)
+	return append(fs, ghostFindings(pod, container, ghosts, anon, ghostLimit)...)
+}
+
+// ipprotoMPTCP is IPPROTO_MPTCP. CRIU cannot dump an MPTCP socket
+// ("inet: Unsupported proto 262"), so a capture of a process that holds
+// one fails in the dump, after the instance was frozen for it. Go 1.24
+// and later open MPTCP listeners by default, so a recent Go service (a
+// NATS server, seen 2026-10-26) holds them without asking for it.
+const ipprotoMPTCP = 262
+
+// socketProtocolOf returns the protocol (SO_PROTOCOL) of socket fd of
+// process pid. A variable for tests.
+var socketProtocolOf = pidfdSocketProtocol
+
+// pidfdSocketProtocol reads the protocol of another process's socket
+// through a duplicate of it (pidfd_getfd), which it closes; the process's
+// own fd is not touched. pid is a pid of this process's pid namespace, as
+// procBase's are (the agent runs with the host's).
+func pidfdSocketProtocol(pid, fd int) (int, error) {
+	pfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return 0, fmt.Errorf("pidfd_open %d: %w", pid, err)
+	}
+	defer func() { _ = unix.Close(pfd) }()
+	dup, err := unix.PidfdGetfd(pfd, fd, 0)
+	if err != nil {
+		return 0, fmt.Errorf("pidfd_getfd %d/%d: %w", pid, fd, err)
+	}
+	defer func() { _ = unix.Close(dup) }()
+	return unix.GetsockoptInt(dup, unix.SOL_SOCKET, unix.SO_PROTOCOL)
+}
+
+// socketScan collects, over a container's processes, the sockets a dump
+// cannot save, and whether their protocols could be read at all.
+type socketScan struct {
+	mptcp   map[int][]string // pid -> "fd N"
+	checked int
+	err     error // the first failure to read a protocol
+}
+
+// scan reads the protocol of every socket process pid holds. A process
+// gone by the time it is read holds nothing.
+func (s *socketScan) scan(procBase string, pid int) {
+	dir := filepath.Join(procBase, strconv.Itoa(pid), "fd")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		if t, lerr := os.Readlink(filepath.Join(dir, e.Name())); lerr != nil || !strings.HasPrefix(t, "socket:[") {
+			continue
+		}
+		proto, err := socketProtocolOf(pid, fd)
+		if err != nil {
+			if s.err == nil {
+				s.err = err
+			}
+			continue
+		}
+		s.checked++
+		if proto == ipprotoMPTCP {
+			if s.mptcp == nil {
+				s.mptcp = map[int][]string{}
+			}
+			s.mptcp[pid] = append(s.mptcp[pid], "fd "+e.Name())
+		}
+	}
+}
+
+// findings blocks the capture of a container whose processes hold MPTCP
+// sockets, one finding per process; when no socket's protocol could be
+// read, it says the check did not run.
+func (s *socketScan) findings(procBase, pod, container string) []PreflightFinding {
+	pids := make([]int, 0, len(s.mptcp))
+	for pid := range s.mptcp {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	var fs []PreflightFinding
+	for _, pid := range pids {
+		comm, _ := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "comm"))
+		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "socket",
+			Detail: fmt.Sprintf("process %d (%s) holds MPTCP sockets (%s): a checkpoint cannot save them; a Go program opens them by default since Go 1.24 (GODEBUG=multipathtcp=0 turns that off)",
+				pid, strings.TrimSpace(string(comm)), strings.Join(s.mptcp[pid], ", "))})
+	}
+	if s.checked == 0 && s.err != nil {
+		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightWarn, Check: "socket",
+			Detail: "socket protocols could not be read, so sockets a checkpoint cannot save were not looked for: " + s.err.Error()})
+	}
+	return fs
+}
+
+// rdmaDevicePrefix is where the RDMA devices are: uverbsN (verbs: memory
+// registrations, queue pairs, doorbell pages), rdma_cm, umadN.
+const rdmaDevicePrefix = "/dev/infiniband/"
+
+// rdmaDevices lists the RDMA device files process pid has open or mapped,
+// sorted. CRIU cannot dump them (checkpoint-restore/criu#267), and their
+// state could not be used after a restore anyway: the registrations belong
+// to a NIC context that does not survive, and the queue pairs are connected
+// to peers that keep this process's old keys. Only the process can release
+// them; a capture of one that holds them would fail in the dump.
+func rdmaDevices(procBase string, pid int) []string {
+	base := filepath.Join(procBase, strconv.Itoa(pid))
+	seen := map[string]bool{}
+	if ents, err := os.ReadDir(filepath.Join(base, "fd")); err == nil {
+		for _, e := range ents {
+			if t, err := os.Readlink(filepath.Join(base, "fd", e.Name())); err == nil && strings.HasPrefix(t, rdmaDevicePrefix) {
+				seen[t] = true
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(base, "maps")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			// address perms offset dev inode path
+			if f := strings.Fields(line); len(f) >= 6 && strings.HasPrefix(f[5], rdmaDevicePrefix) {
+				seen[f[5]] = true
+			}
+		}
+	}
+	devs := make([]string, 0, len(seen))
+	for d := range seen {
+		devs = append(devs, d)
+	}
+	sort.Strings(devs)
+	return devs
+}
+
+// rdmaFindings blocks the capture of a container whose processes hold
+// RDMA devices, one finding per process, naming it and its devices.
+func rdmaFindings(procBase, pod, container string, rdma map[int][]string) []PreflightFinding {
+	pids := make([]int, 0, len(rdma))
+	for pid := range rdma {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	fs := make([]PreflightFinding, 0, len(pids))
+	for _, pid := range pids {
+		comm, _ := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "comm"))
+		fs = append(fs, PreflightFinding{Pod: pod, Container: container, Severity: preflightBlock, Check: "rdma",
+			Detail: fmt.Sprintf("process %d (%s) holds RDMA devices %s: a checkpoint cannot save RDMA state (checkpoint-restore/criu#267); the workload has to release them before it is captured",
+				pid, strings.TrimSpace(string(comm)), strings.Join(rdma[pid], ", "))})
+	}
+	return fs
 }
 
 // ghostFile is a deleted file a container's processes hold.

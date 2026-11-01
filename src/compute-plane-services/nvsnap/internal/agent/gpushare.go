@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -323,13 +324,20 @@ func suspendFailure(err error) error {
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
 func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
-	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, log)
+	_, err := gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, false, 0, log)
+	return err
 }
 
 // gpushareResumeWithGPUsOf resumes pids, entered through hostPID, on the
 // GPUs of gpusPID's pod. They differ for a tree restored into a nested pid
 // namespace: its processes still carry the source pod's GPU environment.
-func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
+// holdGate keeps their GPU launches waiting until gpushareOpen: the pods of
+// a group open only once every one of them has resumed, so no node launches
+// into memory another node is still rebinding (see gpushareOpen). clockAt,
+// when set, is the CLOCK_MONOTONIC their dump recorded: the tool thaws them
+// only once their clocks have reached it (restore_clock_gpu.go); it
+// returns how long the tool waited for that.
+func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, holdGate bool, clockAt int64, log *logrus.Entry) (time.Duration, error) {
 	env := podGPUEnv(gpusPID)
 	if env == nil && gpusPID != hostPID {
 		// No UUIDs in NVIDIA_VISIBLE_DEVICES (GPUs given as device nodes,
@@ -338,19 +346,69 @@ func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []
 		// the tool would map onto first and the pod may not open.
 		gpus, err := gpushareTool(ctx, gpusPID, time.Minute, "gpus")
 		if err != nil {
-			return err
+			return 0, err
 		}
 		env = cudaVisibleEnv(gpus)
 	}
-	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
+	env = append(env, resumeDiagEnv()...)
+	args := gpushareResumeArgs(gpuMap, fabricDir, holdGate, clockAt, pids)
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, env, gpushareResumeDeadline, args...)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
-	return nil
+	// Each pid's remap reply: what it remapped, and where the time went
+	// (host register, imports, map, multicast).
+	for _, l := range remapReplies(out) {
+		log.Info("gpushare: " + l)
+	}
+	if clockAt <= 0 {
+		return 0, nil
+	}
+	// Each pid's distance from the dumped clock when it was thawed:
+	// "behind" means it waited for it, "past" that the restore overran its
+	// clock budget (restore_clock_gpu.go).
+	for _, l := range strings.Split(out, "\n") {
+		if clockLine.MatchString(l) {
+			log.Info("gpushare: " + strings.TrimSpace(l))
+		}
+	}
+	return clockWaited(out), nil
+}
+
+// remapLine is the tool's report of one pid's reply to remap.
+var remapLine = regexp.MustCompile(`^pid=\d+ remap `)
+
+// remapReplies returns the remap reply lines of a resume's output, whole.
+func remapReplies(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); remapLine.MatchString(l) {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// clockLine is the tool's report of a pid's clock at its thaw.
+var clockLine = regexp.MustCompile(`pid=\d+ clock ([0-9.]+)s (behind|past) the dump`)
+
+// clockWaited is how long a resume waited for the dumped clock: the
+// largest "behind" of its pids (they wait one after another, so the first
+// waits for all of them).
+func clockWaited(out string) time.Duration {
+	var w time.Duration
+	for _, m := range clockLine.FindAllStringSubmatch(out, -1) {
+		if m[2] != "behind" {
+			continue
+		}
+		if s, err := strconv.ParseFloat(m[1], 64); err == nil && time.Duration(s*float64(time.Second)) > w {
+			w = time.Duration(s * float64(time.Second))
+		}
+	}
+	return w
 }
 
 // gpushareSuspendArgs builds the suspend command line. fabricDir, when set,
@@ -364,8 +422,14 @@ func gpushareSuspendArgs(store, fabricDir string, pids []int) []string {
 }
 
 // gpushareResumeArgs builds the resume command line.
-func gpushareResumeArgs(gpuMap, fabricDir string, pids []int) []string {
+func gpushareResumeArgs(gpuMap, fabricDir string, holdGate bool, clockAt int64, pids []int) []string {
 	var args []string
+	if holdGate {
+		args = append(args, "--hold-gate")
+	}
+	if clockAt > 0 {
+		args = append(args, "--clock-at", strconv.FormatInt(clockAt, 10))
+	}
 	if gpuMap != "" {
 		args = append(args, "--gpu-map", gpuMap)
 	}
@@ -373,6 +437,23 @@ func gpushareResumeArgs(gpuMap, fabricDir string, pids []int) []string {
 		args = append(args, "--fabric-map", fabricDir)
 	}
 	return append(append(args, "resume"), intsToStrings(pids)...)
+}
+
+// gpushareOpen lets the GPU launches of pids, resumed with holdGate,
+// through. A group's pods resume on their own nodes, each rebinding its
+// share of the memory multicast across nodes; one that launched first
+// could write to a GPU not bound yet, and the kernel waiting on that write
+// would spin for good (2026-10-23, TP=8 over 2 GB300 nodes). Processes of
+// a capture made before the hold opened at resume, which open accepts.
+func gpushareOpen(ctx context.Context, hostPID int, pids []int, log *logrus.Entry) error {
+	t0 := time.Now()
+	out, err := gpushareTool(ctx, hostPID, 2*time.Minute, append([]string{"open"}, intsToStrings(pids)...)...)
+	if err != nil {
+		return err
+	}
+	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
+		Info("gpushare: opened " + lastLines(out, 1))
+	return nil
 }
 
 func intsToStrings(v []int) []string {
@@ -469,6 +550,20 @@ func podGPUEnv(hostPID int) []string {
 	}
 	if v := visibleGPUUUIDs(filepath.Join(procBase, strconv.Itoa(hostPID), "environ")); v != "" {
 		return []string{"CUDA_VISIBLE_DEVICES=" + v}
+	}
+	return nil
+}
+
+// gpushareResumeDiagVar selects a diagnostic the tool runs at resume
+// (see docker/agent/gpushare). The tool runs with an empty environment, so
+// the agent passes it on from its own, when it is set.
+const gpushareResumeDiagVar = "NVSNAP_GPUSHARE_RESUME_DIAG"
+
+// resumeDiagEnv returns the agent's gpushareResumeDiagVar for the tool, or
+// nil when it is not set.
+func resumeDiagEnv() []string {
+	if v := os.Getenv(gpushareResumeDiagVar); v != "" {
+		return []string{gpushareResumeDiagVar + "=" + v}
 	}
 	return nil
 }

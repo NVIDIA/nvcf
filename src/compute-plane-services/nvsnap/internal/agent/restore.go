@@ -412,25 +412,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		joinNs["ipc"] = fmt.Sprintf("/proc/%d/ns/ipc", placeholderMntnsPID)
 		joinNs["uts"] = fmt.Sprintf("/proc/%d/ns/uts", placeholderMntnsPID)
 
-		// Add the dump-time pod IP as a /32 alias on the placeholder's
-		// loopback so CRIU's TCP socket restore can re-bind to it.
-		// Without this, bind(2) returns EADDRNOTAVAIL — the placeholder
-		// was assigned a different pod IP by the K8s CNI.
-		//
-		// Not when the inet address map moves that address: criu then
-		// re-binds the sockets to the new one, and the instance's DNAT
-		// rules send the pod's own traffic to its old address here. An
-		// alias would make the old address local, and capture the traffic
-		// of another pod of the instance that now has it.
-		if inetAddrMapMoves(req.InetAddrMap, metadata.SourcePodIP) {
-			log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Source pod IP moved by the inet address map; no alias on placeholder lo")
-		} else if metadata.SourcePodIP != "" {
-			if aerr := addSourcePodIPToPlaceholderLo(placeholderMntnsPID, metadata.SourcePodIP); aerr != nil {
-				log.WithError(aerr).Warn("Failed to alias source pod IP on placeholder lo; TCP restore may fail")
-			} else {
-				log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Aliased source pod IP on placeholder lo")
-			}
-		}
+		// Ready the placeholder's network for the sockets CRIU re-binds
+		// to the dump-time pod address (restore_address.go).
+		req.InetAddrMap = a.restoreSourceAddress(ctx, placeholderMntnsPID, req.PlaceholderNamespace, req.PlaceholderPodName,
+			metadata.SourcePodIP, req.InetAddrMap, log)
 
 		// Pre-create parent dirs of every path-bound unix socket the dump
 		// captured. Their tmpfs (/var/run, /tmp) is inside the container's

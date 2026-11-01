@@ -409,6 +409,21 @@ Limits of the move:
   checkpoint's directory and the store's chunks that no remaining
   `gpu-*.chunks` list names. Temporary files left in a store by a crash
   are not removed either. `cache-gc` covers the node cache only.
+- RDMA: a workload that holds RDMA devices (`/dev/infiniband/uverbs*`,
+  `rdma_cm`) open or mapped at capture cannot be captured. CRIU cannot dump
+  them (checkpoint-restore/criu#267), and the state behind them could not be
+  used after a restore anyway: memory registrations belong to a NIC context
+  that does not survive, and queue pairs are connected to peers that keep
+  the old keys. gpushare does not touch RDMA. Only the process can release
+  that state, so the capture preflight blocks a capture whose processes hold
+  any RDMA device, naming each process and device; the instance runs on and
+  starts cold. This covers, for example, ModelExpress peer-to-peer over RDMA
+  (NIXL/UCX) and NCCL over InfiniBand or RoCE. A workload that has released
+  its RDMA devices by the time it is captured is not blocked.
+- MPTCP: a process holding an MPTCP socket (Go 1.24 and later open MPTCP
+  listeners by default) cannot be captured either: CRIU cannot dump it. The
+  preflight blocks it the same way (ARCHITECTURE.md, "Who is captured";
+  support: #2926).
 
 ## Validation
 

@@ -66,7 +66,7 @@ built. Anything not listed here is not claimed.
 | Tenant scope on restore | Exercised | `TestCRIURestore_SameScopeInAnotherNamespace`, `TestRecordCRIUCapture_RecordsTheTenantScope`, `TestCRIUGroupKey_ScopedByTenant` |
 | Agent API authentication | Exercised | `internal/agent/auth_test.go` (`TestTokenGuard*`) |
 | Fetched node-bundle verification | Exercised | `internal/agent/bundle_digest_test.go` (`TestFetchedBundleIsVerified`) |
-| Checkpoint transfer over RDMA | Open | not built |
+| Checkpoint transfer over RDMA (rails tier) | Exercised | `internal/agent/rails_fetch_test.go`, `rails_serve_test.go`, `rails_jobs_test.go`; restores through the agent have run in a GB300 cluster's conformance gate, with no timing recorded under `results/`. A manual bedrock-peer copy of a 1.06 TB checkpoint between GB300 nodes ran at 13.2 GiB/s, 97 % of the destination disk's write rate (GB300, 2026-10-21; no nvsnap build, as bedrock-peer ran by hand; not recorded under `results/`) |
 
 ## 1. What nvsnap is and what a deployment runs
 
@@ -241,6 +241,18 @@ refuses unless every check passes:
 | Every member passes the preflight (spec and host checks) | `capture_preflight.go` `capturePreflight` |
 | No GPU pod names its own instance in a way a restore would break | `criu_group.go` `identityBlocksCapture` |
 
+The preflight's host checks read every member's processes on its node. Two kinds of state CRIU cannot dump block
+the capture before anything is frozen, each finding naming the process:
+
+- RDMA devices open or mapped (`/dev/infiniband/uverbs*`, `rdma_cm`): CRIU cannot dump them
+  (checkpoint-restore/criu#267), and their state would be useless after a restore (`rdmaDevices`).
+- MPTCP sockets (`IPPROTO_MPTCP`, 262): CRIU cannot dump them (`inet: Unsupported proto 262`). Go 1.24 and later
+  open MPTCP listeners by default, so a recent Go service such as a NATS server holds them without asking.
+  Setting `GODEBUG=multipathtcp=0` on that service makes it capturable. Support is tracked in
+  [#2926](https://github.com/NVIDIA/nvcf/issues/2926) (`socketScan`).
+
+A refused instance keeps running and later instances of it start cold.
+
 Companions are captured with the ranks: the pods of the namespace without GPUs
 that the ranks hold TCP connections to (an etcd, a NATS), directly or through a
 Service, and the pods connected to those (a frontend)
@@ -287,6 +299,7 @@ A restore takes the first copy of a checkpoint it finds, in this order
 | Tier | Where | Code |
 |---|---|---|
 | L1 | The node's own disk | `localCheckpointComplete` |
+| Rails | Another node that holds it, over the nodes' RDMA NICs (opt-in, `agent.rails`): each node has one rails pod, `nvsnap-rails-serve-<node>`, that claims its NICs through DRA, serves the node's checkpoints and runs the node's own fetches beside that; it stays while a fetch has claimed it (`nvsnap.io/rails-wanted-until`) | `internal/agent/rails_fetch.go` `fetchOverRails`, `rails_serve.go`, `rails_jobs.go`; the node registers as a peer after the copy |
 | L2 | A shared filesystem, when configured; then the checkpoint's `rox-<hash>` read-only volume | `EnsureLocal` (FSStore), `fetchFromL2`; `internal/checkpointstore` |
 | L3 | Another agent that holds it, over HTTP; the agent tries first the peers it has the fewest fetches in flight from, and spreads large files over every peer that holds them | `sortPeersByLoad`, `fetchFromPeer`; every node that fetches registers as a peer (`registerAsPeer`) |
 | L4 | An object-store bucket shared between clusters (opt-in) | `internal/objectstore`, `internal/agent/replication*.go` |

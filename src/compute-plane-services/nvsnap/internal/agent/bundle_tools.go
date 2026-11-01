@@ -33,6 +33,8 @@ type bundleTools struct {
 	pid int
 	// version is the bundle version mounted there.
 	version string
+	// dir is the node's copy of that version.
+	dir string
 }
 
 // capSysAdmin is CAP_SYS_ADMIN's bit in /proc/<pid>/status's CapEff.
@@ -71,7 +73,7 @@ func bundleToolsOf(procBase string, pid int, versionsDir string) (bundleTools, e
 	if err != nil {
 		return bundleTools{}, err
 	}
-	return bundleTools{pid: pid, version: version}, nil
+	return bundleTools{pid: pid, version: version, dir: filepath.Join(versionsDir, version)}, nil
 }
 
 // bundleVersionOf names the staged version whose directory is dev:ino.
@@ -132,6 +134,24 @@ func (t bundleTools) pluginDir(procBase string) string {
 		}
 	}
 	return v2BinDirInContainer + "/plugins"
+}
+
+// gpuToolTextCache holds each version's GPU tool binary: a version never
+// changes.
+var gpuToolTextCache sync.Map
+
+// gpuToolText is the mounted version's GPU tool, read from the node's copy
+// of the version, for the options it carries; "" when it cannot be read.
+func (t bundleTools) gpuToolText() string {
+	if v, ok := gpuToolTextCache.Load(t.version); ok {
+		return v.(string)
+	}
+	b, err := os.ReadFile(filepath.Join(t.dir, gpushareToolName))
+	if err != nil {
+		return ""
+	}
+	gpuToolTextCache.Store(t.version, string(b))
+	return string(b)
 }
 
 var (

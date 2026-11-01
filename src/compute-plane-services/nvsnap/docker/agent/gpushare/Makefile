@@ -12,8 +12,18 @@ CFLAGS ?= -O2 -Wall -Wextra
 
 all: libnvsnap_gpushare.so nvsnap-gpu-suspend
 
+# Every function starts with no-ops (-fpatchable-function-entry): the library
+# hands its wrappers out for the driver's entry points, and a program that
+# hooks those by rewriting their first instructions (UCX's memory hooks,
+# "bistro") must not relocate our code. UCX's arm64 relocation of ADRP drops
+# the page alignment (src/ucm/bistro/bistro_aarch64.c, still in 1.20), so a
+# wrapper whose first instructions load a global jumped to a wrong address:
+# NIXL's UCX backend crashed in w_alloc. A no-op is not in the set UCX
+# relocates; it then hooks our entries another way. GCC 8 and later.
+GPUSHARE_ENTRY ?= -fpatchable-function-entry=4
+
 libnvsnap_gpushare.so: gpushare.c gpushare.h
-	$(CC) $(CFLAGS) -fPIC -shared -I. -I$(CUDA_INC) -o $@ gpushare.c -ldl -lpthread
+	$(CC) $(CFLAGS) $(GPUSHARE_ENTRY) -fPIC -shared -I. -I$(CUDA_INC) -o $@ gpushare.c -ldl -lpthread
 
 nvsnap-gpu-suspend: nvsnap-gpu-suspend.c gpushare.h
 	$(CC) $(CFLAGS) -I. -I$(CUDA_INC) -o $@ nvsnap-gpu-suspend.c -ldl -lpthread

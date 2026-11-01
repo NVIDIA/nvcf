@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -202,5 +204,193 @@ func TestCapturePreflightKeepsEveryFinding(t *testing.T) {
 	fs := a.capturePreflight(context.Background(), ranks, nil, nil, logrus.NewEntry(logrus.New()))
 	if want := spec + n; len(fs) != want {
 		t.Errorf("%d findings, want %d (%d spec + %d host)", len(fs), want, spec, n)
+	}
+}
+
+// fakeRDMAProc writes the /proc entries of process pid that the RDMA check
+// reads: its fd links, its maps and its comm.
+func fakeRDMAProc(t *testing.T, base string, pid int, comm string, fds map[string]string, maps string) {
+	t.Helper()
+	dir := filepath.Join(base, fmt.Sprint(pid))
+	if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for fd, target := range fds {
+		if err := os.Symlink(target, filepath.Join(dir, "fd", fd)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range map[string]string{"maps": maps, "comm": comm + "\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// RDMA devices are found open and mapped (a doorbell page), once each;
+// the GPU's devices and ordinary files are not RDMA devices.
+func TestRDMADevices(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", map[string]string{
+		"3": "/dev/infiniband/uverbs0",
+		"4": "/dev/nvidia0",
+		"5": "/dev/infiniband/rdma_cm",
+		"6": "socket:[123]",
+	}, `7f0000000000-7f0000001000 rw-s 00000000 00:06 512 /dev/infiniband/uverbs0
+7f0000001000-7f0000002000 rw-s 00001000 00:06 513 /dev/infiniband/uverbs1
+7f0000002000-7f0000003000 r-xp 00000000 103:01 77 /usr/lib/libibverbs.so.1
+7f0000003000-7f0000004000 rw-p 00000000 00:00 0
+`)
+	got := strings.Join(rdmaDevices(proc, 41), " ")
+	if want := "/dev/infiniband/rdma_cm /dev/infiniband/uverbs0 /dev/infiniband/uverbs1"; got != want {
+		t.Errorf("devices %q, want %q", got, want)
+	}
+	// libibverbs loaded but no device open: the process holds no RDMA
+	// state.
+	fakeRDMAProc(t, proc, 42, "EngineCore", map[string]string{"3": "/dev/nvidia0", "4": "/dev/shm/pool"},
+		"7f0000002000-7f0000003000 r-xp 00000000 103:01 77 /usr/lib/libibverbs.so.1\n")
+	if devs := rdmaDevices(proc, 42); len(devs) != 0 {
+		t.Errorf("a process without RDMA devices: %v", devs)
+	}
+	// A process gone by the time it is read holds nothing.
+	if devs := rdmaDevices(proc, 43); len(devs) != 0 {
+		t.Errorf("a missing process: %v", devs)
+	}
+}
+
+// Each process holding RDMA devices blocks the capture, named with its
+// devices; none, nothing.
+func TestRDMAFindingsBlock(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", nil, "")
+	fakeRDMAProc(t, proc, 9, "nixl", nil, "")
+	fs := rdmaFindings(proc, "w-0", "main", map[int][]string{
+		41: {"/dev/infiniband/uverbs0", "/dev/infiniband/uverbs1"},
+		9:  {"/dev/infiniband/uverbs2"},
+	})
+	if b := blocking(fs); len(b) != 2 {
+		t.Fatalf("want 2 blocking findings: %+v", fs)
+	}
+	for i, want := range []string{"process 9 (nixl) holds RDMA devices /dev/infiniband/uverbs2:",
+		"process 41 (VllmWorker) holds RDMA devices /dev/infiniband/uverbs0, /dev/infiniband/uverbs1:"} {
+		if f := fs[i]; f.Check != "rdma" || f.Pod != "w-0" || f.Container != "main" || !strings.HasPrefix(f.Detail, want) {
+			t.Errorf("finding %d: %+v, want detail starting %q", i, f, want)
+		}
+	}
+	if fs := rdmaFindings(proc, "w-0", "main", map[int][]string{}); len(fs) != 0 {
+		t.Errorf("findings without RDMA devices: %+v", fs)
+	}
+}
+
+// The host checks of a container block its capture when one of its
+// processes holds an RDMA device, and only then; the other checks still
+// report.
+func TestProcessFindingsRDMA(t *testing.T) {
+	stubSocketProtocols(t, func(int, int) (int, error) { return unix.IPPROTO_TCP, nil })
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", map[string]string{"3": "/dev/nvidia0"}, "")
+	fakeRDMAProc(t, proc, 42, "frontend", map[string]string{"3": "socket:[9]"}, "")
+	fs := processFindings(proc, []int{41, 42}, "w-0", "main", 1<<40)
+	if b := blocking(fs); len(b) != 0 {
+		t.Fatalf("a container without RDMA devices blocked: %+v", b)
+	}
+	if _, ok := findingFor(fs, "memory"); !ok {
+		t.Errorf("no memory finding: %+v", fs)
+	}
+
+	fakeRDMAProc(t, proc, 43, "nixl", map[string]string{"3": "/dev/infiniband/uverbs0"}, "")
+	fs = processFindings(proc, []int{41, 42, 43}, "w-0", "main", 1<<40)
+	b := blocking(fs)
+	if len(b) != 1 || b[0].Check != "rdma" || !strings.Contains(b[0].Detail, "process 43 (nixl)") {
+		t.Fatalf("want one rdma block for process 43: %+v", fs)
+	}
+	if _, ok := findingFor(fs, "memory"); !ok {
+		t.Errorf("the RDMA block hid the other findings: %+v", fs)
+	}
+}
+
+// stubSocketProtocols makes the preflight read socket protocols from f for
+// the rest of the test: the fake /proc trees' pids are not real processes.
+func stubSocketProtocols(t *testing.T, f func(pid, fd int) (int, error)) {
+	t.Helper()
+	prev := socketProtocolOf
+	socketProtocolOf = f
+	t.Cleanup(func() { socketProtocolOf = prev })
+}
+
+// A container whose process holds an MPTCP socket blocks its capture,
+// named with the process and the fd; TCP, UDP and Unix sockets do not.
+// When no socket's protocol can be read, the check says it did not run;
+// when some can, the unreadable ones are not reported.
+func TestProcessFindingsMPTCP(t *testing.T) {
+	proc := t.TempDir()
+	fakeRDMAProc(t, proc, 41, "VllmWorker", map[string]string{"3": "socket:[10]", "4": "/dev/nvidia0"}, "")
+	fakeRDMAProc(t, proc, 42, "nats-server", map[string]string{"5": "socket:[11]", "6": "socket:[12]", "7": "socket:[13]"}, "")
+	protos := map[[2]int]int{{41, 3}: unix.IPPROTO_TCP, {42, 5}: unix.IPPROTO_UDP, {42, 6}: ipprotoMPTCP, {42, 7}: ipprotoMPTCP}
+	stubSocketProtocols(t, func(pid, fd int) (int, error) {
+		if p, ok := protos[[2]int{pid, fd}]; ok {
+			return p, nil
+		}
+		return 0, fmt.Errorf("no such socket %d/%d", pid, fd)
+	})
+	fs := processFindings(proc, []int{41, 42}, "nats-0", "nats", 1<<40)
+	b := blocking(fs)
+	if len(b) != 1 || b[0].Check != "socket" || !strings.Contains(b[0].Detail, "process 42 (nats-server) holds MPTCP sockets (fd 6, fd 7)") {
+		t.Fatalf("want one socket block for process 42's fds 6 and 7: %+v", fs)
+	}
+	if _, ok := findingFor(fs, "memory"); !ok {
+		t.Errorf("the socket block hid the other findings: %+v", fs)
+	}
+
+	protos[[2]int{42, 6}], protos[[2]int{42, 7}] = unix.IPPROTO_TCP, unix.IPPROTO_TCP
+	if b := blocking(processFindings(proc, []int{41, 42}, "nats-0", "nats", 1<<40)); len(b) != 0 {
+		t.Errorf("TCP and UDP sockets blocked: %+v", b)
+	}
+
+	delete(protos, [2]int{42, 5})
+	for _, f := range processFindings(proc, []int{41, 42}, "nats-0", "nats", 1<<40) {
+		if f.Check == "socket" {
+			t.Errorf("an unreadable socket beside readable ones was reported: %+v", f)
+		}
+	}
+
+	stubSocketProtocols(t, func(pid, fd int) (int, error) {
+		return 0, fmt.Errorf("pidfd_getfd %d/%d: operation not permitted", pid, fd)
+	})
+	fs = processFindings(proc, []int{41, 42}, "nats-0", "nats", 1<<40)
+	if len(blocking(fs)) != 0 {
+		t.Fatalf("an unreadable protocol blocked: %+v", fs)
+	}
+	if f, ok := findingFor(fs, "socket"); !ok || f.Severity != preflightWarn || !strings.Contains(f.Detail, "operation not permitted") {
+		t.Errorf("want a warning that the socket check did not run: %+v", fs)
+	}
+}
+
+// The protocol of a real socket of this process, read through pidfd_getfd:
+// TCP reads as TCP, and an MPTCP socket, where the kernel has MPTCP, as
+// MPTCP. The process's own fd stays open.
+func TestPidfdSocketProtocol(t *testing.T) {
+	tcp, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Close(tcp) }()
+	got, err := pidfdSocketProtocol(os.Getpid(), tcp)
+	if err != nil {
+		t.Skipf("pidfd_getfd unavailable here: %v", err)
+	}
+	if got != unix.IPPROTO_TCP {
+		t.Errorf("TCP socket reads as protocol %d", got)
+	}
+	if _, err := unix.GetsockoptInt(tcp, unix.SOL_SOCKET, unix.SO_TYPE); err != nil {
+		t.Errorf("the socket was closed by the check: %v", err)
+	}
+	mp, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, ipprotoMPTCP)
+	if err != nil {
+		t.Skipf("no MPTCP in this kernel: %v", err)
+	}
+	defer func() { _ = unix.Close(mp) }()
+	if got, err := pidfdSocketProtocol(os.Getpid(), mp); err != nil || got != ipprotoMPTCP {
+		t.Errorf("MPTCP socket reads as %d, %v", got, err)
 	}
 }

@@ -121,6 +121,9 @@ delete-and-replace model.
   over UCX, which selects a transport at runtime, so whether a worker is
   capturable at all depends on what UCX picks on the target hardware. This is a
   runtime check, not a source question, and it must be answered at rung 0.
+  The capture preflight makes that check: it blocks the capture of a worker
+  that holds RDMA devices (see `docs/design/GPUSHARE.md`, Requirements and
+  limits).
 
 ## Still assumed
 
